@@ -108,7 +108,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const { t } = useTranslation();
 	const [draft, setDraft] = useState(initialValues);
 	const saved = useRef(JSON.stringify(initialValues));
-	const failedKey = useRef<{ draft: string; validity?: string } | undefined>(undefined);
+	const failedKey = useRef<{ draft: string; validity?: string; section?: SettingsSection } | undefined>(undefined);
 	const [error, setError] = useState<string>();
 	const [replacementError, setReplacementError] = useState<string>();
 	const [didSave, setDidSave] = useState(false);
@@ -133,7 +133,8 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const savedValues = JSON.parse(saved.current) as ProjectSettingsDraft;
 	const failed = failedKey.current;
 	const failedDraft = failed !== undefined && failed.draft === JSON.stringify(draft) &&
-		(failed.validity === undefined || failed.validity === JSON.stringify(validity));
+		(failed.validity === undefined || failed.validity === JSON.stringify(validity)) &&
+		(failed.section === undefined || failed.section === section);
 	const settingRow = (id: string, fields: (keyof ProjectSettingsDraft)[], content: ReactNode) => {
 		const changed = fields.some((field) => draft[field] !== savedValues[field]);
 		return <div data-testid={`setting-${id}`}>
@@ -163,7 +164,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		const problem = validate();
 		setError(problem);
 		if (problem) {
-			failedKey.current = { draft: JSON.stringify(draft), validity: JSON.stringify(validity) };
+			failedKey.current = { draft: JSON.stringify(draft), validity: JSON.stringify(validity), section };
 			return;
 		}
 		setReplacementError(undefined);
@@ -171,13 +172,16 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		mutation.mutate(draft);
 	};
 	useEffect(() => {
-		if (error && !failedDraft) setError(undefined);
-	}, [draft, error, failedDraft, validity]);
+		if (error && !failedDraft) {
+			failedKey.current = undefined;
+			setError(undefined);
+		}
+	}, [draft, error, failedDraft, validity, section]);
 	useEffect(() => {
 		if (disabled || !dirty || mutation.isPending || failedDraft) return;
 		const timeout = window.setTimeout(submit, 650);
 		return () => window.clearTimeout(timeout);
-	}, [disabled, draft, dirty, mutation.isPending, validity]);
+	}, [disabled, draft, dirty, mutation.isPending, validity, failedDraft, section]);
 	useEffect(() => {
 		if (!mutation.isPending) { setShowSaving(false); return; }
 		const timeout = window.setTimeout(() => setShowSaving(true), 200);

@@ -18,12 +18,13 @@ const initialValues: ProjectSettingsDraft = {
 function setup(cloud: boolean, save = vi.fn().mockResolvedValue({}), values = initialValues, section: "general" | "agents" = "general", saveUnchanged = false) {
 	const onSaveState = vi.fn();
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-	const view = render(<QueryClientProvider client={client}><TooltipProvider>
-		<ProjectSettingsEditor initialValues={values} section={section} saveUnchanged={saveUnchanged}
+	const editor = (selectedSection: "general" | "agents") => <QueryClientProvider client={client}><TooltipProvider>
+		<ProjectSettingsEditor initialValues={values} section={selectedSection} saveUnchanged={saveUnchanged}
 			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredAgents: !cloud, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud }}
 			details={[]} modelScope={() => ""} renderAgent={() => null} save={save} onSaveState={onSaveState} />
-	</TooltipProvider></QueryClientProvider>);
-	return { save, onSaveState, unmount: view.unmount };
+	</TooltipProvider></QueryClientProvider>;
+	const view = render(editor(section));
+	return { save, onSaveState, unmount: view.unmount, setSection: (next: "general" | "agents") => view.rerender(editor(next)) };
 }
 
 async function edit(label: string, value: string) {
@@ -83,6 +84,45 @@ describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 		fireEvent.submit(document.getElementById("project-settings-form")!);
 		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Worker and orchestrator agents are required." })));
 		expect(save).not.toHaveBeenCalled();
+	});
+
+	it("retries a validation-refused draft when changing sections makes it valid", async () => {
+		if (cloud) return;
+		const save = vi.fn().mockResolvedValue({});
+		const { onSaveState, setSection } = setup(cloud, save, { ...initialValues, orchestratorAgent: "" }, "agents", true);
+		await userEvent.click(screen.getByRole("button", { name: "Worker approval" }));
+		await userEvent.click(screen.getByRole("menuitem", { name: "Accept edits" }));
+		fireEvent.submit(document.getElementById("project-settings-form")!);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Worker and orchestrator agents are required." })));
+		expect(save).not.toHaveBeenCalled();
+		setSection("general");
+		await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "saved", error: undefined })));
+	});
+
+	it("retries a refused draft after another edit returns to the same value", async () => {
+		const save = vi.fn().mockRejectedValueOnce(new Error("Write failed")).mockResolvedValue({});
+		const { onSaveState } = setup(cloud, save);
+		await edit("Project name", "Draft B");
+		fireEvent.submit(document.getElementById("project-settings-form")!);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Write failed" })));
+		await edit("Project name", "Draft C");
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ error: undefined })));
+		await edit("Project name", "Draft B");
+		await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "saved", dirty: false, error: undefined })));
+	});
+
+	it("does not automatically retry a server-refused draft on another section", async () => {
+		const save = vi.fn().mockRejectedValue(new Error("Write failed"));
+		const { onSaveState, setSection } = setup(cloud, save);
+		await edit("Project name", "Draft name");
+		fireEvent.submit(document.getElementById("project-settings-form")!);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Write failed" })));
+		setSection("agents");
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 750)); });
+		expect(save).toHaveBeenCalledTimes(1);
+		expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Write failed" }));
 	});
 
 	it("uses the same inline fields and autosave, with supported workflow fields", async () => {
