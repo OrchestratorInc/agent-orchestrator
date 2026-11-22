@@ -55,7 +55,7 @@ const checks = new Map<string, Promise<Check>>();
 function settledTurnsStandOut(id: string, sessionId: string, hostId: string | undefined, since: number, until: number): Promise<Check> {
 	let check = checks.get(id);
 	if (!check) {
-		check = fetchRecentConversation(sessionId, hostId).then((snapshot) => {
+		check = fetchRecentConversation(sessionId, hostId).then((snapshot): Check => {
 			const yoursWaiting = snapshot.turns.some((turn) => turn.hasHumanPrompt && (turn.state === "queued" || turn.state === "running"));
 			if (snapshot.hasMoreBefore && !(Date.parse(snapshot.items[0]?.createdAt ?? "") <= since)) return { standsOut: true, yoursWaiting };
 			const index = indexWorkerUpdates(snapshot.items);
