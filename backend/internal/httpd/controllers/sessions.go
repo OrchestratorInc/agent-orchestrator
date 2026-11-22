@@ -878,28 +878,7 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			// origin, where the agent's app does not serve Cloudflare assets.
 			if mediaType, _, err := mime.ParseMediaType(res.Header.Get("Content-Type")); err == nil &&
 				(mediaType == "text/html" || mediaType == "application/xhtml+xml") {
-				protected := false
-				for _, value := range res.Header.Values("Cache-Control") {
-					quoted, escaped, start := false, false, 0
-					for i := 0; i <= len(value); i++ {
-						if i == len(value) || (value[i] == ',' && !quoted) {
-							if strings.EqualFold(strings.TrimSpace(value[start:i]), "no-transform") {
-								protected = true
-							}
-							start = i + 1
-							continue
-						}
-						switch {
-						case escaped:
-							escaped = false
-						case quoted && value[i] == '\\':
-							escaped = true
-						case value[i] == '"':
-							quoted = !quoted
-						}
-					}
-				}
-				if !protected {
+				if !hasCacheDirective(res.Header.Values("Cache-Control"), "no-transform") {
 					res.Header.Add("Cache-Control", "no-transform")
 				}
 			}
@@ -923,6 +902,30 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func hasCacheDirective(values []string, directive string) bool {
+	for _, value := range values {
+		quoted, escaped, start := false, false, 0
+		for i := 0; i <= len(value); i++ {
+			if i == len(value) || (value[i] == ',' && !quoted) {
+				if strings.EqualFold(strings.TrimSpace(value[start:i]), directive) {
+					return true
+				}
+				start = i + 1
+				continue
+			}
+			switch {
+			case escaped:
+				escaped = false
+			case quoted && value[i] == '\\':
+				escaped = true
+			case value[i] == '"':
+				quoted = !quoted
+			}
+		}
+	}
+	return false
 }
 
 // inlineArtifactOrigin serves the session's artifact directory on its inline
