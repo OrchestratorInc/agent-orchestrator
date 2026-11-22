@@ -327,6 +327,7 @@ func (a *API) Register(root chi.Router) {
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				stackMerge := middleware.Timeout(max(timeout, 3*time.Minute))(next)
+				deviceCommand := middleware.Timeout(max(timeout, deviceCommandBudget))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
@@ -367,6 +368,13 @@ func (a *API) Register(root chi.Router) {
 					// An import scan reads every local history.
 					if attachmentUploadRoute(req) || sessionImportRoute(req) {
 						upload.ServeHTTP(w, req)
+						return
+					}
+					// Installing a large build, launching through a cold driver, or
+					// shutting a device down outlasts one REST request; cutting the
+					// request off would kill an install halfway.
+					if deviceCommandRoute(req) {
+						deviceCommand.ServeHTTP(w, req)
 						return
 					}
 					// A managed preview carries the dev server's HMR socket and event
@@ -515,4 +523,22 @@ func agentBrowserURL(raw string) *url.URL {
 func userMessageRecorder(sessions any) controllers.UserMessageRecorder {
 	recorder, _ := sessions.(controllers.UserMessageRecorder)
 	return recorder
+}
+
+// deviceCommandBudget covers the device provider's own limits: two minutes for
+// an install, a launch or a button press through the agent driver, and up to
+// three for a shutdown through the hub, after the lease's driver release.
+const deviceCommandBudget = 4 * time.Minute
+
+// deviceCommandRoute reports the device routes that run a provider command
+// inside the request.
+func deviceCommandRoute(req *http.Request) bool {
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions/{sessionId}/device/install",
+		"/api/v1/sessions/{sessionId}/device/launch",
+		"/api/v1/sessions/{sessionId}/device/close",
+		"/api/v1/sessions/{sessionId}/device/button":
+		return true
+	}
+	return false
 }
