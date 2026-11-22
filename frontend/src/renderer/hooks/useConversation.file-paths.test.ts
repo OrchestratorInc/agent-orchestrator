@@ -47,10 +47,12 @@ it("reads paths from the paths route", async () => {
 });
 
 it("lists paths through the file list on a host whose daemon has no paths route", async () => {
-	await hostAnswering(false);
+	const requested = await hostAnswering(false);
 
 	const { data, error } = await fetchWorkspaceFilePaths("s-1", "box-a");
+	await fetchWorkspaceFilePaths("s-1", "box-a");
 
 	expect(error).toBeUndefined();
 	expect(data).toMatchObject({ paths: ["README.md"], truncated: true });
+	expect(requested.filter((path) => path.endsWith("/workspace/paths"))).toHaveLength(1);
 });

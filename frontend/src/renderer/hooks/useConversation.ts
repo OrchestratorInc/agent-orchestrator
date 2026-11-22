@@ -2213,10 +2213,15 @@ export function emptySkillsSettled(firstEmptyAt: number | undefined, updatedAt: 
 	return firstEmptyAt !== undefined && updatedAt - firstEmptyAt >= EMPTY_SKILLS_GRACE_MS;
 }
 
+const hostsWithoutPathsRoute = new Set<string>();
+
 export async function fetchWorkspaceFilePaths(sessionId: string, hostId?: string, signal?: AbortSignal) {
 	const client = clientForSessionHost(hostId);
-	const result = await client.GET("/api/v1/sessions/{sessionId}/workspace/paths", { params: { path: { sessionId } }, signal });
-	if (apiErrorCode(result.error) !== "ROUTE_NOT_FOUND") return result;
+	if (!hostsWithoutPathsRoute.has(hostId ?? "")) {
+		const result = await client.GET("/api/v1/sessions/{sessionId}/workspace/paths", { params: { path: { sessionId } }, signal });
+		if (apiErrorCode(result.error) !== "ROUTE_NOT_FOUND") return result;
+		hostsWithoutPathsRoute.add(hostId ?? "");
+	}
 	const files = await client.GET("/api/v1/sessions/{sessionId}/workspace/files", { params: { path: { sessionId } }, signal });
 	return {
 		...files,
