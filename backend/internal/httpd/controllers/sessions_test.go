@@ -3819,6 +3819,7 @@ func TestSessionsAPI_ManagedPreviewPreservesEmailHTML(t *testing.T) {
 		{"html without cache policy", "text/html; charset=utf-8", "", "no-transform"},
 		{"html with cache policy", "text/html", "private, max-age=60", "private, max-age=60, no-transform"},
 		{"html already protected", "application/xhtml+xml", "private, no-transform", "private, no-transform"},
+		{"quoted directive argument", "text/html", `no-cache="Set-Cookie, no-transform, ETag"`, `no-cache="Set-Cookie, no-transform, ETag", no-transform`},
 		{"non-html unchanged", "text/plain", "private, max-age=60", "private, max-age=60"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

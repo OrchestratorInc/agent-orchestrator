@@ -880,9 +880,22 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 				(mediaType == "text/html" || mediaType == "application/xhtml+xml") {
 				protected := false
 				for _, value := range res.Header.Values("Cache-Control") {
-					for _, directive := range strings.Split(value, ",") {
-						if strings.EqualFold(strings.TrimSpace(directive), "no-transform") {
-							protected = true
+					quoted, escaped, start := false, false, 0
+					for i := 0; i <= len(value); i++ {
+						if i == len(value) || (value[i] == ',' && !quoted) {
+							if strings.EqualFold(strings.TrimSpace(value[start:i]), "no-transform") {
+								protected = true
+							}
+							start = i + 1
+							continue
+						}
+						switch {
+						case escaped:
+							escaped = false
+						case quoted && value[i] == '\\':
+							escaped = true
+						case value[i] == '"':
+							quoted = !quoted
 						}
 					}
 				}
