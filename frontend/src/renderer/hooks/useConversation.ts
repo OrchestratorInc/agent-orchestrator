@@ -1360,16 +1360,8 @@ export function useConversationCommands(
 	 * means "wait and try again", and one means this harness cannot do it at all.
 	 */
 	const steer = useMutation({
-		onMutate: (input: { text: string; attachments?: WireImageContent[]; clientMessageId: string; recoverOnly?: boolean }) => {
+		onMutate: () => {
 			setSteerRefusedOn(undefined);
-			if (!input.recoverOnly && stateSessionId) {
-				queryClient.setQueryData<ConversationDispatchTrackingBySession>(
-					conversationDispatchTrackingQueryKey,
-					(current = {}) => current[stateSessionId]
-						? current
-						: { ...current, [stateSessionId]: { operation: "send", requestId: input.clientMessageId, state: "pending" } },
-				);
-			}
 			return { sentOn: currentTurnIdRef.current };
 		},
 		onError: (_error, _input, sent) => setSteerRefusedOn({ sentOn: sent?.sentOn, arrivedOn: currentTurnIdRef.current }),
@@ -1392,19 +1384,15 @@ export function useConversationCommands(
 			if (turnId && stateSessionId) {
 				queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 					conversationDispatchTrackingQueryKey,
-					(current = {}) => current[stateSessionId] && current[stateSessionId].requestId !== input.clientMessageId
+					(current = {}) => current[stateSessionId]?.state === "pending"
 						? current
 						: { ...current, [stateSessionId]: { operation: "send", requestId: input.clientMessageId, state: "accepted", turnId } },
 				);
-			} else if (stateSessionId) {
-				releaseConversationDispatch(queryClient, stateSessionId, input.clientMessageId);
 			}
 			invalidate();
 		},
-		onError: (_error, input) => {
-			if (stateSessionId) releaseConversationDispatch(queryClient, stateSessionId, input.clientMessageId);
-		},
 	});
+	const steerInFlight = steer.isPending && !steer.variables?.recoverOnly;
 
 	const promoteQueuedTurn = useMutation({
 		mutationFn: async (turnId: string) => {
@@ -1857,7 +1845,7 @@ export function useConversationCommands(
 				: undefined,
 		activateBranch: (branchId: string) => activateBranch.mutateAsync(branchId),
 		activateBranchPending: activateBranch.isPending,
-		activateBranchDisabled: hasActiveTurn,
+		activateBranchDisabled: hasActiveTurn || steerInFlight,
 		activateBranchTarget: activateBranch.variables,
 		activateBranchError:
 			activateBranchIsBusyError && !hasActiveTurn

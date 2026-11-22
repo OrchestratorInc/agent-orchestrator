@@ -1386,6 +1386,34 @@ describe("steering refusals", () => {
 		await waitFor(() => expect(result.current.activateBranchDisabled).toBe(false));
 	});
 
+	it("keeps a second steer blocking branch switching after the first fallback turn is acknowledged", async () => {
+		postMock.mockResolvedValueOnce({
+			data: { outcome: "sent", duplicate: false, turnId: "turn-9", state: "running" },
+			error: undefined,
+		});
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		await act(async () => {
+			await result.current.steer("first");
+		});
+		await waitFor(() => expect(result.current.pendingAcceptedTurnId).toBe("turn-9"));
+
+		const second = deferred<{ data: unknown; error: undefined }>();
+		postMock.mockImplementationOnce(() => second.promise);
+		let done!: Promise<unknown>;
+		act(() => {
+			done = result.current.steer("second with an image", [{ mimeType: "image/png", data: "aW1hZ2U=" }]);
+		});
+		act(() => result.current.acknowledgeAcceptedTurn("turn-9"));
+		await waitFor(() => expect(result.current.pendingAcceptedTurnId).toBeUndefined());
+		expect(result.current.activateBranchDisabled).toBe(true);
+
+		second.resolve({ data: { outcome: "steered", duplicate: false }, error: undefined });
+		await act(async () => {
+			await done;
+		});
+		await waitFor(() => expect(result.current.activateBranchDisabled).toBe(false));
+	});
+
 	it("clears steer pending before a slow conversation refresh finishes", async () => {
 		const refresh = deferred<void>();
 		const steerResponse = deferred<{
