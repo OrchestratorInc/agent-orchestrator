@@ -47,6 +47,7 @@ const (
 )
 
 var sessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+var dottedSessionIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$`)
 
 var getenv = os.Getenv
 
@@ -1515,6 +1516,11 @@ func handleID(handle ports.RuntimeHandle) (string, error) {
 	id := handle.ID
 	if id == "" {
 		return "", errors.New("tmux runtime: session id is required")
+	}
+	// Reviewer panes derive their stable handle from the worker session ID.
+	// A dotted project ID reaches lookup before Create has returned its tmux name.
+	if strings.Contains(id, ".") && dottedSessionIDPattern.MatchString(id) {
+		id = SessionName(id)
 	}
 	if !sessionIDPattern.MatchString(id) {
 		return "", fmt.Errorf("tmux runtime: invalid handle id %q", id)

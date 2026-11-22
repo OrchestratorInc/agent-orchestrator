@@ -333,6 +333,21 @@ func TestSessionNameMatchesCreateNaming(t *testing.T) {
 	}
 }
 
+func TestDottedReviewerHandleResolvesToCreateName(t *testing.T) {
+	raw := "review-memron.ai-2"
+	got, err := handleID(ports.RuntimeHandle{ID: raw})
+	if err != nil || got != SessionName(raw) {
+		t.Fatalf("handleID(%q) = %q, %v; want Create name %q", raw, got, err, SessionName(raw))
+	}
+	other, err := handleID(ports.RuntimeHandle{ID: "review-memron-ai-2"})
+	if err != nil || other == got {
+		t.Fatalf("distinct reviewer handle = %q, %v; dotted handle = %q", other, err, got)
+	}
+	if _, err := handleID(ports.RuntimeHandle{ID: "review-memron..ai-2"}); err == nil {
+		t.Fatal("dot path segment was accepted")
+	}
+}
+
 // -- env key validation --
 
 func TestCreateRejectsInvalidEnvKeys(t *testing.T) {
