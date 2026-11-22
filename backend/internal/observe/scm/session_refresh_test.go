@@ -68,6 +68,7 @@ func TestPoll_SessionRefreshFetchesOnlyThatSessionOnce(t *testing.T) {
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	waitForTerminalReaction(t, obs, "p-1")
 	if len(provider.fetchBatches) != 1 || len(provider.fetchBatches[0]) != 1 || provider.fetchBatches[0][0].Number != 1 {
 		t.Fatalf("forced poll batches = %v, want only PR 1", provider.fetchBatches)
 	}

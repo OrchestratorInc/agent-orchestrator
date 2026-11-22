@@ -1515,6 +1515,67 @@ func TestPoll_FailedTerminalReactionRetriesAndAcknowledges(t *testing.T) {
 	}
 }
 
+func TestPoll_ForcedTerminalRefreshWaitsForActiveReaction(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	local.MetadataHash = ""
+	store.prs["p-1"] = []domain.PullRequest{local}
+	terminal := testObs(1)
+	terminal.PR.State, terminal.PR.Merged = string(domain.PRStateMerged), true
+	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{prKey(testRepo, 1): terminal}}
+	lc := &gatedTerminalLifecycle{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := obs.Poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-lc.entered:
+	case <-time.After(time.Second):
+		t.Fatal("terminal reaction did not start")
+	}
+	store.mu.Lock()
+	if len(store.writes) != 1 {
+		store.mu.Unlock()
+		t.Fatal("terminal facts were not persisted before delivery")
+	}
+	store.prs["p-1"] = []domain.PullRequest{store.writes[0].pr}
+	store.mu.Unlock()
+	newer := terminal
+	newer.PR.Title = "newer terminal title"
+	provider.mu.Lock()
+	provider.observations[prKey(testRepo, 1)] = newer
+	provider.mu.Unlock()
+	obs.RequestReviewRefresh(local.URL)
+	if err := obs.Poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	writesWhileActive := len(store.writes)
+	store.mu.Unlock()
+	if writesWhileActive != 1 {
+		t.Fatalf("newer facts wrote before older acknowledgement: %d writes", writesWhileActive)
+	}
+	close(lc.release)
+	waitForTerminalReaction(t, obs, "p-1")
+	obs.forceMu.Lock()
+	retry := obs.forcedReviews[local.URL]
+	obs.forceMu.Unlock()
+	if !retry {
+		t.Fatal("skipped terminal refresh was not requeued")
+	}
+	if err := obs.Poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitForTerminalReaction(t, obs, "p-1")
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.writes) < 3 || store.writes[len(store.writes)-1].pr.Title != newer.PR.Title {
+		t.Fatalf("newer terminal facts were lost: %#v", store.writes)
+	}
+}
+
 func (l *gatedTerminalLifecycle) ApplySCMObservation(ctx context.Context, _ domain.SessionID, _ ports.SCMObservation) error {
 	_, bounded := ctx.Deadline()
 	l.mu.Lock()
@@ -2757,6 +2818,7 @@ func TestPoll_StaleOpenPRForcedRefreshAfterMaxAge(t *testing.T) {
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	waitForTerminalReaction(t, obs, "p-1")
 	if len(provider.fetchBatches) != 1 {
 		t.Fatalf("expected 1 fetch batch (stale PR forced refresh), got %d: %#v", len(provider.fetchBatches), provider.fetchBatches)
 	}
@@ -3366,6 +3428,7 @@ func TestPoll_GitHubTerminalReconciliation_TerminalTransition(t *testing.T) {
 	if err := obs.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	waitForTerminalReaction(t, obs, "p-1")
 
 	// The reconciliation pass must issue a detail fetch.
 	if len(provider.fetchBatches) != 1 || len(provider.fetchBatches[0]) != 1 {
@@ -3383,14 +3446,6 @@ func TestPoll_GitHubTerminalReconciliation_TerminalTransition(t *testing.T) {
 		t.Fatalf("terminal merged state not persisted; writes=%#v", store.writes)
 	}
 	// Lifecycle must see the terminal transition.
-	deadline := time.After(time.Second)
-	for obs.terminalReactionActive("p-1") {
-		select {
-		case <-deadline:
-			t.Fatal("terminal lifecycle did not finish")
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
 	if len(lc.observed) == 0 {
 		t.Fatalf("lifecycle not notified of terminal transition; observed=%#v", lc.observed)
 	}

@@ -756,6 +756,9 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		if o.reactionForPRActive(subj.session.ID, finalPR.URL) {
 			// The older delivery still owns this PR's acknowledgement. Keep
 			// the refresh pending so a later poll can persist newer facts.
+			if prepared.PR.Merged || prepared.PR.Closed {
+				o.retryTerminalReaction(finalPR.URL)
+			}
 			markRepoRefreshFailed(subj.repo)
 			continue
 		}
@@ -944,11 +947,13 @@ func (o *Observer) runTerminalReactions(id domain.SessionID) {
 		o.terminalMu.Unlock()
 		delivered := o.deliverTerminalReaction(task)
 		o.terminalMu.Lock()
-		delete(o.terminalInFlight[id], task.pr.URL)
-		o.terminalMu.Unlock()
 		if !delivered {
+			// Publish the retry before releasing in-flight ownership, so a
+			// poll cannot consume the request while still skipping this PR.
 			o.retryTerminalReaction(task.pr.URL)
 		}
+		delete(o.terminalInFlight[id], task.pr.URL)
+		o.terminalMu.Unlock()
 	}
 }
 

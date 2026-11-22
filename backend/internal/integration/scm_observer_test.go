@@ -175,15 +175,44 @@ func (t lifecycleMarkTerminator) Kill(ctx context.Context, id domain.SessionID) 
 
 type failOnceTerminator struct {
 	lcm   *lifecycle.Manager
+	mu    sync.Mutex
 	calls int
 }
 
 func (t *failOnceTerminator) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
+	t.mu.Lock()
 	t.calls++
-	if t.calls == 1 {
+	calls := t.calls
+	t.mu.Unlock()
+	if calls == 1 {
 		return false, errors.New("transient runtime teardown failure")
 	}
 	return true, t.lcm.MarkTerminated(ctx, id)
+}
+
+func (t *failOnceTerminator) count() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.calls
+}
+
+func waitForSCMSessionTermination(t *testing.T, ctx context.Context, f *scmFixture) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		rec, ok, err := f.store.GetSession(ctx, f.session.ID)
+		if err != nil || !ok {
+			t.Fatalf("GetSession: ok=%v err=%v", ok, err)
+		}
+		if rec.IsTerminated {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("merged session did not terminate: %+v", rec)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 
 func newSCMFixture(t *testing.T, branch string) *scmFixture {
@@ -428,14 +457,7 @@ func TestSCMObserverEndToEnd(t *testing.T) {
 		if err := f.observer.Poll(ctx); err != nil {
 			t.Fatalf("Poll: %v", err)
 		}
-
-		rec, ok, err := f.store.GetSession(ctx, f.session.ID)
-		if err != nil || !ok {
-			t.Fatalf("GetSession: ok=%v err=%v", ok, err)
-		}
-		if !rec.IsTerminated {
-			t.Fatalf("merged observation should MarkTerminated the session: %+v", rec)
-		}
+		waitForSCMSessionTermination(t, ctx, f)
 		if got := f.spy.count(); got != 0 {
 			t.Fatalf("merged observation must not nudge, got %d msgs: %+v", got, f.spy.snapshot())
 		}
@@ -456,17 +478,31 @@ func TestSCMObserverEndToEnd(t *testing.T) {
 		if err := f.observer.Poll(ctx); err != nil {
 			t.Fatalf("first Poll: %v", err)
 		}
+		firstAttemptDeadline := time.After(2 * time.Second)
+		for terminator.count() == 0 {
+			select {
+			case <-firstAttemptDeadline:
+				t.Fatal("first teardown attempt did not run")
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
 		if rec, _, _ := f.store.GetSession(ctx, f.session.ID); rec.IsTerminated {
 			t.Fatalf("failed teardown hid a live session: %+v", rec)
 		}
-		if err := f.observer.Poll(ctx); err != nil {
-			t.Fatalf("second Poll: %v", err)
+		retryDeadline := time.After(2 * time.Second)
+		for terminator.count() < 2 {
+			if err := f.observer.Poll(ctx); err != nil {
+				t.Fatalf("retry Poll: %v", err)
+			}
+			select {
+			case <-retryDeadline:
+				t.Fatalf("terminator calls = %d, want 2", terminator.count())
+			case <-time.After(5 * time.Millisecond):
+			}
 		}
-		if terminator.calls != 2 {
-			t.Fatalf("terminator calls = %d, want 2", terminator.calls)
-		}
-		if rec, _, _ := f.store.GetSession(ctx, f.session.ID); !rec.IsTerminated {
-			t.Fatalf("successful retry left session live: %+v", rec)
+		waitForSCMSessionTermination(t, ctx, f)
+		if got := terminator.count(); got != 2 {
+			t.Fatalf("terminator calls = %d, want 2", got)
 		}
 	})
 
@@ -640,13 +676,7 @@ func TestSCMObserverMultiPREndToEnd(t *testing.T) {
 		if err := f.observer.Poll(ctx); err != nil {
 			t.Fatalf("Poll 3: %v", err)
 		}
-		rec, ok, err := f.store.GetSession(ctx, f.session.ID)
-		if err != nil || !ok {
-			t.Fatalf("GetSession: ok=%v err=%v", ok, err)
-		}
-		if !rec.IsTerminated {
-			t.Fatalf("session should terminate once all PRs are merged: %+v", rec)
-		}
+		waitForSCMSessionTermination(t, ctx, f)
 		if got := f.spy.count(); got != 0 {
 			t.Fatalf("merge-driven completion must not nudge, got %d: %+v", got, f.spy.snapshot())
 		}
