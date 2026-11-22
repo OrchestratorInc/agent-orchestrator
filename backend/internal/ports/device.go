@@ -106,6 +106,13 @@ type DeviceStreamTuner interface {
 	SetStreamQuality(ctx context.Context, device DeviceInfo, quality DeviceStreamQuality) error
 }
 
+// DeviceControlRevoker is implemented by a provider whose agent command
+// outlives the lease it was bound for: a session that no longer holds a device
+// must not keep driving it, so RevokeControl turns that command off.
+type DeviceControlRevoker interface {
+	RevokeControl(sessionID string) error
+}
+
 // DeviceButtonPresser is implemented by a provider whose hardware buttons
 // need more than the stream socket's button message. The hub's app switcher
 // presses a Home button that a Face ID iPhone does not have, so it does

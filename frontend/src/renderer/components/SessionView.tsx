@@ -1,4 +1,5 @@
 import { apiErrorException } from "../lib/api-error-exception";
+import { deviceRevealStep, type DeviceBaseline } from "../lib/device-reveal";
 import { useSessionDevice } from "./DevicePanel";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
@@ -1771,20 +1772,25 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const deviceAvailable = Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
 	const deviceLease = useSessionDevice(sessionId, deviceAvailable && !terminated);
 	const deviceLeaseKey = deviceLease.data ? `${deviceLease.data.device.id}:${deviceLease.data.openedAt}` : "";
-	const deviceBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
+	const deviceBaselineRef = useRef<DeviceBaseline | null>(null);
+	// When this session was entered: a lease answer older than that is the
+	// cache from an earlier visit, not what the session holds now.
+	const deviceEnteredRef = useRef({ sessionId: "", at: 0 });
+	if (deviceEnteredRef.current.sessionId !== uiSessionId) deviceEnteredRef.current = { sessionId: uiSessionId, at: Date.now() };
+	const deviceLeaseUpdatedAt = deviceLease.dataUpdatedAt;
 	useEffect(() => {
 		if (!deviceAvailable || deviceLease.isPending) return;
-		const baseline = deviceBaselineRef.current;
-		if (!baseline || baseline.sessionId !== uiSessionId) {
-			deviceBaselineRef.current = { sessionId: uiSessionId, key: deviceLeaseKey };
-			return;
-		}
-		if (baseline.key === deviceLeaseKey) return;
-		deviceBaselineRef.current = { sessionId: uiSessionId, key: deviceLeaseKey };
-		if (!deviceLeaseKey || terminated) return;
+		const step = deviceRevealStep(deviceBaselineRef.current, {
+			sessionId: uiSessionId,
+			key: deviceLeaseKey,
+			dataUpdatedAt: deviceLeaseUpdatedAt,
+			enteredAt: deviceEnteredRef.current.at,
+		});
+		deviceBaselineRef.current = step.baseline;
+		if (!step.reveal || terminated) return;
 		transitionInspectorView("device");
 		setInspectorOpenForSession(uiSessionId, true);
-	}, [deviceAvailable, deviceLease.isPending, deviceLeaseKey, setInspectorOpenForSession, terminated, transitionInspectorView, uiSessionId]);
+	}, [deviceAvailable, deviceLease.isPending, deviceLeaseKey, deviceLeaseUpdatedAt, setInspectorOpenForSession, terminated, transitionInspectorView, uiSessionId]);
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.

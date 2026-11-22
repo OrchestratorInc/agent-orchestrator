@@ -57,6 +57,13 @@ type Provider struct {
 	lookPath func(string) (string, error)
 	run      func(ctx context.Context, name string, args ...string) ([]byte, error)
 
+	// startMu serialises the slow part of EnsureReady (installing the tools,
+	// starting the hub) without holding mu, which Close and Hub need.
+	startMu sync.Mutex
+	// life ends when Close starts: an install or hub start in flight stops.
+	life     context.Context
+	stopLife context.CancelFunc
+
 	mu  sync.Mutex
 	hub *hubProcess
 	// closed stops a hub that exits on its own from being restarted once the
@@ -92,9 +99,12 @@ func New(cfg Config) *Provider {
 	if log == nil {
 		log = slog.Default()
 	}
+	life, stopLife := context.WithCancel(context.Background())
 	return &Provider{
 		cfg:      cfg,
 		log:      log,
+		life:     life,
+		stopLife: stopLife,
 		http:     &http.Client{Timeout: bootTimeout},
 		lookPath: exec.LookPath,
 		run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -147,19 +157,35 @@ func (p *Provider) Platforms(ctx context.Context) []ports.DevicePlatformAvailabi
 	return []ports.DevicePlatformAvailability{ios, android}
 }
 
+// errProviderClosed is EnsureReady's answer once the daemon is shutting down.
+var errProviderClosed = errors.New("device support is shutting down")
+
 // EnsureReady installs the pinned tools, writes the agent shim, and starts the
 // hub. Concurrent callers share one start; a running hub returns at once.
 func (p *Provider) EnsureReady(ctx context.Context) error {
+	p.startMu.Lock()
+	defer p.startMu.Unlock()
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	if p.closed {
+		p.mu.Unlock()
+		return errProviderClosed
+	}
 	if p.hub != nil {
 		select {
 		case <-p.hub.done:
 			p.hub = nil
 		default:
+			p.mu.Unlock()
 			return nil
 		}
 	}
+	p.mu.Unlock()
+	// The work below can take minutes (an npm install) and must stop when the
+	// daemon shuts down, not hold Close up until it finishes.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(p.life, cancel)
+	defer stop()
 	nodePath, err := p.lookPath("node")
 	if err != nil {
 		return errors.New("node was not found on PATH; install Node.js 20 or newer")
@@ -184,7 +210,17 @@ func (p *Provider) EnsureReady(ctx context.Context) error {
 	p.stopStaleHub(hubTool.entryPath(root))
 	hub, err := p.startHub(ctx, nodePath, hubTool.entryPath(root))
 	if err != nil {
+		if p.life.Err() != nil {
+			return errProviderClosed
+		}
 		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		// Close ran while the hub started: nobody would ever stop it.
+		hub.cancel()
+		return errProviderClosed
 	}
 	p.hub = hub
 	if p.tuned == nil {
@@ -900,6 +936,20 @@ func (p *Provider) AgentControl(device ports.DeviceInfo, sessionID string) (port
 	return ports.DeviceAgentControl{Command: path}, nil
 }
 
+// RevokeControl replaces the session's bound agent-device command with one
+// that refuses: the lease it was written for has ended, and run again it would
+// open a new driver session on a device another session may now hold.
+func (p *Provider) RevokeControl(sessionID string) error {
+	if !safeLeaseToken.MatchString(sessionID) {
+		return fmt.Errorf("session id %q has characters a lease command cannot carry", sessionID)
+	}
+	path := filepath.Join(p.stateRoot(), "leases", sessionID, "agent-device")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil
+	}
+	return writeRevokedWrapper(path)
+}
+
 // ReleaseControl closes agent-device sessions AO opened on this device for
 // other AO sessions. agent-device claims a device per session machine-wide,
 // so a session that ended without closing would otherwise lock the device
@@ -946,6 +996,7 @@ func (p *Provider) ReleaseControl(ctx context.Context, device ports.DeviceInfo, 
 // Close stops the hub and the agent-device daemon the agents' commands
 // started. Simulators and emulators keep running; the user owns those.
 func (p *Provider) Close() error {
+	p.stopLife()
 	p.mu.Lock()
 	p.closed = true
 	hub := p.hub
