@@ -294,13 +294,14 @@ func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain
 }
 
 // installationSettled reports whether an installation observation is a
-// definite answer for the startup search. A failed check proves nothing, even
-// when it keeps the state an earlier check recorded. An executable whose
-// identity is not confirmed yet is present but unverified, not absent. Only a
-// completed not-installed result is definite, plus a harness with no
-// installation check, which can never answer.
+// definite answer for the startup search. Only a fresh, completed check
+// counts: a failed, stale, or still-running check can show the state an
+// earlier check recorded, which proves nothing now. An executable whose
+// identity is not confirmed yet is present but unverified, not absent. So the
+// definite answers are a fresh installed or not-installed result, plus a
+// harness with no installation check, which can never answer.
 func installationSettled(installation domain.AgentInstallationObservation) bool {
-	if isReadinessFailureCode(installation.ReasonCode) {
+	if installation.Freshness != domain.AgentReadinessFresh || isReadinessFailureCode(installation.ReasonCode) {
 		return false
 	}
 	switch installation.State {

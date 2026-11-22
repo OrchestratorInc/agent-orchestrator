@@ -1220,6 +1220,35 @@ func TestReadinessCoordinatorFindInstalledOnlyReportsMissingWhenEveryCheckSaysSo
 	}
 }
 
+// Only a fresh, completed observation is a definite answer. A re-check in
+// flight, a stale result, or a failure can all show an earlier "not installed"
+// that proves nothing now.
+func TestInstallationSettledOnlyTrustsFreshCompletedAnswers(t *testing.T) {
+	t.Parallel()
+	notInstalled := func(freshness domain.AgentReadinessFreshness, code string) domain.AgentInstallationObservation {
+		return domain.AgentInstallationObservation{State: domain.AgentInstallationNotInstalled, Freshness: freshness, ReasonCode: code}
+	}
+	unknown := func(code string) domain.AgentInstallationObservation {
+		return domain.AgentInstallationObservation{State: domain.AgentInstallationUnknown, Freshness: domain.AgentReadinessFresh, ReasonCode: code}
+	}
+	for _, tc := range []struct {
+		name        string
+		observation domain.AgentInstallationObservation
+		want        bool
+	}{
+		{"fresh not installed", notInstalled(domain.AgentReadinessFresh, domain.AgentReadinessReasonNotInstalled), true},
+		{"no installation check", unknown(domain.AgentReadinessReasonInstallCheckUnsupported), true},
+		{"earlier absence while a re-check runs", notInstalled(domain.AgentReadinessChecking, domain.AgentReadinessReasonChecking), false},
+		{"earlier absence gone stale", notInstalled(domain.AgentReadinessStale, domain.AgentReadinessReasonNotInstalled), false},
+		{"earlier absence kept by a timed-out check", notInstalled(domain.AgentReadinessStale, domain.AgentReadinessReasonInstallCheckTimeout), false},
+		{"identity not confirmed yet", unknown(domain.AgentReadinessReasonInstallIdentityPending), false},
+	} {
+		if got := installationSettled(tc.observation); got != tc.want {
+			t.Errorf("installationSettled(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 // A failed re-check keeps the state an earlier check recorded, with the
 // failure as its reason. An earlier "not installed" must not turn that failure
 // into proof of absence.
