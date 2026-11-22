@@ -34,6 +34,24 @@ async function edit(label: string, value: string) {
 }
 
 describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
+	it("keeps changed controls quiet during a successful autosave", async () => {
+		let finish!: (result: object) => void;
+		const save = vi.fn().mockReturnValue(new Promise<object>((resolve) => { finish = resolve; }));
+		const { onSaveState } = setup(cloud, save);
+		await edit("Project name", "New name");
+		await userEvent.click(screen.getByRole("switch", { name: "Auto review PRs" }));
+		const nameRow = screen.getByTestId("setting-displayName");
+		const toggleRow = screen.getByTestId("setting-autoReview");
+		expect(within(nameRow).queryByText(/Unsaved changes/)).not.toBeInTheDocument();
+		expect(within(toggleRow).queryByText(/Unsaved changes/)).not.toBeInTheDocument();
+		await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+		expect(within(nameRow).queryByText(/Unsaved changes/)).not.toBeInTheDocument();
+		expect(within(toggleRow).queryByText(/Unsaved changes/)).not.toBeInTheDocument();
+		await act(async () => finish({}));
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "saved", dirty: false })));
+		expect(screen.queryByText(/Unsaved changes/)).not.toBeInTheDocument();
+	});
+
 	it("marks changed controls unsaved after a refused write, then clears feedback on retry and reopen", async () => {
 		const save = vi.fn().mockRejectedValueOnce(new Error("Save rejected")).mockResolvedValue({});
 		const { onSaveState, unmount } = setup(cloud, save);
