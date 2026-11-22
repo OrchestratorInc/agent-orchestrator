@@ -353,6 +353,7 @@ export const ChatComposer = memo(function ChatComposer({
 	autoFocus = true,
 	draftSessionId,
 	draftSessionIncarnation,
+	handoffSessionId,
 	assetBaseUrl,
 	remoteHost = false,
 	assetSessionId,
@@ -523,6 +524,12 @@ export const ChatComposer = memo(function ChatComposer({
 	draftSessionId?: string;
 	/** Immutable daemon identity for this exact incarnation of the session id. */
 	draftSessionIncarnation?: string;
+	/**
+	 * The session whose follow-up from the new chat page this composer takes
+	 * (takeComposerHandoff). Set even where drafts cannot be saved, when
+	 * draftSessionId is not.
+	 */
+	handoffSessionId?: string;
 	/** Host-specific proxy origin for staged attachment reads. */
 	assetBaseUrl?: string;
 	/** The session belongs to a remote host, even if its proxy is disconnected. */
@@ -805,22 +812,24 @@ export const ChatComposer = memo(function ChatComposer({
 		setAttachmentDraftPersistenceError(null);
 		automaticDeliveryRecoveryAttempted.current = undefined;
 	}, [draftScope, draftScopeKey, parkUnsentSends]);
-	// A handed-off follow-up whose save failed stays in the box and in memory, like
-	// typing whose save failed, beside the save error. It runs after the reset
-	// above, which starts the scope with nothing unsaved, and before the restore,
-	// which then leaves the unsaved text alone. Nothing sends it by itself: the
-	// person's Enter saves it as part of the send.
+	// A handed-off follow-up that could not be saved stays in the box and in memory,
+	// like typing whose save failed: beside the save error, or under the in-memory
+	// composer's own storage notice. It runs after the reset above, which starts
+	// the scope with nothing unsaved, and before the restore, which then leaves the
+	// unsaved text alone. Nothing sends it by itself; the person sends it.
 	useEffect(() => {
 		const text = unsavedHandoff.current;
 		if (text === undefined) return;
 		unsavedHandoff.current = undefined;
-		unsavedText.current = { text, revision: composerRevision.current };
+		if (draftScope) {
+			unsavedText.current = { text, revision: composerRevision.current };
+			setTextDraftPersistenceError("chat.draft.saveFailed");
+		}
 		textRef.current = text;
 		hasTextRef.current = text.trim().length > 0;
 		setHasText(hasTextRef.current);
 		editor.current?.setText(text);
-		setTextDraftPersistenceError("chat.draft.saveFailed");
-	}, [draftScopeKey]);
+	}, [draftScope]);
 	const fileAttachments = useFileAttachments({
 		initialAttachments: restoredAttachments,
 		initialKey: attachmentScopeKey,
@@ -1537,10 +1546,17 @@ export const ChatComposer = memo(function ChatComposer({
 	// Entered there, it is held here and sent once the box can send, which queues
 	// it behind the brief. A draft of the session's own keeps its place: the
 	// follow-up goes below it, for the person to send.
+	// Where drafts cannot be saved (an in-memory composer), it is shown as unsaved
+	// typing instead.
 	useLayoutEffect(() => {
-		if (!draftSessionId || !draftScope) return;
-		const handoff = takeComposerHandoff(draftSessionId);
+		const sessionId = draftSessionId ?? handoffSessionId;
+		if (!sessionId) return;
+		const handoff = takeComposerHandoff(sessionId);
 		if (!handoff) return;
+		if (!draftScope) {
+			unsavedHandoff.current = handoff.text;
+			return;
+		}
 		const own = readChatSessionDraft(draftScope).composer;
 		const kept = own.text.trim() ? own.text.replace(/\s+$/, "") : "";
 		const text = kept ? `${kept}\n\n${handoff.text}` : handoff.text;
@@ -1553,7 +1569,7 @@ export const ChatComposer = memo(function ChatComposer({
 		composerRevision.current = result.draft.composer.revision;
 		textRef.current = text;
 		if (handoff.send && !kept && !own.delivery) setHeldSubmit({ text, steer: false, own: true });
-	}, [draftScope, draftSessionId, setHeldSubmit]);
+	}, [draftScope, draftSessionId, handoffSessionId, setHeldSubmit]);
 	// Quoted text from outside the chat (a PR comment's "Add to chat") joins the
 	// draft below what is already typed, ready for the person's own words.
 	useEffect(() => {

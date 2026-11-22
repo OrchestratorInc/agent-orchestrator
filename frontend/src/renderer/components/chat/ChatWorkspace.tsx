@@ -2573,6 +2573,8 @@ function ChatWorkspaceContent({
 										compactBlocked={Boolean(durableTurn)}
 										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
+										// Kept when drafts cannot be saved, so a follow-up from the new chat page still arrives.
+										handoffSessionId={queueEdit ? undefined : draftScope.sessionId}
 										assetBaseUrl={assetBaseUrl}
 										assetSessionId={snapshot.sessionId}
 										remoteHost={Boolean(activeRemoteHostId)}

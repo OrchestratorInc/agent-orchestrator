@@ -150,6 +150,23 @@ describe("handing a follow-up from the new chat page to its session", () => {
 		}
 	});
 
+	it("shows a follow-up as unsaved typing in a composer that cannot save drafts, for the person to send", async () => {
+		const sessionId = "handoff-session-memory";
+		handOffComposerDraft(sessionId, { text: "Also add tests", send: true });
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		renderComposer({ handoffSessionId: sessionId, onSend, willQueue: true });
+		const field = screen.getByLabelText("Message the agent");
+
+		await waitFor(() => expect(field).toHaveTextContent("Also add tests"));
+		await act(async () => {});
+		expect(onSend).not.toHaveBeenCalled();
+		expect(takeComposerHandoff(sessionId)).toBeUndefined();
+
+		fireEvent.keyDown(field, { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
+		expect(onSend.mock.calls[0][0]).toBe("Also add tests");
+	});
+
 	it("puts a follow-up below the session's own draft, for the person to send", async () => {
 		const sessionId = "handoff-session-own-draft";
 		writeChatComposerText(sessionId, "My own words");

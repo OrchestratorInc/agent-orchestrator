@@ -27,6 +27,7 @@ import type { ConversationActivity, ConversationItem, ConversationMessage, Conve
 import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
+import { handOffComposerDraft } from "../../lib/chat-context-bus";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import {
 	getChatComposerMutation,
@@ -5666,6 +5667,39 @@ describe("ChatWorkspace message actions", () => {
 			expect(
 				readChatSessionDraft({ sessionId: snapshot.sessionId, incarnation: session.createdAt }, backing).composer.text,
 			).toBe("");
+		} finally {
+			localStorage.mockRestore();
+		}
+	});
+
+	it("shows a new chat's follow-up in the in-memory composer when draft storage cannot activate", async () => {
+		const snapshot: ConversationSnapshot = { ...idleSnapshot(), capabilities: [], hasMoreBefore: false };
+		const onSend = vi.fn();
+		const session = {
+			...chatSession,
+			createdAt: "2026-08-26T09:40:00.000Z",
+		};
+		const backing = window.localStorage;
+		const storage = {
+			getItem: backing.getItem.bind(backing),
+			removeItem: backing.removeItem.bind(backing),
+			setItem: (_key: string, _value: string): void => {
+				throw new DOMException("blocked", "SecurityError");
+			},
+		} as Storage;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+		handOffComposerDraft(snapshot.sessionId, { text: "Also add tests", send: true });
+
+		try {
+			render(<ChatWorkspace snapshot={snapshot} session={session} onSend={onSend} />);
+			expect(await screen.findByText(/Drafts can’t be saved right now/)).toBeInTheDocument();
+			const composer = await screen.findByLabelText("Message the agent");
+			await waitFor(() => expect(composer).toHaveTextContent("Also add tests"));
+			// It could not be saved, so the person sends it.
+			expect(onSend).not.toHaveBeenCalled();
+
+			fireEvent.keyDown(composer, { key: "Enter" });
+			await waitFor(() => expect(onSend.mock.calls[0]?.[0]).toBe("Also add tests"));
 		} finally {
 			localStorage.mockRestore();
 		}
