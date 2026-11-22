@@ -434,6 +434,14 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.getAllByText(/The orchestrator agent is being replaced/)).toHaveLength(1);
 	});
 
+	it("keeps a reply that ends in a full-width question mark in view", () => {
+		renderOrchestrator([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "#5051をマージしますか？"),
+		]);
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
 	it("keeps failures whose errors differ apart", () => {
 		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
 		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider returned HTTP ${index ? 500 : 429}.` })) });

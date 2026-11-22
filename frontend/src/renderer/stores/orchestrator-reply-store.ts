@@ -61,12 +61,13 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 		check = fetchRecentConversation(sessionId, hostId).then((snapshot) => {
 			const index = indexWorkerUpdates(snapshot.items);
 			const settled = snapshot.turns.filter((turn) => Date.parse(turn.completedAt ?? "") >= since);
-			return settled.length === 0 || snapshot.turns.some((turn) => turn.state === "running") || settled.some((turn) => {
+			const started = snapshot.turns.some((turn) => turn.state === "running" && Date.parse(turn.requestedAt) >= since);
+			return settled.length === 0 || started || settled.some((turn) => {
 				if (turn.hasHumanPrompt) return true;
 				const standing = turnStanding(snapshot.items.filter((item) => item.turnId === turn.id), turn.state, index);
 				return standing !== "background" && standing !== "replaced";
 			});
-		}, () => true);
+		}).catch(() => true);
 		checks.set(id, check);
 		void check.finally(() => checks.delete(id));
 	}
@@ -108,7 +109,8 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 		if (!key || !orchestrator || prev?.id !== orchestrator.id || !prev.working) return;
 		if (activityState !== "idle" && activityState !== "waiting_input") return;
 		const store = useOrchestratorReplyStore.getState();
-		if (!quiet || viewing || activityState === "waiting_input" || lastUserAt > (store.replyAt[key] ?? 0)) {
+		const answered = lastUserAt > (store.replyAt[key] ?? 0) && lastUserAt <= prev.since;
+		if (!quiet || viewing || activityState === "waiting_input" || answered) {
 			store.recordReply(key, at);
 			return;
 		}

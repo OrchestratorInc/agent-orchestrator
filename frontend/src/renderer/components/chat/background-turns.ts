@@ -17,5 +17,5 @@ export function turnStanding(items: readonly ConversationItem[], state: string, 
 	if (state === "failed") return "failed";
 	if (!settled) return "up";
 	if (items.some((item) => workerUpdatesOf(item).some((update) => needsYouNow(index, update)))) return "up";
-	return /\?[*_]*$/.test(finalReply(items)) ? "up" : "background";
+	return /[?？][*_)\]"'”’`]*$/.test(finalReply(items)) ? "up" : "background";
 }

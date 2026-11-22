@@ -112,6 +112,19 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
+	it("checks a background turn the user wrote during, instead of counting it as their answer", async () => {
+		fetchRecentConversation.mockResolvedValue(workerTurn("Noted."));
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
+		const wrote = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:05:10Z" }) as WorkspaceSession;
+		const hook = setup(orchestrator("active", "2026-11-08T10:05:00Z"));
+		hook.rerender({ orchestrator: wrote("active", "2026-11-08T10:05:10Z"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBe("working");
+		hook.rerender({ orchestrator: wrote("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalled());
+		await act(async () => {});
+		expect(hook.result.current).toBeNull();
+	});
+
 	it("lights up when the settled turns cannot be read", async () => {
 		fetchRecentConversation.mockRejectedValue(new Error("offline"));
 		const hook = afterYourReply();
