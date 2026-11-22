@@ -440,6 +440,29 @@ func TestViewerReplayDoesNotWaitForTheDecision(t *testing.T) {
 	}
 }
 
+// TestShutdownClosesAConnectionStillWaitingForItsFirstFrame: a connection
+// accepted before shutdown that is still silent when shutdown sweeps the
+// clients is closed, not registered afterwards and left open.
+func TestShutdownClosesAConnectionStillWaitingForItsFirstFrame(t *testing.T) {
+	defer func(wait time.Duration) { replayDecisionWait = wait }(replayDecisionWait)
+	replayDecisionWait = 300 * time.Millisecond
+	f := startServe(t, 124)
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	time.Sleep(50 * time.Millisecond) // let the host accept it
+
+	f.cancel()
+	f.waitDone(t)
+	select {
+	case _, ok := <-c.frameC:
+		if ok {
+			t.Fatal("got a frame, want the connection closed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("connection left open after shutdown")
+	}
+}
+
 // TestFanOut: two clients receive the same PTY output.
 func TestFanOut(t *testing.T) {
 	f := startServe(t, 101)

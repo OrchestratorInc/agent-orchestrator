@@ -603,6 +603,13 @@ func (h *host) handleConn(conn net.Conn) {
 	// 200 KB, on a path that already held this lock while EncodeMessage
 	// copied the same bytes.
 	h.mu.Lock()
+	select {
+	case <-h.shutdownC: // shutdown already closed the clients it knew about
+		h.mu.Unlock()
+		client.close(conn)
+		return
+	default:
+	}
 	if !client.control {
 		snap := h.cfg.Ring.Replay()
 		if prefix := h.modes.Restore(snap); len(prefix) > 0 {
