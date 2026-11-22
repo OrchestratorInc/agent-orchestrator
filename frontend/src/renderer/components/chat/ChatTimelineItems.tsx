@@ -183,6 +183,7 @@ import {
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
+import { WorkspacePathSegments } from "../ChangedFilesList";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "2-digit",
@@ -4222,10 +4223,10 @@ export function TurnChangedFiles({
 							<span className="sr-only">{status.label}</span>
 							<FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 							<span
-								className="min-w-0 flex-1 truncate text-xs text-foreground/80"
+								className="flex min-w-0 flex-1 text-xs"
 								title=""
 							>
-								{openPath}
+								<WorkspacePathSegments path={openPath} nameClassName="text-foreground/80" />
 							</span>
 							{file.additions > 0 ? (
 								<span className="shrink-0 font-mono text-caption tabular-nums text-success">
@@ -4272,7 +4273,7 @@ export function TurnChangedFiles({
 										oldPath={file.oldPath}
 										locationPath={tooltipPath}
 										locationOldPath={tooltipOldPath}
-										className="min-w-0 flex-1 truncate text-xs text-foreground/80"
+										className="flex min-w-0 flex-1 text-xs"
 									/>
 									{file.additions > 0 ? (
 										<span className="shrink-0 font-mono text-caption tabular-nums text-success">
@@ -4342,15 +4343,15 @@ function FileLocationLabel({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				{/* `title=""` blocks Chromium's native ellipsis tooltip so only the
-				    path tooltip below appears — otherwise hover shows the basename. */}
+				    worktree path tooltip below appears. */}
 				<span
 					className={cn(
-						"min-w-0 truncate text-xs text-foreground/65 outline-none",
+						showFullPath ? "flex min-w-0 text-xs outline-none" : "min-w-0 truncate text-xs text-foreground/65 outline-none",
 						className,
 					)}
 					title=""
 				>
-					{showFullPath ? path : fileBasename(path)}
+					{showFullPath ? <WorkspacePathSegments path={path} nameClassName="text-foreground/80" /> : fileBasename(path)}
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
