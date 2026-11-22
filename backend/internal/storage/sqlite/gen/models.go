@@ -19,6 +19,9 @@ type AgentAccount struct {
 	Email     string
 	Plan      string
 	CreatedAt time.Time
+	Kind      string
+	Name      string
+	KeyHint   string
 }
 
 type AgentAccountDefault struct {
@@ -575,6 +578,8 @@ type PR struct {
 	ReviewPartial            bool
 	HeadFromFork             bool
 	HeadIsDefaultBranch      bool
+	MergeQueueRequired       bool
+	MergeQueueEntry          string
 }
 
 type PRCheck struct {

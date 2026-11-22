@@ -1981,9 +1981,13 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnchanged):
 		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
+	case errors.Is(err, ports.ErrAgentAccountNeedsDeveloperMode):
+		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
+			"Turn on Windows Developer Mode to use this account: search Windows Settings for Developer Mode (System > Advanced on Windows 11 25H2 and later).",
+			map[string]any{"windowsDeveloperMode": true})
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
-			"Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
+			"Orchestrator cannot link this account's folder to this computer's history.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):

@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpFromLine, ChevronDown, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
+import { ArrowUpFromLine, ChevronDown, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, ListEnd, ListX, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { prStackQueryKey, usePRStack } from "../hooks/usePRStack";
@@ -8,8 +8,8 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { clientForSessionHost } from "../lib/host-clients";
-import { prSummaryBlockReason, type PRBlockReason } from "../lib/pr-display";
-import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
+import { prMergeQueueDetail, prMergeQueueEntry, prSummaryBlockReason, type PRBlockReason, type PRMergeQueueEntry } from "../lib/pr-display";
+import { stackBlocker, stackLayersToLand, type StackBlockReason } from "../lib/pr-stack";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { cn } from "../lib/utils";
 import type { SessionGitActionKind } from "../stores/session-git-action-store";
@@ -122,15 +122,26 @@ function usePRStateChange(pr: SessionPRSummary, sessionId: string, hostId?: stri
 			void refresh();
 		},
 	});
-	return { change, refresh, showState };
+	/** Shows the PR's confirmed place in its merge queue, or that it left, before the next sync. */
+	const showQueue = (entry: PRMergeQueueEntry | undefined) => {
+		queryClient.setQueryData<{ prs: SessionPRSummary[]; linkedPrs: unknown[] }>(
+			sessionScmSummaryQueryKey(sessionId, hostId),
+			(current) => current ? {
+				...current,
+				prs: current.prs.map((cached) => cached.url === pr.url ? { ...cached, mergeQueueRequired: true, mergeQueue: entry } : cached),
+			} : current,
+		);
+	};
+	return { change, refresh, showQueue, showState };
 }
 
 /**
  * A PR's one action button, as in other agent apps: it does the next step,
  * the branch's work first (commit and push, update from main), then what the
  * PR is waiting for (Ready for review on a draft; Reopen when closed; merge
- * with the chosen method; or, on a stacked PR, the layers up to it together,
- * since merging one alone would land it on its parent's branch), and its menu
+ * with the chosen method, or join the merge queue where the base branch has
+ * one, which sets the method itself; or, on a stacked PR, the layers up to it
+ * together, since merging one alone would land it on its parent's branch), and its menu
  * holds everything else: the other
  * branch steps, the merge method and Close. Merge stays visible while the PR
  * isn't ready, greyed out with the reason.
@@ -150,7 +161,10 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	const [method, setMethod] = useState<PRMergeMethod>(() => chosenMethod.get(repoKey) ?? "squash");
 	const [confirmClose, setConfirmClose] = useState(false);
 	const [confirmStack, setConfirmStack] = useState(false);
-	const { change, refresh, showState } = usePRStateChange(pr, sessionId, hostId, () => setConfirmClose(false));
+	const { change, refresh, showQueue, showState } = usePRStateChange(pr, sessionId, hostId, () => setConfirmClose(false));
+	const queued = prMergeQueueEntry(pr);
+	// The base branch merges through a queue: merging means joining it.
+	const viaQueue = pr.mergeQueueRequired === true;
 	const stackQuery = usePRStack(pr, hostId, pr.state === "open" || pr.state === "draft");
 	const stack = stackQuery.data?.stack;
 	const landing = stackLayersToLand(stack, pr.number);
@@ -173,8 +187,27 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 				void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				return;
 			}
+			// The base branch has a merge queue: the PR joined it and stays open.
+			if (result?.queue) showQueue(result.queue);
 			await refresh();
 		},
+	});
+	const dequeue = useMutation({
+		mutationFn: async () => {
+			if (usePreviewData) return undefined;
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/dequeue", {
+				params: { path: { id: String(pr.number) } },
+				body: { prUrl: pr.url },
+			});
+			if (error) throw apiErrorException(error, t("pr.queue.removeFailed", { number: pr.number }));
+			return data;
+		},
+		onSuccess: async () => {
+			showQueue(undefined);
+			await refresh();
+		},
+		// It may have merged or left the queue meanwhile; show what's true now.
+		onError: () => { void refresh(); },
 	});
 	const mergeStack = useMutation({
 		mutationFn: async () => {
@@ -194,12 +227,12 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 		},
 	});
 	if (pr.state === "merged" || !pr.url) return null;
-	const busy = merge.isPending || mergeStack.isPending || change.isPending;
+	const busy = merge.isPending || mergeStack.isPending || change.isPending || dequeue.isPending;
 	const open = pr.state === "open" || pr.state === "draft";
 	const lowerBlock = landing ? stackBlocker(landing, pr.number) : undefined;
 	const blocker = lowerBlock
-		? t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) })
-		: canMerge ? undefined : t(blockedSentence[prSummaryBlockReason(pr) ?? "provider"]);
+		? t("pr.stack.blocked", { number: lowerBlock.number, reason: t(stackBlockReasonLabel[lowerBlock.reason]) })
+		: canMerge || queued ? undefined : t(blockedSentence[prSummaryBlockReason(pr) ?? "provider"]);
 	// Until the stack is known, a merge can't say what it would land. A failed read
 	// doesn't hold it up: the daemon re-checks before merging.
 	const mergeAllowed = canMerge && !lowerBlock && !stackQuery.isLoading;
@@ -208,7 +241,9 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	const merging = merge.isPending || mergeStack.isPending;
 	const mergeNotice = mergeStack.data?.status === "enqueued" ? t("pr.stack.queued") : mergeStack.data?.status === "pending" ? t("pr.stack.pending") : null;
 	const methodLabel = t(`pr.merge.method.${method}`);
-	const mergeLabel = severalLayers ? t("pr.stack.mergeThrough", { layers: severalLayers.length, number: pr.number }) : methodLabel;
+	const mergeLabel = severalLayers ? t("pr.stack.mergeThrough", { layers: severalLayers.length, number: pr.number }) : viaQueue ? t("pr.queue.add") : methodLabel;
+	const mergeAria = severalLayers ? mergeLabel : viaQueue ? t("pr.queue.addFor", { number: pr.number }) : t("pr.merge.methodFor", { method: methodLabel, number: pr.number });
+	const queuedLabel = queued ? (queued.position > 0 ? t("pr.queue.queuedAt", { position: queued.position }) : t("pr.queue.queued")) : "";
 	const choose = (next: string) => {
 		const value = next as PRMergeMethod;
 		chosenMethod.set(repoKey, value);
@@ -229,12 +264,15 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 		? { label: t("pr.state.action.ready"), aria: t("pr.state.action.ready"), icon: GitPullRequest, run: () => change.mutate("ready"), disabled: busy, tone: "secondary" as const }
 		: pr.state === "closed"
 			? { label: t("pr.state.action.reopen"), aria: t("pr.state.action.reopen"), icon: GitPullRequest, run: () => change.mutate("reopen"), disabled: busy, tone: "secondary" as const }
-			: { label: merging ? t("pr.merge.merging") : mergeLabel, aria: severalLayers ? mergeLabel : t("pr.merge.methodFor", { method: methodLabel, number: pr.number }), icon: GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
+			: queued
+				// Already in the queue: the button says where, and the menu takes it out.
+				? { label: queuedLabel, aria: t("pr.queue.queuedFor", { number: pr.number, status: queuedLabel }), icon: ListEnd, run: () => {}, disabled: true, tone: "secondary" as const }
+				: { label: merging ? t(viaQueue && !severalLayers ? "pr.queue.adding" : "pr.merge.merging") : mergeLabel, aria: mergeAria, icon: viaQueue && !severalLayers ? ListEnd : GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
 	const primary = gitPrimary ?? { ...prPrimary, spinning: false };
 	const gitMenu = updateYields && git?.primary ? [git.primary, ...git.menu] : (git?.menu ?? []).filter((step) => step.kind !== git?.primary?.kind);
 	// Ready for review, when branch work holds the button on a draft.
 	const stateSteps = pr.state === "draft" && gitPrimary ? [{ key: "ready" as const, label: t("pr.state.action.ready"), icon: GitPullRequest }] : [];
-	const errorText = [merge.error, change.error, confirmStack ? null : mergeStack.error].find((value): value is Error => value instanceof Error && !confirmClose)?.message ?? git?.error ?? null;
+	const errorText = [merge.error, dequeue.error, change.error, confirmStack ? null : mergeStack.error].find((value): value is Error => value instanceof Error && !confirmClose)?.message ?? git?.error ?? null;
 
 	return (
 		<div className="flex min-w-0 flex-col items-stretch gap-1" data-testid="pr-action-button">
@@ -256,7 +294,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 					type="button"
 					variant={primary.tone === "go" ? "primary" : "secondary"}
 				>
-					{primary.spinning || (!gitPrimary && busy && (merging || change.variables === "ready" || change.variables === "reopen")) ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : <primary.icon aria-hidden="true" className="size-icon-sm" />}
+					{primary.spinning || (!gitPrimary && busy && (merging || dequeue.isPending || change.variables === "ready" || change.variables === "reopen")) ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : <primary.icon aria-hidden="true" className="size-icon-sm" />}
 					<span className="truncate">{primary.label}</span>
 				</Button>
 				<DropdownMenu>
@@ -289,16 +327,28 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 						) : null}
 						{open ? (
 							<>
-								<DropdownMenuLabel className="text-micro font-medium text-muted-foreground">{t("pr.merge.methodTitle")}</DropdownMenuLabel>
-								<DropdownMenuRadioGroup onValueChange={choose} value={method}>
-									{MERGE_METHODS.map((value) => (
-										<DropdownMenuRadioItem key={value} value={value}>{t(`pr.merge.method.${value}`)}</DropdownMenuRadioItem>
-									))}
-								</DropdownMenuRadioGroup>
+								{queued ? (
+									<DropdownMenuItem disabled={busy} onSelect={() => dequeue.mutate()}>
+										<ListX aria-hidden="true" />
+										{t("pr.queue.remove")}
+									</DropdownMenuItem>
+								) : viaQueue && pr.state === "open" ? (
+									// The queue's own settings pick how its entries merge.
+									<DropdownMenuLabel className="text-micro font-normal text-muted-foreground">{t("pr.queue.methodNote")}</DropdownMenuLabel>
+								) : (
+									<>
+										<DropdownMenuLabel className="text-micro font-medium text-muted-foreground">{t("pr.merge.methodTitle")}</DropdownMenuLabel>
+										<DropdownMenuRadioGroup onValueChange={choose} value={method}>
+											{MERGE_METHODS.map((value) => (
+												<DropdownMenuRadioItem key={value} value={value}>{t(`pr.merge.method.${value}`)}</DropdownMenuRadioItem>
+											))}
+										</DropdownMenuRadioGroup>
+									</>
+								)}
 								{/* With branch work on the button, merging is still one pick away. */}
-								{gitPrimary && pr.state === "open" ? (
+								{gitPrimary && pr.state === "open" && !queued ? (
 									<DropdownMenuItem disabled={!mergeAllowed || busy} onSelect={mergeNow} title={blocker}>
-										<GitMerge aria-hidden="true" />
+										{viaQueue && !severalLayers ? <ListEnd aria-hidden="true" /> : <GitMerge aria-hidden="true" />}
 										{mergeLabel}
 									</DropdownMenuItem>
 								) : null}
@@ -324,7 +374,8 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 				</DropdownMenu>
 			</div>
 			{errorText ? <p className="m-0 text-xs leading-normal text-error" role="status">{errorText}</p> : null}
-			{mergeNotice ? <p className="m-0 text-xs leading-normal text-muted-foreground" role="status">{mergeNotice}</p> : null}
+			{mergeNotice && !queued ? <p className="m-0 text-xs leading-normal text-muted-foreground" role="status">{mergeNotice}</p> : null}
+			{queued && !gitPrimary ? <p className="m-0 text-xs leading-normal text-muted-foreground" data-testid="pr-queue-status" role="status">{prMergeQueueDetail(queued)}</p> : null}
 			<ConfirmDialog
 				busy={change.isPending}
 				confirmLabel={t("pr.actions.close")}
@@ -464,4 +515,10 @@ export const blockReasonLabel: Record<PRBlockReason, "pr.blocker.draft" | "pr.bl
 	changes: "pr.blocker.changes",
 	review: "pr.blocker.review",
 	threads: "pr.blocker.threads",
+};
+
+/** A stack's reasons as a label: a layer's own, or one still to be rebased. */
+export const stackBlockReasonLabel: Record<StackBlockReason, (typeof blockReasonLabel)[PRBlockReason] | "pr.stack.needsRebase"> = {
+	...blockReasonLabel,
+	rebase: "pr.stack.needsRebase",
 };

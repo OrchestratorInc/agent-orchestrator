@@ -165,7 +165,7 @@ func (s *Service) planNativeSession(ctx context.Context, target domain.SessionSe
 		plan.outcome = nativeUnsupported
 		return plan
 	}
-	previous, hadPrevious, err := s.store.GetSessionSearchSource(ctx, plan.sourceKey)
+	previous, hadPrevious, err := s.sourceState(ctx, plan.sourceKey)
 	if err != nil {
 		s.log.Warn("session search source read failed", "source", plan.sourceKey, "error", err)
 		return plan
@@ -435,7 +435,7 @@ func (s *Service) forEachNativePlan(ctx context.Context, targets []domain.Sessio
 // harness's transcript" must not mean "this session cannot be found": the title
 // is the one thing AO always knows.
 func (s *Service) markUnsupported(ctx context.Context, sourceKey string, target domain.SessionSearchTarget) {
-	previous, had, err := s.store.GetSessionSearchSource(ctx, sourceKey)
+	previous, had, err := s.sourceState(ctx, sourceKey)
 	if err != nil {
 		return
 	}

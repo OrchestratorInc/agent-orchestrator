@@ -1686,6 +1686,21 @@ describe("BrowserPanel", () => {
 		expect(hookState.annotationAction).toHaveBeenCalledWith("discard-all");
 	});
 
+	it("renders the empty annotation placeholder text in the annotation context area", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/docs" };
+		hookState.annotationMode = true;
+		hookState.annotationState = { count: 0, screenshotCount: 0, hasDraft: false };
+
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const annotationToolbar = screen.getByTestId("browser-annotation-toolbar");
+		const hint = annotationToolbar.querySelector<HTMLElement>(".browser-panel__annotation-hint");
+		expect(hint).not.toBeNull();
+		expect(hint).toHaveTextContent("Point at something and say what to change");
+		const context = annotationToolbar.querySelector<HTMLElement>(".browser-panel__annotation-context");
+		expect(context).toContainElement(hint);
+	});
+
 	it("previews the original page while Enter or Space is held on the eye button", async () => {
 		hookState.navState = { ...hookState.navState, url: "https://example.test/docs" };
 		hookState.annotationMode = true;

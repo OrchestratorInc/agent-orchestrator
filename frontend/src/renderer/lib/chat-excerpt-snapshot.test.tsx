@@ -136,6 +136,13 @@ describe("captured chat excerpts", () => {
 		expect(captured.text).not.toContain("Copy");
 		expect(isExcerptSnapshot(captured.snapshot)).toBe(true);
 	});
+	it("leaves a streamed code block's language caption out of the quote", async () => {
+		const source = "Before **bold**.\n\n```ts\n\tgo();\n```\n\nAfter";
+		const { container } = render(<ChatMarkdown streaming text={source} />);
+		await waitFor(() => expect(container).toHaveTextContent("After"));
+		const captured = captureExcerptSnapshot(container, select(container, "bold", "After"), source);
+		expect(captured.text).toBe("bold.\n\tgo();\nAfter");
+	});
 	it.each([
 		["Say &quot;hello&quot; &amp; bye.", '"hello" & bye', "&quot;hello&quot; &amp; bye"],
 		["Escape \\*literal\\* please", "*literal*", "\\*literal\\*"],

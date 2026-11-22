@@ -26,8 +26,20 @@ const CRUSH_SIGN_IN_PROVIDERS = new Set(["openai", "xai", "anthropic"]);
 
 type MenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 
-export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, providerKeysError, onRetryProviderKeys, onProviderKeysChanged, onVerify, onClose, onTerminal }: {
+/** Signs an account folder AO keeps in, instead of the computer's own login.
+ * Saved provider keys, their device setting and models do not apply. */
+export type AccountLoginMode = {
+	/** Runs method for the account and returns its sign-in. One that finished
+	 * at once (an API key or setup token) has no id: nothing is left to follow. */
+	start: (method: string, secret: string, name: string) => Promise<AgentLoginSnapshot>;
+	/** A new account takes a name for a key or token; a saved one keeps its own. */
+	named: boolean;
+};
+
+export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, providerKeysError, onRetryProviderKeys, onProviderKeysChanged, onVerify, onClose, onTerminal, account }: {
 	agentId: AgentId;
+	/** Signs an account in instead of the computer's own login. */
+	account?: AccountLoginMode;
 	methods: components["schemas"]["AgentLoginMethod"][];
 	hostId?: string;
 	/** Saved provider keys, without values, for this host. Undefined while loading or after a failed load. */
@@ -39,7 +51,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	onVerify: (methodId: string) => Promise<boolean | "configured">;
 	/** Closes the panel; signedIn when a verified sign-in closed it. */
 	onClose: (signedIn?: boolean) => void;
-	onTerminal: () => Promise<unknown>;
+	/** Hands the sign-in to a terminal; without it the panel offers none. */
+	onTerminal?: () => Promise<unknown>;
 }) {
 	const { t } = useTranslation();
 	const titleId = useId();
@@ -48,6 +61,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	const availableMethods = remote && agentId === "codex" ? methods.filter((item) => item.id !== "browser") : methods;
 	const [methodId, setMethodId] = useState(availableMethods[0]?.id ?? "browser");
 	const [secret, setSecret] = useState("");
+	// The label of a new account added with a key or token.
+	const [accountName, setAccountName] = useState("");
 	const [model, setModel] = useState("");
 	const [device, setDevice] = useState(false);
 	const [models, setModels] = useState<string[]>([]);
@@ -89,12 +104,14 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	const method = availableMethods.find((item) => item.id === methodId) ?? (methodId ? availableMethods[0] : undefined);
 	const selectedMethodId = method?.id ?? methodId;
 	const providerKeyFor = (id?: string) => {
+		// An account's key is its own, never one AO saved for the harness.
+		if (account) return undefined;
 		const name = id ? providerKeyName(id) : undefined;
 		return name ? providerKeys?.find((key) => key.name === name) : undefined;
 	};
 	// Until the saved keys load, an AO-managed key can't be saved: AO would not
 	// know whether to check it first or keep its device setting.
-	const keyStateUnknown = (id?: string) => Boolean(id && providerKeyName(id) && !providerKeys);
+	const keyStateUnknown = (id?: string) => Boolean(!account && id && providerKeyName(id) && !providerKeys);
 	const selectedKey = providerKeyFor(selectedMethodId);
 	const savedKey = selectedKey?.configured ? selectedKey : undefined;
 	// The AO-stored key this method can remove. Gemini's own key method also
@@ -120,8 +137,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 			mounted.current = false;
 			const current = operationRef.current;
 			// A failed cancellation (for example on a disconnected host) is retried
-			// and keeps the harness pending, so updates stay blocked meanwhile.
-			if (current) void disposeAgentLogin(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId)).catch(() => undefined);
+			// and keeps the harness pending, so updates stay blocked meanwhile. A
+			// sign-in that finished at once has no operation to cancel.
+			if (current?.id) void disposeAgentLogin(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId)).catch(() => undefined);
 		};
 	}, [agentId, hostId]);
 
@@ -246,7 +264,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 				if (!mounted.current) return;
 				// The device choice is sent only where it is shown; otherwise the
 				// key keeps its current setting.
-				const next = targetCatalog
+				const next = account
+					? await account.start(target.id, credential, accountName.trim())
+					: targetCatalog
 					? await startCatalogKeyLogin(agentId, catalogProvider, credential, hostId)
 					: targetKey?.deviceAvailable
 					? await startAgentUILogin(agentId, target.id, credential, hostId, targetNeedsModel ? model.trim() : undefined, device)
@@ -254,6 +274,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 					? await startAgentUILogin(agentId, target.id, credential, hostId, model.trim())
 					: await startAgentUILogin(agentId, target.id, credential, hostId);
 				if (!mounted.current) {
+					if (!next.id) return;
 					const dispose = () => cancelAgentUILogin(agentId, next.id, hostId);
 					try {
 						await dispose();
@@ -268,7 +289,11 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 				if (targetKey || target?.id === "gemini_api_key") onProviderKeysChanged?.();
 			});
 		} catch (err) {
-			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
+			if (mounted.current) {
+				// An account's key or token refused by the daemon stays typed, to fix and retry.
+				if (account) setSecret(credential);
+				setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
+			}
 		} finally {
 			pending.current = false;
 			if (mounted.current) setBusy(false);
@@ -305,10 +330,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		setLoginCode("");
 		try {
 			const current = operationRef.current;
-			if (current) await runAgentLoginTask(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId));
+			if (current?.id) await runAgentLoginTask(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId));
 			if (!mounted.current) return false;
 			operationRef.current = undefined;
-			if (terminal) await onTerminal(); else onClose(signedIn);
+			if (terminal && onTerminal) await onTerminal(); else onClose(signedIn);
 			return true;
 		} catch (err) {
 			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
@@ -483,7 +508,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	// Account sign-ins and API keys are separate lists; the note that applies
 	// to every AO-managed key is said once, under its list.
 	const signInGroup = { id: "signIn", title: t("settings.harness.loginUi.groupSignIn"), items: availableMethods.filter((item) => !item.secret), note: "" };
-	const keysGroup = { id: "keys", title: t("settings.harness.loginUi.groupKeys"), items: availableMethods.filter((item) => item.secret), note: availableMethods.some((item) => item.id.startsWith("env_")) ? t("settings.harness.loginUi.envHint") : "" };
+	const keysGroup = { id: "keys", title: t("settings.harness.loginUi.groupKeys"), items: availableMethods.filter((item) => item.secret), note: !account && availableMethods.some((item) => item.id.startsWith("env_")) ? t("settings.harness.loginUi.envHint") : "" };
 	// Native sign-in is the fallback, not the headline: when it is the only
 	// sign-in, the API keys come first. A real account sign-in (Claude,
 	// ChatGPT, GitHub, Kimi) keeps its place at the top.
@@ -501,7 +526,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		if (item.id === "native") return t("settings.harness.loginUi.nativeHint");
 		// Loading and load errors show once, in the form, not here as well.
 		if (item.id === CATALOG_METHOD) return catalog ? t("settings.harness.loginUi.catalogHint", { total: catalog.length, agent: agentLabel(agentId) }) : t("settings.harness.loginUi.catalogHintPending", { agent: agentLabel(agentId) });
-		if (item.id.startsWith("env_")) return savedKeySummary(t, providerKeyFor(item.id)) ?? t("settings.apiKeys.notSet");
+		if (item.id.startsWith("env_")) return account ? t("settings.agentAccounts.addApiKeyHint") : savedKeySummary(t, providerKeyFor(item.id)) ?? t("settings.apiKeys.notSet");
 		return t(`settings.harness.loginUi.hints.${key}`, { defaultValue: key.endsWith("_browser") ? t("settings.harness.loginUi.browserHint") : item.label });
 	};
 	const secretLabel = (id: string) => t(id === "setup_token" ? "settings.harness.loginUi.setupToken" : id === "access_token" ? "settings.harness.loginUi.accessToken" : "settings.harness.loginUi.apiKey");
@@ -549,7 +574,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 					// One line per method. A sign-in's hint only restates its label, so it is
 					// read to screen readers; a key row shows its saved state instead.
 					const trailing = item.id === CATALOG_METHOD ? (catalog ? t("settings.harness.loginUi.catalogCount", { total: catalog.length }) : "")
-						: item.id.startsWith("env_") ? savedKeySummary(t, providerKeyFor(item.id)) ?? t("settings.apiKeys.notSet")
+						: item.id.startsWith("env_") && !account ? savedKeySummary(t, providerKeyFor(item.id)) ?? t("settings.apiKeys.notSet")
 						: "";
 					return <div key={item.id}><button type="button" data-login-method="" aria-label={label} aria-expanded={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className="group/method relative flex min-h-9 w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
 						<MethodIcon className="size-3.5 shrink-0 text-settings-muted group-aria-expanded/method:text-settings-label" aria-hidden="true" />
@@ -567,6 +592,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 								? <SettingsOptionMenu aria-label={t("settings.harness.loginUi.catalogProvider")} value={catalogProvider} options={catalog.map((provider) => ({ value: provider.id, label: provider.name }))} onChange={chooseCatalogProvider} placeholder={t("settings.harness.loginUi.catalogChoose")} searchable searchPlaceholder={t("settings.harness.loginUi.catalogSearch")} disabled={locked} triggerClassName={fieldTriggerClass} menuAlign="start" menuClassName="w-(--radix-dropdown-menu-trigger-width) max-h-72" />
 								: catalogError ? <p role="alert" className="text-xs leading-4 text-error">{catalogError}</p>
 								: <CatalogProviderPickerSkeleton label={t("settings.harness.loginUi.catalogLoading", { agent: agentLabel(agentId) })} />}
+						</>}
+						{account?.named && <>
+							<label htmlFor={titleId + "-name"} className={fieldLabelClass}>{t("settings.agentAccounts.apiKeyName")}</label>
+							<Input id={titleId + "-name"} className={cn(KEY_FIELD_CLASS, "font-sans placeholder:font-sans")} value={accountName} disabled={locked} autoComplete="off" maxLength={80} placeholder={t("settings.agentAccounts.apiKeyNamePlaceholder")} onChange={(event) => setAccountName(event.target.value)} />
 						</>}
 						<>
 							<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{secretLabel(item.id)}</label>
@@ -587,7 +616,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 								{saveButton}
 							</div>
 						</>}
-						{agentId === "claude-code" && item.id === "env_ANTHROPIC_API_KEY" && <KeyWarning className="col-start-2">{t("settings.apiKeys.claudeBilling")}</KeyWarning>}
+						{agentId === "claude-code" && item.id === "env_ANTHROPIC_API_KEY" && <KeyWarning className="col-start-2">{t(account ? "settings.agentAccounts.apiKeyBilling" : "settings.apiKeys.claudeBilling")}</KeyWarning>}
 						{agentId === "crush" && item.id === CATALOG_METHOD && CRUSH_SIGN_IN_PROVIDERS.has(catalogProvider) && <KeyWarning className="col-start-2">{t("settings.harness.loginUi.crushSignOut", { provider: chosenProvider?.name ?? catalogProvider })}</KeyWarning>}
 						{item.id === "gemini_api_key" && geminiSharedNote && <p className="col-start-2 text-xs leading-4 text-settings-muted">{geminiSharedNote}</p>}
 						{error && <p role="alert" className="col-start-2 text-xs leading-4 text-error">{error}</p>}
@@ -667,11 +696,11 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 		{/* The panel's own actions sit together at the trailing edge, as outline
 		    buttons like Log in again and Log out on the Account card. */}
 		<div className="flex flex-wrap items-center justify-end gap-2">
-			{!connected && (availableMethods.length === 0 || !needsTerminal) && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
+			{onTerminal && !connected && (availableMethods.length === 0 || !needsTerminal) && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
 			<div className="flex flex-wrap items-center justify-end gap-2">
 				{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
 				{running && operation?.method === "native" && operation.nativePrompt !== "terminal_required" && <Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void checkNativeSignIn()}>{verifying ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{t("settings.harness.loginUi.nativeCheck")}</Button>}
-				{needsTerminal && <Button size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
+				{needsTerminal && onTerminal && <Button size="sm" disabled={busy} onClick={() => void leave(true)}><Terminal aria-hidden="true" />{t("settings.harness.loginUi.terminal")}</Button>}
 				<Button variant="outline" size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "common.close" : "settings.harness.loginUi.cancel")}</Button>
 			</div>
 		</div>

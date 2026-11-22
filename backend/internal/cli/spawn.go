@@ -322,7 +322,7 @@ func (c *commandContext) awaitSpawnStart(ctx context.Context, sess spawnedSessio
 		if reason == "" {
 			reason = "unknown error"
 		}
-		return sess, fmt.Errorf("session %s failed to start: %s (retry it from the AO app, or archive it with `ao session kill %s`)", sess.ID, reason, sess.ID)
+		return sess, fmt.Errorf("session %s failed to start: %s (fix the cause, then retry with `ao session resume-agent %s`, or archive it with `ao session kill %s`)", sess.ID, reason, sess.ID, sess.ID)
 	}
 	return sess, nil
 }
