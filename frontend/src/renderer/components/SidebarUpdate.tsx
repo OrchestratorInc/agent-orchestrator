@@ -278,19 +278,19 @@ export function SidebarUpdateRow({
 
 	const content = (
 		<>
-			<span className="relative z-[1] min-w-0 flex-1 wrap-anywhere text-[length:var(--font-size-base)] font-medium tracking-tight text-foreground">
+			<span className="relative z-[1] min-w-0 flex-[1_1_min-content] wrap-break-word text-[length:var(--font-size-base)] font-medium tracking-tight text-foreground">
 				{title}
 				{versionNote ? (
 					<span className="ml-1.5 text-xs font-normal tabular-nums text-passive">{versionNote}</span>
 				) : null}
 				{detail ? <span className="sr-only">{` · ${detail}`}</span> : null}
 			</span>
-			<span className="relative z-[1] grid min-w-control-md shrink-0 place-items-center">{glyph}</span>
+			<span className="relative z-[1] ml-auto grid min-w-control-md shrink-0 place-items-center">{glyph}</span>
 		</>
 	);
 	// A filled strip with no outline or shadow (DESIGN.md: grouped content), as
 	// tall as the footer rows below it.
-	const rowClass = "flex min-h-9 w-full items-center gap-2 rounded-lg bg-[var(--color-bg-secondary)] py-1 pr-1 pl-3 text-left";
+	const rowClass = "flex min-h-9 w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-[var(--color-bg-secondary)] py-1 pr-1 pl-3 text-left";
 
 	if (!press) {
 		return (
