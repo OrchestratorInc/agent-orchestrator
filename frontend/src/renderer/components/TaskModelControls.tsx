@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TaskComposerEffortControl, TaskComposerModelControl } from "@aoagents/product-ui";
 import { acceptsLocalModelID, agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
@@ -11,6 +11,8 @@ import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, formatEffortLabel, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
 import { MENU_TRIGGER_CHROME } from "./ui/option-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { TriangleAlert } from "@/components/app-icons";
 
 // The agent, model and effort menus share one compact width.
 export const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
@@ -151,12 +153,17 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 	onEffortChange: (value: string) => void;
 	onValidityChange: (valid: boolean) => void;
 	agentSwitch: AgentSwitchProps;
+	/** Why the agent's models could not be loaded or checked. */
+	warning?: string;
 }) {
 	const { t } = useTranslation();
-	const { agentId, catalog, value, mode, effort, onEffortChange } = props;
+	const { agentId, catalog, value, mode, effort, onEffortChange, onValidityChange } = props;
 	const models = catalog?.models;
 	const selectedModel = value || models?.find((item) => item.isDefault)?.id || "";
-	const { selected, invalidEffort } = useModelTuning({ models, model: selectedModel, effort, onEffortChange, onValidityChange: props.onValidityChange });
+	const { selected, invalidEffort } = useModelTuning({ models, model: selectedModel, effort, onEffortChange });
+	// An agent whose models could not be loaded, or a level its model no longer offers, cannot be saved.
+	const problem = props.warning ?? (invalidEffort ? t("settings.models.unsupportedTuning", { role: "" }) : undefined);
+	useEffect(() => onValidityChange(!problem), [onValidityChange, problem]);
 	const options = selected?.efforts?.filter((level) => level && level.toLowerCase() !== "default") ?? [];
 	// An agent that picks its own model for each mode lists its modes as the models.
 	const modes = catalog?.selectionMode === "mode";
@@ -191,8 +198,23 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 			onEffortChange(next || selected?.defaultEffort || "");
 		},
 	};
-	return <>
-		<AgentModelPicker currentHarness={agentId} current={current} agentSwitch={props.agentSwitch} disabled={props.disabled} loadingModels={props.fetching && !catalog} />
-		{invalidEffort ? <p role="alert" className="text-xs text-warning">{t("settings.models.unsupportedTuning", { role: "" })}</p> : null}
-	</>;
+	return (
+		<div className="flex min-w-0 items-center gap-0.5">
+			<AgentModelPicker currentHarness={agentId} current={current} agentSwitch={props.agentSwitch} disabled={props.disabled} loadingModels={props.fetching && !catalog} />
+			{/* An icon beside the picker, so a long message never moves it; the whole message opens on hover or focus. */}
+			{problem ? (
+				<TooltipProvider>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<span role="alert" tabIndex={0} aria-describedby={undefined} className="flex size-6 shrink-0 cursor-default items-center justify-center rounded-md text-destructive">
+								<TriangleAlert aria-hidden="true" className="size-3.5" />
+								<span className="sr-only">{problem}</span>
+							</span>
+						</TooltipTrigger>
+						<TooltipContent side="top" className="max-w-80">{problem}</TooltipContent>
+					</Tooltip>
+				</TooltipProvider>
+			) : null}
+		</div>
+	);
 }
