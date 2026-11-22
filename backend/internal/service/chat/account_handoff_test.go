@@ -581,10 +581,8 @@ func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID, TurnState: domain.TurnStateCompleted})
-	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
-	})
-	if got := hh.conv.sentTexts(); len(got) != 3 || got[2] != "queued note" {
+	hh.awaitSnapshot(t, func(store.ConversationSnapshot) bool { return len(hh.conv.sentTexts()) == 3 })
+	if got := hh.conv.sentTexts(); got[2] != "queued note" {
 		t.Fatalf("provider received %v, want the queue after the retry", got)
 	}
 }
@@ -621,6 +619,24 @@ func TestAccountHandoffFailedMoveKeepsTheQueueHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	hh.tick(t)
+
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if got := hh.conv.sentTexts(); len(got) != 1 {
+		t.Fatalf("provider received %v, want nothing more on the limited account", got)
+	}
+}
+
+func TestAccountHandoffAbortedMoveKeepsTheQueueHeld(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
+		t.Fatalf("prepare handoff: %v", err)
+	}
+	hh.svc.AbortChatHandoff(testSession)
 
 	assertTurnStaysQueued(t, hh.harness, "queued note")
 	if got := hh.conv.sentTexts(); len(got) != 1 {
