@@ -83,6 +83,12 @@ import WifiOff from "lucide-react-native/icons/wifi-off";
 import X from "lucide-react-native/icons/x";
 import Bell from "lucide-react-native/icons/bell";
 import ChevronRight from "lucide-react-native/icons/chevron-right";
+import ChevronDown from "lucide-react-native/icons/chevron-down";
+import ChevronUp from "lucide-react-native/icons/chevron-up";
+import Tag from "lucide-react-native/icons/tag";
+import User from "lucide-react-native/icons/user";
+import CircleX from "lucide-react-native/icons/circle-x";
+import Info from "lucide-react-native/icons/info";
 import Cloud from "lucide-react-native/icons/cloud";
 import EllipsisVertical from "lucide-react-native/icons/ellipsis-vertical";
 import FolderOpen from "lucide-react-native/icons/folder-open";
@@ -115,6 +121,8 @@ export const glyphs = {
 	"check": Check,
 	"check-circle": CircleCheck,
 	"chevron-right": ChevronRight,
+	"chevron-down": ChevronDown,
+	"chevron-up": ChevronUp,
 	"circle": Circle,
 	"clipboard-check": ClipboardCheck,
 	"cloud": Cloud,
@@ -168,6 +176,10 @@ export const glyphs = {
 	"pin-off": PinOff,
 	"play": Play,
 	"plus": Plus,
+	"tag": Tag,
+	"user": User,
+	"x-circle": CircleX,
+	"info": Info,
 	"power": Power,
 	"radio": Radio,
 	"refresh-cw": RefreshCw,

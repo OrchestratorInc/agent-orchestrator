@@ -60,7 +60,7 @@ async function renderRoot(platform: string) {
 	return renderer;
 }
 
-const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file", "project/[id]"];
+const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file", "project/[id]", "tag"];
 
 describe("root stack", () => {
 	// A cold start on a deep link or a notification tap lands with the board

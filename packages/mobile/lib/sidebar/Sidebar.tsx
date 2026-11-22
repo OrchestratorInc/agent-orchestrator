@@ -36,6 +36,8 @@ import { useReducedMotion } from "../useReducedMotion";
 import { ARCHIVE_SESSION_CONFIRM, workerContextActions, type WorkerActionId } from "../worker-action-model";
 import { changedAt, isUnread, loadReadState, markRead, useReadState } from "./readState";
 import { useSidebarMaybe } from "./sidebarContext";
+import { applyTag, chosenTag, tagChoice, type SidebarTag } from "./sidebarTags";
+import { deleteTag, loadTags, takeTagSelection, useTags } from "./tagStore";
 import {
 	buildSidebarTree,
 	capRows,
@@ -174,6 +176,13 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 	const [showAll, setShowAll] = useState<Record<string, boolean>>({});
 
 	useEffect(() => { void loadReadState(); }, []);
+	const tags = useTags();
+	useEffect(() => { void loadTags(); }, []);
+	// A tag just made on the tag page is chosen here.
+	useEffect(() => {
+		const id = takeTagSelection();
+		if (id && tags.some((tag) => tag.id === id)) setDevice(tagChoice(id));
+	}, [setDevice, tags]);
 
 	// Home is under every page it opens, so the row of the page on top stays lit.
 	const onSession = pathname.startsWith("/session/");
@@ -183,19 +192,25 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 	// The devices bar: every paired machine and Orchestrator Cloud, in name order.
 	const devices = useMemo(() => sortWorkerEnvironments([...app.hostStates, ...(app.cloud ? [app.cloud] : [])]
 		.map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance }))), [app.cloud, app.hostStates]);
-	// A device that has gone (forgotten, signed out) shows everything again.
-	const device = devices.some((item) => item.id === prefs.device) ? prefs.device : "";
+	// The bar's choice is a device or one of the user's tags. A device that has
+	// gone (forgotten, signed out), or a deleted tag, shows everything again.
+	const activeTag = chosenTag(prefs.device, tags);
+	const device = !activeTag && devices.some((item) => item.id === prefs.device) ? prefs.device : "";
 
-	const tree = useMemo(() => buildSidebarTree({
-		sessions: app.allSessions,
-		projects: app.allProjects,
-		showHosts: !device && environments > 1,
-		hostId: device || undefined,
-		activeKey,
-		isUnread: (session) => isUnread(read, sidebarSessionKey(session), changedAt(session)),
-		isCloudHost,
-		query: query ?? "",
-	}), [activeKey, app.allProjects, app.allSessions, device, environments, query, read]);
+	const tree = useMemo(() => {
+		const all = buildSidebarTree({
+			sessions: app.allSessions,
+			projects: app.allProjects,
+			showHosts: !device && environments > 1,
+			hostId: device || undefined,
+			activeKey,
+			isUnread: (session) => isUnread(read, sidebarSessionKey(session), changedAt(session)),
+			isCloudHost,
+			query: query ?? "",
+		});
+		// A chosen tag shows only the projects and sessions it gathers.
+		return activeTag ? applyTag(all, activeTag) : all;
+	}, [activeKey, activeTag, app.allProjects, app.allSessions, device, environments, query, read]);
 
 	// Each project's orchestrator, as the Projects page found it.
 	const projectRows = useMemo(() => {
@@ -363,6 +378,13 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 		// sectionOpen, listedProjects and standalone are derived from the values listed.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [part, prefs, paired, projects, searching, showAll, projectRows, activeKey, tree.standalone]);
+	const confirmDeleteTag = useCallback((tag: SidebarTag) => {
+		haptics.warning();
+		Alert.alert(`Delete "${tag.name}"?`, "The projects and sessions stay; only the tag goes.", [
+			{ text: "Cancel", style: "cancel" },
+			{ text: "Delete", style: "destructive", onPress: () => deleteTag(tag.id) },
+		]);
+	}, []);
 	const toggleShowAll = useCallback((id: string) => setShowAll((prev) => ({ ...prev, [id]: !prev[id] })), []);
 	const homeExtra = useMemo(() => ({ activeKey, renamingKey, rowWidth, busyProjects, pathname, projectId: params.id, colors, styles }), [activeKey, renamingKey, rowWidth, busyProjects, pathname, params.id, colors, styles]);
 	const renderHomeItem = ({ item }: { item: HomeItem }) => {
@@ -468,7 +490,18 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 				<HeaderButton icon={searching ? "x" : "search"} label={searching ? "Close search" : "Search"} onPress={() => setQuery(searching ? null : "")} colors={colors} />
 			</View>
 			{devices.length > 0 ? (
-				<DevicesBar devices={devices} selected={device} freshness={freshness} onSelect={setDevice} colors={colors} styles={styles} />
+				<DevicesBar
+					devices={devices}
+					tags={tags}
+					selected={activeTag ? prefs.device : device}
+					freshness={freshness}
+					onSelect={setDevice}
+					onNewTag={() => router.push("/tag")}
+					onEditTag={(id) => router.push({ pathname: "/tag", params: { id } })}
+					onDeleteTag={confirmDeleteTag}
+					colors={colors}
+					styles={styles}
+				/>
 			) : null}
 			{searching ? (
 				<View style={styles.fixed}>
@@ -559,14 +592,20 @@ function OrchestratorRow({ action, busy, active, colors, styles, onPress, testID
 
 /**
  * The devices bar: a thin row of chips under home's header, one per paired
- * machine and Orchestrator Cloud, each with its connection dot. Choosing one
- * shows only that device's projects and sessions; All shows every device.
+ * machine and Orchestrator Cloud, each with its connection dot, then the
+ * user's tags and a + to make one. Choosing a device shows only its projects
+ * and sessions; choosing a tag, only what the tag gathers; All shows
+ * everything. A tag's long press edits or deletes it.
  */
-function DevicesBar({ devices, selected, freshness, onSelect, colors, styles }: {
+function DevicesBar({ devices, tags, selected, freshness, onSelect, onNewTag, onEditTag, onDeleteTag, colors, styles }: {
 	devices: readonly { id: string; name: string }[];
+	tags: readonly SidebarTag[];
 	selected: string;
 	freshness: ReadonlyMap<string, MachineFreshness>;
 	onSelect(id: string): void;
+	onNewTag(): void;
+	onEditTag(id: string): void;
+	onDeleteTag(tag: SidebarTag): void;
 	colors: Palette;
 	styles: Styles;
 }) {
@@ -589,12 +628,47 @@ function DevicesBar({ devices, selected, freshness, onSelect, colors, styles }: 
 		);
 	};
 	return (
-		<ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.devicesBar} contentContainerStyle={styles.devicesContent} testID="devices-bar">
+		<ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.devicesBar} contentContainerStyle={styles.devicesContent} keyboardShouldPersistTaps="handled" testID="devices-bar">
 			{chip("", "All")}
 			{devices.map((item) => chip(item.id, item.name, freshnessColor(freshness.get(item.id), colors)))}
+			{tags.map((tag) => {
+				const choice = tagChoice(tag.id);
+				const on = selected === choice;
+				return (
+					<LongPressMenu
+						key={choice}
+						actions={TAG_MENU}
+						onAction={(id) => (id === "edit" ? onEditTag(tag.id) : onDeleteTag(tag))}
+						onPress={() => { haptics.select(); onSelect(on ? "" : choice); }}
+						accessibilityLabel={`${tag.name} tag`}
+						accessibilityHint="Shows only what the tag gathers. Touch and hold to edit or delete it."
+						style={[styles.deviceChip, on && { backgroundColor: colors.active, borderColor: colors.active }]}
+						pressedStyle={{ backgroundColor: colors.hover }}
+						testID={`tag-${tag.id}`}
+					>
+						<Feather name="tag" size={10} color={on ? colors.text : colors.muted} />
+						<Text style={[styles.deviceLabel, on && styles.navLabelActive]} numberOfLines={1}>{tag.name}</Text>
+					</LongPressMenu>
+				);
+			})}
+			<Pressable
+				accessibilityRole="button"
+				accessibilityLabel="New tag"
+				onPress={onNewTag}
+				hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+				style={({ pressed }) => [styles.deviceChip, styles.addTag, pressed && { backgroundColor: colors.hover }]}
+				testID="tag-new"
+			>
+				<Feather name="plus" size={12} color={colors.muted} />
+			</Pressable>
 		</ScrollView>
 	);
 }
+
+const TAG_MENU: LongPressMenuAction<"edit" | "delete">[] = [
+	{ id: "edit", title: "Edit tag", icon: "edit-3", systemImage: "pencil" },
+	{ id: "delete", title: "Delete tag", icon: "trash-2", systemImage: "trash" },
+];
 
 // The freshness map lists only machines that are not live; a missing entry is live.
 function freshnessColor(state: MachineFreshness | undefined, colors: Palette): string {
@@ -1150,6 +1224,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 	devicesContent: { paddingHorizontal: 12, paddingBottom: 6, gap: 5, alignItems: "center" },
 	deviceChip: { height: 22, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, borderRadius: 11, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
 	deviceDot: { width: 6, height: 6, borderRadius: 3 },
+	addTag: { width: 26, paddingHorizontal: 0, justifyContent: "center" },
 	deviceLabel: { fontFamily: font.medium, fontSize: 11, color: c.muted, maxWidth: 140 },
 	fab: { position: "absolute", right: 16, height: FAB_HEIGHT, borderRadius: FAB_HEIGHT / 2, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 8, shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
 	fabLabel: { fontFamily: font.medium, fontSize: 15 },

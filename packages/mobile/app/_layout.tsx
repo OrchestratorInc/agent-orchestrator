@@ -278,6 +278,8 @@ function Shell() {
 				    stack's back: the scanner, then the manual form over it. */}
 				<Stack.Screen name="pair" options={{ title: "Pair a machine" }} />
 				<Stack.Screen name="connect" options={{ title: "Connect manually" }} />
+				{/* A home tag, made from the devices bar's + or edited from a tag's long press. */}
+				<Stack.Screen name="tag" options={{ title: "New tag", ...GLASS_HEADER_OPTIONS }} />
 
 				{/* Sheets. `formSheet` is a real UIKit sheet, so the drag-to-dismiss,
 				    the grabber and the rubber-banding come from the OS rather than

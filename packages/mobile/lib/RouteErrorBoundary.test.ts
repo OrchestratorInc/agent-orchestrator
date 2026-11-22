@@ -44,6 +44,7 @@ const screenRoutes = [
 	"session/[id].tsx",
 	"settings/index.tsx",
 	"shell/[handleId].tsx",
+	"tag.tsx",
 ];
 
 const sheetRoutes = [
