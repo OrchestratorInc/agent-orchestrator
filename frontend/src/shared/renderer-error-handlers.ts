@@ -68,9 +68,25 @@ export function installRendererErrorHandlers(capture?: Handler): void {
 				const debugId = filename && assets.get(filename);
 				frames.push({ function: "renderer_frame", ...(filename ? { filename } : {}), ...(lineno ? { lineno } : {}), ...(colno ? { colno } : {}), ...(debugId ? { debug_id: debugId } : {}) });
 			}
+			// Keep this bounded walk inside the serialized installer.
+			let errorCode: string | undefined;
+			let fallbackCode: string | undefined;
+			let candidate = error;
+			for (let depth = 0; depth < 16 && candidate !== null && typeof candidate === "object"; depth++) {
+				const value = candidate as { code?: unknown; cause?: unknown; telemetryCode?: unknown };
+				const { code, telemetryCode } = value;
+				if (typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)) {
+					errorCode = code;
+					break;
+				}
+				if (!fallbackCode && typeof telemetryCode === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(telemetryCode)) fallbackCode = telemetryCode;
+				candidate = value.cause;
+			}
+			errorCode ??= fallbackCode;
 			void root.ao.telemetry.capture({
 				kind: "exception", message: message.length <= 4096 ? message : "", level: "error",
 				tags: { category: source === "unhandledrejection" ? "renderer_rejection" : "renderer_exception",
+					...(errorCode ? { error_code: errorCode } : {}),
 					code: source === "unhandledrejection" ? "UNHANDLED_REJECTION" : source === "script-load" ? "RENDERER_SCRIPT_LOAD_FAILED" : "WINDOW_ERROR" },
 				exception: { type: name, frames: frames.reverse() },
 			}).catch(() => undefined);

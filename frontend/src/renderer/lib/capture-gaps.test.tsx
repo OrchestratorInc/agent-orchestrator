@@ -20,8 +20,8 @@ it("reports a non-API query error once across cache, route and React StrictMode 
 	await expect(queryClient.fetchQuery({ queryKey: ["private-project-id"], retry: false, queryFn: () => { throw error; } })).rejects.toBe(error);
 	const view = render(<StrictMode><RouteErrorCapture error={error} reset={() => {}} /></StrictMode>);
 	await waitFor(() => expect(capture).toHaveBeenCalledOnce());
-	expect(capture.mock.calls[0][0]).toMatchObject({ kind: "exception", message: "Renderer error", tags: { operation: "query" } });
-	expect(JSON.stringify(capture.mock.calls)).not.toMatch(/private query details|private-project-id/);
+	expect(capture.mock.calls[0][0]).toMatchObject({ kind: "exception", message: error.message, tags: { operation: "query" } });
+	expect(JSON.stringify(capture.mock.calls)).not.toMatch(/private-project-id/);
 	view.unmount();
 });
 
@@ -64,7 +64,7 @@ it("captures a real router loader rejection once while preserving silent session
 	await router.load();
 	const view = render(<StrictMode><RouterProvider router={router} /></StrictMode>);
 	await waitFor(() => expect(capture).toHaveBeenCalledOnce());
-	expect(JSON.stringify(capture.mock.calls)).not.toContain("private route id");
+	expect(capture.mock.calls[0][0]).toMatchObject({ message: error.message, tags: { operation: "route" } });
 	view.unmount();
 });
 

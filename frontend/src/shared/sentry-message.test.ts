@@ -1,0 +1,53 @@
+import { describe, expect, it } from "vitest";
+import { AoError, sentryErrorCode } from "../../../packages/shared/telemetry/ao-error";
+import { scrubSentryMessage, sentryMessageFingerprint, sentryMessageIdentity } from "../../../packages/shared/telemetry/sentry-message";
+
+describe("Sentry message normalization", () => {
+	it.each([
+		[undefined, ""],
+		["", ""],
+		["x".repeat(4097), ""],
+		["Uncaught (in promise) CustomError: Connection failed\nsecond line", "Connection failed"],
+		["Uncaught Error: failed\r\nsecond line", "failed"],
+		["open http://host/a https://host/b file:///home/a app://renderer/x ws://host wss://host", "open <url> <url> <url> <url> <url> <url>"],
+		["send to alice@example.test", "send to <email>"],
+		[String.raw`open C:\Users\Alice\file.txt \\host\share\x ~/notes /var/log/app`, "open <path> <path> <path> <path>"],
+		["open D:/data/file.txt", "open <path>"],
+		["open C:\\Program Files\\Git\\bin.exe failed", "open <path> failed"],
+		["open file:/tmp/file", "open <url>"],
+		["quote \"prompt\" 'credential' \x60code\x60 “text” ‘value’", "quote '?' '?' '?' '?' '?'"],
+		["read 12345678-1234-1234-1234-123456789abc and abcDEF1234", "read <id> and <id>"],
+		["value 0xdeadbeef was -3.14 at 200", "value <n> was <n> at <n>"],
+		["spawn project123-12 next", "spawn <id> next"],
+		["spawn comic-12: process exited 5", "spawn <id>: process exited <n>"],
+		["  Loading\t failed   now ", "Loading failed now"],
+		["Could not open 'private document\u2028also private'", "Could not open '?'"],
+		["Couldn't parse 'don't show this' as input", "Couldn't parse '?' as input"],
+		["Authorization: Basic YWxpY2U6c2VjcmV0", "<credential>"],
+		["Cannot send prompt: summarize this confidential text", "Cannot send <content>"],
+		["token=private", "<credential>"],
+		["x".repeat(150), "x".repeat(120)],
+		["x".repeat(301), ""],
+		["word ".repeat(26), ""],
+	])("normalizes %j", (input, expected) => expect(scrubSentryMessage(input)).toBe(expected));
+
+	it("uses the lowercase normalized text for a fingerprint", () => {
+		const fingerprint = (text: string) => sentryMessageFingerprint(scrubSentryMessage(text));
+		expect(fingerprint("Spawn comic-12: /home/alice returned 3")).toEqual(fingerprint("spawn comic-31: ~/secret returned 9"));
+		expect(fingerprint("Spawn comic-12: /home/alice returned 3")).not.toEqual(fingerprint("Open comic-12: /home/alice returned 3"));
+	});
+
+	it("keeps only the normalized hash input for unsafe messages", () => {
+		const message = "word ".repeat(26) + " 999";
+		expect(sentryMessageIdentity(message)).toMatchObject({ label: "", hashInput: "word ".repeat(26) + "<n>" });
+	});
+
+	it("uses the IPC channel and an application code from the cause chain", () => {
+		const error = new Error("Error invoking remote method 'remotes:list': Error: translated failure",
+			{ cause: new AoError("REMOTES_READ_FAILED", "Original failure") });
+		const code = sentryErrorCode(error);
+		expect(sentryMessageIdentity(error.message, code)).toMatchObject({ channel: "remotes:list", code: "REMOTES_READ_FAILED", label: "REMOTES_READ_FAILED" });
+		expect(sentryMessageIdentity(error.message)).toMatchObject({ channel: "remotes:list", label: "translated failure" });
+		expect(sentryErrorCode({ code: "invalid code!" })).toBeUndefined();
+	});
+});

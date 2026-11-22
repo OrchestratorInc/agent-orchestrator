@@ -69,6 +69,7 @@ export interface CloudTaskFile {
  * message, and the control plane started the session in the terminal.
  */
 export class CloudTaskFilesNeedChatError extends Error {
+	readonly code: string = "CLOUD_TASK_FILES_NEED_CHAT_ERROR";
 	/** A refusal a retry cannot change: the composer keeps the task to change and send again. */
 	readonly code = "CLOUD_ATTACHMENTS_NEED_CHAT";
 	constructor() {
@@ -83,6 +84,7 @@ export class CloudTaskFilesNeedChatError extends Error {
  * the reason, to send again.
  */
 export class CloudTaskFilesUndeliveredError extends Error {
+	readonly code: string = "CLOUD_TASK_FILES_UNDELIVERED_ERROR";
 	readonly code = "CLOUD_TASK_FILES_UNDELIVERED";
 	constructor(message: string) {
 		super(message);
@@ -99,6 +101,7 @@ export class CloudTaskFilesUndeliveredError extends Error {
  * (unsettledFileStarts). cause is the failure the cleanup followed.
  */
 export class CloudTaskFilesUncertainError extends Error {
+	readonly code: string = "CLOUD_TASK_FILES_UNCERTAIN_ERROR";
 	constructor(cause: unknown) {
 		super(cause instanceof Error ? cause.message : String(cause), { cause });
 		this.name = "CloudTaskFilesUncertainError";
