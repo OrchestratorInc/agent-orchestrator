@@ -1355,7 +1355,7 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
-		openInUserBrowser: (url) => userBrowser.open(url),
+		openInUserBrowser: async (url, hostId) => userBrowser.open((hostId ? await loopbackTunnels.localUrl(hostId, url) : undefined) ?? url),
 		describeUserBrowser: () => userBrowser.describe(),
 		prepareBrowserPartition: (partition, hostId) => {
 			const browserSession = session.fromPartition(partition);

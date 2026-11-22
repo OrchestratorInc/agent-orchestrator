@@ -516,7 +516,7 @@ export type BrowserViewHostOptions = {
   browserDownloadManager?: BrowserDownloadManager;
   clearBrowserProfileData?: (partition: string) => Promise<void>;
   /** Open a page in the person's own browser (Chrome when installed). */
-  openInUserBrowser?: (url: string) => Promise<UserBrowser>;
+  openInUserBrowser?: (url: string, hostId?: string) => Promise<UserBrowser>;
   /** Which browser openInUserBrowser would use, to name the action. */
   describeUserBrowser?: () => Promise<UserBrowser>;
   // Configures a browser partition's session before its first page exists.
@@ -3877,7 +3877,7 @@ export function createBrowserViewHost(
     if (!options.openInUserBrowser || !canOpenInUserBrowser(url, { agentTab: entry?.agentTab !== undefined })) {
       throw browserError("BROWSER_URL_FORBIDDEN", "This page cannot be opened in another browser");
     }
-    return options.openInUserBrowser(url);
+    return options.openInUserBrowser(url, session?.hostId);
   });
   handle("browser:find", (event, input: BrowserFindInput) => {
     const session =

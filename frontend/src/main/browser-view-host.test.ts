@@ -1228,7 +1228,7 @@ function setupTabHost(
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
 	overrides?: {
 		entryReadyTimeoutMs?: number;
-		openInUserBrowser?: (url: string) => Promise<{ name: string; chrome: boolean }>;
+		openInUserBrowser?: (url: string, hostId?: string) => Promise<{ name: string; chrome: boolean }>;
 		/** Flip `destroyed` to model the BaseWindow closing under the host. */
 		window?: { destroyed: boolean };
 	},
@@ -6922,11 +6922,20 @@ describe("sites that refuse the Browser panel", () => {
 		const { invoke, viewId, openInUserBrowser } = await setup();
 		await invoke("browser:navigate", { viewId, url: "https://shop.test/cart?id=1" });
 		expect(await invoke("browser:openInUserBrowser", viewId)).toEqual({ name: "Chrome", chrome: true });
-		expect(openInUserBrowser).toHaveBeenCalledWith("https://shop.test/cart?id=1");
+		expect(openInUserBrowser).toHaveBeenCalledWith("https://shop.test/cart?id=1", undefined);
 
 		await invoke("browser:clear", viewId);
 		await expect(invoke("browser:openInUserBrowser", viewId)).rejects.toMatchObject({ code: "BROWSER_URL_FORBIDDEN" });
 		expect(openInUserBrowser).toHaveBeenCalledOnce();
+	});
+
+	it("names the remote host whose page a tab shows, so main forwards its localhost", async () => {
+		const openInUserBrowser = vi.fn(async (_url: string, _hostId?: string) => ({ name: "Chrome", chrome: true }));
+		const { invoke } = setupTabHost(undefined, false, undefined, undefined, undefined, { openInUserBrowser });
+		const { viewId } = (await invoke("browser:ensure", "remote:h_box:s1")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/" });
+		await invoke("browser:openInUserBrowser", viewId);
+		expect(openInUserBrowser).toHaveBeenCalledWith("http://localhost:3000/", "h_box");
 	});
 });
 
