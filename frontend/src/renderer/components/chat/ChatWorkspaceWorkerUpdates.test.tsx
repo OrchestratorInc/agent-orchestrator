@@ -467,6 +467,46 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.getByText(/HTTP 429/)).toBeInTheDocument();
 	});
 
+	it("keeps failures apart when they differ only in a file position", () => {
+		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
+		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `TypeError at worker.ts:${index ? "88:10" : "12:34"}` })) });
+		expect(screen.queryByRole("button", { name: /failed the same way/ })).not.toBeInTheDocument();
+	});
+
+	it("merges failures that differ only in an ISO time", () => {
+		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
+		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Rate limited until 2026-11-22T10:0${index}:00.123+05:30.` })) });
+		expect(screen.getByRole("button", { name: /^1 earlier update failed the same way/ })).toBeInTheDocument();
+	});
+
+	it("leaves a worker turn where the user answered an approval in view", () => {
+		const approval: ConversationActivity = {
+			kind: "activity", id: "t1-approval", turnId: "t1", sequence: 15, revision: 0, activityKind: "approval", status: "completed",
+			summary: "gh pr merge 7054", createdAt: at(1), detail: { decision: "accept" },
+		};
+		renderOrchestrator([report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."), approval, reply("t1", 2, "Merged.")]);
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
+	it("keeps an open background line open when an older background turn joins its front", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		const view = (items: ConversationItem[]) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ChatWorkspace snapshot={snapshot(items)} sessionRole="orchestrator" />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const newer = [report("t3", 3, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."), reply("t3", 4, "Noted."), human("t5", 5, "Status?"), reply("t5", 6, "All good.")];
+		const { rerender } = render(view(newer));
+		await userEvent.click(screen.getByRole("button", { name: /^1 background update/ }));
+		expect(screen.getAllByTestId("background-turn")).toHaveLength(1);
+		rerender(view([report("t1", 1, "[done] [iOS pages](ao://sessions/proj/proj-286)\nPages load."), reply("t1", 2, "Noted."), ...newer]));
+		expect(screen.getByRole("button", { name: /^2 background updates/ })).toBeInTheDocument();
+		expect(screen.getAllByTestId("background-turn")).toHaveLength(2);
+	});
+
 	it("keeps failures apart when the field after a timestamp differs", () => {
 		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
 		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider error: {"time":"2026-11-22T10:0${index}:00Z","status":${index ? 500 : 429}}` })) });

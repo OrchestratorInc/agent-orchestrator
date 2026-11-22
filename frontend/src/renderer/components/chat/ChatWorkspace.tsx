@@ -7004,7 +7004,7 @@ function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boo
 	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
 	if (!member) return [`${group.key}:worked`];
 	if (group.folded!.kind === "failed" && member === group.folded!.members.at(-1)) return [`${member.key}:worked`];
-	return [`${group.key}:open`, `${member.key}:open`, `${member.key}:worked`];
+	return [group.folded!.kind === "replaced" ? `${group.key}:open` : `${member.key}:line`, `${member.key}:open`, `${member.key}:worked`];
 }
 
 function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>): TimelineGroup[] {
@@ -7033,7 +7033,7 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 				: group);
 			continue;
 		}
-		const key = standing === "failed" ? `failed:${outcome!.state}:${outcome!.failureCode ?? ""}:${(outcome!.error ?? "").replace(/\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?[AP]M)?/gi, "")}` : standing;
+		const key = standing === "failed" ? `failed:${outcome!.state}:${outcome!.failureCode ?? ""}:${(outcome!.error ?? "").replace(/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?|(?<![\w:.])\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?[AP]M)?(?![\w:])/gi, "")}` : standing;
 		if (run?.key !== key) {
 			close();
 			run = { kind: standing, key, members: [] };
@@ -7072,8 +7072,8 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 		<BackgroundUpdates
 			turns={listed.map((member) => member.items)}
 			failed={kind === "failed"}
-			open={Boolean(overrides[lineKey])}
-			onOpenChange={(open) => onOpenChange(lineKey, open)}
+			open={listed.some((member) => overrides[`${member.key}:line`])}
+			onOpenChange={(open) => { for (const member of listed) onOpenChange(`${member.key}:line`, open); }}
 		>
 			{listed.map((member) => (
 				<BackgroundTurnRow

@@ -5,7 +5,8 @@ import { finalReply, isTaskTitleUpdate, isWorkerLead, needsYouNow, relayedVia, r
 export type TurnStanding = "yours" | "replaced" | "failed" | "up" | "background";
 
 const isYours = (item: ConversationItem) =>
-	isUserQueuePrompt(item) || relayedVia(item) !== null || (item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId);
+	isUserQueuePrompt(item) || relayedVia(item) !== null ||
+	(item.kind === "activity" && ((isSteer(item) && !item.detail?.senderSessionId) || item.activityKind === "approval" || item.activityKind === "user_input"));
 
 export function turnStanding(items: readonly ConversationItem[], state: string, index: WorkerUpdateIndex | null): TurnStanding {
 	const lead = items[0];
