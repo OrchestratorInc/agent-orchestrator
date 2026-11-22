@@ -97,6 +97,19 @@ describe("useOrchestratorReplyState", () => {
 		expect(hook.result.current).toBeNull();
 	});
 
+	it("ignores a queued message the user cancelled during the work", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({
+			...quiet,
+			turns: [...quiet.turns, { id: "t-cancelled", state: "cancelled", hasHumanPrompt: true, requestedAt: "2026-11-08T10:05:05Z", completedAt: "2026-11-08T10:05:10Z" }],
+		});
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalledWith("orch-1", undefined));
+		await act(async () => {});
+		expect(hook.result.current).toBeNull();
+	});
+
 	it("lights up when worker traffic leaves a question for the user", async () => {
 		fetchRecentConversation.mockResolvedValue(workerTurn("Tunnel or loopback?"));
 		const hook = afterYourReply();

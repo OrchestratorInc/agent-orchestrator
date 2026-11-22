@@ -62,7 +62,7 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 			if (snapshot.hasMoreBefore && !(Date.parse(snapshot.items[0]?.createdAt ?? "") <= since)) return true;
 			const index = indexWorkerUpdates(snapshot.items);
 			const { under } = placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items);
-			const settled = snapshot.turns.filter((turn) => Date.parse(turn.completedAt ?? "") >= since);
+			const settled = snapshot.turns.filter((turn) => turn.state !== "cancelled" && Date.parse(turn.completedAt ?? "") >= since);
 			const ids = new Set(settled.map((turn) => turn.id));
 			const drained = (snapshot.batchedDeliveries ?? []).filter((delivery) => ids.has(delivery.deliveredWithTurnId));
 			const standsOut = [...settled, ...drained.map((delivery) => ({ id: delivery.turnId, state: "completed", hasHumanPrompt: false }))].some((turn) => {
@@ -90,8 +90,7 @@ export type OrchestratorReplyState = "working" | "unread" | null;
  * What a project's orchestrator buttons should signal: a reply the user has not
  * seen, or a turn in progress. A reply is the orchestrator's activity settling
  * from working back to idle or waiting for input, observed live from the
- * streamed workspace; in chat mode, only turns the chat keeps in view count.
- * Resets to idle on restore or resume never count, and tool
+ * streamed workspace. Resets to idle on restore or resume never count, and tool
  * calls inside a turn keep it working. Viewing the orchestrator marks its
  * replies seen; both facts persist per project across restarts.
  */
