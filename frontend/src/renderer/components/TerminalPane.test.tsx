@@ -360,6 +360,7 @@ function renderPane(
 	onInputRequestResult?: (id: number, accepted: boolean) => void,
 	terminalTarget?: TerminalTarget,
 	onTerminalContentReadyChange?: (ready: boolean) => void,
+	onLinkOpen?: (uri: string) => void,
 ) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const previousAO = window.ao;
@@ -373,6 +374,7 @@ function renderPane(
 					inputRequest={inputRequest}
 					onInputRequestResult={onInputRequestResult}
 					onTerminalContentReadyChange={onTerminalContentReadyChange}
+					onLinkOpen={onLinkOpen}
 					session={session}
 					terminalTarget={terminalTarget}
 					theme="dark"
@@ -1620,6 +1622,18 @@ describe("terminal link preview", () => {
 		const view = renderPane();
 		try {
 			act(() => terminalLinkHandler?.("http://localhost:3000"));
+			expect(postMock).not.toHaveBeenCalled();
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("uses the standalone terminal's link handler when supplied", () => {
+		const onLinkOpen = vi.fn();
+		const view = renderPane(undefined, undefined, undefined, { kind: "shell", handleId: "cline-login", generation: "2026-11-22T00:00:00Z", title: "Cline login" }, undefined, onLinkOpen);
+		try {
+			act(() => terminalLinkHandler?.("https://app.cline.bot/auth/device"));
+			expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://app.cline.bot/auth/device");
 			expect(postMock).not.toHaveBeenCalled();
 		} finally {
 			view.restore();

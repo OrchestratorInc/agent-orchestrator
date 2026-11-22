@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { activatePRTab, deactivatePRTab, openPRTab, resetPRTabs } from "../lib/pr-tabs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionView } from "./SessionView";
+import { requestSessionBrowserPopOut } from "../lib/session-browser-popout-request";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
@@ -6300,6 +6301,14 @@ describe("SessionView", () => {
 		} finally {
 			rect.mockRestore();
 		}
+	});
+
+	it("shows the session Browser above Settings when login requests it", () => {
+		act(() => useUiStore.getState().setInspectorView("sess-1", "browser"));
+		render(<SessionView sessionId="sess-1" />);
+		act(() => requestSessionBrowserPopOut());
+		expect(document.querySelector(".browser-popout-overlay")).toHaveAttribute("data-phase", "open");
+		expect(screen.getByRole("button", { name: "browser center" })).toBeInTheDocument();
 	});
 
 	it("does not reserve the traffic-light band during native macOS fullscreen", () => {
