@@ -691,6 +691,18 @@ describe("session-scoped conversation commands", () => {
 });
 
 describe("provider catalog controller epochs", () => {
+	it("normalizes omitted choices from older daemon reads and writes", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const option = { id: "model", name: "Model", type: "select" as const };
+		getMock.mockResolvedValueOnce({ data: { options: [option] }, error: undefined });
+		patchMock.mockResolvedValueOnce({ data: { options: [option] }, error: undefined });
+		const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.options).toEqual([{ ...option, choices: [] }]));
+		await act(async () => { await result.current.setOption("model", { value: "opus" }); });
+		expect(result.current.options).toEqual([{ ...option, choices: [] }]);
+	});
+
 	it("discards a config mutation response from before switch admission", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

@@ -71,6 +71,7 @@ type WireActivity = components["schemas"]["ConversationActivityResponse"];
 type WireImageContent = components["schemas"]["ConversationImageContentRequest"];
 type WireResourceContent = components["schemas"]["ConversationResourceContentRequest"];
 type WireExcerptReference = components["schemas"]["ConversationExcerptReferenceRequest"];
+type WireConfigOption = components["schemas"]["ConversationConfigOptionResponse"];
 
 export interface ConversationSendInput {
 	text: string;
@@ -2029,6 +2030,10 @@ function offersValue(options: ChatConfigOption[], optionId: string, value: ChatC
 	return !("value" in value) || option.type !== "select" || option.choices.some((choice) => choice.value === value.value);
 }
 
+function toChatConfigOptions(options: WireConfigOption[] | undefined): ChatConfigOption[] {
+	return (options ?? []).map((option) => ({ ...option, currentBoolean: option.currentBoolean ?? undefined, choices: option.choices ?? [] }));
+}
+
 export function useConversationConfigOptions(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const queryKey = conversationConfigOptionsQueryKey(sessionId ?? "", hostId);
@@ -2085,7 +2090,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 				throw error;
 			}
 			snapshotRefreshed.current = false;
-			return (data?.options ?? []) as ChatConfigOption[];
+			return toChatConfigOptions(data?.options);
 		},
 	});
 	const mutation = useMutation({
@@ -2171,7 +2176,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 			},
 		);
 		if (error) throw error;
-		const options = (data?.options ?? []) as ChatConfigOption[];
+		const options = toChatConfigOptions(data?.options);
 		writes.current.confirmed = options;
 		return { controllerEpoch, options };
 	}
