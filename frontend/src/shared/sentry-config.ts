@@ -38,13 +38,7 @@ export function safeSentryFunctionName(value: unknown, fallback: string): string
 	return typeof value === "string" && SAFE_FUNCTION_NAMES.has(value) ? value : fallback;
 }
 
-const SAFE_EXCEPTION_TYPES = new Set([
-	"Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "DOMException",
-]);
-
-export function safeSentryExceptionType(value: unknown): string {
-	return typeof value === "string" && SAFE_EXCEPTION_TYPES.has(value) ? value : "Error";
-}
+export { safeSentryExceptionType } from "./sentry-message";
 
 // Keep this version mapping aligned with sentryEnvironment in the Go daemon.
 export function sentryEnvironment(version: string): "unknown" | "nightly" | "development" | "stable" {
