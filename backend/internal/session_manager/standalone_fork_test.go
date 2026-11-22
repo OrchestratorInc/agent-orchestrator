@@ -122,9 +122,32 @@ func TestStandaloneOlderTurnForkGetsTheOriginalsDependencies(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ws.Path, "data", "rows.csv")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the fork got the original's current files: %v", err)
 	}
-	if b, err := os.ReadFile(filepath.Join(ws.Path, "node_modules", "left-pad", "index.js")); err != nil || string(b) != "pad" {
-		t.Fatalf("node_modules not cloned: %q, %v", b, err)
+	// Dependencies are cloned only where the disk makes copy-on-write clones;
+	// elsewhere the fork starts without them and setup installs them, as for
+	// a git fork.
+	b, err := os.ReadFile(filepath.Join(ws.Path, "node_modules", "left-pad", "index.js"))
+	if cloneSupported(t) {
+		if err != nil || string(b) != "pad" {
+			t.Fatalf("node_modules not cloned: %q, %v", b, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("node_modules = %q, %v; want none where clones aren't supported", b, err)
 	}
+}
+
+// cloneSupported reports whether this disk makes copy-on-write clones.
+func cloneSupported(t *testing.T) bool {
+	t.Helper()
+	src := t.TempDir()
+	writeTestFile(t, filepath.Join(src, "probe"), "probe")
+	err := dirseed.CloneTree(src, filepath.Join(t.TempDir(), "clone"))
+	if errors.Is(err, dirseed.ErrCloneUnsupported) {
+		return false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return true
 }
 
 // A seed that can't be applied fails the spawn, and the created folder is
