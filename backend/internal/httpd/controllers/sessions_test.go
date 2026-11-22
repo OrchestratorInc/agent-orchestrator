@@ -2230,7 +2230,7 @@ func TestSessionsAPI_SpawnRejectsUnknownRequestedOutput(t *testing.T) {
 func TestSessionsAPI_PreviewServesSelectedStaticIndex(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte(`<link rel="stylesheet" href="styles.css"><script src="app.js"></script>`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte(`<link rel="stylesheet" href="styles.css"><script src="app.js"></script><a href="mailto:support@example.test">support@example.test</a>`), 0o644); err != nil {
 		t.Fatalf("write index: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "styles.css"), []byte(`body { color: red; }`), 0o644); err != nil {
@@ -2273,6 +2273,13 @@ func TestSessionsAPI_PreviewServesSelectedStaticIndex(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "styles.css") {
 		t.Fatalf("preview body did not serve index: %s", body)
+	}
+	if !strings.Contains(string(body), `mailto:support@example.test`) || headers.Get("Cache-Control") != "private, no-cache, no-transform" {
+		t.Fatalf("preview HTML changed or is transformable: body=%s Cache-Control=%q", body, headers.Get("Cache-Control"))
+	}
+	_, status, headers = doPreviewOriginRequest(t, srv, preview.PreviewURL, "/styles.css")
+	if status != http.StatusOK || headers.Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("preview CSS cache policy = status %d Cache-Control %q", status, headers.Get("Cache-Control"))
 	}
 }
 
@@ -2579,6 +2586,9 @@ func TestSessionsAPI_PreviewFileRawMarkdownBypassesHTMLRendering(t *testing.T) {
 	if !strings.Contains(headers.Get("Content-Type"), "text/html") || !bytes.Contains(body, []byte("<!doctype html>")) {
 		t.Fatalf("rendered markdown response content-type=%q body=%q, want HTML document", headers.Get("Content-Type"), body)
 	}
+	if got := headers.Get("Cache-Control"); got != "no-transform" {
+		t.Fatalf("rendered markdown Cache-Control = %q, want no-transform", got)
+	}
 
 	for _, raw := range []string{"1", "true"} {
 		body, status, headers = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/notes.md?raw="+raw, "")
@@ -2590,6 +2600,9 @@ func TestSessionsAPI_PreviewFileRawMarkdownBypassesHTMLRendering(t *testing.T) {
 		}
 		if strings.Contains(headers.Get("Content-Type"), "text/html") {
 			t.Fatalf("raw=%s markdown content type = %q, want non-HTML", raw, headers.Get("Content-Type"))
+		}
+		if got := headers.Get("Cache-Control"); got != "private, no-cache" {
+			t.Fatalf("raw=%s markdown Cache-Control = %q, want private, no-cache", raw, got)
 		}
 	}
 }

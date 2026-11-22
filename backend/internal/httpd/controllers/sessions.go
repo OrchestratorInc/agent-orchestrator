@@ -1119,7 +1119,12 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 		// Last-Modified alone cannot distinguish replacements within one second.
 		w.Header().Set("ETag", fmt.Sprintf(`"%d-%d"`, info.Size(), info.ModTime().UnixNano()))
 		w.Header().Set("Access-Control-Expose-Headers", "ETag")
-		w.Header().Set("Cache-Control", "private, no-cache")
+		cacheControl := "private, no-cache"
+		if mediaType, _, err := mime.ParseMediaType(mime.TypeByExtension(strings.ToLower(filepath.Ext(clean)))); err == nil &&
+			(mediaType == "text/html" || mediaType == "application/xhtml+xml") {
+			cacheControl += ", no-transform"
+		}
+		w.Header().Set("Cache-Control", cacheControl)
 		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 		return
 	}
@@ -1135,6 +1140,7 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-transform")
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(rendered) //nolint:gosec // G705: legacy documents are sandboxed; isolated previews have no daemon API authority
 	}
