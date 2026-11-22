@@ -7002,7 +7002,9 @@ const turnsIn = (group: TimelineGroup): TimelineGroup[] => group.folded?.members
 
 function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boolean): string[] {
 	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
-	return member ? [`${group.key}:open`, `${member.key}:open`, `${member.key}:worked`] : [`${group.key}:worked`];
+	if (!member) return [`${group.key}:worked`];
+	if (group.folded!.kind === "failed" && member === group.folded!.members.at(-1)) return [`${member.key}:worked`];
+	return [`${group.key}:open`, `${member.key}:open`, `${member.key}:worked`];
 }
 
 function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>): TimelineGroup[] {
@@ -7031,7 +7033,7 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 				: group);
 			continue;
 		}
-		const key = standing === "failed" ? `failed:${outcome!.state}:${outcome!.failureCode ?? ""}:${(outcome!.error ?? "").replace(/\d+/g, "")}` : standing;
+		const key = standing === "failed" ? `failed:${outcome!.state}:${outcome!.failureCode ?? ""}:${(outcome!.error ?? "").replace(/\d{4}-\d{2}-\d{2}\S*|\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?/gi, "")}` : standing;
 		if (run?.key !== key) {
 			close();
 			run = { kind: standing, key, members: [] };

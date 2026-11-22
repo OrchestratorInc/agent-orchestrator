@@ -486,7 +486,7 @@ export function BackgroundUpdates({ turns, failed = false, open, onOpenChange, c
 	const start = formatMessageTimestamp(first);
 	const span = new Date(first).toDateString() !== new Date(last).toDateString()
 		? `${start} – ${formatMessageTimestamp(last)}`
-		: first !== last && start.endsWith(formatTime(first)) ? `${start}–${formatTime(last)}` : start;
+		: formatTime(first) !== formatTime(last) && start.endsWith(formatTime(first)) ? `${start}–${formatTime(last)}` : start;
 	return (
 		<div className="min-w-0 text-[length:var(--font-size-base)]" data-testid="background-updates">
 			<Pressable

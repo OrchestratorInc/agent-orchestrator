@@ -434,6 +434,13 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.getAllByText(/The orchestrator agent is being replaced/)).toHaveLength(1);
 	});
 
+	it("keeps failures whose errors differ apart", () => {
+		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
+		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider returned HTTP ${index ? 500 : 429}.` })) });
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+		expect(screen.getByText(/HTTP 429/)).toBeInTheDocument();
+	});
+
 	it("leaves worker turns that stopped short in view without calling them failed", () => {
 		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
 		renderSnapshot({ ...base, turns: base.turns.map((turn) => ({ ...turn, state: "interrupted" })) });

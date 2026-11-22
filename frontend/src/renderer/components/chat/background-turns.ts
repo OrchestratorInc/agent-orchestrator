@@ -1,10 +1,11 @@
-import { isUserQueuePrompt, type ConversationItem } from "../../types/conversation";
+import { isSteer, isUserQueuePrompt, type ConversationItem } from "../../types/conversation";
 import { automationOf } from "./AutomationMessage";
 import { finalReply, isTaskTitleUpdate, isWorkerLead, needsYouNow, relayedVia, renamedTitle, workerUpdatesOf, type WorkerUpdateIndex } from "./WorkerUpdates";
 
 export type TurnStanding = "yours" | "replaced" | "failed" | "up" | "background";
 
-const isYours = (item: ConversationItem) => isUserQueuePrompt(item) || relayedVia(item) !== null;
+const isYours = (item: ConversationItem) =>
+	isUserQueuePrompt(item) || relayedVia(item) !== null || (item.kind === "activity" && isSteer(item) && !item.detail?.senderSessionId);
 
 export function turnStanding(items: readonly ConversationItem[], state: string, index: WorkerUpdateIndex | null): TurnStanding {
 	const lead = items[0];
