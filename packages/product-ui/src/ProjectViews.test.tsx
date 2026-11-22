@@ -125,6 +125,13 @@ describe("project models", () => {
 		).toBe(false);
 	});
 
+	it("gates project setup on intake eligibility alone when agents are not asked for", () => {
+		expect(canSubmitProjectSetup({})).toBe(true);
+		expect(canSubmitProjectSetup({ intakeEnabled: true })).toBe(false);
+		expect(canSubmitProjectSetup({ intakeEnabled: true, intakeAssignee: "octocat" })).toBe(true);
+		expect(canSubmitProjectSetup({ workerAgent: "", orchestratorAgent: "codex" })).toBe(false);
+	});
+
 });
 
 describe("project presentation", () => {

@@ -456,7 +456,7 @@ describe("editor handoff", () => {
 
 		expect(input.launch).toHaveBeenCalledWith(
 			"C:\\Windows\\System32\\cmd.exe",
-			["/d", "/s", "/v:off", "/k", `""C:\\bin\\nvim.exe" ".""`],
+			["/d", "/s", "/v:off", "/c", `"start "" "C:\\bin\\nvim.exe" ".""`],
 			workspacePath,
 		);
 	});
@@ -796,6 +796,16 @@ describe("editor handoff (win32 fallback discovery)", () => {
 	});
 });
 
+describe("shared terminal command", () => {
+	it("preserves terminal launcher argv on Linux and Windows", async () => {
+		const { terminalCommand } = await import("./terminal-command");
+		expect(terminalCommand(["/bin/nvim", "/work tree"], "linux", { PATH: "/bin" }, (p) => p === "/bin/gnome-terminal"))
+			.toEqual({ command: "/bin/gnome-terminal", args: ["--", "/bin/nvim", "/work tree"] });
+		expect(terminalCommand(["C:\\a&b\\nvim.exe", "."], "win32", {}, () => false))
+			.toEqual({ command: "cmd.exe", args: ["/d", "/s", "/v:off", "/c", '"start "" "C:\\a&b\\nvim.exe" ".""'] });
+	});
+});
+
 describe("chat path actions", () => {
 	it.skipIf(process.platform === "win32")("checks existing symlink parents before copying missing relative paths", async () => {
 		const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "ao-missing-path-")));
@@ -973,7 +983,7 @@ describe("chat path actions", () => {
 			isExecutable: installedExecutables("C:\\bin\\nvim.exe"),
 		});
 		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src/a b.ts", action: "open", editorId: "neovim" });
-		expect(input.launch).toHaveBeenCalledWith("C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/v:off", "/k", '""C:\\bin\\nvim.exe" "C:\\worktrees\\ao-1\\src\\a b.ts""'], "C:\\worktrees\\ao-1\\src");
+		expect(input.launch).toHaveBeenCalledWith("C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/v:off", "/c", '"start "" "C:\\bin\\nvim.exe" "C:\\worktrees\\ao-1\\src\\a b.ts""'], "C:\\worktrees\\ao-1\\src");
 		await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src/%TEMP%.ts", action: "open", editorId: "neovim" })).rejects.toThrow("safely");
 		expect(input.launch).toHaveBeenCalledTimes(1);
 	});

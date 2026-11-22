@@ -4,9 +4,11 @@ import { ActivityIndicator, Keyboard, Platform, Pressable, StyleSheet, TextInput
 import { AppSymbol } from "./AppSymbol";
 import { ChatAttachmentMenu } from "./chat/ChatAttachmentMenu";
 import { ComposerGlass } from "./chat/composer-glass";
-import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./chat/composerStyles";
+import type { ComposerImageAsset, PasteOverflow } from "./chat/composerImages";
+import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./chat/composerStyles";
 import { usePressFeedback } from "./pressFeedback";
 import type { SpawnComposerVoice } from "./spawn-composer-controls.types";
+import { useImagePaste } from "./chat/useImagePaste";
 import { DictationField } from "./voice/DictationField";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -28,6 +30,8 @@ export type SpawnComposerProps = {
 	settings: ReactNode;
 	onChoosePhoto: () => void;
 	onChooseFile: () => void;
+	/** Takes images pasted into the field; null while they can't be attached. */
+	onPasteImages?: ((assets: ComposerImageAsset[], overflow?: PasteOverflow) => void) | null;
 	voice: SpawnComposerVoice;
 	onSpawn: () => void;
 	busy: boolean;
@@ -41,11 +45,15 @@ export type SpawnComposerProps = {
  * page is for choosing who runs the task, so the model, effort and approval
  * stay in sight while the field is empty and unfocused.
  */
-export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments, settings, onChoosePhoto, onChooseFile, voice, onSpawn, busy, disabled }: SpawnComposerProps) {
+export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments, settings, onChoosePhoto, onChooseFile, onPasteImages, voice, onSpawn, busy, disabled }: SpawnComposerProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const field = useRef<TextInput>(null);
+	const pasteLayout = useImagePaste(onPasteImages ?? null);
+	// The field's heights at the reader's text size, as the chat's: in points
+	// alone, the largest sizes cut the placeholder off top and bottom.
+	const fieldSize = useComposerFieldSize();
 	const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
 	// A new task is for typing into, so the page opens with the keyboard up, as
 	// a new chat does. iOS focuses
@@ -70,10 +78,13 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 
 	// One round button that follows the prompt, as the chat's: it stops the mic
 	// while it is open, starts the task once there is something written, and
-	// otherwise dictates; a device that cannot dictate keeps Start, which says
+	// otherwise dictates; a device with no recogniser keeps Start, which says
 	// what is missing when pressed. Dictation is hands-free and drops the
 	// keyboard.
-	const canDictate = voice.state !== "unavailable" && voice.state !== "denied";
+	// A denied mic still dictates from here: its tap opens Settings, where the
+	// microphone can be turned back on.
+	const canDictate = voice.state !== "unavailable";
+	const micDenied = voice.state === "denied";
 	const primary = busy ? "send" : listening ? "stopDictation" : transcribing ? "transcribing" : promptEmpty && canDictate ? "dictate" : "send";
 	const roundButton = primary === "send"
 		? <Pressable
@@ -92,7 +103,7 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 		</Pressable>
 		: <Pressable
 			accessibilityRole="button"
-			accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : "Dictate the task"}
+			accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : micDenied ? "Turn on microphone access in Settings" : "Dictate the task"}
 			accessibilityState={{ disabled: transcribing, busy: transcribing }}
 			disabled={transcribing}
 			android_ripple={sendFeedback.android_ripple}
@@ -101,7 +112,7 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 			style={({ pressed }) => [styles.roundTarget, pressed && sendFeedback.pressed]}
 		>
 			<View style={[styles.roundDisc, primary === "stopDictation" ? styles.dictating : styles.roundAccent]}>
-				{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
+				{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : micDenied ? "micOff" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
 			</View>
 		</Pressable>;
 
@@ -115,16 +126,18 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 				{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} waveformOnly /> : null}
 				<TextInput
 					ref={field}
+					onLayout={pasteLayout}
 					accessibilityLabel="Task prompt"
 					value={prompt}
 					onChangeText={onChangePrompt}
 					placeholder={placeholder}
 					placeholderTextColor={t.textFaint}
+					maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
 					{...textSelectionColors(t)}
 					// Grows on its own between the style's min and max height, as the
 					// chat's field does: a height set from the content-size event lagged
 					// a line behind and scrolled the top line out of view.
-					style={[styles.input, dictating && styles.hiddenField]}
+					style={[styles.input, fieldSize.field, dictating && styles.hiddenField]}
 					multiline
 					// Android focuses once the push has finished (see above).
 					autoFocus={Platform.OS === "ios"}

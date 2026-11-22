@@ -18,6 +18,7 @@ import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
+import { prepareUnpublish, sessionDeleteTargets, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { useUiStore } from "../stores/ui-store";
 
 type TerminateSessionOptions = {
@@ -36,8 +37,29 @@ export const terminateSessionMutationKey = ["terminate-session"] as const;
  */
 export type TerminateSessionRequest = WorkspaceSession & { deleteArtifacts?: boolean };
 
+type TerminateResult = {
+	/** Whether the daemon or control plane confirmed it deleted the artifacts. */
+	artifactsDeleted: boolean;
+	/** How many of the deleted artifacts' public links could not be unpublished. */
+	linksLive: number;
+};
+
+/**
+ * Archives the session. With deleteArtifacts, its published links are looked
+ * up first and unpublished once the files are confirmed deleted: an archive
+ * that keeps the files keeps their links too.
+ */
+async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<TerminateResult> {
+	const baseUrl = session.deleteArtifacts ? queryClient.getQueryData<Settings>(settingsQueryKey)?.cloudControlPlaneUrl ?? "" : "";
+	const links = session.deleteArtifacts
+		? await prepareUnpublish(baseUrl, await sessionDeleteTargets(baseUrl, session), { deleting: [{ hostId: session.hostId, sessionId: session.id }] })
+		: undefined;
+	const artifactsDeleted = await archiveSession(queryClient, session);
+	return { artifactsDeleted, linksLive: artifactsDeleted && links ? await links.unpublish() : 0 };
+}
+
 /** Resolves to whether the daemon or control plane confirmed it deleted the artifacts. */
-async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<boolean> {
+async function archiveSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<boolean> {
 	if (session.cloud) {
 		const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
 		const baseUrl = settings?.cloudControlPlaneUrl ?? "";
@@ -164,7 +186,7 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			}
 			return { workspace, cloud };
 		},
-		onSuccess: async (artifactsDeleted, session) => {
+		onSuccess: async ({ artifactsDeleted, linksLive }, session) => {
 			useUiStore.getState().resetFilesSelection(sessionUiKey(session.id, session.hostId));
 			void captureRendererEvent("ao.sessions.killed", { project_id: session.workspaceId });
 			// The archive stands either way. A failed delete, or a host whose daemon
@@ -172,6 +194,7 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			if (session.deleteArtifacts && !artifactsDeleted) {
 				useUiStore.getState().showGlobalToast(t("archive.artifactsNotDeleted"), t("archive.artifactsNotDeletedBody"), "error");
 			}
+			warnLinksStillLive(t, linksLive);
 			// Reinforce before refresh; keep the optimistic id until this refetch finishes.
 			const queryKey = workspaceQueryKeyForHost(session.hostId);
 			queryClient.setQueryData<WorkspaceSummary[]>(queryKey, (workspaces) =>
@@ -288,15 +311,25 @@ function reportArchiveCleanup(queryClient: QueryClient, session: WorkspaceSessio
 	const timer = window.setTimeout(stop, CLEANUP_REPORT_WINDOW_MS);
 }
 
-function useCachedWorkspaces(hostId?: string) {
+const noSubscription = () => () => {};
+
+function useCachedWorkspaces(hostId?: string, enabled = true) {
 	const queryClient = useQueryClient();
 	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
-	return useSyncExternalStore(subscribe, () => queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)));
+	return useSyncExternalStore(
+		enabled ? subscribe : noSubscription,
+		() => (enabled ? queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)) : undefined),
+	);
 }
 
-export function useTerminateSessionState(sessionId: string, hostId?: string) {
+/**
+ * `enabled` false skips watching the board data (every card watching the whole
+ * query cache re-renders on every fetch anywhere); only this session's own
+ * archive mutations are then followed.
+ */
+export function useTerminateSessionState(sessionId: string, hostId?: string, enabled = true) {
 	// Observe existing board data; this does not start another network request.
-	const data = useCachedWorkspaces(hostId);
+	const data = useCachedWorkspaces(hostId, enabled);
 	const session = data?.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId);
 	const summary = summarizeBySession(useTerminateSessionMutations()).find(({ session }) =>
 		session.id === sessionId && session.hostId === hostId);

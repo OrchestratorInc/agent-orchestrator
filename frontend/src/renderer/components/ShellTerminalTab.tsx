@@ -7,7 +7,6 @@ import { useTruncatedText } from "../hooks/useTruncatedText";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 import { cn } from "../lib/utils";
 import { type ShellAgent, useShellAgentStore, useShellAgentStream } from "../stores/shell-agent-store";
-import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
 import { TabContextMenu } from "./TabContextMenu";
 import { TerminalTabFrame, terminalTabActionClassName, terminalTabRenameInputClassName } from "./TerminalTabFrame";
@@ -22,8 +21,8 @@ type ShellTerminalTabProps = {
 	appearance?: "pill" | "connected";
 	/** Commit a new tab title. Omitted where rename is not wired. */
 	onRename?: (title: string) => void;
-	/** Every shell tab handle in this strip; tabs running the same agent keep their numbers. */
-	stripShellHandleIds?: readonly string[];
+	/** Every shell tab in this strip; tabs running the same agent keep their numbers. */
+	stripShells?: readonly ShellTerminal[];
 };
 
 // One shell tab in the session pane's tab strip (CenterPane). Session-pane
@@ -35,7 +34,7 @@ type ShellTerminalTabProps = {
 // discarded. The close control is a sibling
 // button, not nested inside the tab button - nesting interactive elements is
 // invalid HTML and breaks keyboard traversal. Connected session-strip tabs use
-// the shared TerminalTabFrame, which shows that sibling in the glyph's slot on hover.
+// the shared TerminalTabFrame, which shows that sibling at the tab's right edge.
 export function ShellTerminalTab({
 	shell,
 	isActive,
@@ -43,7 +42,7 @@ export function ShellTerminalTab({
 	onClose,
 	appearance = "pill",
 	onRename,
-	stripShellHandleIds,
+	stripShells,
 }: ShellTerminalTabProps) {
 	const { t } = useTranslation();
 	const [isEditing, setIsEditing] = useState(false);
@@ -51,11 +50,11 @@ export function ShellTerminalTab({
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	const lastClickAtRef = useRef(0);
 	const canEdit = Boolean(onRename) && !shell.optimistic;
-	// The agent tab is a Developer Mode preview, like the simplified topbar.
-	const developerMode = useUiStore((state) => state.developerMode);
-	const tracksAgent = developerMode && !shell.optimistic && !shell.cloud && !shell.hostId;
+	// Only the local daemon watches shells, so cloud and remote-host tabs stay plain.
+	const tracksAgent = !shell.optimistic && !shell.cloud && !shell.hostId;
 	useShellAgentStream(tracksAgent);
-	const agent = useShellAgentStore((state) => (tracksAgent ? state.agents[shell.handleId] : undefined));
+	const liveAgent = useShellAgentStore((state) => (tracksAgent ? state.agents[shell.handleId] : undefined));
+	const agent = liveAgent ?? (tracksAgent && shell.resumeHarness ? { harness: shell.resumeHarness, state: "idle" as const } : undefined);
 	const unseenDone = useShellAgentStore((state) => Boolean(state.unseenDone[shell.handleId]));
 	const markSeen = useShellAgentStore((state) => state.markSeen);
 	// A default-named tab ("Terminal 3") reads as its agent ("Claude Code"),
@@ -63,10 +62,17 @@ export function ShellTerminalTab({
 	// rename edits the stored title, which returns when the agent exits.
 	const defaultNumber = /^Terminal (\d+)$/.exec(shell.title)?.[1];
 	const sharesAgent = useShellAgentStore((state) =>
-		Boolean(agent && stripShellHandleIds?.some((id) => id !== shell.handleId && state.agents[id]?.harness === agent.harness)),
+		Boolean(
+			agent &&
+				stripShells?.some(
+					(other) =>
+						other.handleId !== shell.handleId &&
+						(state.agents[other.handleId]?.harness ?? other.resumeHarness) === agent.harness,
+				),
+		),
 	);
 	const agentName = agent && defaultNumber ? agentLabel(agent.harness) : undefined;
-	const terminalTitle = developerMode ? shell.terminalTitle : undefined;
+	const terminalTitle = shell.terminalTitle;
 	const title = terminalTitle ?? (agentName ? (sharesAgent ? `${agentName} ${defaultNumber}` : agentName) : shell.title);
 	// An agent's name is display only, so renaming starts from the real title.
 	const renameBase = terminalTitle ?? shell.title;
@@ -142,7 +148,9 @@ export function ShellTerminalTab({
 		type: "button" as const,
 	};
 	if (appearance === "connected") {
-		const closeAction = isEditing || shell.optimistic ? undefined : (
+		// The close sits at the tab's right edge from the first frame. Closing a
+		// shell still starting cancels it: its create request destroys the shell.
+		const closeAction = (
 			<Pressable {...closeControl} className={terminalTabActionClassName}>
 				<X aria-hidden="true" className="size-icon-sm" />
 			</Pressable>
@@ -174,7 +182,7 @@ export function ShellTerminalTab({
 				<TerminalTabFrame
 					wide={Boolean(agent)}
 					action={closeAction}
-					onClose={closeAction ? onClose : undefined}
+					onClose={isEditing ? undefined : onClose}
 					active={isActive}
 					buttonProps={{
 						"aria-current": isActive,

@@ -2,12 +2,15 @@ import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { Stack, useIsFocused, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { useSharedValue } from "react-native-reanimated";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
 import { InlineBanner, type InlineBannerProps } from "../InlineBanner";
+import { pendingSwitchFor, requestedSwitchModel, type PendingAgentSwitch } from "../agentSwitch";
+import { useAgentSwitchMenu } from "./useAgentSwitchMenu";
+import { prewarmChatAgent } from "./api";
 import { useApp } from "../store";
 import {
 	mobileInterfaceTransitionIsActive,
@@ -20,29 +23,33 @@ import {
 import { InterfaceSwitchCard } from "../session/InterfaceSwitchCard";
 import { useInterfaceHandoff } from "../session/useInterfaceHandoff";
 import type { Theme } from "../theme";
-import { Frost, FROST_TAIL, frostStops } from "../frost";
+import { Frost, FROST_TAIL, pillFrostStops } from "../frost";
+import { headerBackOptions } from "../headerBack";
+import { HeaderPill, HeaderPillButton, pillBackOptions } from "../headerPill";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { getWorkspacePaths, openSessionShell } from "./api";
+import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, resolveWorkspacePath, type ForkOptions } from "./api";
 import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
 import { KeyboardFollower } from "./KeyboardFollower";
+import { KeyboardMotionScope } from "./keyboardMotion";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
+import { useFlag } from "./flag";
 import { McpServerNotice } from "./McpServerNotice";
+import { ProviderSwitchLine } from "./ProviderSwitchMarker";
 import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
 import { conversationMenuGroups, type CloudConversationMenuAction, type ConversationMenuAction, type ConversationMenuGroup } from "./conversationMenuModel";
-import { quotaWarning } from "./conversationChrome";
 import { shouldAutoResume } from "./autoResume";
-import { controllerStoppedBanner, errorBanner, mcpNoticeKey, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
+import { controllerStoppedBanner, errorBanner, mcpNoticeKey, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { contextReadout } from "./conversationChrome";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
-import { brokenMcpServers, can, type ConversationSnapshot } from "./types";
-import { useMobileConversation } from "./useConversation";
+import { brokenMcpServers, can, type ChatExcerpt, type ChatImage, type ChatResource, type ConversationSnapshot } from "./types";
+import { clientMessageId, useMobileConversation } from "./useConversation";
 import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
@@ -54,14 +61,21 @@ import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
+import { usePushSettled } from "../usePushSettled";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
+import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
+import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { isAbsoluteFileReference, matchBareFile } from "./fileLinks";
+import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
+import { TurnRecoveryContext, type TurnRecovery } from "./UsageLimitNotice";
+import { usageLimitedTurn } from "./usageLimit";
 import { useChangeSummary } from "../files/useChangeSummary";
 import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
@@ -104,6 +118,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, machine, session.id);
+	// See `awaitingConversation`: only a conversation the page opened without is held.
+	const pushSettled = usePushSettled();
+	const [openedWithSnapshot] = useState(() => Boolean(conversation.snapshot));
+	const holdArrivingSnapshot = !pushSettled && !openedWithSnapshot && Boolean(conversation.snapshot);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
 	// The catalog is asked for again too if it has none of its own yet: a page
 	// cached as ready loads it before the wake, and that load can fail unseen.
@@ -137,6 +155,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const restoreRequest = useCallback(() => setDismissedRequest(undefined), []);
 	const [filePaths, setFilePaths] = useState<string[]>([]);
 	const [filePathsTruncated, setFilePathsTruncated] = useState(false);
+	// Whether `filePaths` has been read: a bare file name in a reply waits for it.
+	const [filePathsLoaded, setFilePathsLoaded] = useState(false);
+	const loadFilePaths = useRef<() => void>(() => {});
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
 	const [resuming, setResuming] = useState(false);
@@ -146,24 +167,30 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
 	// keyboard-controller's early events, corrected by React Native's when it
 	// misses a transition. See useChatKeyboard.
-	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });
+	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER, floating: true });
 	const headerOverlap = useGlassHeaderOverlap();
 	// On iOS 26 the banners float under the header, over the list's top, and the
 	// list starts below them.
 	const [bannersHeight, setBannersHeight] = useState(0);
 	const [composerHeight, setComposerHeight] = useState(0);
 	// The jump back to the newest message steps aside while the composer is open.
-	const [composerOpen, setComposerOpen] = useState(false);
+	// The composer's open state, for the jump to the newest message alone (see Flag).
+	const composerOpen = useFlag();
 	// The composer springs open and closed, and its height changes every frame
 	// of that. The timeline takes the height once it settles, rather than
 	// re-rendering the conversation for each frame.
 	const composerSettle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	useEffect(() => () => clearTimeout(composerSettle.current), []);
+	// The conversation is padded for the pill fully open and one line tall;
+	// the pill opening and lines typed move it on the UI thread instead
+	// (ChatTimeline's `composerGrowth`), so neither waits on React.
+	const composerDeficit = useSharedValue(0);
+	const composerFieldGrowth = useSharedValue(0);
 	const measureComposer = useCallback((event: LayoutChangeEvent) => {
-		const height = Math.round(event.nativeEvent.layout.height);
+		const height = event.nativeEvent.layout.height;
 		clearTimeout(composerSettle.current);
-		composerSettle.current = setTimeout(() => setComposerHeight(height), COMPOSER_SETTLE_MS);
-	}, []);
+		composerSettle.current = setTimeout(() => setComposerHeight(Math.round(height + composerDeficit.value - composerFieldGrowth.value)), COMPOSER_SETTLE_MS);
+	}, [composerDeficit, composerFieldGrowth]);
 	const keyboardVisible = chatKeyboard.keyboardVisible;
 	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
@@ -176,6 +203,59 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// stopped controller.
 	const handoff = useInterfaceHandoff(interfaceSwitch.transition, "chat");
 	const switchingToTerminal = interfaceTransitionActive || handoff.pending;
+
+	// Agent switching, from the model menu's "Other agents" (the new task's
+	// menu). As on desktop, a pick only records the agent the next message goes
+	// to; the send then switches and sends in one request. Orchestrators switch
+	// too, as on desktop, including once their agent has stopped at a usage
+	// limit: the daemon wakes it to hand over. Not offered to terminated
+	// sessions, which must be restored first.
+	const currentHarness = conversation.snapshot?.harness || "";
+	const agentSwitchMenu = useAgentSwitchMenu({
+		cfg: config,
+		current: currentHarness,
+		projectId: session.projectId,
+		enabled: !terminated && Boolean(currentHarness),
+	});
+	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
+	const pendingSwitch = pendingSwitchFor(chosenSwitch, currentHarness || undefined);
+	// A pick whose agent the chat now runs is done, however the switch's answer went.
+	useEffect(() => {
+		if (chosenSwitch && chosenSwitch.harness === currentHarness) setChosenSwitch(undefined);
+	}, [chosenSwitch, currentHarness]);
+	useEffect(() => { setChosenSwitch(undefined); }, [session.id]);
+	// The daemon's first-start chat check can take a second; run it now so the send does not wait.
+	const pendingHarness = pendingSwitch?.harness;
+	useEffect(() => {
+		if (config && pendingHarness) void prewarmChatAgent(config, pendingHarness).catch(() => {});
+	}, [config, pendingHarness]);
+	const agentBusy = conversation.snapshot?.controller.state === "busy" ||
+		Boolean(conversation.snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"));
+	const otherAgents = useMemo(
+		() => (agentSwitchMenu ? { ...agentSwitchMenu, pending: pendingSwitch, disabled: agentBusy, onPick: setChosenSwitch } : undefined),
+		[agentBusy, agentSwitchMenu, pendingSwitch],
+	);
+	const agentSwitchSending = conversation.pendingSends.some((item) => item.state === "sending" && Boolean(item.providerSwitch));
+	const sendConversation = conversation.send;
+	const send = useCallback(
+		(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => sendConversation(
+			text, attachments, resources, excerpts,
+			pendingSwitch ? { targetHarness: pendingSwitch.harness, model: requestedSwitchModel(pendingSwitch.model) } : undefined,
+		),
+		[pendingSwitch, sendConversation],
+	);
+	// A new agent brings its own models and options: reload them uncached, so
+	// the outgoing agent's never stay in the menu (desktop's
+	// useAgentSwitchProviderCatalogs).
+	const loadTurnOptionsNow = conversation.loadTurnOptions;
+	const snapshotHarness = conversation.snapshot?.harness;
+	const harnessSeen = useRef<{ sessionId: string; harness: string } | undefined>(undefined);
+	useEffect(() => {
+		if (!snapshotHarness) return;
+		const previous = harnessSeen.current;
+		harnessSeen.current = { sessionId: session.id, harness: snapshotHarness };
+		if (previous?.sessionId === session.id && previous.harness !== snapshotHarness) void loadTurnOptionsNow({ refresh: true }).catch(() => {});
+	}, [loadTurnOptionsNow, session.id, snapshotHarness]);
 	// The card covers the conversation only once the Chat controller starts
 	// stopping. Until then (`draining` lasts as long as the agent's turn) the
 	// conversation stays readable behind a banner, dismissed requests included.
@@ -210,7 +290,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			? "Orchestrator restored the session in its last committed interface."
 			: interfaceTransitionNotice?.phase === "recovery_required"
 				? "The interface switch needs recovery before more work is sent."
-				: "The interface switch failed; the current interface remains available.");
+				: interfaceTransitionNotice?.targetAccountId
+					? "The switch failed. The agent stays on its previous account."
+					: "The interface switch failed; the current interface remains available.");
 	const turnActive = Boolean(
 		conversation.snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
 	);
@@ -236,10 +318,40 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	const sessionName = sessionTitle(session);
 	// Codex-style: every surface that shows the agent changed files can open them.
+	// A file action placed by the daemon lands only if it is still the latest one
+	// and the reader is still on this chat: a newer tap, or leaving, drops it.
+	const fileOpenRequest = useRef(0);
+	const fileOpenStillHere = useStillHere(`${currentHostId ?? ""}|${session.id}`, () => navigation.isFocused?.() !== false);
 	const filesNavigation = useMemo<FilesNavigation>(() => ({
-		openChanges: () => router.push(filesRoute(session.id, currentHostId, sessionName)),
-		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, currentHostId, previousPath)),
-	}), [currentHostId, router, session.id, sessionName]);
+		openChanges: () => {
+			fileOpenRequest.current++;
+			router.push(filesRoute(session.id, currentHostId, sessionName));
+		},
+		openFile: (path, previousPath, line) => {
+			const request = ++fileOpenRequest.current;
+			// Agents also cite absolute paths (`/…/worktree/src/a.ts:12`): the
+			// daemon places those, in the worktree or among the session's artifacts.
+			if (!config || !isAbsoluteFileReference(path)) {
+				router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
+				return;
+			}
+			const here = fileOpenStillHere();
+			const current = () => request === fileOpenRequest.current && here();
+			void resolveWorkspacePath(config, session.id, path).then((resolved) => {
+				if (!current()) return;
+				if (resolved.kind === "workspace" && resolved.path) router.push(fileRoute(session.id, resolved.path, currentHostId, previousPath, line));
+				else if (resolved.kind === "artifact" && resolved.path) router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: session.id, path: resolved.path, hostId: currentHostId } });
+				else Alert.alert("Outside this session", `${path} isn't in this session's worktree.`);
+			}, () => {
+				if (current()) router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
+			});
+		},
+		bareFile: (name) => filePathsLoaded ? matchBareFile(name, filePaths, !filePathsTruncated) : undefined,
+		// One list answers every bare name, so any name loads all of it once.
+		wantBareFile: () => loadFilePaths.current(),
+	}), [config, currentHostId, fileOpenStillHere, filePaths, filePathsLoaded, filePathsTruncated, router, session.id, sessionName]);
+	// The artifacts a turn made, drawn as cards under its reply.
+	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.
 	const lastTurn = conversation.snapshot?.turns.at(-1);
 	const changeSignal = `${changedPathCount(conversation.snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
@@ -257,6 +369,29 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const headerState = conversation.snapshot?.controller.state;
 	// The PR ready for review, as a chip over the composer that opens it.
 	const reviewPromptPR = "projectName" in session ? undefined : sessionPRReadyForReview(session);
+	// Session fork: offered when the daemon supports it.
+	const [forkOptions, setForkOptions] = useState<ForkOptions | null>(null);
+	const forkTurnCount = conversation.snapshot?.turns.length ?? 0;
+	const forkLatestState = conversation.snapshot?.turns.at(-1)?.state;
+	// Keyed on the connection, not the config object, which can be rebuilt on
+	// a render without anything changing; refetching then would never settle.
+	const forkConfigRef = useRef(config);
+	forkConfigRef.current = config;
+	const forkConnection = config ? `${config.secure ? "https" : "http"}://${config.host}:${config.httpPort}` : "";
+	useEffect(() => {
+		const cfg = forkConfigRef.current;
+		if (!cfg) return;
+		let live = true;
+		getForkOptions(cfg, session.id)
+			.then((options) => { if (live) setForkOptions(options); })
+			.catch(() => { if (live) setForkOptions(null); });
+		return () => { live = false; };
+	}, [forkConnection, session.id, forkTurnCount, forkLatestState]);
+	const forkTurn = useCallback(async (turnId: string) => {
+		if (!config) return;
+		const fork = await forkSession(config, session.id, turnId, clientMessageId());
+		router.push({ pathname: "/session/[id]", params: { id: fork.sessionId, projectId: session.projectId, hostId: config.hostId } });
+	}, [config, router, session.id, session.projectId]);
 	// Fetched only over the live connection; read through the last verified one
 	// too, so the card stays put while an app switch has the connection down.
 	const reviewSummaries = usePRSummaries(config && reviewPromptPR ? [{ config, sessionId: session.id }] : []);
@@ -283,29 +418,40 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useLayoutEffect(() => {
 		navigation.setOptions({ gestureEnabled: !cardShowing });
 	}, [cardShowing, navigation]);
+	// Android's title pill leads with the way back (see `HeaderPill`).
+	const goBack = useCallback(() => backOr(router), [router]);
 	useLayoutEffect(() => {
 		navigation.setOptions({
-			headerTitle: () => (
-				<ConversationTitle
-					title={title}
-					subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
-					harness={headerHarness}
-					state={headerState}
-				/>
-			),
+			headerTitle: () => {
+				const heading = (
+					<ConversationTitle
+						title={title}
+						subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
+						harness={headerHarness}
+						state={headerState}
+					/>
+				);
+				return PILL_HEADER ? <HeaderPill onBack={goBack}>{heading}</HeaderPill> : heading;
+			},
 		});
-	}, [headerHarness, headerState, navigation, projectName, title, t]);
+	}, [goBack, headerHarness, headerState, navigation, projectName, title, t]);
+	// The route keeps its options when it swaps this screen for the terminal,
+	// which sets only `title`. A `headerTitle` left here outranks it, so the bar
+	// stayed on this screen's last state: the Chat controller the switch stopped,
+	// read as "Stopped" while the session sat idle (#8283).
+	useLayoutEffect(() => () => navigation.setOptions({ headerTitle: undefined }), [navigation]);
 	// The conversation scrolls up under a clear bar. iOS 27's is the system's
 	// glass, which blurs it beneath the title, as Settings and the board do; the
 	// edge effect is the system's own: setting `scrollEdgeEffects` from here
-	// turned it off. Android's bar frosts it out with the page's colour (see
-	// `frost`), as the board tabs' bars do. Every other iOS keeps the stack's own
+	// turned it off. Android's bar floats its back button, title and actions on
+	// pills of their own (see `headerPill`) over a light frost of the page's
+	// colour (see `pillFrostStops`). Every other iOS keeps the stack's own
 	// bar (see `CLEAR_HEADER`). The route also holds terminal sessions, so the
 	// stack's own bar comes back when this screen goes.
 	useLayoutEffect(() => {
 		if (!CLEAR_HEADER) return;
-		navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" } });
-		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle });
+		navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" }, ...(PILL_HEADER ? pillBackOptions() : null) });
+		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle, ...(PILL_HEADER ? { headerBackVisible: undefined, headerLeft: undefined, ...headerBackOptions() } : null) });
 	}, [navigation, t]);
 
 	// Remounts the composer only for a different conversation, never because the
@@ -327,6 +473,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			.then((result) => {
 				setFilePaths(result.paths);
 				setFilePathsTruncated(result.truncated);
+				setFilePathsLoaded(true);
 				return result;
 			})
 			.catch(() => ({ paths: filePaths, truncated: filePathsTruncated }))
@@ -334,6 +481,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		filePathsRequest.current = request;
 		return request;
 	}, [config, conversation.snapshot, filePaths, filePathsTruncated, session.id]);
+	loadFilePaths.current = () => { void loadWorkspaceFiles(); };
 
 	const openShell = useCallback(async () => {
 		if (!config || openingShell) return;
@@ -492,6 +640,25 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Offered only where the agent can carry the conversation on in Terminal UI.
 	const menuCanSwitch = Boolean(interfaceSwitch.status?.supported);
 	const menuSwitching = interfaceSwitch.starting || switchingToTerminal;
+	const accountMove = interfaceSwitch.transition?.targetAccountId ? interfaceSwitch.transition : undefined;
+	const accountMoving = mobileInterfaceTransitionIsActive(accountMove);
+	// Reread the binding once a move settles: it commits at the end of the move.
+	const agentAccounts = useAgentAccounts(config, terminated ? undefined : headerHarness, session.id, accountMoving ? undefined : accountMove?.id);
+	const stillHere = useStillHere(`${currentHostId ?? ""}|${session.id}|${config ? JSON.stringify(config) : ""}`, () => navigation.isFocused?.() !== false);
+	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
+	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
+	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
+	const limitedTurnId = useMemo(() => conversation.snapshot ? usageLimitedTurn(conversation.snapshot)?.id : undefined, [conversation.snapshot]);
+	const { retryTurn, setTurnAutoResume } = conversation;
+	const turnRecovery = useMemo((): TurnRecovery => ({
+		limitedTurnId,
+		resume: retryTurn,
+		setAutoResume: setTurnAutoResume,
+		accountLabel: (accountId) => {
+			const account = agentAccounts.accounts.find((candidate) => candidate.id === accountId);
+			return account ? agentAccountLabel(account, agentAccounts.accounts) : undefined;
+		},
+	}), [agentAccounts.accounts, limitedTurnId, retryTurn, setTurnAutoResume]);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		artifactCount: menuArtifactCount,
@@ -507,7 +674,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		compacting: menuCompacting,
 		turnInFlight: turnActive,
 		contextPercent: menuContextPercent,
-	}) : undefined, [isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
+		account: menuAccountName ? { name: menuAccountName, moving: accountMoving, canMove: menuAccountCanMove } : undefined,
+	}) : undefined, [accountMoving, menuAccountCanMove, menuAccountName, isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
 	// The actions sheet follows what it shows while it is up (see `ConversationActionsEntry`).
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
@@ -542,6 +710,34 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
 		},
 		compact: () => void conversation.compact().catch(() => {}),
+		account: async () => {
+			if (!config) return;
+			const move = (accountId: string, stop: boolean) => void moveSessionAgentAccount(config, session.id, accountId, stop)
+				.then(() => interfaceSwitch.refresh())
+				.catch((cause) => Alert.alert("Couldn't switch account", userFacingError(cause)));
+			const here = stillHere();
+			const { accounts, current } = await agentAccounts.reload().catch(() => undefined) ?? agentAccounts;
+			if (!here()) return;
+			void presentSheet({
+				kind: "account-picker",
+				subtitle: "The agent resumes this conversation on the account you choose.",
+				options: agentAccountOptions(accounts),
+				selected: current ?? "",
+				onSelect: (accountId) => {
+					if (!turnActive) return move(accountId, false);
+					const target = accounts.find((account) => account.id === accountId);
+					haptics.warning();
+					Alert.alert(
+						"Stop the turn and move?",
+						`The agent is still working. Orchestrator stops it now and resumes the conversation on ${target ? agentAccountLabel(target, accounts) : "that account"}.`,
+						[
+							{ text: "Cancel", style: "cancel" },
+							{ text: "Stop and move", style: "destructive", onPress: () => move(accountId, true) },
+						],
+					);
+				},
+			});
+		},
 		switch_tui: requestInterfaceSwitch,
 		delete: () => {
 			haptics.warning();
@@ -573,7 +769,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		const groups = latestMenuGroups.current;
 		if (groups) void presentSheet({ kind: "conversation-actions", title, groups, subscribeGroups: subscribeMenuGroups, onSelect: runMenuAction });
 	}, [presentSheet, runMenuAction, subscribeMenuGroups, title]);
-	const headerItems = useMemo(() => menuReady ? (
+	// Android's "⋯" floats on a pill of its own, as the back button and title
+	// do, where the toolbar's would sit on the bar bare.
+	useLayoutEffect(() => {
+		if (!PILL_HEADER) return;
+		navigation.setOptions({
+			headerRight: menuReady ? () => <HeaderPillButton icon="more" label="Conversation actions" onPress={openActions} testID="header-more" /> : undefined,
+		});
+		return () => navigation.setOptions({ headerRight: undefined });
+	}, [menuReady, navigation, openActions]);
+	const headerItems = useMemo(() => menuReady && !PILL_HEADER ? (
 		<Stack.Toolbar placement="right">
 			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
 		</Stack.Toolbar>
@@ -598,7 +803,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		}
 	}, [interfaceSwitch]);
 	const interfaceRecoveryMessage = mobileInterfaceTransitionRecoveryMessage(interfaceSwitch.transition);
-	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `Switching to Terminal UI · ${interfacePhaseShortLabel(interfaceSwitch.transition?.phase)}`;
+	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `${accountMove ? "Switching account" : "Switching to Terminal UI"} · ${interfacePhaseShortLabel(interfaceSwitch.transition?.phase)}`;
 	const interfaceTransitionBanner = {
 		text: interfaceSwitch.fetchFailed
 			? `${interfaceTransitionPhaseText}. Couldn't check on it${interfaceSwitch.error ? `: ${interfaceSwitch.error}` : ""}`
@@ -630,10 +835,15 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		return <Failure><EmptyState icon="warning" iconColor={t.red} title="Session failed to start" message={failedStart} action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />} /></Failure>;
 	}
 	// A session that is still starting shows its checklist straight away rather than a bare spinner.
-	if (conversation.loading && !conversation.snapshot && startupView && !startupView.failed) {
+	// A conversation that arrives while the page is still sliding in waits for
+	// the slide to finish: mounting the timeline mid-push stalled the UI thread
+	// for hundreds of milliseconds, so the slide froze and then jumped to its
+	// end. One already cached renders with the page, before the slide starts.
+	const awaitingConversation = (conversation.loading && !conversation.snapshot) || holdArrivingSnapshot;
+	if (awaitingConversation && startupView && !startupView.failed) {
 		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
 	}
-	if (conversation.loading && !conversation.snapshot) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
+	if (awaitingConversation) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
 	if (conversation.unavailable) {
 		return <Failure>
 			<EmptyState
@@ -665,7 +875,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Once per run of the session, like the desktop: a restart starts its tool servers again.
 	const noticeKey = mcpNoticeKey(currentHostId, session.id, "createdAt" in session ? session.createdAt : undefined);
 	const rolledBack = snapshot.turns.filter((turn) => turn.rolledBack).length;
-	const quota = quotaWarning(snapshot.rateLimits);
 	const compactSupported = can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact);
 	const steerUnsupported = conversationActionUnsupported("steer", conversation.actionCodes.steer);
 
@@ -717,29 +926,27 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				onDismiss={dismissBanner}
 			/>
 			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="offline" action="Retry" onPress={() => void conversation.refresh()} /> : null}
-			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="warning" action="Details" onPress={openUsage} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="error" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon={{ ios: "arrow.uturn.backward", android: "undo" }} /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="error" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
 		</>
 	);
 
+	// One keyboard handler for the composer, its follower and the conversation
+	// (see KeyboardMotionScope).
 	return (
+		<KeyboardMotionScope>
 		<View style={styles.screen}>
-		{/* keyboard-controller's avoider, not React Native's. Both do the same
-		    arithmetic; this one interpolates the padding with the keyboard's own
-		    animation. RN's re-renders once per keyboard event on the JS thread,
-		    which is the single-frame jump up when the keyboard opens. */}
-		<KeyboardAvoidingView
-			style={[styles.screen, chatKeyboard.rootStyle]}
-			behavior={chatKeyboard.behavior}
-			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
-		>
+		{/* Not padded for the keyboard: the timeline moves its content with the
+		    keyboard on the UI thread (ChatTimeline's `keyboardOffset`). */}
+		<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>
 			{headerItems}
 			{CLEAR_HEADER ? null : banners}
 			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
+				<TurnArtifactsContext.Provider value={turnArtifacts}>
+				<TurnRecoveryContext.Provider value={turnRecovery}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -749,6 +956,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onDecide={conversation.resolveApproval}
 					onResolveInput={conversation.resolveInput}
 					onRollback={conversation.rollback}
+					onFork={forkOptions?.allowed ? forkTurn : undefined}
+					forkAnyTurn={forkOptions?.anyTurn === true}
 					onEditMessage={conversation.editMessage}
 					onEditingChange={setEditingMessage}
 					jumpToSequence={jumpToSequence}
@@ -758,8 +967,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					underHeader={headerOverlap}
 					topInset={bannersHeight}
 					bottomInset={composerHeight}
+					keyboardOffset={chatKeyboard.listKeyboardOffset}
+					composerGrowth={composerFieldGrowth}
 					jumpHidden={composerOpen}
 				/>
+				</TurnRecoveryContext.Provider>
+				</TurnArtifactsContext.Provider>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
 			{switchCardShown ? (
@@ -774,8 +987,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					/>
 				) : (
 					<InterfaceSwitchCard
-						title={interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Terminal"}
-						message={interfaceRecoveryMessage || interfacePhaseLabel(interfaceSwitch.transition?.phase)}
+						title={interfaceRecoveryMessage ? "Interface recovery blocked" : accountMove ? "Switching account" : "Switching to Terminal"}
+						message={interfaceRecoveryMessage || (accountMove ? accountPhaseLabel : interfacePhaseLabel)(interfaceSwitch.transition?.phase)}
 						blocked={Boolean(interfaceRecoveryMessage)}
 						cancellable={mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition)}
 						cancelling={interfaceSwitch.cancelling}
@@ -787,11 +1000,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					/>
 				)
 			) : null}
-			{/* Android's frost behind the clear bar: solid under the title, then
-			    dissolving into the page, so the conversation frosts out as it
-			    passes under it rather than meeting a hard edge. */}
+			{/* Android's frost behind the clear bar's pills: dense at the status
+			    bar, then thinning through the bar and dissolving into the page,
+			    so the conversation shows around the pills and fades out as it
+			    passes under them rather than meeting a hard edge. */}
 			{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (
-				<Frost from="top" stops={frostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />
+				<Frost from="top" stops={pillFrostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />
 			) : null}
 			{CLEAR_HEADER ? (
 				<View pointerEvents="box-none" style={[styles.floatingBanners, { top: headerOverlap }]} onLayout={(event) => setBannersHeight(event.nativeEvent.layout.height)}>
@@ -800,13 +1014,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			) : null}
 			</View>
 			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
-		</KeyboardAvoidingView>
+		</View>
 		{/* The composer floats over the conversation, which scrolls on under its
 		    glass; the timeline leaves its measured height clear at the end. It is
 		    out of the padded root above and rides the keyboard by a transform: the
 		    padding is layout, which waited on a busy JS thread (KeyboardFollower). */}
 		<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>
 			{switchCardShown ? null : <McpServerNotice key={noticeKey} noticeKey={noticeKey} servers={brokenServers} visible={chatFocused} />}
+			{/* While a send carries an agent switch, the line desktop draws in the
+			    transcript; the daemon's own marker replaces it once it lands. */}
+			{agentSwitchSending ? <View style={styles.switchingLine}><ProviderSwitchLine switching /></View> : null}
 			<View style={editingMessage ? styles.composerHidden : undefined}>
 				<ChatComposer
 					key={composerKey}
@@ -815,13 +1032,13 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					reviewPR={reviewPromptPR}
 					reviewPRSummary={reviewPromptSummary}
 					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
-					onExpandedChange={setComposerOpen}
+					onExpandedChange={composerOpen.set}
 					sessionId={session.id}
 					config={config}
 					machine={machine}
 					snapshot={snapshot}
 					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
-					quotaActive={Boolean(quota)}
+					onOpenUsage={openUsage}
 					request={request}
 					requestDismissed={requestDismissed}
 					onRequestDecide={conversation.resolveApproval}
@@ -840,7 +1057,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					disabled={switchingToTerminal || Boolean(failedStart)}
 					pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
 					interrupting={conversation.pendingActions.includes("interrupt")}
-					onSend={conversation.send}
+					onSend={send}
 					onAcknowledgeSend={conversation.acknowledgeSend}
 					completedRetry={conversation.completedRetry}
 					onSteer={conversation.steer}
@@ -849,7 +1066,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onInterrupt={() => void conversation.interrupt().catch(() => {})}
 					onSettings={conversation.chooseSettings}
 					onConfigOption={conversation.setConfigOption}
+					otherAgents={otherAgents}
 					restingInset={chatKeyboard.restingInset}
+					openDeficit={composerDeficit}
+					fieldGrowth={composerFieldGrowth}
 					dockRiseOverride={chatKeyboard.dockRiseOverride}
 					openingTurnId={startupView?.openingTurnId}
 					startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
@@ -857,6 +1077,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			</View>
 		</KeyboardFollower>
 		</View>
+		</KeyboardMotionScope>
 	);
 }
 
@@ -893,6 +1114,12 @@ function Failure({ children }: { children: ReactNode }) {
  */
 const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";
 
+/**
+ * Android's bar floats its controls on pills over the conversation (see
+ * `headerPill`), as its board bar and composer float.
+ */
+const PILL_HEADER = Platform.OS === "android";
+
 /** How much of the screen the clear header covers; nothing under a solid one. */
 function useGlassHeaderOverlap(): number {
 	const headerHeight = useHeaderHeight();
@@ -919,6 +1146,17 @@ function interfacePhaseLabel(phase?: string): string {
 		default: return "Checking that the terminal can resume this agent's native conversation.";
 	}
 }
+function accountPhaseLabel(phase?: string): string {
+	switch (phase) {
+		case "draining": return "Waiting for the current turn to finish.";
+		case "source_stopping": return "Stopping the agent on its current account.";
+		case "source_stopped":
+		case "target_starting": return "Resuming the same conversation on the new account.";
+		case "activating":
+		case "completed": return "The agent is ready on the new account.";
+		default: return "Checking that the agent can move to that account.";
+	}
+}
 function signInCommand(harness: string): string | undefined { return harness === "codex" ? "codex login" : harness === "claude-code" || harness === "claude" ? "claude auth login" : undefined; }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
@@ -929,6 +1167,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// The page's colour, so the conversation scrolling up passes under the
 	// banners rather than showing between them.
 	floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 },
+	switchingLine: { paddingHorizontal: space.xl },
 	floatingBanners: { position: "absolute", left: 0, right: 0, backgroundColor: t.bgBase },
 	headerFrost: { position: "absolute", top: 0, left: 0, right: 0 },
 	// Where the timeline will draw the checklist, so the handoff to it does not move it.

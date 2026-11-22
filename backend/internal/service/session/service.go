@@ -54,6 +54,7 @@ type Store interface {
 	GetDisplayPRFactsForSession(ctx context.Context, id domain.SessionID) (domain.PRFacts, bool, error)
 	ListPRFactsForSession(ctx context.Context, id domain.SessionID) ([]domain.PRFacts, error)
 	ListPRFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error)
+	ListPRStateTimes(ctx context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error)
 	ListCurrentHeadReviewRunsForSession(ctx context.Context, id domain.SessionID) ([]domain.CurrentHeadReviewRun, error)
 	ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.CurrentHeadReviewRun, error)
 	ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error)
@@ -83,6 +84,11 @@ type ListFilter struct {
 	// order, as before paging.
 	Limit  int
 	Cursor string
+	// PRState keeps the sessions owning a pull request in that state, ordered
+	// by when their newest such PR reached it rather than pinned-then-updated,
+	// and has the page report how many sessions match. Empty keeps every
+	// session.
+	PRState domain.PRState
 }
 
 // commander is the command-side surface Service delegates to: the
@@ -119,6 +125,13 @@ type interfaceTransitionCommander interface {
 // service fakes while production delegates to Session Manager.
 type exitAgentCommander interface {
 	ExitAgent(context.Context, domain.SessionID) (domain.SessionRecord, error)
+}
+
+// taskPreparationRenewer keeps a held task preparation alive while the new
+// chat page uses its worktree. Optional so focused service fakes need not
+// implement it.
+type taskPreparationRenewer interface {
+	RenewTaskPreparation(domain.TaskPreparationToken)
 }
 
 // agentAccountCommander keeps account moves optional for focused service fakes.
@@ -212,6 +225,8 @@ type terminalTitleSource interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
+	// prMoved tells a live session that another session took its PR.
+	prMoved             PRMovedNotifier
 	manager             commander
 	terminalTitles      terminalTitleSource
 	store               Store
@@ -249,6 +264,8 @@ type Service struct {
 	// each session's last reconciled branch, remote, and base tips.
 	branchStateMu sync.Mutex
 	branchTips    map[domain.SessionID]string
+	// conflicts remembers the conflicting files of a PR's head against its base.
+	conflicts conflictCache
 	// signalCapable reports whether a harness has a hook pipeline that can
 	// deliver activity signals at all. Only capable harnesses are eligible for
 	// the no_signal downgrade: a hook-less harness staying silent forever is
@@ -284,6 +301,17 @@ type Service struct {
 	githubRepos ports.GitHubRepositoryResolver
 }
 
+// renewTaskPreparation extends a hidden preparation's expiry when its files
+// are read or staged, which only the page holding it does.
+func (s *Service) renewTaskPreparation(rec domain.SessionRecord) {
+	if !rec.IsTaskPreparation {
+		return
+	}
+	if renewer, ok := s.manager.(taskPreparationRenewer); ok {
+		renewer.RenewTaskPreparation(domain.TaskPreparationToken(rec.ID))
+	}
+}
+
 // SetGitHubRepositoryResolver late-binds the resolver ClaimPR uses to follow
 // a github.com origin's rename or transfer.
 func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) {
@@ -295,6 +323,13 @@ func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) 
 func (s *Service) SetComputerLoginCheck(check func(ctx context.Context, harness domain.AgentHarness, accountID string) bool) {
 	s.runsOnComputerLogin = check
 }
+
+// PRMovedNotifier is told when session to takes PR pr from live session from.
+type PRMovedNotifier func(ctx context.Context, from, to domain.SessionID, pr domain.PullRequest)
+
+// SetPRMovedNotifier wires the notice sent to a session whose PR was claimed
+// by another session.
+func (s *Service) SetPRMovedNotifier(notify PRMovedNotifier) { s.prMoved = notify }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
 // services have been constructed. It performs no provider or filesystem probes.
@@ -1334,6 +1369,8 @@ func (s *Service) Delete(ctx context.Context, id domain.SessionID, cleanup bool)
 	}
 	s.cancelTitleRefinement(id)
 	s.deleteArtifactDir(ctx, id)
+	// A kept record left by an earlier keeping delete that failed.
+	s.forgetKeptArtifacts(ctx, id)
 	return nil
 }
 
@@ -1343,8 +1380,9 @@ type archivedSessionLister interface {
 }
 
 // DeleteExpired permanently deletes the archived sessions whose worktree is
-// released and that were archived more than days ago, the same way Delete
-// does. The store leaves out sessions with shared history, which the delete
+// released and that were archived more than days ago. Their artifacts are
+// kept, the way DeleteKeepingArtifacts keeps them: artifacts are deleted only
+// when the person deletes them. The store leaves out sessions with shared history, which the delete
 // always refuses. A session the delete refuses for now (an operation running)
 // or that is already gone is left for a later pass.
 func (s *Service) DeleteExpired(ctx context.Context, days int) error {
@@ -1365,7 +1403,7 @@ func (s *Service) DeleteExpired(ctx context.Context, days int) error {
 		if sess.ArchivedAt.After(cutoff) {
 			continue
 		}
-		err := s.Delete(ctx, sess.ID, false)
+		err := s.DeleteKeepingArtifacts(ctx, sess.ID, false)
 		var apiErr *apierr.Error
 		if err == nil || errors.As(err, &apiErr) && (apiErr.Kind == apierr.KindConflict || apiErr.Kind == apierr.KindNotFound) {
 			continue
@@ -1642,6 +1680,8 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 // filter.Limit is set, and reports the archive an active-only list left out.
 // The page is chosen from the stored rows before any read-model facts are
 // loaded, so a page of an archive of thousands costs a page's worth of reads.
+// A PR-state filter adds one narrow read of the PR table (session and time
+// only), not the card facts of every candidate.
 func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, error) {
 	recoveryRevision := s.statusRecoveryRevision()
 	if filter.Limit < 0 || filter.Limit > MaxListLimit {
@@ -1664,8 +1704,26 @@ func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, er
 	}
 	matched, archive := selectSessionRecords(recs, filter)
 	page := ListPage{Archived: archive}
+	keyOf := pageKeyOf
+	if filter.PRState != "" {
+		var reachedAt map[domain.SessionID]time.Time
+		matched, reachedAt, err = s.selectByPRState(ctx, matched, filter.PRState)
+		if err != nil {
+			return ListPage{}, err
+		}
+		total := len(matched)
+		page.Total = &total
+		// The archive summary sizes a list without the PR filter; with it the
+		// total is the count that matters.
+		page.Archived = nil
+		keyOf = func(rec domain.SessionRecord) listPageKey {
+			return listPageKey{updatedAt: reachedAt[rec.ID], id: rec.ID}
+		}
+		sortSessionRecords(matched, keyOf)
+		page.Version = prStateListVersion(matched, reachedAt)
+	}
 	if filter.Limit > 0 {
-		matched, page.NextCursor = pageSessionRecords(matched, after, filter.Limit)
+		matched, page.NextCursor = pageSessionRecords(matched, keyOf, after, filter.Limit)
 	}
 	page.Sessions, err = s.sessionsFromRecords(ctx, matched, recoveryRevision)
 	if err != nil {
@@ -1922,9 +1980,13 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnchanged):
 		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
+	case errors.Is(err, ports.ErrAgentAccountNeedsDeveloperMode):
+		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
+			"Turn on Windows Developer Mode to use this account: search Windows Settings for Developer Mode (System > Advanced on Windows 11 25H2 and later).",
+			map[string]any{"windowsDeveloperMode": true})
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
-			"Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
+			"Orchestrator cannot link this account's folder to this computer's history.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
@@ -2015,12 +2077,16 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("HARNESS_INSTALL_ACTIVE", "The selected harness is currently being installed", nil)
 	case errors.Is(err, sessionmanager.ErrUnsupportedModel):
 		return apierr.Invalid("UNSUPPORTED_MODEL", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrTerminalUnsupported):
+		return apierr.Invalid("TERMINAL_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):
 		return apierr.Invalid("TARGET_AGENT_UNAUTHORIZED",
 			"The target agent is not authenticated; authenticate it before switching", nil)
 	case errors.Is(err, sessionmanager.ErrDeliveryUnconfirmed):
 		return apierr.Conflict("SESSION_DELIVERY_UNCONFIRMED",
 			"Message was written to the terminal but the agent did not start a turn; prompt may be unsubmitted", nil)
+	case errors.Is(err, sessionmanager.ErrBaseBranchUnsupported):
+		return apierr.Invalid("BASE_BRANCH_UNSUPPORTED", "Base branches need a repository project", nil)
 	case errors.Is(err, sessionmanager.ErrScratchBranchUnsupported):
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
@@ -2076,6 +2142,9 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("CHAT_DRIVER_INCOMPATIBLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):
 		return apierr.Conflict("CHAT_AUTH_REQUIRED", "The agent is installed but not authenticated", nil)
+	case errors.Is(err, ports.ErrChatProviderSessionLost):
+		return apierr.Conflict("CHAT_PROVIDER_SESSION_LOST",
+			"The agent's process lost this conversation and was stopped. Resume the agent to continue; your history is kept.", nil)
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		return apierr.Conflict("CHAT_RESUME_FAILED",
 			"The agent could not resume its saved conversation. Your Orchestrator history is still available.", nil)

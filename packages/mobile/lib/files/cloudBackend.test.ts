@@ -53,8 +53,10 @@ describe("a cloud session's files, in the daemon's shapes", () => {
 
 	it("reads one file with its diff, for the section asked", async () => {
 		const getWorkspaceReviewFile = vi.fn(async () => ({ ...file("src/a.ts", "modified"), deleted: false, content: "x", contentTruncated: false, diff: "@@", diffTruncated: false, workspaceVersion: "v7" }));
-		const detail = await backend({ getWorkspaceReviewFile }).file("s1", "src/a.ts", "staged");
-		expect(getWorkspaceReviewFile).toHaveBeenCalledWith("org-1", "s1", { path: "src/a.ts", scope: "staged" });
+		const { signal } = new AbortController();
+		const detail = await backend({ getWorkspaceReviewFile }).file("s1", "src/a.ts", { section: "staged" }, signal);
+		// The screen's signal reaches the request, so closing the screen cancels it.
+		expect(getWorkspaceReviewFile).toHaveBeenCalledWith("org-1", "s1", { path: "src/a.ts", scope: "staged" }, signal);
 		expect(detail).toMatchObject({ path: "src/a.ts", status: "modified", content: "x", diff: "@@", fileFingerprint: "fp-src/a.ts", workspaceVersion: "v7" });
 	});
 
@@ -87,7 +89,7 @@ describe("a cloud session's files, in the daemon's shapes", () => {
 			.mockRejectedValueOnce(new CloudError("gone", { status: 409, code: "WORKER_UNAVAILABLE" }));
 		const files = backend({ getWorkspaceRevision });
 		expect(await files.imageSource("s1", "a.png", "after", "v7")).toEqual({ uri: "data:image/png;base64,iVBO" });
-		expect(getWorkspaceRevision).toHaveBeenCalledWith("org-1", "s1", { path: "a.png", side: "after", workspaceVersion: "v7" });
+		expect(getWorkspaceRevision).toHaveBeenCalledWith("org-1", "s1", { path: "a.png", side: "after", workspaceVersion: "v7" }, undefined);
 		expect(await files.imageSource("s1", "a.png", "before", "v7")).toBeUndefined();
 		expect(await files.imageSource("s1", "a.png", "before", "v7")).toBeUndefined();
 	});

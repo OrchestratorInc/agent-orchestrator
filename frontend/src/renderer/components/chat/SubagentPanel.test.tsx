@@ -1,5 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderChat as render } from "../../test/render-chat";
 import {
@@ -95,6 +96,33 @@ describe("SubagentPanel", () => {
 		const { onOpen } = panel();
 		await user.click(screen.getByRole("button", { name: /Audit: info pages/ }));
 		expect(onOpen).toHaveBeenCalledWith("a");
+	});
+
+	it("moves focus to Back when a row opens its child, and back to that row on Back", async () => {
+		const user = userEvent.setup();
+		function Host() {
+			const [openId, setOpenId] = useState<string>();
+			return (
+				<SubagentPanel
+					subagents={[finished, working, failed]}
+					openId={openId}
+					onOpen={setOpenId}
+					onBack={() => setOpenId(undefined)}
+					harness="claude-code"
+				/>
+			);
+		}
+		render(<Host />);
+
+		await user.click(screen.getByRole("button", { name: /Audit: info pages/ }));
+		expect(screen.getByRole("button", { name: "All subagents" })).toHaveFocus();
+		await user.keyboard("{Enter}");
+		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveFocus();
+	});
+
+	it("leaves focus where it was when a child opens from the chat", () => {
+		panel({ openId: "a" });
+		expect(screen.getByRole("button", { name: "All subagents" })).not.toHaveFocus();
 	});
 
 	it("shows one child's whole conversation, read-only, under a header that leads back", async () => {

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import type { SessionProvisionStep } from "../../types/workspace";
 import { Button } from "../ui/button";
-import { ResponseSpinner } from "./ChatTimelineItems";
+import { ResponseSpinner, STEP_MARK_SLOT_CLASS } from "./ChatTimelineItems";
 
 type StepStatus = SessionProvisionStep["status"] | "failed";
 
@@ -21,6 +21,7 @@ export function SessionStartup({
 	onRetry,
 	retrying,
 	retryError,
+	retryLabel,
 }: {
 	failed: boolean;
 	steps: readonly SessionProvisionStep[];
@@ -31,6 +32,7 @@ export function SessionStartup({
 	onRetry?: () => void;
 	retrying?: boolean;
 	retryError?: string;
+	retryLabel?: string;
 }) {
 	const { t } = useTranslation();
 	// A start that has just begun reveals its steps one by one; reopening a session
@@ -58,9 +60,10 @@ export function SessionStartup({
 							className={cn("flex min-h-7 items-center gap-2 text-xs", stagger && "session-startup-step-in")}
 							style={stagger ? { animationDelay: `${index * 90}ms` } : undefined}
 						>
-							{/* The same 20px slot and gap as the live row's mark above, so every
-							    mark sits on one centre line and the labels start together. */}
-							<span className="flex size-5 shrink-0 items-center justify-center">
+							{/* The same slot and gap as the live row's mark above and the step
+							    rows' icons, so every mark starts on one left edge and the
+							    labels start together. */}
+							<span className={STEP_MARK_SLOT_CLASS}>
 								<StepIcon status={status} />
 							</span>
 							<span className="sr-only">{t(`chat.startup.status.${status}`)}:</span>
@@ -80,12 +83,12 @@ export function SessionStartup({
 				})}
 			</ol>
 			{failed ? (
-				<div className="mt-1 flex flex-col items-start gap-2 pl-7">
+				<div className="mt-1 flex flex-col items-start gap-2 pl-5">
 					{error ? <p className="text-xs leading-snug text-muted-foreground">{error}</p> : null}
 					<p className="text-xs leading-snug text-muted-foreground">{t("chat.startup.saved")}</p>
 					{onRetry ? (
 						<Button type="button" size="sm" variant="secondary" onClick={onRetry} disabled={retrying}>
-							{retrying ? t("chat.startup.retrying") : t("chat.startup.retry")}
+							{retrying ? t("chat.startup.retrying") : retryLabel ?? t("chat.startup.retry")}
 						</Button>
 					) : null}
 					{retryError ? <p role="alert" className="text-xs leading-snug text-destructive">{retryError}</p> : null}

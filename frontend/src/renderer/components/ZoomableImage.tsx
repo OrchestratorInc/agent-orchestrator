@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ImgHTMLAttributes } from "react";
 import type { ArtifactZoomController } from "../lib/artifact-zoom";
+import { claimSwipe } from "../lib/swipe-ownership";
 
 /**
  * An image fit to its box that the artifact zoom scales with a transform:
@@ -61,6 +62,8 @@ export function ZoomableImage({ controller, ...props }: ImgHTMLAttributes<HTMLIm
 			// A pinch (ctrlKey) is the viewer's; a plain scroll pans a zoomed image.
 			if (event.ctrlKey || !pannable()) return;
 			event.preventDefault();
+			// A pan, not a back or forward swipe.
+			claimSwipe();
 			x -= event.deltaX;
 			y -= event.deltaY;
 			clamp();

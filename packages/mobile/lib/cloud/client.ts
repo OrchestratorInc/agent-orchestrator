@@ -1,3 +1,4 @@
+import { noteRequestAnswered } from "../answeredRequests";
 import { CLOUD_API_PREFIX, cloudAddressIsSafe, cloudWebSocketBase } from "./config";
 import { CloudAuthError, CloudError, isPlanRefusal } from "./errors";
 import type {
@@ -35,6 +36,7 @@ import type {
 	CloudWorkspaceSearch,
 	CloudWorkspaceTree,
 	CreateCloudSessionInput,
+	CreateCloudStandaloneAgentInput,
 } from "./types";
 
 type Query = Record<string, string | number | boolean | undefined>;
@@ -152,6 +154,7 @@ export function createCloudClient(options: CloudClientOptions) {
 		init.signal?.addEventListener("abort", abort);
 		const timer = setTimeout(abort, init.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 		let response: Response;
+		const startedAt = Date.now();
 		try {
 			response = await doFetch(buildUrl(baseUrl, path, init.query), {
 				method,
@@ -159,6 +162,7 @@ export function createCloudClient(options: CloudClientOptions) {
 				body: init.body === undefined ? undefined : JSON.stringify(init.body),
 				signal: controller.signal,
 			});
+			noteRequestAnswered(startedAt);
 		} catch (cause) {
 			if (init.signal?.aborted) throw Object.assign(new Error("Request cancelled"), { name: "AbortError" });
 			throw new CloudError("Couldn't reach Orchestrator Cloud.", { status: 0, cause });
@@ -198,8 +202,13 @@ export function createCloudClient(options: CloudClientOptions) {
 			json<{ organization: CloudOrganization }>("POST", "/orgs", { body: { displayName } }),
 
 		// ---- Projects
-		listProjects: (orgId: string, list: ListOptions = {}) =>
-			json<CloudPage<CloudProject>>("GET", `${org(orgId)}/projects`, { query: { cursor: list.cursor, limit: list.limit ?? 100 }, signal: list.signal }),
+		/**
+		 * `standaloneAgents` reads the projects without the caller's standalone
+		 * agents ("exclude") or those agents alone ("only"); omitted lists both. A
+		 * control plane without agents ignores it and lists every project.
+		 */
+		listProjects: (orgId: string, list: ListOptions & { standaloneAgents?: "exclude" | "only" } = {}) =>
+			json<CloudPage<CloudProject>>("GET", `${org(orgId)}/projects`, { query: { cursor: list.cursor, limit: list.limit ?? 100, standaloneAgents: list.standaloneAgents }, signal: list.signal }),
 		getProject: (orgId: string, projectId: string) =>
 			json<{ project: CloudProject }>("GET", `${org(orgId)}/projects/${seg(projectId)}`),
 		createStandaloneProject: (orgId: string, input: { displayName: string; config?: CloudProjectConfig }, idempotencyKey = options.newKey()) =>
@@ -231,6 +240,9 @@ export function createCloudClient(options: CloudClientOptions) {
 			json<{ session: CloudSession }>("GET", session(orgId, sessionId), { signal }),
 		createSession: (orgId: string, input: CreateCloudSessionInput, idempotencyKey = options.newKey()) =>
 			json<{ session: CloudSession }>("POST", `${org(orgId)}/sessions`, { body: input, idempotencyKey }),
+		/** One worker with no repository and no orchestrator; its own project comes back with it. */
+		createStandaloneAgent: (orgId: string, input: CreateCloudStandaloneAgentInput, idempotencyKey = options.newKey()) =>
+			json<{ project: CloudProject; session: CloudSession }>("POST", `${org(orgId)}/standalone-agents`, { body: input, idempotencyKey }),
 		/** Archive: stops the sandbox, keeps the history. */
 		/**
 		 * Opens the session's event stream (server-sent events): what it already

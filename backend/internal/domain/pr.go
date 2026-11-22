@@ -38,6 +38,12 @@ type PRFacts struct {
 	ExternalApproved         bool
 	ExternalChangesRequested bool
 	ExternalComments         bool
+	// StackParent is the number of the open PR, in any live session, whose
+	// source branch this PR targets; 0 when its base branch has no open PR AO
+	// still polls. The parent is in this PR's Host and Repo.
+	StackParent int
+	Host        string
+	Repo        string
 }
 
 // PullRequest is the app-level representation of one tracked pull request as
@@ -81,10 +87,22 @@ type PullRequest struct {
 	BaseSHA         string
 	MergeCommitSHA  string
 
+	// HeadFromFork and HeadIsDefaultBranch say the head is not a private
+	// branch of this repository: it lives in a fork, or it is the repository's
+	// default branch. Neither kind of PR can be a stack parent.
+	HeadFromFork        bool
+	HeadIsDefaultBranch bool
+
 	ProviderState            string
 	ProviderMergeable        string
 	ProviderMergeStateStatus string
 	HTMLURL                  string
+
+	// MergeQueueRequired says the PR's base branch merges through a merge
+	// queue, so merging it means adding it to the queue. MergeQueue is the PR's
+	// place in that queue, nil while it isn't queued.
+	MergeQueueRequired bool
+	MergeQueue         *MergeQueueEntry
 
 	CreatedAtProvider time.Time
 	UpdatedAtProvider time.Time
@@ -102,6 +120,102 @@ type PullRequest struct {
 	// provider's thread-window cap, so stored thread rows are a partial view.
 	ReviewPartial bool
 	AutoInjectCI  bool
+
+	// Details is the PR's description, labels, requested reviewers and commits
+	// from the latest observation. It is a write carrier: nil means the
+	// observation did not carry details, and the stored ones are left as they
+	// are. Reads load stored details separately.
+	Details *PullRequestDetails
+}
+
+// MergeQueueState is where a queued pull request stands, in GitHub's
+// MergeQueueEntryState values lower-cased.
+type MergeQueueState string
+
+// Merge queue entry states.
+const (
+	// MergeQueueQueued waits its turn in the queue.
+	MergeQueueQueued MergeQueueState = "queued"
+	// MergeQueueAwaitingChecks is waiting for the queue's checks to pass.
+	MergeQueueAwaitingChecks MergeQueueState = "awaiting_checks"
+	// MergeQueueMergeable passed and merges once the entries ahead of it do.
+	MergeQueueMergeable MergeQueueState = "mergeable"
+	// MergeQueueUnmergeable can't merge from the queue as it stands.
+	MergeQueueUnmergeable MergeQueueState = "unmergeable"
+	// MergeQueueLocked is locked by the queue, as while it merges.
+	MergeQueueLocked MergeQueueState = "locked"
+)
+
+// MergeQueueEntry is a pull request's place in its base branch's merge queue.
+// Position is the provider's position in the queue. EstimatedSecondsToMerge
+// is the provider's estimate, 0 when it gives none.
+type MergeQueueEntry struct {
+	State                   MergeQueueState `json:"state"`
+	Position                int             `json:"position"`
+	EstimatedSecondsToMerge int             `json:"estimatedSecondsToMerge,omitempty"`
+	EnqueuedAt              time.Time       `json:"enqueuedAt,omitzero"`
+}
+
+// MaxPullRequestDescriptionBytes caps a stored PR description. Providers allow
+// far larger bodies; the view only renders a description.
+const MaxPullRequestDescriptionBytes = 64 * 1024
+
+// PullRequestLabel is one label on a pull request. Color is a provider hex
+// string without the leading "#", or empty.
+type PullRequestLabel struct {
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+}
+
+// PullRequestRequestedReviewer is a user or team whose review is requested and
+// not yet given.
+type PullRequestRequestedReviewer struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	IsTeam    bool   `json:"isTeam,omitempty"`
+}
+
+// PullRequestCommit is one commit on the pull request's branch.
+type PullRequestCommit struct {
+	SHA         string    `json:"sha"`
+	Headline    string    `json:"headline"`
+	Author      string    `json:"author,omitempty"`
+	CommittedAt time.Time `json:"committedAt,omitempty"`
+}
+
+// MaxPullRequestConversationComments caps the stored top-level conversation
+// comments: the view shows the newest ones, not the PR's full history.
+const MaxPullRequestConversationComments = 50
+
+// MaxPullRequestCommentBodyBytes caps one stored conversation comment body.
+const MaxPullRequestCommentBodyBytes = 8 * 1024
+
+// PullRequestConversationComment is one top-level (non-review) comment on a
+// pull request's conversation.
+type PullRequestConversationComment struct {
+	ID        string    `json:"id"`
+	Author    string    `json:"author"`
+	IsBot     bool      `json:"isBot,omitempty"`
+	Body      string    `json:"body"`
+	URL       string    `json:"url,omitempty"`
+	CreatedAt time.Time `json:"createdAt,omitempty"`
+}
+
+// PullRequestDetails is the slow-changing, view-only part of a pull request.
+type PullRequestDetails struct {
+	// Description is the PR body as markdown, cut to MaxPullRequestDescriptionBytes.
+	Description          string
+	DescriptionTruncated bool
+	Labels               []PullRequestLabel
+	RequestedReviewers   []PullRequestRequestedReviewer
+	// Commits is the newest commits on the branch, oldest first. CommitCount is
+	// the branch's total, which exceeds len(Commits) when the list was capped.
+	Commits     []PullRequestCommit
+	CommitCount int
+	// Conversation is the newest top-level conversation comments, oldest
+	// first, capped at MaxPullRequestConversationComments.
+	Conversation []PullRequestConversationComment
+	ObservedAt   time.Time
 }
 
 // PullRequestCheck is one normalized CI check run for a pull request.

@@ -65,6 +65,22 @@ function handback(id: string, parent: string, message: string, createdAt = at(9)
 	});
 }
 
+// An ACP approval keeps the tool it asks about, launch input included.
+function agentApproval(id: string, status: "pending" | "resolved"): ConversationActivity {
+	return {
+		...launch(id),
+		activityKind: "approval",
+		status,
+		detail: {
+			protocol: "acp",
+			subjectKind: "reasoning",
+			providerToolName: "Agent",
+			input: { description: `Audit ${id}`, prompt: `Read-only. Audit ${id}.`, subagent_type: "Explore" },
+			...(status === "resolved" ? { decision: "reject" } : {}),
+		} as ConversationActivity["detail"],
+	};
+}
+
 function message(id: string, sequence: number): ConversationItem {
 	return {
 		kind: "message",
@@ -91,6 +107,16 @@ describe("isSubagentLaunch", () => {
 		expect(isSubagentLaunch({ ...launch("r"), detail: { text: "Thinking" } })).toBe(false);
 		expect(isSubagentLaunch(step("s", "tool-a"))).toBe(false);
 		expect(isSubagentLaunch(message("m", 1))).toBe(false);
+	});
+
+	it("does not treat an approval or a question for an Agent call as a launch", () => {
+		const pending = agentApproval("p", "pending");
+		const rejected = agentApproval("r", "resolved");
+		expect(isSubagentLaunch(pending)).toBe(false);
+		expect(isSubagentLaunch(rejected)).toBe(false);
+		expect(isSubagentLaunch({ ...pending, activityKind: "user_input" })).toBe(false);
+		// Neither leaves the turn, so the approval history still draws it.
+		expect(partitionSubagentSteps([pending, rejected]).items).toEqual([pending, rejected]);
 	});
 });
 
@@ -176,6 +202,14 @@ describe("readSubagent", () => {
 		const agent = readSubagent(launch("a"), [step("a1", "tool-a", { status: "running" })], false);
 		expect(agent.state).toBe("working");
 		expect(agent.endedAt).toBeUndefined();
+	});
+
+	it("settles as unknown, not working, once the controller has stopped", () => {
+		// A background child with a step left running, after the controller died mid-step.
+		const background = readSubagent(launch("a"), [step("a1", "tool-a", { status: "running" })], false, true);
+		expect(background.state).toBe("unknown");
+		expect(background.endedAt).toBeDefined();
+		expect(readSubagent(launch("b", { status: "running" }), [], false, true).state).toBe("unknown");
 	});
 
 	it("reports a failed launch with the provider's reason, not its trailing noise", () => {

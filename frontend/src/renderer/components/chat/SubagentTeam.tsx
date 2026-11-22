@@ -15,11 +15,11 @@
 
 import { createContext, Fragment, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ChevronRight, Loader2, Square } from "@/components/app-icons";
+import { ChevronRight, Square } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
-import { ActivityTransition } from "./ChatTimelineItems";
+import { ActivityTransition, ResponseSpinner } from "./ChatTimelineItems";
 import { SubagentTranscript } from "./SubagentTranscript";
 import {
 	latestSubagentLine,
@@ -33,6 +33,11 @@ import type { ConversationActivity } from "../../types/conversation";
 const EASE_OUT = [0.22, 1, 0.36, 1] as const;
 /** At most this many avatars stack in the header; the count says the rest. */
 const STACKED_AVATARS = 3;
+/**
+ * How far the rows sit in under the header: one stacked mark's step (18px marks, 6px
+ * overlap). The same for one child or fifteen, so the list keeps one left edge.
+ */
+const ROW_INSET = 12;
 /**
  * Claude's default agent type. It says nothing a reader can act on, so a row names
  * only a specialized type, such as `Explore`, `Plan` or a project's own agent.
@@ -49,8 +54,8 @@ export function SubagentTeam({
 	launches,
 	steps,
 	live,
+	stopped = false,
 	harness,
-	folded = false,
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
@@ -59,10 +64,10 @@ export function SubagentTeam({
 	steps: ReadonlyMap<string, ConversationActivity[]>;
 	/** The launches whose child can still be working: a turn holding it is still running. */
 	live: ReadonlySet<string>;
+	/** The controller has really stopped, so no child is still working. */
+	stopped?: boolean;
 	/** Whose agents these are, for the avatar. */
 	harness?: string;
-	/** A finished team under "Worked for": it starts closed, like the turn's other folded work. */
-	folded?: boolean;
 	disclosureKey?: string;
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
@@ -71,8 +76,8 @@ export function SubagentTeam({
 	const reducedMotion = useReducedMotion();
 	const openSubagent = useContext(OpenSubagentContext);
 	const agents = useMemo(
-		() => launches.map((launch) => readSubagent(launch, steps.get(launch.id) ?? [], live.has(launch.id))),
-		[launches, steps, live],
+		() => launches.map((launch) => readSubagent(launch, steps.get(launch.id) ?? [], live.has(launch.id), stopped)),
+		[launches, steps, live, stopped],
 	);
 	const working = agents.some((agent) => agent.state === "working");
 	const now = useNow(working);
@@ -87,13 +92,9 @@ export function SubagentTeam({
 		else setLocalOpen((current) => ({ ...current, [key]: open }));
 	};
 	const teamKey = disclosureKey ?? "subagents";
-	// While the team works the list is the point of the card, so it starts open. Under
-	// "Worked for" it starts closed, like the turn's other folded work.
-	const open = isOpen(teamKey, !folded);
+	// The list starts closed, working or finished; the header opens it.
+	const open = isOpen(teamKey, false);
 	const counts = countStates(agents);
-	// Each mark after the first widens the header's stack by 12px (18px marks, 6px
-	// overlap). The rows sit in by that much, so their names line up under the team's.
-	const stackInset = (Math.min(agents.length, STACKED_AVATARS) - 1) * 12;
 
 	return (
 		<motion.div
@@ -153,7 +154,7 @@ export function SubagentTeam({
 					>
 						{/* Plain rows on the chat's canvas, working or finished: only the spinner and the
 						    live line tell a working child apart, so nothing changes shape as it ends. */}
-						<ul className="mt-1 flex min-w-0 flex-col" style={{ paddingLeft: stackInset }}>
+						<ul className="mt-1 flex min-w-0 flex-col" style={{ paddingLeft: ROW_INSET }}>
 							<AnimatePresence initial={false}>
 								{agents.map((agent) => {
 									const agentKey = `${teamKey}:agent:${agent.launch.id}`;
@@ -209,9 +210,6 @@ function countStates(agents: readonly Subagent[]): StateCounts {
 function TeamSummary({ counts }: { counts: StateCounts }) {
 	const { t } = useTranslation();
 	const parts: { key: string; text: string; className: string }[] = [];
-	if (counts.working) {
-		parts.push({ key: "working", text: t("chat.subagent.summary.working", { count: counts.working }), className: "text-status-working" });
-	}
 	if (counts.done) {
 		parts.push({ key: "done", text: t("chat.subagent.summary.done", { count: counts.done }), className: "text-muted-foreground" });
 	}
@@ -384,7 +382,8 @@ export function SubagentAvatar({ harness, state, centered = false }: { harness?:
 }
 
 /**
- * The status slot: a spinner while working, then a glyph and a word for anything
+ * The status slot: the chat's working mark (the lattice the live row shows) while
+ * working, then a glyph and a word for anything
  * that did not simply finish, so the state never rests on color alone. Done shows
  * nothing: the report under the name and the header's count already say it, so a
  * check on every row is noise. Screen readers still hear it.
@@ -395,10 +394,9 @@ export function StateGlyph({ state }: { state: SubagentState }) {
 	let glyph: ReactNode;
 	if (state === "working") {
 		glyph = (
-			<Loader2
-				aria-label={t("chat.subagent.state.working")}
-				className="size-3 animate-spin text-muted-foreground/70 motion-reduce:animate-none"
-			/>
+			<span role="img" aria-label={t("chat.subagent.state.working")} className="flex">
+				<ResponseSpinner />
+			</span>
 		);
 	} else if (state === "done") {
 		glyph = undefined;

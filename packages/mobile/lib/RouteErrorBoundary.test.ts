@@ -39,6 +39,7 @@ const screenRoutes = [
 	"preview/[id].tsx",
 	"project/[id].tsx",
 	"render.tsx",
+	"shared-artifact.tsx",
 	"review/[sessionId].tsx",
 	"reviewer/[reviewId].tsx",
 	"session/[id].tsx",
@@ -48,11 +49,13 @@ const screenRoutes = [
 
 const sheetRoutes = [
 	"cloud/new-project.tsx",
+	"sheets/account.tsx",
 	"sheets/agent.tsx",
 	"sheets/artifact-history.tsx",
 	"sheets/cloud-plan.tsx",
-	"sheets/composer-picker.tsx",
 	"sheets/conversation-usage.tsx",
+	"sheets/files-branch.tsx",
+	"sheets/files-changes.tsx",
 	"sheets/machine-name.tsx",
 	"sheets/model.tsx",
 	"sheets/review-actions.tsx",

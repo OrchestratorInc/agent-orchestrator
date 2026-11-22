@@ -1,4 +1,5 @@
-import { preloadLinkPreview } from "../hooks/useLinkPreview";
+import { linkOrigin, linkPreviewQueryKey, preloadLinkPreview } from "../hooks/useLinkPreview";
+import { useUiStore } from "../stores/ui-store";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
@@ -136,6 +137,103 @@ function onIntersection(entries: IntersectionObserverEntry[]) {
 		const watcher = watchers.get(entry.target);
 		if (watcher) (entry.isIntersecting ? arm : disarm)(watcher);
 	}
+}
+
+// An IP literal, a single label (localhost, an intranet name) or a local
+// suffix names a machine, not a public site with an icon worth asking for.
+const MACHINE_HOST = /^(\[.*\]|[\d.]+|[^.]+|.+\.(local|localhost|internal|lan|home\.arpa))$/i;
+// Favicons load as soon as a link appears, so they get their own small queue
+// rather than waiting behind the hover-card warmers.
+const MAX_CONCURRENT_FAVICONS = 3;
+const DRAFT_SETTLE_MS = 400;
+const DRAFT_URL = /\bhttps?:\/\/[^\s<>"'`)\]]+/gi;
+
+/**
+ * The HTTPS site root a link's favicon is read from. Only the root is asked
+ * for, never the link: its path and query can carry data or act on a GET, as
+ * above. An http link's root is asked for over HTTPS, never in the clear.
+ */
+function faviconOrigin(href: string): string | undefined {
+	let url: URL;
+	try {
+		url = new URL(href);
+	} catch {
+		return undefined;
+	}
+	if (url.username || url.password || MACHINE_HOST.test(url.hostname)) return undefined;
+	return linkOrigin(href);
+}
+
+const faviconQueue = new Set<string>();
+let faviconsActive = 0;
+
+async function preloadFavicon(origin: string) {
+	const preview = await preloadLinkPreview(origin);
+	// Same request mode as the icon's first load, so it comes from the HTTP cache.
+	const icon = (useUiStore.getState().resolvedTheme === "dark" && preview?.faviconDarkUrl) || preview?.faviconUrl;
+	if (icon) warmImage(icon, "anonymous");
+}
+
+function drainFavicons() {
+	for (const origin of faviconQueue) {
+		if (faviconsActive >= MAX_CONCURRENT_FAVICONS) return;
+		faviconQueue.delete(origin);
+		if (attemptedRecently(origin)) continue;
+		rememberAttempt(origin);
+		faviconsActive += 1;
+		void preloadFavicon(origin).catch(() => undefined).finally(() => {
+			faviconsActive -= 1;
+			drainFavicons();
+		});
+	}
+}
+
+function queueFavicon(origin: string) {
+	if (attemptedRecently(origin) || queryClient.getQueryData(linkPreviewQueryKey(origin))) return;
+	faviconQueue.add(origin);
+	drainFavicons();
+}
+
+/** Whether a link's site icon can be asked for at all (a public web site). */
+export function canLoadLinkFavicon(href: string): boolean {
+	return faviconOrigin(href) !== undefined;
+}
+
+/** Loads a web link's site icon now, once per site, for a link on screen. */
+export function preloadLinkFavicon(href: string) {
+	const origin = faviconOrigin(href);
+	if (origin) queueFavicon(origin);
+}
+
+/**
+ * Warms the site icons of the links typed into a draft, so a sent link shows
+ * its icon at once. A link erased before its turn in the queue is dropped; one
+ * already asked for finishes, since the daemon caches it either way.
+ */
+export function createDraftFaviconWarmer() {
+	let origins = new Set<string>();
+	let timer: number | undefined;
+	const apply = (text: string) => {
+		const next = new Set<string>();
+		for (const [url] of text.matchAll(DRAFT_URL)) {
+			const origin = faviconOrigin(url);
+			if (origin) next.add(origin);
+		}
+		for (const origin of next) if (!origins.has(origin)) queueFavicon(origin);
+		for (const origin of origins) if (!next.has(origin)) faviconQueue.delete(origin);
+		origins = next;
+	};
+	return {
+		update(text: string) {
+			window.clearTimeout(timer);
+			timer = window.setTimeout(() => apply(text), DRAFT_SETTLE_MS);
+		},
+		dispose() {
+			window.clearTimeout(timer);
+			for (const origin of origins) faviconQueue.delete(origin);
+			origins.clear();
+		},
+	};
 }
 
 /**

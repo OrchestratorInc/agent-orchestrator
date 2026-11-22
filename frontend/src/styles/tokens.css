@@ -77,12 +77,15 @@
 	--color-text-primary: var(--foreground);
 	--color-text-muted: var(--muted-foreground);
 	--color-text-passive: var(--chart-3);
-	--color-brand-logo: #79b0dc;
-	--color-brand-logo-bright: #a5cde7;
-	--color-brand-logo-foreground: #0a0b0d;
-	--color-text-markdown-code: var(--color-brand-logo);
-	--color-text-markdown-link: var(--color-brand-logo); /* underline distinguishes links */
-	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
+	--color-brand-logo: #338ad3;
+	--color-brand-logo-bright: #66a4de;
+	--color-brand-logo-foreground: #ffffff;
+	/* The accent as small text: a lighter shade of the fill so links and labels
+	 * stay above 4.5:1 on canvas, cards and bubbles. */
+	--color-brand-logo-text: #66a4de;
+	--color-text-markdown-code: var(--color-brand-logo-text);
+	--color-text-markdown-link: var(--color-brand-logo-text); /* underline distinguishes links */
+	--color-text-markdown-link-hover: #88b8e5;
 	--color-text-terminal: #d6d6d6;
 	--color-text-terminal-dim: #8e8e8e;
 
@@ -112,12 +115,7 @@
 	/* Board lane signals, matched to the landing hero's board preview. */
 	--color-status-working: #60a5fa;
 	--color-status-needs-you: #f06445;
-	/* Validating is pink with the new sidebar design and yellow without it
-	   (`data-legacy-status-colors`, below). Themes set the two candidates;
-	   only this block and the legacy one pick between them. */
-	--color-status-validating-new: #e58bb5;
-	--color-status-validating-legacy: #facc15;
-	--color-status-validating: var(--color-status-validating-new);
+	--color-status-validating: #e58bb5;
 	--color-status-in-review: #f59e0b;
 	--color-status-ready: #4ade80;
 	--color-status-merged: #c084fc;
@@ -376,13 +374,14 @@
 	--size-content-max: 320px;
 	/* Lets flex children shrink for truncation without hardcoding zero-width utilities in components. */
 	--size-flex-min: 0px;
-	/* Keeps terminal tabs usable after title truncation while leaving room for several tabs. */
-	--size-shell-tab-min: 64px;
+	/* Keeps terminal tabs usable after title truncation while leaving room for
+	   several tabs: a short title stays clear of the close laid over its end. */
+	--size-shell-tab-min: 144px;
 	/* Keeps added session tabs aligned with the owning tab in the secondary strip. */
 	--size-session-pane-tab-max: 112px;
 	/* Caps a standalone shell terminal's tab label so several open shells stay
 	   readable side by side instead of one long path crowding out the rest. */
-	--size-shell-tab-max: 140px;
+	--size-shell-tab-max: 180px;
 	/* Agent names and their status glyph need more room in Developer Mode. */
 	--size-agent-shell-tab-max: 192px;
 	/* The session's own tab carries its title and an always-visible ⋮, so it reads the most text. */
@@ -413,7 +412,7 @@
 	--color-border-overlay: color-mix(in oklch, var(--foreground) 2%, transparent);
 	/* Overlay shadow: a barely-there lift. Black, not --background, so it
 	 * reads on a graphite canvas. */
-	--shadow-control-inset: inset 0 1px 0 oklch(100% 0 0 / 6%), inset 0 -1px 0 oklch(0% 0 0 / 10%);
+	--shadow-control-inset: inset 0 1px 0 oklch(100% 0 0 / 12%), inset 0 -1px 0 oklch(0% 0 0 / 8%), 0 1px 3px oklch(0% 0 0 / 1%);
 	--shadow-popover: 0 4px 12px -4px oklch(0 0 0 / 14%);
 	--size-command-palette: 720px;
 	--size-command-palette-top: 14vh;
@@ -681,11 +680,6 @@
 		"FiraCode Nerd Font Mono", "FiraCode Nerd Font", "MesloLGS NF", Menlo, monospace;
 }
 
-/* The new sidebar design switched off in Developer mode: the old yellow Validating. */
-:root[data-legacy-status-colors] {
-	--color-status-validating: var(--color-status-validating-legacy);
-}
-
 /* Light theme — set via data-theme (apply-initial-theme + Zustand toggle). */
 
 :root[data-theme="light"] {
@@ -737,12 +731,13 @@
 	--color-text-primary: var(--foreground);
 	--color-text-muted: var(--muted-foreground);
 	--color-text-passive: oklch(0.62 0 0);
-	--color-brand-logo: #304c83;
-	--color-brand-logo-bright: #466daa;
+	--color-brand-logo: #338ad3;
+	--color-brand-logo-bright: #2f6da4;
 	--color-brand-logo-foreground: #ffffff;
-	--color-text-markdown-code: var(--color-brand-logo);
-	--color-text-markdown-link: var(--color-brand-logo);
-	--color-text-markdown-link-hover: var(--color-brand-logo-bright);
+	--color-brand-logo-text: #2f6da4;
+	--color-text-markdown-code: var(--color-brand-logo-text);
+	--color-text-markdown-link: var(--color-brand-logo-text);
+	--color-text-markdown-link-hover: #295984;
 	--color-text-terminal: #3d3d3d;
 	--color-text-terminal-dim: #757575;
 
@@ -768,8 +763,7 @@
 	/* Same lane hues as dark, deepened so they hold contrast on a light canvas. */
 	--color-status-working: #2563eb;
 	--color-status-needs-you: #c2412d;
-	--color-status-validating-new: #9b4871;
-	--color-status-validating-legacy: #ca8a04;
+	--color-status-validating: #9b4871;
 	--color-status-in-review: #d97706;
 	--color-status-ready: #16a34a;
 	--color-status-merged: #9333ea;

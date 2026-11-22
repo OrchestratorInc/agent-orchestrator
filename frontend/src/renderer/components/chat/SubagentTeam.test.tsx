@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
@@ -25,14 +25,22 @@ function team(live = true) {
 	return render(<SubagentTeam launches={[pages, tests]} steps={steps} live={new Set(live ? ["pages", "tests"] : [])} harness="claude-code" />);
 }
 
+/** The team's list starts closed; its header opens it. */
+function openTeam() {
+	fireEvent.click(screen.getByRole("button", { name: /^\d+ subagents?/ }));
+}
+
 describe("SubagentTeam", () => {
 	it("summarizes the team and lists every child with its current state", () => {
 		team();
 
 		const header = screen.getByRole("button", { name: /2 subagents/ });
-		expect(header).toHaveAttribute("aria-expanded", "true");
-		expect(within(header).getByText("1 working")).toBeInTheDocument();
+		// Closed until opened, working or not; the header counts what has ended, not who works.
+		expect(header).toHaveAttribute("aria-expanded", "false");
+		expect(within(header).queryByText(/working/)).not.toBeInTheDocument();
 		expect(within(header).getByText("1 done")).toBeInTheDocument();
+		openTeam();
+		expect(header).toHaveAttribute("aria-expanded", "true");
 
 		const working = screen.getByRole("button", { name: /Audit: info pages/ });
 		expect(within(working).getByText("Explore")).toBeInTheDocument();
@@ -57,6 +65,7 @@ describe("SubagentTeam", () => {
 			input: { description: "README audit", prompt: "Read-only. README audit.", subagent_type: "general-purpose" },
 		} as ConversationActivity["detail"];
 		render(<SubagentTeam launches={[readme, launch("pages", "Audit: info pages")]} steps={new Map()} live={new Set(["readme", "pages"])} harness="claude-code" />);
+		openTeam();
 
 		expect(within(screen.getByRole("button", { name: /README audit/ })).queryByText("general-purpose")).not.toBeInTheDocument();
 		expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("Explore")).toBeInTheDocument();
@@ -64,6 +73,7 @@ describe("SubagentTeam", () => {
 
 	it("never shows the provider's internal launch note", () => {
 		team();
+		openTeam();
 		expect(screen.queryByText(/Async agent launched/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/agentId/)).not.toBeInTheDocument();
 	});
@@ -71,6 +81,7 @@ describe("SubagentTeam", () => {
 	it("opens a child inline onto its prompt, its steps and its report where the chat has no panel", async () => {
 		const user = userEvent.setup();
 		team();
+		openTeam();
 
 		const done = screen.getByRole("button", { name: /Audit: testing gaps/ });
 		expect(done).toHaveAttribute("aria-expanded", "false");
@@ -92,9 +103,10 @@ describe("SubagentTeam", () => {
 			<OpenSubagentContext.Provider value={openSubagent}>
 				<SubagentTeam launches={[launch("tests", "Audit: testing gaps")]} steps={new Map()} live={new Set(["tests"])} harness="claude-code" />
 			</OpenSubagentContext.Provider>,
-		);
+			);
+			openTeam();
 
-		const row = screen.getByRole("button", { name: /Audit: testing gaps/ });
+			const row = screen.getByRole("button", { name: /Audit: testing gaps/ });
 		// It goes somewhere else, so it is not a disclosure.
 		expect(row).not.toHaveAttribute("aria-expanded");
 		await user.click(row);
@@ -103,12 +115,15 @@ describe("SubagentTeam", () => {
 		expect(screen.queryByText("Sent by the parent agent")).not.toBeInTheDocument();
 	});
 
-	it("folds the list from its header", async () => {
-		const user = userEvent.setup();
-		team();
-		const header = screen.getByRole("button", { name: /2 subagents/ });
-		await user.click(header);
-		expect(header).toHaveAttribute("aria-expanded", "false");
+	it("opens and folds the list from its header", async () => {
+	const user = userEvent.setup();
+	team();
+	const header = screen.getByRole("button", { name: /2 subagents/ });
+	await user.click(header);
+	expect(header).toHaveAttribute("aria-expanded", "true");
+	expect(screen.getByRole("button", { name: /Audit: info pages/ })).toBeInTheDocument();
+	await user.click(header);
+	expect(header).toHaveAttribute("aria-expanded", "false");
 		await waitFor(() =>
 			expect(screen.queryByRole("button", { name: /Audit: info pages/ })).not.toBeInTheDocument(),
 		);
@@ -121,9 +136,10 @@ describe("SubagentTeam", () => {
 				steps={new Map()}
 				live={new Set(["over"])}
 				harness="claude-code"
-			/>,
-		);
-		const row = screen.getByRole("button", { name: /Audit: cart/ });
+				/>,
+				);
+				openTeam();
+				const row = screen.getByRole("button", { name: /Audit: cart/ });
 		expect(within(row).getByText("Failed")).toBeInTheDocument();
 		expect(within(row).getByText(/Concurrent subagent limit reached/)).toBeInTheDocument();
 		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 failed")).toBeInTheDocument();
@@ -131,6 +147,7 @@ describe("SubagentTeam", () => {
 
 	it("keeps a child working after its turn settles while one of its steps still runs", () => {
 		team(false);
+		openTeam();
 		const row = screen.getByRole("button", { name: /Audit: info pages/ });
 		expect(within(row).getByLabelText("Working")).toBeInTheDocument();
 	});
@@ -143,14 +160,15 @@ describe("SubagentTeam", () => {
 				steps={new Map([["quiet", [command("q1", "tool-quiet", "ls")]]])}
 				live={new Set()}
 				harness="claude-code"
-			/>,
-		);
-		const row = screen.getByRole("button", { name: /Audit: admin/ });
+				/>,
+				);
+				openTeam();
+				const row = screen.getByRole("button", { name: /Audit: admin/ });
 		expect(within(row).getByText("No report")).toBeInTheDocument();
 		expect(within(row).queryByLabelText("Working")).not.toBeInTheDocument();
 	});
 
-	it("reads each child's live state on its own, and counts every state in the header", () => {
+	it("reads each child's live state on its own, and counts every ended state in the header", () => {
 		// The parent picked one child up again in a running turn; the other one's turns have all ended.
 		render(
 			<SubagentTeam
@@ -158,12 +176,13 @@ describe("SubagentTeam", () => {
 				steps={new Map()}
 				live={new Set(["again"])}
 				harness="claude-code"
-			/>,
-		);
-		expect(within(screen.getByRole("button", { name: /Audit: checkout/ })).getByLabelText("Working")).toBeInTheDocument();
+				/>,
+				);
+				openTeam();
+				expect(within(screen.getByRole("button", { name: /Audit: checkout/ })).getByLabelText("Working")).toBeInTheDocument();
 		expect(within(screen.getByRole("button", { name: /Audit: admin/ })).getByText("No report")).toBeInTheDocument();
 		const header = screen.getByRole("button", { name: /2 subagents/ });
-		expect(within(header).getByText("1 working")).toBeInTheDocument();
+		expect(within(header).queryByText(/working/)).not.toBeInTheDocument();
 		expect(within(header).getByText("1 no report")).toBeInTheDocument();
 	});
 
@@ -171,21 +190,24 @@ describe("SubagentTeam", () => {
 		const user = userEvent.setup();
 		const overrides: Record<string, boolean> = {};
 		const pages = launch("pages", "Audit: info pages");
-		render(
+		const element = () => (
 			<SubagentTeam
 				launches={[pages]}
 				steps={new Map()}
 				live={new Set(["pages"])}
 				harness="claude-code"
 				disclosureKey="turn:subagents-1"
-				disclosureOverrides={overrides}
+				disclosureOverrides={{ ...overrides }}
 				onDisclosureChange={(key, open) => {
 					overrides[key] = open;
 				}}
-			/>,
+			/>
 		);
+		const { rerender } = render(element());
 		await user.click(screen.getByRole("button", { name: /1 subagent/ }));
-		expect(overrides).toEqual({ "turn:subagents-1": false });
+		expect(overrides).toEqual({ "turn:subagents-1": true });
+		// The caller owns the choices, so the list opens once it hands them back.
+		rerender(element());
 		await user.click(screen.getByRole("button", { name: /Audit: info pages/ }));
 		expect(overrides).toMatchObject({ "turn:subagents-1:agent:pages": true });
 	});
@@ -204,8 +226,9 @@ describe("SubagentTeam", () => {
 				steps={new Map()}
 				live={new Set(["working"])}
 				harness="claude-code"
-			/>,
-		);
+				/>,
+				);
+				openTeam();
 
 		expect(within(screen.getByRole("button", { name: /Audit: stopped early/ })).getByText("No steps recorded")).toBeInTheDocument();
 		const done = screen.getByRole("button", { name: /Audit: reported elsewhere/ });

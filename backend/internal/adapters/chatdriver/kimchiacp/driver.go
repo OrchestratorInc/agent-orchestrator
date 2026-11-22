@@ -20,8 +20,10 @@ import (
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:        domain.HarnessKimchi,
+		HideCommand:    hiddenCommands,
 		Configure:      configure,
 		SessionOptions: sessionOptions,
+		SteerRequest:   steerRequest,
 		VersionProbe:   versionProbe,
 	}, log)
 }

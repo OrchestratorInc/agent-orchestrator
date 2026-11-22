@@ -4,6 +4,8 @@ The `ao` CLI is a thin Go/Cobra client for the local Agent Orchestrator daemon.
 It opens the desktop app and discovers, inspects, or stops its daemon through the
 loopback HTTP surface and the `running.json` handshake. It must not open SQLite
 directly or call runtime, workspace, tracker, or agent adapters in-process.
+The offline `ao triage` exception resolves agent executables and launches a local
+agent without the daemon, as described below.
 
 When using the CLI directly from a shell, make sure the daemon is running first
 by opening the desktop app or running `ao daemon` under a service manager. Product commands such as
@@ -19,7 +21,7 @@ go build -o ./bin/ao ./cmd/ao
 
 ## Current commands
 
-Every product command resolves to a daemon HTTP route. Run `ao <command>
+Product commands use daemon HTTP routes. The offline `ao triage` diagnostic launcher is an exception. Run `ao <command>
 --help` for the authoritative flag shape.
 
 ### Daemon control
@@ -67,6 +69,14 @@ it again to move the machine to another account. An agent
 without a terminal runs it in the background and reads its output; see
 [Set up a VM as an agent](../self-hosted-remote.md#set-up-a-vm-as-an-agent).
 
+### Report a problem
+
+Unreleased: `ao triage` collects bounded, redacted diagnostics and opens Claude Code
+or Codex to draft a report. It works with the daemon down and never starts it.
+Files go under `$AO_DATA_DIR/triage` when set, otherwise `~/.ao/triage`.
+After the agent exits, review the text and answer `[y/N]` before posting.
+See the [command reference](../../backend/internal/skillassets/using-ao/commands/triage.md).
+
 ### Product commands
 
 | Command                             | Daemon route                                   |
@@ -78,19 +88,26 @@ without a terminal runs it in the background and reads its output; see
 | `ao project rm <id>`                | `DELETE /api/v1/projects/{id}`                 |
 | `ao agent ls`                       | `POST /api/v1/agents/readiness/ensure` (`display`) |
 | `ao agent ls --refresh`             | `POST /api/v1/agents/refresh` (forced checks) |
+| `ao account ls`                     | `GET /api/v1/agents/accounts`                  |
+| `ao account default <account-id>`   | `POST /api/v1/agents/accounts/{id}/default`    |
+| `ao account show [<session-id>]`    | `GET /api/v1/agents/accounts/sessions/{id}`    |
+| `ao account switch <session-id> <account-id>` | `PUT /api/v1/agents/accounts/sessions/{id}`; `--wait` polls `GET /api/v1/sessions/{id}/interface-transition` |
 | `ao automation create/list/get/update/delete/runs` | `POST/GET/PATCH/DELETE /api/v1/automations` |
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
 | `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
 | `ao session get <id>`               | `GET /api/v1/sessions/{id}`. `--transcript N` also reads `GET /api/v1/sessions/{id}/conversation` for chat sessions on the local daemon. |
+| `ao session interrupt <id>`         | `POST /api/v1/sessions/{id}/conversation/interrupt` |
 | `ao session kill <id>`              | `POST /api/v1/sessions/{id}/kill`              |
 | `ao session restore <id>`           | `POST /api/v1/sessions/{id}/restore`           |
 | `ao session exit-agent <id>`        | `POST /api/v1/sessions/{id}/exit-agent`        |
 | `ao session resume-agent <id>`      | `POST /api/v1/sessions/{id}/resume-agent`      |
 | `ao session rename <id> <name>`     | `PATCH /api/v1/sessions/{id}`                  |
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
-| `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}`                 |
+| `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}?keepArtifacts=true`; artifact files stay, view only, on the Artifacts page. `--delete-artifacts` drops `keepArtifacts` so they are deleted too. |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
+| `ao session fork <id> [--check]` | `POST /api/v1/sessions/{id}/fork`             |
+| `ao session switch <id> [agent]` / `--from <agent> [agent]` `[--model <m>] [--effort <e>] [--permission <p>] [--force] [-m <text>]` | `--from` lists via `GET /api/v1/sessions?active=true`; each switch is `POST /api/v1/sessions/{id}/provider-switch`, then `POST /api/v1/sessions/{id}/send` for `-m` |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
@@ -119,6 +136,18 @@ branch, issue, or PR-claim options.
 explicitly with `ao session claim-pr <session-id> <pr-ref>`. The explicit form
 remains supported for backward compatibility and cross-session coordination.
 
+To review someone else's PR, claim it as a review:
+`ao session claim-pr <pr-ref> --no-takeover --review`, or
+`ao spawn --claim-pr <pr-ref> --no-takeover --review`. Before the claim, the CLI
+turns off the session's automatic CI and review-comment fixing
+(`PATCH /api/v1/sessions/{id}/auto-inject-ci` and `.../auto-inject-review`) and
+its native auto-review (`PUT /api/v1/sessions/{id}/auto-review`), so the session
+gets none of the PR's CI failures, merge conflicts, or review comments. These
+switches cover every PR the session owns; if the claim is refused, the CLI puts
+them back. `--review` implies `--no-takeover`, so it never takes the PR from a
+session that is working on it. To take the PR over, run `ao session claim-pr <pr-ref> --review=false`,
+which turns CI and review-comment fixing back on.
+
 Both `ao session claim-pr` and `ao spawn --claim-pr` claim ownership metadata
 only. The claim step does not check out a branch or change HEAD, so
 `branchChanged: false` renders as `checkout: not performed; workspace unchanged`
@@ -131,7 +160,9 @@ together.
 `ao report` persists a worker-originated coordination claim before reporting
 success. Checkpoints, free-form messages, and output-only reports batch until
 another flush or the first report's one-hour fallback. The first `--done`
-report opens a fixed five-minute settlement window. `--needs-input` delivers
+report opens a five-minute settlement window. AO tries to deliver the batch about 15
+seconds after no other worker of the project is still working, and at the
+latest when the window closes. `--needs-input` delivers
 immediately without interrupting current orchestrator work. `--stuck` requests
 an interrupt at most once per worker every three minutes and coalesces equal
 repeats. Reports route to the active project orchestrator at each attempt and

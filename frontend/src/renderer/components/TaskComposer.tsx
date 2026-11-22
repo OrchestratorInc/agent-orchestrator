@@ -12,9 +12,11 @@ import { useTranslation } from "react-i18next";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { ApprovalMode, ChatModel, TurnSettings } from "../types/conversation";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
+import { CHAT_SWITCH_TARGETS } from "../lib/agent-switch-targets";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
+import { agentAccountProviderFor, type AgentAccountProvider } from "../hooks/useAgentAccounts";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { useResetStaleProjectTuning } from "../hooks/useResetStaleProjectTuning";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -37,7 +39,12 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useCloudOrchestratorModel } from "../hooks/useCloudOrchestratorModel";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
-import { createCloudSession } from "../lib/cloud-session-create";
+import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
+import { uploadCloudAttachment } from "../lib/cloud-attachments";
+import { readBlobAsBase64, toWireAttachments } from "../lib/attachment-uploads";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
+import { reportCloudSessionCreateRequested } from "../lib/cloud-telemetry";
+import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
 import { cloudDefaultModel, cloudModelLabel, isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
 import { ToggleRow } from "./chat/AgentSwitchPicker";
@@ -50,7 +57,7 @@ import {
 	unknownAgentReadiness,
 	type AgentInfo,
 } from "../lib/agent-select-options";
-import { cloudSessionsQueryKey, seedCreatedFreestyleSession, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, seedCreatedFreestyleSession, seedCreatedStandaloneAgent, useCachedProjectListed, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
@@ -59,9 +66,10 @@ import {
 	revalidateAgentModels,
 } from "../hooks/useAgentModelsQuery";
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
+import { sessionNameFromBrief } from "../lib/report-problem";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
-import { STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
+import { CLOUD_STANDALONE_WORKSPACE_ID, STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
 import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { type EffortAvailability } from "./settings/EffortPicker";
 import { COMPOSER_MENU_WIDTH, TaskEffortPicker, TaskModelPicker } from "./TaskModelControls";
@@ -88,6 +96,7 @@ type CreateTaskInput = {
 	effort?: string;
 	mode?: "chat" | "tui";
 	approvalMode?: ApprovalMode;
+	accountId?: string;
 	attachments?: FileAttachmentPayload[];
 	taskPreparation?: string;
 };
@@ -98,6 +107,13 @@ const CHAT_PREFLIGHT_CODES = new Set([
 	"CHAT_DRIVER_INCOMPATIBLE",
 	"CHAT_AUTH_REQUIRED",
 ]);
+
+// Harnesses without a terminal interface; mirrors the backend's ChatOnly.
+const CHAT_ONLY_AGENTS = new Set(["unreal-agent", "docker-agent"]);
+
+function isChatOnlyAgent(agent: string | null | undefined): boolean {
+	return Boolean(agent && CHAT_ONLY_AGENTS.has(agent));
+}
 
 const READINESS_RECONCILE_CODES = new Set(["AGENT_BINARY_NOT_FOUND", "AGENT_AUTH_REQUIRED", "CHAT_AUTH_REQUIRED"]);
 
@@ -110,6 +126,53 @@ function cancelTaskPreparation(token: string, hostId?: string): void {
 	} catch {
 		// A disconnected host will reclaim this preparation on its own TTL.
 	}
+}
+
+// A host deletes a preparation five minutes after it was made or last used
+// (the daemon's defaultTaskPreparationTTL; reading or staging its files counts
+// as use). A kept one is offered again for a minute less, so a send does not
+// race its expiry; a send that does only falls back to making its own worktree.
+const KEPT_PREPARATION_REUSE_MS = 4 * 60_000;
+
+// aliveAt: when the host last restarted this preparation's expiry, as far as
+// the page knows: its request, or the page's last successful read of its files.
+type KeptPreparation = { token: string; aliveAt: number };
+
+// The preparation a page left behind, per host and project, so the next visit
+// to that project starts from a worktree that already exists.
+const keptPreparations = new Map<string, KeptPreparation>();
+
+function keptPreparationKey(projectId: string, hostId?: string): string {
+	return `${hostId ?? ""}\u0000${projectId}`;
+}
+
+function keepPreparation(key: string, preparation: KeptPreparation, hostId?: string): void {
+	const previous = keptPreparations.get(key);
+	if (previous && previous.token !== preparation.token) {
+		// A late answer to an older request must not replace a newer kept one,
+		// which has longer left before the host deletes it.
+		if (previous.aliveAt > preparation.aliveAt) {
+			cancelTaskPreparation(preparation.token, hostId);
+			return;
+		}
+		cancelTaskPreparation(previous.token, hostId);
+	}
+	keptPreparations.set(key, preparation);
+}
+
+/** Hands a page the kept preparation for its project, unless it is too old to offer. */
+function takeKeptPreparation(key: string, hostId?: string): KeptPreparation | undefined {
+	const kept = keptPreparations.get(key);
+	if (!kept) return undefined;
+	keptPreparations.delete(key);
+	if (Date.now() - kept.aliveAt < KEPT_PREPARATION_REUSE_MS) return kept;
+	cancelTaskPreparation(kept.token, hostId);
+	return undefined;
+}
+
+/** Test seam: forget every kept preparation. */
+export function resetKeptTaskPreparationsForTests(): void {
+	keptPreparations.clear();
 }
 
 class TaskCreateError extends Error {
@@ -160,6 +223,7 @@ export type LaunchReplay = {
 	effort?: string;
 	approvalMode?: ApprovalMode;
 	mode?: "chat" | "tui";
+	accountId?: string;
 };
 
 /**
@@ -167,6 +231,12 @@ export type LaunchReplay = {
  * with, and the create call for local, remote, cloud, and standalone targets.
  * The new chat page and TaskComposer render it.
  */
+/** The decoded size of standard base64, as an inline attachment carries its bytes. */
+function base64Bytes(data: string): number {
+	const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+	return Math.floor((data.length * 3) / 4) - padding;
+}
+
 export function useTaskLaunch({ projectId, hostId }: {
 	projectId?: string;
 	hostId?: string;
@@ -189,6 +259,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const [status, setStatus] = useState<string | undefined>();
 	const [errorAction, setErrorAction] = useState<"install-agent" | "choose-branch" | undefined>();
 	const [branchOverride, setBranchOverride] = useState("");
+	const [accountPicks, setAccountPicks] = useState<Partial<Record<AgentAccountProvider, string>>>({});
+	useEffect(() => setAccountPicks({}), [hostId]);
 	const [branchDraft, setBranchDraft] = useState("");
 	useEffect(() => {
 		setBranchOverride("");
@@ -198,6 +270,14 @@ export function useTaskLaunch({ projectId, hostId }: {
 	}, [projectId, hostId]);
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
+	// When the host last restarted the held preparation's expiry, so a kept one
+	// is not reused past it: its request, then each use the page reports.
+	const taskPreparationAliveAtRef = useRef(0);
+	/** Reports that the host just restarted this preparation's expiry (its files were read). */
+	const notePreparationUsed = useCallback((token: string, at: number) => {
+		if (!token || token !== taskPreparationRef.current) return;
+		taskPreparationAliveAtRef.current = Math.max(taskPreparationAliveAtRef.current, at);
+	}, []);
 	// The preparation a send in flight will claim. Leaving the page or project does not
 	// cancel it; the send does, once answered.
 	const launchingPreparationRef = useRef("");
@@ -221,9 +301,12 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const cloudOffering = useCloudOffering();
 	const cloudProjects = useCloudProjectsQuery();
 	const cloudProject = (cloudProjects.data ?? []).find((project) => project.id === projectId);
-	const isCloudProject = !hostId && Boolean(cloudProject);
+	// A Cloud standalone agent starts as a Cloud task with no project's
+	// settings: the control plane gives it a project of its own.
+	const isCloudStandalone = !hostId && projectId === CLOUD_STANDALONE_WORKSPACE_ID;
+	const isCloudProject = !hostId && (Boolean(cloudProject) || isCloudStandalone);
 	// Coder projects keep their own New Task dialog and start-up untouched.
-	const isCoderCloudProject = isCloudProject && projectSandboxProvider(cloudProject?.config, cloudOffering) === CODER_PROVIDER;
+	const isCoderCloudProject = isCloudProject && !isCloudStandalone && projectSandboxProvider(cloudProject?.config, cloudOffering) === CODER_PROVIDER;
 	const isStandalone = projectId === STANDALONE_WORKSPACE_ID;
 	const preferenceContext = hostId ? `${hostId}:${projectId ?? ""}` : projectId ?? "";
 	const persistedPreferences = useMemo(
@@ -236,7 +319,39 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
-				if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
+				const files = input.attachments ?? [];
+				// Files ride the first message of a Chat session (createCloudChatSessionWithFiles),
+				// on a control plane that takes them. A standalone agent starts without
+				// them: its own project comes with its session, and a start the files
+				// did not reach would leave that project behind.
+				// Both are final refusals (a code), so the page hands the task back to change.
+				if (files.length > 0 && (isCloudStandalone || cloudOffering.maxAttachmentBytes === undefined)) {
+					throw new TaskCreateError(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }), "CLOUD_ATTACHMENTS_UNSUPPORTED");
+				}
+				if (files.length > 0 && input.mode !== "chat") {
+					// No switch on the page picks the interface: an agent Cloud runs
+					// only in the terminal starts there, any other as the default
+					// session interface in Settings says.
+					throw new TaskCreateError(input.agent && !cloudOffering.chatHarnesses.includes(input.agent)
+						? t("newTask.cloudAttachmentsNeedChatAgent", { agent: agentLabel(input.agent), defaultValue: "Files can start a Cloud task only in Chat, which {{agent}} doesn't run in on Cloud. Choose another agent, or remove the files." })
+						: t("newTask.cloudAttachmentsNeedChatDefault", { defaultValue: "Files can start a Cloud task only in Chat. Set the default session interface to Chat in Settings > General, or remove the files." }),
+					"CLOUD_ATTACHMENTS_NEED_CHAT");
+				}
+				// AO Cloud says how large one upload may be, and the main process carries
+				// no more than MAX_CLOUD_CP_BINARY_BYTES in one request; both read the
+				// bytes whole. Every file is held to that limit, including one already
+				// read inline; a file kept on disk is read now if it fits.
+				const cloudMaxBytes = Math.min(cloudOffering.maxAttachmentBytes ?? 0, MAX_CLOUD_CP_BINARY_BYTES);
+				const cloudFiles = await Promise.all(files.map(async (file) => {
+					const size = file.file?.size ?? base64Bytes(file.data);
+					if (!(file.data || file.file) || size > cloudMaxBytes) {
+						throw new TaskCreateError(t("newTask.cloudAttachmentTooLarge", {
+							size: Math.floor(cloudMaxBytes / (1024 * 1024)),
+							defaultValue: "AO Cloud takes files up to {{size}} MB each. Remove the larger ones to start this task.",
+						}), "CLOUD_ATTACHMENT_TOO_LARGE");
+					}
+					return file.data || !file.file ? file : { ...file, data: await readBlobAsBase64(file.file) };
+				}));
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// The agent is always the one the picker shows; with none there is nothing to start.
 				if (!input.agent) throw new Error(t("newTask.noReadyAgent"));
@@ -246,9 +361,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				// The task starts in the interface the composer resolved (its choice,
 				// else the default session interface); an older control plane that
 				// predates the field starts it in the terminal (createCloudSession).
-				const { session } = await createCloudSession(cloudClient, cloudOrg.id, {
-					projectId: input.projectId,
-					kind: "worker",
+				const body = {
 					harness: input.agent,
 					displayName: input.brief.trim().slice(0, 100) || input.agent,
 					prompt: input.brief,
@@ -258,7 +371,26 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// Only a permission the user picked, as for a local task; without
 					// one the worker derives it from the session's mode.
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
-				}, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
+				};
+				const createOptions = input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined;
+				const orgId = cloudOrg.id;
+				let session;
+				if (isCloudStandalone) {
+					// The agent and its project come back together; its project joins
+					// the list now so the Scratchpad shows the agent at once.
+					reportCloudSessionCreateRequested({ kind: "worker", projectId: "" });
+					const created = await cloudClient.createStandaloneAgent(orgId, body, createOptions);
+					seedCreatedStandaloneAgent(queryClient, cloudBaseUrl, orgId, created.project);
+					rememberStandaloneAgent(created.session.id, created.project.id);
+					session = created.session;
+				} else if (files.length > 0) {
+					({ session } = await createCloudChatSessionWithFiles(cloudClient, orgId,
+						{ projectId: input.projectId, kind: "worker", ...body, interfaceMode: "chat" }, cloudFiles,
+						(sessionId, file, signal) => uploadCloudAttachment(cloudBaseUrl, orgId, sessionId, { name: file.name || "attachment", data: file.data }, { signal }),
+						{ idempotencyKey: input.clientRequestId }));
+				} else {
+					({ session } = await createCloudSession(cloudClient, orgId, { projectId: input.projectId, kind: "worker", ...body }, createOptions));
+				}
 				// The session's Chat composer shows, and its turns keep, what the task
 				// was started with, as a local task's chat does.
 				rememberCloudChatSettings(cloudOrg.id, session.id, session.harness, input);
@@ -285,15 +417,20 @@ export function useTaskLaunch({ projectId, hostId }: {
 				}
 				// The code drives the same fallbacks a local create error does ("Create as Terminal").
 				if (err instanceof CloudCpError) throw new TaskCreateError(err.message, err.code, undefined, err.status);
+				// A task with files that left nothing behind is refused as final, to send again.
+				if (err instanceof CloudTaskFilesNeedChatError) throw new TaskCreateError(t("newTask.cloudAttachmentsStartedInTerminal", { defaultValue: err.message }), err.code);
+				if (err instanceof CloudTaskFilesUndeliveredError) throw new TaskCreateError(err.message, err.code);
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudBaseUrl, cloudClient, cloudOrg, cloudUserId, queryClient, t],
+		[cloudBaseUrl, cloudClient, cloudOffering.chatHarnesses, cloudOffering.maxAttachmentBytes, cloudOrg, cloudUserId, isCloudStandalone, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
+				// A file too large to inline is streamed from disk to the daemon first.
+				const wireAttachments = input.attachments?.length ? await toWireAttachments(input.attachments, hostId) : undefined;
 				const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/orchestrators/delegate", {
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					body: {
@@ -306,7 +443,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
 						...(input.mode ? { mode: input.mode } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
-						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+						...(input.accountId ? { accountId: input.accountId } : {}),
+						...(wireAttachments ? { attachments: wireAttachments } : {}),
 						...(input.taskPreparation ? { taskPreparation: input.taskPreparation } : {}),
 					},
 				});
@@ -343,7 +481,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const createStandaloneTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
-			const displayName = input.brief.trim().slice(0, 100) || input.agent || "Standalone agent";
+			const displayName = sessionNameFromBrief(input.brief) || input.agent || "Standalone agent";
+			// A file too large to inline is streamed from disk to the daemon first.
+			const wireAttachments = input.attachments?.length ? await toWireAttachments(input.attachments, hostId) : undefined;
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 				body: {
@@ -356,7 +496,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 					...(input.effort ? { effort: input.effort } : {}),
 					...(input.mode ? { mode: input.mode } : {}),
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
-					...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+					...(input.accountId ? { accountId: input.accountId } : {}),
+					...(wireAttachments ? { attachments: wireAttachments } : {}),
 				},
 			});
 			if (error) {
@@ -393,8 +534,16 @@ export function useTaskLaunch({ projectId, hostId }: {
 			return data.project as Project;
 		},
 	});
+	// A project the host's loaded project list already has is prepared at once,
+	// without waiting for the project read above: that read can wait on GitHub
+	// for the repo's canonical name, and the preparation's git work is the long
+	// part. Any other project still waits for the read.
+	const projectListed = useCachedProjectListed(projectId, hostId);
+	const prepareProjectId = isCloudProject || isStandalone
+		? undefined
+		: projectListed ? projectId : projectQuery.data?.id;
 	useEffect(() => {
-		const id = projectQuery.data?.id;
+		const id = prepareProjectId;
 		if (!id) return;
 		let client;
 		try {
@@ -403,31 +552,47 @@ export function useTaskLaunch({ projectId, hostId }: {
 			return;
 		}
 		let disposed = false;
-		taskPreparationRef.current = "";
-		setPreparedSessionId("");
-		void client.POST("/api/v1/projects/{id}/tasks/prepare", {
-			params: { path: { id } },
-		}).then(
-			({ data }) => {
-				const token = data?.taskPreparation ?? "";
-				if (!token) return;
-				if (disposed) {
-					cancelTaskPreparation(token, hostId);
-					return;
-				}
-				taskPreparationRef.current = token;
-				setPreparedSessionId(token);
-			},
-			() => undefined,
-		);
+		const key = keptPreparationKey(id, hostId);
+		const hold = (token: string, aliveAt: number) => {
+			taskPreparationRef.current = token;
+			taskPreparationAliveAtRef.current = aliveAt;
+			setPreparedSessionId(token);
+		};
+		const kept = takeKeptPreparation(key, hostId);
+		if (kept) {
+			hold(kept.token, kept.aliveAt);
+		} else {
+			taskPreparationRef.current = "";
+			setPreparedSessionId("");
+			const requestedAt = Date.now();
+			void client.POST("/api/v1/projects/{id}/tasks/prepare", {
+				params: { path: { id } },
+			}).then(
+				({ data }) => {
+					const token = data?.taskPreparation ?? "";
+					if (!token) return;
+					// A page that has gone keeps it for the next visit to this project.
+					if (disposed) {
+						keepPreparation(key, { token, aliveAt: requestedAt }, hostId);
+						return;
+					}
+					hold(token, requestedAt);
+				},
+				() => undefined,
+			);
+		}
 		return () => {
 			disposed = true;
 			const token = taskPreparationRef.current;
 			taskPreparationRef.current = "";
 			setPreparedSessionId("");
-			if (token !== launchingPreparationRef.current) cancelTaskPreparation(token, hostId);
+			// A send in flight claims its preparation; any other is kept for the
+			// next visit to this project rather than thrown away.
+			if (token && token !== launchingPreparationRef.current) {
+				keepPreparation(key, { token, aliveAt: taskPreparationAliveAtRef.current }, hostId);
+			}
 		};
-	}, [hostId, projectQuery.data?.id]);
+	}, [hostId, prepareProjectId]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	const { settings, error: settingsError } = useSettings(hostId);
 	// The composer preselects the agent and model a spawn would actually use
@@ -473,6 +638,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
+	const accountProvider = agentAccountProviderFor(selectedAgent);
+	const accountId = accountProvider && !isCloudProject ? accountPicks[accountProvider] : undefined;
 	// The connection a cloud task with this agent runs on; its catalog follows it.
 	const selectedCloudConnection = isCloudProject
 		? cloudConnectionsQuery.data?.find(
@@ -526,7 +693,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		baseUrl: cloudBaseUrl,
 		orgId: cloudOrg?.id,
 		projectId,
-		enabled: isCloudProject,
+		// A standalone agent has no orchestrator to start beside.
+		enabled: isCloudProject && !isCloudStandalone,
 	});
 	const orchestratorModelForSelectedAgent = isCloudProject && cloudOrchestrator && cloudOrchestrator.harness === selectedAgent &&
 		isConcreteModelID(cloudOrchestrator.model) && !cloudModelUnavailable(cloudOrchestrator.model)
@@ -1101,6 +1269,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					effort: replay.effort,
 					mode: replay.mode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 					approvalMode: replay.approvalMode,
+					accountId: replay.accountId,
 				} : {
 					agent: selectedAgent ? (selectedAgent as CreateTaskInput["agent"]) : undefined,
 					model: requestedModel,
@@ -1110,6 +1279,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					// plane has none, so a cloud task carries it.
 					mode: interfaceMode ?? (isCloudProject ? settings?.defaultSessionMode : undefined),
 					approvalMode: requestedApproval ?? launchApproval,
+					accountId,
 				}),
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
@@ -1165,7 +1335,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			setFallbackAction(
 				canBypassApprovals
 					? "bypass-permissions"
-					: selectedAgent !== "unreal-agent" && interfaceMode !== "tui" &&
+					: !isChatOnlyAgent(selectedAgent) && interfaceMode !== "tui" &&
 							err instanceof TaskCreateError &&
 							Boolean(err.code && CHAT_PREFLIGHT_CODES.has(err.code))
 						? "tui"
@@ -1213,10 +1383,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 		}
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
-	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
+	const submitMode: TaskLaunchOptions["interfaceMode"] = isChatOnlyAgent(selectedAgent) ? "chat" : requiresTuiFallback ? "tui" : undefined;
 	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
-			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
+			? launch(brief, { interfaceMode: isChatOnlyAgent(selectedAgent) ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
 			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
 
 	const changeAgent = (value: string) => {
@@ -1238,15 +1408,28 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// installed agents whose sign-in is known to be usable: an "Auth unknown" agent may
 	// not start, so it stays in Harness settings. A remote host's readiness can be
 	// unknown without anything being wrong, so there definite failures alone are left out.
-	const agentChoices = useMemo(() => {
+	// The chat agents, and any installed agent that is not signed in, are still offered
+	// dimmed with the reason, so the picker opens their setup instead of hiding them.
+	const agentChoices = useMemo((): Array<{ id: string; label: string; unavailable?: string }> => {
 		const agents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 		const ranked = buildRankedAgentOptions({
 			agents,
 			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 			fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
 		});
-		return (agents ? ranked.filter(hostId ? isLaunchableAgent : startsLocally) : ranked).map(({ id, label }) => ({ id, label }));
-	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject]);
+		if (!agents) return ranked.map(({ id, label }) => ({ id, label }));
+		const runs = hostId ? isLaunchableAgent : startsLocally;
+		const offeredForSetup = (agent: AgentInfo) => !isCloudProject
+			&& ((CHAT_SWITCH_TARGETS as readonly string[]).includes(agent.id) || agent.authentication.state === "unauthorized");
+		return ranked.flatMap((agent) => {
+			if (runs(agent)) return [{ id: agent.id, label: agent.label }];
+			if (!offeredForSetup(agent)) return [];
+			const unavailable = agent.installation.state === "not_installed" ? t("agentSwitch.notInstalled")
+				: agent.authentication.state === "unauthorized" ? t("agentSwitch.notSignedIn")
+				: t("agentSelector.needsSetup");
+			return [{ id: agent.id, label: agent.label, unavailable }];
+		});
+	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject, t]);
 	const catalogProjectId = isCloudProject || isStandalone ? "" : projectId ?? "";
 	// A pick from the picker's other agents: that agent, with the model and effort chosen
 	// alongside it, if any. Its catalog is cached, since the picker lists its models.
@@ -1321,11 +1504,18 @@ export function useTaskLaunch({ projectId, hostId }: {
 			effort: requestedEffort,
 			approvalMode: launchApproval,
 			mode: submitMode,
+			accountId,
 		}),
+		account: accountProvider && !isCloudProject ? {
+			provider: accountProvider,
+			value: accountId,
+			choose: (id: string | undefined) => setAccountPicks((picks) => ({ ...picks, [accountProvider]: id })),
+		} : undefined,
 		// The interface a plain send starts in, including the Settings default.
 		effectiveInterface: (submitMode ?? settings?.defaultSessionMode ?? "tui") as "chat" | "tui",
 		refreshModels: refreshSelectedModels,
 		preparedSessionId,
+		notePreparationUsed,
 		submitMode,
 		isCloudProject,
 		isCoderCloudProject,
@@ -1353,6 +1543,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 			},
 		} : undefined,
 		remoteLoadError,
+		// "Set one up in Settings" gets the way there. A remote host's agents are set up on that host.
+		remoteLoadErrorAction: !hostId && remoteLoadError === t("newTask.noReadyAgent") ? {
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
+			onClick: () => openGlobalSettings("harness", { harnessView: isCloudProject ? "cloud" : "local", preserveProject: true }),
+		} : undefined,
 		modelWarning,
 		modelWarningRetries,
 		fallbackAction,
@@ -1371,7 +1566,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		model: {
 			agentId: selectedAgent,
 			agentLabel: selectedAgentLabel,
-			projectId: isStandalone ? "" : (projectId ?? ""),
+			projectId: isStandalone || isCloudStandalone ? "" : (projectId ?? ""),
 			disabled: isSubmitting,
 			value: selectedModel,
 			mode: selectedMode,
@@ -1531,7 +1726,7 @@ export function TaskComposer({
 				showFallbackAction: task.fallbackAction !== undefined,
 				error: task.error ?? task.remoteLoadError ?? undefined,
 				status: task.status,
-				errorAction: task.errorAction,
+				errorAction: task.error ? task.errorAction : task.remoteLoadErrorAction,
 				isSubmitting: task.isSubmitting,
 				modelWarning: task.modelWarning,
 				onFallbackAction: (brief) => settle(task.launchFallback(brief)),
