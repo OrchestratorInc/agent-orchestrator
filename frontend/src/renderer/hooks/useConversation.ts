@@ -2156,6 +2156,9 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// agent's answer to that earlier pick dropped the option or this value (a new model
 		// with other efforts), sending it would only be refused, so it is dropped instead.
 		const confirmed = writes.current.confirmed;
+		if (confirmed && "value" in value && confirmed.some((option) => option.id === optionId && option.type === "select" && option.choices.length === 0)) {
+			throw new Error("Config option choices are not available yet; retry after they load.");
+		}
 		if (confirmed && !offersValue(confirmed, optionId, value)) return { controllerEpoch, options: confirmed };
 		// A read already in flight when the user picked would otherwise land
 		// after this mutation's setQueryData and put the pre-change catalog
