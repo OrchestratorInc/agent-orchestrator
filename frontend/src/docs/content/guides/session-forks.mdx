@@ -45,6 +45,7 @@ A standalone agent works in a plain folder with no git repository. Its forks wor
 
 - The fork gets its own folder instead of a new branch. Forked at the latest turn, it holds everything in the original's folder, copied with copy-on-write where the disk supports it. Forked at an older turn, it holds the files as that turn left them.
 - AO saves the folder's files before each turn in a store of its own under the data folder, so nothing is written into the folder itself. The same snapshots let **Roll back** restore a standalone agent's files.
+- Snapshots leave out files that git ignores, through a `.gitignore` in the folder or your global git ignore file. A fork of an older turn doesn't get them, and **Roll back** leaves them as they are. A fork of the latest turn copies the whole folder, ignored files included.
 - `node_modules` and `.venv` are always left out of those snapshots, whatever the folder's `.gitignore` says, as a git project ignores them. A fork of an older turn gets them cloned from the original where the disk supports copy-on-write, and starts without them elsewhere.
 - Symlinks stay links; what they point to isn't copied.
 - An older turn whose files include a git repository the agent cloned into the folder can't be forked, and once the agent makes the folder itself a repository, no older turn can. A snapshot holds a repository only as the commit it had checked out, not its files or history. The latest turn still forks with everything.
