@@ -1,6 +1,7 @@
 import { LoaderCircle, X } from "@/components/app-icons";
 import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { useRestoreFocusOnClose } from "../../hooks/useRestoreFocusOnClose";
 import { clearAgentEndpoint, setAgentEndpoint, type AgentEndpointStatus, type SetAgentEndpointRequest } from "../../hooks/useAgentEndpoint";
 import { Button } from "../ui/button";
 import {
@@ -47,6 +48,9 @@ export function AgentEndpointDialog({
 	onChanged: () => void | Promise<void>;
 }) {
 	const { t } = useTranslation();
+	// The dialog opens from a button, not a DialogTrigger, so focus goes back
+	// to that button explicitly when it closes.
+	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	const [pending, setPending] = useState<"save" | "remove" | null>(null);
 	const [baseUrl, setBaseUrl] = useState("");
 	const [apiKey, setApiKey] = useState("");
@@ -110,7 +114,7 @@ export function AgentEndpointDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-			<DialogContent className={settingsDialogContentClass} showCloseButton={false}>
+			<DialogContent className={settingsDialogContentClass} onCloseAutoFocus={restoreFocusOnClose} showCloseButton={false}>
 				<DialogClose asChild>
 					<button aria-label={t("common.close")} className="settings-dialog-close-button settings-close-button" disabled={busy} type="button">
 						<X aria-hidden="true" className="size-5" />

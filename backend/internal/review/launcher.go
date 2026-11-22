@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -164,6 +165,7 @@ type agentLauncher struct {
 	chat       ReviewerChatController
 	forceStop  forceStopHooks
 	stops      forceStopState
+	log        *slog.Logger
 }
 
 type preLaunchReviewer interface {
@@ -205,6 +207,16 @@ func WithExecutable(executable func() (string, error)) LauncherOption {
 	}
 }
 
+// WithLogger sets where the launcher reports problems it launches through,
+// such as an unreadable custom endpoint.
+func WithLogger(log *slog.Logger) LauncherOption {
+	return func(l *agentLauncher) {
+		if log != nil {
+			l.log = log
+		}
+	}
+}
+
 // WithRunFilePath pins reviewer-local AO CLI calls to this daemon's run-file.
 // This is intentionally separate from AO_DATA_DIR: the CLI discovers the live
 // daemon from AO_RUN_FILE, not from the durable data directory.
@@ -216,7 +228,7 @@ func WithRunFilePath(path string) LauncherOption {
 
 // NewLauncher builds the production reviewer launcher.
 func NewLauncher(reviewers ports.ReviewerResolver, rt reviewerRuntime, dataDir string, opts ...LauncherOption) Launcher {
-	l := &agentLauncher{reviewers: reviewers, runtime: rt, dataDir: dataDir, executable: agentlaunch.Executable}
+	l := &agentLauncher{reviewers: reviewers, runtime: rt, dataDir: dataDir, executable: agentlaunch.Executable, log: slog.Default()}
 	for _, opt := range opts {
 		opt(l)
 	}
@@ -353,6 +365,10 @@ func (l *agentLauncher) endpointEnv(spec LaunchSpec) map[string]string {
 	// endpoint, so its key never travels to a gateway it was not saved for.
 	stored, err := harnessendpoint.ForDataDir(l.dataDir).ProjectEnv(string(spec.Harness), spec.ProjectEnv, false)
 	if err != nil {
+		// As for sessions: say so, and launch on native credentials.
+		if l.log != nil {
+			l.log.Warn("custom harness endpoint unavailable; reviewer launches with native credentials", "harness", spec.Harness, "error", err)
+		}
 		stored = nil
 	}
 	env := make(map[string]string, len(stored))
