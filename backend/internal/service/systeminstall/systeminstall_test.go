@@ -813,7 +813,9 @@ func (e exitCodeError) ExitCode() int { return e.code }
 
 func TestWingetPackageNotFoundExplainsRecovery(t *testing.T) {
 	// winget exits APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND (0x8A150014)
-	// for an ID the catalog no longer has, e.g. SST.opencode since November 2026.
+	// for an ID the catalog no longer has, e.g. SST.opencode since November 2026,
+	// and also when its local source data is stale, so the message suggests
+	// refreshing the sources before installing another way.
 	// Go reports the code unsigned; PowerShell's $LASTEXITCODE shows it signed.
 	const notFound = "No package found matching input criteria.\n"
 	for _, tc := range []struct {
@@ -846,7 +848,7 @@ func TestWingetPackageNotFoundExplainsRecovery(t *testing.T) {
 				t.Fatalf("job = %+v, want failure with original diagnostics", job)
 			}
 			if tc.wantHint {
-				for _, want := range []string{"SST.opencode", "no longer in the winget catalog", "Install it another way", "Verify again", "exit status 0x8a150014"} {
+				for _, want := range []string{"SST.opencode", "winget source update", "retry", "no longer in the winget catalog", "install it another way", "Verify again", "exit status 0x8a150014"} {
 					if !strings.Contains(job.Error, want) {
 						t.Fatalf("error = %q, want %q", job.Error, want)
 					}

@@ -1501,10 +1501,11 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		if plan.Target == TargetCursor && strings.Contains(out.String(), "[unauthenticated]") {
 			message = fmt.Sprintf("Cursor's update service rejected the CLI's saved login. Log out of Cursor, update, then log in again. (%v)", runErr)
 		}
-		// A package ID the winget catalog dropped fails the same way every
-		// time; retrying cannot help, so say what to do instead.
+		// winget reports "no package found" for an ID its catalog dropped, and
+		// also when its local source data is stale. Suggest refreshing the
+		// sources first; if it still fails, the package is gone from the catalog.
 		if plan.Method == "winget" && wingetPackageNotFound(runErr) {
-			message = fmt.Sprintf("winget package %s is no longer in the winget catalog, so it cannot be installed this way. Install it another way, then choose Verify again. (%v)", plan.Package, runErr)
+			message = fmt.Sprintf("winget could not find package %s. Run `winget source update` and retry. If it still fails, the package is no longer in the winget catalog, so install it another way, then choose Verify again. (%v)", plan.Package, runErr)
 		}
 		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
