@@ -26,6 +26,7 @@ type process struct {
 	reconnected bool
 	gate        *gatedReader
 	acpState    *persistenthost.ACPState
+	hostExited  func() bool
 }
 
 type gatedReader struct {

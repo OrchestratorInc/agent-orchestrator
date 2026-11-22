@@ -155,6 +155,112 @@ func TestPersistentACPPromptDisconnectPreservesTurn(t *testing.T) {
 	}
 }
 
+func TestPersistentACPPromptFailsWhenTheHostExited(t *testing.T) {
+	const message = "the agent's process exited before this turn finished"
+	for _, tc := range []struct {
+		name       string
+		compaction bool
+	}{
+		{name: "turn"},
+		{name: "compaction", compaction: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon, host := net.Pipe()
+			defer host.Close()
+			proc := &process{
+				stdin: daemon, stdout: daemon, stop: daemon.Close,
+				terminate:  func() error { return nil },
+				hostExited: func() bool { return true },
+			}
+			conv := newConversation(proc, slog.New(slog.DiscardHandler), "", nil, nil)
+			conv.sessionID = "provider-session"
+			conv.activeTurn = "durable-turn"
+			if tc.compaction {
+				conv.compactingTurnID = conv.activeTurn
+			}
+			go conv.runTurn(context.Background(), conv.sessionID, preparedTurn{id: conv.activeTurn})
+			_ = host.SetReadDeadline(time.Now().Add(time.Second))
+			request, err := bufio.NewReader(host).ReadBytes('\n')
+			if err != nil || !strings.Contains(string(request), "session/prompt") {
+				t.Fatalf("prompt request: %s, %v", request, err)
+			}
+			_ = host.Close()
+			var completed, stopped, failure *ports.ChatEvent
+			for event := range conv.Events() {
+				switch {
+				case event.Kind == ports.ChatEventError:
+					failure = &event
+				case event.Kind == ports.ChatEventTurnCompleted:
+					if tc.compaction && failure == nil {
+						t.Fatal("compaction completion arrived before its error row")
+					}
+					completed = &event
+				case event.ControllerState == ports.ChatControllerStopped:
+					stopped = &event
+				}
+			}
+			if completed == nil || completed.ProviderTurnID != "durable-turn" || completed.TurnState != domain.TurnStateFailed ||
+				completed.Err == nil || completed.Err.Error() != message {
+				t.Fatalf("turn after the host exited: %+v", completed)
+			}
+			if stopped == nil || errors.Is(stopped.Err, ports.ErrChatRecoveryInconclusive) {
+				t.Fatalf("stop after the host exited: %+v", stopped)
+			}
+			if tc.compaction != (failure != nil) || failure != nil && (failure.ProviderTurnID != "durable-turn" || failure.Err.Error() != message) {
+				t.Fatalf("error row after the host exited: %+v", failure)
+			}
+		})
+	}
+}
+
+func TestPersistentACPHostExitKeepsAResultAlreadyReceived(t *testing.T) {
+	daemon, host := net.Pipe()
+	defer host.Close()
+	conv := newConversation(&process{
+		stdin: daemon, stdout: daemon, stop: daemon.Close,
+		terminate:  func() error { return nil },
+		hostExited: func() bool { return true },
+	}, slog.New(slog.DiscardHandler), "", nil, nil)
+	conv.sessionID = "provider-session"
+	conv.activeTurn = "durable-turn"
+	conv.turnModelID, conv.turnModel = conv.activeTurn, "selected-model"
+	settling := make(chan struct{})
+	conv.servedModel = func(context.Context, string, string) (string, string) {
+		close(settling)
+		for deadline := time.Now().Add(2 * time.Second); !conv.hostGone.Load() && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+		return "", ""
+	}
+	go conv.runTurn(context.Background(), conv.sessionID, preparedTurn{id: conv.activeTurn})
+	_ = host.SetDeadline(time.Now().Add(time.Second))
+	request, err := bufio.NewReader(host).ReadBytes('\n')
+	var prompt struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err != nil || json.Unmarshal(request, &prompt) != nil {
+		t.Fatalf("prompt request: %s, %v", request, err)
+	}
+	if _, err := fmt.Fprintf(host, `{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}`+"\n", prompt.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-settling:
+	case <-time.After(time.Second):
+		t.Fatal("the prompt result never reached settlement")
+	}
+	_ = host.Close()
+	var completions []ports.ChatEvent
+	for event := range conv.Events() {
+		if event.Kind == ports.ChatEventTurnCompleted {
+			completions = append(completions, event)
+		}
+	}
+	if len(completions) != 1 || completions[0].TurnState != domain.TurnStateCompleted || completions[0].Err != nil {
+		t.Fatalf("completions after the host exited mid-settlement: %+v", completions)
+	}
+}
+
 func TestACPDisconnectWithFullEventBufferCanClose(t *testing.T) {
 	daemon, host := net.Pipe()
 	defer host.Close()

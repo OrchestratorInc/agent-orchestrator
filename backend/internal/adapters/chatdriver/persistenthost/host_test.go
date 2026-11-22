@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"testing"
 	"time"
@@ -1004,5 +1005,18 @@ func TestReconnectOnlyNeverPreparesOrStartsMissingHost(t *testing.T) {
 	}
 	if _, err := readDescriptor(cfg.DataDir, cfg.SessionID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("health check wrote a descriptor: %v", err)
+	}
+}
+
+func TestHostExitedTellsAnEndedHostFromALiveOne(t *testing.T) {
+	ended := exec.Command(os.Args[0], "-test.run=^$")
+	if err := ended.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if !HostExited(ended.Process.Pid) {
+		t.Fatal("an ended host reported as running")
+	}
+	if HostExited(os.Getpid()) {
+		t.Fatal("a live host reported as exited")
 	}
 }
