@@ -1194,7 +1194,9 @@ func TestObserve_FetchesRemainingCheckContexts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := newFakeGH(t)
 			fx := basePRFixture()
+			var firstPR map[string]any
 			fx.prData(func(pr map[string]any) {
+				firstPR = pr
 				roll := statusRollup(pr)
 				roll["state"] = "FAILURE"
 				first := actionsCheckRun("Go", "lint", tc.first, 1)
@@ -1217,11 +1219,15 @@ func TestObserve_FetchesRemainingCheckContexts(t *testing.T) {
 			})
 			fake.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				body, _ := io.ReadAll(r.Body)
 				switch fake.callsTo(http.MethodPost, "/graphql") {
 				case 1:
+					if !strings.Contains(string(body), "pageInfo{ hasNextPage endCursor }") {
+						t.Error("initial GraphQL query does not request endCursor")
+						delete(statusContexts(firstPR)["pageInfo"].(map[string]any), "endCursor")
+					}
 					_ = json.NewEncoder(w).Encode(fx.graphql)
 				case 2:
-					body, _ := io.ReadAll(r.Body)
 					if !strings.Contains(string(body), `after:\"cursor-1\"`) && !strings.Contains(string(body), `after:"cursor-1"`) {
 						t.Fatalf("fallback query missing cursor, body=%s", body)
 					}

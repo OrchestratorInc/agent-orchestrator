@@ -283,7 +283,7 @@ const prObservationQuery = `query($owner:String!,$repo:String!,$number:Int!){
               ... on CheckRun  { ` + checkRunFields + ` }
               ... on StatusContext { context state targetUrl }
             }
-            pageInfo{ hasNextPage }
+            pageInfo{ hasNextPage endCursor }
           }
         }
       } } }
