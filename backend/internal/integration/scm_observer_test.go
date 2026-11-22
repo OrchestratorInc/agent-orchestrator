@@ -196,7 +196,7 @@ func (t *failOnceTerminator) count() int {
 	return t.calls
 }
 
-func waitForSCMSessionTermination(t *testing.T, ctx context.Context, f *scmFixture) {
+func waitForSCMSessionTermination(ctx context.Context, t *testing.T, f *scmFixture) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
 	for {
@@ -457,7 +457,7 @@ func TestSCMObserverEndToEnd(t *testing.T) {
 		if err := f.observer.Poll(ctx); err != nil {
 			t.Fatalf("Poll: %v", err)
 		}
-		waitForSCMSessionTermination(t, ctx, f)
+		waitForSCMSessionTermination(ctx, t, f)
 		if got := f.spy.count(); got != 0 {
 			t.Fatalf("merged observation must not nudge, got %d msgs: %+v", got, f.spy.snapshot())
 		}
@@ -500,7 +500,7 @@ func TestSCMObserverEndToEnd(t *testing.T) {
 			case <-time.After(5 * time.Millisecond):
 			}
 		}
-		waitForSCMSessionTermination(t, ctx, f)
+		waitForSCMSessionTermination(ctx, t, f)
 		if got := terminator.count(); got != 2 {
 			t.Fatalf("terminator calls = %d, want 2", got)
 		}
@@ -676,7 +676,7 @@ func TestSCMObserverMultiPREndToEnd(t *testing.T) {
 		if err := f.observer.Poll(ctx); err != nil {
 			t.Fatalf("Poll 3: %v", err)
 		}
-		waitForSCMSessionTermination(t, ctx, f)
+		waitForSCMSessionTermination(ctx, t, f)
 		if got := f.spy.count(); got != 0 {
 			t.Fatalf("merge-driven completion must not nudge, got %d: %+v", got, f.spy.snapshot())
 		}
