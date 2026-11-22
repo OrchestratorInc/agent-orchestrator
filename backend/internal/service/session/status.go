@@ -72,7 +72,7 @@ func clearStaleChangesRequested(prs []domain.PRFacts, runs []domain.CurrentHeadR
 		}
 		currentRequest := false
 		for _, run := range runs {
-			if run.PRURL == pr.URL && run.Verdict == domain.VerdictChangesRequested {
+			if run.PRURL == pr.URL && (run.Verdict == domain.VerdictChangesRequested || run.LastVerdictChangesRequested) {
 				currentRequest = true
 				break
 			}

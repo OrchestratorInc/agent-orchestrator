@@ -229,6 +229,17 @@ WHERE id = ? AND worker_notice = 'pending';
 -- cancelled pass, any pass with a verdict, even if a later pass superseded it,
 -- or a failure auto review must not retry (preflight_failed, cancel_unconfirmed).
 SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at,
+       CAST(COALESCE((
+           SELECT CASE WHEN settled.verdict = 'changes_requested' THEN 1 ELSE 0 END
+           FROM review_run settled
+           WHERE settled.session_id = review_run.session_id
+             AND settled.pr_url = review_run.pr_url
+             AND settled.target_sha = review_run.target_sha
+             AND settled.harness = review_run.harness
+             AND settled.verdict IN ('approved', 'changes_requested')
+           ORDER BY settled.created_at DESC, settled.id DESC
+           LIMIT 1
+       ), 0) AS INTEGER) AS last_verdict_changes_requested,
        (
            SELECT COUNT(*)
            FROM review_run failed
@@ -276,6 +287,17 @@ WITH wanted_session AS (
     FROM json_each(?) AS j
 )
 SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at,
+       CAST(COALESCE((
+           SELECT CASE WHEN settled.verdict = 'changes_requested' THEN 1 ELSE 0 END
+           FROM review_run settled
+           WHERE settled.session_id = review_run.session_id
+             AND settled.pr_url = review_run.pr_url
+             AND settled.target_sha = review_run.target_sha
+             AND settled.harness = review_run.harness
+             AND settled.verdict IN ('approved', 'changes_requested')
+           ORDER BY settled.created_at DESC, settled.id DESC
+           LIMIT 1
+       ), 0) AS INTEGER) AS last_verdict_changes_requested,
        (
            SELECT COUNT(*)
            FROM review_run failed

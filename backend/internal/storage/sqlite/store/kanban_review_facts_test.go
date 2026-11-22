@@ -100,6 +100,39 @@ func TestListCurrentHeadReviewRunsForSessionKeepsLatestRunPerHarness(t *testing.
 	}
 }
 
+func TestCurrentHeadReviewRunsKeepPostedVerdictDuringNoVerdictRerun(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	const url = "pr/rerun"
+	if err := s.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: url, SessionID: rec.ID, Number: 1, HeadSHA: "head", UpdatedAt: now, ObservedAt: now,
+	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertReview(ctx, domain.Review{ID: "rev", SessionID: rec.ID, ProjectID: "mer", Harness: "codex", PRURL: url, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range []domain.ReviewRun{
+		{ID: "posted", ReviewID: "rev", SessionID: rec.ID, Harness: "codex", PRURL: url, TargetSHA: "head", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested, CreatedAt: now},
+		{ID: "rerun", ReviewID: "rev", SessionID: rec.ID, Harness: "codex", PRURL: url, TargetSHA: "head", Status: domain.ReviewRunRunning, CreatedAt: now.Add(time.Second)},
+	} {
+		if err := s.InsertReviewRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListCurrentHeadReviewRunsForSession(ctx, rec.ID)
+	if err != nil || len(got) != 1 || got[0].ID != "rerun" || got[0].Verdict != domain.VerdictNone || !got[0].LastVerdictChangesRequested {
+		t.Fatalf("single current-head runs = %+v, err %v", got, err)
+	}
+	batch, err := s.ListCurrentHeadReviewRunsForSessions(ctx, []domain.SessionID{rec.ID})
+	if err != nil || len(batch[rec.ID]) != 1 || !batch[rec.ID][0].LastVerdictChangesRequested {
+		t.Fatalf("batch current-head runs = %+v, err %v", batch, err)
+	}
+}
+
 // The aggregate review_decision mixes AO's own provider reviews with everyone
 // else's, so the PR facts must expose the human-only verdicts separately. AO's
 // review is matched by the review id it recorded when it posted.

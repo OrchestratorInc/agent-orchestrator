@@ -79,12 +79,18 @@ func canonicalizeCurrentHeadReviewRuns(prs []domain.PRFacts, runs []domain.Curre
 
 	out := make([]domain.CurrentHeadReviewRun, 0, len(runs))
 	byCanonicalAndHarness := make(map[string]int, len(runs))
+	lastVerdict := make(map[string]domain.CurrentHeadReviewRun, len(runs))
 	for _, run := range runs {
 		normalized := run
 		if canonicalURL, ok := canonicalByURL[run.PRURL]; ok {
 			normalized.PRURL = canonicalURL
 		}
 		key := normalized.PRURL + "\x00" + string(normalized.Harness)
+		if normalized.Verdict != domain.VerdictNone {
+			if prior, ok := lastVerdict[key]; !ok || currentHeadRunOutranks(normalized, prior) {
+				lastVerdict[key] = normalized
+			}
+		}
 		if idx, ok := byCanonicalAndHarness[key]; ok {
 			if currentHeadRunOutranks(normalized, out[idx]) {
 				out[idx] = normalized
@@ -93,6 +99,11 @@ func canonicalizeCurrentHeadReviewRuns(prs []domain.PRFacts, runs []domain.Curre
 		}
 		byCanonicalAndHarness[key] = len(out)
 		out = append(out, normalized)
+	}
+	for key, idx := range byCanonicalAndHarness {
+		if out[idx].Verdict == domain.VerdictNone && !out[idx].LastVerdictChangesRequested {
+			out[idx].LastVerdictChangesRequested = lastVerdict[key].Verdict == domain.VerdictChangesRequested
+		}
 	}
 	return out
 }

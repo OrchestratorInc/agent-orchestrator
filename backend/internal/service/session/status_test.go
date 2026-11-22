@@ -14,10 +14,10 @@ func TestChangesRequestedPushReviewAndRestart(t *testing.T) {
 	rec := statusRec(domain.ActivityIdle, false)
 	rec.ID, rec.ProjectID = id, "mer"
 	st.sessions[id] = rec
-	pr := domain.PRFacts{URL: url, HeadSHA: "old-head", Review: domain.ReviewChangesRequest, ExternalChangesRequested: true}
+	pr := domain.PRFacts{URL: url, Number: 1, HeadSHA: "old-head", Review: domain.ReviewChangesRequest, ExternalChangesRequested: true, UpdatedAt: statusNow}
 	st.prFacts[id] = []domain.PRFacts{pr}
 
-	read := func(wantReview domain.ReviewDecision, wantStatus domain.SessionStatus, wantDisplay string) {
+	read := func(wantReview domain.ReviewDecision, wantStatus domain.SessionStatus, wantColumn, wantDisplay string) {
 		t.Helper()
 		// A fresh service models daemon restart: only durable store facts survive.
 		svc := &Service{store: st, clock: func() time.Time { return statusNow }}
@@ -35,13 +35,13 @@ func TestChangesRequestedPushReviewAndRestart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(sess.PRs) != 1 || sess.PRs[0].Review != wantReview || sess.SCMStatus != wantStatus || string(sess.DisplayStatus) != wantDisplay || sess.KanbanColumn != "needs_review" {
-				t.Fatalf("session after read = review %+v, scm %q, column %q, display %q; want review %q, scm %q, in review/%q", sess.PRs, sess.SCMStatus, sess.KanbanColumn, sess.DisplayStatus, wantReview, wantStatus, wantDisplay)
+			if len(sess.PRs) != 1 || sess.PRs[0].Review != wantReview || sess.SCMStatus != wantStatus || string(sess.DisplayStatus) != wantDisplay || string(sess.KanbanColumn) != wantColumn {
+				t.Fatalf("session after read = review %+v, scm %q, column %q, display %q; want review %q, scm %q, column %q/display %q", sess.PRs, sess.SCMStatus, sess.KanbanColumn, sess.DisplayStatus, wantReview, wantStatus, wantColumn, wantDisplay)
 			}
 		}
 	}
 
-	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "Changes requested")
+	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "needs_review", "Changes requested")
 	active := rec
 	active.Activity.State = domain.ActivityActive
 	st.sessions[id] = active
@@ -53,14 +53,19 @@ func TestChangesRequestedPushReviewAndRestart(t *testing.T) {
 	// GitHub retains its aggregate verdict, while the review row targeted the old head.
 	pr.HeadSHA, pr.ExternalChangesRequested = "new-head", false
 	st.prFacts[id] = []domain.PRFacts{pr}
-	read(domain.ReviewRequired, domain.StatusReviewPending, "Awaiting review")
+	read(domain.ReviewRequired, domain.StatusReviewPending, "needs_review", "Awaiting review")
+	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{{PRURL: url, Verdict: domain.VerdictChangesRequested}}
+	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "validating", "Changes requested")
+	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{{PRURL: url + "-other", Verdict: domain.VerdictChangesRequested}}
+	read(domain.ReviewRequired, domain.StatusReviewPending, "needs_review", "Awaiting review")
+	delete(st.reviewRuns, id)
 	if st.prFacts[id][0].Review != domain.ReviewChangesRequest {
 		t.Fatal("read changed durable provider decision")
 	}
 	// A current-head request and then approval each replace the awaiting state.
 	pr.ExternalChangesRequested = true
 	st.prFacts[id] = []domain.PRFacts{pr}
-	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "Changes requested")
+	read(domain.ReviewChangesRequest, domain.StatusChangesRequested, "needs_review", "Changes requested")
 	pr.Review, pr.ExternalChangesRequested = domain.ReviewApproved, false
 	st.prFacts[id] = []domain.PRFacts{pr}
 	approved, err := (&Service{store: st, clock: func() time.Time { return statusNow }}).Get(context.Background(), id)
@@ -73,6 +78,53 @@ func TestChangesRequestedPushReviewAndRestart(t *testing.T) {
 	unknownHead, err := (&Service{store: st, clock: func() time.Time { return statusNow }}).Get(context.Background(), id)
 	if err != nil || unknownHead.PRs[0].Review != domain.ReviewChangesRequest {
 		t.Fatalf("unknown-head decision = %+v, err %v", unknownHead.PRs, err)
+	}
+}
+
+func TestTerminatedSessionGetKeepsCurrentHeadReviewDecision(t *testing.T) {
+	const id, url = domain.SessionID("mer-terminated"), "pr/terminated"
+	st := newFakeStore()
+	rec := statusRec(domain.ActivityExited, true)
+	rec.ID, rec.ProjectID = id, "mer"
+	st.sessions[id] = rec
+	st.prFacts[id] = []domain.PRFacts{{URL: url, HeadSHA: "head", Review: domain.ReviewChangesRequest}}
+	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{{PRURL: url, Verdict: domain.VerdictChangesRequested}}
+	svc := &Service{store: st, clock: func() time.Time { return statusNow }}
+	got, err := svc.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.List(context.Background(), ListFilter{})
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list = %+v, err %v", listed, err)
+	}
+	if got.PRs[0].Review != domain.ReviewChangesRequest || listed[0].PRs[0].Review != domain.ReviewChangesRequest {
+		t.Fatalf("Get review = %q, List review = %q; want current-head changes requested", got.PRs[0].Review, listed[0].PRs[0].Review)
+	}
+}
+
+func TestLaterSameHeadRunWithoutVerdictKeepsPostedChangesRequest(t *testing.T) {
+	const id, url = domain.SessionID("mer-rerun"), "pr/rerun"
+	st := newFakeStore()
+	rec := statusRec(domain.ActivityIdle, false)
+	rec.ID, rec.ProjectID = id, "mer"
+	st.sessions[id] = rec
+	st.prFacts[id] = []domain.PRFacts{{URL: url, HeadSHA: "head", Review: domain.ReviewChangesRequest}}
+	st.reviewRuns[id] = []domain.CurrentHeadReviewRun{
+		{ID: "posted", PRURL: url, Harness: "codex", Verdict: domain.VerdictChangesRequested, CreatedAt: statusNow},
+		{ID: "rerun", PRURL: url, Harness: "codex", Status: domain.ReviewRunRunning, CreatedAt: statusNow.Add(time.Minute)},
+	}
+	svc := &Service{store: st, clock: func() time.Time { return statusNow.Add(2 * time.Minute) }}
+	got, err := svc.Get(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.List(context.Background(), ListFilter{})
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list = %+v, err %v", listed, err)
+	}
+	if got.PRs[0].Review != domain.ReviewChangesRequest || listed[0].PRs[0].Review != domain.ReviewChangesRequest {
+		t.Fatalf("Get review = %q, List review = %q; want posted current-head changes request", got.PRs[0].Review, listed[0].PRs[0].Review)
 	}
 }
 

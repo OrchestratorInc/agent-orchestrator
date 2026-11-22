@@ -161,6 +161,8 @@ func prKanbanColumnOnItsOwn(session KanbanSessionFacts, pr KanbanPRFacts) Kanban
 		return KanbanReady
 	case pr.Draft:
 		return KanbanValidating
+	case pr.ExternalReview.ChangesRequested:
+		return KanbanNeedsReview
 	case externallyApproved(pr) && !mergeBlockedByPR(pr):
 		return KanbanReady
 	case aoOwnsNextStep(session, pr):

@@ -578,6 +578,17 @@ func (q *Queries) ListActiveReviewRunsBySession(ctx context.Context, sessionID d
 
 const listCurrentHeadReviewRunsBySession = `-- name: ListCurrentHeadReviewRunsBySession :many
 SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at,
+       CAST(COALESCE((
+           SELECT CASE WHEN settled.verdict = 'changes_requested' THEN 1 ELSE 0 END
+           FROM review_run settled
+           WHERE settled.session_id = review_run.session_id
+             AND settled.pr_url = review_run.pr_url
+             AND settled.target_sha = review_run.target_sha
+             AND settled.harness = review_run.harness
+             AND settled.verdict IN ('approved', 'changes_requested')
+           ORDER BY settled.created_at DESC, settled.id DESC
+           LIMIT 1
+       ), 0) AS INTEGER) AS last_verdict_changes_requested,
        (
            SELECT COUNT(*)
            FROM review_run failed
@@ -618,14 +629,15 @@ WHERE review_run.session_id = ?
 `
 
 type ListCurrentHeadReviewRunsBySessionRow struct {
-	ID               string
-	Harness          domain.ReviewerHarness
-	PRURL            string
-	Status           domain.ReviewRunStatus
-	Verdict          domain.ReviewVerdict
-	CreatedAt        time.Time
-	FailedAutoRuns   int64
-	AutoRetryBlocked int64
+	ID                          string
+	Harness                     domain.ReviewerHarness
+	PRURL                       string
+	Status                      domain.ReviewRunStatus
+	Verdict                     domain.ReviewVerdict
+	CreatedAt                   time.Time
+	LastVerdictChangesRequested int64
+	FailedAutoRuns              int64
+	AutoRetryBlocked            int64
 }
 
 // AO review passes recorded against each PR's CURRENT head commit. Passes for
@@ -653,6 +665,7 @@ func (q *Queries) ListCurrentHeadReviewRunsBySession(ctx context.Context, sessio
 			&i.Status,
 			&i.Verdict,
 			&i.CreatedAt,
+			&i.LastVerdictChangesRequested,
 			&i.FailedAutoRuns,
 			&i.AutoRetryBlocked,
 		); err != nil {
@@ -675,6 +688,17 @@ WITH wanted_session AS (
     FROM json_each(?) AS j
 )
 SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at,
+       CAST(COALESCE((
+           SELECT CASE WHEN settled.verdict = 'changes_requested' THEN 1 ELSE 0 END
+           FROM review_run settled
+           WHERE settled.session_id = review_run.session_id
+             AND settled.pr_url = review_run.pr_url
+             AND settled.target_sha = review_run.target_sha
+             AND settled.harness = review_run.harness
+             AND settled.verdict IN ('approved', 'changes_requested')
+           ORDER BY settled.created_at DESC, settled.id DESC
+           LIMIT 1
+       ), 0) AS INTEGER) AS last_verdict_changes_requested,
        (
            SELECT COUNT(*)
            FROM review_run failed
@@ -715,15 +739,16 @@ WHERE pr.head_sha != ''
 `
 
 type ListCurrentHeadReviewRunsBySessionsRow struct {
-	SessionID        domain.SessionID
-	ID               string
-	Harness          domain.ReviewerHarness
-	PRURL            string
-	Status           domain.ReviewRunStatus
-	Verdict          domain.ReviewVerdict
-	CreatedAt        time.Time
-	FailedAutoRuns   int64
-	AutoRetryBlocked int64
+	SessionID                   domain.SessionID
+	ID                          string
+	Harness                     domain.ReviewerHarness
+	PRURL                       string
+	Status                      domain.ReviewRunStatus
+	Verdict                     domain.ReviewVerdict
+	CreatedAt                   time.Time
+	LastVerdictChangesRequested int64
+	FailedAutoRuns              int64
+	AutoRetryBlocked            int64
 }
 
 // Batch form of ListCurrentHeadReviewRunsBySession for session-list reads.
@@ -746,6 +771,7 @@ func (q *Queries) ListCurrentHeadReviewRunsBySessions(ctx context.Context, jsonE
 			&i.Status,
 			&i.Verdict,
 			&i.CreatedAt,
+			&i.LastVerdictChangesRequested,
 			&i.FailedAutoRuns,
 			&i.AutoRetryBlocked,
 		); err != nil {

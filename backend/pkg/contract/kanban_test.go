@@ -826,6 +826,25 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			want:       contract.DisplayChangesRequested,
 		},
 		{
+			name:    "external changes request stays in review despite auto review",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Review: contract.ReviewChangesRequest,
+				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
+			name: "external changes request stays in review despite mergeable snapshot",
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Review: contract.ReviewChangesRequest, Mergeability: contract.MergeMergeable,
+				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
 			name: "an external changes request with auto-inject on and worker active stays in review while being addressed",
 			session: contract.KanbanSessionFacts{
 				SessionFacts:     contract.SessionFacts{Activity: contract.ActivityActive},
