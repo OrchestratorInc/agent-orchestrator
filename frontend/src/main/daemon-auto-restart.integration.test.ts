@@ -76,6 +76,8 @@ function setup(platform: "linux" | "win32" = "linux") {
 	const inspect = vi.fn(async (_launch?: unknown, _probe?: DaemonProber): Promise<unknown> => null);
 	const direct = vi.fn(async (_deps?: { expectedPort: number; probe: DaemonProber; identityError: (probe: DaemonProbe) => string | null }): Promise<unknown> => null);
 	const probe = vi.fn(async (_port: number, _endpoint: "healthz" | "readyz", _onTimeout?: () => void): Promise<DaemonProbe | null> => null);
+	const readProcessStartMs = vi.fn(async (_pid: number): Promise<number | null> => null);
+	const kill = vi.fn();
 	const stage = vi.fn(async (): Promise<void> => undefined);
 	const supervisorDisposed = vi.fn();
 	const establishSupervisorLink = vi.fn();
@@ -89,7 +91,7 @@ function setup(platform: "linux" | "win32" = "linux") {
 		lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj,
 		console, Date, setTimeout, clearTimeout, setInterval, clearInterval, Buffer, path,
 		openSync, closeSync: vi.fn(),
-		process: { env, platform, resourcesPath: "/owned/lab", kill: vi.fn() },
+		process: { env, platform, resourcesPath: "/owned/lab", kill },
 		os: { homedir: () => "/owned/home" }, app, ipcMain: { handle: (name: string, handler: () => unknown) => ipc.set(name, handler) },
 		browserQuitRequested: false, daemonOutput: "", supervisorLink: { dispose: supervisorDisposed }, appRunId: "test-app",
 		browserRuntimeRecoveryDecision, browserRuntimeRecoveryAttempted: false,
@@ -101,7 +103,7 @@ function setup(platform: "linux" | "win32" = "linux") {
 		shouldLinkOnAttach: () => false, establishSupervisorLink, resolveDaemonFromPort: direct,
 		resolvedDaemonPort: () => 3001, readDaemonProbe: probe, daemonIdentityError: () => null,
 		runFilePath: () => "/owned/running.json", parseRunFile, readFile: read, rm: unlink,
-		portHolderPidToReplace, readProcessStartMs: async () => null, processAlive: () => false,
+		portHolderPidToReplace, readProcessStartMs, processAlive: () => false,
 		existsSync: () => true, ensureBundledTmuxStaged: stage, keepDaemonAlive,
 		waitForFile: async () => true, BUNDLED_DAEMON_WAIT_MS: 10_000, bundledDaemonMissingMessage, daemonExitReason,
 		childStdioDrained, DAEMON_EXIT_DRAIN_MS: 250,
@@ -115,7 +117,7 @@ function setup(platform: "linux" | "win32" = "linux") {
 	});
 	vm.runInContext(`${controller}\nfunction setDaemonStatus(status) { daemonStatus = status; }`, context);
 	return {
-		read, unlink, spawn, children, replace, lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj, openSync, inspect, direct, probe, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
+		read, unlink, spawn, children, replace, lifecycleLog, planDaemonSpawnIsolation, applyDaemonOomScoreAdj, openSync, inspect, direct, probe, readProcessStartMs, kill, stage, supervisorDisposed, establishSupervisorLink, daemonEnv, env,
 		setShellEnvReady(promise: Promise<void>) { shellEnvReady = promise; },
 		setMarker(value: string | Error) { marker = value; },
 		start: () => ipc.get("daemon:start")!(), stop: () => ipc.get("daemon:stop")!(), restart: () => ipc.get("daemon:restart")!(),
@@ -272,7 +274,8 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 
 	it("spawns when a stale run-file port times out but the expected port is free", async () => {
 		const h = setup("win32");
-		h.setMarker(JSON.stringify({ pid: 42, port: 4000, owner: "app", appRunId: "previous-app" }));
+		h.setMarker(JSON.stringify({ pid: 42, port: 4000, startedAt: "2023-11-14T22:13:20.000Z", owner: "app", appRunId: "previous-app" }));
+		h.readProcessStartMs.mockResolvedValue(1_699_999_992_000);
 		h.inspect.mockImplementation(async (_launch, probe) => {
 			await probe!(4000, "healthz");
 			return null;
@@ -285,6 +288,8 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		await vi.advanceTimersByTimeAsync(2_000);
 		await starting;
+		expect(h.kill).not.toHaveBeenCalled();
+		expect(h.readProcessStartMs).not.toHaveBeenCalled();
 		expect(h.probe.mock.calls.map(([port]) => port)).toEqual([4000, 3001, 3001]);
 		expect(h.replace).not.toHaveBeenCalled();
 		expect(h.spawn).toHaveBeenCalledOnce();

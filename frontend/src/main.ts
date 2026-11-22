@@ -2581,7 +2581,8 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	// the port is not replaced (out of scope). When no holder is identified, skip
 	// straight to spawn (the new daemon overwrites a stale run-file itself); a live
 	// process that is left alone is logged below.
-	const orphanProbe = await startupProbe(resolvedDaemonPort(), "healthz");
+	const configuredPort = resolvedDaemonPort();
+	const orphanProbe = await startupProbe(configuredPort, "healthz");
 	if (startCancelled()) return daemonStatus;
 	if (!orphanProbe && reportTimedOutProbe()) return daemonStatus;
 	const runFilePath_ = runFilePath();
@@ -2594,11 +2595,15 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		}
 	}
 	if (startCancelled() || (autoRestartIntent && orphanProbe)) return daemonStatus;
-	const holder = autoRestartIntent ? { pid: null, reason: "automatic recovery never signals a port holder" } : await portHolderPidToReplace({
-		probe: orphanProbe,
-		runFile,
-		processStartMs: readProcessStartMs,
-	});
+	const holder = autoRestartIntent
+		? { pid: null, reason: "automatic recovery never signals a port holder" }
+		: !orphanProbe && runFile && runFile.port !== configuredPort
+			? { pid: null, reason: `running.json names port ${runFile.port}, not configured port ${configuredPort}` }
+			: await portHolderPidToReplace({
+				probe: orphanProbe,
+				runFile,
+				processStartMs: readProcessStartMs,
+			});
 	// Declining to signal is otherwise silent, so say why a live process named by
 	// running.json is left alone (a hung daemon that is not replaced shows up here).
 	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
