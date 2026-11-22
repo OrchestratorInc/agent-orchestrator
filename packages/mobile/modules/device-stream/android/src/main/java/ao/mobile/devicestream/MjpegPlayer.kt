@@ -30,7 +30,13 @@ class MjpegPlayer(
   private var reader: Thread? = null
   private var decoder: Thread? = null
 
-  @Volatile private var running = false
+  /**
+   * The live connection's number. Each start takes a new one and stop moves
+   * past it, so a reader or decoder left over from an earlier connection sees
+   * it is no longer current and exits, instead of ending or racing the new one
+   * (a shared "running" flag let a cancelled reader stop its replacement).
+   */
+  @Volatile private var generation = 0L
   private val statsLock = Any()
   private var statsBytes = 0L
   private var statsFrames = 0
@@ -41,33 +47,35 @@ class MjpegPlayer(
 
   fun start(url: String, headers: Map<String, String>) {
     stop()
-    running = true
+    val gen = synchronized(lock) { ++generation }
     val request = Request.Builder().url(url).apply { headers.forEach { (name, value) -> addHeader(name, value) } }.build()
     val live = client.newCall(request)
     call = live
-    reader = Thread({ read(live) }, "device-mjpeg-read").also { it.isDaemon = true; it.start() }
-    decoder = Thread({ decode() }, "device-mjpeg-decode").also { it.isDaemon = true; it.start() }
+    reader = Thread({ read(live, gen) }, "device-mjpeg-read").also { it.isDaemon = true; it.start() }
+    decoder = Thread({ decode(gen) }, "device-mjpeg-decode").also { it.isDaemon = true; it.start() }
   }
 
   fun stop() {
-    running = false
-    call?.cancel()
-    call = null
     synchronized(lock) {
+      generation++
       latest = null
       lock.notifyAll()
     }
+    call?.cancel()
+    call = null
     reader = null
     decoder = null
   }
 
-  private fun read(live: Call) {
+  private fun current(gen: Long) = generation == gen
+
+  private fun read(live: Call, gen: Long) {
     try {
       live.execute().use { response ->
         if (!response.isSuccessful) throw IOException("stream ${response.code}")
         val source = response.body?.source() ?: throw IOException("empty stream")
         var previous: ByteArray? = null
-        while (running) {
+        while (current(gen)) {
           val line = source.readUtf8LineStrict()
           if (!line.startsWith("--")) continue
           var length = -1
@@ -89,6 +97,7 @@ class MjpegPlayer(
           if (previous != null && previous.contentEquals(bytes)) continue
           previous = bytes
           synchronized(lock) {
+            if (generation != gen) return
             latest = bytes // an unshown older frame is simply replaced
             lock.notifyAll()
           }
@@ -97,10 +106,17 @@ class MjpegPlayer(
     } catch (_: Exception) {
       // Closed by stop() or lost: either way the view decides what happens next.
     } finally {
-      if (running) {
-        running = false
-        onEnded()
+      // Only the live connection's end is news; a replaced one just stops.
+      val ended = synchronized(lock) {
+        if (generation == gen) {
+          generation++
+          lock.notifyAll()
+          true
+        } else {
+          false
+        }
       }
+      if (ended) onEnded()
     }
   }
 
@@ -125,12 +141,13 @@ class MjpegPlayer(
     stats
   }
 
-  private fun decode() {
+  private fun decode(gen: Long) {
     var reusable: Bitmap? = null
     var first = true
-    while (running) {
+    while (current(gen)) {
       val data = synchronized(lock) {
-        while (latest == null && running) lock.wait()
+        while (latest == null && generation == gen) lock.wait()
+        if (generation != gen) return
         val taken = latest
         latest = null
         taken
@@ -151,6 +168,7 @@ class MjpegPlayer(
         height = bitmap.height
         onSize(width, height)
       }
+      if (!current(gen)) return
       draw(bitmap)
       if (first) {
         first = false
