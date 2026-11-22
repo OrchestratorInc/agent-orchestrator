@@ -1200,18 +1200,6 @@ type StartPreviewServerRequest struct {
 	Configuration string `json:"configuration,omitempty" description:"Named preview configuration. Optional when exactly one configuration exists."`
 }
 
-// SessionServer is a TCP port one of a session's processes listens on.
-type SessionServer struct {
-	Port    int    `json:"port"`
-	PID     int    `json:"pid"`
-	Command string `json:"command"`
-}
-
-// SessionServersResponse lists the ports a session's processes listen on.
-type SessionServersResponse struct {
-	Servers []SessionServer `json:"servers"`
-}
-
 // PreviewServerStatusResponse reports the deterministic server AO owns for one
 // session. Logs are bounded to the latest lines and never contain global
 // process or port discovery.

@@ -5450,14 +5450,7 @@
 	"backgroundTasks.shells_many": "{{count}} shells sont toujours en cours",
 	"backgroundTasks.agents_many": "{{count}} agents en arrière-plan en cours",
 	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours",
-	"sessionServers.title": "Serveurs",
-	"sessionServers.open": "Ouvrir le port {{port}} dans le navigateur",
-	"sessionServers.forward": "Rediriger",
-	"sessionServers.forwardLabel": "Rediriger le port {{port}} vers cet ordinateur",
-	"sessionServers.forwardedTitle": "Redirigé vers cet ordinateur",
-	"sessionServers.stop": "Arrêter",
-	"sessionServers.stopLabel": "Arrêter la redirection du port {{port}}",
-	"sessionServers.forwardFailed": "Impossible de rediriger le port",
+	"remote.forwardFailed": "Impossible de rediriger le port",
 	"remote.shareLocalhost": "Partager localhost",
 	"remote.shareLocalhostDescription": "Vos autres appareils peuvent ouvrir les serveurs de cet ordinateur et rediriger ses ports."
 }

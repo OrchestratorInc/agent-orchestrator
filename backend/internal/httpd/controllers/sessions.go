@@ -38,7 +38,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
@@ -233,7 +232,6 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/preview", c.setPreview)
 	r.Delete("/sessions/{sessionId}/preview", c.clearPreview)
 	r.Get("/sessions/{sessionId}/preview/server", c.previewServerStatus)
-	r.Get("/sessions/{sessionId}/servers", c.servers)
 	r.Post("/sessions/{sessionId}/preview/server", c.startPreviewServer)
 	r.Delete("/sessions/{sessionId}/preview/server", c.stopPreviewServer)
 	r.Get("/sessions/{sessionId}/preview/files/*", c.previewFile)
@@ -1807,28 +1805,6 @@ func (c *SessionsController) previewServerStatus(w http.ResponseWriter, r *http.
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, previewServerStatusResponse(c.PreviewServer.Status(sessionID(r))))
-}
-
-func (c *SessionsController) servers(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/sessions/{sessionId}/servers")
-		return
-	}
-	if _, err := c.Svc.Get(r.Context(), sessionID(r)); err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	self, _ := os.Executable()
-	listeners, err := aoprocess.ListenersWithEnv(r.Context(), sessionmanager.EnvSessionID, string(sessionID(r)), self)
-	if err != nil {
-		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "SESSION_SERVERS", err.Error(), nil)
-		return
-	}
-	res := SessionServersResponse{Servers: make([]SessionServer, 0, len(listeners))}
-	for _, l := range listeners {
-		res.Servers = append(res.Servers, SessionServer{Port: l.Port, PID: l.PID, Command: l.Command})
-	}
-	envelope.WriteJSON(w, http.StatusOK, res)
 }
 
 func (c *SessionsController) startPreviewServer(w http.ResponseWriter, r *http.Request) {

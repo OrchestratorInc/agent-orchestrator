@@ -5450,14 +5450,7 @@
 	"backgroundTasks.shells_many": "{{count}} shells ainda em execução",
 	"backgroundTasks.agents_many": "{{count}} agentes em segundo plano em execução",
 	"backgroundTasks.tasks_many": "{{count}} tarefas em segundo plano em execução",
-	"sessionServers.title": "Servidores",
-	"sessionServers.open": "Abrir a porta {{port}} no navegador",
-	"sessionServers.forward": "Encaminhar",
-	"sessionServers.forwardLabel": "Encaminhar a porta {{port}} para este computador",
-	"sessionServers.forwardedTitle": "Encaminhada para este computador",
-	"sessionServers.stop": "Parar",
-	"sessionServers.stopLabel": "Parar de encaminhar a porta {{port}}",
-	"sessionServers.forwardFailed": "Não foi possível encaminhar a porta",
+	"remote.forwardFailed": "Não foi possível encaminhar a porta",
 	"remote.shareLocalhost": "Compartilhar localhost",
 	"remote.shareLocalhostDescription": "Seus outros dispositivos podem abrir os servidores deste computador e encaminhar as portas dele."
 }

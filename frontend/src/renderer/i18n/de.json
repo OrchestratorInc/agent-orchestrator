@@ -5298,14 +5298,7 @@
 	"backgroundTasks.state.running": "Läuft",
 	"backgroundTasks.state.paused": "Pausiert",
 	"backgroundTasks.state.failed": "Fehlgeschlagen",
-	"sessionServers.title": "Server",
-	"sessionServers.open": "Port {{port}} im Browser öffnen",
-	"sessionServers.forward": "Weiterleiten",
-	"sessionServers.forwardLabel": "Port {{port}} an diesen Computer weiterleiten",
-	"sessionServers.forwardedTitle": "An diesen Computer weitergeleitet",
-	"sessionServers.stop": "Stoppen",
-	"sessionServers.stopLabel": "Weiterleitung von Port {{port}} stoppen",
-	"sessionServers.forwardFailed": "Port konnte nicht weitergeleitet werden",
+	"remote.forwardFailed": "Port konnte nicht weitergeleitet werden",
 	"remote.shareLocalhost": "localhost freigeben",
 	"remote.shareLocalhostDescription": "Deine anderen Geräte können Server auf diesem Computer öffnen und seine Ports weiterleiten."
 }

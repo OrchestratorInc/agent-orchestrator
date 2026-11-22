@@ -488,9 +488,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
 					loopbackReach: async () => "off" as const,
-					portForwards: async () => [],
-					forwardPort: async () => { throw new Error("remote hosts need the desktop app"); },
-					stopPortForward: async () => undefined,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -1499,9 +1496,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
 					loopbackReach: async () => "off" as const,
-					portForwards: async () => [],
-					forwardPort: async () => { throw new Error("remote hosts need the desktop app"); },
-					stopPortForward: async () => undefined,
 				},
 				cloud: {
 					getSession: async () => null,

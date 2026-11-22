@@ -5278,14 +5278,7 @@
 	"shell.deleteCloudProjectLead": "Bu işlem {{name}} projesini kalıcı olarak silecek",
 	"shell.deleteCloudProjectConfirm": "Kalıcı olarak sil",
 	"shell.cloudProjectDeleted": "{{name}} silindi",
-	"sessionServers.title": "Sunucular",
-	"sessionServers.open": "{{port}} bağlantı noktasını Tarayıcı'da aç",
-	"sessionServers.forward": "Yönlendir",
-	"sessionServers.forwardLabel": "{{port}} bağlantı noktasını bu bilgisayara yönlendir",
-	"sessionServers.forwardedTitle": "Bu bilgisayara yönlendirildi",
-	"sessionServers.stop": "Durdur",
-	"sessionServers.stopLabel": "{{port}} bağlantı noktasının yönlendirmesini durdur",
-	"sessionServers.forwardFailed": "Bağlantı noktası yönlendirilemedi",
+	"remote.forwardFailed": "Bağlantı noktası yönlendirilemedi",
 	"remote.shareLocalhost": "localhost'u paylaş",
 	"remote.shareLocalhostDescription": "Diğer cihazlarınız bu bilgisayardaki sunucuları açabilir ve bağlantı noktalarını yönlendirebilir."
 }

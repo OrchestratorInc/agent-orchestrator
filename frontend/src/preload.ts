@@ -36,7 +36,7 @@ import type { DictationEvent } from "./shared/dictation";
 import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
-import type { LoopbackReach, PortForward } from "./main/loopback-tunnel";
+import type { LoopbackReach } from "./main/loopback-tunnel";
 import type { RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
@@ -1034,9 +1034,6 @@ const api = {
 		externalUrl: (hostId: string, url: string) =>
 			ipcRenderer.invoke("remotes:externalUrl", hostId, url) as Promise<string>,
 		loopbackReach: (hostId: string) => ipcRenderer.invoke("remotes:loopbackReach", hostId) as Promise<LoopbackReach>,
-		portForwards: () => ipcRenderer.invoke("remotes:portForwards") as Promise<PortForward[]>,
-		forwardPort: (hostId: string, port: number) => ipcRenderer.invoke("remotes:forwardPort", hostId, port) as Promise<PortForward>,
-		stopPortForward: (hostId: string, port: number) => ipcRenderer.invoke("remotes:stopPortForward", hostId, port) as Promise<void>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

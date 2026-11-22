@@ -5280,14 +5280,7 @@
 	"backgroundTasks.state.running": "运行中",
 	"backgroundTasks.state.paused": "已暂停",
 	"backgroundTasks.state.failed": "失败",
-	"sessionServers.title": "服务器",
-	"sessionServers.open": "在浏览器中打开端口 {{port}}",
-	"sessionServers.forward": "转发",
-	"sessionServers.forwardLabel": "将端口 {{port}} 转发到这台电脑",
-	"sessionServers.forwardedTitle": "已转发到这台电脑",
-	"sessionServers.stop": "停止",
-	"sessionServers.stopLabel": "停止转发端口 {{port}}",
-	"sessionServers.forwardFailed": "无法转发端口",
+	"remote.forwardFailed": "无法转发端口",
 	"remote.shareLocalhost": "共享 localhost",
 	"remote.shareLocalhostDescription": "你的其他设备可以打开这台电脑上的服务器并转发其端口。"
 }

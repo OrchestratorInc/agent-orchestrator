@@ -5298,14 +5298,7 @@
 	"backgroundTasks.state.running": "실행 중",
 	"backgroundTasks.state.paused": "일시 중지됨",
 	"backgroundTasks.state.failed": "실패",
-	"sessionServers.title": "서버",
-	"sessionServers.open": "브라우저에서 포트 {{port}} 열기",
-	"sessionServers.forward": "전달",
-	"sessionServers.forwardLabel": "포트 {{port}}을(를) 이 컴퓨터로 전달",
-	"sessionServers.forwardedTitle": "이 컴퓨터로 전달됨",
-	"sessionServers.stop": "중지",
-	"sessionServers.stopLabel": "포트 {{port}} 전달 중지",
-	"sessionServers.forwardFailed": "포트를 전달하지 못했습니다",
+	"remote.forwardFailed": "포트를 전달하지 못했습니다",
 	"remote.shareLocalhost": "localhost 공유",
 	"remote.shareLocalhostDescription": "다른 기기에서 이 컴퓨터의 서버를 열고 포트를 전달할 수 있습니다."
 }

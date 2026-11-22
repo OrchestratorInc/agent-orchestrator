@@ -537,7 +537,7 @@ function InlineLinkFavicon({ href }: { href: string }) {
 
 const hostExternalUrl = (hostId: string, url: string): Promise<string | undefined> =>
 	aoBridge.remotes.externalUrl(hostId, url).catch((error: unknown) => {
-		useUiStore.getState().showGlobalToast(appI18n.t("sessionServers.forwardFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
+		useUiStore.getState().showGlobalToast(appI18n.t("remote.forwardFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
 		return undefined;
 	});
 

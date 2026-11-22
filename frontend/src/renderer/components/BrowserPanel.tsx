@@ -898,7 +898,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const openCurrentPageExternally = async () => {
 		if (!isWebLink(navState.url) || agentPageOnHost) return;
 		const url = await externalURL(navState.url).catch((error: unknown) => {
-			showGlobalToast(t("sessionServers.forwardFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
+			showGlobalToast(t("remote.forwardFailed"), editorHandoffErrorMessage(error) ?? undefined, "error");
 		});
 		if (url) await openLinkInSystemBrowser(url);
 	};
