@@ -549,6 +549,26 @@ func TestBootRollsBackASimulatorWhoseStreamDidNotStart(t *testing.T) {
 	}
 }
 
+// A write that ends inside the port number waits for the rest of it.
+func TestPortWatcherWaitsForTheWholePort(t *testing.T) {
+	w := newPortWatcher()
+	_, _ = w.Write([]byte("  Local:   http://localhost:5"))
+	select {
+	case port := <-w.port:
+		t.Fatalf("published port %d before the number ended", port)
+	default:
+	}
+	_, _ = w.Write([]byte("1234\n"))
+	select {
+	case port := <-w.port:
+		if port != 51234 {
+			t.Fatalf("port = %d, want 51234", port)
+		}
+	default:
+		t.Fatal("no port once the number ended")
+	}
+}
+
 // A hub exit while a restart is running is not dropped: it is queued.
 func TestHubExitDuringARestartIsQueued(t *testing.T) {
 	p := New(Config{DataDir: t.TempDir()})
