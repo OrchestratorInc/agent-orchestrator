@@ -32,7 +32,7 @@ type DeviceService interface {
 	Screenshot(ctx context.Context, id domain.SessionID) ([]byte, error)
 	PressButton(ctx context.Context, id domain.SessionID, button string) error
 	SetQuality(ctx context.Context, id domain.SessionID, quality ports.DeviceStreamQuality) error
-	HubTarget(ctx context.Context, id domain.SessionID) (ports.DeviceHubEndpoint, devices.Lease, error)
+	HubTarget(ctx context.Context, id domain.SessionID) (ports.DeviceHubEndpoint, devices.Lease, context.Context, error)
 }
 
 // DeviceSessionReader reads the session a device route names.
@@ -283,11 +283,18 @@ func (c *DevicesController) hub(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	endpoint, lease, err := c.Svc.HubTarget(r.Context(), id)
+	endpoint, lease, leaseCtx, err := c.Svc.HubTarget(r.Context(), id)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	// The connection lives only as long as the lease: releasing the device, or
+	// another session taking it, closes the stream and the touch socket.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	stop := context.AfterFunc(leaseCtx, cancel)
+	defer stop()
+	r = r.WithContext(ctx)
 	tail, _, err := wildcardPath(r)
 	if err != nil || !devices.HubRouteAllowed(lease.Device, tail, r.URL.Query().Get("device")) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "DEVICE_HUB_NOT_FOUND", "Not a device stream route", nil)

@@ -3,6 +3,7 @@ package devices
 import (
 	"io"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,5 +104,27 @@ func TestStillFrameStreamPassesThroughUnknownFraming(t *testing.T) {
 	rest, err := io.ReadAll(out)
 	if err != nil || len(rest) != 0 {
 		t.Fatalf("after EOF got %q, %v; want no repeat", rest, err)
+	}
+}
+
+// A chunk that completes one part and starts the next must not arm the repeat:
+// it would land inside the part still arriving.
+func TestStillFrameDoesNotRepeatIntoAPartInFlight(t *testing.T) {
+	part := func(body string) string {
+		return "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body + "\r\n"
+	}
+	pr, pw := io.Pipe()
+	out := StillFrameStream(pr, 20*time.Millisecond)
+	defer out.Close()
+	second := part("BBBB")
+	go func() {
+		_, _ = pw.Write([]byte(part("AAAA") + second[:20]))
+		time.Sleep(100 * time.Millisecond) // quiet, mid-part
+		_, _ = pw.Write([]byte(second[20:]))
+		_ = pw.Close()
+	}()
+	got, _ := io.ReadAll(out)
+	if want := part("AAAA") + second; !strings.HasPrefix(string(got), want) {
+		t.Fatalf("stream = %q, want %q before any repeat", got, want)
 	}
 }
