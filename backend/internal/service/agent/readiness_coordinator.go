@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
@@ -227,25 +228,37 @@ func (c *readinessCoordinator) Force(ctx context.Context, agentIDs []string, pur
 // confirms a harness. Compatible checks already in progress remain shared and
 // continue under the daemon context after this caller stops waiting; presence
 // checks never inherit an execution-enabled identity probe.
-func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, bool) {
+//
+// It reports AgentMissing only when every check finished with a definite
+// answer and none found an agent. A check that is still running when ctx ends,
+// timed out, or failed proves nothing, so the result is AgentUnconfirmed.
+func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, AgentSearch) {
 	if err := ctx.Err(); err != nil || !purpose.Valid() {
-		return domain.AgentReadinessSnapshot{}, false
+		return domain.AgentReadinessSnapshot{}, AgentUnconfirmed
 	}
 	ids, err := c.normalizeIDs(nil)
-	if err != nil || len(ids) == 0 {
-		return domain.AgentReadinessSnapshot{}, false
+	if err != nil {
+		return domain.AgentReadinessSnapshot{}, AgentUnconfirmed
+	}
+	if len(ids) == 0 {
+		return domain.AgentReadinessSnapshot{}, AgentMissing
 	}
 	waitCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	matches := make(chan domain.AgentReadinessSnapshot, 1)
 	done := make(chan struct{})
+	var unconfirmed atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(len(ids))
 	for _, id := range ids {
 		go func(id string) {
 			defer wg.Done()
 			snapshot, ensureErr := c.ensureOne(waitCtx, id, purpose, readinessInvalidateInstallation, true)
-			if ensureErr != nil || snapshot.Installation.State != domain.AgentInstallationInstalled {
+			if ensureErr != nil || !installationSettled(snapshot.Installation) {
+				unconfirmed.Store(true)
+				return
+			}
+			if snapshot.Installation.State != domain.AgentInstallationInstalled {
 				return
 			}
 			select {
@@ -261,17 +274,38 @@ func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain
 	}()
 	select {
 	case snapshot := <-matches:
-		return snapshot, true
+		return snapshot, AgentFound
 	case <-done:
 		select {
 		case snapshot := <-matches:
-			return snapshot, true
+			return snapshot, AgentFound
 		default:
-			return domain.AgentReadinessSnapshot{}, false
+			if unconfirmed.Load() {
+				return domain.AgentReadinessSnapshot{}, AgentUnconfirmed
+			}
+			return domain.AgentReadinessSnapshot{}, AgentMissing
 		}
 	case <-ctx.Done():
-		return domain.AgentReadinessSnapshot{}, false
+		return domain.AgentReadinessSnapshot{}, AgentUnconfirmed
 	}
+}
+
+// installationSettled reports whether an installation observation is a
+// definite answer for the startup search. Installed and not-installed are
+// definite. So is an unknown state the check itself decided on: a name-only
+// match whose identity is unconfirmed (such as Pressly's goose) is not an agent,
+// and a harness with no installation check can never answer. Any other unknown
+// state (a timeout, a failure, or a check replaced while running) is not.
+func installationSettled(installation domain.AgentInstallationObservation) bool {
+	switch installation.State {
+	case domain.AgentInstallationInstalled, domain.AgentInstallationNotInstalled:
+		return true
+	}
+	switch installation.ReasonCode {
+	case domain.AgentReadinessReasonInstallIdentityPending, domain.AgentReadinessReasonInstallCheckUnsupported:
+		return true
+	}
+	return false
 }
 
 func (c *readinessCoordinator) ensure(ctx context.Context, agentIDs []string, purpose domain.AgentReadinessPurpose, requested readinessInvalidation) ([]domain.AgentReadinessSnapshot, error) {

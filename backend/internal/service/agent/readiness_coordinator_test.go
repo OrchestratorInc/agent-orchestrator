@@ -1116,9 +1116,9 @@ func TestReadinessCoordinatorFindInstalledIsBoundedAndDoesNotWaitForAuth(t *test
 		Workers: 2,
 	})
 
-	found, ok := coordinator.FindInstalled(context.Background(), domain.AgentReadinessPurposeLaunch)
-	if !ok || found.ID != "codex" {
-		t.Fatalf("FindInstalled() = (%#v, %v), want Codex", found, ok)
+	found, search := coordinator.FindInstalled(context.Background(), domain.AgentReadinessPurposeLaunch)
+	if search != AgentFound || found.ID != "codex" {
+		t.Fatalf("FindInstalled() = (%#v, %v), want Codex", found, search)
 	}
 	if got := installed.authCalls.Load(); got != 0 {
 		t.Fatalf("authentication checks = %d, want none in startup presence path", got)
@@ -1162,9 +1162,56 @@ func TestReadinessCoordinatorFindInstalledDoesNotStarveLaterHarnesses(t *testing
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	found, ok := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
-	if !ok || found.ID != "z" {
-		t.Fatalf("FindInstalled() = (%#v, %v), want Z", found, ok)
+	found, search := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
+	if search != AgentFound || found.ID != "z" {
+		t.Fatalf("FindInstalled() = (%#v, %v), want Z", found, search)
+	}
+}
+
+// The startup gate may only report "no agent" when every installation check
+// finished and said so. A check that is still running, timed out, or failed is
+// not evidence of absence.
+func TestReadinessCoordinatorFindInstalledOnlyReportsMissingWhenEveryCheckSaysSo(t *testing.T) {
+	t.Parallel()
+	notInstalled := func(context.Context) (string, error) { return "", ports.ErrAgentBinaryNotFound }
+	noAuth := func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusUnknown, nil }
+	for _, tc := range []struct {
+		name    string
+		resolve func(context.Context) (string, error)
+		want    AgentSearch
+	}{
+		{name: "every check says not installed", resolve: notInstalled, want: AgentMissing},
+		{name: "a check is still running", resolve: func(ctx context.Context) (string, error) {
+			<-ctx.Done()
+			return "", ctx.Err()
+		}, want: AgentUnconfirmed},
+		{name: "a check timed out", resolve: func(context.Context) (string, error) {
+			return "", context.DeadlineExceeded
+		}, want: AgentUnconfirmed},
+		{name: "a check failed", resolve: func(context.Context) (string, error) {
+			return "", errors.New("stat: access is denied")
+		}, want: AgentUnconfirmed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+			defer cancelDaemon()
+			coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+				Agents: []agentregistry.HarnessAgent{
+					readinessHarness("missing", "Missing", &readinessTestAgent{resolve: notInstalled, auth: noAuth}),
+					readinessHarness("other", "Other", &readinessTestAgent{resolve: tc.resolve, auth: noAuth}),
+				},
+				Context:        daemonCtx,
+				InstallTimeout: time.Second,
+				Workers:        2,
+			})
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			if _, got := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch); got != tc.want {
+				t.Fatalf("FindInstalled() search = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1197,9 +1244,9 @@ func TestReadinessCoordinatorWarmFinishesPresenceBeforeAuthentication(t *testing
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	found, ok := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
-	if !ok || found.ID != "codex" {
-		t.Fatalf("FindInstalled() while auth is running = (%#v, %v), want cached Codex presence", found, ok)
+	found, search := coordinator.FindInstalled(ctx, domain.AgentReadinessPurposeLaunch)
+	if search != AgentFound || found.ID != "codex" {
+		t.Fatalf("FindInstalled() while auth is running = (%#v, %v), want cached Codex presence", found, search)
 	}
 	close(authRelease)
 }
