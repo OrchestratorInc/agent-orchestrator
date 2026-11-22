@@ -70,7 +70,7 @@ import { LinkFavicon } from "../LinkPreviewCard";
 import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
 import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
 import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
-import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
+import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, type SessionLinkPreview } from "../SessionLinkPreviewCard";
 import {
 	explicitWorkspaceFilePath,
 	createWorkspaceFileLookup,
@@ -466,7 +466,7 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string; node?: HastElement };
+type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string; node?: HastElement; preview?: SessionLinkPreview };
 
 function MarkdownLink(props: MarkdownLinkProps) {
 	const { href } = props;
@@ -529,7 +529,7 @@ function InlineLinkFavicon({ href }: { href: string }) {
 	);
 }
 
-function MarkdownLinkTarget({ href, children, className, menuPath, node }: MarkdownLinkProps) {
+function MarkdownLinkTarget({ href, children, className, menuPath, node, preview }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
@@ -564,7 +564,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 			onFileOpen={onFileOpen}
 			hoverPreview={sessionLink
 				? () => isSessionLink(href!)
-					? <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} onOpen={onSessionLinkOpen && (() => onSessionLinkOpen(href!))} />
+					? <SessionLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} onOpen={onSessionLinkOpen && (() => onSessionLinkOpen(href!))} {...preview} />
 					: <ArtifactLinkPreviewCard href={href!} sourceHostId={sessionLinkHostId} sourceKind={sessionLinkSourceKind} />
 				: undefined}
 			onClick={(event) => {
@@ -600,8 +600,8 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node }: Markd
 }
 
 /** Render one safe in-app session or artifact link using the surrounding ChatLinkProvider. */
-export function SessionLabelLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
-	return <MarkdownLink href={href} className={className}>{children}</MarkdownLink>;
+export function SessionLabelLink({ href, children, className, preview }: { href: string; children: ReactNode; className?: string; preview?: SessionLinkPreview }) {
+	return <MarkdownLink href={href} className={className} preview={preview}>{children}</MarkdownLink>;
 }
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {

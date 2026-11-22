@@ -3561,6 +3561,50 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	background: color-mix(in srgb, var(--color-bg-secondary) 62%, transparent);
 }
 
+/* The spawn tree under a turn's reply: one solid line down from the ring, a tick
+   from its right edge to each worker row, and a rounded corner at the last. The
+   line is opaque and no two strokes share a pixel, so the joints never draw darker. */
+.chat-spawn-tree {
+	--chat-spawn-line: color-mix(in oklch, var(--foreground) 20%, var(--background));
+}
+
+.chat-spawn-node {
+	color: var(--chat-spawn-line);
+}
+
+.chat-spawn-item {
+	position: relative;
+	padding-left: 24px;
+}
+
+.chat-spawn-item::before {
+	content: "";
+	position: absolute;
+	left: 9.25px;
+	top: 0;
+	bottom: 0;
+	border-left: 1.5px solid var(--chat-spawn-line);
+	pointer-events: none;
+}
+
+.chat-spawn-item:last-child::before {
+	bottom: auto;
+	width: 11px;
+	height: 50%;
+	border-bottom: 1.5px solid var(--chat-spawn-line);
+	border-bottom-left-radius: 7px;
+}
+
+.chat-spawn-item:not(:last-child)::after {
+	content: "";
+	position: absolute;
+	left: 10.75px;
+	top: calc(50% - 0.75px);
+	width: 9.5px;
+	border-top: 1.5px solid var(--chat-spawn-line);
+	pointer-events: none;
+}
+
 /* Explore / command expansion: one soft chat card; command and output share
    the surface and split on a hairline — no nested near-black wells. */
 .cursor-chat-explore-box {

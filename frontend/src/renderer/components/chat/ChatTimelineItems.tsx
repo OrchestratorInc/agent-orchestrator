@@ -1443,6 +1443,7 @@ export function AssistantMessage({
 	live = false,
 	onRollback,
 	rollbackDisabled = false,
+	beforeActions,
 }: {
 	message: ConversationMessage;
 	/** The final answer owns the copy action; it stays available while that answer streams. */
@@ -1456,6 +1457,8 @@ export function AssistantMessage({
 	onRollback?: () => void;
 	/** Keep the rollback action mounted while another response is streaming. */
 	rollbackDisabled?: boolean;
+	/** What the answer introduced, drawn under its prose and above its action row. */
+	beforeActions?: ReactNode;
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
@@ -1476,6 +1479,7 @@ export function AssistantMessage({
 			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
 		>
 			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
+			{beforeActions ? <div className="mt-2.5">{beforeActions}</div> : null}
 			{showActions ? (
 				// One action row for the completed answer, not one after every prose
 				// fragment the provider emitted while working. Copy and rollback stay

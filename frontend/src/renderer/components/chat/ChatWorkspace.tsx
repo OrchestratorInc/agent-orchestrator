@@ -4555,9 +4555,9 @@ export function Timeline({
 				: group);
 		if (!workerUpdates) return groups;
 		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
-		// A worker this chat spawned is drawn by its box and then by its reports, so the
-		// daemon's records of it would only repeat them: its termination, and its spawn
-		// once it has answered and the box is gone. Dropped here, before they can leave
+		// A worker this chat spawned is drawn by its spawn tree row and then by its reports,
+		// so the daemon's records of it would only repeat them: its termination, and its
+		// spawn once it has answered and the row is gone. Dropped here, before they can leave
 		// an empty group behind.
 		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
 		if (spawned.size === 0) return placed;
@@ -6435,7 +6435,7 @@ const TurnGroup = memo(function TurnGroup({
 			/>
 		);
 	};
-	const renderSingleRun = (run: TimelineRun) => (
+	const renderSingleRun = (run: TimelineRun, beforeActions?: ReactNode) => (
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
@@ -6476,6 +6476,7 @@ const TurnGroup = memo(function TurnGroup({
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
 				: undefined}
+			beforeActions={beforeActions}
 		/>
 	);
 	// One flat keyed list rather than a slot per section, so a run keeps its element
@@ -6549,12 +6550,12 @@ const TurnGroup = memo(function TurnGroup({
 	// into its summary. A settled turn loaded from history mounts it without the fade.
 	const disclosureKey = `${group.key}:worked`;
 	const workedDurationMs = outcome?.durationMs !== undefined && outcome.durationMs > 0 ? outcome.durationMs : undefined;
-	// Each worker the turn spawned is a box under it, from the moment the daemon records
-	// the spawn until the worker answers, so it stays out of the fold. `ao spawn`
-	// output still names the workers a daemon too old to record the spawn started.
+	// Each worker the turn spawned is a row in the spawn tree under it, from the moment
+	// the daemon records the spawn until the worker answers, so it stays out of the fold.
+	// `ao spawn` output still names the workers a daemon too old to record the spawn started.
 	const recordedSpawns = workerUpdates ? group.items.flatMap((item) => spawnedBy(item) ?? []) : [];
 	const commandSpawns = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	const spawnBoxes = recordedSpawns.length > 0 || commandSpawns.length > 0
+	const spawnTree = recordedSpawns.length > 0 || commandSpawns.length > 0
 		? <SpawnedAgents key="spawned" sessionIds={recordedSpawns} commandSessionIds={commandSpawns} />
 		: null;
 	const hasFoldedWork = foldedRuns.length > 0;
@@ -6606,9 +6607,11 @@ const TurnGroup = memo(function TurnGroup({
 	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
 	// Settled steers still carry the reports they delivered.
 	if (outcome) body.push(...noticeRuns.flatMap(renderWorkerRun));
-	if (finalRun) body.push(renderRun(finalRun));
-	// Under the reply, so the reply streams in above the boxes.
-	if (spawnBoxes) body.push(spawnBoxes);
+	// Under the reply, so the reply streams in above the tree, and above the reply's
+	// copy and undo row, which belongs to the whole turn.
+	const finalReply = finalRun?.kind === "single" && finalRun.items[0]?.kind === "message" && finalRun.items[0].role === "assistant";
+	if (finalRun) body.push(finalReply && spawnTree ? renderSingleRun(finalRun, spawnTree) : renderRun(finalRun));
+	if (spawnTree && !finalReply) body.push(spawnTree);
 	return (
 		// Positioned, so the live row that popLayout lifts out of the flow as the turn
 		// settles fades where it was rather than against some outer ancestor.
@@ -6725,6 +6728,7 @@ function TimelineItem({
 	rollbackDisabled,
 	onSelectAnnotation,
 	status,
+	beforeActions,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -6766,6 +6770,8 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
+	/** What an answer introduced, between its prose and its action row. */
+	beforeActions?: ReactNode;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6776,6 +6782,7 @@ function TimelineItem({
 					live={live}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
+					beforeActions={beforeActions}
 				/>
 			);
 		}

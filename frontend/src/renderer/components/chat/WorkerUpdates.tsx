@@ -5,14 +5,15 @@
  * time — that opens to the full text, instead of a full-width card. When the
  * orchestrator's answer asks the user nothing, it hangs under the rows as one line
  * that opens to the work behind it, so the chat reads as the user's conversation
- * rather than a log of worker traffic. A worker a turn spawned is a box under that
- * turn, saying where it is now, until it answers.
+ * rather than a log of worker traffic. The workers a turn spawned hang off its reply
+ * as a spawn tree, a row each saying where it is now, until each one answers.
  */
 
-import { ArrowUpRight, Bot, ChevronDown, ChevronRight, FileText, Split, Tag } from "@/components/app-icons";
+import { ArrowUpRight, Bot, ChevronDown, ChevronRight, CircleAlert, FileText, GitPullRequest, Tag } from "@/components/app-icons";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
+import { getSessionRowMarker } from "../../lib/session-presentation";
 import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
 import { isSteer, type BatchedDelivery, type ConversationItem } from "../../types/conversation";
@@ -20,9 +21,7 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces, useOpenSessionLink } from "./ChatMarkdown";
 import { formatDuration, formatTime, humanVisibleText, QueuedNote, ResponseSpinner, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { AgentAvatar } from "../AgentAvatar";
-import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 export interface WorkerUpdate {
 	key: string;
@@ -236,7 +235,7 @@ export interface WorkerUpdateIndex {
 	latestKeys: ReadonlySet<string>;
 	/** Each worker's newest update, by session. */
 	latest: ReadonlyMap<string, WorkerUpdate>;
-	/** Workers whose spawn the daemon recorded, so their box draws from that record. */
+	/** Workers whose spawn the daemon recorded, so their tree row draws from that record. */
 	spawnRecorded: ReadonlySet<string>;
 }
 
@@ -627,8 +626,10 @@ export function terminatedBy(item: ConversationItem): string | undefined {
 }
 
 /**
- * The workers a turn started, one box each, until each one answers; its reports
- * then say where it is.
+ * The workers a turn started, as a spawn tree under its reply: a ring where the
+ * turn branched, then one row per worker until it answers; its reports then say
+ * where it is. A row opens the worker's session, and hovering it opens the card a
+ * session link shows.
  */
 export function SpawnedAgents({ sessionIds, commandSessionIds = [] }: {
 	/** Workers the daemon recorded the turn spawning. */
@@ -641,33 +642,53 @@ export function SpawnedAgents({ sessionIds, commandSessionIds = [] }: {
 	const waiting = [...sessionIds, ...unrecorded].filter((id) => !index?.latest.has(id));
 	if (waiting.length === 0) return null;
 	return (
-		<div className="flex min-w-0 flex-col gap-2">
-			{waiting.map((id) => (
-				<SpawnedAgentBox key={id} sessionId={id} />
-			))}
+		<div data-testid="spawned-agents" className="chat-spawn-tree flex min-w-0 flex-col self-stretch">
+			{/* Where the turn branched: a ring whose stem runs on as the branch line. */}
+			<svg aria-hidden="true" viewBox="0 0 16 18" className="chat-spawn-node ml-0.5 block h-[18px] w-4 shrink-0">
+				<circle cx="8" cy="6" r="4.25" fill="none" stroke="currentColor" strokeWidth="1.5" />
+				<path d="M8 10.25V18" stroke="currentColor" strokeWidth="1.5" />
+			</svg>
+			<ul className="m-0 list-none p-0">
+				{waiting.map((id) => (
+					<SpawnedAgentRow key={id} sessionId={id} />
+				))}
+			</ul>
 		</div>
 	);
 }
 
-type WaitingState = { label: string; tone: "working" | "attention" | "quiet" };
+type SpawnGlyph = "loader" | "alert" | "review" | "ready" | "merged" | "exited" | "terminated" | "quiet";
+type WaitingState = { label: string; glyph: SpawnGlyph };
+
+const PR_STATES = {
+	review: { label: "In review", glyph: "review" },
+	ready: { label: "Ready to merge", glyph: "ready" },
+	merged: { label: "Merged", glyph: "merged" },
+} as const satisfies Record<string, WaitingState>;
+
+/** The PR state a session's sidebar row shows, once a PR decides it. */
+function prState(session: WorkspaceSession): WaitingState | undefined {
+	const marker = getSessionRowMarker(session);
+	return marker && marker !== "attention" ? PR_STATES[marker] : undefined;
+}
 
 /** Where a worker that has not answered yet is now, read from its session's durable facts. */
 function waitingState(session: WorkspaceSession | undefined): WaitingState {
 	if (session?.status === "needs_input" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked") {
-		return { label: "Needs input", tone: "attention" };
+		return { label: "Needs input", glyph: "alert" };
 	}
-	if (session?.isTerminated || session?.status === "terminated") return { label: "Terminated", tone: "quiet" };
-	if (session?.provisionState === "provisioning") return { label: "Spawning", tone: "working" };
-	if (session?.provisionState === "failed") return { label: "Start failed", tone: "attention" };
-	if (session?.activity?.state === "exited" || session?.status === "exited") return { label: "Exited", tone: "quiet" };
-	if (session?.statusReadiness === "checking") return { label: "Checking status", tone: "quiet" };
+	if (session?.isTerminated || session?.status === "terminated") return { label: "Terminated", glyph: "terminated" };
+	if (session?.provisionState === "provisioning") return { label: "Starting", glyph: "loader" };
+	if (session?.provisionState === "failed") return { label: "Start failed", glyph: "alert" };
+	if (session?.activity?.state === "exited" || session?.status === "exited") return { label: "Exited", glyph: "exited" };
+	if (session?.statusReadiness === "checking") return { label: "Checking", glyph: "quiet" };
 	if (!session || session.statusReadiness === "unavailable"
 		|| session.activity?.state === "unknown" || session.status === "unknown" || session.status === "no_signal") {
-		return { label: "Status unavailable", tone: "quiet" };
+		return { label: "Status unavailable", glyph: "quiet" };
 	}
-	if (session.activity?.state === "idle" || session.status === "idle") return { label: "Idle", tone: "quiet" };
-	if (session.activity?.state === "active" || session.status === "working") return { label: "Working", tone: "working" };
-	return { label: "Status unavailable", tone: "quiet" };
+	if (session.activity?.state === "idle" || session.status === "idle") return prState(session) ?? { label: "Idle", glyph: "quiet" };
+	if (session.activity?.state === "active" || session.status === "working") return { label: "Working", glyph: "loader" };
+	return prState(session) ?? { label: "Status unavailable", glyph: "quiet" };
 }
 
 /** Time since `startedAt`, ticking each second; absent without a start. */
@@ -683,56 +704,72 @@ function useElapsed(startedAt: string | undefined): string | undefined {
 	return Number.isFinite(started) ? formatDuration(Math.max(0, now - started)) : undefined;
 }
 
-function SpawnedAgentBox({ sessionId }: { sessionId: string }) {
-	const { t } = useTranslation();
+const PR_GLYPH_TONE: Partial<Record<SpawnGlyph, string>> = {
+	review: "text-status-in-review",
+	ready: "text-status-ready",
+	merged: "text-status-merged",
+};
+
+function SpawnStateGlyph({ glyph }: { glyph: SpawnGlyph }) {
+	if (glyph === "loader") return <ResponseSpinner />;
+	if (glyph === "alert") return <CircleAlert aria-hidden="true" className="size-3.5 shrink-0" />;
+	const prTone = PR_GLYPH_TONE[glyph];
+	if (prTone) return <GitPullRequest aria-hidden="true" className={cn("size-3.5 shrink-0", prTone)} />;
+	return (
+		<span
+			aria-hidden="true"
+			className={cn(
+				"mx-[3.5px] size-[7px] shrink-0 rounded-full",
+				glyph === "exited" && "bg-destructive",
+				glyph === "terminated" && "border-[1.5px] border-passive",
+				glyph === "quiet" && "bg-passive",
+			)}
+		/>
+	);
+}
+
+/** Classes for a spawn tree row: the whole row is the session's link. */
+const SPAWN_ROW_CLASS = "group flex min-h-9 w-full min-w-0 items-center gap-2.5 rounded-lg py-1.5 pr-2 pl-2.5 text-foreground";
+
+function SpawnedAgentRow({ sessionId }: { sessionId: string }) {
 	const openSession = useOpenSessionLink();
 	const session = useWorkerSession(sessionId);
 	const state = waitingState(session);
-	const working = state.tone === "working";
-	const elapsed = useElapsed(working ? session?.createdAt : undefined);
+	const elapsed = useElapsed(state.glyph === "loader" ? session?.createdAt : undefined);
 	const name = session?.title || sessionId;
 	const href = session ? sessionHref({ sessionId, projectId: session.workspaceId }) : undefined;
-	// The daemon's phrase for the stage the worker is in, when it says more than the state does.
-	const phrase = session?.provisionState === "failed" ? session.provisionError : session?.displayStatus;
-	const phase = phrase && !["working", state.label.toLowerCase()].includes(phrase.toLowerCase()) ? phrase : undefined;
+	const content = (
+		<>
+			{session ? <AgentAvatar provider={session.provider} className="size-4 shrink-0" /> : <span aria-hidden="true" className="size-4 shrink-0" />}
+			<span className="min-w-0 flex-1 truncate text-[length:var(--font-size-base)]">{name}</span>
+			<span className={cn("flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs tabular-nums text-muted-foreground", state.glyph === "alert" && "text-status-needs-you")}>
+				<SpawnStateGlyph glyph={state.glyph} />
+				<span>{state.label}</span>
+				{elapsed ? <span>· {elapsed}</span> : null}
+			</span>
+			{/* A reserved slot, so showing the arrow on hover never moves the state. */}
+			{href && openSession ? (
+				<span aria-hidden="true" className="flex w-4 shrink-0 justify-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 motion-reduce:transition-none">
+					<ArrowUpRight className="size-3.5" />
+				</span>
+			) : null}
+		</>
+	);
 	return (
-		<div data-testid="spawned-agent" className="cursor-chat-explore-box flex min-w-0 items-start gap-2.5 rounded-lg border px-3 py-2.5">
-			{/* The spawn's own mark, as the turn's "Spawned" line had. */}
-			<Split aria-hidden="true" className="mt-[3px] size-3.5 shrink-0 text-muted-foreground" />
-			<div className="min-w-0 flex-1">
-				<div className="flex min-w-0 items-center gap-3">
-					<span className="min-w-0 flex-1 truncate text-[length:var(--font-size-base)] font-medium text-foreground">
-						{href ? <SessionLabelLink href={href} className="decoration-foreground/40 underline-offset-2 hover:underline">{name}</SessionLabelLink> : name}
-					</span>
-					<span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-						{working ? (
-							<ResponseSpinner />
-						) : (
-							<span aria-hidden="true" className={cn("mx-[2.5px] size-[7px] shrink-0 rounded-full", state.tone === "attention" ? "bg-status-needs-you" : "bg-status-idle")} />
-						)}
-						<span className={cn(state.tone === "attention" && "text-status-needs-you")}>{state.label}</span>
-						{elapsed ? <span className="tabular-nums">· {elapsed}</span> : null}
-					</span>
-					{href && openSession ? (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									type="button"
-									variant="quiet"
-									size="icon-xs"
-									onClick={() => openSession(href)}
-									aria-label={t("chat.action.openSession")}
-									className="-my-1 -mr-1.5 shrink-0"
-								>
-									<ArrowUpRight aria-hidden="true" className="size-3.5" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("chat.action.openSession")}</TooltipContent>
-						</Tooltip>
-					) : null}
-				</div>
-				{phase ? <p className="mt-0.5 truncate text-xs text-muted-foreground" title={phase}>{phase}</p> : null}
-			</div>
-		</div>
+		<li data-testid="spawned-agent" className="chat-spawn-item">
+			{href ? (
+				<SessionLabelLink
+					href={href}
+					// Above the row, so the card never covers the worker under it. A start that
+					// failed says why on the card, since the row has room only for its state.
+					preview={{ side: "top", align: "start", detail: session?.provisionState === "failed" ? session.provisionError : undefined }}
+					className={cn(SPAWN_ROW_CLASS, "transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:outline-none motion-reduce:transition-none")}
+				>
+					{content}
+				</SessionLabelLink>
+			) : (
+				<div className={SPAWN_ROW_CLASS}>{content}</div>
+			)}
+		</li>
 	);
 }

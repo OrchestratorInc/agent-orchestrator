@@ -1,6 +1,6 @@
 /**
- * The orchestrator chat draws a spawned worker as a box under its turn until it
- * answers, and worker traffic as rows. These pin what a reader keeps when it does:
+ * The orchestrator chat draws a spawned worker as a row in a spawn tree under its
+ * turn until it answers, and worker traffic as rows. These pin what a reader keeps when it does:
  * a quiet reply still copies and rolls back, a reply that asks something stays a
  * full reply, and a turn with no reply still shows its work.
  */
@@ -90,37 +90,43 @@ describe("orchestrator worker updates", () => {
 	});
 	const startedReply = { ...reply("t1", 1, "Worker started."), sequence: 13 };
 
-	it("shows a recorded spawn as one box under the turn's reply, outside Worked for", async () => {
+	it("shows a recorded spawn as one spawn tree row under the turn's reply, outside Worked for", async () => {
 		const openSession = vi.fn();
 		renderOrchestrator([automation("t1", 1, "Check current usage."), spawnCommand(), spawnRecord(), startedReply], vi.fn(), worker(), "orchestrator", "completed", openSession);
 
-		const box = screen.getByTestId("spawned-agent");
+		const row = screen.getByTestId("spawned-agent");
 		expect(screen.getAllByTestId("spawned-agent")).toHaveLength(1);
-		expect(screen.getByText("Worker started.").compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.getByText("Worker started.").compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		// The reply's copy row closes the turn, under the tree.
+		expect(row.compareDocumentPosition(screen.getByRole("button", { name: "Copy message as markdown" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /Spawned \d agents?/ })).not.toBeInTheDocument();
-		// The spawn's fork mark, and no agent logo: chat draws none.
-		expect(box.querySelector("svg.icon-split")).not.toBeNull();
-		expect(box.querySelector("img")).toBeNull();
-		expect(within(box).getByRole("link", { name: "Audit usage" })).toHaveAttribute("href", "ao://sessions/proj/proj-288");
-		const idle = within(box).getByText("Idle");
+		// The ring where the turn branched in place of the fork icon, and the worker's agent logo.
+		expect(screen.getByTestId("spawned-agents").querySelector("svg.chat-spawn-node")).not.toBeNull();
+		expect(row.querySelector("svg.icon-split")).toBeNull();
+		expect(within(row).getByRole("img", { name: "codex" })).toBeInTheDocument();
+		// The whole row is the session's link, with the open arrow in its reserved slot.
+		const link = within(row).getByRole("link", { name: /Audit usage/ });
+		expect(link).toHaveAttribute("href", "ao://sessions/proj/proj-288");
+		expect(link.querySelector("svg.icon-arrow-up-right")).not.toBeNull();
+		const idle = within(row).getByText("Idle");
 		expect(idle.parentElement?.querySelector('[data-testid="lattice-loader"]')).toBeNull();
-		await userEvent.click(within(box).getByRole("button", { name: "Open session" }));
+		await userEvent.click(link);
 		expect(openSession).toHaveBeenCalledWith("ao://sessions/proj/proj-288");
 	});
 
 	it("offers no open arrow where the chat cannot open a session", () => {
 		renderOrchestrator([automation("t1", 1, "Check current usage."), spawnRecord(), startedReply], vi.fn(), worker());
-		expect(within(screen.getByTestId("spawned-agent")).queryByRole("button", { name: "Open session" })).not.toBeInTheDocument();
+		expect(screen.getByTestId("spawned-agent").querySelector("svg.icon-arrow-up-right")).toBeNull();
 	});
 
-	it("draws a recorded spawn outside any turn as the worker's box", () => {
+	it("draws a recorded spawn outside any turn as the worker's row", () => {
 		renderOrchestrator([automation("t1", 1, "Check current usage."), spawnRecord("proj-288", undefined, 2)]);
 		expect(screen.getByTestId("spawned-agent")).toHaveTextContent("proj-288");
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("draws a spawn filed under a rolled-back turn as the worker's box on its own", () => {
+	it("draws a spawn filed under a rolled-back turn as the worker's row on its own", () => {
 		const action: ConversationActivity = {
 			kind: "activity", id: "ao-action:session.spawned:proj-9", turnId: "t2", sequence: 25, revision: 0, activityKind: "ao_action",
 			status: "completed", summary: "Spawned an agent", createdAt: at(2),
@@ -149,15 +155,15 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("shows the box as soon as the daemon records the spawn, while the turn and its command still run", () => {
+	it("shows the row as soon as the daemon records the spawn, while the turn and its command still run", () => {
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawnCommand("proj-288", "running"), spawnRecord()], vi.fn(), [], "orchestrator", "running");
 		expect(screen.getByTestId("spawned-agent")).toBeInTheDocument();
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("draws a box for a spawn only its command output names, beside a recorded one", () => {
+	it("draws a row for a spawn only its command output names, beside a recorded one", () => {
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawnCommand("proj-288"), spawnRecord("proj-289"), startedReply]);
-		expect(screen.getAllByTestId("spawned-agent").map((box) => box.textContent)).toEqual([
+		expect(screen.getAllByTestId("spawned-agent").map((row) => row.textContent)).toEqual([
 			expect.stringContaining("proj-289"),
 			expect.stringContaining("proj-288"),
 		]);
@@ -170,7 +176,7 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
 	});
 
-	it("drops the box once the worker reports", () => {
+	it("drops the row once the worker reports", () => {
 		renderOrchestrator([
 			automation("t1", 1, "Check current usage."), spawnRecord(), startedReply,
 			report("t2", 3, "[done] [Audit usage](ao://sessions/proj/proj-288)\nFound 9 issues across 6 files."),
@@ -180,7 +186,7 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("drops the termination of a worker its box already shows", () => {
+	it("drops the termination of a worker its row already shows", () => {
 		const terminated = { ...spawnRecord("proj-288", undefined, 20), id: "ao-action:session.terminated:proj-288", summary: "Terminated an agent", detail: { action: "session.terminated", operationId: "proj-288:generation:0", targetSessionId: "proj-288" } };
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord(), startedReply, terminated], vi.fn(), worker({ status: "terminated", isTerminated: true }));
 		expect(within(screen.getByTestId("spawned-agent")).getByText("Terminated")).toBeInTheDocument();
@@ -194,16 +200,28 @@ describe("orchestrator worker updates", () => {
 			detail: { action: "session.terminated", operationId: `${id}:generation:0`, targetSessionId: id },
 		});
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord("proj-288", undefined, 2), terminated("proj-288", 3, "failed"), terminated("proj-300", 4, "completed")]);
-		// The failed one says it failed; the other worker has no box to say it ended.
+		// The failed one says it failed; the other worker has no row to say it ended.
 		expect(screen.getByText("Terminated 2 agents")).toBeInTheDocument();
 	});
 
-	it("shows how long a working worker has run and the stage the daemon names", () => {
+	it("shows how long a working worker has run, and the stage the daemon names on its hover card", async () => {
 		const workspaces = worker({ status: "working", activity: { state: "active" }, displayStatus: "Fixing CI failures", createdAt: new Date(Date.now() - 90_000).toISOString() });
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord(), startedReply], vi.fn(), workspaces);
-		const box = screen.getByTestId("spawned-agent");
-		expect(box).toHaveTextContent("Working· 1m");
-		expect(box).toHaveTextContent("Fixing CI failures");
+		const row = screen.getByTestId("spawned-agent");
+		expect(row).toHaveTextContent("Working· 1m");
+		// One line per worker: the stage waits on the card.
+		expect(row).not.toHaveTextContent("Fixing CI failures");
+		await userEvent.hover(within(row).getByRole("link", { name: /Audit usage/ }));
+		expect(await screen.findByRole("status", { name: "Audit usage, Fixing CI failures" })).toBeInTheDocument();
+	});
+
+	it("says on the hover card why a worker's start failed", async () => {
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord(), startedReply], vi.fn(), worker({ provisionState: "failed", provisionError: "worktree add failed" }));
+		const row = screen.getByTestId("spawned-agent");
+		expect(row).toHaveTextContent("Start failed");
+		expect(row).not.toHaveTextContent("worktree add failed");
+		await userEvent.hover(within(row).getByRole("link", { name: /Audit usage/ }));
+		expect(await screen.findByText("worktree add failed")).toBeInTheDocument();
 	});
 
 	it("does not repeat the state as the stage", () => {
@@ -212,7 +230,7 @@ describe("orchestrator worker updates", () => {
 	});
 
 	it.each([
-		["provisioning", { provisionState: "provisioning" }, "Spawning", true],
+		["provisioning", { provisionState: "provisioning" }, "Starting", true],
 		["active", { status: "working", activity: { state: "active" } }, "Working", true],
 		["idle", { status: "idle", activity: { state: "idle" } }, "Idle", false],
 		["exited", { status: "exited", activity: { state: "exited" } }, "Exited", false],
@@ -222,7 +240,11 @@ describe("orchestrator worker updates", () => {
 		["PR waiting input", { status: "needs_input", prs: [{ number: 94, state: "open", ci: "pending", review: "pending", mergeability: "unknown" }] }, "Needs input", false],
 		["activity waiting input", { activity: { state: "waiting_input" } }, "Needs input", false],
 		["activity blocked", { activity: { state: "blocked" } }, "Needs input", false],
-		["checking", { statusReadiness: "checking" }, "Checking status", false],
+		["checking", { statusReadiness: "checking" }, "Checking", false],
+		["PR in review", { status: "idle", activity: { state: "idle" }, kanbanColumn: "needs_review", displayStatus: "Needs human review" }, "In review", false],
+		["PR ready", { status: "idle", activity: { state: "idle" }, kanbanColumn: "ready", displayStatus: "Mergeable" }, "Ready to merge", false],
+		["PR merged", { status: "idle", activity: { state: "idle" }, kanbanColumn: "ready", displayStatus: "Merged" }, "Merged", false],
+		["working with a PR", { status: "working", activity: { state: "active" }, kanbanColumn: "needs_review", displayStatus: "Needs human review" }, "Working", true],
 		["unavailable", { statusReadiness: "unavailable" }, "Status unavailable", false],
 		["missing", null, "Status unavailable", false],
 	] as const)("shows %s child state without a false spinner", (_case, child, label, spinning) => {
