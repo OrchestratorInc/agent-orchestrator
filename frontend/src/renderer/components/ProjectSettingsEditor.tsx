@@ -71,6 +71,7 @@ type RoleFields = {
 	effort: "workerEffort" | "orchestratorEffort" | "reviewerEffort";
 	permissions: "workerPermissions" | "orchestratorPermissions" | "reviewerPermissions";
 };
+type ValidationField = "agents" | "displayName" | "defaultBranch" | "tuning";
 const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 	worker: { agent: "workerAgent", model: "workerModel", mode: "workerMode", effort: "workerEffort", permissions: "workerPermissions" },
 	orchestrator: { agent: "orchestratorAgent", model: "orchestratorModel", mode: "orchestratorMode", effort: "orchestratorEffort", permissions: "orchestratorPermissions" },
@@ -108,7 +109,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const { t } = useTranslation();
 	const [draft, setDraft] = useState(initialValues);
 	const saved = useRef(JSON.stringify(initialValues));
-	const failedKey = useRef<{ draft: string; validity?: string; section?: SettingsSection } | undefined>(undefined);
+	const failedKey = useRef<{ draft: string; validity?: string; section?: SettingsSection; field?: ValidationField } | undefined>(undefined);
 	const [error, setError] = useState<string>();
 	const [replacementError, setReplacementError] = useState<string>();
 	const [didSave, setDidSave] = useState(false);
@@ -149,23 +150,23 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const intakeIncomplete = capabilities.intake && intakeNeedsRule(intake);
 	const visibleRoles = capabilities.reviewer ? roles : roles.slice(0, 2);
 	const nameLimit = capabilities.nameLimit ?? MAX_PROJECT_DISPLAY_NAME_LEN;
-	const nameInvalid = inlineError === t("settings.project.nameRequired") || inlineError === t("settings.project.nameTooLong", { max: nameLimit });
-	const validate = () => {
+	const nameInvalid = inlineError !== undefined && failed?.field === "displayName";
+	const validate = (): { field: ValidationField; message: string } | undefined => {
 		if (capabilities.requiredAgents &&
 			(section === "agents" || draft.workerAgent !== savedValues.workerAgent || draft.orchestratorAgent !== savedValues.orchestratorAgent) &&
-			(!draft.workerAgent || !draft.orchestratorAgent)) return t("settings.project.agentsRequired");
-		if (!draft.displayName.trim()) return t("settings.project.nameRequired");
-		if ([...draft.displayName.trim()].length > nameLimit && draft.displayName.trim() !== initialValues.displayName.trim()) return t("settings.project.nameTooLong", { max: nameLimit });
-		if (capabilities.requiredBranch && (!draft.defaultBranch.trim() || [...draft.defaultBranch.trim()].length > 255)) return t("settings.cloudProject.identityValidation");
-		if (visibleRoles.some((role) => !validity[role])) return t("settings.project.tuningInvalid");
+			(!draft.workerAgent || !draft.orchestratorAgent)) return { field: "agents", message: t("settings.project.agentsRequired") };
+		if (!draft.displayName.trim()) return { field: "displayName", message: t("settings.project.nameRequired") };
+		if ([...draft.displayName.trim()].length > nameLimit && draft.displayName.trim() !== initialValues.displayName.trim()) return { field: "displayName", message: t("settings.project.nameTooLong", { max: nameLimit }) };
+		if (capabilities.requiredBranch && (!draft.defaultBranch.trim() || [...draft.defaultBranch.trim()].length > 255)) return { field: "defaultBranch", message: t("settings.cloudProject.identityValidation") };
+		if (visibleRoles.some((role) => !validity[role])) return { field: "tuning", message: t("settings.project.tuningInvalid") };
 		return undefined;
 	};
 	const submit = () => {
 		if (disabled || mutation.isPending || intakeIncomplete || (!dirty && !saveUnchanged)) return;
 		const problem = validate();
-		setError(problem);
+		setError(problem?.message);
 		if (problem) {
-			failedKey.current = { draft: JSON.stringify(draft), validity: JSON.stringify(validity), section };
+			failedKey.current = { draft: JSON.stringify(draft), validity: JSON.stringify(validity), section, field: problem.field };
 			return;
 		}
 		setReplacementError(undefined);
@@ -210,7 +211,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 				</ProjectSettingsSection>}
 				{capabilities.workflow && <>
 					<ProjectSettingsSection title={t("settings.project.worktrees")} grouped>
-						{settingRow("defaultBranch", ["defaultBranch"], <ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} describedBy={inlineError && draft.defaultBranch !== savedValues.defaultBranch ? "setting-defaultBranch-feedback" : undefined} invalid={inlineError === t("settings.cloudProject.identityValidation")} onChange={(defaultBranch) => patch({ defaultBranch })} />)}
+						{settingRow("defaultBranch", ["defaultBranch"], <ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} describedBy={inlineError && draft.defaultBranch !== savedValues.defaultBranch ? "setting-defaultBranch-feedback" : undefined} invalid={inlineError !== undefined && failed?.field === "defaultBranch"} onChange={(defaultBranch) => patch({ defaultBranch })} />)}
 						{capabilities.sessionPrefix && settingRow("sessionPrefix", ["sessionPrefix"], <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" describedBy={inlineError && draft.sessionPrefix !== savedValues.sessionPrefix ? "setting-sessionPrefix-feedback" : undefined} onChange={(sessionPrefix) => patch({ sessionPrefix })} />)}
 					</ProjectSettingsSection>
 					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped>{settingRow("intake", ["intakeEnabled", "intakeRepo", "intakeAssignee"], <IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} />)}</ProjectSettingsSection>}
@@ -246,7 +247,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 					}));
 					return <ProjectSettingsSection key={role} title={t(`settings.models.${role}Role`)} grouped>
 						{/* A warning wraps onto its own line under the whole row, starting at the label. Top-aligned, so it grows the row downward and moves nothing; the control-height label box keeps "Agent" level with the pickers. */}
-						{settingRow(`${role}-agent`, [fields.agent, fields.model, fields.mode, fields.effort], <ProjectSettingsRow label={t("settings.project.agent")} className="flex-wrap items-start justify-end gap-x-2 gap-y-1.5 [&>:first-child]:mr-auto [&>:first-child]:min-h-control-md [&>:last-child]:contents"><div className="contents"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
+						{settingRow(`${role}-agent`, [fields.agent, fields.model, fields.mode, fields.effort], <ProjectSettingsRow label={t("settings.project.agent")} className="flex-wrap items-start justify-end gap-x-2 gap-y-1.5 [&>:first-child]:mr-auto [&>:first-child]:min-h-control-md [&>:last-child]:contents"><div className="contents"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: inlineError !== undefined && failed?.field === "agents" && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
 						<div className="contents"><AgentModelField warningClassName="order-last basis-full px-0" role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} cloudOrgId={cloudOrgId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}

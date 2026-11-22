@@ -52,6 +52,42 @@ describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 		expect(screen.queryByText(/Unsaved changes/)).not.toBeInTheDocument();
 	});
 
+	it("does not mark a valid name invalid when a server failure uses validation wording", async () => {
+		const save = vi.fn().mockRejectedValue(new Error("Project name is required."));
+		const { onSaveState } = setup(cloud, save);
+		await edit("Project name", "New name");
+		fireEvent.submit(document.getElementById("project-settings-form")!);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Project name is required." })));
+		expect(within(screen.getByTestId("setting-displayName")).getByText(/Unsaved changes.*Project name is required/)).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Edit Project name" }));
+		expect(screen.getByRole("textbox", { name: "Project name" })).not.toHaveAttribute("aria-invalid");
+	});
+
+	it("does not mark a valid branch invalid when a server failure uses validation wording", async () => {
+		if (!cloud) return;
+		const message = "Enter a project name of 1-120 characters and a default branch of 1-255 characters.";
+		const save = vi.fn().mockRejectedValue(new Error(message));
+		const { onSaveState } = setup(cloud, save);
+		await edit("Default branch", "develop");
+		fireEvent.submit(document.getElementById("project-settings-form")!);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: message })));
+		await userEvent.click(screen.getByRole("button", { name: "Edit Default branch" }));
+		expect(screen.getByRole("textbox", { name: "Default branch" })).not.toHaveAttribute("aria-invalid");
+	});
+
+	it("marks a branch invalid when local validation rejects it", async () => {
+		if (!cloud) return;
+		const { save, onSaveState } = setup(cloud);
+		await edit("Default branch", "");
+		fireEvent.submit(document.getElementById("project-settings-form")!);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Enter a project name of 1-120 characters and a default branch of 1-255 characters." })));
+		expect(save).not.toHaveBeenCalled();
+		await userEvent.click(screen.getByRole("button", { name: "Edit Default branch" }));
+		const branch = screen.getByRole("textbox", { name: "Default branch" });
+		expect(branch).toHaveAttribute("aria-invalid", "true");
+		expect(branch).toHaveAttribute("aria-describedby", "setting-defaultBranch-feedback");
+	});
+
 	it("marks changed controls unsaved after a refused write, then clears feedback on retry and reopen", async () => {
 		const save = vi.fn().mockRejectedValueOnce(new Error("Save rejected")).mockResolvedValue({});
 		const { onSaveState, unmount } = setup(cloud, save);
