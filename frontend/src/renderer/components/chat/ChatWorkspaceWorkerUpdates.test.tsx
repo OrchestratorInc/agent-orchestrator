@@ -434,6 +434,12 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.getAllByText(/The orchestrator agent is being replaced/)).toHaveLength(1);
 	});
 
+	it("leaves worker turns that stopped short in view without calling them failed", () => {
+		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
+		renderSnapshot({ ...base, turns: base.turns.map((turn) => ({ ...turn, state: "interrupted" })) });
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
 	it("leaves a replacement that failed in view", () => {
 		const base = snapshot([automation("t1", 1, "AO is replacing this project orchestrator. Stop coordinating new work now and hand off.")]);
 		renderSnapshot({ ...base, turns: base.turns.map((turn) => ({ ...turn, state: "failed", errorMessage: "Authentication required." })) });

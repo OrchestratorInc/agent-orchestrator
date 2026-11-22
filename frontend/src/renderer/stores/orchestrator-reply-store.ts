@@ -61,7 +61,7 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 		check = fetchRecentConversation(sessionId, hostId).then((snapshot) => {
 			const index = indexWorkerUpdates(snapshot.items);
 			const settled = snapshot.turns.filter((turn) => Date.parse(turn.completedAt ?? "") >= since);
-			return settled.length === 0 || settled.some((turn) => {
+			return settled.length === 0 || snapshot.turns.some((turn) => turn.state === "running") || settled.some((turn) => {
 				if (turn.hasHumanPrompt) return true;
 				const standing = turnStanding(snapshot.items.filter((item) => item.turnId === turn.id), turn.state, index);
 				return standing !== "background" && standing !== "replaced";

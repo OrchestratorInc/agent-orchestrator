@@ -282,7 +282,7 @@ export function readAutomation(text: string): Automation | null {
 }
 
 // A message an agent sent is the agent's, whatever its text says.
-const automationOf = cachedBy((item) =>
+export const automationOf = cachedBy((item) =>
 	item.kind === "message" && !item.senderSessionId && !/^\s*\[from /.test(item.text) ? readAutomation(item.text) : null,
 );
 

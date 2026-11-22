@@ -104,6 +104,14 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
+	it("lights up when the turn that just ended is not recorded yet", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({ ...quiet, turns: [...quiet.turns, { id: "t2", state: "running", requestedAt: "2026-11-08T10:05:40Z" }] });
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:50Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
+	});
+
 	it("lights up when the settled turns cannot be read", async () => {
 		fetchRecentConversation.mockRejectedValue(new Error("offline"));
 		const hook = afterYourReply();

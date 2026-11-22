@@ -6357,7 +6357,7 @@ const TurnGroup = memo(function TurnGroup({
 		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
-	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && isWorkerLead(group.items[0]);
+	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && (group.leadless || isWorkerLead(group.items[0]));
 	// What the live row names: the step the agent is on right now. Items the user acts
 	// on (approvals, questions) are not work, and a provider retry has its own slot. A
 	// subagent's step is the child's work, named in its own row and panel instead.
@@ -7045,7 +7045,7 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 const leadless = new WeakMap<TimelineGroup, TimelineGroup>();
 function withoutLead(member: TimelineGroup): TimelineGroup {
 	let body = leadless.get(member);
-	if (!body) leadless.set(member, body = { ...member, items: member.items.slice(1) });
+	if (!body) leadless.set(member, body = { ...member, items: member.items.slice(1), leadless: true });
 	return body;
 }
 
@@ -7215,6 +7215,7 @@ type TimelineGroup = {
 	/** Subagents' steps, read from the whole conversation. See `withSubagentSteps`. */
 	subagents?: GroupSubagents;
 	folded?: { kind: "background" | "failed" | "replaced"; members: TimelineGroup[] };
+	leadless?: boolean;
 };
 
 type GroupSubagents = {
