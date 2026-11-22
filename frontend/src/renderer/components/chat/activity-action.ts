@@ -194,6 +194,11 @@ function isFailedSpawnCommand(activity: ConversationActivity): boolean {
 	return activity.activityKind === "command" && activity.status === "failed" && SPAWN_COMMAND.test(activity.detail?.command ?? activity.summary);
 }
 
+/** Either half of a spawn that failed: the `ao spawn` call or the daemon's record of it. */
+export function isFailedSpawn(activity: ConversationActivity): boolean {
+	return isFailedSpawnRecord(activity) || isFailedSpawnCommand(activity);
+}
+
 /** A failed `ao spawn` call that carries the daemon's reason, as {@link mergeFailedSpawns} leaves it. */
 export function isSpawnFailure(activity: ConversationActivity): boolean {
 	return isFailedSpawnCommand(activity) && Boolean(text(activity.detail?.error));

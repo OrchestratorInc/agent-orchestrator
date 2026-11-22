@@ -170,10 +170,39 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("keeps a failed spawn as the action row that says so", () => {
+	it("folds a turn's failed spawn into Worked for, as one failed step", async () => {
+		const reason = "The default account is signed out or now holds another login, and no other account is signed in.";
+		const cmd = "ao spawn --project proj --name 'background config snapshot'";
+		const approval: ConversationActivity = {
+			kind: "activity", id: "t1-approval", turnId: "t1", sequence: 11, revision: 0, activityKind: "auto_review", status: "completed",
+			summary: cmd, detail: { status: "approved", riskLevel: "medium", command: cmd }, createdAt: at(1),
+		};
+		const failedCall: ConversationActivity = {
+			kind: "activity", id: "t1-spawn", turnId: "t1", sequence: 12, revision: 0, activityKind: "command", status: "failed",
+			summary: cmd, detail: { command: cmd, exitCode: 1, output: reason }, createdAt: at(1),
+		};
+		const failedRecord: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:failed-1", turnId: "t1", sequence: 13, revision: 0, activityKind: "ao_action", status: "failed",
+			summary: "Spawned an agent", createdAt: at(1), detail: { action: "session.spawned", operationId: "failed:req-1", error: reason },
+		};
+		renderOrchestrator([automation("t1", 1, "Check the config."), approval, failedCall, failedRecord, { ...reply("t1", 1, "I couldn't start the check."), sequence: 14 }]);
+
+		// Folded, the turn shows only Worked for and the reply.
+		expect(screen.queryByRole("button", { name: /Ran 2 tool calls/ })).not.toBeInTheDocument();
+		expect(screen.queryByText(reason)).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
+		expect(await screen.findByRole("button", { name: /Ran 2 tool calls/ })).toHaveTextContent("1 failed");
+		expect(screen.getByRole("button", { name: /Starting\s*background config snapshot\s*failed/ })).toBeInTheDocument();
+		expect(screen.getByText(reason)).toBeInTheDocument();
+	});
+
+	it("keeps a failed spawn as the action row that says so, inside Worked for", async () => {
 		renderOrchestrator([automation("t1", 1, "Check current usage."), { ...spawnRecord("", undefined, 2, "failed"), detail: { action: "session.spawned", operationId: "failed:req-1", error: "project not found" } }]);
 		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
-		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
+		expect(await screen.findByText("Spawned an agent")).toBeInTheDocument();
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
 	});
 
 	it("drops the row once the worker reports", () => {

@@ -209,7 +209,7 @@ import { ActivityRun } from "./ActivityRun";
 import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
 import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
 import { isSubagentLaunch, partitionSubagentSteps, readSubagent, type SubagentRef } from "./subagent-team";
-import { isOrdinaryActivity } from "./activity-action";
+import { isFailedSpawn, isOrdinaryActivity } from "./activity-action";
 import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -7875,7 +7875,9 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 	if (item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
 	// A run holding a failed call stays out of the fold, so the failure shows under it.
-	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
+	// A spawn that failed folds into Worked for with the rest of the work: its step
+	// says so there, and the reply above the fold already tells the reader.
+	if (isOrdinaryActivity(item) && isFailedCall(item) && !isFailedSpawn(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
 	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
 }
