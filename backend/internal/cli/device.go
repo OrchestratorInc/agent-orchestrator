@@ -245,6 +245,14 @@ func writeDeviceLease(w io.Writer, out sessionDeviceDTO, jsonOutput, howTo bool)
 	if _, err := fmt.Fprintf(w, "Opened %s%s via %s: %s.\nThe user is watching it in the Device tab.\n", l.Device.Name, version, l.Provider, l.Reason); err != nil {
 		return err
 	}
+	// Builds must aim at this device: other sessions' devices may be running.
+	aim := "--device " + l.Device.ID + " or -destination id=" + l.Device.ID
+	if l.Device.Platform == "android" {
+		aim = "ANDROID_SERIAL=" + l.Device.ID + " or --deviceId " + l.Device.ID
+	}
+	if _, err := fmt.Fprintf(w, "Device id: %s (aim builds at it: %s).\n", l.Device.ID, aim); err != nil {
+		return err
+	}
 	if !howTo || l.AgentDevice.Command == "" {
 		return nil
 	}

@@ -55,6 +55,7 @@ func TestDeviceOpen_PrintsPinnedDriverInvocation(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Opened iPhone 17 Pro (iOS 26.5) via local: Runs on this machine.",
+		"Device id: UDID-1 (aim builds at it: --device UDID-1 or -destination id=UDID-1).",
 		"/ao/devices/leases/aa-47/agent-device snapshot -i\n",
 		"already bound to this session's device",
 	} {

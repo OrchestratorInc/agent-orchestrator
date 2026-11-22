@@ -422,15 +422,6 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 		}
 		updated := existing
 		updated.Device = device
-		if device.ID != existing.Device.ID {
-			// A restarted emulator runs under a new serial: the agent's command is
-			// bound to the old one, so bind it again.
-			control, err := s.cfg.Provider.AgentControl(device, string(id))
-			if err != nil {
-				return Lease{}, err
-			}
-			updated.AgentControl = control
-		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		// The boot took a while: the lease may have been released (and the
@@ -443,6 +434,15 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 			return Lease{}, apierr.Conflict("DEVICE_IN_USE", device.Name+" is in use by another session.", nil)
 		}
 		if device.ID != existing.Device.ID {
+			// A restarted emulator runs under a new serial: the agent's command is
+			// bound to the old one, so bind it again. Only now, with the lease
+			// confirmed and s.mu held: the command file is shared by every lease
+			// this session holds, and a stale reopen must not rewrite a newer one.
+			control, err := s.cfg.Provider.AgentControl(device, string(id))
+			if err != nil {
+				return Lease{}, err
+			}
+			updated.AgentControl = control
 			s.stopWatchLocked(id)
 		}
 		s.leases[id] = updated
@@ -500,17 +500,12 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 		s.owned[booted.ID] = true
 		s.mu.Unlock()
 	}
-	control, err := s.cfg.Provider.AgentControl(booted, string(id))
-	if err != nil {
-		return Lease{}, err
-	}
 	lease := Lease{
-		SessionID:    id,
-		Provider:     decision.Provider,
-		Device:       booted,
-		Reason:       decision.Reason,
-		AgentControl: control,
-		OpenedAt:     s.cfg.Now().UTC(),
+		SessionID: id,
+		Provider:  decision.Provider,
+		Device:    booted,
+		Reason:    decision.Reason,
+		OpenedAt:  s.cfg.Now().UTC(),
 	}
 	s.mu.Lock()
 	if owner, clash := s.ownerOfLocked(booted.ID); clash && owner != id {
@@ -527,6 +522,14 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 		s.mu.Unlock()
 		return Lease{}, apierr.Conflict("NO_DEVICE_AVAILABLE", fmt.Sprintf("This machine already runs %d devices for other sessions, the most it runs at once. Release one of them, or end its session, to open another.", s.cfg.MaxLocalLeases), map[string]any{"platform": string(booted.Platform)})
 	}
+	// Bound under s.mu, after the checks, like a reopen's rebind: the two
+	// write the same per-session command file and must not interleave.
+	control, err := s.cfg.Provider.AgentControl(booted, string(id))
+	if err != nil {
+		s.mu.Unlock()
+		return Lease{}, err
+	}
+	lease.AgentControl = control
 	replaced := hadPrevious && previous.Device.ID != booted.ID
 	if replaced {
 		s.stopWatchLocked(id)
