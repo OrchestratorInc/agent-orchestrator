@@ -84,6 +84,7 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ t
 vi.mock("../api", () => ({
 	ApiError: class ApiError extends Error {},
 	getPreview: fixtures.getPreview,
+	getSessionDevice: vi.fn(async () => null),
 	killSession: fixtures.killSession,
 	killSessionReviewer: vi.fn(async () => {}),
 	sendMessage: vi.fn(async () => {}),
