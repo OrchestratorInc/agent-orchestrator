@@ -539,7 +539,7 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 				testID="sidebar-home-list"
 			/>
 
-			{/* New chat, floating at the bottom right over the list. */}
+			{/* New chat: a round chat button floating at the bottom right over the list. */}
 			{paired ? (
 				<Pressable
 					accessibilityRole="button"
@@ -548,8 +548,7 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 					style={({ pressed }) => [styles.fab, { bottom: Math.max(insets.bottom, 16) + 8, backgroundColor: t.accent }, pressed && styles.fabPressed]}
 					testID="new-chat"
 				>
-					<Feather name="edit" size={18} color={t.onAccent} />
-					<Text style={[styles.fabLabel, { color: t.onAccent }]}>New chat</Text>
+					<Feather name="message-square" size={22} color={t.onAccent} />
 				</Pressable>
 			) : null}
 		</View>
@@ -690,7 +689,7 @@ function HeaderButton({ icon, label, onPress, colors, dot = false, testID }: { i
 }
 
 const headerDot = { position: "absolute", top: 7, right: 7, width: 8, height: 8, borderRadius: 4, borderWidth: 1.5 } as const;
-const FAB_HEIGHT = 48;
+const FAB_HEIGHT = 56;
 /** The home list's side padding (styles.scrollContent). */
 const LIST_PADDING = 8;
 
@@ -1226,8 +1225,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 	deviceDot: { width: 6, height: 6, borderRadius: 3 },
 	addTag: { width: 26, paddingHorizontal: 0, justifyContent: "center" },
 	deviceLabel: { fontFamily: font.medium, fontSize: 11, color: c.muted, maxWidth: 140 },
-	fab: { position: "absolute", right: 16, height: FAB_HEIGHT, borderRadius: FAB_HEIGHT / 2, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", gap: 8, shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
-	fabLabel: { fontFamily: font.medium, fontSize: 15 },
+	fab: { position: "absolute", right: 16, width: FAB_HEIGHT, height: FAB_HEIGHT, borderRadius: FAB_HEIGHT / 2, alignItems: "center", justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
 	fabPressed: { opacity: 0.85 },
 	fill: { flex: 1, minWidth: 0 },
 });
