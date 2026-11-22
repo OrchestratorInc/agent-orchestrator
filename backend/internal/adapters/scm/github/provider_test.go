@@ -1360,7 +1360,7 @@ func actionsCheckRun(workflow, name, conclusion string, id float64) map[string]a
 	n := map[string]any{"__typename": "CheckRun", "name": name, "status": "COMPLETED", "conclusion": conclusion, "databaseId": id}
 	if workflow != "" {
 		workflowIDs := map[string]float64{"Go": 1, "Frontend": 2, "CLI E2E": 3, "CI": 4}
-		n["checkSuite"] = map[string]any{"workflowRun": map[string]any{"runNumber": id, "runAttempt": 1, "workflow": map[string]any{"name": workflow, "databaseId": workflowIDs[workflow]}}}
+		n["checkSuite"] = map[string]any{"workflowRun": map[string]any{"event": "pull_request", "runNumber": id, "runAttempt": 1, "workflow": map[string]any{"name": workflow, "databaseId": workflowIDs[workflow]}}}
 	}
 	return n
 }
@@ -1418,6 +1418,31 @@ func TestCISummaryUnknownConclusionBlocksPassing(t *testing.T) {
 	obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello"}, Number: 42}, pr)
 	if obs.CI.Summary != string(domain.CIUnknown) || len(obs.CI.FailedChecks) != 0 {
 		t.Fatalf("observer CI = %+v, want unknown without failed checks", obs.CI)
+	}
+}
+
+func TestCISummaryPreservesDifferentEventsOnSameHead(t *testing.T) {
+	for _, conclusion := range []string{"FAILURE", "CANCELLED"} {
+		t.Run(conclusion, func(t *testing.T) {
+			var pr map[string]any
+			basePRFixture().prData(func(m map[string]any) {
+				pr = m
+				push := actionsCheckRun("Go", "lint", conclusion, 1)
+				push["checkSuite"].(map[string]any)["workflowRun"].(map[string]any)["event"] = "push"
+				push["detailsUrl"] = "https://example.com/checks/push-lint"
+				pullRequest := actionsCheckRun("Go", "lint", "SUCCESS", 2)
+				roll := statusRollup(m)
+				roll["state"] = "FAILURE"
+				roll["contexts"] = map[string]any{"nodes": []any{push, pullRequest}, "pageInfo": map[string]any{"hasNextPage": false}}
+			})
+			if got := ciSummaryFromGraphQL(pr); got != domain.CIFailing {
+				t.Fatalf("summary = %q, want failing for current %s push check", got, conclusion)
+			}
+			obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello"}, Number: 42}, pr)
+			if obs.CI.Summary != string(domain.CIFailing) || len(obs.CI.Checks) != 2 || len(obs.CI.FailedChecks) != 1 || obs.CI.FailedChecks[0].URL != "https://example.com/checks/push-lint" {
+				t.Fatalf("observer CI = %+v, want both events and actionable push link", obs.CI)
+			}
+		})
 	}
 }
 
@@ -1825,7 +1850,7 @@ func TestFetchPullRequestsToleratesWorkflowRunAccessErrors(t *testing.T) {
 	basePRFixture().prData(func(m map[string]any) { pr = m })
 	fake.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if !strings.Contains(string(body), "checkSuite{ conclusion id workflowRun{ runNumber runAttempt workflow{ databaseId } } }") {
+		if !strings.Contains(string(body), "checkSuite{ conclusion id workflowRun{ event runNumber runAttempt workflow{ databaseId } } }") {
 			t.Fatalf("batch query should request each check run's suite conclusion and workflow, body=%s", body)
 		}
 		w.Header().Set("Content-Type", "application/json")

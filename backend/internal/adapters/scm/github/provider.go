@@ -243,7 +243,7 @@ const graphQLCheckContextLimit = 100
 // checkRunFields is the CheckRun selection every rollup query uses. The
 // workflow database ID and run number/attempt identify reruns of the same job
 // (see latestCheckRuns). Suite IDs keep cancellation evidence within one run.
-const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ conclusion id workflowRun{ runNumber runAttempt workflow{ databaseId } } }`
+const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ conclusion id workflowRun{ event runNumber runAttempt workflow{ databaseId } } }`
 
 // prObservationQuery is the GraphQL query (derived from PR #28, credited
 // to @whoisasx) that pulls everything we need in one round trip:
@@ -655,10 +655,10 @@ func jobIDForCheck(pr map[string]any, name string) int64 {
 // superseded on this commit. statusCheckRollup keeps every workflow run on the
 // SHA (one cancelled when the workflow re-ran, a failed attempt before a green
 // rerun) and GitHub's rollup state counts them, while GitHub's checks list and
-// `gh pr checks` show only the newest run per workflow and job. The workflow
-// run number and attempt select the newest occurrence. A run without complete
-// workflow metadata (another app, or a token without Actions access) is always
-// kept: it can't be safely matched to its reruns.
+// `gh pr checks` show only the newest run per workflow, event, and job. The
+// workflow run number and attempt select the newest occurrence. A run without
+// complete workflow metadata (another app, or a token without Actions access)
+// is always kept: it can't be safely matched to its reruns.
 func latestCheckRuns(in []map[string]any) []map[string]any {
 	type runVersion struct{ number, attempt float64 }
 	newest := map[string]runVersion{}
@@ -691,10 +691,11 @@ func checkRunKey(n map[string]any) (string, float64, float64) {
 	run, _ := suite["workflowRun"].(map[string]any)
 	workflow, _ := run["workflow"].(map[string]any)
 	workflowID, number, attempt := num(workflow["databaseId"]), num(run["runNumber"]), num(run["runAttempt"])
-	if workflowID <= 0 || number <= 0 || attempt <= 0 || str(n["name"]) == "" {
+	event := str(run["event"])
+	if workflowID <= 0 || number <= 0 || attempt <= 0 || event == "" || str(n["name"]) == "" {
 		return "", 0, 0
 	}
-	return strconv.FormatInt(int64(workflowID), 10) + "\x00" + str(n["name"]), number, attempt
+	return strconv.FormatInt(int64(workflowID), 10) + "\x00" + event + "\x00" + str(n["name"]), number, attempt
 }
 
 // statusRollup extracts the commits[0].commit.statusCheckRollup blob

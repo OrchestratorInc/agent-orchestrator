@@ -44,9 +44,10 @@
 //     checks. Pending if no check failed or was cancelled and one is running.
 //     Passing if all non-skipped contexts concluded SUCCESS / NEUTRAL.
 //     Unknown otherwise. Empty rollup falls back to the rollup-level
-//     "state" field. Only the newest CheckRun per workflow ID and job counts,
-//     ordered by workflow run number then attempt: a run superseded on the same
-//     commit (cancelled by a re-run, an earlier failed attempt) is dropped.
+//     "state" field. Only the newest CheckRun per workflow ID, event, and job
+//     counts, ordered by workflow run number then attempt: a run superseded on
+//     the same commit (cancelled by a re-run, an earlier failed attempt) is
+//     dropped.
 //
 //   - Review: from GraphQL pullRequest.reviewDecision:
 //
