@@ -1363,6 +1363,29 @@ describe("steering refusals", () => {
 		expect(result.current.activateBranchDisabled).toBe(true);
 	});
 
+	it("keeps branch switching disabled while a steer is still in flight", async () => {
+		const steered = deferred<{ data: unknown; error: undefined }>();
+		postMock.mockImplementationOnce(() => steered.promise);
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		let done!: Promise<unknown>;
+		act(() => {
+			done = result.current.steer("uploading an image", [{ mimeType: "image/png", data: "aW1hZ2U=" }]);
+		});
+		await waitFor(() => expect(result.current.activateBranchDisabled).toBe(true));
+		steered.resolve({ data: { outcome: "steered", duplicate: false }, error: undefined });
+		await act(async () => {
+			await done;
+		});
+		await waitFor(() => expect(result.current.activateBranchDisabled).toBe(false));
+
+		postMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		await act(async () => {
+			await result.current.steer("lost").catch(() => {});
+		});
+		await waitFor(() => expect(result.current.activateBranchDisabled).toBe(false));
+	});
+
 	it("clears steer pending before a slow conversation refresh finishes", async () => {
 		const refresh = deferred<void>();
 		const steerResponse = deferred<{

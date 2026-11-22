@@ -1360,36 +1360,49 @@ export function useConversationCommands(
 	 * means "wait and try again", and one means this harness cannot do it at all.
 	 */
 	const steer = useMutation({
-		onMutate: () => {
+		onMutate: (input: { text: string; attachments?: WireImageContent[]; clientMessageId: string; recoverOnly?: boolean }) => {
 			setSteerRefusedOn(undefined);
+			if (!input.recoverOnly && stateSessionId) {
+				queryClient.setQueryData<ConversationDispatchTrackingBySession>(
+					conversationDispatchTrackingQueryKey,
+					(current = {}) => current[stateSessionId]
+						? current
+						: { ...current, [stateSessionId]: { operation: "send", requestId: input.clientMessageId, state: "pending" } },
+				);
+			}
 			return { sentOn: currentTurnIdRef.current };
 		},
 		onError: (_error, _input, sent) => setSteerRefusedOn({ sentOn: sent?.sentOn, arrivedOn: currentTurnIdRef.current }),
-		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
+		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId: string; recoverOnly?: boolean }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
 				"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 				{
 					params: { path: { sessionId: sessionId as string } },
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
-					body: { ...input, clientMessageId: input.clientMessageId ?? crypto.randomUUID() },
+					body: input,
 				},
 			);
 			if (error) throw error;
 			return data;
 		},
-		onSuccess: (data) => {
+		onSuccess: (data, input) => {
 			const turnId = data?.outcome === "sent" && data.state !== "queued" && (!data.duplicate || data.state === "running")
 				? data.turnId
 				: undefined;
 			if (turnId && stateSessionId) {
 				queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 					conversationDispatchTrackingQueryKey,
-					(current = {}) => current[stateSessionId]
+					(current = {}) => current[stateSessionId] && current[stateSessionId].requestId !== input.clientMessageId
 						? current
-						: { ...current, [stateSessionId]: { operation: "send", requestId: turnId, state: "accepted", turnId } },
+						: { ...current, [stateSessionId]: { operation: "send", requestId: input.clientMessageId, state: "accepted", turnId } },
 				);
+			} else if (stateSessionId) {
+				releaseConversationDispatch(queryClient, stateSessionId, input.clientMessageId);
 			}
 			invalidate();
+		},
+		onError: (_error, input) => {
+			if (stateSessionId) releaseConversationDispatch(queryClient, stateSessionId, input.clientMessageId);
 		},
 	});
 
@@ -1855,7 +1868,7 @@ export function useConversationCommands(
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
 			try {
 				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
-				await steer.mutateAsync({ text, attachments, clientMessageId, recoverOnly });
+				await steer.mutateAsync({ text, attachments, clientMessageId: clientMessageId ?? crypto.randomUUID(), recoverOnly });
 				return { status: "accepted" };
 			} catch (error) {
 				const outcome = steerNonAcceptance(error);
