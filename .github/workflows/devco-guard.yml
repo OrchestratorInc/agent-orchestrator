@@ -1,0 +1,34 @@
+# DevCo guard-hook check, installed by Cezar's "Set up for DevCo".
+# It runs ONLY the guard-hook cases (no project build: Cezar does not know this app's build).
+# GitHub's standard Linux runner (ubuntu-latest) only: no self-hosted, no larger runners. No secrets.
+name: DevCo guard
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+permissions:
+  contents: read
+concurrency:
+  group: devco-guard-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  guard:
+    # Never run a fork's code in this repo's CI.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          # Large repos: fetch only what the guard test needs.
+          fetch-depth: 1
+          sparse-checkout: |
+            .devco
+            .claude
+          sparse-checkout-cone-mode: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: guard hook cases
+        run: node .devco/scripts/test-guard.mjs

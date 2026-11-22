@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devco.task/v0",
+  "title": "DevCo task metadata (Sprint 0 draft)",
+  "description": "Company metadata Cezar does not hold. Task STATUS is never stored here: it always comes from Cezar run state, linked by cezarRunIds. Cezar validates tasks with its own schema (contract devcoTaskSchema); this file mirrors it for the planner.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "title", "goal", "ownerRole", "reviewerRole", "dependsOn", "acceptance", "writeSet", "workflow", "cezarRunIds"],
+  "properties": {
+    "schema": { "const": "devco.task/v0" },
+    "id": { "type": "string", "pattern": "^T-[0-9]{3,}$" },
+    "title": { "type": "string", "minLength": 3, "maxLength": 120 },
+    "goal": { "type": "string", "minLength": 10, "maxLength": 10000 },
+    "sprint": { "type": "string", "maxLength": 100 },
+    "ownerRole": { "type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9-]+$" },
+    "reviewerRole": { "type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9-]+$" },
+    "dependsOn": { "type": "array", "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "pattern": "^T-[0-9]{3,}$" } },
+    "acceptance": { "type": "array", "minItems": 1, "maxItems": 100, "items": { "type": "string", "minLength": 5, "maxLength": 2000 } },
+    "writeSet": { "type": "array", "minItems": 1, "maxItems": 500, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+    "requirements": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 500 } },
+    "workflow": { "enum": ["devco-feature", "devco-delivery"], "description": "The only workflows a DevCo task may start (confined, no npm/node shell)." },
+    "budgetUsd": { "type": "number", "exclusiveMinimum": 0 },
+    "category": { "enum": ["ci-repair", "bug-fix", "feature", "maintenance", "qa", "security", "research", "design", "docs"], "description": "What kind of work this is, for routing. Absent = read from the title and goal." },
+    "securityClass": { "enum": ["standard", "sensitive"], "description": "May only raise the class: a write set or text that touches CI, the supply chain or auth is sensitive whatever this says." },
+    "cezarRunIds": { "type": "array", "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 200 } },
+    "ctoActionRequired": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "evidence": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 500 } },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "effort", "mode"],
+      "description": "Set by the board's New task panel: the run's model, reasoning effort and mode.",
+      "properties": {
+        "model": { "enum": ["opus", "sonnet", "haiku"] },
+        "effort": { "enum": ["low", "medium", "high", "xhigh"] },
+        "mode": { "enum": ["plan", "code"] },
+        "baseBranch": { "type": "string", "description": "Code-mode tasks only." }
+      }
+    }
+  }
+}

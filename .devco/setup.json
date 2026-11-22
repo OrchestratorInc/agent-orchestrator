@@ -1,0 +1,34 @@
+{
+  "schema": "devco.setup/v1",
+  "templateVersion": 15,
+  "source": "devco-sandbox@96688dd1281e",
+  "files": [
+    ".ai/cezar/workflows/devco-research.yaml",
+    ".ai/cezar/workflows/devco-creative.yaml",
+    ".ai/cezar/workflows/devco-content.yaml",
+    ".ai/cezar/workflows/devco-feature.yaml",
+    ".ai/cezar/workflows/devco-delivery.yaml",
+    ".ai/cezar/workflows/devco-fix.yaml",
+    ".ai/cezar/workflows/devco-design-plan.yaml",
+    ".ai/cezar/workflows/devco-design-research.yaml",
+    ".ai/cezar/workflows/devco-design-system.yaml",
+    ".ai/cezar/workflows/devco-design-build.yaml",
+    ".ai/cezar/workflows/devco-design-audit.yaml",
+    ".ai/cezar/workflows/devco-design-elevate.yaml",
+    ".ai/cezar/workflows/devco-design-review.yaml",
+    ".devco/visual-qa.json",
+    ".claude/hooks/guard.mjs",
+    ".claude/settings.json",
+    ".devco/decisions/schema.json",
+    ".devco/tasks/schema.json",
+    ".devco/scripts/test-guard.mjs",
+    ".devco/scripts/collect-evidence.mjs",
+    ".github/workflows/devco-guard.yml"
+  ],
+  "config": {
+    "path": ".ai/cezar/config.json",
+    "keys": [
+      "reviewGate"
+    ]
+  }
+}

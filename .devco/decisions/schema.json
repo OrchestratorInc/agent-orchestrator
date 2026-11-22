@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "devco.decision/v0",
+  "title": "DevCo decision (Sprint 0 draft)",
+  "description": "A question the Engineering Director could not settle alone and that blocks work. File name: D-<nnn>.json, matching id. The CTO answers it on the DevCo board, which writes answer, answeredAt and answeredBy into this same file. options empty = free-text answer; otherwise the answer is one of the options.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "question", "why", "options", "blocks"],
+  "properties": {
+    "schema": { "const": "devco.decision/v0" },
+    "id": { "type": "string", "pattern": "^D-[0-9]{3,}$" },
+    "question": { "type": "string", "minLength": 5, "maxLength": 2000 },
+    "why": { "type": "string", "minLength": 5, "maxLength": 5000 },
+    "options": { "type": "array", "maxItems": 20, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+    "blocks": { "type": "array", "maxItems": 100, "uniqueItems": true, "items": { "type": "string", "pattern": "^T-[0-9]{3,}$" } },
+    "answer": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "answeredAt": { "type": "string", "maxLength": 100 },
+    "answeredBy": { "type": "string", "maxLength": 64 }
+  }
+}

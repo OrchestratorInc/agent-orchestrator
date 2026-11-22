@@ -1,0 +1,19 @@
+{
+  "serve": {
+    "dir": "dist"
+  },
+  "routes": [
+    "/"
+  ],
+  "viewports": [
+    1440,
+    390
+  ],
+  "locales": [
+    "en"
+  ],
+  "themes": [
+    "light"
+  ],
+  "axe": true
+}

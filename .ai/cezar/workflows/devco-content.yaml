@@ -1,0 +1,83 @@
+version: 2
+name: devco-content
+description: >-
+  DevCo social media and email marketing DRAFTS (Sprint 0 draft). The writer (devco-social-media
+  or devco-email-marketing, named in the task) has no shell, no web and no platform account:
+  nothing is posted or sent. Drafts go only under .devco/social/ or .devco/email/ (scope check).
+  A separate reviewer checks brand, platform limits and compliance. Commit + draft PR for CTO
+  approval; publishing stays a human action.
+nodes:
+  - { id: start, type: start }
+  - { id: snapshot, type: check, name: Record base (Cezar), command: 'node "$CEZ_PROTECTED_PATHS" --record', sandbox: true }
+
+  - id: draft
+    type: agent
+    runner: claude
+    confined: true
+    name: Draft content
+    skill: devco-social-media
+    prompt: |
+      {{task}}
+
+      If the task is about email, act as `devco-email-marketing` instead and follow that skill.
+      Rules: write ONLY under the `.devco/social/<id>/` or `.devco/email/<id>/` folder the task
+      names, plus `<that folder>/report.md`. DRAFT ONLY: never post, send or schedule anything.
+    allowedTools: ["Read(./**)", "Write(.devco/social/**)", "Write(.devco/email/**)", "Edit(.devco/social/**)", "Edit(.devco/email/**)", "Grep(./**)", "Glob(./**)"]
+
+  - { id: scope, type: check, name: Drafts scope check (Cezar), command: 'node "$CEZ_SCOPE_CHECK" --kinds social,email', sandbox: true }
+  - { id: final_scope, type: check, name: Drafts scope check before commit (Cezar), command: 'node "$CEZ_SCOPE_CHECK" --kinds social,email', sandbox: true }
+
+  - id: review
+    type: agent
+    runner: claude
+    confined: true
+    name: Content review
+    skill: devco-code-reviewer
+    prompt: |
+      You did not write these drafts. Check them against the task: on-brief and on-brand, within
+      each platform's length limits, alt text present for images, no false or unsupported claims,
+      no fake reviews or undisclosed promotion, and for email an unsubscribe and postal-address
+      placeholder in every message. Do not edit any file. Report BLOCKER / MAJOR / MINOR.
+      Approve only if there is no BLOCKER or MAJOR finding.
+
+      Task: {{task}}
+    verdicts: [approve, changes]
+    allowedTools: ["Read(./**)", "Grep(./**)", "Glob(./**)"]
+  - { id: review_loop, type: loop, max: 1 }
+  - id: fix_review
+    type: agent
+    runner: claude
+    confined: true
+    name: Address review
+    session: { continue: draft }
+    prompt: |
+      The reviewer requested changes. Fix every BLOCKER and MAJOR finding:
+      {{nodes.review.summary}}
+    allowedTools: ["Read(./**)", "Write(.devco/social/**)", "Write(.devco/email/**)", "Edit(.devco/social/**)", "Edit(.devco/email/**)", "Grep(./**)", "Glob(./**)"]
+
+  # Cezar's own secret scan (script shipped with Cezar, not in this repo); required before any commit.
+  - { id: secret_scan, type: check, name: Secret scan (Cezar), command: 'node "$CEZ_SECRET_SCAN"', sandbox: true }
+  - { id: commit, type: git.commit, message: "devco-content: drafts for CTO approval" }
+  - { id: pr, type: github.draft-pr }
+  - { id: ok, type: end, status: success }
+  - { id: failed, type: end, status: failed }
+
+edges:
+  - { from: start, to: snapshot }
+  - { from: snapshot.pass, to: draft }
+  - { from: snapshot.fail, to: failed }
+  - { from: draft.done, to: scope }
+  - { from: scope.pass, to: review }
+  - { from: scope.fail, to: failed }
+  - { from: review.approve, to: final_scope }
+  - { from: final_scope.pass, to: secret_scan }
+  - { from: final_scope.fail, to: failed }
+  - { from: secret_scan.pass, to: commit }
+  - { from: secret_scan.fail, to: failed }
+  - { from: review.changes, to: review_loop }
+  - { from: review_loop.repeat, to: fix_review }
+  - { from: review_loop.exhausted, to: failed }
+  - { from: fix_review.done, to: scope }
+  - { from: commit.done, to: pr }
+  - { from: commit.nothing, to: failed }
+  - { from: pr.created, to: ok }
