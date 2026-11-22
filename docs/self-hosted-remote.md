@@ -63,7 +63,13 @@ desktop start that update by itself whenever a saved host runs an older version
 than this computer. On the VM this runs
 `setup-self-hosted.sh --upgrade` in the `ao-self-hosted-update` user unit;
 read its output with
-`journalctl --user -u ao-self-hosted-update.service --no-pager`. A host on a
+`journalctl --user -u ao-self-hosted-update.service --no-pager`. On a Mac
+installed with the setup script it runs as the
+`dev.aoagents.self-hosted-update` launchd job and logs to
+`~/.ao/host/logs/update.log`. A remote Mac running the Orchestrator desktop
+app updates after you confirm: the app there downloads the update, closes and
+relaunches. Its window has to be open, and it refuses while it holds an unsent
+draft; auto update leaves these computers alone. A host on a
 release from before desktop updates has to be updated by hand once. A release
 without `ao remote-host link` prints an address and password instead of the
 sign-in link; pair it by hand, or install nightly. A release without
