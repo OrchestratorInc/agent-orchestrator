@@ -1,6 +1,8 @@
 import { QueryClientContext, useQueryClient } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
-import { useContext, useState } from "react";
+import { useContext, useState, type CSSProperties } from "react";
+import { useCenterPanelBox } from "../../hooks/useCenterPanelBox";
+import { useHarnessUpdateNoticeRect } from "../../hooks/useHarnessUpdateNoticeClearance";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import {
 	decideApproval,
@@ -11,6 +13,8 @@ import {
 } from "../../lib/approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { useUiStore } from "../../stores/ui-store";
+import type { AgentAvatarProps } from "../AgentAvatar";
+import { ApprovalNoticeCard } from "./ApprovalNoticeCard";
 import { ApprovalPrompt } from "./ApprovalPrompt";
 
 function useDecide(request: PendingApproval | undefined) {
@@ -99,32 +103,50 @@ function GlobalApprovalCardContent() {
 	const elsewhere = [...(pending.data ?? []), ...remote].filter((request) => requestKey(request) !== routed);
 	const request = elsewhere[0];
 	const { decide, busy, error } = useDecide(request);
+	const placement = useCornerPlacement();
 	if (!request) return null;
 	let projectId: string | undefined;
 	let title: string | undefined;
+	let provider: AgentAvatarProps["provider"] | undefined;
 	for (const workspace of request.hostId ? [] : workspaces.data ?? []) {
 		const session = workspace.sessions.find((candidate) => candidate.id === request.sessionId);
 		if (session) {
 			projectId = workspace.id;
 			title = session.title;
+			provider = session.provider;
 			break;
 		}
 	}
 	return (
-		<div
-			className="fixed bottom-4 right-4 z-overlay w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-(--color-border-overlay) bg-popover text-popover-foreground shadow-(--shadow-popover)"
-			data-testid="global-approval-card"
-		>
-			<ApprovalPrompt
+		<div className="fixed z-overlay" style={{ ...placement, WebkitAppRegion: "no-drag" } as CSSProperties} data-testid="global-approval-card">
+			<ApprovalNoticeCard
 				key={request.id}
 				request={request}
 				onDecide={decide}
 				busy={busy}
 				error={error}
 				sessionLabel={title || request.sessionId}
+				provider={provider}
 				onOpenSession={() => navigateToSession(projectId, request.sessionId, request.hostId)}
 				more={elsewhere.length - 1}
 			/>
 		</div>
 	);
+}
+
+/** Gap between the card and the panel edge or the notice above it (--space-3). */
+const EDGE = 12;
+const WIDTH = 320;
+
+/**
+ * The center panel's top-right corner, where the app's notices sit, under the
+ * page's top bar; below the harness update notice while that is showing.
+ */
+function useCornerPlacement(): CSSProperties {
+	const panel = useCenterPanelBox();
+	const notice = useHarnessUpdateNoticeRect();
+	const viewport = document.documentElement.clientWidth;
+	const area = panel ?? { left: 0, top: 0, right: viewport, bottom: 0, topInset: 0 };
+	const top = notice ? notice.bottom + EDGE : area.top + area.topInset + EDGE;
+	return { top, right: viewport - area.right + EDGE, width: Math.min(WIDTH, area.right - area.left - 2 * EDGE) };
 }

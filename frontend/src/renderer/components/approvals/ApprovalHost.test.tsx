@@ -78,8 +78,7 @@ describe("approval hosts", () => {
 		state.routedSessionId = "ao-1";
 		renderWith(<GlobalApprovalCard />);
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(b)");
-		expect(screen.getByText(/Book flights/)).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Open session" }));
+		fireEvent.click(screen.getByRole("button", { name: "Book flights" }));
 		expect(state.navigate).toHaveBeenCalledWith("proj", "ao-2", undefined);
 	});
 
@@ -90,7 +89,7 @@ describe("approval hosts", () => {
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(r)");
 		fireEvent.click(screen.getByRole("button", { name: /Deny/ }));
 		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("r", "deny", expect.anything(), "box-b"));
-		fireEvent.click(screen.getByRole("button", { name: "Open session" }));
+		fireEvent.click(screen.getByRole("button", { name: "ao-9" }));
 		expect(state.navigate).toHaveBeenCalledWith(undefined, "ao-9", "box-b");
 	});
 
@@ -119,6 +118,22 @@ describe("approval hosts", () => {
 		} finally {
 			useUiStore.setState({ settingsModal: null } as never);
 		}
+	});
+
+	it("allows a site for good only when its box is ticked", async () => {
+		state.pending = [request("a", "ao-2")];
+		renderWith(<GlobalApprovalCard />);
+		fireEvent.click(screen.getByRole("checkbox", { name: "Always allow on shop.example" }));
+		fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-site", expect.anything(), undefined));
+	});
+
+	it("previews why the action was flagged", () => {
+		state.pending = [request("a", "ao-2")];
+		renderWith(<GlobalApprovalCard />);
+		expect(screen.queryByText("reads like a payment")).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+		expect(screen.getByText("reads like a payment")).toBeVisible();
 	});
 
 	it("stays out of the way when the only request belongs to the open session", () => {

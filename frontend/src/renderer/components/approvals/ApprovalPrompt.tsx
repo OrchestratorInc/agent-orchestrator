@@ -10,7 +10,7 @@ export function approvalTimeLeft(expiresAt: string, now: number): string {
 	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function useNow(intervalMs = 1000): number {
+export function useNow(intervalMs = 1000): number {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		const timer = setInterval(() => setNow(Date.now()), intervalMs);
