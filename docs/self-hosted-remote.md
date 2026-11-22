@@ -5,7 +5,8 @@ AO account sign-in is required for desktop remote hosts; Cloud sandbox execution
 
 ## Set up a VM
 
-You need a fresh Ubuntu 24.04 x64 machine with outbound internet and a
+You need a fresh Ubuntu 24.04 machine, x64 or arm64 (for example an AWS
+Graviton instance), with outbound internet and a
 non-root user with `sudo`. No inbound ports: devices reach the VM through a
 Cloudflare tunnel.
 

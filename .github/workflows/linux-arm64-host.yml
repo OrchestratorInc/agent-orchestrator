@@ -1,0 +1,147 @@
+# .github/workflows/linux-arm64-host.yml
+name: Linux arm64 host package
+
+# Linux arm64 machines (cloud VMs such as AWS Graviton) are usually headless,
+# and there is no arm64 Linux desktop app. They run Orchestrator as a
+# self-hosted remote host instead: setup-self-hosted.sh installs this package,
+# which holds the daemon, the bundled Node ACP runtime and tmux, and nothing
+# from Electron.
+#
+# build-artifacts.yml calls this for every release build, with the pinned ref
+# and version; the conductor reads the package and its digest from that run.
+# Pull requests that touch the package's inputs build and smoke-test it too, so
+# a break shows up before a release depends on it.
+#
+# Built on arm64 hardware, not cross-built: tmux is compiled from source and
+# the Node runtime is per-architecture. ubuntu-22.04 matches the x64 build's
+# glibc baseline.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+  pull_request:
+    paths:
+      - ".github/workflows/linux-arm64-host.yml"
+      - "backend/go.mod"
+      - "backend/go.sum"
+      - "frontend/acp-runtime/**"
+      - "frontend/scripts/build-acp-runtime*.mjs"
+      - "frontend/scripts/build-daemon.mjs"
+      - "frontend/scripts/build-host-bundle.mjs"
+      - "frontend/scripts/build-tmux.mjs"
+      - "frontend/scripts/go-version.mjs"
+      - "frontend/scripts/tmux-version.mjs"
+      - "scripts/setup-self-hosted.sh"
+
+permissions:
+  contents: read
+
+# Only pull request runs share a group; a release build (run_id) never cancels
+# or waits on another.
+concurrency:
+  group: linux-arm64-host-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build linux-arm64 host package
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 30
+    env:
+      # `ao remote-host link` signs in with the same WorkOS client as the
+      # desktop build (build-daemon.mjs bakes it in).
+      VITE_WORKOS_CLIENT_ID: ${{ vars.VITE_WORKOS_CLIENT_ID }}
+    defaults:
+      run:
+        working-directory: frontend
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Verify WorkOS build configuration
+        if: inputs.version != ''
+        run: |
+          if [ -z "$VITE_WORKOS_CLIENT_ID" ]; then
+            echo "::error::Repository variable VITE_WORKOS_CLIENT_ID is required for release artifacts." >&2
+            exit 1
+          fi
+      # Same stamp as build-artifacts.yml, so `ao version` names the release.
+      - name: Stamp version
+        if: inputs.version != ''
+        env:
+          BUILD_VERSION: ${{ inputs.version }}
+        run: |
+          node -e "const v=process.env.BUILD_VERSION.split('+')[0]; const fs=require('fs'); const p=require('./package.json'); p.version=v; fs.writeFileSync('./package.json', JSON.stringify(p,null,'\t')+'\n');"
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential file pkg-config
+      # No frontend `npm ci`: these scripts use only Node built-ins, and the ACP
+      # runtime installs from its own lockfile.
+      - name: Build host package
+        run: |
+          npm run build:daemon
+          npm run build:tmux
+          npm run build:acp-runtime
+          npm run build:host
+      - name: Smoke-test host package
+        run: |
+          set -euo pipefail
+          check="$RUNNER_TEMP/host-check"
+          mkdir -p "$check"
+          tar -xzf dist-host/ao-host-linux-arm64.tar.gz -C "$check"
+          resources="$check/resources"
+          info="$(file "$resources/daemon/ao")"
+          echo "$info"
+          [[ "$info" == *"ARM aarch64"* ]] || { echo "::error::daemon is not an arm64 binary" >&2; exit 1; }
+          expected="$(node -p "require('./package.json').version")"
+          actual="$("$resources/daemon/ao" version | awk '{print $1}')"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::ao version reports $actual, expected $expected" >&2
+            exit 1
+          fi
+          # setup-self-hosted.sh refuses a package without these.
+          "$resources/daemon/ao" remote-host --help >/dev/null
+          "$resources/acp-runtime/node/bin/node" --version
+          "$resources/tmux/bin/tmux" -V
+      - name: Collect artifact and compute digest
+        run: |
+          set -euo pipefail
+          name="ao-host-linux-arm64.tar.gz"
+          mkdir -p dist-artifact
+          cp "dist-host/$name" "dist-artifact/$name"
+          hash="$(openssl dgst -sha256 "dist-artifact/$name" | awk '{print $NF}')"
+          # Same flat filename -> sha256 fragment as build-artifacts.yml; its
+          # digests job merges every digest-* artifact into digests.json.
+          jq -n --arg f "$name" --arg h "$hash" '{($f): $h}' > dist-artifact/linux-arm64-host.digest.json
+          echo "linux-arm64-host: $name sha256=$hash" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-host
+          path: frontend/dist-artifact/ao-host-linux-arm64.tar.gz
+          # Release builds hand off within the hour; a pull request's package
+          # stays a week so someone can try it on an arm64 machine.
+          retention-days: ${{ inputs.version != '' && 1 || 7 }}
+          if-no-files-found: error
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-linux-arm64-host
+          path: frontend/dist-artifact/linux-arm64-host.digest.json
+          retention-days: 1
+          if-no-files-found: error

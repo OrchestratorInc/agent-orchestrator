@@ -3,7 +3,8 @@ name: Desktop build artifacts
 
 # Dispatchable unsigned desktop build for an external release conductor.
 # Builds the Electron app for all four platforms at a pinned ref with a
-# caller-supplied version, uploads each installer as a short-lived run
+# caller-supplied version, plus the headless Linux arm64 host package
+# (linux-arm64-host.yml), uploads each as a short-lived run
 # artifact, and emits a digests.json artifact (a flat JSON object mapping
 # each artifact filename to its sha256 hex string) that the conductor reads
 # to verify hashes before signing. Creates no release, references no secrets.
@@ -259,10 +260,19 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Linux arm64 ships no desktop app, only the headless package that
+  # setup-self-hosted.sh installs on a remote host. The called workflow uploads
+  # it as the `linux-arm64-host` artifact plus a digest-* fragment.
+  host-linux-arm64:
+    uses: ./.github/workflows/linux-arm64-host.yml
+    with:
+      ref: ${{ inputs.ref }}
+      version: ${{ inputs.version }}
+
   # Merge the per-platform digest fragments into one digests.json artifact so
   # a downstream consumer reads every expected hash from a single file.
   digests:
-    needs: build
+    needs: [build, host-linux-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

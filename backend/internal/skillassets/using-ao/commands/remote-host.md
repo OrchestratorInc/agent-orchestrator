@@ -44,8 +44,8 @@ ao remote-host require-device-credentials on|off
 
 ## Set up a fresh VM over SSH
 
-The VM needs Ubuntu 24.04 x64, outbound internet, and a non-root user with
-`sudo`. No inbound ports.
+The VM needs Ubuntu 24.04 on x64 or arm64, outbound internet, and a non-root
+user with `sudo`. No inbound ports.
 
 1. Install Orchestrator and its service. With no terminal the installer skips sign-in and
    prints pairing details; do not repeat its `Pairing code:` line. `pipefail` makes
