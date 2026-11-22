@@ -185,3 +185,12 @@ describe("the bar over the conversation", () => {
 		expect(screenSource).not.toContain("headerBlurEffect");
 	});
 });
+
+describe("the top bar stays whole", () => {
+	// The timeline is lifted as the composer grows; unclipped, its first card
+	// slid up over the session's top bar and cut the tab in half.
+	it("clips the conversation to its frame and keeps the bar above it", () => {
+		expect(screenSource).toContain('conversation: { flex: 1, overflow: "hidden" },');
+		expect(readFileSync(new URL("./SessionTopbar.tsx", import.meta.url), "utf8")).toContain("bar: { zIndex: 2,");
+	});
+});

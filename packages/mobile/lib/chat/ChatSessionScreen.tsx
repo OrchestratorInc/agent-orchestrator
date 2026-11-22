@@ -1191,7 +1191,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	composerHidden: { display: "none" },
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, backgroundColor: t.bgBase },
-	conversation: { flex: 1 },
+	// Clipped to its own frame: the timeline is lifted as the composer grows
+	// (ChatTimeline's growthLift), and unclipped it slid up over the top bar.
+	conversation: { flex: 1, overflow: "hidden" },
 	// The page's colour, so the conversation scrolling up passes under the
 	// banners rather than showing between them.
 	floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 },

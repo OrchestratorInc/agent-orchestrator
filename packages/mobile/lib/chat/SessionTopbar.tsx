@@ -73,7 +73,8 @@ export function SessionTopbar({ title, harness, onBack, onMenu, onNewTab, action
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	bar: { flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.xs, backgroundColor: t.bgBase, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderDefault },
+	// Above the conversation, which can be lifted toward it as the composer grows.
+	bar: { zIndex: 2, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.xs, backgroundColor: t.bgBase, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderDefault },
 	iconButton: { width: ICON_BUTTON, height: ICON_BUTTON, borderRadius: 8, alignItems: "center", justifyContent: "center" },
 	pressed: { backgroundColor: t.bgSubtle },
 	disabled: { opacity: 0.45 },
