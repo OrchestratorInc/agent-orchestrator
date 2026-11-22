@@ -53,3 +53,24 @@ it("stops discovery when the chat closes", async () => {
 	renderer = undefined;
 	expect(fixture.signals.every((signal) => signal.aborted)).toBe(true);
 });
+
+// The app drops its verified connection on every app switch. The menu cleared
+// its agents and their models then, and loaded them again on return.
+it("keeps the agents and their models while the connection is away, and lists them again once it is back", async () => {
+	let cfg: ServerConfig | null = config;
+	function Switching() { menu = useAgentSwitchMenu({ cfg, current: "claude-code", enabled: true }); return null; }
+	await act(async () => { renderer = create(<Switching />); });
+	const listed = menu;
+	expect(listed?.models.codex?.models.map((model) => model.label)).toEqual(["GPT-6-Sol"]);
+	cfg = null;
+	await act(async () => { renderer!.update(<Switching />); });
+	expect(menu?.agents.map((agent) => agent.id)).toEqual(["codex", "cursor"]);
+	expect(menu?.models.codex?.models.map((model) => model.label)).toEqual(["GPT-6-Sol"]);
+	// Verified again: read afresh, with nothing cleared in between.
+	cfg = { ...config };
+	fixture.getAgentModels.mockClear();
+	await act(async () => { renderer!.update(<Switching />); });
+	expect(fixture.getAgentModels).toHaveBeenCalled();
+	expect(menu?.agents.map((agent) => agent.id)).toEqual(["codex", "cursor"]);
+	expect(menu?.models.codex?.models.map((model) => model.label)).toEqual(["GPT-6-Sol"]);
+});

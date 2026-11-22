@@ -346,6 +346,26 @@ describe("live browser without a verified connection", () => {
 		expect(alerts()).toHaveLength(0);
 	});
 
+	// The last frame is kept through a reconnect so the page doesn't blank; the
+	// "Connecting to browser…" cover hid it anyway until the new stream drew.
+	it("keeps the last frame visible under a loading bar while the app reconnects", async () => {
+		await render();
+		await open();
+		await showFrame();
+		fixtures.config = null;
+		await rerender();
+		expect(nodes("Image")).toHaveLength(1);
+		expect(nodes("EmptyState").map((node) => node.props.title)).not.toContain("Connecting to browser…");
+		expect(nodes("LoadingBar")[0].props).toMatchObject({ loading: true, accessibilityLabel: "Reconnecting to the browser" });
+		fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+		await rerender();
+		// The new stream is connecting: still the old frame, still no cover.
+		expect(nodes("EmptyState").map((node) => node.props.title)).not.toContain("Connecting to browser…");
+		await open();
+		await showFrame();
+		expect(nodes("LoadingBar")[0].props).toMatchObject({ loading: false, accessibilityLabel: "Loading page" });
+	});
+
 	it("says the machine is offline once it really is", async () => {
 		fixtures.config = null;
 		fixtures.unreachable = true;

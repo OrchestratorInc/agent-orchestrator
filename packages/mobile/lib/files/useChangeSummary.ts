@@ -1,14 +1,20 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ServerConfig } from "../config";
+import { holdFilesBackend, useHeldBackend } from "../heldBackend";
 import type { WorkspaceManifest } from "./api";
 import { daemonFilesBackend, type FilesBackend } from "./backend";
 
 export type ChangeSummary = WorkspaceManifest["summary"];
 
-/** A machine session's totals, read from its daemon. */
-export function useChangeSummary(config: ServerConfig | null, sessionId: string, signal: string): ChangeSummary | null {
-	const backend = useMemo(() => config ? daemonFilesBackend(config) : null, [config]);
+/**
+ * A machine session's totals, read from its daemon. The backend is held for
+ * `machine` (see heldBackend), so the pill keeps its totals through an app
+ * switch instead of leaving and coming back.
+ */
+export function useChangeSummary(config: ServerConfig | null, machine: string, sessionId: string, signal: string): ChangeSummary | null {
+	const live = useMemo(() => config ? daemonFilesBackend(config) : null, [config]);
+	const backend = useHeldBackend(live, machine, holdFilesBackend);
 	return useBackendChangeSummary(backend, sessionId, signal);
 }
 

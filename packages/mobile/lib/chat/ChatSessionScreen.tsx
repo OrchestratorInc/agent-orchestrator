@@ -355,7 +355,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Re-read git's totals when a turn reports edits, not on a timer.
 	const lastTurn = conversation.snapshot?.turns.at(-1);
 	const changeSignal = `${changedPathCount(conversation.snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
-	const changeSummary = useChangeSummary(config, session.id, changeSignal);
+	const changeSummary = useChangeSummary(config, machine, session.id, changeSignal);
 	// Desktop derives one name from the session (useWorkspaceQuery: displayName ??
 	// issueId ?? id) and its chat header prefers it over the conversation's own
 	// title (ChatWorkspace: sessionTitle || session.title || snapshot.title). This

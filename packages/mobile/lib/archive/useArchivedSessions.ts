@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getArchivedSessions, type ArchiveSummary, type DashboardSession } from "../api";
 import { userFacingError } from "../connectionError";
+import { HELD_WAIT_MS } from "../heldBackend";
 import type { MachineAppearance } from "../machineAppearance";
 import { useApp } from "../store";
+import { readFleetFreshness } from "../useMachineFreshness";
 import { compareArchived, mergeArchiveStreams } from "./archiveOrder";
+import { waitForConfig } from "./waitForConfig";
 
 /** One machine's archive, optionally narrowed to a project, as a board shows it. */
 export type ArchiveSource = {
@@ -101,7 +104,11 @@ export function useArchivedSessions(
 	sources: readonly ArchiveSource[],
 	options: { active: boolean; exhaustive: boolean; inline: readonly DashboardSession[]; refreshToken: number },
 ) {
-	const { configForHost } = useApp();
+	const app = useApp();
+	const { configForHost } = app;
+	// Read when a page is asked for, so the fetch below does not change with every poll.
+	const appRef = useRef(app);
+	appRef.current = app;
 	const [streams, setStreams] = useState<Record<string, Stream>>({});
 	const streamsRef = useRef(streams);
 	streamsRef.current = streams;
@@ -127,11 +134,6 @@ export function useArchivedSessions(
 		const source = sourcesRef.current.find((candidate) => sourceKey(candidate) === key);
 		const stream = streamsRef.current[key];
 		if (!source || !stream || stream.loading || (mode === "next" && stream.done)) return;
-		const config = configForHost(source.hostId);
-		if (!config) {
-			setStreams((current) => current[key] ? { ...current, [key]: { ...current[key], error: "This machine is offline." } } : current);
-			return;
-		}
 		const run = generation.current;
 		const controller = new AbortController();
 		controllers.current.set(key, controller);
@@ -139,6 +141,18 @@ export function useArchivedSessions(
 		streamsRef.current = { ...streamsRef.current, [key]: { ...stream, loading: true, error: null } };
 		setStreams((current) => current[key] ? { ...current, [key]: { ...current[key], loading: true, error: null } } : current);
 		try {
+			// An app switch drops the connection for a moment: a page asked for
+			// then (scrolling on) waits for it rather than calling the machine
+			// offline. One the board already calls unreachable says so at once.
+			let config = configForHost(source.hostId);
+			if (!config && readFleetFreshness(appRef.current, Date.now()).get(source.hostId) !== "unreachable") {
+				config = await waitForConfig(() => configForHost(source.hostId), HELD_WAIT_MS, controller.signal);
+				if (run !== generation.current || controller.signal.aborted) return;
+			}
+			if (!config) {
+				setStreams((current) => current[key] ? { ...current, [key]: { ...current[key], loading: false, error: "This machine is offline." } } : current);
+				return;
+			}
 			const page = await getArchivedSessions(
 				config,
 				{ cursor: mode === "next" ? stream.cursor : null, projectId: source.projectId || undefined },

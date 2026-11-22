@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { rankAgents } from "../agentPicker";
 import { AUTOMATIC_MODEL, agentSwitchTargets, type AgentSwitchTarget } from "../agentSwitch";
 import { getAgentModels, getAgents, getSettings } from "../api";
@@ -30,7 +30,10 @@ export function useAgentSwitchMenu({ cfg, current, projectId, enabled }: {
 	const catalogProject = projectId && projectId !== STANDALONE_PROJECT ? projectId : undefined;
 
 	useEffect(() => {
-		if (!cfg || !enabled || !current) { setAgents(undefined); return; }
+		if (!enabled || !current) { setAgents(undefined); return; }
+		// The connection drops on every app switch: the menu keeps the agents it
+		// listed until the verified one is back and lists them again.
+		if (!cfg) return;
 		let cancelled = false;
 		Promise.all([getAgents(cfg), getSettings(cfg)])
 			.then(([catalog, settings]) => { if (!cancelled) setAgents(agentSwitchTargets(rankAgents(catalog), current, settings.chatHarnesses)); })
@@ -39,8 +42,15 @@ export function useAgentSwitchMenu({ cfg, current, projectId, enabled }: {
 	}, [cfg, current, enabled]);
 
 	const targets = useMemo(() => (agents ?? []).map((agent) => agent.id).join("|"), [agents]);
+	// What the model lists were read for: other agents or another project start
+	// them over, a connection dropped and verified again does not.
+	const modelsFor = useRef("");
 	useEffect(() => {
-		setModels({});
+		const listing = `${catalogProject ?? ""}|${targets}`;
+		if (modelsFor.current !== listing) {
+			modelsFor.current = listing;
+			setModels({});
+		}
 		if (!cfg || !targets) return;
 		let cancelled = false;
 		// getAgentModels keeps polling while an agent is still discovering its
