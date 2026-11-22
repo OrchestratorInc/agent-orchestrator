@@ -9844,12 +9844,14 @@ func TestRetireForReplacementWorkspaceProjectCapturesAndReleasesEveryRepo(t *tes
 // assert the chat controller stopped before the worktree was force-removed.
 type orderedStopLauncher struct {
 	*recordingLauncher
-	log *[]string
+	log     *[]string
+	stopErr error
 }
 
 func (l orderedStopLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 	*l.log = append(*l.log, "StopChat:"+string(id))
-	return l.recordingLauncher.StopChat(ctx, id)
+	_ = l.recordingLauncher.StopChat(ctx, id)
+	return l.stopErr
 }
 
 func assertStopBeforeForceDestroy(t *testing.T, log []string, stop, destroy string) {
@@ -9941,6 +9943,38 @@ func TestRetireForReplacementWorkspaceProjectStopsChatControllerBeforeForceDestr
 		t.Fatalf("retire destroyed %d runtimes for a chat session that never had one", rt.destroyed)
 	}
 	assertStopBeforeForceDestroy(t, sharedLog, "StopChat:mer-orch", "ForceDestroy:api")
+}
+
+// An unconfirmed chat stop (host shutdown failed or timed out) may leave the
+// agent alive in the worktree, so retirement must not force-remove it and the
+// old orchestrator must stay live, matching a failed runtime destroy.
+func TestRetireForReplacementChatStopFailureBlocksWorkspaceRelease(t *testing.T) {
+	m, st, _, ws := newLifecycleManager()
+	var sharedLog []string
+	st.sharedLog = &sharedLog
+	ws.sharedLog = &sharedLog
+	m.chat = orderedStopLauncher{recordingLauncher: &recordingLauncher{}, log: &sharedLog, stopErr: errors.New("wait for chat host shutdown: deadline exceeded")}
+	st.sessions["mer-orch"] = domain.SessionRecord{
+		ID:        "mer-orch",
+		ProjectID: "mer",
+		Kind:      domain.KindOrchestrator,
+		Mode:      domain.SessionModeChat,
+		Metadata:  domain.SessionMetadata{WorkspacePath: "/ws/mer-orch", Branch: "ao/mer-orchestrator"},
+		Activity:  domain.Activity{State: domain.ActivityActive},
+	}
+
+	err := m.RetireForReplacement(ctx, "mer-orch")
+	if err == nil || !strings.Contains(err.Error(), "chat host shutdown") {
+		t.Fatalf("RetireForReplacement err = %v, want the chat stop failure", err)
+	}
+	if st.sessions["mer-orch"].IsTerminated {
+		t.Fatal("session must remain active when its chat controller cannot be stopped")
+	}
+	for _, call := range sharedLog {
+		if strings.HasPrefix(call, "ForceDestroy:") {
+			t.Fatalf("ForceDestroy must not run after a failed chat stop; log=%v", sharedLog)
+		}
+	}
 }
 
 func TestRetireForReplacementWorkspaceProjectRuntimeDestroyFailureKeepsRepoInventory(t *testing.T) {

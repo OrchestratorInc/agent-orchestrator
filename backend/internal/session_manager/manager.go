@@ -3369,10 +3369,16 @@ func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID)
 // owns the app-server child process directly, so skipping it would leave the
 // agent running with its cwd inside the worktree the retirement is about to
 // force-remove (on Windows that removal then fails with "file in use").
+//
+// Unlike kill, a failed chat stop is returned rather than logged: retirement
+// always force-removes the worktree next, so an unconfirmed stop must leave the
+// old orchestrator live and intact, exactly as a failed runtime destroy does.
 func (m *Manager) stopRetiringController(ctx context.Context, rec domain.SessionRecord) error {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		m.stopChatBestEffort(ctx, rec.ID)
-		return nil
+		if m.chat == nil {
+			return nil
+		}
+		return m.chat.StopChat(ctx, rec.ID)
 	}
 	handle := runtimeHandle(rec.Metadata)
 	if handle.ID == "" {
