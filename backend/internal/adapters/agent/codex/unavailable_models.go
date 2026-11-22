@@ -44,8 +44,7 @@ func ParseUnavailableModel(text string) (string, bool) {
 }
 
 // UnavailableModelHint is the next step shown with Codex's refusal.
-const UnavailableModelHint = "Choose another model in the model picker: it lists the models this Codex account can use. " +
-	"New Codex sessions on this model are refused until the account lists it."
+const UnavailableModelHint = "Choose another model. AO will refuse new sessions on this model for this account for now."
 
 // UnavailableModelMessage explains a refused spawn and names the models the
 // account lists, when AO knows them.
@@ -198,6 +197,28 @@ func (u *UnavailableModels) Forget(home, model string, at time.Time) error {
 		setModelTime(u.state.Forgotten, account, model, at)
 	}
 	return u.persistLocked()
+}
+
+// ForgetExpired allows a retry when a refusal has outlived the period for
+// which AO can trust it without a model catalog for that account. The expiry
+// is recorded so replaying an older failed rollout cannot restore the refusal.
+func (u *UnavailableModels) ForgetExpired(home, model string, now time.Time, maxAge time.Duration) (bool, error) {
+	account, model := AccountKey(home), strings.TrimSpace(model)
+	if maxAge <= 0 {
+		return false, errors.New("codex: expire unavailable model: nonpositive maximum age")
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	refusedAt, refused := u.state.Refused[account][model]
+	if !refused || now.Before(refusedAt.Add(maxAge)) {
+		return false, nil
+	}
+	deleteModel(u.state.Refused, account, model)
+	expiredAt := refusedAt.Add(maxAge)
+	if forgotten, known := u.state.Forgotten[account][model]; !known || expiredAt.After(forgotten) {
+		setModelTime(u.state.Forgotten, account, model, expiredAt)
+	}
+	return true, u.persistLocked()
 }
 
 // Unavailable reports whether Codex refused model for the account with home.

@@ -2072,12 +2072,17 @@ type codexAccountHomes interface {
 // model may start catalog rediscovery for its harness and project.
 const refusedModelRefreshInterval = 10 * time.Minute
 
+// Codex exposes no account-specific catalog for saved accounts or a project's
+// CODEX_HOME. Retry their refused models after a day so a plan or rollout change
+// cannot leave an account blocked indefinitely.
+const codexRefusalRetryInterval = 24 * time.Hour
+
 // refuseUnavailableCodexModel refuses a Codex session on a model Codex already
 // refused for the account the session runs on, instead of starting a worker
 // whose first turn fails (#4518). Another account is never refused for it. On
 // the computer's own account, a model a fresh saved catalog lists again is
 // allowed and forgotten; a stale catalog's listing proves nothing, so the
-// refusal stays.
+// refusal stays. A home without its own catalog gets a retry after one day.
 func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, model string) error {
 	if model == "" {
 		return nil
@@ -2087,10 +2092,20 @@ func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.Spa
 	if !ok || !unavailable.Unavailable(home, model) {
 		return nil
 	}
+	if strings.TrimSpace(home) != "" {
+		expired, err := unavailable.ForgetExpired(home, model, time.Now(), codexRefusalRetryInterval)
+		if err != nil && m.logger != nil {
+			m.logger.Warn("spawn: could not persist an expired Codex model refusal", "error", err)
+		}
+		if expired {
+			return nil
+		}
+	}
 	var available []string
 	// Codex's catalog is discovered under the computer's own login only, never
 	// a saved account's or a project's CODEX_HOME, so it says nothing about
-	// another account's models: that account's refusal stays, without a list.
+	// another account's models: that account's refusal stays until expiry,
+	// without borrowing another account's list.
 	if m.modelCatalog != nil && strings.TrimSpace(home) == "" {
 		if catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false); err == nil {
 			for _, item := range catalog.Models {

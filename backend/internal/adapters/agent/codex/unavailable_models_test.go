@@ -70,6 +70,43 @@ func TestUnavailableModelsIgnoreARefusalOlderThanItsForgetting(t *testing.T) {
 	}
 }
 
+func TestUnavailableModelsForgetExpiredRefusalWithoutRevivingOldRollouts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "unavailable-models.json")
+	home, other := filepath.Join(dir, "saved"), filepath.Join(dir, "other")
+	model := "gpt-5.2-codex"
+	refused := time.Date(2026, 11, 18, 5, 0, 0, 0, time.UTC)
+	now := refused.Add(25 * time.Hour)
+	store := NewUnavailableModels(path)
+	for account, at := range map[string]time.Time{home: refused, other: refused.Add(time.Hour + time.Nanosecond)} {
+		if err := store.Record(account, model, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if expired, err := store.ForgetExpired(other, model, now, 24*time.Hour); err != nil || expired {
+		t.Fatalf("recent refusal expired = %v, error = %v; want kept", expired, err)
+	}
+	if expired, err := store.ForgetExpired(home, model, now, 24*time.Hour); err != nil || !expired {
+		t.Fatalf("day-old refusal expired = %v, error = %v; want forgotten", expired, err)
+	}
+	reloaded := NewUnavailableModels(path)
+	if reloaded.Unavailable(home, model) || !reloaded.Unavailable(other, model) {
+		t.Fatal("expiry was not persisted for only the account whose refusal aged out")
+	}
+	if err := reloaded.Record(home, model, refused); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Unavailable(home, model) {
+		t.Fatal("an old rollout revived the expired refusal")
+	}
+	if err := reloaded.Record(home, model, now.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.Unavailable(home, model) {
+		t.Fatal("a fresh refusal did not start a new retry window")
+	}
+}
+
 // A write that failed is retried by the next one, even one that changes
 // nothing, so the refusal is not lost at the next restart.
 func TestUnavailableModelsRetryAFailedWrite(t *testing.T) {

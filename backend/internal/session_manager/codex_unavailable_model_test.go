@@ -218,3 +218,54 @@ func TestResolveAgentConfigKeepsASavedAccountsRefusalTheComputersCatalogLists(t 
 		t.Fatalf("rediscoveries for a saved account's refusal = %d, want 0", got)
 	}
 }
+
+// A saved account or project-specific CODEX_HOME has no matching model catalog.
+// Its refusal blocks new sessions for a day, then permits one retry so a plan
+// change or model rollout cannot leave that account blocked forever.
+func TestResolveAgentConfigRetriesOldRefusalsWithoutAnAccountCatalog(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		accountID   string
+		projectHome bool
+	}{
+		{name: "saved account", accountID: "saved"},
+		{name: "project CODEX_HOME", projectHome: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			codexagent.ConfigureUnavailableModels("")
+			t.Cleanup(func() { codexagent.ConfigureUnavailableModels("") })
+			dir := t.TempDir()
+			t.Setenv("CODEX_HOME", filepath.Join(dir, "device"))
+			home := filepath.Join(dir, "other-account")
+			project := domain.ProjectConfig{}
+			if tc.projectHome {
+				project.Env = map[string]string{"CODEX_HOME": home}
+			}
+			store := codexagent.DefaultUnavailableModels()
+			model := "gpt-5.2-codex"
+			if err := store.Record(home, model, time.Now().Add(-25*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			catalog := &refreshCountingCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{{ID: model}}}}
+			m := &Manager{
+				backgroundContext: context.Background(), modelCatalog: catalog,
+				agentAccounts: codexAccountsFake{homes: map[string]string{"": "", "saved": home}},
+			}
+			if _, err := codexSpawn(m, tc.accountID, model, project); err != nil {
+				t.Fatalf("spawn after the retry window: %v", err)
+			}
+			if store.Unavailable(home, model) {
+				t.Fatal("the old refusal was not forgotten before retrying")
+			}
+			if err := store.Record(home, model, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := codexSpawn(m, tc.accountID, model, project); !errors.Is(err, ErrUnsupportedModel) {
+				t.Fatalf("spawn after a fresh refusal: error = %v, want ErrUnsupportedModel", err)
+			}
+			if got := catalog.refreshCount(); got != 0 {
+				t.Fatalf("another account's catalog was refreshed %d times, want 0", got)
+			}
+		})
+	}
+}
