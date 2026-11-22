@@ -395,8 +395,15 @@ function Composer({
 			.finally(() => { if (mounted) setDraftLoaded(true); });
 		return () => { mounted = false; };
 	}, [draftKey]);
+	// Set while a send that emptied the field is in flight (see `submit`).
+	const clearedForSend = useRef(false);
 	useEffect(() => {
 		if (!draftKey || !draftLoaded) return;
+		// The field emptied by a send in flight is not a draft: saving it would
+		// drop the stored message, and a send that then fails with the
+		// conversation closed would leave nothing to restore. The send removes it
+		// once it lands.
+		if (clearedForSend.current && !text && quotes.length === 0) return;
 		draftTimer.current = setTimeout(() => {
 			const value = encodeResponseDraft(text, quotes);
 			void afterDraftWrites(draftKey, () => value ? AsyncStorage.setItem(draftKey, value) : AsyncStorage.removeItem(draftKey)).catch(() => {});
@@ -452,6 +459,7 @@ function Composer({
 		// that fails puts it back. One with files or quotes stays until it lands.
 		const clearedAtSend = attachments.length === 0 && quotes.length === 0;
 		if (clearedAtSend) {
+			clearedForSend.current = true;
 			latestText.current = "";
 			setText("");
 			setCursor(undefined);
@@ -491,7 +499,10 @@ function Composer({
 			}
 			setLocalError(userFacingError(cause));
 			haptics.error();
-		} finally { setSubmitting(false); }
+		} finally {
+			clearedForSend.current = false;
+			setSubmitting(false);
+		}
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
 
 	// Pasting is a way to attach too, so it follows the same gate as the menu.
