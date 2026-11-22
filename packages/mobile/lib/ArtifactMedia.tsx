@@ -1,18 +1,22 @@
 import { useEvent } from "expo";
 import { useVideoPlayer, VideoView, type VideoPlayer } from "expo-video";
-import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { AccessibilityInfo, ActivityIndicator, Platform, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { haptics } from "./haptics";
 import { formatMediaTime } from "./mediaTime";
 import { Feather } from "./icons";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { fontScaleCap, iconSize, space, type } from "./tokens";
+import { fontScaleCap, iconSize, radius, space, type } from "./tokens";
 import { EmptyState } from "./ui";
 import { useGlassBarInset } from "./useHeaderOverlap";
 
 // How long a failed Cloud source waits for its renewed address before saying it can't play.
 const RENEW_WAIT_MS = 10_000;
+// How long a playing video's controls stay up after they were last used.
+const CONTROLS_HIDE_MS = 3_000;
+// Video controls sit over the picture, whatever the app's theme.
+const ON_VIDEO = { glyph: "#FFFFFF", text: "rgba(255,255,255,0.85)", button: "rgba(0,0,0,0.5)", bar: "rgba(0,0,0,0.6)", track: "rgba(255,255,255,0.3)" };
 
 /**
  * A video or audio artifact in the platform's own player, as the desktop plays
@@ -50,8 +54,8 @@ export function ArtifactMedia({ source, kind, active, name, label, hint, renew }
 	}, [active]);
 	const player = useVideoPlayer(shown ? source : null, (created) => {
 		created.loop = false;
-		// Audio draws its own position; a video's controls draw theirs.
-		if (kind === "audio") created.timeUpdateEventInterval = 0.25;
+		// The app draws the position for audio, and for video on iOS (see VideoControls).
+		if (kind === "audio" || Platform.OS === "ios") created.timeUpdateEventInterval = 0.25;
 	});
 	const { status } = useEvent(player, "statusChange", { status: player.status });
 	useEffect(() => {
@@ -81,8 +85,150 @@ export function ArtifactMedia({ source, kind, active, name, label, hint, renew }
 	if (kind === "audio") return <AudioPlayer key={source.uri} player={player} name={name} ready={status === "readyToPlay"} />;
 	return (
 		<View style={[styles.screen, { paddingTop: glassInset }]}>
-			<VideoView player={player} nativeControls contentFit="contain" fullscreenOptions={{ enable: true }} allowsPictureInPicture={false} style={styles.video} />
+			{Platform.OS === "ios"
+				? <VideoControls key={source.uri} player={player} ready={status === "readyToPlay"} />
+				: <VideoView player={player} nativeControls contentFit="contain" fullscreenOptions={{ enable: true }} allowsPictureInPicture={false} style={styles.video} />}
 		</View>
+	);
+}
+
+/** Play and pause, and where the file is, for the controls the app draws itself. */
+function useTransport(player: VideoPlayer) {
+	const { isPlaying } = useEvent(player, "playingChange", { isPlaying: player.playing });
+	const { currentTime } = useEvent(player, "timeUpdate", { currentTime: player.currentTime, currentLiveTimestamp: null, currentOffsetFromLive: null, bufferedPosition: 0 });
+	const { duration } = useEvent(player, "sourceLoad", { duration: player.duration, videoSource: null, availableVideoTracks: [], availableSubtitleTracks: [], availableAudioTracks: [] });
+	const length = duration > 0 ? duration : player.duration;
+	const toggle = () => {
+		haptics.tap();
+		if (isPlaying) player.pause();
+		else {
+			// Finished: start over, as a media element's play button does.
+			if (length > 0 && currentTime >= length - 0.25) player.currentTime = 0;
+			player.play();
+		}
+	};
+	return { isPlaying, currentTime, length, toggle };
+}
+
+function useScreenReaderEnabled(): boolean {
+	const [enabled, setEnabled] = useState(false);
+	useEffect(() => {
+		let live = true;
+		void AccessibilityInfo.isScreenReaderEnabled().then((value) => { if (live) setEnabled(value); }, () => {});
+		const subscription = AccessibilityInfo.addEventListener("screenReaderChanged", setEnabled);
+		return () => { live = false; subscription.remove(); };
+	}, []);
+	return enabled;
+}
+
+/**
+ * A video's controls on iOS, drawn by the app. The platform player's own
+ * controls never came up in the artifact viewer on iOS 27, even when tapped,
+ * and on iOS 26 a video not yet played showed none until the first tap, so a
+ * paused video was a bare picture with no way to see it could play. A tap on
+ * the picture shows or hides these; they hide while playing and stay while
+ * paused (or while a screen reader is on). Fullscreen is the platform's
+ * player, presented with its own controls.
+ */
+function VideoControls({ player, ready }: { player: VideoPlayer; ready: boolean }) {
+	const styles = useThemedStyles(makeStyles);
+	const view = useRef<VideoView>(null);
+	const { isPlaying, currentTime, length, toggle } = useTransport(player);
+	const screenReader = useScreenReaderEnabled();
+	const [shown, setShown] = useState(true);
+	// Bumped by each use of the controls, so the hide waits from the last one.
+	const [used, setUsed] = useState(0);
+	const [fullscreen, setFullscreen] = useState(false);
+	useEffect(() => {
+		if (!isPlaying) setShown(true);
+	}, [isPlaying]);
+	useEffect(() => {
+		if (!shown || !isPlaying || screenReader) return;
+		const timer = setTimeout(() => setShown(false), CONTROLS_HIDE_MS);
+		return () => clearTimeout(timer);
+	}, [shown, isPlaying, screenReader, used]);
+	const touched = () => setUsed((n) => n + 1);
+	const enterFullscreen = () => {
+		haptics.tap();
+		// Fullscreen shows the platform's controls; they are turned on first so it opens with them.
+		setFullscreen(true);
+		requestAnimationFrame(() => {
+			view.current?.enterFullscreen().catch(() => setFullscreen(false));
+		});
+	};
+	return (
+		<View style={styles.video}>
+			<VideoView
+				ref={view}
+				player={player}
+				nativeControls={fullscreen}
+				contentFit="contain"
+				fullscreenOptions={{ enable: true }}
+				allowsPictureInPicture={false}
+				onFullscreenEnter={() => setFullscreen(true)}
+				onFullscreenExit={() => setFullscreen(false)}
+				style={StyleSheet.absoluteFill}
+			/>
+			<Pressable accessible={false} onPress={() => setShown((value) => !value)} style={StyleSheet.absoluteFill} />
+			{(shown || screenReader) && !fullscreen ? (
+				<View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+					<View pointerEvents="box-none" style={styles.videoCenter}>
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel={isPlaying ? "Pause" : "Play"}
+							disabled={!ready}
+							onPress={() => { toggle(); touched(); }}
+							style={({ pressed }) => [styles.videoPlay, pressed && styles.pressed, !ready && styles.disabled]}
+						>
+							<Feather name={isPlaying ? "pause" : "play"} size={iconSize.xl} color={ON_VIDEO.glyph} />
+						</Pressable>
+					</View>
+					<View style={styles.videoBar}>
+						<View style={styles.videoPosition}>
+							<MediaPosition player={player} currentTime={currentTime} length={length} onVideo onSeek={touched} />
+						</View>
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel="Full screen"
+							disabled={!ready}
+							onPress={enterFullscreen}
+							hitSlop={space.sm}
+							style={({ pressed }) => [styles.videoFullscreen, pressed && styles.pressed, !ready && styles.disabled]}
+						>
+							<Feather name="maximize-2" size={iconSize.md} color={ON_VIDEO.glyph} />
+						</Pressable>
+					</View>
+				</View>
+			) : null}
+		</View>
+	);
+}
+
+/** A bar that shows the position and seeks where it is tapped, over the elapsed and total times. */
+function MediaPosition({ player, currentTime, length, onVideo = false, onSeek }: { player: VideoPlayer; currentTime: number; length: number; onVideo?: boolean; onSeek?: () => void }) {
+	const styles = useThemedStyles(makeStyles);
+	const [barWidth, setBarWidth] = useState(0);
+	const progress = length > 0 ? Math.min(1, Math.max(0, currentTime / length)) : 0;
+	return (
+		<>
+			<Pressable
+				accessibilityRole="adjustable"
+				accessibilityLabel="Position"
+				accessibilityValue={{ text: `${formatMediaTime(currentTime)} of ${formatMediaTime(length)}` }}
+				accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+				onAccessibilityAction={(event) => { player.seekBy(event.nativeEvent.actionName === "increment" ? 10 : -10); onSeek?.(); }}
+				onLayout={(event: LayoutChangeEvent) => setBarWidth(event.nativeEvent.layout.width)}
+				onPress={(event) => { if (barWidth > 0 && length > 0) player.currentTime = (event.nativeEvent.locationX / barWidth) * length; onSeek?.(); }}
+				hitSlop={{ top: space.md, bottom: space.md }}
+				style={[styles.track, onVideo && styles.trackOnVideo]}
+			>
+				<View style={[styles.trackFill, onVideo && styles.trackFillOnVideo, { width: `${progress * 100}%` }]} />
+			</Pressable>
+			<View style={[styles.times, onVideo && styles.timesOnVideo]}>
+				<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.time, onVideo && styles.timeOnVideo]}>{formatMediaTime(currentTime)}</Text>
+				<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.time, onVideo && styles.timeOnVideo]}>{formatMediaTime(length)}</Text>
+			</View>
+		</>
 	);
 }
 
@@ -95,21 +241,7 @@ function AudioPlayer({ player, name, ready }: { player: VideoPlayer; name: strin
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const glassInset = useGlassBarInset();
-	const { isPlaying } = useEvent(player, "playingChange", { isPlaying: player.playing });
-	const { currentTime } = useEvent(player, "timeUpdate", { currentTime: player.currentTime, currentLiveTimestamp: null, currentOffsetFromLive: null, bufferedPosition: 0 });
-	const { duration } = useEvent(player, "sourceLoad", { duration: player.duration, videoSource: null, availableVideoTracks: [], availableSubtitleTracks: [], availableAudioTracks: [] });
-	const length = duration > 0 ? duration : player.duration;
-	const [barWidth, setBarWidth] = useState(0);
-	const progress = length > 0 ? Math.min(1, Math.max(0, currentTime / length)) : 0;
-	const toggle = () => {
-		haptics.tap();
-		if (isPlaying) player.pause();
-		else {
-			// Finished: start over, as a media element's play button does.
-			if (length > 0 && currentTime >= length - 0.25) player.currentTime = 0;
-			player.play();
-		}
-	};
+	const { isPlaying, currentTime, length, toggle } = useTransport(player);
 	return (
 		<View style={[styles.screen, { paddingTop: glassInset }]}>
 			<View style={styles.audioArt}>
@@ -117,23 +249,7 @@ function AudioPlayer({ player, name, ready }: { player: VideoPlayer; name: strin
 				<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={2} style={styles.audioName}>{name}</Text>
 			</View>
 			<View style={styles.audioControls}>
-				<Pressable
-					accessibilityRole="adjustable"
-					accessibilityLabel="Position"
-					accessibilityValue={{ text: `${formatMediaTime(currentTime)} of ${formatMediaTime(length)}` }}
-					accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
-					onAccessibilityAction={(event) => player.seekBy(event.nativeEvent.actionName === "increment" ? 10 : -10)}
-					onLayout={(event: LayoutChangeEvent) => setBarWidth(event.nativeEvent.layout.width)}
-					onPress={(event) => { if (barWidth > 0 && length > 0) player.currentTime = (event.nativeEvent.locationX / barWidth) * length; }}
-					hitSlop={{ top: space.md, bottom: space.md }}
-					style={styles.track}
-				>
-					<View style={[styles.trackFill, { width: `${progress * 100}%` }]} />
-				</Pressable>
-				<View style={styles.times}>
-					<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.time}>{formatMediaTime(currentTime)}</Text>
-					<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.time}>{formatMediaTime(length)}</Text>
-				</View>
+				<MediaPosition player={player} currentTime={currentTime} length={length} />
 				<Pressable
 					accessibilityRole="button"
 					accessibilityLabel={isPlaying ? "Pause" : "Play"}
@@ -161,6 +277,15 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	times: { alignSelf: "stretch", flexDirection: "row", justifyContent: "space-between", marginTop: space.xs, marginBottom: space.lg },
 	time: { ...type.caption1, color: t.textSecondary, fontVariant: ["tabular-nums"] },
 	playButton: { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
+	trackOnVideo: { backgroundColor: ON_VIDEO.track },
+	trackFillOnVideo: { backgroundColor: ON_VIDEO.glyph },
+	timesOnVideo: { marginBottom: 0 },
+	timeOnVideo: { color: ON_VIDEO.text },
+	videoCenter: { flex: 1, alignItems: "center", justifyContent: "center" },
+	videoPlay: { width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center", backgroundColor: ON_VIDEO.button },
+	videoBar: { flexDirection: "row", alignItems: "center", gap: space.md, marginHorizontal: space.md, marginBottom: space.md, paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.sm, borderRadius: radius.lg, borderCurve: "continuous", backgroundColor: ON_VIDEO.bar },
+	videoPosition: { flex: 1 },
+	videoFullscreen: { width: 32, height: 32, alignItems: "center", justifyContent: "center", marginTop: -space.xs },
 	pressed: { opacity: 0.7 },
 	disabled: { opacity: 0.4 },
 });
