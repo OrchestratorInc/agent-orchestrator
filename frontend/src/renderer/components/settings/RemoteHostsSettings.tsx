@@ -6,6 +6,7 @@ import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
 import { compareVersions, hostUpdateAction, startHostUpdate, useHostUpdateStore } from "../../hooks/useHostUpdates";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
+import { useUpdateStatus } from "../../hooks/useUpdateStatus";
 import { useCloudSession } from "../../lib/cloud-session";
 import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { useSettings } from "../../hooks/useSettings";
@@ -48,6 +49,8 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	const formRef = useRef<HTMLFormElement>(null);
 	const localVersion = useHostUpdateStore((state) => state.localVersion);
 	const hostUpdates = useHostUpdateStore((state) => state.byUrl);
+	const localUpdate = useUpdateStatus();
+	const newest = (localUpdate.version && localVersion && ["available", "downloading", "preparing", "downloaded"].includes(localUpdate.state) && (compareVersions(localUpdate.version, localVersion) ?? 0) > 0 ? localUpdate.version : localVersion)?.replace(/^v/i, "");
 
 	const load = async () => {
 		setLoading(true);
@@ -159,7 +162,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			{saved.map((host) => {
 				const version = hostUpdates[host.url]?.view?.version;
 				const update = hostUpdateAction(hostUpdates[host.url], localVersion);
-				const target = version && localVersion && (compareVersions(version, localVersion) ?? 0) < 0 ? localVersion.replace(/^v/i, "") : undefined;
+				const target = version && localVersion && (compareVersions(version, localVersion) ?? 0) < 0 ? newest : undefined;
 				return (
 				<SettingsRow
 					key={host.url}
@@ -234,7 +237,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			}}
 			onOpenChange={(open) => { if (!open) setConfirmingUpdate(null); }}
 			open={confirmingUpdate !== null}
-			title={t("remote.updateAppTitle", { label: confirmingUpdate?.label, version: localVersion?.replace(/^v/i, "") })}
+			title={t("remote.updateAppTitle", { label: confirmingUpdate?.label, version: newest })}
 		/>
 		<ConfirmDialog
 			busy={removeBusy}

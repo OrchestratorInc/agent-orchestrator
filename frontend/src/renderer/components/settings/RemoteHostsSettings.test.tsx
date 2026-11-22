@@ -25,6 +25,8 @@ vi.mock("../../lib/bridge", () => ({ aoBridge: { remotes } }));
 vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: account.status, signIn: vi.fn() }) }));
 vi.mock("../../hooks/useCloudLocalAuth", () => ({ useCloudLocalAuth: () => ({ available: false }) }));
 vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
+const localUpdate = vi.hoisted(() => ({ status: { state: "idle" } as { state: string; version?: string } }));
+vi.mock("../../hooks/useUpdateStatus", () => ({ useUpdateStatus: () => localUpdate.status }));
 
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 
@@ -167,5 +169,17 @@ it("asks before updating a computer running the desktop app", async () => {
 	expect(screen.getByText("The app closes and relaunches on that computer. Its agents keep running.")).toBeVisible();
 	fireEvent.click(screen.getByRole("button", { name: "Update" }));
 	await waitFor(() => expect(remotes.startHostUpdate).toHaveBeenCalledWith("http://studio:3011"));
+	useHostUpdateStore.setState({ byUrl: {} });
+});
+
+it("names the newer release this computer has downloaded as the target", async () => {
+	saved.entries = [{ hostId: "studio", label: "Studio Mac", url: "http://studio:3011" }];
+	useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { "http://studio:3011": { view: { version: "0.14.10", supported: true, method: "app", state: "idle" } } } });
+	localUpdate.status = { state: "downloaded", version: "0.15.1" };
+	renderSettings();
+	expect(await screen.findByText("v0.15.1")).toBeVisible();
+	fireEvent.click(screen.getByRole("button", { name: "Update Studio Mac" }));
+	expect(screen.getByText("Update Orchestrator on Studio Mac to v0.15.1?")).toBeVisible();
+	localUpdate.status = { state: "idle" };
 	useHostUpdateStore.setState({ byUrl: {} });
 });
