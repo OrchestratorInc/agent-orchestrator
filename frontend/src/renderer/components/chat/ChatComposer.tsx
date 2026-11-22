@@ -312,6 +312,7 @@ export const ChatComposer = memo(function ChatComposer({
 	elicitation,
 	skills = [],
 	skillsLoading = false,
+	filePathsLoading = false,
 	filePaths = [],
 	filePathsTruncated,
 	onFileQuery,
@@ -321,6 +322,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onSteer,
 	showSteerButton,
 	onInterrupt,
+	stopping,
 	onContinue,
 	canSteer,
 	sendPending,
@@ -432,6 +434,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 * belong to the editor.
 	 */
 	skillsLoading?: boolean;
+	filePathsLoading?: boolean;
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
 	/**
@@ -465,6 +468,8 @@ export const ChatComposer = memo(function ChatComposer({
 	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
 	onInterrupt?: () => void;
+	/** Stop already landed; the turn is winding down, so Stop shows progress instead of firing again. */
+	stopping?: boolean;
 	/**
 	 * Pick a stopped turn back up when there is no draft to send: the same button
 	 * that stopped it continues it, like play after pause. Present only while the
@@ -872,7 +877,8 @@ export const ChatComposer = memo(function ChatComposer({
 	// Drawn even with nothing to pick while the skills are on their way, so `/` is
 	// never answered with silence. Keyboard handling still follows `menuOpen`.
 	const skillsNote = skillsLoading && trigger?.kind === "skill" && trigger.key !== dismissedKey;
-	const menuShown = menuOpen || skillsNote;
+	const filesNote = filePathsLoading && trigger?.kind === "file" && trigger.key !== dismissedKey;
+	const menuShown = menuOpen || skillsNote || filesNote;
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
 	// index from the previous list can point past the end of this one.
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
@@ -2265,7 +2271,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 		// The "Loading skills…" note closes the same way a menu does.
-		if (event.key === "Escape" && skillsLoading && liveTrigger?.kind === "skill" && liveTrigger.key !== dismissedKeyRef.current) {
+		if (event.key === "Escape" && liveTrigger && ((skillsLoading && liveTrigger.kind === "skill") || (filePathsLoading && liveTrigger.kind === "file")) && liveTrigger.key !== dismissedKeyRef.current) {
 			event.preventDefault();
 			event.stopPropagation();
 			dismissedKeyRef.current = liveTrigger.key;
@@ -2498,7 +2504,7 @@ export const ChatComposer = memo(function ChatComposer({
 						highlighted={activeIndex}
 						onPick={pick}
 						truncated={trigger?.kind === "file" && filePathsTruncated}
-						loadingNote={skillsNote ? "Loading skills…" : undefined}
+						loadingNote={skillsNote ? "Loading skills…" : filesNote ? "Loading files…" : undefined}
 					/>
 				) : null}
 
@@ -2822,11 +2828,13 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="primary"
 										size="icon-sm"
 										shape="pill"
-										disabled={canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
+										disabled={canStopTurn ? Boolean(stopping) : canContinueTurn ? continuing : !sendActionEnabled}
 										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
-										aria-label={canStopTurn ? "Stop turn" : canContinueTurn ? "Continue turn" : sendActionLabel}
+										aria-label={canStopTurn ? (stopping ? "Stopping turn" : "Stop turn") : canContinueTurn ? "Continue turn" : sendActionLabel}
 									>
-										{canStopTurn ? (
+										{canStopTurn && stopping ? (
+											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+										) : canStopTurn ? (
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : canContinueTurn && !continuing ? (
 											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
@@ -2840,7 +2848,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</Button>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : canContinueTurn ? "Continue from where it stopped" : sendBlockedReason ?? (durableDelivery ? sendActionLabel : sendHint)}</TooltipContent>
+							<TooltipContent side="bottom">{canStopTurn ? (stopping ? "Stopping…" : "Stop turn") : canContinueTurn ? "Continue from where it stopped" : sendBlockedReason ?? (durableDelivery ? sendActionLabel : sendHint)}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>
