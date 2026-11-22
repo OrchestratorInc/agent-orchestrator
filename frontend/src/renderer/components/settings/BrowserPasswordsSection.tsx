@@ -53,7 +53,7 @@ function vaultError(reason: unknown, fallback: string): string {
 	return match?.[1] || reason.message || fallback;
 }
 
-export function BrowserPasswordsSection({ titleHidden }: { titleHidden?: boolean }) {
+export function BrowserPasswordsSection() {
 	const { t } = useTranslation();
 	const bridge = (aoBridge as Partial<AoBridge>).vault as VaultBridge | undefined;
 	const projects = useLocalProjects();
@@ -112,7 +112,6 @@ export function BrowserPasswordsSection({ titleHidden }: { titleHidden?: boolean
 			<SettingsSection
 				title={t("settings.passwords.saved")}
 				sectionId="passwords"
-				titleHidden={titleHidden}
 				grouped
 				action={
 					<Button disabled={!bridge || !available} onClick={() => setEditing("new")} size="sm" type="button" variant="quiet">

@@ -1,6 +1,6 @@
 import { BrowserApprovalsSection } from "./BrowserApprovalsSection";
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, Bot, CircleHelp, CreditCard, Keyboard, KeyRound, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
+import { Activity, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "@/components/app-icons";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -126,17 +126,12 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		render: (_t, titleHidden) => (
 			<>
 				<BrowserProfilesSection titleHidden={titleHidden} />
+				<BrowserPasswordsSection />
 				<BrowserDownloadsSection />
 				<BrowserChromeSection />
 				<BrowserApprovalsSection />
 			</>
 		),
-	},
-	{
-		id: "passwords",
-		icon: KeyRound,
-		label: (t) => t("settings.passwords"),
-		render: (_t, titleHidden) => <BrowserPasswordsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "computerUse",

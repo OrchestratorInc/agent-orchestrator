@@ -5243,7 +5243,6 @@
 	"settings.approvals.loadFailed": "Não foi possível carregar as aprovações: {{message}}",
 	"browser.approvals.label": "Perguntar antes de agir",
 	"approvals.category.script": "Script da página",
-	"settings.passwords": "Senhas",
 	"settings.passwords.saved": "Senhas salvas",
 	"settings.passwords.add": "Adicionar senha",
 	"settings.passwords.empty": "Nenhuma senha salva. Agentes podem entrar com uma senha salva sem nunca vê-la.",

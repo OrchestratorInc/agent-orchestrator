@@ -5096,7 +5096,6 @@
 	"settings.approvals.loadFailed": "承認を読み込めませんでした: {{message}}",
 	"browser.approvals.label": "操作前に確認",
 	"approvals.category.script": "ページスクリプト",
-	"settings.passwords": "パスワード",
 	"settings.passwords.saved": "保存済みパスワード",
 	"settings.passwords.add": "パスワードを追加",
 	"settings.passwords.empty": "保存済みのパスワードはありません。エージェントは保存済みパスワードを一度も見ることなくサインインできます。",

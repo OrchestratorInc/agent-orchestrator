@@ -5076,7 +5076,6 @@
 	"settings.approvals.logEmpty": "Henüz onay gerektiren eylem yok",
 	"settings.approvals.loadFailed": "Onaylar yüklenemedi: {{message}}",
 	"browser.approvals.label": "Eylemden önce sor",
-	"settings.passwords": "Parolalar",
 	"settings.passwords.saved": "Kayıtlı parolalar",
 	"settings.passwords.add": "Parola ekle",
 	"settings.passwords.empty": "Kayıtlı parola yok. Ajanlar kayıtlı bir parolayı hiç görmeden onunla oturum açabilir.",

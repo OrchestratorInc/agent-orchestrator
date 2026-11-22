@@ -5078,7 +5078,6 @@
 	"settings.approvals.loadFailed": "无法加载批准：{{message}}",
 	"browser.approvals.label": "操作前询问",
 	"approvals.category.script": "页面脚本",
-	"settings.passwords": "密码",
 	"settings.passwords.saved": "已保存的密码",
 	"settings.passwords.add": "添加密码",
 	"settings.passwords.empty": "没有已保存的密码。智能体可以使用已保存的密码登录，而始终看不到它。",

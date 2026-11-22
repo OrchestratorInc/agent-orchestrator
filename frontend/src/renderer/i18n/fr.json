@@ -5243,7 +5243,6 @@
 	"settings.approvals.loadFailed": "Impossible de charger les approbations : {{message}}",
 	"browser.approvals.label": "Demander avant d’agir",
 	"approvals.category.script": "Script de page",
-	"settings.passwords": "Mots de passe",
 	"settings.passwords.saved": "Mots de passe enregistrés",
 	"settings.passwords.add": "Ajouter un mot de passe",
 	"settings.passwords.empty": "Aucun mot de passe enregistré. Les agents peuvent se connecter avec un mot de passe enregistré sans jamais le voir.",

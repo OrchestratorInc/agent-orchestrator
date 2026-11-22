@@ -5076,7 +5076,6 @@
 	"settings.approvals.loadFailed": "Could not load approvals: {{message}}",
 	"browser.approvals.label": "Ask before acting",
 	"approvals.category.script": "Page script",
-	"settings.passwords": "Passwords",
 	"settings.passwords.saved": "Saved passwords",
 	"settings.passwords.add": "Add password",
 	"settings.passwords.empty": "No saved passwords. Agents can sign in with a saved password without ever seeing it.",

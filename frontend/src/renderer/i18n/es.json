@@ -5243,7 +5243,6 @@
 	"settings.approvals.loadFailed": "No se pudieron cargar las aprobaciones: {{message}}",
 	"browser.approvals.label": "Preguntar antes de actuar",
 	"approvals.category.script": "Script de página",
-	"settings.passwords": "Contraseñas",
 	"settings.passwords.saved": "Contraseñas guardadas",
 	"settings.passwords.add": "Añadir contraseña",
 	"settings.passwords.empty": "No hay contraseñas guardadas. Los agentes pueden iniciar sesión con una contraseña guardada sin verla nunca.",

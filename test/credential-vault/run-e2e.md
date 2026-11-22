@@ -23,7 +23,7 @@ require("fs").writeFileSync("secret.env",
 `http://localhost:4173/login` asks for `alice@example.test` + the password, then
 `/2fa` asks for the TOTP code, then `/welcome` greets the user.
 
-## 2. Save the credential in Settings › Passwords
+## 2. Save the credential in Settings › Browser › Saved passwords
 
 Add password: Sites `http://localhost:4173`, Username `alice@example.test`,
 Password and 2FA setup key from `secret.env` (paste them; do not echo them in a
@@ -45,7 +45,7 @@ Expected:
 - The agent's `login` prints `Signed in fields username, password on
   http://localhost:4173 (••••)`, then `totp` on `/2fa`, with no second prompt.
 - The page reaches `/welcome`; `site.log` shows `POST /login ok`, `POST /2fa ok`.
-- Settings › Passwords › Sign-in activity lists two `Filled` rows; the approvals
+- Settings › Browser › Sign-in activity lists two `Filled` rows; the approvals
   log lists one `allow-site` then `site-allowed`.
 
 Negative checks, same session:
