@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { conversationQueryKey, refreshRemoteConversation } from "../hooks/useConversation";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, toCloudWorkspace, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { useCloudOrg } from "../hooks/useCloudOrg";
@@ -106,6 +107,8 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 				mutationFn: async () => {
 					const result = await restoreSession(resolved.sessionId, remoteHostId);
 					if (result.status !== "success") throw new Error(result.message);
+					if (remoteHostId) await refreshRemoteConversation(queryClient, resolved.sessionId, remoteHostId).catch(() => {});
+					else await queryClient.invalidateQueries({ queryKey: conversationQueryKey(resolved.sessionId) }).catch(() => {});
 				},
 			}).execute(undefined).catch((error: unknown) => {
 				showGlobalToast(error instanceof Error ? error.message : "Unable to restore session", undefined, {

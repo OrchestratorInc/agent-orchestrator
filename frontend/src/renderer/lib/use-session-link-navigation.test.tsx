@@ -87,7 +87,9 @@ describe("useSessionLinkNavigation", () => {
 		expect(mocks.restore).toHaveBeenCalledTimes(1);
 		expect(mocks.restore).toHaveBeenCalledWith("terminated", undefined);
 		expect(queryClient.isMutating({ mutationKey: ["resume-agent", "local", "terminated"] })).toBe(1);
+		const refetch = vi.spyOn(queryClient, "invalidateQueries");
 		await act(async () => finish({ status: "success" }));
+		expect(refetch).toHaveBeenCalledWith({ queryKey: ["conversation", "terminated"] });
 		expect(queryClient.isMutating()).toBe(0);
 		expect(useUiStore.getState().globalToasts).toEqual([]);
 	});
