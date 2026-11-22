@@ -26,7 +26,7 @@ import { useChatArtifactFiles, useChatSessionId } from "./chat-image-source";
 import { ArtifactThumbnail } from "../ArtifactThumbnail";
 import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
 import type { ArtifactRow } from "../../lib/artifacts";
-import { useChatEntrance } from "./chat-entrance";
+import { useChatEntrance, useRequestedEntrance } from "./chat-entrance";
 import { pageHidden } from "../../lib/page-hidden";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -1147,7 +1147,8 @@ export function HumanMessage({
 	sessionId,
 	apiBaseUrl = getApiBaseUrl(),
 	queued,
-	animateIn = false,
+	animateIn: animateInRequested = false,
+	entranceKey,
 	onEdit,
 	editing = false,
 	editText,
@@ -1178,6 +1179,8 @@ export function HumanMessage({
 	queued?: boolean;
 	/** True only for a human message added after the timeline first mounted. */
 	animateIn?: boolean;
+	/** The timeline's key for this prompt, shared by its local echo and durable row; the entrance plays once per key. */
+	entranceKey?: string;
 	onEdit?: (turnId: string, text: string) => Promise<unknown> | void;
 	editing?: boolean;
 	editText?: string;
@@ -1203,6 +1206,7 @@ export function HumanMessage({
 	 */
 	status?: ReactNode;
 }) {
+	const animateIn = useRequestedEntrance(entranceKey ?? message.id, animateInRequested);
 	// A cloud message's files are listed by the message itself; the references
 	// its local echo carries until the server's copy arrives are not prose.
 	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
@@ -2163,7 +2167,7 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 				// Said explicitly rather than implied by the label: "Ran command"
 				// alone never tells the reader what ran, and the collapsed row
 				// deliberately keeps only the category.
-				<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
+				<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 					{detail.command}
 				</pre>
 			) : null}
@@ -2245,7 +2249,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 			) : null}
 
 			{command ? (
-				<pre
+				<pre data-no-swipe-nav=""
 					className={cn(
 						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
 						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
@@ -2289,7 +2293,7 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 				<Keyboard aria-hidden="true" className="size-3" />
 				Agent typed
 			</span>
-			<pre className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
+			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
 				{shown}
 			</pre>
 			{truncated ? (
@@ -2369,7 +2373,7 @@ function CommandOutput({
 
 	return (
 		<>
-			<pre
+			<pre data-no-swipe-nav=""
 				ref={pre}
 				aria-live={streaming ? "polite" : undefined}
 				className={cn(
@@ -2699,6 +2703,16 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Whether a tool payload field carries anything. The daemon stores an ACP tool
+ * call's missing input or content as JSON null (Hermes rows have left it out
+ * since #6635; other ACP providers and older Hermes rows still carry it), so
+ * null counts as absent: printing it would show the word "null" as the body.
+ */
+function present(value: unknown): boolean {
+	return value !== undefined && value !== null;
+}
+
+/**
  * A call to a tool served by an MCP server.
  *
  * Deliberately not shaped like a command row. These used to render as though the
@@ -2825,9 +2839,9 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 function mcpToolHasBody(activity: ConversationActivity): boolean {
 	const detail = activity.detail;
 	return Boolean(
-		mcpToolArguments(activity) !== undefined ||
-		detail?.result !== undefined ||
-		detail?.content !== undefined ||
+		present(mcpToolArguments(activity)) ||
+		present(detail?.result) ||
+		present(detail?.content) ||
 		detail?.error ||
 		detail?.progress,
 	);
@@ -2844,11 +2858,11 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
 					{detail.error}
 				</p>
 			) : null}
-			{args !== undefined ? <JsonPayload label="Arguments" value={args} /> : null}
-			{detail?.result !== undefined ? (
-				<JsonPayload label="Result" value={detail.result} />
+			{present(args) ? <JsonPayload label="Arguments" value={args} /> : null}
+			{present(detail?.result) ? (
+				<JsonPayload label="Result" value={detail?.result} />
 			) : null}
-			{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
+			{present(detail?.content) ? <ToolContent value={detail?.content} /> : null}
 			{detail?.progress ? (
 				<div className="flex flex-col gap-1">
 					<span className="text-caption text-muted-foreground/70">
@@ -2948,7 +2962,7 @@ function ToolContent({ value }: { value: unknown }) {
 	if (text) {
 		if (looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
 		return (
-			<pre className="chat-code max-h-64 overflow-auto whitespace-pre rounded-lg border border-border bg-background px-2.5 py-1.5">
+			<pre data-no-swipe-nav="" className="chat-code max-h-64 overflow-auto whitespace-pre rounded-lg border border-border bg-background px-2.5 py-1.5">
 				<code className="block whitespace-pre font-mono text-caption leading-relaxed text-muted-foreground">
 					{ text }
 				</code>
@@ -2957,7 +2971,7 @@ function ToolContent({ value }: { value: unknown }) {
 	}
 	const truncated = truncationNote(value);
 	return (
-		<pre className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
+		<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
 			<code className="font-mono text-caption leading-[1.55] text-foreground">
 				{truncated ?? formatJson(value)}
 			</code>
@@ -3047,7 +3061,7 @@ function JsonPayload({ label, value }: { label: string; value: unknown }) {
 					{capped}
 				</p>
 			) : (
-				<pre className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
+				<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
 					<code className="font-mono text-caption leading-[1.55] text-foreground">
 						<HighlightedCode code={text} language="json" />
 					</code>

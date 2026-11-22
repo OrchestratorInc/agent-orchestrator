@@ -8,6 +8,7 @@ import { createDesktopQuitController } from "./desktop-quit";
 import { requestDesktopShutdown } from "./desktop-shutdown";
 import { isTrayEnabled } from "./tray-lifecycle";
 import { TRAY_RENDERER_READY_CHANNEL } from "../shared/tray";
+import { parseSharedArtifactLink } from "../../../packages/shared/artifacts/shared-artifact-link";
 
 // Execute the production handlers, following daemon-auto-restart's VM harness.
 // This catches wiring mistakes that isolated controller tests cannot observe.
@@ -106,6 +107,89 @@ function setup(platform: NodeJS.Platform = "win32", withTray = true) {
 	const rendererReady = (sender = context.getShellWebContents()) => ipcMain.emit(TRAY_RENDERER_READY_CHANNEL, { sender });
 	return { app, context, controller, fetch, trayLifecycle, confirmLeave, guard, createWindowInternal, focus, settled, navigated, rendererReady };
 }
+
+function setupDeepLinks() {
+	const h = setup();
+	Object.assign(h.app, { whenReady: vi.fn(async () => undefined) });
+	Object.assign(h.context, {
+		URL, parseSharedArtifactLink, SHARED_ARTIFACT_VIEWER_ORIGINS: ["https://orchestrator.inc"],
+		windowsAwaitingFirstShow: new Set(), pendingSharedArtifacts: [], MAX_PENDING_SHARED_ARTIFACTS: 20,
+		openSharedArtifact: vi.fn(), OPEN_SETTINGS_SHORTCUT_CHANNEL: "open-settings",
+	});
+	const names = new Set(["focusCloudWindow", "isShareDeepLink", "isBillingDeepLink", "handleCloudDeepLinkAndFocus"]);
+	const declarations = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.has(node.name?.text ?? ""));
+	vm.runInContext(transpile(declarations.map((node) => node.getText(source)).join("\n")), h.context);
+	return { ...h, open: (url: string) => h.context.handleCloudDeepLinkAndFocus(url) as Promise<void> };
+}
+
+describe("tray-resident deep links", () => {
+	const viewer = "https://orchestrator.inc/artifact/abcdefghijklmnopqrstuvwxyz";
+	const link = `ao-app://shared-artifact?url=${encodeURIComponent(viewer)}`;
+
+	it("recreates the closed dashboard and queues a published artifact for its renderer", async () => {
+		const h = setupDeepLinks();
+		h.context.mainWindow!.close();
+		await h.open(link);
+		expect(h.createWindowInternal).toHaveBeenCalledOnce();
+		expect(h.context.pendingSharedArtifacts).toEqual([viewer]);
+		expect(h.context.openSharedArtifact).not.toHaveBeenCalled();
+	});
+
+	it("delivers a published artifact to the existing dashboard without duplicating its queue entry", async () => {
+		const h = setupDeepLinks();
+		const contents = { isLoading: () => false, isDestroyed: () => false, send: vi.fn() };
+		h.context.getShellWebContents = () => contents;
+		await h.open(link);
+		await h.open(link);
+		expect(contents.send).toHaveBeenCalledWith("cloud:openSharedArtifact", viewer);
+		expect(h.context.pendingSharedArtifacts).toEqual([viewer]);
+		expect(h.createWindowInternal).not.toHaveBeenCalled();
+	});
+
+	it("recreates the closed dashboard for a billing link and queues its destination", async () => {
+		const h = setupDeepLinks();
+		h.context.mainWindow!.close();
+		await h.open("ao-app://billing");
+		await h.settled();
+		expect(h.createWindowInternal).toHaveBeenCalledOnce();
+		expect(h.context.pendingBillingSection).toBe("billing");
+	});
+
+	it("ignores artifact links once desktop shutdown has started", async () => {
+		const h = setupDeepLinks();
+		h.context.browserQuitRequested = true;
+		await h.open(link);
+		expect(h.createWindowInternal).not.toHaveBeenCalled();
+		expect(h.context.pendingSharedArtifacts).toEqual([]);
+		expect(h.context.openSharedArtifact).not.toHaveBeenCalled();
+	});
+
+	it("does not reopen for an artifact if shutdown starts while awaiting app readiness", async () => {
+		const h = setupDeepLinks();
+		h.context.mainWindow!.close();
+		let ready!: () => void;
+		h.context.app.whenReady.mockImplementation(() => new Promise<void>((resolve) => { ready = resolve; }));
+		const pending = h.open(link);
+		h.context.browserQuitRequested = true;
+		ready();
+		await pending;
+		expect(h.createWindowInternal).not.toHaveBeenCalled();
+		expect(h.context.pendingSharedArtifacts).toEqual([]);
+		expect(h.context.openSharedArtifact).not.toHaveBeenCalled();
+	});
+
+	it("does not open a fallback artifact window if recreation fails during shutdown", async () => {
+		const h = setupDeepLinks();
+		h.context.mainWindow!.close();
+		h.createWindowInternal.mockImplementationOnce(async () => {
+			h.context.browserQuitRequested = true;
+			throw new Error("window closed during shutdown");
+		});
+		await h.open(link);
+		expect(h.context.pendingSharedArtifacts).toEqual([]);
+		expect(h.context.openSharedArtifact).not.toHaveBeenCalled();
+	});
+});
 
 describe("desktop tray event wiring", () => {
 	it.each(["close", "ordinary quit"])("preserves the daemon on Windows %s", async (action) => {

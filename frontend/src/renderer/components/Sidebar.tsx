@@ -143,7 +143,7 @@ import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { CloudMark } from "./CloudMark";
 import { ProjectIcon } from "./ProjectIcon";
 import { OrchestratorIcon } from "./icons";
-import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
+import { OrchestratorReplyIcon, orchestratorReplyLabel, ReplyBadge } from "./OrchestratorReplyIcon";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -154,7 +154,7 @@ import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
-import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
+import { isSessionUnread, sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
@@ -185,6 +185,8 @@ const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperti
 const ROW_ACTIONS_CLASS = "absolute inset-y-0 right-1 flex items-center gap-0.5";
 /** Long enough that sweeping the pointer across the list starts no agents. */
 const AGENT_WARM_UP_HOVER_MS = 300;
+/** How long the pointer rests on a chat row before its history is read. */
+const CHAT_PREFETCH_REST_MS = 100;
 const ROW_ACTION_BUTTON_CLASS = "sidebar-icon-action [&_svg]:size-icon-md";
 const HOVER_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 const SESSION_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
@@ -608,7 +610,8 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
 // Each state has its own glyph, so colour is never the only difference: a red
 // alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge.
+// request is ready to merge. A row's blue spinner (working) and its dot are
+// drawn by SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
@@ -630,6 +633,33 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 			onAnimationEnd={onPopEnd}
 			{...rest}
 		/>
+	);
+}
+
+// The spinner and the dot: a blue spinner while the agent works, a filled grey
+// dot for a session that changed since the user last opened it, a hollow grey
+// ring otherwise.
+function SessionActivityGlyph({ state, ...rest }: {
+	state: "working" | "unread" | "read";
+} & Record<`data-${string}`, string | undefined>) {
+	if (state === "working") {
+		return (
+			<LoaderCircle
+				className="-mx-0.5 size-3 animate-spin text-status-working motion-reduce:animate-none"
+				{...rest}
+			/>
+		);
+	}
+	return (
+		<span className="-mx-0.5 inline-flex size-3 items-center justify-center" {...rest}>
+			<span
+				className={cn(
+					"size-2 rounded-full",
+					state === "unread" ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
+				)}
+				data-session-unread={state === "unread" ? "" : undefined}
+			/>
+		</span>
 	);
 }
 
@@ -670,24 +700,13 @@ export function SessionStatusDot({ session, indicator }: {
 					popped={popped}
 				/>
 			) : working ? (
-				<LoaderCircle
-					className="-mx-0.5 size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
-					data-session-status={session.status}
-					data-session-spinner=""
-				/>
+				<SessionActivityGlyph data-session-spinner="" data-session-status={session.status} state="working" />
 			) : (
-				<span
-					className="-mx-0.5 inline-flex size-3 items-center justify-center"
+				<SessionActivityGlyph
 					data-session-idle={stopped ? "stopped" : "idle"}
 					data-session-status={session.status}
-				>
-					<span
-						className={cn(
-							"size-2 rounded-full",
-							unread ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
-						)}
-					/>
-				</span>
+					state={unread ? "unread" : "read"}
+				/>
 			)}
 		</span>
 	);
@@ -831,9 +850,18 @@ export const Sidebar = memo(function Sidebar({
 	// while staying on a session is left alone.
 	const activeSessionKey = selection.activeSessionId ?? selection.activeRemoteSessionId;
 	const activeProjectKey = selection.activeProjectId;
+	// A project row's Orchestrator button opens its chat without touching the
+	// project's disclosure, so the reveal below must not expand the project for
+	// the chat that button opened. Cleared by the next session change either way.
+	const orchestratorButtonSessionId = useRef<string | null>(null);
+	const noteOrchestratorButtonOpen = useLatestCallback((sessionId: string) => {
+		orchestratorButtonSessionId.current = sessionId;
+	});
 	useEffect(() => {
+		const openedFromOrchestratorButton = orchestratorButtonSessionId.current === activeSessionKey;
+		orchestratorButtonSessionId.current = null;
 		if (!activeSessionKey || isCollapsed) return;
-		if (activeProjectKey) {
+		if (activeProjectKey && !openedFromOrchestratorButton) {
 			setExpandedIds((prev) => {
 				if (prev.has(activeProjectKey)) return prev;
 				const next = new Set(prev);
@@ -1285,6 +1313,7 @@ export const Sidebar = memo(function Sidebar({
 													projectDragInProgress={draggingProjectId !== null}
 													consumeDragClick={projectDragClickGuard.consumeClick}
 													onToggle={toggleProjectDisclosure}
+													onOrchestratorButtonOpen={noteOrchestratorButtonOpen}
 													onRemoveProject={onRemoveProject}
 													onProjectDragStart={handleProjectDragStart}
 													onProjectDragEnd={handleProjectDragEnd}
@@ -1499,6 +1528,8 @@ type ProjectItemProps = {
 	avatarUrl?: string;
 	hostLabel?: string;
 	onOpenOrchestrator?: () => void;
+	/** Called with the orchestrator chat the row's Orchestrator button is about to open. */
+	onOrchestratorButtonOpen?: (sessionId: string) => void;
 	expanded: boolean;
 	selection: Selection;
 	isDragged: boolean;
@@ -1547,6 +1578,7 @@ const ProjectItem = memo(function ProjectItem({
 	avatarUrl,
 	hostLabel,
 	onOpenOrchestrator,
+	onOrchestratorButtonOpen,
 	expanded,
 	selection,
 	isDragged,
@@ -1610,6 +1642,33 @@ const ProjectItem = memo(function ProjectItem({
 		[workspace.sessions, workspace.shared],
 	);
 	const projectNeedsInput = useMemo(() => visibleSessions.some(sessionNeedsInput), [visibleSessions]);
+	// What a collapsed project signals, strongest first: a session waiting on the
+	// user (the alert replaces the icon), then one whose agent is working, then a
+	// finished turn the user has not opened (both a corner dot on the icon, like
+	// the orchestrator button's).
+	const readAt = useSessionReadStore((state) => state.readAt);
+	const readBaseline = useSessionReadStore((state) => state.baseline);
+	const markRead = useSessionReadStore((state) => state.markRead);
+	const openSessionId = selection.activeSessionId;
+	const viewedSession = visibleSessions.find((session) => session.id === openSessionId);
+	// The open session's row marks it read, but a collapsed project has no rows,
+	// so the project keeps it read too: nothing the user is looking at is unread.
+	useEffect(() => {
+		if (!viewedSession) return;
+		const updated = Date.parse(viewedSession.updatedAt);
+		if (Number.isFinite(updated)) markRead(sessionReadKey(viewedSession), updated);
+	}, [markRead, viewedSession]);
+	const projectActivity = useMemo(() => {
+		if (projectNeedsInput) return "attention" as const;
+		const indicators = visibleSessions.map((session) => getSessionRowIndicator(session));
+		if (indicators.includes("working")) return "working" as const;
+		const read = { readAt, baseline: readBaseline };
+		return visibleSessions.some(
+			(session, index) => session.id !== openSessionId && indicators[index] === null && isSessionUnread(session, read),
+		)
+			? ("unread" as const)
+			: null;
+	}, [openSessionId, projectNeedsInput, readAt, readBaseline, visibleSessions]);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
 		() => {
@@ -1698,11 +1757,14 @@ const ProjectItem = memo(function ProjectItem({
 
 	// Mirrors the session topbar's launcher: attach to the running orchestrator, or
 	// spawn one via the daemon and follow it once the workspace refetches.
-	// Expand a collapsed project so opening the orchestrator also reveals its
-	// session list — otherwise the tree stays shut while you're inside it.
+	// Opening the orchestrator leaves the project's session list as it was:
+	// only the row and folder toggle change disclosure.
+	const goOrchestrator = (sessionId: string) => {
+		onOrchestratorButtonOpen?.(sessionId);
+		selection.goSession(workspace.id, sessionId);
+	};
 	const openOrchestrator = async () => {
 		if (isSpawning || isProjectProvisioning || isProjectRestarting) return;
-		if (!expanded) toggleDisclosure();
 		if (onOpenOrchestrator) {
 			onOpenOrchestrator();
 			return;
@@ -1715,7 +1777,7 @@ const ProjectItem = memo(function ProjectItem({
 					// Start the resume, then open the chat while it runs; its
 					// composer shows the startup shimmer in the meantime.
 					const resume = resumeOrchestrator(orchestrator.id);
-					selection.goSession(workspace.id, orchestrator.id);
+					goOrchestrator(orchestrator.id);
 					await resume;
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					return;
@@ -1731,7 +1793,7 @@ const ProjectItem = memo(function ProjectItem({
 					setIsSpawning(false);
 				}
 			}
-			selection.goSession(workspace.id, orchestrator.id);
+			goOrchestrator(orchestrator.id);
 			return;
 		}
 		// A guest cannot start an orchestrator in someone else's project.
@@ -1744,7 +1806,7 @@ const ProjectItem = memo(function ProjectItem({
 			try {
 				const sessionId = await spawnCloudOrchestrator(queryClient, workspace.id);
 				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				selection.goSession(workspace.id, sessionId);
+				goOrchestrator(sessionId);
 			} catch (err) {
 				console.error("Failed to spawn cloud orchestrator:", err);
 				void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
@@ -1761,7 +1823,7 @@ const ProjectItem = memo(function ProjectItem({
 		try {
 			const sessionId = await spawnOrchestrator(workspace.id, "sidebar");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			selection.goSession(workspace.id, sessionId);
+			goOrchestrator(sessionId);
 		} catch (err) {
 			console.error("Failed to spawn orchestrator:", err);
 			void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
@@ -2000,12 +2062,15 @@ const ProjectItem = memo(function ProjectItem({
 										{/* 1.2 — contextual icon swap on hover, instant (scale and opacity snap).
 										    Hover paint lives in styles.css (fine pointer only). */}
 										<span
-											className="inline-flex size-icon-md items-center justify-center"
+											className="relative inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
-											{!expanded && projectNeedsInput ? (
+											{!expanded && projectActivity === "attention" ? (
 												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
 											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
+											{!expanded && (projectActivity === "working" || projectActivity === "unread") ? (
+												<ReplyBadge data-project-marker={projectActivity} reply={projectActivity} surface="sidebar" />
+											) : null}
 										</span>
 										<span
 											className={cn(
@@ -2784,6 +2849,12 @@ const SessionRow = memo(function SessionRow({
 		if (!canPrefetchChat || (!session.hostId && !hasTrustedApiBaseUrl()) || queryClient.getQueryData(conversationQueryKey(session.id, session.hostId))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id, session.hostId));
 	};
+	// Reads the chat once the pointer rests on the row, not as it passes over: every
+	// move restarts the wait, so sweeping down the list, however slowly, reads nothing.
+	const prefetchWhenResting = () => {
+		clearTimeout(hoverTimerRef.current);
+		hoverTimerRef.current = setTimeout(prefetchConversation, CHAT_PREFETCH_REST_MS);
+	};
 	// A stopped agent takes seconds to come back. Start it while the pointer rests
 	// on the row so the chat is ready when it opens; opening joins this request.
 	const warmUpAgent = () => {
@@ -2896,9 +2967,10 @@ const SessionRow = memo(function SessionRow({
 							{...(reorder?.listeners ?? {})}
 							onMouseEnter={() => {
 								if (!canPrefetchChat) return;
-								hoverTimerRef.current = setTimeout(prefetchConversation, 100);
+								prefetchWhenResting();
 								if (canPrefetch) resumeTimerRef.current = setTimeout(warmUpAgent, AGENT_WARM_UP_HOVER_MS);
 							}}
+							onMouseMove={canPrefetchChat ? prefetchWhenResting : undefined}
 							onMouseLeave={() => {
 								clearTimeout(hoverTimerRef.current);
 								clearTimeout(resumeTimerRef.current);

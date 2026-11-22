@@ -98,6 +98,12 @@ type PullRequest struct {
 	ProviderMergeStateStatus string
 	HTMLURL                  string
 
+	// MergeQueueRequired says the PR's base branch merges through a merge
+	// queue, so merging it means adding it to the queue. MergeQueue is the PR's
+	// place in that queue, nil while it isn't queued.
+	MergeQueueRequired bool
+	MergeQueue         *MergeQueueEntry
+
 	CreatedAtProvider time.Time
 	UpdatedAtProvider time.Time
 	MergedAtProvider  time.Time
@@ -120,6 +126,34 @@ type PullRequest struct {
 	// observation did not carry details, and the stored ones are left as they
 	// are. Reads load stored details separately.
 	Details *PullRequestDetails
+}
+
+// MergeQueueState is where a queued pull request stands, in GitHub's
+// MergeQueueEntryState values lower-cased.
+type MergeQueueState string
+
+// Merge queue entry states.
+const (
+	// MergeQueueQueued waits its turn in the queue.
+	MergeQueueQueued MergeQueueState = "queued"
+	// MergeQueueAwaitingChecks is waiting for the queue's checks to pass.
+	MergeQueueAwaitingChecks MergeQueueState = "awaiting_checks"
+	// MergeQueueMergeable passed and merges once the entries ahead of it do.
+	MergeQueueMergeable MergeQueueState = "mergeable"
+	// MergeQueueUnmergeable can't merge from the queue as it stands.
+	MergeQueueUnmergeable MergeQueueState = "unmergeable"
+	// MergeQueueLocked is locked by the queue, as while it merges.
+	MergeQueueLocked MergeQueueState = "locked"
+)
+
+// MergeQueueEntry is a pull request's place in its base branch's merge queue.
+// Position is the provider's position in the queue. EstimatedSecondsToMerge
+// is the provider's estimate, 0 when it gives none.
+type MergeQueueEntry struct {
+	State                   MergeQueueState `json:"state"`
+	Position                int             `json:"position"`
+	EstimatedSecondsToMerge int             `json:"estimatedSecondsToMerge,omitempty"`
+	EnqueuedAt              time.Time       `json:"enqueuedAt,omitzero"`
 }
 
 // MaxPullRequestDescriptionBytes caps a stored PR description. Providers allow
