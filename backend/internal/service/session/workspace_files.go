@@ -1098,7 +1098,7 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 			return WorkspaceFiles{}, err
 		}
 		compares = append(compares, compare)
-		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated)
+		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated, maxWorkspaceFiles)
 		truncated = truncated || repoTruncated
 		if uncommittedErr == nil {
 			var repoUncommitted []WorkspaceFileSummary
@@ -1173,8 +1173,8 @@ func (s *Service) resolveWorkspaceProjectFileTarget(ctx context.Context, rec dom
 	return workspaceFileTarget{root: row.WorktreePath, prefix: prefix, rel: repoRel, compare: compare, changes: changes}, nil
 }
 
-func appendWorkspaceFilesWithCap(files, repoFiles []WorkspaceFileSummary, truncated bool) ([]WorkspaceFileSummary, bool) {
-	remaining := maxWorkspaceFiles - len(files)
+func appendWorkspaceFilesWithCap[T any](files, repoFiles []T, truncated bool, limit int) ([]T, bool) {
+	remaining := limit - len(files)
 	if remaining <= 0 {
 		if len(repoFiles) > 0 {
 			truncated = true
@@ -1213,7 +1213,7 @@ func (s *Service) workspaceFileSummariesCached(
 	if err := g.Wait(); err != nil {
 		return nil, false, workspaceCompareTarget{}, err
 	}
-	paths, truncated := mergeWorkspaceFilePaths(lsParts, changes.changedPaths())
+	paths, truncated := mergeWorkspaceFilePaths(lsParts, changes.changedPaths(), maxWorkspaceFiles)
 	files := buildWorkspaceFileSummaries(root, prefix, excludePrefixes, paths, changes)
 	return files, truncated, compare, nil
 }
@@ -1810,7 +1810,7 @@ func gitLsFilesParts(ctx context.Context, root string) ([]string, error) {
 	return splitNUL(out), nil
 }
 
-func mergeWorkspaceFilePaths(parts []string, extraPaths map[string]struct{}) ([]string, bool) {
+func mergeWorkspaceFilePaths(parts []string, extraPaths map[string]struct{}, limit int) ([]string, bool) {
 	paths := make([]string, 0, len(parts))
 	seen := map[string]struct{}{}
 	truncated := false
@@ -1823,7 +1823,7 @@ func mergeWorkspaceFilePaths(parts []string, extraPaths map[string]struct{}) ([]
 			return
 		}
 		seen[rel] = struct{}{}
-		if len(paths) >= maxWorkspaceFiles {
+		if len(paths) >= limit {
 			truncated = true
 			return
 		}

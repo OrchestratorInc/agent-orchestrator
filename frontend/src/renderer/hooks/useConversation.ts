@@ -2222,6 +2222,21 @@ export function emptySkillsSettled(firstEmptyAt: number | undefined, updatedAt: 
  * The endpoint caps itself, and `truncated` is respected rather than presented as a
  * complete list.
  */
+export async function fetchWorkspaceFilePaths(sessionId: string, hostId?: string, signal?: AbortSignal) {
+	const client = clientForSessionHost(hostId);
+	const result = await client.GET("/api/v1/sessions/{sessionId}/workspace/paths", { params: { path: { sessionId } }, signal });
+	if (apiErrorCode(result.error) !== "ROUTE_NOT_FOUND") return result;
+	const files = await client.GET("/api/v1/sessions/{sessionId}/workspace/files", { params: { path: { sessionId } }, signal });
+	return {
+		...files,
+		data: files.data && {
+			sessionId: files.data.sessionId,
+			paths: files.data.files.filter((file) => file.status !== "deleted").map((file) => file.path),
+			truncated: files.data.truncated,
+		},
+	};
+}
+
 export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const query = useQuery({
@@ -2235,22 +2250,13 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 		// Remote sessions use their owning daemon instead of the local event stream.
 		refetchInterval: (query) => hostId && !isMissingWorkspaceError(query.state.error) ? 30 * 1000 : false,
 		retry: false,
-		queryFn: async () => {
+		queryFn: async ({ signal }: { signal: AbortSignal }): Promise<{ paths: string[]; truncated: boolean }> => {
 			const missing = knownMissingWorkspace(sessionId as string, hostId);
 			if (missing) throw missing;
 			const epoch = workspaceRecoveryEpoch(sessionId as string, hostId);
-			const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/files", {
-				params: { path: { sessionId: sessionId as string } },
-			});
+			const { data, error, response } = await fetchWorkspaceFilePaths(sessionId as string, hostId, signal);
 			if (error) throw recordWorkspaceResult(sessionId as string, hostId, error, response, "Unable to load workspace files", epoch);
-			return {
-				// A deleted path cannot be read, so offering it would insert a
-				// reference the agent then fails to resolve.
-				paths: (data?.files ?? [])
-					.filter((file) => file.status !== "deleted")
-					.map((file) => file.path),
-				truncated: Boolean(data?.truncated),
-			};
+			return { paths: data?.paths ?? [], truncated: Boolean(data?.truncated) };
 		},
 	});
 	useEffect(() => {

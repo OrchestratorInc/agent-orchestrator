@@ -5,13 +5,13 @@ import { Cloud, Folder, Plus, Smartphone, StickyNote } from "@/components/app-ic
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
+import { fetchWorkspaceFilePaths, seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiErrorMessage } from "../lib/api-client";
 import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
 import { dropReportPrompt, sessionNameFromBrief } from "../lib/report-problem";
 import { chatDraftScopeKey, newChatDraftScope, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
-import { clientForHost, labelForHost } from "../lib/host-clients";
+import { labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
@@ -124,15 +124,9 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		queryFn: async () => {
 			// The host restarts the expiry as the read arrives, so time it from its start.
 			const readAt = Date.now();
-			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/workspace/files", {
-				params: { path: { sessionId: preparedId as string } },
-			});
+			const { data, error } = await fetchWorkspaceFilePaths(preparedId as string, hostId);
 			if (error) throw error;
-			return {
-				paths: (data?.files ?? []).filter((file) => file.status !== "deleted").map((file) => file.path),
-				truncated: Boolean(data?.truncated),
-				readAt,
-			};
+			return { paths: data?.paths ?? [], truncated: Boolean(data?.truncated), readAt };
 		},
 	});
 	// A read that answered restarted the host's expiry; the next visit offers a

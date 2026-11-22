@@ -556,6 +556,13 @@ type ListWorkspaceTreeResponse struct {
 	Truncated bool                 `json:"truncated"`
 }
 
+// ListWorkspaceFilePathsResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/paths.
+type ListWorkspaceFilePathsResponse struct {
+	SessionID domain.SessionID `json:"sessionId"`
+	Paths     []string         `json:"paths"`
+	Truncated bool             `json:"truncated"`
+}
+
 // WorkspaceTreeEntry is one immediate child of a listed directory.
 type WorkspaceTreeEntry struct {
 	Name string                            `json:"name"`

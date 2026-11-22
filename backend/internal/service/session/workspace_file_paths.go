@@ -1,0 +1,197 @@
+package session
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+)
+
+// WorkspaceFilePaths lists the files ListWorkspaceFiles lists, by path only.
+type WorkspaceFilePaths struct {
+	SessionID domain.SessionID
+	Paths     []string
+	Truncated bool
+}
+
+const maxWorkspaceFilePaths = 20000
+
+type workspacePathSource struct {
+	root    string
+	prefix  string
+	exclude []string
+	resolve func(context.Context) workspaceCompareTarget
+}
+
+// ListWorkspaceFilePaths returns the session workspace's visible file paths
+// without reading each file or computing the Git review sections.
+func (s *Service) ListWorkspaceFilePaths(ctx context.Context, id domain.SessionID) (WorkspaceFilePaths, error) {
+	rec, sources, scratch, err := s.workspacePathSources(ctx, id)
+	if err != nil {
+		return WorkspaceFilePaths{}, err
+	}
+	if scratch {
+		files, truncated, err := scratchWorkspaceFiles(rec.Metadata.WorkspacePath)
+		if err != nil {
+			return WorkspaceFilePaths{}, err
+		}
+		paths := make([]string, len(files))
+		for i, file := range files {
+			paths[i] = file.Path
+		}
+		return WorkspaceFilePaths{SessionID: id, Paths: paths, Truncated: truncated}, nil
+	}
+	paths, truncated, err := s.workspaceSourcePaths(ctx, id, sources, maxWorkspaceFilePaths)
+	if err != nil {
+		return WorkspaceFilePaths{}, err
+	}
+	return WorkspaceFilePaths{SessionID: id, Paths: paths, Truncated: truncated}, nil
+}
+
+func (s *Service) workspacePathSources(ctx context.Context, id domain.SessionID) (domain.SessionRecord, []workspacePathSource, bool, error) {
+	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	if err != nil {
+		return domain.SessionRecord{}, nil, false, err
+	}
+	project, projectOK, err := s.sessionProject(ctx, rec)
+	if err != nil {
+		return domain.SessionRecord{}, nil, false, err
+	}
+	projectKind := domain.ProjectKindSingleRepo
+	if isStandaloneScratchWorkspace(rec) {
+		projectKind = domain.ProjectKindScratch
+	}
+	if projectOK {
+		projectKind = project.Kind.WithDefault()
+	}
+	if projectKind == domain.ProjectKindScratch {
+		return rec, nil, true, nil
+	}
+	var rows []domain.SessionWorktreeRecord
+	if projectKind == domain.ProjectKindWorkspace {
+		rows, err = s.store.ListSessionWorktrees(ctx, rec.ID)
+		if err != nil {
+			return domain.SessionRecord{}, nil, false, fmt.Errorf("list workspace project rows: %w", err)
+		}
+	}
+	if len(rows) == 0 {
+		prs, err := s.workspaceComparePRs(ctx, rec.ID)
+		if err != nil {
+			return domain.SessionRecord{}, nil, false, err
+		}
+		resolve := func(rctx context.Context) workspaceCompareTarget {
+			return resolveWorkspaceCompare(rctx, rec.Metadata.WorkspacePath, rec.Metadata.DiffBaseSHA, rec.Metadata.DiffBaseRef, defaultBranchForProject(project, projectOK), prs)
+		}
+		return rec, []workspacePathSource{{root: rec.Metadata.WorkspacePath, resolve: resolve}}, false, nil
+	}
+	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
+	childPrefixes := nonEmptyWorkspacePrefixes(prefixes)
+	defaultBranch := defaultBranchForProject(project, true)
+	sources := make([]workspacePathSource, 0, len(rows))
+	for _, row := range rows {
+		if strings.TrimSpace(row.WorktreePath) == "" {
+			continue
+		}
+		prefix, ok := prefixes[row.RepoName]
+		if !ok {
+			continue
+		}
+		source := workspacePathSource{root: row.WorktreePath, prefix: prefix}
+		if prefix == "" {
+			source.exclude = childPrefixes
+		}
+		baseRef := row.BaseRef
+		if strings.TrimSpace(baseRef) == "" {
+			baseRef = defaultBranch
+		}
+		source.resolve = func(rctx context.Context) workspaceCompareTarget {
+			return resolveWorkspaceProjectCompare(rctx, row.WorktreePath, row.BaseSHA, baseRef)
+		}
+		sources = append(sources, source)
+	}
+	return rec, sources, false, nil
+}
+
+func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID, sources []workspacePathSource, limit int) ([]string, bool, error) {
+	inventories := make([][]string, len(sources))
+	total := 0
+	for i, source := range sources {
+		parts, err := s.workspacePaths(ctx, id, source.root)
+		if err != nil {
+			return nil, false, err
+		}
+		inventories[i] = parts
+		total += len(parts)
+	}
+	var paths []string
+	truncated := false
+	for i, source := range sources {
+		var changed map[string]struct{}
+		if total > limit {
+			_, changes, err := s.resolveWorkspaceChanges(ctx, id, source.root, source.resolve)
+			if err != nil {
+				return nil, false, err
+			}
+			changed = changes.changedPaths()
+		}
+		merged, repoTruncated := mergeWorkspaceFilePaths(inventories[i], changed, limit)
+		repoPaths := make([]string, 0, len(merged))
+		for _, rel := range merged {
+			if !workspacePathExcluded(rel, source.exclude) {
+				repoPaths = append(repoPaths, joinWorkspaceRelative(source.prefix, rel))
+			}
+		}
+		paths, truncated = appendWorkspaceFilesWithCap(paths, repoPaths, truncated || repoTruncated, limit)
+	}
+	sort.Strings(paths)
+	return paths, truncated, nil
+}
+
+func workspacePathSourceFor(sources []workspacePathSource, path string) (workspacePathSource, string, bool) {
+	best := -1
+	for i, source := range sources {
+		if source.prefix != "" && !strings.HasPrefix(path, source.prefix+"/") {
+			continue
+		}
+		if best < 0 || len(source.prefix) > len(sources[best].prefix) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return workspacePathSource{}, "", false
+	}
+	source := sources[best]
+	if source.prefix == "" {
+		return source, path, true
+	}
+	return source, strings.TrimPrefix(path, source.prefix+"/"), true
+}
+
+func (s *Service) workspaceSourceFileSummary(ctx context.Context, id domain.SessionID, sources []workspacePathSource, path string) (WorkspaceFileSummary, error) {
+	source, rel, ok := workspacePathSourceFor(sources, path)
+	if !ok {
+		return WorkspaceFileSummary{}, fmt.Errorf("no worktree owns workspace path %q", path)
+	}
+	_, changes, err := s.resolveWorkspaceChanges(ctx, id, source.root, source.resolve)
+	if err != nil {
+		return WorkspaceFileSummary{}, err
+	}
+	status := changes.statuses[rel]
+	if status == "" {
+		status = WorkspaceFileUnmodified
+	}
+	size, binary := workspaceFileSizeAndBinary(source.root, rel, status)
+	file := WorkspaceFileSummary{
+		Path:         path,
+		PreviousPath: joinWorkspaceRelative(source.prefix, changes.previous[rel]),
+		Status:       status,
+		Additions:    changes.counts[rel][0],
+		Deletions:    changes.counts[rel][1],
+		Size:         size,
+		Binary:       binary,
+	}
+	file.FileFingerprint = summaryFingerprint(file)
+	return file, nil
+}

@@ -646,17 +646,33 @@ func (s *Service) SearchWorkspaceFiles(ctx context.Context, id domain.SessionID,
 		}
 		offset = parsed
 	}
-	files, err := s.ListWorkspaceFiles(ctx, id)
+	rec, sources, scratch, err := s.workspacePathSources(ctx, id)
 	if err != nil {
 		return WorkspaceFileSearch{}, err
 	}
-	needle := strings.ToLower(query)
-	matches := make([]WorkspaceFileSearchResult, 0)
-	for _, file := range files.Files {
-		if !strings.Contains(strings.ToLower(file.Path), needle) {
-			continue
+	var paths []string
+	var truncated bool
+	var scratchFiles map[string]WorkspaceFileSummary
+	if scratch {
+		files, scratchTruncated, err := scratchWorkspaceFiles(rec.Metadata.WorkspacePath)
+		if err != nil {
+			return WorkspaceFileSearch{}, err
 		}
-		matches = append(matches, WorkspaceFileSearchResult{Path: file.Path, Status: file.Status, Size: file.Size, Binary: file.Binary, FileFingerprint: file.FileFingerprint})
+		scratchFiles = make(map[string]WorkspaceFileSummary, len(files))
+		for _, file := range finalizeWorkspaceFiles(WorkspaceFiles{Files: files}).Files {
+			scratchFiles[file.Path] = file
+			paths = append(paths, file.Path)
+		}
+		truncated = scratchTruncated
+	} else if paths, truncated, err = s.workspaceSourcePaths(ctx, id, sources, maxWorkspaceFilePaths); err != nil {
+		return WorkspaceFileSearch{}, err
+	}
+	needle := strings.ToLower(query)
+	matches := make([]string, 0)
+	for _, path := range paths {
+		if strings.Contains(strings.ToLower(path), needle) {
+			matches = append(matches, path)
+		}
 	}
 	if offset > len(matches) {
 		offset = len(matches)
@@ -665,7 +681,17 @@ func (s *Service) SearchWorkspaceFiles(ctx context.Context, id domain.SessionID,
 	if end > len(matches) {
 		end = len(matches)
 	}
-	result := WorkspaceFileSearch{SessionID: id, Query: query, Results: matches[offset:end], Truncated: files.Truncated}
+	results := make([]WorkspaceFileSearchResult, 0, end-offset)
+	for _, path := range matches[offset:end] {
+		file, ok := scratchFiles[path]
+		if !ok {
+			if file, err = s.workspaceSourceFileSummary(ctx, id, sources, path); err != nil {
+				return WorkspaceFileSearch{}, err
+			}
+		}
+		results = append(results, WorkspaceFileSearchResult{Path: file.Path, Status: file.Status, Size: file.Size, Binary: file.Binary, FileFingerprint: file.FileFingerprint})
+	}
+	result := WorkspaceFileSearch{SessionID: id, Query: query, Results: results, Truncated: truncated}
 	if end < len(matches) {
 		result.NextCursor = strconv.Itoa(end)
 	}

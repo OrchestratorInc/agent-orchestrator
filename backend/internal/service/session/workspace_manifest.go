@@ -73,7 +73,7 @@ func (s *Service) gitWorkspaceManifest(
 	if err != nil {
 		return WorkspaceManifest{}, err
 	}
-	paths, truncated := mergeWorkspaceFilePaths(nil, changes.changedPaths())
+	paths, truncated := mergeWorkspaceFilePaths(nil, changes.changedPaths(), maxWorkspaceFiles)
 	files := buildWorkspaceFileSummaries(root, prefix, excludePrefixes, paths, changes)
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	manifest := WorkspaceManifest{
@@ -158,10 +158,10 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 		if err != nil {
 			return WorkspaceManifest{}, err
 		}
-		paths, repoTruncated := mergeWorkspaceFilePaths(nil, changes.changedPaths())
+		paths, repoTruncated := mergeWorkspaceFilePaths(nil, changes.changedPaths(), maxWorkspaceFiles)
 		repoFiles := buildWorkspaceFileSummaries(row.WorktreePath, prefix, exclude, paths, changes)
 		compares = append(compares, compare)
-		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated)
+		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated, maxWorkspaceFiles)
 		truncated = truncated || repoTruncated
 		if uncommittedErr == nil {
 			var repoUncommitted []WorkspaceFileSummary
