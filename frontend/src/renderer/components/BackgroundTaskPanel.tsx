@@ -242,71 +242,82 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible, onBack, autoFoc
 	const summary = useMemo(() => (text ? outputSummary(text) : null), [text]);
 
 	return (
-		// One inset card: a header block (the task and Stop, then its command and
-		// counts) over the output, with Jump to latest docked at its bottom.
-		<section aria-label={name} className="m-2 flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border">
-			<header className="flex shrink-0 flex-col gap-0.5 border-b border-border pt-1.5 pr-2 pb-2.5 pl-3">
-				<div className="flex h-control-md min-w-0 items-center gap-1.5 text-xs">
-					<Tooltip open={backTip} onOpenChange={(open) => setBackTip(open && !quietFocus.current)}>
-						<TooltipTrigger asChild>
-							<Button
-								ref={backButton}
-								type="button"
-								variant="ghost"
-								size="icon-sm"
-								// Its arrow lines up with the command below.
-								className="-ml-2"
-								aria-label={backLabel}
-								onClick={onBack}
-								onBlur={() => { quietFocus.current = false; }}
-								onPointerEnter={() => { quietFocus.current = false; }}
-							>
-								<ArrowLeft aria-hidden="true" className="size-3.5" />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent>{backLabel}</TooltipContent>
-					</Tooltip>
-					<TaskMark entry={tab} />
-					<h3 className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{name}</h3>
-					{failed === task.id ? <span role="status" className="shrink-0 text-caption text-destructive">{t("backgroundTasks.stopFailed")}</span> : null}
-					<TaskState entry={tab} />
-					{stale ? <span className="shrink-0 text-caption text-muted-foreground/70">{t("backgroundTasks.stale")}</span> : null}
-					{time ? <span className="shrink-0 text-caption tabular-nums text-muted-foreground/70">{time}</span> : null}
-					{live && task.stoppable ? (
+		// The side panel's frame is the card: a header block (the task and Stop,
+		// then its command and counts) over the output, with Jump to latest
+		// docked at its bottom.
+		<section aria-label={name} className="flex min-h-0 flex-1 flex-col">
+			<header className="flex shrink-0 items-start gap-1.5 border-b border-border pt-1.5 pr-2 pb-2.5 pl-3">
+				<Tooltip open={backTip} onOpenChange={(open) => setBackTip(open && !quietFocus.current)}>
+					<TooltipTrigger asChild>
 						<Button
+							ref={backButton}
 							type="button"
-							variant="quiet"
-							size="xs"
-							className="shrink-0"
-							aria-label={t("backgroundTasks.stop", { name })}
-							disabled={stale || stopping.has(task.id)}
-							onClick={() => stop(task.id)}
+							variant="ghost"
+							size="icon-sm"
+							// Its arrow lines up with the output below.
+							className="-ml-2 shrink-0"
+							aria-label={backLabel}
+							onClick={onBack}
+							onBlur={() => { quietFocus.current = false; }}
+							onPointerEnter={() => { quietFocus.current = false; }}
 						>
-							<Square aria-hidden="true" className="size-2.5 fill-current" />
-							{t("backgroundTasks.stopAction")}
+							<ArrowLeft aria-hidden="true" className="size-3.5" />
 						</Button>
+					</TooltipTrigger>
+					<TooltipContent>{backLabel}</TooltipContent>
+				</Tooltip>
+				{/* The task's icon, name and time, with its command lined up under the icon. */}
+				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<div className="flex h-control-md min-w-0 items-center gap-1.5 text-xs">
+						<TaskMark entry={tab} />
+						<h3 className="min-w-0 truncate text-xs font-medium text-foreground">{name}</h3>
+						{time ? (
+							<>
+								<span aria-hidden="true" className="shrink-0 text-caption text-muted-foreground/70">·</span>
+								<span className="shrink-0 text-caption tabular-nums text-muted-foreground/70">{time}</span>
+							</>
+						) : null}
+						<span className="ml-auto flex shrink-0 items-center gap-1.5">
+							{failed === task.id ? <span role="status" className="shrink-0 text-caption text-destructive">{t("backgroundTasks.stopFailed")}</span> : null}
+							<TaskState entry={tab} />
+							{stale ? <span className="shrink-0 text-caption text-muted-foreground/70">{t("backgroundTasks.stale")}</span> : null}
+							{live && task.stoppable ? (
+								<Button
+									type="button"
+									variant="quiet"
+									size="xs"
+									className="shrink-0"
+									aria-label={t("backgroundTasks.stop", { name })}
+									disabled={stale || stopping.has(task.id)}
+									onClick={() => stop(task.id)}
+								>
+									<Square aria-hidden="true" className="size-2.5 fill-current" />
+									{t("backgroundTasks.stopAction")}
+								</Button>
+							) : null}
+						</span>
+					</div>
+					{command || summary ? (
+						<div className="flex min-w-0 items-baseline gap-3 pr-1">
+							{command ? (
+								<code className="board-scrollbar max-h-20 min-w-0 flex-1 overflow-y-auto font-mono text-xs leading-[18px] break-all whitespace-pre-wrap text-muted-foreground select-text">
+									{command}
+								</code>
+							) : null}
+							{summary ? (
+								<span className="ml-auto shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+									{t("backgroundTasks.output.lines", { count: summary.lines })}
+									{summary.warnings ? (
+										<><span aria-hidden="true"> · </span><span className="text-(--color-term-yellow)">{t("backgroundTasks.output.warnings", { count: summary.warnings })}</span></>
+									) : null}
+									{summary.errors ? (
+										<><span aria-hidden="true"> · </span><span className="text-(--color-term-red)">{t("backgroundTasks.output.errors", { count: summary.errors })}</span></>
+									) : null}
+								</span>
+							) : null}
+						</div>
 					) : null}
 				</div>
-				{command || summary ? (
-					<div className="flex min-w-0 items-baseline gap-3 pr-1">
-						{command ? (
-							<code className="board-scrollbar max-h-20 min-w-0 flex-1 overflow-y-auto font-mono text-xs leading-[18px] break-all whitespace-pre-wrap text-muted-foreground select-text">
-								{command}
-							</code>
-						) : null}
-						{summary ? (
-							<span className="ml-auto shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
-								{t("backgroundTasks.output.lines", { count: summary.lines })}
-								{summary.warnings ? (
-									<><span aria-hidden="true"> · </span><span className="text-(--color-term-yellow)">{t("backgroundTasks.output.warnings", { count: summary.warnings })}</span></>
-								) : null}
-								{summary.errors ? (
-									<><span aria-hidden="true"> · </span><span className="text-(--color-term-red)">{t("backgroundTasks.output.errors", { count: summary.errors })}</span></>
-								) : null}
-							</span>
-						) : null}
-					</div>
-				) : null}
 			</header>
 			<div className="flex min-h-0 flex-1 flex-col">
 				{/* A failed refresh keeps what was read; only a first read that fails says so in place of output. */}
@@ -419,12 +430,13 @@ export function TailedOutput({ text, truncated, label }: { text: string; truncat
 
 	// One row per line, so a warning or error tints its whole row and a wrapped
 	// line stays one block. The rows are blocks inside one <pre>, so a copied
-	// selection keeps its line breaks.
+	// selection keeps its line breaks. No scrollbar, so tinted rows run the
+	// full width; the wheel, the keyboard and Jump to latest still scroll it.
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<div
 				aria-label={label}
-				className="board-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain py-1.5 outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+				className="scrollbar-none min-h-0 flex-1 overflow-y-auto overscroll-contain py-1.5 outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
 				onScroll={onScroll}
 				ref={scrollRef}
 				role="region"
