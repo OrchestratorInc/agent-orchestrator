@@ -98,6 +98,19 @@ const OPEN_FIELD_INSET = space.xs;
 const DICTATION_INSET = space.md;
 
 /** The chat's composer, sharing the screen's keyboard handler when there is one (see KeyboardMotionScope). */
+/**
+ * Plain sends in flight, by draft key: the text each emptied from its field.
+ * A composer opened on the same conversation while one is in flight (the
+ * person left and came back) must not load that text as a draft, nor save
+ * its own empty field over the stored copy; if the send fails, the text goes
+ * back into whichever composer is open.
+ */
+const sendsInFlight = new Map<string, string>();
+const failedSendListeners = new Map<string, Set<(text: string) => void>>();
+function sendFailed(draftKey: string, text: string) {
+	for (const listener of [...(failedSendListeners.get(draftKey) ?? [])]) listener(text);
+}
+
 export function ChatComposer(props: ComponentProps<typeof Composer>) {
 	return <KeyboardMotionScope><Composer {...props} /></KeyboardMotionScope>;
 }
@@ -386,24 +399,40 @@ function Composer({
 			.then((value) => {
 				if (!mounted) return;
 				const draft = decodeResponseDraft(value);
+				// The stored copy of a send still in flight is not a draft (see `sendsInFlight`).
+				const text = draft.text === sendsInFlight.get(draftKey) ? "" : draft.text;
 				// Text typed before the read finished wins, and so does its caret.
 				if (!latestText.current) setCursor(undefined);
-				setText((current) => current || draft.text);
+				setText((current) => current || text);
 				setQuotes((current) => [...draft.quotes.filter((quote) => !current.some((item) => item.id === quote.id)), ...current]);
 			})
 			.catch(() => {})
 			.finally(() => { if (mounted) setDraftLoaded(true); });
 		return () => { mounted = false; };
 	}, [draftKey]);
-	// Set while a send that emptied the field is in flight (see `submit`).
-	const clearedForSend = useRef(false);
+	// A send this conversation's composer made, in this one or one since closed, failed: its text comes back.
+	useEffect(() => {
+		if (!draftKey) return;
+		const restore = (sent: string) => {
+			if (latestText.current) return;
+			latestText.current = sent;
+			setText(sent);
+		};
+		const listeners = failedSendListeners.get(draftKey) ?? new Set();
+		failedSendListeners.set(draftKey, listeners);
+		listeners.add(restore);
+		return () => {
+			listeners.delete(restore);
+			if (!listeners.size) failedSendListeners.delete(draftKey);
+		};
+	}, [draftKey]);
 	useEffect(() => {
 		if (!draftKey || !draftLoaded) return;
 		// The field emptied by a send in flight is not a draft: saving it would
 		// drop the stored message, and a send that then fails with the
 		// conversation closed would leave nothing to restore. The send removes it
 		// once it lands.
-		if (clearedForSend.current && !text && quotes.length === 0) return;
+		if (sendsInFlight.has(draftKey) && !text && quotes.length === 0) return;
 		draftTimer.current = setTimeout(() => {
 			const value = encodeResponseDraft(text, quotes);
 			void afterDraftWrites(draftKey, () => value ? AsyncStorage.setItem(draftKey, value) : AsyncStorage.removeItem(draftKey)).catch(() => {});
@@ -459,7 +488,7 @@ function Composer({
 		// that fails puts it back. One with files or quotes stays until it lands.
 		const clearedAtSend = attachments.length === 0 && quotes.length === 0;
 		if (clearedAtSend) {
-			clearedForSend.current = true;
+			if (draftKey) sendsInFlight.set(draftKey, text);
 			latestText.current = "";
 			setText("");
 			setCursor(undefined);
@@ -480,7 +509,12 @@ function Composer({
 				const current = latestText.current;
 				const currentQuotes = latestQuotes.current;
 				const unchanged = (clearedAtSend ? current === "" : current === text) && currentQuotes === quotes;
-				await afterDraftWrites(draftKey, () => unchanged ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes)));
+				const sentDraft = encodeResponseDraft(text, quotes);
+				await afterDraftWrites(draftKey, async () => {
+					if (!unchanged) return AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes));
+					// Only the sent copy: a composer opened since may have saved a new draft.
+					if (!clearedAtSend || await AsyncStorage.getItem(draftKey) === sentDraft) await AsyncStorage.removeItem(draftKey);
+				});
 			}
 			await onAcknowledgeSend(id);
 			if (!clearedAtSend && latestText.current === text && latestQuotes.current === quotes) {
@@ -492,15 +526,18 @@ function Composer({
 			forgetComposerAttachments(sentKey, sent);
 			haptics.success();
 		} catch (cause) {
-			// Unless something new was typed meanwhile.
-			if (clearedAtSend && latestText.current === "") {
+			// Unless something new was typed meanwhile; a composer opened since gets it instead.
+			if (clearedAtSend && draftKey) {
+				sendsInFlight.delete(draftKey);
+				sendFailed(draftKey, text);
+			} else if (clearedAtSend && latestText.current === "") {
 				latestText.current = text;
 				setText(text);
 			}
 			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally {
-			clearedForSend.current = false;
+			if (clearedAtSend && draftKey && sendsInFlight.get(draftKey) === text) sendsInFlight.delete(draftKey);
 			setSubmitting(false);
 		}
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, canSubmit, keyboardSend.begin, attachmentKey, dismissAttachmentNotice]);
