@@ -2533,6 +2533,10 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			});
 			try {
 				await gracefullyReplaceDaemonForBrowser(directDaemon);
+				// The confirmed port holder has been retired. A timeout on a stale
+				// run-file port must not abort this already-authorized replacement.
+				timedOutProbe = null;
+				timedOutEndpoints.clear();
 				replacementKeepAlive = keepAliveForReplacement({
 					ownership,
 					forceRequested: forceReplaceAdoptedRequested,
