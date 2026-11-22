@@ -424,8 +424,14 @@ export function AgentModelPicker({
 	const starredFor = (model: PickerModel) => model.id
 		? favorites.find((entry) => entry.harness === shownHarness && (entry.row === model.id || model.aliases?.includes(entry.row)))
 		: undefined;
-	// A starred model is listed once, first, as its favourite; the rows below are the rest.
-	const unstarred = <T extends { model: PickerModel }>(rows: T[]) => setups.length > 0 ? rows.filter((row) => !starredFor(row.model)) : rows;
+	// A starred model is listed once, first, as its favourite; the rows below are the rest. A favourite
+	// that cannot be sent (its id is not one the agent runs) does not take the place of a row that can.
+	const unstarred = <T extends { model: PickerModel }>(rows: T[]) => setups.length > 0
+		? rows.filter((row) => {
+			const favorite = starredFor(row.model);
+			return !favorite || !offered(favorite);
+		})
+		: rows;
 	// That favourite is checked when the model row it replaces is the chosen one, under its id or an alias.
 	const standsForChosen = (favorite: ModelFavorite) => source.models.some((model) =>
 		model.id === source.modelId && (model.id === favorite.row || Boolean(model.aliases?.includes(favorite.row))));

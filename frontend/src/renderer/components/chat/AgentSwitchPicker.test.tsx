@@ -160,7 +160,7 @@ describe("AgentModelPicker", () => {
 		expect(screen.getByText("fireworks/accounts/fireworks/models/kimi")).toBeInTheDocument();
 	});
 
-	it("shows the agent's level again after a dragged level is released and not taken", async () => {
+	it("follows the pointer while dragging, holds the sent level, and shows the agent's again if it is not taken", async () => {
 		const user = userEvent.setup();
 		const { current } = open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
@@ -171,12 +171,21 @@ describe("AgentModelPicker", () => {
 		track.setPointerCapture = () => { captured = true; };
 		track.hasPointerCapture = () => captured;
 		track.releasePointerCapture = () => { captured = false; };
-		fireEvent.pointerDown(track, { button: 0, clientX: 195, pointerId: 1 });
+		// The thumb follows the pointer between levels instead of jumping from one to the next.
+		fireEvent.pointerDown(track, { button: 0, clientX: 70, pointerId: 1 });
+		const thumb = track.lastElementChild as HTMLElement;
+		const midway = thumb.style.left;
+		fireEvent.pointerMove(track, { button: 0, clientX: 80, pointerId: 1 });
+		expect(thumb.style.left).not.toBe(midway);
+		expect(slider).toHaveAttribute("aria-valuetext", "High");
+		fireEvent.pointerMove(track, { button: 0, clientX: 195, pointerId: 1 });
 		expect(slider).toHaveAttribute("aria-valuetext", "Max");
 		fireEvent.pointerUp(track, { button: 0, clientX: 195, pointerId: 1 });
 		expect(current.onPickEffort).toHaveBeenCalledExactlyOnceWith("max");
-		// The agent still reports High (the change was refused, or has not landed), so High is shown.
-		expect(slider).toHaveAttribute("aria-valuetext", "High");
+		// Held on Max while the agent answers, so the thumb does not jump back and forth.
+		expect(slider).toHaveAttribute("aria-valuetext", "Max");
+		// The agent never reports Max (it refused), so its own level, High, shows again.
+		await vi.waitFor(() => expect(slider).toHaveAttribute("aria-valuetext", "High"), { timeout: 4000 });
 	});
 
 	it("lists Claude's newest models first and keeps the older releases below them", async () => {
@@ -292,6 +301,30 @@ describe("AgentModelPicker", () => {
 			expect(screen.getByRole("menuitemradio", { name: /^Opus/ })).toHaveAttribute("aria-checked", "true");
 		} finally {
 			toggleModelFavorite(saved);
+		}
+	});
+
+	it("keeps a runnable model's row when its star was saved under an id the agent cannot run", async () => {
+		const user = userEvent.setup();
+		const saved = { harness: "claude-code", row: "claude-opus-5-5", model: "claude-opus-5-5", label: "Opus 5.5" };
+		toggleModelFavorite(saved);
+		try {
+			open(undefined, false, "claude-code", {
+				models: [
+					{ id: "opus", label: "Opus 5.5" },
+					{ id: "claude-opus-5-5", label: "Opus 5.5", unavailableReason: "Needs a newer Claude Code" },
+				],
+				modelId: "opus",
+			});
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const rows = screen.getAllByRole("menuitemradio", { name: /^Opus 5\.5/ });
+			// The star, greyed out as it cannot be sent, and the runnable row it would otherwise hide.
+			expect(rows).toHaveLength(2);
+			expect(rows[0]).toHaveAttribute("aria-disabled", "true");
+			expect(rows[1]).not.toHaveAttribute("aria-disabled");
+			expect(rows[1]).toHaveAttribute("aria-checked", "true");
+		} finally {
+			act(() => toggleModelFavorite(saved));
 		}
 	});
 
