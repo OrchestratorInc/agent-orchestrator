@@ -448,11 +448,12 @@ function SidebarSectionScroller({
 
 // Sidebar sections open, close and fill at their final size in one frame: no
 // height animation, so a section gaining its first row never pushes the rows
-// below it down over several frames.
+// below it down over several frames. The single 1fr row bounds the content to
+// the section's height so its scroller scrolls.
 function SectionBody({ open, children, className }: { open: boolean; children: ReactNode; className?: string }) {
 	if (!open) return null;
 	return (
-		<div className={cn("grid", className)}>
+		<div className={cn("grid grid-rows-[1fr]", className)}>
 			<div className="flex min-h-0 flex-col overflow-hidden">{children}</div>
 		</div>
 	);
