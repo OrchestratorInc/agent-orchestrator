@@ -188,13 +188,21 @@ func (d dirForkSeeds) Capture(ctx context.Context, workspace string) (string, er
 
 // CaptureTurn writes the files a turn left, from the folder's snapshot, to a
 // new seed.
+// A folder the agent made a repository, or one holding a repository it cloned,
+// is refused: snapshots never record a repository's own files and history.
 func (d dirForkSeeds) CaptureTurn(ctx context.Context, workspace, snapshotRef string) (string, error) {
+	if _, err := os.Lstat(filepath.Join(workspace, ".git")); !errors.Is(err, os.ErrNotExist) {
+		return "", sessionfork.ErrSnapshotHasRepository
+	}
 	seed, err := d.newSeedPath()
 	if err != nil {
 		return "", err
 	}
 	if err := filesnapshot.Export(ctx, workspace, snapshotRef, seed); err != nil {
-		if errors.Is(err, filesnapshot.ErrNotFound) || errors.Is(err, filesnapshot.ErrNotRepository) {
+		switch {
+		case errors.Is(err, filesnapshot.ErrNestedRepository):
+			return "", sessionfork.ErrSnapshotHasRepository
+		case errors.Is(err, filesnapshot.ErrNotFound) || errors.Is(err, filesnapshot.ErrNotRepository):
 			return "", sessionfork.ErrSnapshotMissing
 		}
 		return "", err

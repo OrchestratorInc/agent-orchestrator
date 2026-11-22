@@ -37,6 +37,9 @@ const (
 	// CodeWorkspaceUnmanaged: a plain folder outside Orchestrator's own
 	// workspaces, such as the home folder, is never copied.
 	CodeWorkspaceUnmanaged = "FORK_WORKSPACE_UNMANAGED"
+	// CodeTurnHasRepository: a plain folder's older turn whose files include a
+	// git repository, which its snapshot never recorded.
+	CodeTurnHasRepository = "FORK_TURN_HAS_REPOSITORY"
 )
 
 var refusalMessages = map[string]string{
@@ -52,6 +55,7 @@ var refusalMessages = map[string]string{
 	CodeTurnFilesMissing:   "The files from this turn weren't saved, so it can't be forked.",
 	CodeOlderTurn:          "This agent can fork only from its latest turn.",
 	CodeWorkspaceUnmanaged: "This session's folder can't be copied.",
+	CodeTurnHasRepository:  "This turn's files include a git repository, so it can be forked only from its latest turn.",
 }
 
 // ErrDisabled means session forks are turned off for this service.
@@ -62,6 +66,11 @@ var ErrNotRepository = errors.New("workspace is not a git repository")
 
 // ErrSnapshotMissing means no file snapshot was saved for a turn.
 var ErrSnapshotMissing = errors.New("file snapshot missing")
+
+// ErrSnapshotHasRepository is returned by DirSeeds.CaptureTurn when the
+// turn's files include a git repository, which the snapshot holds only as a
+// commit, never its files.
+var ErrSnapshotHasRepository = errors.New("file snapshot holds a git repository")
 
 // ErrSessionNotFound means the source session doesn't exist.
 var ErrSessionNotFound = errors.New("session not found")
@@ -166,7 +175,8 @@ type DirSeeds interface {
 	Capture(ctx context.Context, workspace string) (seed string, err error)
 	// CaptureTurn writes the files a turn left, from the snapshot under
 	// snapshotRef, to a new seed. It returns ErrSnapshotMissing when no
-	// snapshot was saved.
+	// snapshot was saved, and ErrSnapshotHasRepository when the files
+	// include a git repository.
 	CaptureTurn(ctx context.Context, workspace, snapshotRef string) (seed string, err error)
 	Delete(ctx context.Context, seed string) error
 }
@@ -635,6 +645,9 @@ func (s *Service) captureFolder(ctx context.Context, plan forkPlan) (forkPlan, e
 		seed, err := s.deps.DirSeeds.CaptureTurn(ctx, plan.source.Metadata.WorkspacePath, ref)
 		if errors.Is(err, ErrSnapshotMissing) {
 			return forkPlan{}, refuse(CodeTurnFilesMissing)
+		}
+		if errors.Is(err, ErrSnapshotHasRepository) {
+			return forkPlan{}, refuse(CodeTurnHasRepository)
 		}
 		if err != nil {
 			return forkPlan{}, fmt.Errorf("read turn files: %w", err)

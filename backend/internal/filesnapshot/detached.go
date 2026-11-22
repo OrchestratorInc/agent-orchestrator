@@ -118,7 +118,9 @@ func storeReady(store string) bool {
 // Export writes the files of the snapshot under ref into dst, a folder that
 // must not exist yet, the way they were when it was taken. Ignored files and
 // dependency folders were never in the snapshot and are not written. A
-// missing snapshot is ErrNotFound; on any failure dst is removed.
+// missing snapshot is ErrNotFound, and one holding another repository, whose
+// files it never recorded, is ErrNestedRepository; on any failure dst is
+// removed.
 func Export(ctx context.Context, workspace, ref, dst string) (err error) {
 	top, err := toplevel(ctx, workspace)
 	if err != nil {
@@ -131,6 +133,15 @@ func Export(ctx context.Context, workspace, ref, dst string) (err error) {
 			return fmt.Errorf("%w: %s", ErrNotFound, ref)
 		}
 		return err
+	}
+	// A repository inside the folder is in the snapshot only as the commit it
+	// had checked out, never its files: exported, it would be an empty folder.
+	nested, err := gitlink(ctx, top, snapshot+"^{tree}")
+	if err != nil {
+		return err
+	}
+	if nested != "" {
+		return fmt.Errorf("%w: %s", ErrNestedRepository, nested)
 	}
 	if _, err := os.Lstat(dst); err == nil {
 		return fmt.Errorf("export snapshot: %s already exists", dst)

@@ -235,3 +235,27 @@ func TestDetachedStoreCreatedOnceUnderConcurrentTurns(t *testing.T) {
 		}
 	}
 }
+
+// A repository cloned into a plain folder is in a snapshot only as the commit
+// it had checked out, so its files can't come back from it; Export refuses
+// rather than write an empty folder in its place.
+func TestExportRefusesASnapshotHoldingAnotherRepository(t *testing.T) {
+	folder, _ := plainFolder(t)
+	write(t, folder, "notes.md", "notes\n")
+	clone := filepath.Join(folder, "app")
+	runGit(t, folder, "init", "-q", clone)
+	write(t, clone, "main.go", "package main\n")
+	runGit(t, clone, "add", ".")
+	runGit(t, clone, "-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "-qm", "app")
+	ref := Ref("s1", "turn-2")
+	if err := Capture(context.Background(), folder, ref); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "seed")
+	if err := Export(context.Background(), folder, ref, dst); !errors.Is(err, ErrNestedRepository) {
+		t.Fatalf("Export = %v, want ErrNestedRepository", err)
+	}
+	if _, err := os.Lstat(dst); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused export left %s behind: %v", dst, err)
+	}
+}

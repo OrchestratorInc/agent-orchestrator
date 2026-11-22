@@ -33,6 +33,7 @@ type fakeDirSeeds struct {
 	// ones a fork exported.
 	turns    map[string]bool
 	exported *[]string
+	turnErr  error
 	// onCapture runs as the folder is copied.
 	onCapture func()
 	err       error
@@ -53,6 +54,9 @@ func (f fakeDirSeeds) Capture(_ context.Context, workspace string) (string, erro
 	return seed, nil
 }
 func (f fakeDirSeeds) CaptureTurn(_ context.Context, workspace, ref string) (string, error) {
+	if f.turnErr != nil {
+		return "", f.turnErr
+	}
 	if !f.turns[ref] {
 		return "", ErrSnapshotMissing
 	}
@@ -306,5 +310,18 @@ func TestProjectForkStillUsesGitSeeds(t *testing.T) {
 	}
 	if fork := sp.got[0].Fork; fork.SeedRef == "" || fork.StartPoint != "abc123" || fork.SeedDir != "" {
 		t.Fatalf("fork = %+v, want a git seed", fork)
+	}
+}
+
+// A turn whose files include a git repository can't come back from its
+// snapshot, which holds only the commit that repository had checked out.
+func TestStandaloneOlderTurnHoldingARepositoryIsRefused(t *testing.T) {
+	s, sp, _ := newStandaloneService(t, standaloneSource(), fakeDirSeeds{turnErr: ErrSnapshotHasRepository})
+	_, err := s.ForkTurn(context.Background(), "p-1", "req-1", "turn-2")
+	if code := refusalCode(t, err); code != CodeTurnHasRepository {
+		t.Fatalf("refusal = %q, want %q", code, CodeTurnHasRepository)
+	}
+	if len(sp.got) != 0 {
+		t.Fatalf("spawned %d forks, want none", len(sp.got))
 	}
 }

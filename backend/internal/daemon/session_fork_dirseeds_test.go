@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,5 +207,57 @@ func TestDirForkSeedsCaptureTurnExportsTheSnapshot(t *testing.T) {
 	}
 	if _, err := seeds.CaptureTurn(context.Background(), src, filesnapshot.Ref("standalone-1", "missing")); !errors.Is(err, sessionfork.ErrSnapshotMissing) {
 		t.Fatalf("CaptureTurn of a missing snapshot = %v, want ErrSnapshotMissing", err)
+	}
+}
+
+// A folder holding a git repository, as itself or inside it, can't have an
+// older turn's files written back: its snapshots never recorded the
+// repository's own files or history.
+func TestDirForkSeedsCaptureTurnRefusesFoldersHoldingARepository(t *testing.T) {
+	dataDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	filesnapshot.SetDetachedStores(folderSnapshotStores(dataDir))
+	t.Cleanup(func() { filesnapshot.SetDetachedStores(nil) })
+	seeds := newDirForkSeeds(dataDir)
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=t@example.com", "-c", "user.name=T"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	// A repository cloned into the folder.
+	nested := filepath.Join(dataDir, "worktrees", "standalone", "sessions", "standalone-1")
+	if err := os.MkdirAll(filepath.Join(nested, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(nested, "init", "-q", "app")
+	if err := os.WriteFile(filepath.Join(nested, "app", "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(filepath.Join(nested, "app"), "add", ".")
+	git(filepath.Join(nested, "app"), "commit", "-qm", "app")
+	ref := filesnapshot.Ref("standalone-1", "turn-2")
+	if err := filesnapshot.Capture(context.Background(), nested, ref); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seeds.CaptureTurn(context.Background(), nested, ref); !errors.Is(err, sessionfork.ErrSnapshotHasRepository) {
+		t.Fatalf("CaptureTurn(cloned repository) = %v, want ErrSnapshotHasRepository", err)
+	}
+
+	// The folder itself made a repository.
+	own := filepath.Join(dataDir, "worktrees", "standalone", "sessions", "standalone-2")
+	if err := os.MkdirAll(own, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(own, "init", "-q")
+	if _, err := seeds.CaptureTurn(context.Background(), own, filesnapshot.Ref("standalone-2", "turn-2")); !errors.Is(err, sessionfork.ErrSnapshotHasRepository) {
+		t.Fatalf("CaptureTurn(folder is a repository) = %v, want ErrSnapshotHasRepository", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(dataDir, dirseed.DirName)); len(entries) != 0 {
+		t.Fatalf("refused captures left seeds: %v", entries)
 	}
 }
