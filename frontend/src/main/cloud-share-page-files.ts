@@ -28,6 +28,8 @@ export type PageFileSkipReason =
 	| "video"
 	/** A video in a format browsers do not play (isUnplayableShareVideo). */
 	| "video_format"
+	/** A video over the control plane's size limit. */
+	| "too_large"
 	/** Outside the page's folder, by "..", or an absolute path. */
 	| "outside"
 	/** Not a file in the session's artifacts. */

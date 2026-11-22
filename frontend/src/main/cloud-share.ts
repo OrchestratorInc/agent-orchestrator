@@ -668,6 +668,8 @@ export interface PageFilesOutcome {
 	 * not serve videos yet): left out, as a page's missing files are.
 	 */
 	refusedVideos: string[];
+	/** The paths of the videos over the control plane's size limit: left out too. */
+	tooLargeVideos: string[];
 }
 
 interface UploadStart {
@@ -778,10 +780,16 @@ function isRefusedType(error: unknown): boolean {
 	return error instanceof CloudShareError && error.code === "artifact_share_type_unsupported";
 }
 
+/** Whether a refusal says a video is over the control plane's size limit. */
+function isVideoTooLarge(error: unknown): boolean {
+	return error instanceof CloudShareError && error.code === "artifact_share_video_too_large";
+}
+
 /** The file tokens of a page's uploaded files, and the videos the control plane refused. */
 interface UploadedPageFiles {
 	tokens: string[];
 	refusedVideos: string[];
+	tooLargeVideos: string[];
 }
 
 /**
@@ -807,13 +815,14 @@ async function uploadPageFiles(
 				{ uploadToken: pageToken, path: "", size: 0, sha256: "0".repeat(64) }, signal);
 		} catch (error) {
 			if (isMissingRoute(error)) return null;
-			if (error instanceof CloudShareError && error.status === 400) return { tokens: [], refusedVideos: [] };
+			if (error instanceof CloudShareError && error.status === 400) return { tokens: [], refusedVideos: [], tooLargeVideos: [] };
 			throw error;
 		}
-		return { tokens: [], refusedVideos: [] };
+		return { tokens: [], refusedVideos: [], tooLargeVideos: [] };
 	}
 	const tokens: string[] = [];
 	const refusedVideos: string[] = [];
+	const tooLargeVideos: string[] = [];
 	for (const [index, file] of files.entries()) {
 		let start: UploadStart;
 		try {
@@ -821,8 +830,8 @@ async function uploadPageFiles(
 				{ uploadToken: pageToken, path: file.path, size: file.snapshot.size, sha256: file.snapshot.sha256 }, signal);
 		} catch (error) {
 			if (index === 0 && isMissingRoute(error)) return null;
-			if (isRefusedType(error)) {
-				refusedVideos.push(file.path);
+			if (isRefusedType(error) || isVideoTooLarge(error)) {
+				(isRefusedType(error) ? refusedVideos : tooLargeVideos).push(file.path);
 				onSent(file.snapshot.size);
 				continue;
 			}
@@ -838,7 +847,7 @@ async function uploadPageFiles(
 			throw error;
 		}
 	}
-	return { tokens, refusedVideos };
+	return { tokens, refusedVideos, tooLargeVideos };
 }
 
 /**
@@ -878,7 +887,7 @@ export async function uploadShare(
 			...(fileTokens ? { files: fileTokens.map((fileToken) => ({ fileToken })) } : {}),
 		}, signal, SHARE_TIMEOUTS.publish);
 		if (!input.page) return result;
-		return { ...result, pageFiles: { included: fileTokens?.length ?? 0, unsupported: uploaded === null, refusedVideos: uploaded?.refusedVideos ?? [] } };
+		return { ...result, pageFiles: { included: fileTokens?.length ?? 0, unsupported: uploaded === null, refusedVideos: uploaded?.refusedVideos ?? [], tooLargeVideos: uploaded?.tooLargeVideos ?? [] } };
 	} catch (error) {
 		// The upload was never finalized: discard its parts. Finalize itself
 		// failing leaves nothing to discard but aborting is harmless.

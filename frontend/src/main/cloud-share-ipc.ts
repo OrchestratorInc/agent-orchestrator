@@ -634,10 +634,15 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			}, (sentBytes) => progress(copied + sentBytes, total), controller.signal);
 			// A video the control plane refused was left out, as a missing file is.
 			if (pageFiles && result.pageFiles) {
-				for (const refused of result.pageFiles.refusedVideos) {
+				const left = [
+					...result.pageFiles.refusedVideos.map((refused) => [refused, "video"] as const),
+					...result.pageFiles.tooLargeVideos.map((refused) => [refused, "too_large"] as const),
+				];
+				for (const [refused, reason] of left) {
 					const relativePath = pageFiles.referenced.get(refused);
-					pageFiles.skipped.push({ reference: refused, reason: "video", ...(relativePath ? { relativePath } : {}) });
-					if (relativePath) pageFiles.fingerprints[relativePath] = "";
+					pageFiles.skipped.push({ reference: refused, reason, ...(relativePath ? { relativePath } : {}) });
+					// A video refused now is offered again once the control plane takes it.
+					if (relativePath && reason === "video") pageFiles.fingerprints[relativePath] = "";
 				}
 			}
 			// The link serves the page's files only when the control plane took them.

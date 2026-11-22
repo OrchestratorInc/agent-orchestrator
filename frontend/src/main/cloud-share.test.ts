@@ -173,7 +173,7 @@ interface Call {
 	body?: string | Uint8Array;
 }
 
-function fakeControlPlane(partSize: number, options: { failPart?: number; finalizeError?: { status: number; code: string }; files?: boolean; failFile?: string; refuseVideos?: boolean } = {}) {
+function fakeControlPlane(partSize: number, options: { failPart?: number; finalizeError?: { status: number; code: string }; files?: boolean; failFile?: string; refuseVideos?: boolean; maxVideoBytes?: number } = {}) {
 	const calls: Call[] = [];
 	const stored = new Map<number, Uint8Array>();
 	// An included file's bytes, by the path it is served at.
@@ -196,6 +196,9 @@ function fakeControlPlane(partSize: number, options: { failPart?: number; finali
 				if (request.uploadToken !== "tok") return json({ code: "artifact_share_upload_invalid", message: "bad" }, 400);
 				if (request.path === "") return json({ code: "invalid_request", message: "path" }, 400);
 				if (options.refuseVideos && request.path.endsWith(".mp4")) return json({ code: "artifact_share_type_unsupported", message: "Videos can't be included in a shared page yet." }, 415);
+				if (options.maxVideoBytes !== undefined && request.path.endsWith(".mp4") && request.size > options.maxVideoBytes) {
+					return json({ code: "artifact_share_video_too_large", message: "Videos over 1 GiB can't be shared." }, 413);
+				}
 				return json({ uploadToken: `file:${request.path}`, partSize, partCount: Math.max(1, Math.ceil(request.size / partSize)) }, 201);
 			}
 			if (pathname.endsWith("/uploads/files/complete") && options.files) {
@@ -362,7 +365,7 @@ describe("uploadShare", () => {
 		const control = fakeControlPlane(4, { files: true });
 		const progress: number[] = [];
 		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, (sent) => progress.push(sent));
-		expect(result.pageFiles).toEqual({ included: 2, unsupported: false, refusedVideos: [] });
+		expect(result.pageFiles).toEqual({ included: 2, unsupported: false, refusedVideos: [], tooLargeVideos: [] });
 		expect(Object.fromEntries(control.files)).toEqual({ "images/a.png": "aaaaaa", "b.svg": "bb" });
 		const starts = control.calls.filter((call) => call.url.endsWith("/uploads/files")).map((call) => JSON.parse(call.body as string));
 		expect(starts).toEqual([
@@ -384,7 +387,7 @@ describe("uploadShare", () => {
 		const control = fakeControlPlane(4, { files: true, refuseVideos: true });
 		const progress: number[] = [];
 		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, (sent) => progress.push(sent));
-		expect(result.pageFiles).toEqual({ included: 1, unsupported: false, refusedVideos: ["clip.mp4"] });
+		expect(result.pageFiles).toEqual({ included: 1, unsupported: false, refusedVideos: ["clip.mp4"], tooLargeVideos: [] });
 		expect(Object.fromEntries(control.files)).toEqual({ "a.png": "aa" });
 		const finalize = JSON.parse(control.calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
 		expect(finalize.files).toEqual([{ fileToken: "ft:a.png" }]);
@@ -392,12 +395,24 @@ describe("uploadShare", () => {
 		expect(progress.at(-1)).toBe(page.size + 4 + 2);
 	});
 
+	it("leaves out a page's video over the control plane's size limit and publishes the rest", async () => {
+		const page = await snapshotOf("<img src=a.png><video src=clip.mp4>", "page.html");
+		const files = [
+			{ path: "clip.mp4", snapshot: await snapshotOf("vvvvvvvv", "clip.mp4") },
+			{ path: "a.png", snapshot: await snapshotOf("aa", "a.png") },
+		];
+		const control = fakeControlPlane(4, { files: true, maxVideoBytes: 4 });
+		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, () => undefined);
+		expect(result.pageFiles).toEqual({ included: 1, unsupported: false, refusedVideos: [], tooLargeVideos: ["clip.mp4"] });
+		expect(Object.fromEntries(control.files)).toEqual({ "a.png": "aa" });
+	});
+
 	it("uploads a page's video when the control plane takes it", async () => {
 		const page = await snapshotOf("<video src=clip.mp4>", "page.html");
 		const files = [{ path: "clip.mp4", snapshot: await snapshotOf("vvvv", "clip.mp4") }];
 		const control = fakeControlPlane(4, { files: true });
 		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, () => undefined);
-		expect(result.pageFiles).toEqual({ included: 1, unsupported: false, refusedVideos: [] });
+		expect(result.pageFiles).toEqual({ included: 1, unsupported: false, refusedVideos: [], tooLargeVideos: [] });
 		expect(Object.fromEntries(control.files)).toEqual({ "clip.mp4": "vvvv" });
 	});
 
@@ -405,7 +420,7 @@ describe("uploadShare", () => {
 		const page = await snapshotOf("<p>no images</p>", "page.html");
 		const control = fakeControlPlane(4, { files: true });
 		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files: [] } }, () => undefined);
-		expect(result.pageFiles).toEqual({ included: 0, unsupported: false, refusedVideos: [] });
+		expect(result.pageFiles).toEqual({ included: 0, unsupported: false, refusedVideos: [], tooLargeVideos: [] });
 		const finalize = JSON.parse(control.calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
 		expect(finalize.files).toEqual([]);
 	});
@@ -415,7 +430,7 @@ describe("uploadShare", () => {
 		for (const files of [[], [{ path: "a.png", snapshot: await snapshotOf("aaaa", "a.png") }]]) {
 			const control = fakeControlPlane(4);
 			const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, () => undefined);
-			expect(result.pageFiles).toEqual({ included: 0, unsupported: true, refusedVideos: [] });
+			expect(result.pageFiles).toEqual({ included: 0, unsupported: true, refusedVideos: [], tooLargeVideos: [] });
 			const finalize = JSON.parse(control.calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
 			expect(finalize).not.toHaveProperty("files");
 		}
