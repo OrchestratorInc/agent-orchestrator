@@ -1805,6 +1805,13 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			event.preventDefault();
 			event.stopPropagation();
 
+			// Line and page deltas are scroll units. Each event is one zoom step.
+			if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) {
+				const direction = Math.sign(event.deltaY);
+				if (direction !== 0) onChangeFontSize(-direction);
+				return;
+			}
+
 			if (event.timeStamp - lastWheelZoomAt > WHEEL_ZOOM_RESET_MS) wheelZoomRemainder = 0;
 			lastWheelZoomAt = event.timeStamp;
 			wheelZoomRemainder += event.deltaY;

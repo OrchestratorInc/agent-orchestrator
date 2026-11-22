@@ -1069,6 +1069,20 @@ describe("XtermTerminal", () => {
 		expect(onChangeFontSize.mock.calls).toEqual([[1], [-1]]);
 	});
 
+	it.each([
+		["line", WheelEvent.DOM_DELTA_LINE, 3],
+		["page", WheelEvent.DOM_DELTA_PAGE, 1],
+	] as const)("zooms one step for each %s-mode wheel event", (_unit, deltaMode, deltaY) => {
+		const onChangeFontSize = vi.fn();
+		const { container } = render(<XtermTerminal onChangeFontSize={onChangeFontSize} theme="dark" />);
+		const textarea = container.querySelector("textarea")!;
+
+		fireEvent.wheel(textarea, { ctrlKey: true, deltaMode, deltaY: -deltaY });
+		fireEvent.wheel(textarea, { ctrlKey: true, deltaMode, deltaY });
+		fireEvent.wheel(textarea, { ctrlKey: true, deltaMode, deltaY: 0, deltaX: deltaY });
+		expect(onChangeFontSize.mock.calls).toEqual([[1], [-1]]);
+	});
+
 	it("reports terminal focus and applies main-process font-size shortcuts only there", () => {
 		let fontSizeShortcut: ((delta: -1 | 1) => void) | undefined;
 		window.ao!.terminal.onFontSizeShortcut = (listener) => {
