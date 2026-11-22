@@ -102,6 +102,19 @@ describe("a sent message", () => {
 		expect(source).toContain("if (!anchorFound || broughtUp.current === anchorFound) return;");
 		expect(source).toContain("if (dragging.current || (!followsTail.current && Date.now() - anchorFound.at > SEND_INTENT_MS)) return;");
 	});
+
+	// Sending closes the keyboard, which moves the list itself, and iOS drops
+	// some of its scroll events: a glide could start from a stale place and
+	// jump, and the old follow once the keyboard stopped snapped. The move is
+	// one native animated scroll from where the list really is, made once the
+	// keyboard has closed, and follows wait for it to end.
+	it("moves to it in one native animated scroll after the keyboard closes", () => {
+		expect(source).toContain("sendScroll.current.pending = true;\n\t\trequestAnimationFrame(followTail);");
+		expect(source).toContain("scrollToLatest(true, true);");
+		expect(source).toContain("if (viewportHeight.current && !native) glide.place(endOffset());");
+		expect(source).toContain("if (sendScroll.current.pending) followToLatest();\n\t\telse scrollToLatest(false);");
+		expect(source).toContain("if (Date.now() < send.until) {\n\t\t\tsend.owed = true;");
+	});
 });
 
 describe("following a growing reply", () => {
@@ -222,7 +235,7 @@ describe("jump to latest", () => {
 	// followed. It must not count against coming to rest at the end, and a
 	// follow that resumes catches up on it.
 	it("keeps the release's verdict through Android's still momentum and catches up when the follow resumes", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; endSendScroll(); }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);");
 		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);\n\t};");
@@ -461,7 +474,7 @@ describe("following the newest message", () => {
 	});
 
 	it("stops following on the person's own drag and resumes only at rest at the end", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; endSendScroll(); }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("onMomentumScrollEnd={settle}");
 		expect(source).toContain("if (!dragging.current && resting) followsTail.current = true;");

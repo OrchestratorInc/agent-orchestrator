@@ -88,6 +88,8 @@ const FIELD_REVEAL_WAIT_MS = 600;
  * and shows up later only moves a list that is following.
  */
 const SEND_INTENT_MS = 5000;
+// Longest a send's scroll to its message runs before a follow it held back goes (see `sendScroll`).
+const SEND_SCROLL_MS = 600;
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
@@ -413,9 +415,9 @@ function Timeline({
 	// scrolls to its true end here instead, which is never above the header,
 	// and nothing scrolls until the list has measured itself (the content can
 	// report its size first; `onLayout` then makes the scroll).
-	const scrollToLatest = (requestedAnimated: boolean) => {
+	const scrollToLatest = (requestedAnimated: boolean, native = false) => {
 		const animated = requestedAnimated && !reduceMotion;
-		if (animated && glides()) {
+		if (animated && !native && glides()) {
 			glide.glideTo(endOffset(), viewportHeight.current);
 			return;
 		}
@@ -432,11 +434,42 @@ function Timeline({
 		else if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });
 		else listRef.current?.scrollToEnd({ animated });
 		// A scroll of ours may report no event (iOS throttles them): the next glide starts here.
-		if (viewportHeight.current) glide.place(endOffset());
+		// A native animated one reports where it ended (`settle`).
+		if (viewportHeight.current && !native) glide.place(endOffset());
+	};
+	// A send's move to its message is one native animated scroll. The send
+	// closes the keyboard, which moves the list on its own, and iOS drops some of
+	// the scroll events for that, so a glide could start from where the list was
+	// and jump; the native scroll starts from where it is. Follows asked for
+	// while it runs wait for it to end (`settle`, or the cap on Android).
+	const sendScroll = useRef({ pending: false, until: 0, owed: false });
+	const latestFollowTail = useRef<() => void>(() => {});
+	const endSendScroll = () => {
+		const send = sendScroll.current;
+		if (!send.until) return false;
+		const owed = send.owed;
+		send.until = 0;
+		send.owed = false;
+		return owed;
 	};
 	// Output that outgrows the list while it follows is glided along, one motion
 	// however often the end moves; the opening list, still measuring, snaps.
 	const followToLatest = () => {
+		const send = sendScroll.current;
+		if (send.pending) {
+			send.pending = false;
+			if (glides()) {
+				send.until = Date.now() + SEND_SCROLL_MS;
+				send.owed = false;
+				scrollToLatest(true, true);
+				setTimeout(() => { if (endSendScroll()) latestFollowTail.current(); }, SEND_SCROLL_MS);
+				return;
+			}
+		}
+		if (Date.now() < send.until) {
+			send.owed = true;
+			return;
+		}
 		if (glides()) glide.glideTo(endOffset(), viewportHeight.current);
 		else scrollToLatest(false);
 	};
@@ -452,16 +485,20 @@ function Timeline({
 		}
 		followToLatest();
 	};
+	latestFollowTail.current = followTail;
 	latestFollow.current = () => {
 		if (!followAfterKeyboard.current) return;
 		followAfterKeyboard.current = false;
-		if (followsTail.current) scrollToLatest(false);
+		if (!followsTail.current) return;
+		// A send that waited for the keyboard to close makes its move now.
+		if (sendScroll.current.pending) followToLatest();
+		else scrollToLatest(false);
 	};
 	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
 
 	// The send's message arrived: bring it to the top once, unless the person has
 	// their finger on the list. The room below it is already in this layout, so
-	// the follow glides to an end that holds the message at the top.
+	// the list's end holds the message at the top; the move is `sendScroll`'s.
 	const broughtUp = useRef<SendAnchor | undefined>(undefined);
 	useEffect(() => {
 		if (!anchorFound || broughtUp.current === anchorFound) return;
@@ -469,6 +506,7 @@ function Timeline({
 		if (dragging.current || (!followsTail.current && Date.now() - anchorFound.at > SEND_INTENT_MS)) return;
 		followsTail.current = true;
 		setShowJump(false);
+		sendScroll.current.pending = true;
 		requestAnimationFrame(followTail);
 		// Once per send; `followTail` is this render's.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -611,6 +649,8 @@ function Timeline({
 		// follow) as momentum ending too. Only a drag decides whether to follow;
 		// one of ours that landed short of an end still moving goes again.
 		if (!dragging.current) {
+			// Our send scroll ended here; output it held back is below, so not at the end.
+			endSendScroll();
 			if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);
 			return;
 		}
@@ -676,7 +716,7 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); }}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; endSendScroll(); }}
 							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
