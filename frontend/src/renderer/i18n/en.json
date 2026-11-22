@@ -518,6 +518,7 @@
 	"home.starUs": "Star Us",
 	"browser.agentAction": "Agent {{verb}}",
 	"browser.agentUsing": "Agent using browser",
+	"browser.agentTab": "Agent's tab: {{title}}",
 	"browser.find.close": "Close find",
 	"browser.find.matchCount": "{{active}} of {{total}}",
 	"browser.find.next": "Next match",

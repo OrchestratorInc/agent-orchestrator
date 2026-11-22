@@ -4,6 +4,13 @@ Open a URL or workspace file in the desktop browser panel for the current
 session, or start a deterministic session-owned dev server from
 an existing `.ao/launch.json`.
 
+The preview loads in the tab the agent works in, the one `ao browser`
+commands act on, never in a tab the user opened. It comes to the front unless
+the user is working in a tab of their own. One exception: when a remote or
+cloud session's agent-browser viewer is in front, the preview goes to a tab
+already on its origin (whoever owns it) or to a new tab of the user's, and
+that tab comes to the front.
+
 Static HTML and Markdown do not need a development server. Open them directly
 with `ao preview <workspace-path>`. Never create or modify `package.json`,
 install dependencies, or introduce npm or another server solely to display
