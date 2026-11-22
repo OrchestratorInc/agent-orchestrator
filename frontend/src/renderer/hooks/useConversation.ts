@@ -29,7 +29,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
 import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { isDiskCopy } from "../lib/remote-chat-cache";
+import { savedConversationQueryKey } from "../lib/local-chat-cache";
 import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -201,7 +201,6 @@ type ConversationLocalEchosBySession = Record<string, ConversationLocalEcho[]>;
 
 function newestCachedSequence(queryClient: QueryClient, sessionId: string, hostId?: string): number {
 	const cached = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId));
-	if (isDiskCopy(cached?.pages[0])) return 0;
 	return Math.max(0, ...(cached?.pages.map((page) => page.latestSequence) ?? []));
 }
 
@@ -436,6 +435,7 @@ const PERMANENT_CODES = new Set([
 
 export interface ConversationQueryResult {
 	snapshot?: ConversationSnapshot;
+	savedSnapshot?: ConversationSnapshot;
 	isLoading: boolean;
 	/** Set when the session exists but has no chat conversation to show. */
 	unavailable?: { code: string; message: string };
@@ -814,8 +814,8 @@ function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: strin
  * every change through events; one still starting up or waking does not.
  */
 export function conversationSettled(queryClient: QueryClient, sessionId: string, hostId?: string): boolean {
-	const page = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId))?.pages[0];
-	return !isDiskCopy(page) && (page?.controller.state === "ready" || page?.controller.state === "busy");
+	const state = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId))?.pages[0]?.controller.state;
+	return state === "ready" || state === "busy";
 }
 
 export function conversationQueryOptions(sessionId: string, hostId?: string) {
@@ -854,6 +854,11 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		queryKey: remoteConversationRefreshErrorKey(sessionId ?? "", hostId ?? ""),
 		queryFn: async () => false,
 		initialData: false,
+		enabled: false,
+	}).data;
+	const saved = useQuery({
+		queryKey: savedConversationQueryKey(sessionId ?? ""),
+		queryFn: async (): Promise<ConversationSnapshot | null> => null,
 		enabled: false,
 	}).data;
 	const query = useInfiniteQuery({
@@ -902,6 +907,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 
 	return {
 		snapshot: query.data,
+		savedSnapshot: !hostId && query.isLoading && saved ? saved : undefined,
 		refreshError: hostId && (refreshError || query.error) ? "Could not load this remote conversation." : undefined,
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
@@ -1025,10 +1031,9 @@ export function useConversationCommands(
 
 	const send = useMutation({
 		onMutate: (variables: ConversationSendMutationInput) => {
-			const cached = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
+			const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
 				conversationQueryKey(variables.targetSessionId, hostId),
 			);
-			const current = isDiskCopy(cached?.pages[0]) ? undefined : cached;
 			const backgroundWake = current?.pages.some((page) => page.controller.state === "hibernated") ?? false;
 			const turnActive = current?.pages.some((page) =>
 				page.turns.some((turn) => turn.state === "running" || turn.state === "queued"),

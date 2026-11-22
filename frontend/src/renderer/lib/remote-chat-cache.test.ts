@@ -10,7 +10,6 @@ function seeded() {
 		client.setQueryData(["remote-workspaces", hostId, "projects"], []);
 	}
 	client.setQueryData(["remote-conversation-refresh-error", "box-b", "session-1"], true);
-	client.setQueryData(["conversation", "session-1"], { pages: [], pageParams: [] });
 	return client;
 }
 
@@ -24,7 +23,6 @@ it("keeps only the saved hosts' lists and chats", async () => {
 	expect(client.getQueryData(["remote-workspaces", "box-b", "projects"])).toBeUndefined();
 	// Only kept queries are the cache's to prune.
 	expect(client.getQueryData(["remote-conversation-refresh-error", "box-b", "session-1"])).toBe(true);
-	expect(client.getQueryData(["conversation", "session-1"])).toBeDefined();
 });
 
 it("drops everything kept for a host that refused this device", async () => {
@@ -33,5 +31,4 @@ it("drops everything kept for a host that refused this device", async () => {
 	expect(client.getQueryData(["remote-conversation", "box-b", "session-1"])).toBeUndefined();
 	expect(client.getQueryData(["remote-workspaces", "box-b", "sessions"])).toBeUndefined();
 	expect(client.getQueryData(["remote-conversation", "box-a", "session-1"])).toBeDefined();
-	expect(client.getQueryData(["conversation", "session-1"])).toBeDefined();
 });
