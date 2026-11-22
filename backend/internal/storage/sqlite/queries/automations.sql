@@ -179,7 +179,7 @@ WHERE status = 'pending' AND scheduled_for <= sqlc.arg(now)
 -- name: AutomationSessionReadyToComplete :one
 SELECT EXISTS (
     SELECT 1 FROM sessions s
-    WHERE s.id = sqlc.arg(session_id) AND s.kind = 'worker'
+    WHERE s.id = sqlc.arg(session_id)
       AND s.is_terminated = 0 AND s.activity_state = 'idle'
       AND NOT EXISTS (
           SELECT 1 FROM reports r
@@ -197,7 +197,7 @@ SELECT EXISTS (
           (s.session_mode = 'chat' AND (
               SELECT t.state FROM conversation_turns t
               JOIN conversations c ON c.id = t.conversation_id
-              WHERE t.handled_by_session_id = s.id AND c.scope = 'session'
+              WHERE t.handled_by_session_id = s.id AND c.scope IN ('session', 'project')
                 AND t.rolled_back_at IS NULL AND t.promoted_to_turn_id IS NULL
                 AND t.branch_id = c.active_branch_id
               ORDER BY t.requested_at DESC, t.rowid DESC LIMIT 1

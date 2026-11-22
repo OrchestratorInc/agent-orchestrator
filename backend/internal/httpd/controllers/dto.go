@@ -2270,6 +2270,7 @@ type AutomationResponse struct {
 	CreatedAt   time.Time                     `json:"createdAt"`
 	UpdatedAt   time.Time                     `json:"updatedAt"`
 	LatestRun   *AutomationRunSummaryResponse `json:"latestRun,omitempty"`
+	ActiveRun   *AutomationRunSummaryResponse `json:"activeRun,omitempty"`
 	Model       string                        `json:"model,omitempty"`
 	Mode        string                        `json:"mode,omitempty"`
 	Effort      string                        `json:"effort,omitempty"`

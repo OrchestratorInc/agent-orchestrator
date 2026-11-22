@@ -275,6 +275,42 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 			if _, err := store.CompleteAutomationRun(ctx, run.ID, now); err != nil {
 				problems = append(problems, err)
 			}
+			continue
+		}
+		if session.Activity.State != domain.ActivityIdle && session.Activity.State != domain.ActivityExited {
+			continue
+		}
+		// Otherwise a run holds the slot only until a newer occurrence is due.
+		// A worker without completion evidence keeps its session open. An idle
+		// orchestrator may be waiting on its workers, so it is closed only now,
+		// because the project's next orchestrator cannot start while it lives.
+		definition, found, err := s.store.GetAutomation(ctx, run.AutomationID)
+		if err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		if !found || definition.LastRunAt == nil || !definition.LastRunAt.After(run.ScheduledFor) {
+			continue
+		}
+		if session.Kind == domain.KindOrchestrator && s.spawner != nil {
+			finished, err := store.AutomationSessionReadyToComplete(ctx, session.ID, now)
+			if err != nil {
+				problems = append(problems, err)
+				continue
+			}
+			if _, err := s.spawner.Kill(ctx, session.ID); err != nil {
+				problems = append(problems, fmt.Errorf("close automation orchestrator %s: %w", session.ID, err))
+				continue
+			}
+			if finished {
+				if _, err := store.CompleteAutomationRun(ctx, run.ID, now); err != nil {
+					problems = append(problems, err)
+				}
+				continue
+			}
+		}
+		if _, err := store.FailAutomationRun(ctx, run.ID, "Did not finish before the next scheduled run", now); err != nil {
+			problems = append(problems, err)
 		}
 	}
 	return errors.Join(problems...)

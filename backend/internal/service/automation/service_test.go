@@ -53,6 +53,7 @@ type fakeStore struct {
 	projects    map[string]domain.ProjectRecord
 	automations map[domain.AutomationID]domain.Automation
 	latestRuns  map[domain.AutomationID]domain.AutomationRun
+	activeRuns  []domain.AutomationRun
 	latestCalls int
 	latestErr   error
 }
@@ -79,6 +80,10 @@ func (f *fakeStore) ListLatestAutomationRuns(_ context.Context, ids []domain.Aut
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeStore) ListActiveAutomationRuns(context.Context) ([]domain.AutomationRun, error) {
+	return f.activeRuns, nil
 }
 
 func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
@@ -128,8 +133,10 @@ func TestListLoadsLatestRunsInOneStoreCall(t *testing.T) {
 	store := newFakeStore()
 	store.automations["automation-1"] = domain.Automation{ID: "automation-1"}
 	store.automations["automation-2"] = domain.Automation{ID: "automation-2"}
-	store.latestRuns["automation-2"] = domain.AutomationRun{ID: "run-2", AutomationID: "automation-2"}
-	page, err := New(Deps{Store: store}).List(context.Background(), domain.AutomationFilter{})
+	store.latestRuns["automation-2"] = domain.AutomationRun{ID: "run-2", AutomationID: "automation-2", Status: domain.AutomationRunPending}
+	store.activeRuns = []domain.AutomationRun{{ID: "blocking-run", AutomationID: "automation-2", Status: domain.AutomationRunRunning}}
+	svc := New(Deps{Store: store})
+	page, err := svc.List(context.Background(), domain.AutomationFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,11 +146,17 @@ func TestListLoadsLatestRunsInOneStoreCall(t *testing.T) {
 	found := false
 	for _, item := range page.Items {
 		if item.ID == "automation-2" {
-			found = item.LatestRun != nil && item.LatestRun.ID == "run-2"
+			found = item.LatestRun != nil && item.LatestRun.ID == "run-2" && item.ActiveRun != nil && item.ActiveRun.ID == "blocking-run"
+		} else if item.ActiveRun != nil {
+			t.Fatalf("%s active run = %#v, want none", item.ID, item.ActiveRun)
 		}
 	}
 	if !found {
-		t.Fatalf("page = %#v, want latest run attached", page)
+		t.Fatalf("page = %#v, want latest and active runs attached", page)
+	}
+	got, err := svc.Get(context.Background(), "automation-2")
+	if err != nil || got.ActiveRun == nil || got.ActiveRun.ID != "blocking-run" {
+		t.Fatalf("get = %#v err=%v, want the blocking run attached", got, err)
 	}
 }
 

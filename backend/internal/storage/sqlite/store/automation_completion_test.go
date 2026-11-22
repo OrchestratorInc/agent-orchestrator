@@ -30,14 +30,20 @@ func TestAutomationChatCompletionRequiresSuccessfulSettledWork(t *testing.T) {
 		{name: "approval", state: domain.TurnStateCompleted, activity: domain.ActivityBlocked},
 		{name: "waiting input", state: domain.TurnStateCompleted, activity: domain.ActivityWaitingInput},
 		{name: "active", state: domain.TurnStateCompleted, activity: domain.ActivityActive},
-		{name: "orchestrator", state: domain.TurnStateCompleted, activity: domain.ActivityIdle, orchestrator: true},
+		{name: "orchestrator", state: domain.TurnStateCompleted, activity: domain.ActivityIdle, orchestrator: true, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			s, session, conversation := seededChatConversation(t)
 			session.Kind = domain.KindWorker
 			if tc.orchestrator {
+				// An orchestrator's turns live in its project's conversation.
 				session.Kind = domain.KindOrchestrator
+				var err error
+				conversation, err = s.CreateConversation(ctx, "conversation-project", domain.ConversationScopeProject, session.ProjectID, session.ID, testNow)
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			session.Activity.State = tc.activity
 			if err := s.UpdateSession(ctx, session); err != nil {
