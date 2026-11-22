@@ -1,3 +1,5 @@
+import { copyFile, mkdtemp, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { MakerBase, type MakerOptions } from "@electron-forge/maker-base";
 import type { ForgePlatform } from "@electron-forge/shared-types";
@@ -25,6 +27,15 @@ export type MakerAppImageConfig = {
 	appImage?: Record<string, unknown>;
 };
 
+async function linuxIconDir(icon: string | undefined): Promise<string | undefined> {
+	if (!icon) return undefined;
+	const resolved = path.resolve(icon);
+	if ((await stat(resolved)).isDirectory()) return resolved;
+	const dir = await mkdtemp(path.join(tmpdir(), "ao-linux-icons-"));
+	await copyFile(resolved, path.join(dir, "icon.png"));
+	return dir;
+}
+
 export default class MakerAppImage extends MakerBase<MakerAppImageConfig> {
 	name = "appimage";
 	defaultPlatforms: ForgePlatform[] = ["linux"];
@@ -39,6 +50,7 @@ export default class MakerAppImage extends MakerBase<MakerAppImageConfig> {
 		// Mirror buildForge's own output layout (<dir>/../make) so artifacts land
 		// where Forge's publisher expects them.
 		const output = path.join(path.dirname(path.resolve(dir)), "make");
+		const icon = await linuxIconDir(cfg.icon);
 		return buildForge(
 			{ dir },
 			{
@@ -65,7 +77,7 @@ export default class MakerAppImage extends MakerBase<MakerAppImageConfig> {
 					// which fails in CI with no GH_TOKEN set.
 					publish: null,
 					linux: {
-						...(cfg.icon ? { icon: cfg.icon } : {}),
+						...(icon ? { icon } : {}),
 					},
 					appImage: {
 						...cfg.appImage,
