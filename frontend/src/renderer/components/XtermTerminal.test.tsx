@@ -1049,6 +1049,26 @@ describe("XtermTerminal", () => {
 		expect(decrease.preventDefault).toHaveBeenCalledOnce();
 	});
 
+	it.each([
+		["Command", { metaKey: true }],
+		["Ctrl", { ctrlKey: true }],
+	])("resizes the terminal with %s+wheel over xterm and preserves plain scrolling", (_label, modifier) => {
+		const onChangeFontSize = vi.fn();
+		const { container } = render(<XtermTerminal onChangeFontSize={onChangeFontSize} theme="dark" />);
+		const textarea = container.querySelector("textarea")!;
+
+		expect(fireEvent.wheel(textarea, { deltaY: -80, cancelable: true })).toBe(true);
+		expect(onChangeFontSize).not.toHaveBeenCalled();
+
+		expect(fireEvent.wheel(textarea, { ...modifier, deltaY: -40, cancelable: true })).toBe(false);
+		expect(onChangeFontSize).not.toHaveBeenCalled();
+		expect(fireEvent.wheel(textarea, { ...modifier, deltaY: -40, cancelable: true })).toBe(false);
+		expect(onChangeFontSize).toHaveBeenLastCalledWith(1);
+
+		expect(fireEvent.wheel(textarea, { ...modifier, deltaY: 80, cancelable: true })).toBe(false);
+		expect(onChangeFontSize.mock.calls).toEqual([[1], [-1]]);
+	});
+
 	it("reports terminal focus and applies main-process font-size shortcuts only there", () => {
 		let fontSizeShortcut: ((delta: -1 | 1) => void) | undefined;
 		window.ao!.terminal.onFontSizeShortcut = (listener) => {

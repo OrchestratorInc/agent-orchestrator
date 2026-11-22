@@ -289,9 +289,6 @@ function latestPendingInteraction(
 
 const CHAT_FONT_SIZE_DEFAULT = 14;
 
-const WHEEL_ZOOM_THRESHOLD = 80;
-const WHEEL_ZOOM_RESET_MS = 250;
-
 /**
  * What a surface's onSend resolves to when the message went somewhere other
  * than the main transcript (a /btw question opens a side chat), so sending it
@@ -1651,8 +1648,6 @@ function ChatWorkspaceContent({
 		window.addEventListener("focus", retry);
 		return () => window.removeEventListener("focus", retry);
 	}, [onRetryDraftPersistence]);
-	const lastWheelZoomAtRef = useRef(0);
-	const wheelZoomRemainderRef = useRef(0);
 	const [terminalFontSize, setTerminalFontSize] = useState(initialTerminalFontSize);
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	useEffect(() => {
@@ -1670,29 +1665,6 @@ function ChatWorkspaceContent({
 			return next;
 		});
 	}, []);
-
-	const handleWheelZoom = useCallback(
-		(event: ReactWheelEvent<HTMLDivElement>) => {
-			if (!event.ctrlKey && !event.metaKey) return;
-			event.preventDefault();
-			event.stopPropagation();
-
-			if (event.timeStamp - lastWheelZoomAtRef.current > WHEEL_ZOOM_RESET_MS) {
-				wheelZoomRemainderRef.current = 0;
-			}
-			lastWheelZoomAtRef.current = event.timeStamp;
-			wheelZoomRemainderRef.current += event.deltaY;
-
-			const steps = Math.floor(Math.abs(wheelZoomRemainderRef.current) / WHEEL_ZOOM_THRESHOLD);
-			if (steps === 0) return;
-
-			const direction = wheelZoomRemainderRef.current > 0 ? -1 : 1;
-			updateTerminalFontSize(direction * steps);
-			wheelZoomRemainderRef.current -=
-				Math.sign(wheelZoomRemainderRef.current) * steps * WHEEL_ZOOM_THRESHOLD;
-		},
-		[updateTerminalFontSize],
-	);
 
 	const toggleFullscreen = useCallback(async () => {
 		const surface = surfaceRef.current;
@@ -2207,7 +2179,6 @@ function ChatWorkspaceContent({
 						aria-label="Reviewer terminal"
 						className="relative min-h-0 flex-1"
 						data-testid="chat-reviewer-panel"
-						onWheelCapture={handleWheelZoom}
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-reviewer-terminal">
@@ -2231,7 +2202,6 @@ function ChatWorkspaceContent({
 						aria-label="Shell terminal"
 						className="relative min-h-0 flex-1"
 						data-testid="chat-shell-panel"
-						onWheelCapture={handleWheelZoom}
 						role="tabpanel"
 					>
 						<div className="h-full min-h-0" data-testid="chat-shell-terminal">
