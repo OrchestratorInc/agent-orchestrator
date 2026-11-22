@@ -76,8 +76,11 @@ describe("the sent message", () => {
 		expect(matchesSend({ ...message, clientMessageId: "theirs" }, sending)).toBe(false);
 		// An older daemon keeps no key: the place after the send decides.
 		expect(matchesSend(message, sending)).toBe(true);
-		// Once the send has returned, a resend under an earlier key still counts.
-		expect(matchesSend({ ...message, clientMessageId: "earlier" }, { ...sending, settled: true })).toBe(true);
+		// Once the send returns the anchor takes the key it was delivered under, so a
+		// resend of an earlier send matches by that key, and nobody else's does.
+		const resent = { ...sending, clientMessageId: "earlier" };
+		expect(matchesSend({ ...message, clientMessageId: "earlier" }, resent)).toBe(true);
+		expect(matchesSend({ ...message, clientMessageId: "theirs" }, resent)).toBe(false);
 		const steer = { kind: "activity", id: "s", sequence: 11, revision: 1, activityKind: "system", status: "completed", summary: "x", detail: { event: "steer", text: "x", clientMessageId: "theirs" }, createdAt: "" } as const;
 		expect(matchesSend(steer, sending)).toBe(false);
 	});

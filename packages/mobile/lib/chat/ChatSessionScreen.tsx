@@ -92,6 +92,9 @@ const HANDOFF_STALLED_COPY = "This screen hasn't switched over yet. Retry, or go
 /** How long the composer's height holds still before the timeline takes it: past its spring. */
 const COMPOSER_SETTLE_MS = 120;
 
+/** How long a returned send's early copy is drawn while the conversation does not show it under its key. */
+const OPTIMISTIC_SETTLED_MS = 10_000;
+
 async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<void> {
 	Keyboard.dismiss();
 	if (!keyboardVisible) return;
@@ -259,10 +262,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		setSendAnchor(anchor);
 		return anchor;
 	};
-	// The send returned with the key it delivered under (a resend of an earlier
-	// send keeps that one's), and the conversation has what it took.
+	// The send returned with the key it was delivered under (a resend of an
+	// earlier send keeps that one's). Its message shows until the conversation
+	// has it; should the conversation keep it under another key, the early copy
+	// stops being drawn a little later rather than staying beside it.
 	const settleAnchor = (anchor: SendAnchor | undefined, id: string) => {
-		if (anchor) setSendAnchor((shown) => shown?.at === anchor.at ? { ...shown, clientMessageId: id, settled: true } : shown);
+		if (!anchor) return;
+		setSendAnchor((shown) => shown?.at === anchor.at ? { ...shown, clientMessageId: id } : shown);
+		setTimeout(() => setSendAnchor((shown) => shown?.at === anchor.at && shown.text ? { ...shown, text: undefined } : shown), OPTIMISTIC_SETTLED_MS);
 	};
 	const dropAnchor = (anchor: SendAnchor | undefined) => {
 		if (anchor) setSendAnchor((shown) => shown?.at === anchor.at ? undefined : shown);

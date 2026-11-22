@@ -111,10 +111,12 @@ export type SendAnchor = {
 	kind?: "send" | "steer";
 	text?: string;
 	turnId?: string;
-	/** The send's idempotency key, which the conversation keeps on the message or steer. */
+	/**
+	 * The send's idempotency key, which the conversation keeps on the message or
+	 * steer; once the send returns, the key it was delivered under (a resend of
+	 * an earlier send keeps that one's).
+	 */
 	clientMessageId?: string;
-	/** The send has returned; the conversation has whatever it took. */
-	settled?: boolean;
 };
 
 /** Whether `item` is what a send after `after` put in the conversation: the person's message, or their steer. */
@@ -131,16 +133,15 @@ export function sentItemId(item: ConversationItem): string | undefined {
 }
 
 /**
- * Whether `item` can be the send's own message or steer. While the send is in
- * flight, one carrying another key is someone else's (another device, another
- * agent's steer) and is passed over. One without a key (an older daemon) is
- * taken by its place after the send began, and so is any once the send has
- * returned and nothing carries its key (a resend of an earlier send).
+ * Whether `item` can be the send's own message or steer. One carrying another
+ * key is someone else's (another device, another agent's steer) and is passed
+ * over; one without a key (an older daemon) is taken by its place after the
+ * send began.
  */
 export function matchesSend(item: ConversationItem, anchor: SendAnchor): boolean {
 	if (!isSentItem(item, anchor.after)) return false;
 	const id = sentItemId(item);
-	return !anchor.clientMessageId || anchor.settled || id === undefined || id === anchor.clientMessageId;
+	return !anchor.clientMessageId || id === undefined || id === anchor.clientMessageId;
 }
 
 /**
