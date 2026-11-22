@@ -247,7 +247,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - `--radius-xs` suits tiny controls; `--radius-sm` (6px) suits buttons; `--radius-md` suits inputs; `--radius-lg` is the maximum routine component radius.
 - `--radius-panel` is reserved for route-level framed surfaces and larger dialogs.
 - `--radius-full` is only for avatars, dots, and intentional pills.
-- Shadows are elevation cues for transient layers only: dialogs, menus, and tooltips. Filled buttons use inset shading only. No permanent card shadows, glow, or decorative drop shadow.
+- Shadows are elevation cues for transient layers only: dialogs, menus, and tooltips. Filled buttons use inset shading plus a barely-there 1% outer shadow (see Buttons), never a visible lift or glow. No permanent card shadows, glow, or decorative drop shadow.
 - Focus is not decoration: use the semantic focus ring/outline with sufficient contrast. Never remove it or replace it with a barely visible background shift.
 - Avoid cards inside cards. If hierarchy is weak, fix spacing, typography, or surface contrast before adding another border.
 
