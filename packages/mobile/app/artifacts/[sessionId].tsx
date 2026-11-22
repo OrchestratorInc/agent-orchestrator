@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
-import { ArtifactCard, ARTIFACT_GRID_WINDOW, ARTIFACT_VIEWABILITY } from "../../lib/ArtifactCard";
+import { ArtifactCard, ARTIFACT_GRID_WINDOW, ARTIFACT_VIEWABILITY, useSettledVisibility } from "../../lib/ArtifactCard";
 import { useArtifactActions } from "../../lib/artifact-menu";
 import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import type { SessionArtifact } from "../../lib/artifacts";
@@ -70,10 +70,8 @@ function SessionArtifactsContent() {
 	}, [routeHostId, router, sessionId]);
 
 	// Previews load only for cards on screen; FlatList wants these callbacks stable.
-	const [visiblePaths, setVisiblePaths] = useState<ReadonlySet<string>>(() => new Set());
-	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<SessionArtifact>[] }) => {
-		setVisiblePaths(new Set(viewableItems.flatMap((token) => token.item ? [token.item.path] : [])));
-	}).current;
+	// Previews load only once the grid settles, so scrolling does not make and drop web views.
+	const { visibleKeys: visiblePaths, onViewableItemsChanged } = useSettledVisibility<SessionArtifact>((artifact) => artifact.path);
 	const viewabilityConfig = useRef(ARTIFACT_VIEWABILITY).current;
 
 	const onRefresh = useCallback(async () => {

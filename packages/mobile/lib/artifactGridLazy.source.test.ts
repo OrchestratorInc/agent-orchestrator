@@ -15,6 +15,8 @@ describe("artifact grids load lazily", () => {
 			const text = source(page);
 			expect(text).toContain("{...ARTIFACT_GRID_WINDOW}");
 			expect(text).toContain("useRef(ARTIFACT_VIEWABILITY)");
+			// Previews change only once the grid settles, not mid-scroll.
+			expect(text).toContain("useSettledVisibility<");
 		}
 	});
 

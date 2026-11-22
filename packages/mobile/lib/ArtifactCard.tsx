@@ -1,4 +1,5 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Pressable, StyleSheet, Text, View, type ViewToken } from "react-native";
 import { ArtifactPoster } from "./ArtifactPoster";
 import { formatArtifactSize, type SessionArtifact } from "./artifacts";
 import type { ArtifactsBackend } from "./artifactsBackend";
@@ -14,6 +15,42 @@ import { fontScaleCap, press, radius, space, type } from "./tokens";
  */
 export const ARTIFACT_GRID_WINDOW = { initialNumToRender: 6, maxToRenderPerBatch: 4, updateCellsBatchingPeriod: 80, windowSize: 5 } as const;
 export const ARTIFACT_VIEWABILITY = { itemVisiblePercentThreshold: 25, minimumViewTime: 200 } as const;
+
+/** How long the grid must hold still before previews load or let go. */
+export const ARTIFACT_SETTLE_MS = 150;
+
+/**
+ * Which cards are on screen, changed only once the grid has settled. A card's
+ * preview is a web view (a page) or a rendered document, and making and
+ * dropping them as cards crossed the edge mid-scroll is what made the grid
+ * stutter: while it moves, every card keeps what it shows, and when it stops
+ * the cards now on screen load and those gone let go.
+ */
+export function useSettledVisibility<T>(keyOf: (item: T) => string) {
+	const [visibleKeys, setVisibleKeys] = useState<ReadonlySet<string>>(() => new Set());
+	const pending = useRef<ReadonlySet<string> | null>(null);
+	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const keyOfRef = useRef(keyOf);
+	keyOfRef.current = keyOf;
+	useEffect(() => () => clearTimeout(timer.current), []);
+	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<T>[] }) => {
+		pending.current = new Set(viewableItems.flatMap((token) => token.item ? [keyOfRef.current(token.item)] : []));
+		clearTimeout(timer.current);
+		timer.current = setTimeout(() => {
+			const next = pending.current;
+			pending.current = null;
+			if (next) setVisibleKeys((prev) => (sameKeys(prev, next) ? prev : next));
+		}, ARTIFACT_SETTLE_MS);
+	}).current;
+	const isVisible = useCallback((key: string) => visibleKeys.has(key), [visibleKeys]);
+	return { visibleKeys, isVisible, onViewableItemsChanged };
+}
+
+function sameKeys(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+	if (a.size !== b.size) return false;
+	for (const key of a) if (!b.has(key)) return false;
+	return true;
+}
 
 /**
  * An artifact as a card, as the desktop's Artifacts grid draws one: a preview

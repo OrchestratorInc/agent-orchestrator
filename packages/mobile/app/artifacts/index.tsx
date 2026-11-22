@@ -1,8 +1,8 @@
 import { Stack, useRouter } from "expo-router";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type ViewToken } from "react-native";
+import { FlatList, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ArtifactCard, ARTIFACT_GRID_WINDOW, ARTIFACT_VIEWABILITY } from "../../lib/ArtifactCard";
+import { ArtifactCard, ARTIFACT_GRID_WINDOW, ARTIFACT_VIEWABILITY, useSettledVisibility } from "../../lib/ArtifactCard";
 import { artifactIndexRows, artifactLocationCounts, filterArtifactRows, rowsAtLocation, type ArtifactIndexRow, type ArtifactLocation } from "../../lib/artifactsIndex";
 import { CLOUD_HOST_ID } from "../../lib/cloud/mapping";
 import { daemonArtifactsBackend, type ArtifactsBackend } from "../../lib/artifactsBackend";
@@ -68,17 +68,39 @@ export default function ArtifactsPage() {
 		return map;
 	}, [app.hostStates]);
 
-	// Previews load only for cards on screen; FlatList wants these callbacks stable.
-	const [visibleKeys, setVisibleKeys] = useState<ReadonlySet<string>>(() => new Set());
-	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<ArtifactIndexRow>[] }) => {
-		setVisibleKeys(new Set(viewableItems.flatMap((token) => token.item ? [token.item.key] : [])));
-	}).current;
+	// Previews load only for cards on screen, and only once the grid settles.
+	const { visibleKeys, onViewableItemsChanged } = useSettledVisibility<ArtifactIndexRow>((row) => row.key);
 	const viewabilityConfig = useRef(ARTIFACT_VIEWABILITY).current;
 
 	const open = useCallback((row: ArtifactIndexRow) => {
 		haptics.tap();
 		router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: row.sessionId, path: row.path, hostId: row.hostId } });
 	}, [router]);
+
+	// Memoized: visibility changes as the grid scrolls, and the chips and search need not redraw with it.
+	const header = useMemo(() => rows.length ? (
+					<>
+					<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips} style={styles.chipsBar} testID="artifact-locations">
+						<LocationChip label="All" count={counts.all} selected={!chosen} onPress={() => setLocation(undefined)} styles={styles} />
+						{locations.map((item) => (
+							<LocationChip key={item.hostId} label={item.label} count={counts.byHost.get(item.hostId) ?? 0} selected={chosen === item.hostId} onPress={() => setLocation(item.hostId)} styles={styles} />
+						))}
+					</ScrollView>
+					<View style={styles.search}>
+						<Feather name="search" size={15} color={t.textTertiary} />
+						<TextInput
+							value={query}
+							onChangeText={setQuery}
+							placeholder="Search artifacts"
+							placeholderTextColor={t.textTertiary}
+							returnKeyType="search"
+							style={styles.searchInput}
+							accessibilityLabel="Search artifacts"
+							{...textSelectionColors(t)}
+						/>
+					</View>
+					</>
+				) : null, [chosen, counts, locations, query, rows.length, styles, t]);
 
 	const refresh = useCallback(() => {
 		setRefreshes((count) => count + 1);
@@ -102,29 +124,7 @@ export default function ArtifactsPage() {
 				viewabilityConfig={viewabilityConfig}
 				// Lazy: a few screens of cards are mounted at a time, not the whole list.
 				{...ARTIFACT_GRID_WINDOW}
-				ListHeaderComponent={rows.length ? (
-					<>
-					<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips} style={styles.chipsBar} testID="artifact-locations">
-						<LocationChip label="All" count={counts.all} selected={!chosen} onPress={() => setLocation(undefined)} styles={styles} />
-						{locations.map((item) => (
-							<LocationChip key={item.hostId} label={item.label} count={counts.byHost.get(item.hostId) ?? 0} selected={chosen === item.hostId} onPress={() => setLocation(item.hostId)} styles={styles} />
-						))}
-					</ScrollView>
-					<View style={styles.search}>
-						<Feather name="search" size={15} color={t.textTertiary} />
-						<TextInput
-							value={query}
-							onChangeText={setQuery}
-							placeholder="Search artifacts"
-							placeholderTextColor={t.textTertiary}
-							returnKeyType="search"
-							style={styles.searchInput}
-							accessibilityLabel="Search artifacts"
-							{...textSelectionColors(t)}
-						/>
-					</View>
-					</>
-				) : null}
+				ListHeaderComponent={header}
 				ListEmptyComponent={(
 					<View style={styles.empty}>
 						<Feather name="package" size={28} color={t.textTertiary} />
