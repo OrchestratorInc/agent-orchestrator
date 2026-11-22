@@ -153,8 +153,31 @@ describe("useOrchestratorReplyState", () => {
 		expect(hook.result.current).toBe("working");
 	});
 
+	it("takes up the user's message once a check finds none of their turns still waiting", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({
+			...quiet,
+			turns: [...quiet.turns, { id: "t-yours", state: "completed", hasHumanPrompt: true, requestedAt: "2026-11-08T10:05:10Z", completedAt: "2026-11-08T10:05:50Z" }],
+			items: [
+				...quiet.items,
+				{ kind: "message", id: "u1", turnId: "t-yours", sequence: 3, revision: 0, role: "user", origin: "human", streaming: false, createdAt: "2026-11-08T10:05:10Z", text: "Merge it?" },
+				{ kind: "message", id: "a1", turnId: "t-yours", sequence: 4, revision: 0, role: "assistant", origin: "provider", streaming: false, createdAt: "2026-11-08T10:05:50Z", text: "Merged." },
+			],
+		});
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, handledAt: { ":project-a": Date.parse("2026-11-08T09:59:00Z") } }));
+		const sent = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:05:10Z" }) as WorkspaceSession;
+		const hook = setup(orchestrator("idle", "2026-11-08T10:04:00Z"));
+		hook.rerender({ orchestrator: orchestrator("active", "2026-11-08T10:05:00Z"), viewing: false, projectId: "project-a" });
+		hook.rerender({ orchestrator: sent("active", "2026-11-08T10:05:20Z"), viewing: false, projectId: "project-a" });
+		hook.rerender({ orchestrator: sent("idle", "2026-11-08T10:05:50Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
+		hook.rerender({ orchestrator: sent("active", "2026-11-08T10:07:00Z"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBe("unread");
+	});
+
 	it("leaves a queued message pending when a button mounted after the work began", async () => {
-		fetchRecentConversation.mockResolvedValue(workerTurn("Noted."));
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({ ...quiet, turns: [...quiet.turns, { id: "t-yours", state: "queued", hasHumanPrompt: true, requestedAt: "2026-11-08T10:05:00Z" }] });
 		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, handledAt: { ":project-a": Date.parse("2026-11-08T09:59:00Z") } }));
 		const sent = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:05:00Z" }) as WorkspaceSession;
 		const hook = setup(sent("active", "2026-11-08T10:05:03Z"));
@@ -237,7 +260,7 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalled());
 		hook.rerender({ orchestrator: wrote("active", "2026-11-08T10:05:31Z"), viewing: false, projectId: "project-a" });
 		const quiet = workerTurn("Noted.");
-		await act(async () => resolve({ ...quiet, turns: [...quiet.turns, { id: "t2", state: "running", requestedAt: "2026-11-08T10:05:10Z" }] }));
+		await act(async () => resolve({ ...quiet, turns: [...quiet.turns, { id: "t2", state: "running", hasHumanPrompt: true, requestedAt: "2026-11-08T10:05:10Z" }] }));
 		expect(hook.result.current).toBe("working");
 	});
 

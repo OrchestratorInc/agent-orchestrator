@@ -7033,7 +7033,9 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 		const outcome = group.turnId && !group.live && segments.get(group.turnId) === 1
 			? group.outcome ?? (known.has(group.turnId) ? undefined : { state: "completed" as const })
 			: undefined;
-		const standing = outcome ? turnStanding(group.items, outcome.state, index, carried) : "yours";
+		const { steps, live, stopped } = groupSubagents(group);
+		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
+		const standing = outcome && !teamWorking ? turnStanding(group.items, outcome.state, index, carried) : "yours";
 		if (standing !== "background" && standing !== "failed") {
 			close();
 			out.push(standing === "replaced"

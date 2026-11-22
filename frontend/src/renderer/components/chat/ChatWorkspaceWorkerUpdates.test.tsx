@@ -398,6 +398,22 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
 	});
 
+	it("keeps a background turn in view while a subagent it launched still works", () => {
+		renderOrchestrator([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render above the browser."),
+			{
+				kind: "activity", id: "t1-launch", turnId: "t1", sequence: 15, revision: 0, providerItemId: "tool-launch", activityKind: "reasoning", status: "completed", summary: "Audit pages",
+				detail: { providerToolName: "Agent", nestedAgent: true, input: { description: "Audit pages", prompt: "Audit.", subagent_type: "Explore" } } as ConversationActivity["detail"], createdAt: at(1),
+			},
+			{
+				kind: "activity", id: "t1-step", turnId: "t1", sequence: 16, revision: 0, providerItemId: "tool-step", activityKind: "command", status: "running", summary: "grep -rn menu src",
+				detail: { parentProviderItemId: "tool-launch", command: "grep -rn menu src" }, createdAt: at(1),
+			},
+			reply("t1", 2, "Noted."),
+		]);
+		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
 	it("folds a needs-you report a newer update from the same worker overtook", () => {
 		renderOrchestrator([
 			report("t1", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?"),
