@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	// Version 5 hosts honour MsgControlReq. Clients send it to every host: an
-	// older host ignores it and replays the scrollback as before.
+	// Version 5 adds MsgControlReq; older hosts ignore it and replay as before.
 	conPTYHostProtocolVersion         = 5
 	conPTYStyledOutputProtocolVersion = 2
 	// Older hosts ignore MsgWatchForegroundReq and would stream raw output.
@@ -37,10 +36,7 @@ const (
 	MsgForegroundState    byte = 0x0c // host -> watcher: JSON ForegroundPayload, sent on change
 	MsgWatchTitleReq      byte = 0x0d // client -> host: empty; turns the connection into a title watcher
 	MsgTitleState         byte = 0x0e // host -> watcher: JSON TitlePayload, sent on change
-	// MsgControlReq is sent as a connection's first frame by a client that only
-	// probes, reads output or writes input. The host then sends it no scrollback
-	// replay and no terminal output, only the responses it asks for.
-	MsgControlReq byte = 0x0f // client -> host: empty
+	MsgControlReq         byte = 0x0f // client -> host: empty; sent first, the connection gets no replay and no terminal output
 )
 
 // JSON payload structs shared with later tasks (kept minimal).
@@ -114,10 +110,8 @@ func NewMessageParser(onMessage func(msgType byte, payload []byte)) *MessagePars
 	return &MessageParser{onMessage: onMessage}
 }
 
-// newFilteredParser returns a parser that calls onMessage only for the frame
-// types want accepts. Other payloads are discarded as they stream in, never
-// buffered or copied, so a probe that an older host sends its whole scrollback
-// replay does not hold it in memory.
+// newFilteredParser returns a parser that calls onMessage only for the types
+// want accepts; other payloads are dropped as they arrive, never buffered.
 func newFilteredParser(want func(msgType byte) bool, onMessage func(msgType byte, payload []byte)) *MessageParser {
 	return &MessageParser{onMessage: onMessage, want: want}
 }

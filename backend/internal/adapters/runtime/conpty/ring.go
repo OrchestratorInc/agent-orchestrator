@@ -12,23 +12,18 @@ const MaxOutputLines = 1000
 // MaxOutputBytes caps the bytes a Ring keeps, whatever its line cap.
 const MaxOutputBytes = 1 << 20
 
-// partialKeepCap is the largest partial-line buffer kept for reuse once a
-// newline ends the line; a larger one is released.
+// partialKeepCap is the largest partialLine buffer kept for reuse after a newline.
 const partialKeepCap = 64 << 10
 
 // Ring is a bounded rolling buffer of terminal output lines, ANSI codes preserved.
 // It mirrors the appendOutput state machine from pty-host.ts.
 // Concurrent Append and Snapshot/Tail calls are safe.
 type Ring struct {
-	mu       sync.Mutex
-	lines    []string // each entry is "line\n" (or bare text on FlushPartial)
-	size     int      // bytes in lines
-	maxLines int
-	// partial is the output since the last newline. A full-screen program that
-	// repaints with cursor moves and no newline grows it with every chunk, so it
-	// is appended to in place and only its last MaxOutputBytes count (see
-	// partialLocked): a chunk costs its own length, not a copy of the line so far.
-	partial []byte
+	mu          sync.Mutex
+	lines       []string // each entry is "line\n" (or bare text on FlushPartial)
+	size        int
+	maxLines    int
+	partialLine []byte // appended in place; only its last MaxOutputBytes count
 }
 
 // NewRing returns an empty Ring.
@@ -45,10 +40,9 @@ func NewRingOfLines(maxLines int) *Ring {
 	return &Ring{maxLines: maxLines}
 }
 
-// Append mirrors appendOutput from pty-host.ts: each newline in raw completes
-// the partial line, which is stored with its "\n"; the text after the last
-// newline extends the partial line. It then trims to the line cap and
-// MaxOutputBytes.
+// Append mirrors appendOutput from pty-host.ts: prepend the current partialLine,
+// split on newlines, store completed lines with "\n" re-appended, keep the last
+// element as the new partialLine, then trim to the line cap and MaxOutputBytes.
 func (r *Ring) Append(raw []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -61,11 +55,11 @@ func (r *Ring) Append(raw []byte) {
 		r.pushLocked(raw[:i+1])
 		raw = raw[i+1:]
 	}
-	r.partial = append(r.partial, raw...)
+	r.partialLine = append(r.partialLine, raw...)
 	r.trimLocked()
 }
 
-// pushLocked stores the partial line, ended by end, as a completed line.
+// pushLocked stores partialLine, ended by end, as a completed line.
 func (r *Ring) pushLocked(end []byte) {
 	partial := r.partialLocked()
 	var line strings.Builder
@@ -74,26 +68,25 @@ func (r *Ring) pushLocked(end []byte) {
 	line.Write(end)
 	r.lines = append(r.lines, line.String())
 	r.size += line.Len()
-	if cap(r.partial) > partialKeepCap {
-		r.partial = nil
+	if cap(r.partialLine) > partialKeepCap {
+		r.partialLine = nil
 	} else {
-		r.partial = r.partial[:0]
+		r.partialLine = r.partialLine[:0]
 	}
 }
 
-// partialLocked returns the part of the partial line the ring keeps.
+// partialLocked returns the part of partialLine the ring keeps.
 func (r *Ring) partialLocked() []byte {
-	if len(r.partial) > MaxOutputBytes {
-		return r.partial[len(r.partial)-MaxOutputBytes:]
+	if len(r.partialLine) > MaxOutputBytes {
+		return r.partialLine[len(r.partialLine)-MaxOutputBytes:]
 	}
-	return r.partial
+	return r.partialLine
 }
 
 func (r *Ring) trimLocked() {
-	// The dropped head of the partial line is compacted away only once it is
-	// as long as the part kept, so each append stays linear in its chunk.
-	if len(r.partial) >= 2*MaxOutputBytes {
-		r.partial = append(r.partial[:0], r.partialLocked()...)
+	// Compact only once the dropped head is as long as the kept part, so appends stay linear.
+	if len(r.partialLine) >= 2*MaxOutputBytes {
+		r.partialLine = append(r.partialLine[:0], r.partialLocked()...)
 	}
 	partial := len(r.partialLocked())
 	drop := 0
@@ -102,8 +95,7 @@ func (r *Ring) trimLocked() {
 		drop++
 	}
 	if drop > 0 {
-		// The backing array outlives the slice head until append reallocates
-		// it; clear the dropped entries so their bytes can be collected.
+		// Let the dropped strings be collected; the backing array outlives the slice head.
 		clear(r.lines[:drop])
 		// ponytail: slice off the head; ceiling: O(n) copy on every trim cycle.
 		// Upgrade path: circular buffer if trim rate is very high.
@@ -117,7 +109,7 @@ func (r *Ring) FlushPartial() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if len(r.partial) == 0 {
+	if len(r.partialLine) == 0 {
 		return
 	}
 	r.pushLocked(nil)
@@ -125,7 +117,7 @@ func (r *Ring) FlushPartial() {
 }
 
 // Snapshot returns all stored lines concatenated as raw bytes for scrollback replay.
-// The in-progress partial line is NOT included (matches TS outputBuffer.join("")).
+// The in-progress partialLine is NOT included (matches TS outputBuffer.join("")).
 func (r *Ring) Snapshot() []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -136,8 +128,8 @@ func (r *Ring) Snapshot() []byte {
 // Replay returns the complete terminal byte stream retained for a newly
 // attached viewer, including the current non-newline-terminated fragment.
 // Full-screen TUIs commonly repaint with cursor-control sequences and carriage
-// returns instead of newlines, so excluding the partial line can otherwise
-// replay an empty screen even though the process has already drawn its UI.
+// returns instead of newlines, so excluding partialLine can otherwise replay an
+// empty screen even though the process has already drawn its UI.
 func (r *Ring) Replay() []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()

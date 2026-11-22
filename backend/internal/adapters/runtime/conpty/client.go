@@ -39,15 +39,12 @@ func dialHostContext(ctx context.Context, addr string, timeout time.Duration) (n
 	return dialer.DialContext(ctx, "tcp", addr)
 }
 
-// isType accepts only frames of type want; see newFilteredParser.
 func isType(want byte) func(byte) bool {
 	return func(msgType byte) bool { return msgType == want }
 }
 
-// withControl prefixes a connection's first frame with MsgControlReq. Every
-// connection here except Attach starts with it, so the host sends it no
-// scrollback replay and no terminal output. An older host ignores the frame and
-// replays as before, which these readers already skip.
+// withControl prefixes a connection's first frame with MsgControlReq, so the
+// host sends it no replay and no terminal output.
 func withControl(frame []byte) []byte {
 	return append([]byte{MsgControlReq, 0, 0, 0, 0}, frame...)
 }
@@ -362,7 +359,7 @@ func clientWatchTitle(ctx context.Context, addr string, fn func(TitlePayload)) e
 }
 
 // clientWatchFrames subscribes with request and passes each response frame's
-// payload to fn. An older host's replay is ignored.
+// payload to fn. The replay sent before the request is ignored.
 func clientWatchFrames(ctx context.Context, addr string, request, response byte, fn func(payload []byte)) error {
 	conn, err := dialHostContext(ctx, addr, dialTimeout)
 	if err != nil {
