@@ -99,6 +99,7 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.excerpt.selectedText": "Texte sélectionné :",
 	"chat.excerpt.flowchartAttached": "Organigramme joint",
+	"chat.excerpt.quoted": "« {{text}} »",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Ajoutez un message pendant que {{agent}} se prépare",
 	"chat.archived.body": "L'historique est conservé. Restaurez la session pour continuer.",

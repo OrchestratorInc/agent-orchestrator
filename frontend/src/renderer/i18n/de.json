@@ -98,6 +98,7 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.excerpt.selectedText": "Ausgewählter Text:",
 	"chat.excerpt.flowchartAttached": "Flussdiagramm angehängt",
+	"chat.excerpt.quoted": "„{{text}}“",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Folgenachricht einreihen, während {{agent}} startet",
 	"chat.archived.body": "Der Verlauf bleibt erhalten. Stellen Sie die Sitzung wieder her, um fortzufahren.",
