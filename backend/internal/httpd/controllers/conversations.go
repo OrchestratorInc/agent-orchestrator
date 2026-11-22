@@ -1125,7 +1125,12 @@ func sendConversationMessageResponse(turn domain.ConversationTurn) SendConversat
 // bytes once already, to stage the file, so a message that also hands the image
 // to the agent natively need not carry them a second time. Anything other than
 // a direct file in .ao/attachments, or a file this session did not stage, is
-// refused; the size cap is checked before the file is read.
+// refused.
+//
+// A path is a few bytes of JSON that expands to a whole file, so the request
+// body limit no longer bounds what this reads. The count, per-image and total
+// limits that conversationContent applies to decoded images are applied here
+// first, before any file is read, and each file's size is checked before it is.
 func (c *ConversationsController) stagedImages(ctx context.Context, sessionID string, images []ConversationImageContentRequest) ([]ConversationImageContentRequest, *attachmentError) {
 	staged := false
 	for _, image := range images {
@@ -1133,6 +1138,15 @@ func (c *ConversationsController) stagedImages(ctx context.Context, sessionID st
 	}
 	if !staged {
 		return images, nil
+	}
+	if len(images) > maxAttachments {
+		return nil, &attachmentError{"TOO_MANY_ATTACHMENTS", "too many attachments"}
+	}
+	budget := maxConversationImagesBytes
+	for _, image := range images {
+		if image.Path == "" {
+			budget -= inlineImageBytes(image.Data)
+		}
 	}
 	out := make([]ConversationImageContentRequest, len(images))
 	for i, image := range images {
@@ -1147,17 +1161,33 @@ func (c *ConversationsController) stagedImages(ctx context.Context, sessionID st
 		if !ok {
 			return nil, &attachmentError{"INVALID_ATTACHMENT_PATH", "attachment path must name a staged file in .ao/attachments"}
 		}
-		data, err := c.readStagedImage(ctx, domain.SessionID(sessionID), name)
+		data, err := c.readStagedImage(ctx, domain.SessionID(sessionID), name, budget)
 		if err != nil {
 			return nil, err
 		}
+		budget -= len(data)
 		out[i] = ConversationImageContentRequest{MIMEType: image.MIMEType, Data: base64.StdEncoding.EncodeToString(data)}
 	}
 	return out, nil
 }
 
-func (c *ConversationsController) readStagedImage(ctx context.Context, sessionID domain.SessionID, name string) ([]byte, *attachmentError) {
+// inlineImageBytes is the decoded size of an inline base64 image. Malformed
+// data counts at its encoded length; conversationContent refuses it anyway.
+func inlineImageBytes(data string) int {
+	data = strings.TrimSpace(data)
+	if len(data)%4 != 0 {
+		return len(data)
+	}
+	return len(data)/4*3 - (len(data) - len(strings.TrimRight(data, "=")))
+}
+
+// readStagedImage reads one staged image, refusing it by its size on disk
+// before reading when it is over the per-image cap or the bytes still left in
+// the message's budget, and never reading past either.
+func (c *ConversationsController) readStagedImage(ctx context.Context, sessionID domain.SessionID, name string, budget int) ([]byte, *attachmentError) {
 	notFound := &attachmentError{"ATTACHMENT_NOT_FOUND", "staged attachment not found"}
+	tooLarge := &attachmentError{"ATTACHMENT_TOO_LARGE", "attachment is too large"}
+	overBudget := &attachmentError{"ATTACHMENTS_TOO_LARGE", "attachments are too large"}
 	if c.Renders == nil {
 		return nil, notFound
 	}
@@ -1167,14 +1197,22 @@ func (c *ConversationsController) readStagedImage(ctx context.Context, sessionID
 	}
 	defer func() { _ = file.Close() }()
 	if info.Size() > maxConversationImageBytes {
-		return nil, &attachmentError{"ATTACHMENT_TOO_LARGE", "attachment is too large"}
+		return nil, tooLarge
 	}
-	data, err := io.ReadAll(io.LimitReader(file, maxConversationImageBytes+1))
+	if info.Size() > int64(budget) {
+		return nil, overBudget
+	}
+	limit := min(maxConversationImageBytes, budget)
+	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
 		return nil, notFound
 	}
+	// The file grew after it was checked: still nothing past the limits is kept.
 	if len(data) > maxConversationImageBytes {
-		return nil, &attachmentError{"ATTACHMENT_TOO_LARGE", "attachment is too large"}
+		return nil, tooLarge
+	}
+	if len(data) > budget {
+		return nil, overBudget
 	}
 	return data, nil
 }

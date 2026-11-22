@@ -46,9 +46,16 @@ func (s *stagedImagesStub) EditQueuedTurn(_ context.Context, _ domain.SessionID,
 
 func stagedImagesServer(t *testing.T, stub *stagedImagesStub) *httptest.Server {
 	t.Helper()
+	return stagedImagesServerWith(t, stub, map[string][]byte{stagedImageName: stagedImageBytes})
+}
+
+func stagedImagesServerWith(t *testing.T, stub *stagedImagesStub, files map[string][]byte) *httptest.Server {
+	t.Helper()
 	dataDir := t.TempDir()
-	if err := attachmentstore.New(dataDir).PutCanonical(context.Background(), "p1-1", stagedImageName, stagedImageBytes); err != nil {
-		t.Fatalf("stage image: %v", err)
+	for name, data := range files {
+		if err := attachmentstore.New(dataDir).PutCanonical(context.Background(), "p1-1", name, data); err != nil {
+			t.Fatalf("stage %s: %v", name, err)
+		}
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server := httptest.NewServer(httpd.NewRouterWithControl(config.Config{DataDir: dataDir}, log, nil, httpd.APIDeps{
@@ -172,5 +179,58 @@ func TestConversationSnapshotAdvertisesStagedImages(t *testing.T) {
 	})
 	if body["supportsStagedImages"] != true {
 		t.Fatalf("supportsStagedImages = %#v, want true", body["supportsStagedImages"])
+	}
+}
+
+// A path is a few bytes that expand to a whole file, so the limits on decoded
+// images are applied before any file is read, not after every one has been.
+func TestStagedImagePathsAreBoundedBeforeTheyAreRead(t *testing.T) {
+	const nineMiB, tenMiB = 9 << 20, 10 << 20
+	big := "attachment-0123abce.png"
+	oversized := "attachment-0123abcf.png"
+	files := map[string][]byte{big: make([]byte, nineMiB), oversized: make([]byte, tenMiB+1)}
+	path := func(name string) map[string]string { return stagedImage(".ao/attachments/" + name) }
+	repeat := func(image map[string]string, n int) []map[string]string {
+		out := make([]map[string]string, n)
+		for i := range out {
+			out[i] = image
+		}
+		return out
+	}
+	eightMiB := map[string]string{"mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(make([]byte, 8<<20))}
+	for _, tc := range []struct {
+		name   string
+		images []map[string]string
+		code   string
+	}{
+		// None of these files exist: refusing for the count shows nothing was opened first.
+		{"more images than a message takes", repeat(path("attachment-missing.png"), 9), "TOO_MANY_ATTACHMENTS"},
+		{"one file over the per-image limit", []map[string]string{path(oversized)}, "ATTACHMENT_TOO_LARGE"},
+		{"the same file named until it passes the total", repeat(path(big), 3), "ATTACHMENTS_TOO_LARGE"},
+		{"inline bytes and staged paths together over the total", []map[string]string{eightMiB, path(big), path(big)}, "ATTACHMENTS_TOO_LARGE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stagedImagesStub{fakeConversationService: &fakeConversationService{}}
+			server := stagedImagesServerWith(t, stub, files)
+			status, body := postStagedImageJSON(t, server, "/api/v1/sessions/p1-1/conversation/messages", map[string]any{
+				"text": "inspect", "attachments": tc.images,
+			})
+			assertErrorCode(t, body, status, http.StatusBadRequest, tc.code)
+			if stub.sent.Text != "" {
+				t.Fatalf("service called with %d content blocks, want refusal before delivery", len(stub.sent.Content))
+			}
+		})
+	}
+
+	// Two 9 MiB files fit the 25 MiB total and still go through.
+	stub := &stagedImagesStub{fakeConversationService: &fakeConversationService{}}
+	server := stagedImagesServerWith(t, stub, files)
+	if status, body := postStagedImageJSON(t, server, "/api/v1/sessions/p1-1/conversation/messages", map[string]any{
+		"text": "inspect", "attachments": repeat(path(big), 2),
+	}); status != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %.200s", status, body)
+	}
+	if len(stub.sent.Content) != 2 {
+		t.Fatalf("content = %d blocks, want 2", len(stub.sent.Content))
 	}
 }
