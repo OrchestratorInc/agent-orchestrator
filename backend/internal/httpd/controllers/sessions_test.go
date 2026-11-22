@@ -3811,6 +3811,47 @@ func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_ManagedPreviewPreservesEmailHTML(t *testing.T) {
+	const page = `<p>support@example.test</p><a href="mailto:support@example.test">Email support</a>`
+	for _, tc := range []struct {
+		name, contentType, cacheControl, wantCacheControl string
+	}{
+		{"html without cache policy", "text/html; charset=utf-8", "", "no-transform"},
+		{"html with cache policy", "text/html", "private, max-age=60", "private, max-age=60, no-transform"},
+		{"html already protected", "application/xhtml+xml", "private, no-transform", "private, no-transform"},
+		{"non-html unchanged", "text/plain", "private, max-age=60", "private, max-age=60"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				if tc.cacheControl != "" {
+					w.Header().Set("Cache-Control", tc.cacheControl)
+				}
+				_, _ = io.WriteString(w, page)
+			}))
+			t.Cleanup(app.Close)
+			parsed, _ := url.Parse(app.URL)
+			port, _ := strconv.Atoi(parsed.Port())
+			svc := newFakeSessionService()
+			session := svc.sessions["ao-1"]
+			session.Metadata.PreviewURL = app.URL + "/"
+			svc.sessions["ao-1"] = session
+			managed := &fakeManagedPreviewServer{status: previewserver.Status{
+				State: previewserver.StateReady, TargetKind: previewserver.TargetApp,
+				URL: session.Metadata.PreviewURL, Port: port,
+			}}
+			srv := newSessionTestServerWithPreview(t, svc, managed)
+			body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/app/", "")
+			if status != http.StatusOK || string(body) != page {
+				t.Fatalf("proxied page = (%d) %q, want original %q", status, body, page)
+			}
+			if got := strings.Join(headers.Values("Cache-Control"), ", "); got != tc.wantCacheControl {
+				t.Errorf("Cache-Control = %q, want %q", got, tc.wantCacheControl)
+			}
+		})
+	}
+}
+
 func TestSessionsAPI_ManagedPreviewRequiresOwningCapability(t *testing.T) {
 	svc := newFakeSessionService()
 	managed := &fakeManagedPreviewServer{}

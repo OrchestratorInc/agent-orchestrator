@@ -873,6 +873,23 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			}
 		},
 		ModifyResponse: func(res *http.Response) error {
+			// Cloudflare can obfuscate email addresses in HTML before the remote
+			// Browser receives it. Its decoder URL would resolve on the preview
+			// origin, where the agent's app does not serve Cloudflare assets.
+			if mediaType, _, err := mime.ParseMediaType(res.Header.Get("Content-Type")); err == nil &&
+				(mediaType == "text/html" || mediaType == "application/xhtml+xml") {
+				protected := false
+				for _, value := range res.Header.Values("Cache-Control") {
+					for _, directive := range strings.Split(value, ",") {
+						if strings.EqualFold(strings.TrimSpace(directive), "no-transform") {
+							protected = true
+						}
+					}
+				}
+				if !protected {
+					res.Header.Add("Cache-Control", "no-transform")
+				}
+			}
 			// Remote proxies publish this app on a separate origin, where the
 			// sandbox is removed in favor of their existing preview policy.
 			res.Header.Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
