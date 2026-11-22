@@ -20,6 +20,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	browse,
 	browseKey,
 	rows,
+	searchHidesRows = 0,
 	header,
 	footer,
 	pickable,
@@ -42,6 +43,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	 * Unset takes the pane's own max height. The count includes any rows above the list, such as favourites.
 	 */
 	rows?: number;
+	/** Of `rows`, the ones a search hides (favourites above the list), left out of a search's cap. */
+	searchHidesRows?: number;
 	/**
 	 * Controls between the search and the list, such as the agent rail. Up and Shift+Tab
 	 * leave them for the search, Down and Tab for the list, and typing goes to the search.
@@ -107,9 +110,12 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const headerRef = useRef<HTMLDivElement>(null);
 	const footerRef = useRef<HTMLDivElement>(null);
-	// A search hides the header, and the list takes its room as one more row.
+	// A search hides the header, and the list takes its room as one more row. Rows it hides above
+	// the list (favourites) leave its cap, so a long list of matches scrolls rather than growing.
 	const showHeader = Boolean(header) && !normalizedQuery;
-	const listRows = rows === undefined ? undefined : rows + (header && normalizedQuery ? 1 : 0);
+	const listRows = rows === undefined ? undefined
+		: normalizedQuery ? Math.max(1, rows - searchHidesRows) + (header ? 1 : 0)
+		: rows;
 	// A row is the menu item's text line plus its py-1.5, with the surface's 1px gap between rows.
 	// The pane's basis is that height whatever it lists, so a search with no matches never shrinks the
 	// menu under the pointer. It grows into room the held height below leaves it, and shrinks only

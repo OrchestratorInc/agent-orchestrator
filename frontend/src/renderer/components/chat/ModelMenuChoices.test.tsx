@@ -225,6 +225,23 @@ describe("ModelMenuChoices", () => {
 		expect(screen.getByTestId("rail")).toBeInTheDocument();
 	});
 
+	it("leaves the rows a search hides, such as favourites, out of the search's cap", async () => {
+		const user = userEvent.setup();
+		render(
+			<ModelMenuChoices models={generateModels(30)} searchable rows={14} searchHidesRows={10} header={<div data-testid="rail" />}>
+				{(matches) => matches.map((model) => (
+					<button key={model.id} type="button" role="menuitemradio">{model.label}</button>
+				))}
+			</ModelMenuChoices>,
+		);
+		const pane = () => document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!;
+		// Ten favourites above four model rows while browsing.
+		expect(pane().style.getPropertyValue("--model-list-rows")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 14 + 1px * 14)");
+		// Searching hides the favourites, so many matches scroll in four rows plus the rail's, not fifteen.
+		await user.type(screen.getByRole("searchbox"), "Model");
+		expect(pane().style.getPropertyValue("--model-list-rows")).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 5 + 1px * 5)");
+	});
+
 	it("passes over matches that cannot be picked when Enter picks from the search", async () => {
 		const user = userEvent.setup();
 		const picked = vi.fn();

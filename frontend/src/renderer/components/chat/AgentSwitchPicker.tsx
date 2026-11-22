@@ -555,6 +555,8 @@ export function AgentModelPicker({
 					searchable
 					searchPlaceholder={t("agentSwitch.search")}
 					rows={VISIBLE_MODEL_ROWS + setups.length}
+					// A search lists matches only; the favourites above the list are hidden.
+					searchHidesRows={setups.length}
 					className="max-h-none"
 					header={(
 						<AgentRail
