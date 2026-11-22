@@ -1,20 +1,19 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
-import { ArtifactPoster } from "../../lib/ArtifactPoster";
+import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
+import { ArtifactCard } from "../../lib/ArtifactCard";
 import { useArtifactActions } from "../../lib/artifact-menu";
 import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
-import { formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
+import type { SessionArtifact } from "../../lib/artifacts";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches, machineState } from "../../lib/hostRoute";
 import { MachineRejectedState } from "../../lib/MachineRejectedState";
-import { relativeTime } from "../../lib/notificationView";
 import type { ArtifactsBackend } from "../../lib/artifactsBackend";
 import { useArtifactsBackend } from "../../lib/useArtifactsBackend";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { fontScaleCap, press, radius, space, type } from "../../lib/tokens";
+import { space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
 
@@ -125,47 +124,6 @@ function SessionArtifactsContent() {
 	);
 }
 
-function ArtifactCard({ artifact, backend, sessionId, visible, refreshes, versionOf, onOpen, onMenu }: {
-	artifact: SessionArtifact;
-	backend: ArtifactsBackend | null;
-	sessionId: string;
-	/** On screen: the card's preview of its contents may load. */
-	visible: boolean;
-	/** Pulls to refresh so far; a failed preview is tried again after one. */
-	refreshes: number;
-	versionOf(path: string): string | undefined;
-	onOpen(): void;
-	onMenu?(): void;
-}) {
-	const styles = useThemedStyles(makeStyles);
-	const age = relativeTime(artifact.updatedAt);
-	const meta = [artifact.shareUrl ? "Public" : "", age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");
-	return (
-		<Pressable
-			accessibilityRole="button"
-			accessibilityLabel={`${artifact.name}, ${meta}`}
-			accessibilityHint="Opens the artifact. Long-press for more actions."
-			accessibilityActions={[{ name: "longpress", label: "More actions" }]}
-			onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === "longpress") onMenu?.(); }}
-			onPress={onOpen}
-			onLongPress={onMenu}
-			delayLongPress={350}
-			style={styles.card}
-		>
-			{({ pressed }) => (<>
-				<ArtifactPoster artifact={artifact} backend={backend} sessionId={sessionId} visible={visible} versionOf={versionOf} retries={refreshes} style={styles.poster} />
-				<View style={styles.label}>
-					<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.name}>{artifact.name}</Text>
-					{meta ? <Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.meta}>{meta}</Text> : null}
-				</View>
-				{/* Pressed, the card dims under a veil: an Android WebView does not fade
-				    with a parent's opacity, and fading one can blank it for a frame. */}
-				{pressed ? <View pointerEvents="none" style={styles.pressed} /> : null}
-			</>)}
-		</Pressable>
-	);
-}
-
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	content: { paddingHorizontal: space.lg - space.xs, paddingTop: space.md, paddingBottom: space.xxxl },
@@ -173,12 +131,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	row: { marginBottom: space.md },
 	caption: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, paddingHorizontal: space.xs, marginBottom: space.md },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
-	card: { overflow: "hidden", borderRadius: radius.lg, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-	poster: { aspectRatio: 4 / 3 },
-	pressed: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase, opacity: 1 - press.opacity },
-	label: { paddingHorizontal: space.md, paddingVertical: space.sm, gap: space.hair },
-	name: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "500" },
-	meta: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

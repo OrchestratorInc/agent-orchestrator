@@ -1,62 +1,94 @@
 import { Stack, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from "react-native";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { FlatList, RefreshControl, StyleSheet, Text, TextInput, useWindowDimensions, View, type ViewToken } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { formatTimeTerse } from "../../../product-ui/src/formatting";
+import { ArtifactCard } from "../../lib/ArtifactCard";
 import { artifactIndexRows, filterArtifactRows, type ArtifactIndexRow } from "../../lib/artifactsIndex";
+import { daemonArtifactsBackend, type ArtifactsBackend } from "../../lib/artifactsBackend";
 import { haptics } from "../../lib/haptics";
-import { Feather, type FeatherIconName } from "../../lib/icons";
+import { Feather } from "../../lib/icons";
+import { relativeTime } from "../../lib/notificationView";
 import { refreshControlColors } from "../../lib/refreshControlColors";
 import { sessionTitle } from "../../lib/sessionStatus";
 import { useApp } from "../../lib/store";
 import { textSelectionColors } from "../../lib/textSelection";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { font } from "../../lib/tokens";
+import { font, space } from "../../lib/tokens";
 import { useRefreshActions } from "../../lib/useRefreshActions";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
-const KIND_ICONS: Record<ArtifactIndexRow["kind"], FeatherIconName> = { html: "globe", markdown: "file-text", file: "file" };
+// Cards reflow to three across once a column would be wider than a phone's half.
+const WIDE_LAYOUT = 600;
 
 /**
- * Every session's artifacts in one list, as the desktop sidebar's Artifacts
- * page: newest change first, each with the session and project it came from,
- * and a search over all three. A row opens the file in the artifact viewer.
+ * Every session's artifacts in one grid, as the desktop sidebar's Artifacts
+ * page: a card per file with a preview of it, its name, and where it is and
+ * how long ago it changed; newest first, with a search over the file, its
+ * session and its project. A card opens the file in the artifact viewer.
  */
 export default function ArtifactsPage() {
 	const router = useRouter();
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
+	const { width } = useWindowDimensions();
+	const columns = width >= WIDE_LAYOUT ? 3 : 2;
 	const app = useApp();
 	const [query, setQuery] = useState("");
 	const { refreshing, onRefresh } = useRefreshActions(app.refreshAll);
+	// Each pull to refresh lets a card whose preview failed try it again.
+	const [refreshes, setRefreshes] = useState(0);
 
 	const rows = useMemo(() => {
 		const projects = new Map(app.allProjects.map((project) => [`${project.hostId}:${project.id}`, project.name]));
 		return artifactIndexRows(
-			app.allSessions.map((session) => ({ id: session.id, hostId: session.hostId, projectId: session.projectId, artifacts: session.artifacts, outputType: session.outputType, title: sessionTitle(session) })),
+			app.allSessions.map((session) => ({ id: session.id, hostId: session.hostId, hostName: session.hostName, projectId: session.projectId, artifacts: session.artifacts, outputType: session.outputType, title: sessionTitle(session) })),
 			(hostId, projectId) => projects.get(`${hostId}:${projectId}`),
 		);
 	}, [app.allProjects, app.allSessions]);
 	const shown = useMemo(() => filterArtifactRows(rows, query), [query, rows]);
+
+	// One backend per paired machine: a card reads its file from its own machine.
+	const backends = useMemo(() => {
+		const map = new Map<string, ArtifactsBackend>();
+		for (const host of app.hostStates) if (host.config) map.set(host.hostId, daemonArtifactsBackend(host.config));
+		return map;
+	}, [app.hostStates]);
+
+	// Previews load only for cards on screen; FlatList wants these callbacks stable.
+	const [visibleKeys, setVisibleKeys] = useState<ReadonlySet<string>>(() => new Set());
+	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<ArtifactIndexRow>[] }) => {
+		setVisibleKeys(new Set(viewableItems.flatMap((token) => token.item ? [token.item.key] : [])));
+	}).current;
+	const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 1, minimumViewTime: 120 }).current;
 
 	const open = useCallback((row: ArtifactIndexRow) => {
 		haptics.tap();
 		router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: row.sessionId, path: row.path, hostId: row.hostId } });
 	}, [router]);
 
+	const refresh = useCallback(() => {
+		setRefreshes((count) => count + 1);
+		onRefresh();
+	}, [onRefresh]);
+
 	return (
 		<>
 			<Stack.Screen options={{ title: "Artifacts" }} />
 			<FlatList
+				key={columns}
 				style={styles.page}
 				contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
 				contentInsetAdjustmentBehavior="automatic"
 				keyboardShouldPersistTaps="handled"
 				data={shown}
+				numColumns={columns}
+				columnWrapperStyle={shown.length ? styles.row : undefined}
 				keyExtractor={(row) => row.key}
+				onViewableItemsChanged={onViewableItemsChanged}
+				viewabilityConfig={viewabilityConfig}
 				ListHeaderComponent={rows.length ? (
 					<View style={styles.search}>
 						<Feather name="search" size={15} color={t.textTertiary} />
@@ -80,23 +112,20 @@ export default function ArtifactsPage() {
 					</View>
 				)}
 				renderItem={({ item }) => (
-					<Pressable
-						accessibilityRole="button"
-						accessibilityLabel={`${item.name}, from ${item.sessionTitle}${item.projectName ? ` in ${item.projectName}` : ""}`}
-						onPress={() => open(item)}
-						style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-						testID={`artifact-${item.sessionId}-${item.path}`}
-					>
-						<View style={styles.icon}><Feather name={KIND_ICONS[item.kind]} size={16} color={t.textSecondary} /></View>
-						<View style={styles.text}>
-							<Text style={styles.name} numberOfLines={1}>{item.name}</Text>
-							<Text style={styles.meta} numberOfLines={1}>{[item.sessionTitle, item.projectName].filter(Boolean).join(" · ")}</Text>
-						</View>
-						<Text style={styles.age}>{formatTimeTerse(item.updatedAt)}</Text>
-					</Pressable>
+					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
+						<ArtifactCard
+							artifact={item.artifact}
+							backend={backends.get(item.hostId) ?? null}
+							sessionId={item.sessionId}
+							visible={visibleKeys.has(item.key)}
+							refreshes={refreshes}
+							versionOf={(path) => item.sessionArtifacts.find((file) => file.path === path)?.updatedAt}
+							meta={[item.hostName, relativeTime(item.updatedAt)].filter(Boolean).join(" · ")}
+							onOpen={() => open(item)}
+						/>
+					</View>
 				)}
-				ItemSeparatorComponent={() => <View style={styles.separator} />}
-				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
+				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} {...refreshControlColors(t)} />}
 			/>
 		</>
 	);
@@ -104,17 +133,10 @@ export default function ArtifactsPage() {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	page: { flex: 1, backgroundColor: t.bgBase },
-	content: { paddingHorizontal: 16, paddingTop: 8 },
-	search: { height: 38, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, marginBottom: 12, borderRadius: 10, backgroundColor: t.bgElevated },
+	content: { paddingHorizontal: space.lg - space.xs, paddingTop: space.sm },
+	row: { marginBottom: space.md },
+	search: { height: 38, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, marginHorizontal: space.xs, marginBottom: space.md, borderRadius: 10, backgroundColor: t.bgElevated },
 	searchInput: { flex: 1, fontFamily: font.regular, fontSize: 15, color: t.textPrimary },
-	row: { minHeight: 56, flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 8, paddingVertical: 8, borderRadius: 10 },
-	pressed: { backgroundColor: t.bgSubtle },
-	icon: { width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated },
-	text: { flex: 1, minWidth: 0, gap: 2 },
-	name: { fontFamily: font.medium, fontSize: 15, color: t.textPrimary },
-	meta: { fontFamily: font.regular, fontSize: 13, color: t.textTertiary },
-	age: { fontFamily: font.regular, fontSize: 12, color: t.textTertiary },
-	separator: { height: StyleSheet.hairlineWidth, marginLeft: 52, backgroundColor: t.borderDefault },
 	empty: { alignItems: "center", gap: 8, paddingTop: 80, paddingHorizontal: 32 },
 	emptyTitle: { fontFamily: font.medium, fontSize: 16, color: t.textPrimary },
 	emptyMessage: { fontFamily: font.regular, fontSize: 14, color: t.textTertiary, textAlign: "center" },

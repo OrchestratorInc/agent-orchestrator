@@ -12,9 +12,15 @@ export type ArtifactIndexRow = {
 	updatedAt: string;
 	sessionTitle: string;
 	projectName?: string;
+	/** The machine it is on, for the card's line. */
+	hostName?: string;
+	/** The file as the session lists it, for its card's preview. */
+	artifact: SessionArtifact;
+	/** Every file the session lists, for a markdown preview's images. */
+	sessionArtifacts: readonly SessionArtifact[];
 };
 
-type Source = { id: string; hostId: string; projectId?: string | null; artifacts?: SessionArtifact[]; outputType?: string; title: string };
+type Source = { id: string; hostId: string; hostName?: string; projectId?: string | null; artifacts?: SessionArtifact[]; outputType?: string; title: string };
 
 /**
  * Whether a session's files are artifacts at all: only a session started to
@@ -46,6 +52,9 @@ export function artifactIndexRows(sessions: readonly Source[], projectName: (hos
 				updatedAt: artifact.updatedAt,
 				sessionTitle: session.title,
 				projectName: session.projectId ? projectName(session.hostId, session.projectId) : undefined,
+				hostName: session.hostName,
+				artifact,
+				sessionArtifacts: session.artifacts,
 			});
 		}
 	}
