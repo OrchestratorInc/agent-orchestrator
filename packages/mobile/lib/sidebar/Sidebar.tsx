@@ -298,7 +298,7 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 			indented={indented}
 			active={row.key === activeKey}
 			renaming={renamingKey === row.key}
-			width={part === "home" ? rowWidth : undefined}
+			width={rowWidth}
 			colors={colors}
 			styles={styles}
 			onOpen={openSession}
@@ -320,7 +320,9 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 
 	// Home is one virtualized list, as the board before it was: only the rows
 	// on screen are mounted, each with its native menu, instead of every
-	// project and session at once.
+	// project and session at once. The list (home's, or the drawer's) is
+	// measured once and gives its session rows their width, which iOS's menu
+	// host needs to truncate a long title rather than grow past the edge.
 	const [listWidth, setListWidth] = useState<number>();
 	const onListLayout = useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
 		const next = Math.round(event.nativeEvent.layout.width);
@@ -441,7 +443,7 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 					<NavRow icon="layout-grid" label="All workers" onPress={() => go("/board")} styles={styles} colors={colors} disabled={!paired} />
 					<NavRow icon="bell" label="Notifications" onPress={() => go("/notifications")} styles={styles} colors={colors} active={pathname.startsWith("/notifications")} trailing={unread > 0 ? String(unread) : undefined} />
 				</View>
-				<ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+				<ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} onLayout={onListLayout}>
 					{tree.pinned.length > 0 ? (
 						<Section label="Pinned" open={sectionOpen("pinned")} onToggle={() => toggleIn("closedSections", "pinned")} styles={styles} colors={colors}>
 							{tree.pinned.map((row) => sessionRow(row, false))}

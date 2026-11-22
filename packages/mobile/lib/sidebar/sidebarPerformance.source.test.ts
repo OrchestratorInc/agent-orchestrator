@@ -29,4 +29,11 @@ describe("home list performance", () => {
 		expect(sidebar).toContain("onLayout={onListLayout}");
 		expect(sidebar).not.toContain("<View style={indented ? styles.indented : null} onLayout={slot.onLayout}>");
 	});
+
+	// The drawer's Pinned rows got no width after the per-row measuring went,
+	// and iOS's menu host let a long title run past the drawer's edge.
+	it("gives the drawer's rows a measured width too, so long titles truncate", () => {
+		expect(sidebar).toContain("			width={rowWidth}\n");
+		expect(sidebar).toContain("showsVerticalScrollIndicator={false} onLayout={onListLayout}>");
+	});
 });
