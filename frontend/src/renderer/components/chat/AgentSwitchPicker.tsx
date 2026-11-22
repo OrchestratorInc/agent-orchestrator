@@ -9,7 +9,7 @@ import type { TFunction } from "i18next";
 import { Brain, ChevronRight, Loader2, Settings2, Star, TriangleAlert, Zap } from "@/components/app-icons";
 import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
+import { agentModelsQueryOptions, isRefreshingCatalog, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useAgentManagementMenu } from "../../hooks/useAgentManagementMenu";
 import { useAgentReadinessQuery } from "../../hooks/useAgentReadinessQuery";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
@@ -348,10 +348,14 @@ export function AgentModelPicker({
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;
 	const settable = !terminal || Boolean(pending);
 	// A catalog that could not be read says why, instead of an empty model list.
-	const shownCatalog = useQuery({ ...catalogOptions(shownHarness), enabled: open && settable }).data;
+	const shownCatalogQuery = useQuery({ ...catalogOptions(shownHarness), enabled: open && settable });
+	const shownCatalog = shownCatalogQuery.data;
 	const modelsProblem = !settable || source.models.some((model) => model.id)
 		? undefined
 		: catalogProblem(shownCatalog);
+	// An agent whose models are still being read says so, instead of an empty list.
+	const modelsLoadingRow = settable && !modelsProblem && !source.models.some((model) => model.id)
+		&& (Boolean(loadingModels) || shownCatalogQuery.isPending || isRefreshingCatalog(shownCatalog));
 	const defaultModel = savedCatalog?.models?.find((model) => model.isDefault);
 	const savedLabel = !loadingModels || !savedCatalog ? undefined
 		: savedModel && savedModel !== "default" ? recordedModelName(currentHarness, savedModel, savedCatalog.models ?? [])
@@ -647,6 +651,12 @@ export function AgentModelPicker({
 							) : null}
 							{!settable ? (
 								<p className="px-2 py-1.5 text-xs text-muted-foreground">{t("agentSwitch.switchAnother")}</p>
+							) : null}
+							{modelsLoadingRow ? (
+								<OptionMenuItem disabled className="gap-2 text-xs text-muted-foreground">
+									<Loader2 aria-hidden="true" className="size-3 animate-spin" />
+									{t("settings.models.loading")}
+								</OptionMenuItem>
 							) : null}
 							{modelsProblem ? (
 								<OptionMenuItem disabled className="items-start gap-2 text-xs text-muted-foreground">

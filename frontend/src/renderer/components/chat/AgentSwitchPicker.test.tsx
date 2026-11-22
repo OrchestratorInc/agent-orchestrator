@@ -22,7 +22,7 @@ vi.mock("../../hooks/useProviderConnections", () => ({ useProviderConnections: (
 vi.mock("../../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryOptions: (agent: string) => ({
 		queryKey: ["agent-models", agent],
-		queryFn: async () => agent === "droid" ? {
+		queryFn: async () => agent === "agy" ? { models: [], refreshState: "refreshing" } : agent === "droid" ? {
 			models: [], refreshState: "error",
 			refreshError: "droid failed to start: Cannot find module 'tree-sitter'\n    at Module._resolveFilename",
 		} : ({
@@ -33,6 +33,7 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 					: [],
 		}),
 	}),
+	isRefreshingCatalog: (catalog?: { refreshState?: string }) => catalog?.refreshState === "refreshing" || catalog?.refreshState === "queued",
 }));
 
 function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false, savedModel?: string, account?: AccountChoice) {
@@ -466,6 +467,21 @@ describe("AgentModelPicker", () => {
 		open({ harness: "droid" });
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		expect(await screen.findByText("Couldn't load Droid's models: droid failed to start: Cannot find module 'tree-sitter'")).toBeInTheDocument();
+	});
+
+	it("says the agent's models are loading instead of showing an empty list", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "agy", { models: [], modelId: undefined, modelLabel: undefined, efforts: [], effort: undefined });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(await screen.findByRole("menuitem", { name: "Loading models…" })).toBeInTheDocument();
+	});
+
+	it("does not say loading once the agent's models are listed", async () => {
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(await screen.findByRole("menuitemradio", { name: /^Opus/ })).toBeInTheDocument();
+		expect(screen.queryByText("Loading models…")).not.toBeInTheDocument();
 	});
 
 	it("offers Cursor's thinking when a terminal switches to it", async () => {
