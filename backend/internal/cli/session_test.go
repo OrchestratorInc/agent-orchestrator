@@ -438,6 +438,30 @@ func TestSessionGet_JSONOutputDecodes(t *testing.T) {
 	}
 }
 
+func TestSessionGet_MemcodePendingModelIsExplicit(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"session":{"id":"demo-1","projectId":"demo","kind":"worker","harness":"memcode","modelPending":true,"status":"idle","prs":[]}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	out, errOut, err := executeCLI(t, deps, "session", "get", "demo-1")
+	if err != nil || !strings.Contains(out, "model: pending") {
+		t.Fatalf("pending model text: err=%v stderr=%s output=%s", err, errOut, out)
+	}
+	out, errOut, err = executeCLI(t, deps, "session", "get", "demo-1", "--json")
+	if err != nil {
+		t.Fatalf("pending model JSON: %v stderr=%s", err, errOut)
+	}
+	var got sessionResponse
+	if err := json.Unmarshal([]byte(out), &got); err != nil || !got.Session.ModelPending || got.Session.Model != "" {
+		t.Fatalf("pending model JSON: err=%v output=%s", err, out)
+	}
+}
+
 func TestSessionGet_PrintsArtifactsWithPublicLinks(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

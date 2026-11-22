@@ -3276,6 +3276,9 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 		Model:              s.Metadata.Model,
 		RoleAgent:          s.Metadata.RoleAgent,
 		Effort:             s.Metadata.Effort,
+		ModelPending: s.Harness == domain.HarnessMemcode && s.Mode == domain.SessionModeTUI &&
+			s.Metadata.RuntimeLaunchID == "" && s.Metadata.Model == "" && !s.IsTerminated &&
+			s.Activity.State != domain.ActivityExited && s.ProvisionState != domain.SessionProvisionFailed,
 		LastUserMessageAt: func() *time.Time {
 			if s.Metadata.LatestUserPromptAt.IsZero() {
 				return nil

@@ -908,6 +908,46 @@ func (f *fakeSessionService) ListWorkspaceTree(_ context.Context, id domain.Sess
 	return sessionsvc.WorkspaceTree{SessionID: id, Path: path}, nil
 }
 
+func TestSessionsAPI_MemcodeModelPendingUntilLaunch(t *testing.T) {
+	svc := newFakeSessionService()
+	sess := svc.sessions["ao-1"]
+	sess.Harness = domain.HarnessMemcode
+	sess.Mode = domain.SessionModeTUI
+	sess.Metadata.Model = ""
+	sess.Metadata.RuntimeLaunchID = ""
+	svc.sessions["ao-1"] = sess
+	srv := newSessionTestServer(t, svc)
+
+	for _, tc := range []struct {
+		name    string
+		model   string
+		launch  string
+		pending bool
+	}{
+		{name: "resolving", pending: true},
+		{name: "selected model", model: "opus", launch: "launch-1"},
+		{name: "custom endpoint default", launch: "launch-1"},
+	} {
+		sess.Metadata.Model = tc.model
+		sess.Metadata.RuntimeLaunchID = tc.launch
+		svc.sessions["ao-1"] = sess
+		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1", "")
+		if status != http.StatusOK {
+			t.Fatalf("%s: GET = %d: %s", tc.name, status, body)
+		}
+		var response struct {
+			Session struct {
+				Model        string `json:"model"`
+				ModelPending bool   `json:"modelPending"`
+			} `json:"session"`
+		}
+		mustJSON(t, body, &response)
+		if response.Session.Model != tc.model || response.Session.ModelPending != tc.pending {
+			t.Fatalf("%s: model/pending = %q/%t, want %q/%t", tc.name, response.Session.Model, response.Session.ModelPending, tc.model, tc.pending)
+		}
+	}
+}
+
 func TestSessionsAPI_SelectionSurvivesLiveAndRestoredReads(t *testing.T) {
 	svc := newFakeSessionService()
 	sess := svc.sessions["ao-1"]

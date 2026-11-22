@@ -7263,6 +7263,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            modelPending?: boolean;
             moveStarted?: string;
             movedTo?: components["schemas"]["SessionMove"];
             needsResume: boolean;

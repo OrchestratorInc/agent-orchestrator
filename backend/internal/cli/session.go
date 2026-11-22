@@ -73,6 +73,7 @@ type sessionDTO struct {
 	Kind          string               `json:"kind"`
 	Harness       string               `json:"harness,omitempty"`
 	Model         string               `json:"model,omitempty"`
+	ModelPending  bool                 `json:"modelPending,omitempty"`
 	Effort        string               `json:"effort,omitempty"`
 	DisplayName   string               `json:"displayName,omitempty"`
 	Activity      sessionActivity      `json:"activity"`
@@ -225,6 +226,7 @@ type sessionListEntry struct {
 	IssueID        string          `json:"issueId,omitempty"`
 	Harness        string          `json:"harness,omitempty"`
 	Model          string          `json:"model,omitempty"`
+	ModelPending   bool            `json:"modelPending,omitempty"`
 	Effort         string          `json:"effort,omitempty"`
 	Branch         string          `json:"branch,omitempty"`
 	PRs            []sessionListPR `json:"prs"`
@@ -1227,6 +1229,7 @@ func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRS
 			IssueID:        sess.IssueID,
 			Harness:        sess.Harness,
 			Model:          sess.Model,
+			ModelPending:   sess.ModelPending,
 			Effort:         sess.Effort,
 			Branch:         sess.Branch,
 			PRs:            listPRsForSession(sess, summaries[sess.ID]),
@@ -1383,6 +1386,10 @@ func sessionAge(now, at time.Time) string {
 
 func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 	out := cmd.OutOrStdout()
+	model := sess.Model
+	if sess.ModelPending {
+		model = "pending"
+	}
 	startFailure := ""
 	if sess.ProvisionState == "failed" {
 		startFailure = strings.TrimSpace(sess.ProvisionError)
@@ -1399,7 +1406,7 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 		{"activity", sess.Activity.State},
 		{"start failed", startFailure},
 		{"harness", sess.Harness},
-		{"model", sess.Model},
+		{"model", model},
 		{"effort", sess.Effort},
 		{"issue", sess.IssueID},
 		{"branch", formatBranchState(sess)},
