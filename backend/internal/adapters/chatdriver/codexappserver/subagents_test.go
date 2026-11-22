@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -449,8 +451,8 @@ func TestReconnectFilesASurvivingChildUnderItsEarlierLaunch(t *testing.T) {
 	}
 	spawned := `{"type":"collabAgentToolCall","id":"call-spawn","tool":"spawnAgent","status":"completed","senderThreadId":"thread-1","receiverThreadIds":["child-1"],"prompt":"Check the build","agentsStates":{}}`
 	srv.respondSequence("thread/read",
-		`{"thread":{"id":"thread-1","turns":[{"id":"root-turn","status":"inProgress","items":[`+spawned+`]}]}}`,
-		`{"thread":{"id":"child-1","turns":[{"id":"child-turn","status":"inProgress","items":[]}]}}`)
+		`{"thread":{"id":"child-1","parentThreadId":"thread-1"}}`,
+		`{"thread":{"id":"thread-1","turns":[{"id":"root-turn","status":"inProgress","items":[`+spawned+`]}]}}`)
 
 	conv, err := d.Reconnect(context.Background(), ports.ChatResumeConfig{
 		SessionID: "subagent-reconnect", ProviderConversationID: "thread-1", DataDir: t.TempDir(), WorkspacePath: "/tmp/ws",
@@ -481,5 +483,149 @@ func TestReconnectFilesASurvivingChildUnderItsEarlierLaunch(t *testing.T) {
 	if handback == nil || decodeDetail(t, *handback).ParentProviderItemID != "call-spawn" ||
 		decodeDetail(t, *handback).Input["message"] != "Build passes." {
 		t.Fatalf("hand-back after reattach = %+v", handback)
+	}
+}
+
+func reconnectedTestDriver(t *testing.T) (*Driver, *scriptedServer, ports.ChatConversation) {
+	t.Helper()
+	d, srv := newTestDriver(t)
+	srv.replyError("initialize", -32600, "Already initialized")
+	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.persistent = true
+	d.connectHost = func(_ context.Context, _ persistenthost.Config) (*persistenthost.Transport, error) {
+		return &persistenthost.Transport{Stdin: proc.stdin, Stdout: proc.stdout, Reconnected: true, NextRequestID: 41}, nil
+	}
+	conv, err := d.Reconnect(context.Background(), ports.ChatResumeConfig{
+		SessionID: "subagent-reconnect", ProviderConversationID: "thread-1", DataDir: t.TempDir(), WorkspacePath: "/tmp/ws",
+	})
+	if err != nil {
+		t.Fatalf("Reconnect: %v", err)
+	}
+	t.Cleanup(func() { _ = conv.Close() })
+	return d, srv, conv
+}
+
+// The first thread to speak after a reattach can be a grandchild whose chain
+// started after many other launches. Recovery follows that thread's own ancestry,
+// so older launches ahead of the active one cannot use up the reads.
+func TestReconnectRecoversTheActiveChainBehindOlderLaunches(t *testing.T) {
+	_, srv, conv := reconnectedTestDriver(t)
+	var older []string
+	for i := range 31 {
+		older = append(older, fmt.Sprintf(`{"type":"collabAgentToolCall","id":"call-old-%d","tool":"spawnAgent","status":"completed","receiverThreadIds":["old-child-%d"],"agentsStates":{}}`, i, i))
+	}
+	active := `{"type":"collabAgentToolCall","id":"call-spawn","tool":"spawnAgent","status":"completed","receiverThreadIds":["child-1"],"agentsStates":{}}`
+	inner := `{"type":"collabAgentToolCall","id":"call-inner","tool":"spawnAgent","status":"completed","receiverThreadIds":["grandchild-1"],"agentsStates":{}}`
+	srv.respondSequence("thread/read",
+		`{"thread":{"id":"grandchild-1","parentThreadId":"child-1"}}`,
+		`{"thread":{"id":"child-1","parentThreadId":"thread-1"}}`,
+		`{"thread":{"id":"thread-1","turns":[{"id":"old-turn","status":"completed","items":[`+strings.Join(older, ",")+`]},{"id":"root-turn","status":"inProgress","items":[`+active+`]}]}}`,
+		`{"thread":{"id":"child-1","turns":[{"id":"child-turn","status":"inProgress","items":[`+inner+`]}]}}`)
+
+	srv.push(`{"method":"item/completed","params":{"threadId":"grandchild-1","turnId":"gc-turn","item":{"type":"agentMessage","id":"gc-msg","text":"Tests pass."}}}`)
+	srv.push(`{"method":"turn/completed","params":{"threadId":"grandchild-1","turn":{"id":"gc-turn","status":"completed","items":[]}}}`)
+
+	got := collectUntil(t, conv.Events(), func(ev ports.ChatEvent) bool {
+		return ev.Kind == ports.ChatEventTurnCompleted && ev.ProviderConversationID == "grandchild-1"
+	})
+	var reply, handback *ports.ChatEvent
+	for i, ev := range got {
+		switch {
+		case ev.ProviderItemID == "gc-msg":
+			reply = &got[i]
+		case strings.HasPrefix(ev.ProviderItemID, "codex-handback:"):
+			handback = &got[i]
+		}
+	}
+	if reply == nil || reply.Kind != ports.ChatEventActivityCompleted || decodeDetail(t, *reply).ParentProviderItemID != "call-inner" {
+		t.Fatalf("grandchild reply after reattach = %+v", reply)
+	}
+	if handback == nil || decodeDetail(t, *handback).ParentProviderItemID != "call-inner" ||
+		decodeDetail(t, *handback).Input["message"] != "Tests pass." {
+		t.Fatalf("grandchild hand-back after reattach = %+v", handback)
+	}
+}
+
+// Reading a child's launch back takes a round trip to the provider. The parent's
+// own events keep flowing meanwhile; only the child's wait.
+func TestReconnectRecoveryDoesNotHoldTheParent(t *testing.T) {
+	_, srv, conv := reconnectedTestDriver(t)
+	srv.push(`{"method":"item/completed","params":{"threadId":"child-1","turnId":"child-turn","item":{"type":"agentMessage","id":"child-msg","text":"Build passes."}}}`)
+	read := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/read" })
+
+	srv.push(`{"method":"item/completed","params":{"threadId":"thread-1","turnId":"root-turn","item":{"type":"agentMessage","id":"parent-msg","text":"Still here."}}}`)
+	before := collectUntil(t, conv.Events(), func(ev ports.ChatEvent) bool { return ev.ProviderItemID == "parent-msg" })
+	for _, ev := range before {
+		if ev.ProviderItemID == "child-msg" {
+			t.Fatalf("child reply went out before its launch was read back: %+v", ev)
+		}
+	}
+
+	spawned := `{"type":"collabAgentToolCall","id":"call-spawn","tool":"spawnAgent","status":"completed","receiverThreadIds":["child-1"],"agentsStates":{}}`
+	srv.reply("thread/read", `{"thread":{"id":"thread-1","turns":[{"id":"root-turn","status":"inProgress","items":[`+spawned+`]}]}}`)
+	srv.push(`{"id":` + string(*read.ID) + `,"result":{"thread":{"id":"child-1","parentThreadId":"thread-1"}}}`)
+	after := collectUntil(t, conv.Events(), func(ev ports.ChatEvent) bool { return ev.ProviderItemID == "child-msg" })
+	if reply := after[len(after)-1]; reply.Kind != ports.ChatEventActivityCompleted || decodeDetail(t, reply).ParentProviderItemID != "call-spawn" {
+		t.Fatalf("child reply after read-back = %+v", reply)
+	}
+}
+
+// Codex reports a child's fatal error on its own before the failed turn ends. It
+// stays under the launch, on the child's turn, so it never reads as the parent's.
+func TestChildFatalErrorStaysUnderItsLaunch(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"root-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/started","params":` + spawnStartedParams + `}`)
+	srv.push(`{"method":"item/completed","params":` + spawnCompletedParams + `}`)
+	srv.push(`{"method":"turn/started","params":{"threadId":"child-1","turn":{"id":"child-turn","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"error","params":{"threadId":"child-1","turnId":"child-turn","willRetry":false,"error":{"message":"context window exceeded","codexErrorInfo":null,"additionalDetails":null}}}`)
+	srv.push(`{"method":"turn/completed","params":{"threadId":"child-1","turn":{"id":"child-turn","status":"failed","items":[],"error":{"message":"context window exceeded"}}}}`)
+
+	got := collectUntil(t, conv.Events(), func(ev ports.ChatEvent) bool {
+		return ev.Kind == ports.ChatEventTurnCompleted && ev.ProviderConversationID == "child-1"
+	})
+	var failure *ports.ChatEvent
+	for i, ev := range got {
+		if ev.Kind == ports.ChatEventError {
+			failure = &got[i]
+		}
+	}
+	if failure == nil {
+		t.Fatalf("no error event: %+v", got)
+	}
+	if detail := decodeDetail(t, *failure); failure.ProviderTurnID != "child-turn" ||
+		detail.ParentProviderItemID != "call-spawn" || !detail.ChildTurn {
+		t.Fatalf("child error = %+v detail %s", failure, failure.Detail)
+	}
+}
+
+// A child's reply chunk goes out like an assistant delta: dropped at once when the
+// reader is behind, since the reply's completion restates it, rather than holding
+// the shared pump.
+func TestChildReplyChunkDoesNotWaitOnAStalledReader(t *testing.T) {
+	c := &conversation{events: make(chan ports.ChatEvent, 1), log: slog.New(slog.DiscardHandler)}
+	c.events <- ports.ChatEvent{}
+	r := newSubagentRouter(func(id string) string { return id })
+	r.launchOf["child-1"] = "call-spawn"
+	r.origin["call-spawn"] = "thread-1"
+	out := r.route("thread-1", "child-1", ports.ChatEvent{
+		Kind: ports.ChatEventMessageDelta, ProviderTurnID: "child-turn", ProviderItemID: "child-msg", Delta: "Build",
+	})
+	if len(out) != 2 || out[1].Kind != ports.ChatEventActivityText {
+		t.Fatalf("routed = %+v", out)
+	}
+	start := time.Now()
+	c.emitRouted(r, out[1:])
+	if waited := time.Since(start); waited > time.Second {
+		t.Fatalf("a child's reply chunk waited %s on a stalled reader", waited)
 	}
 }

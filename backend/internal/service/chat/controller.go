@@ -3918,7 +3918,7 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				Kind:    domain.ActivityKindError,
 				Status:  domain.ActivityStatusFailed,
 				Summary: message,
-				Detail:  detail,
+				Detail:  withSubagentLink(detail, event.Detail),
 			}, now)
 
 	default:
@@ -4427,9 +4427,9 @@ func planActivityStatus(plan domain.ConversationPlan) domain.ActivityStatus {
 	return domain.ActivityStatusCompleted
 }
 
-// withSubagentLink keeps the launch a subagent's plan belongs to. A driver that
-// files a child's work under its launch names it on the plan event, and the plan's
-// row then reads as one of that child's steps rather than as the parent's plan.
+// withSubagentLink keeps the launch a subagent's plan or fatal error belongs to. A
+// driver that files a child's work under its launch names it on the event, and the
+// row then reads as one of that child's steps rather than as the parent's.
 func withSubagentLink(detail, from []byte) []byte {
 	var link struct {
 		Parent    string `json:"parentProviderItemId"`

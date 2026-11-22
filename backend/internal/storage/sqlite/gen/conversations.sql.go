@@ -886,7 +886,7 @@ const finalizeConversationPlanActivity = `-- name: FinalizeConversationPlanActiv
 UPDATE conversation_activities
 SET status = 'completed',
     summary = ?1,
-    detail_json = ?2,
+    detail_json = json_patch(CASE WHEN json_valid(detail_json) THEN detail_json ELSE '{}' END, CAST(?2 AS TEXT)),
     revision = revision + 1,
     updated_at = ?3
 WHERE conversation_activities.conversation_id = ?4
@@ -904,7 +904,9 @@ type FinalizeConversationPlanActivityParams struct {
 
 // Successful completion is the terminal fact for a plan even when the provider
 // omits its customary final plan notification. Keep the timeline copy identical
-// to the turn copy that SettleTurn finalizes from the same event.
+// to the turn copy that SettleTurn finalizes from the same event. The plan fields
+// are patched in, so anything else on the row, such as the launch a subagent's
+// plan belongs to, stays.
 func (q *Queries) FinalizeConversationPlanActivity(ctx context.Context, arg FinalizeConversationPlanActivityParams) error {
 	_, err := q.db.ExecContext(ctx, finalizeConversationPlanActivity,
 		arg.Summary,

@@ -753,12 +753,14 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
 
 -- Successful completion is the terminal fact for a plan even when the provider
 -- omits its customary final plan notification. Keep the timeline copy identical
--- to the turn copy that SettleTurn finalizes from the same event.
+-- to the turn copy that SettleTurn finalizes from the same event. The plan fields
+-- are patched in, so anything else on the row, such as the launch a subagent's
+-- plan belongs to, stays.
 -- name: FinalizeConversationPlanActivity :exec
 UPDATE conversation_activities
 SET status = 'completed',
     summary = sqlc.arg(summary),
-    detail_json = sqlc.arg(detail_json),
+    detail_json = json_patch(CASE WHEN json_valid(detail_json) THEN detail_json ELSE '{}' END, CAST(sqlc.arg(detail_json) AS TEXT)),
     revision = revision + 1,
     updated_at = sqlc.arg(updated_at)
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)

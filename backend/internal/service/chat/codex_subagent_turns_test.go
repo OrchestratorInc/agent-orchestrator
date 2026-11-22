@@ -96,7 +96,8 @@ func TestCodexChildFailureSettlesItsOwnRowsOnly(t *testing.T) {
 }
 
 // The parent and the child each plan. The parent's turn keeps its own plan, and the
-// child's plan row reads as one of the child's steps.
+// child's plan row reads as one of the child's steps, also once the child's turn
+// completes with a step still open and its plan is finalized.
 func TestCodexChildPlanIsAStepNotTheParentPlan(t *testing.T) {
 	h := newHarness(t)
 	startCodexParentWithChild(t, h)
@@ -110,7 +111,7 @@ func TestCodexChildPlanIsAStepNotTheParentPlan(t *testing.T) {
 			Plan: plan("Run the build"), Detail: []byte(childStepDetail),
 		},
 	)
-	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		plans := 0
 		for _, activity := range s.Activities {
 			if activity.Kind == domain.ActivityKindPlan {
@@ -118,6 +119,18 @@ func TestCodexChildPlanIsAStepNotTheParentPlan(t *testing.T) {
 			}
 		}
 		return plans == 2
+	})
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-child-1", ProviderConversationID: "child-thread-1",
+		TurnState: domain.TurnStateCompleted,
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, activity := range s.Activities {
+			if activity.Kind == domain.ActivityKindPlan && activity.Status == domain.ActivityStatusCompleted {
+				return true
+			}
+		}
+		return false
 	})
 
 	turnByID := map[string]domain.ConversationTurn{}
@@ -135,7 +148,8 @@ func TestCodexChildPlanIsAStepNotTheParentPlan(t *testing.T) {
 			Parent    string `json:"parentProviderItemId"`
 			ChildTurn bool   `json:"childTurn"`
 			Steps     []struct {
-				Text string `json:"text"`
+				Text   string `json:"text"`
+				Status string `json:"status"`
 			} `json:"steps"`
 		}
 		if err := json.Unmarshal(activity.Detail, &detail); err != nil {
@@ -147,11 +161,40 @@ func TestCodexChildPlanIsAStepNotTheParentPlan(t *testing.T) {
 				t.Fatalf("parent plan row = %s", activity.Detail)
 			}
 		case "provider-child-1":
-			if detail.Parent != "call-spawn" || !detail.ChildTurn || detail.Steps[0].Text != "Run the build" {
-				t.Fatalf("child plan row = %s", activity.Detail)
+			if detail.Parent != "call-spawn" || !detail.ChildTurn || detail.Steps[0].Text != "Run the build" ||
+				detail.Steps[0].Status != string(domain.PlanStepCompleted) {
+				t.Fatalf("finalized child plan row = %s", activity.Detail)
 			}
 		default:
 			t.Fatalf("plan row on an unexpected turn: %+v", activity)
+		}
+	}
+}
+
+// Codex reports a child's fatal error before its failed turn ends. The error row
+// keeps the launch link, so it is one of the child's steps.
+func TestCodexChildFatalErrorIsAStep(t *testing.T) {
+	h := newHarness(t)
+	startCodexParentWithChild(t, h)
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventError, ProviderTurnID: "provider-child-1", ProviderConversationID: "child-thread-1",
+		Err: errors.New("context window exceeded"), Detail: []byte(childStepDetail),
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return countActivities(s, domain.ActivityKindError) == 1
+	})
+	for _, activity := range snapshot.Activities {
+		if activity.Kind != domain.ActivityKindError {
+			continue
+		}
+		var detail struct {
+			Error     string `json:"error"`
+			Parent    string `json:"parentProviderItemId"`
+			ChildTurn bool   `json:"childTurn"`
+		}
+		if err := json.Unmarshal(activity.Detail, &detail); err != nil ||
+			detail.Error != "context window exceeded" || detail.Parent != "call-spawn" || !detail.ChildTurn {
+			t.Fatalf("child error row = %s (%v)", activity.Detail, err)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package codexappserver
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,13 +40,16 @@ const subagentHandbackTool = "SubagentHandback"
 // short; past the cap, everything held goes out unfiled rather than piling up.
 const maxHeldSubagentEvents = 2000
 
-// maxRecoveredSubagentThreads bounds how many threads a reconnect reads back to
-// find launches: the root, and the children its launches started.
-const maxRecoveredSubagentThreads = 32
-
-// subagentRecoveryWait bounds those reads. Recovery is best effort: a child it
-// cannot place goes out unfiled, as any thread no launch names does.
-const subagentRecoveryWait = 10 * time.Second
+// After a live reattach, a thread no launch names may be a child whose launch went
+// out before the detach. Its launch chain is read back from the provider, at most
+// maxSubagentDepth launches up, for at most maxSubagentRecoveries threads, each
+// within subagentRecoveryWait. Recovery is best effort: a thread it cannot place
+// goes out unfiled, as any thread no launch names does.
+const (
+	maxSubagentDepth      = 8
+	maxSubagentRecoveries = 64
+	subagentRecoveryWait  = 10 * time.Second
+)
 
 func isSpawnAgent(it threadItem) bool {
 	return it.Type == itemCollabAgentToolCall && deref(it.Tool) == codexSpawnTool
@@ -120,6 +124,9 @@ type subagentRouter struct {
 	// that no launch has named yet. A v2 child can start before its launch item, so
 	// its events wait for it until the root turn ends.
 	expected map[string]bool
+	// recovering holds threads whose launch chain is being read back after a
+	// reattach. Their events wait for the answer.
+	recovering map[string]bool
 	// origin is the thread each spawn call was made on. A nested launch's steps wait
 	// until its chain of launches reaches the root, so the launch they hang from has
 	// gone out before them.
@@ -140,14 +147,15 @@ type subagentRouter struct {
 
 func newSubagentRouter(scope func(string) string) *subagentRouter {
 	return &subagentRouter{
-		scope:     scope,
-		inflight:  map[string]struct{}{},
-		launchOf:  map[string]string{},
-		expected:  map[string]bool{},
-		origin:    map[string]string{},
-		held:      map[string][]ports.ChatEvent{},
-		streaming: map[string]bool{},
-		lastSaid:  map[string]string{},
+		scope:      scope,
+		inflight:   map[string]struct{}{},
+		launchOf:   map[string]string{},
+		expected:   map[string]bool{},
+		recovering: map[string]bool{},
+		origin:     map[string]string{},
+		held:       map[string][]ports.ChatEvent{},
+		streaming:  map[string]bool{},
+		lastSaid:   map[string]string{},
 	}
 }
 
@@ -189,43 +197,34 @@ func (r *subagentRouter) observe(n notification, root string) {
 	r.place(p.ThreadID, p.Item, root)
 }
 
-// place records which child threads a launch item names: a completed spawn in
+// namedChildren is the child threads a launch item names: a completed spawn in
 // receiverThreadIds, a v2 launch in agentThreadId as soon as the child exists.
-func (r *subagentRouter) place(thread string, it threadItem, root string) []string {
-	launch := it.itemID()
-	var children []string
+func namedChildren(it threadItem) []string {
 	switch {
-	case launch == "":
+	case it.itemID() == "":
+		return nil
 	case isSubagentStart(it):
-		children = []string{deref(it.AgentThreadID)}
+		return []string{deref(it.AgentThreadID)}
 	case isSpawnAgent(it):
-		children = it.ReceiverThreadIds
+		return it.ReceiverThreadIds
 	}
-	var placed []string
-	for _, child := range children {
-		if child == "" || child == root || child == thread {
-			continue
-		}
-		if _, known := r.origin[launch]; !known {
-			r.origin[launch] = thread
-		}
-		r.launchOf[child] = launch
-		placed = append(placed, child)
-	}
-	return placed
+	return nil
 }
 
-// recoverLaunches places the children of launches one thread made before AO
-// attached, from that thread's items as the provider reads them back. A reconnect
-// gets only what the host buffered while AO was away, so a launch delivered before
-// the detach never comes again. It returns the child threads those launches named,
-// so the caller can read them next for launches of their own.
-func (r *subagentRouter) recoverLaunches(root, thread string, items []threadItem) (children []string) {
-	r.root = root
-	for _, it := range items {
-		children = append(children, r.place(thread, it, root)...)
+// place records the child threads a launch item on thread names.
+func (r *subagentRouter) place(thread string, it threadItem, root string) {
+	for _, child := range namedChildren(it) {
+		if child != "" && child != root && child != thread {
+			r.placeChild(child, it.itemID(), thread)
+		}
 	}
-	return children
+}
+
+func (r *subagentRouter) placeChild(child, launch, thread string) {
+	if _, known := r.origin[launch]; !known {
+		r.origin[launch] = thread
+	}
+	r.launchOf[child] = launch
 }
 
 func (r *subagentRouter) placed(thread string) bool {
@@ -233,39 +232,116 @@ func (r *subagentRouter) placed(thread string) bool {
 	return ok
 }
 
-// recoverSubagents reads back the launches the provider made before AO reattached
-// to it, from the root thread down, and places their children. Without it, a
-// surviving child's next reply would go out as the parent's and its launch would
-// never get a report.
-func (c *conversation) recoverSubagents(router *subagentRouter) {
-	ctx, cancel := context.WithTimeout(context.Background(), subagentRecoveryWait)
-	defer cancel()
-	includeTurns := true
-	queue := []string{c.threadID}
-	read := map[string]bool{}
-	for len(queue) > 0 && len(read) < maxRecoveredSubagentThreads {
-		thread := queue[0]
-		queue = queue[1:]
-		if read[thread] {
-			continue
-		}
-		read[thread] = true
-		var resp struct {
-			Thread struct {
-				Turns []struct {
-					Items []threadItem `json:"items"`
-				} `json:"turns"`
-			} `json:"thread"`
-		}
-		if err := c.conn.request(ctx, codexproto.MethodThreadRead,
-			codexproto.ThreadReadParams{ThreadID: thread, IncludeTurns: &includeTurns}, &resp); err != nil {
-			c.log.Debug("codex subagent launches not recovered", "thread", thread, "error", err)
-			continue
-		}
-		for _, turn := range resp.Thread.Turns {
-			queue = append(queue, router.recoverLaunches(c.threadID, thread, turn.Items)...)
+// placedThreads is a copy of the threads a launch names, for a reader off the pump.
+func (r *subagentRouter) placedThreads() map[string]bool {
+	placed := make(map[string]bool, len(r.launchOf))
+	for thread := range r.launchOf {
+		placed[thread] = true
+	}
+	return placed
+}
+
+// subagentRecovery is what reading back one thread's launch chain found: for each
+// thread on the chain, the launch that named it and the thread it was made on.
+type subagentRecovery struct {
+	thread     string
+	placements []subagentPlacement
+}
+
+type subagentPlacement struct{ child, launch, parent string }
+
+// recover holds thread's events while its launch chain is read back.
+func (r *subagentRouter) recover(thread string) { r.recovering[thread] = true }
+
+// recovered places what a read-back found. A thread it could not place stops
+// waiting, and release() lets its events out as they were.
+func (r *subagentRouter) recovered(found subagentRecovery) {
+	for _, p := range found.placements {
+		if !r.placed(p.child) {
+			r.placeChild(p.child, p.launch, p.parent)
 		}
 	}
+	delete(r.recovering, found.thread)
+}
+
+// recoverLaunchChain reads back the launches that lead to thread, which spoke
+// after a live reattach with no launch naming it. A reconnect gets only what the
+// host buffered while AO was away, so a launch delivered before the detach never
+// comes again. It walks up the thread's ancestry to the root or to a thread already
+// placed, then down, taking from each parent the newest launch that named the
+// thread below. It runs off the pump, which holds the thread's events meanwhile,
+// and always answers, with whatever it found.
+func (c *conversation) recoverLaunchChain(thread string, placed map[string]bool, out chan<- subagentRecovery) {
+	found := subagentRecovery{thread: thread}
+	defer func() {
+		select {
+		case out <- found:
+		case <-c.pumpDone:
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), subagentRecoveryWait)
+	defer cancel()
+
+	chain := []string{thread}
+	for {
+		parent, err := c.parentThread(ctx, chain[len(chain)-1])
+		if err != nil {
+			c.log.Debug("codex subagent launch not recovered", "thread", thread, "error", err)
+			return
+		}
+		if parent == "" || len(chain) > maxSubagentDepth {
+			// Not a subagent, such as a provider-internal thread, or too deep to follow.
+			return
+		}
+		chain = append(chain, parent)
+		if parent == c.threadID || placed[parent] {
+			break
+		}
+	}
+	for i := len(chain) - 1; i > 0; i-- {
+		parent, child := chain[i], chain[i-1]
+		launch, err := c.launchNaming(ctx, parent, child)
+		if err != nil || launch == "" {
+			c.log.Debug("codex subagent launch not recovered", "thread", child, "parent", parent, "error", err)
+			return
+		}
+		found.placements = append(found.placements, subagentPlacement{child: child, launch: launch, parent: parent})
+	}
+}
+
+// parentThread is the thread that started thread, or "" for one no launch started.
+func (c *conversation) parentThread(ctx context.Context, thread string) (string, error) {
+	var resp codexproto.ThreadReadResponse
+	if err := c.conn.request(ctx, codexproto.MethodThreadRead, codexproto.ThreadReadParams{ThreadID: thread}, &resp); err != nil {
+		return "", err
+	}
+	return deref(resp.Thread.ParentThreadID), nil
+}
+
+// launchNaming is the newest launch on parent that names child.
+func (c *conversation) launchNaming(ctx context.Context, parent, child string) (string, error) {
+	includeTurns := true
+	var resp struct {
+		Thread struct {
+			Turns []struct {
+				Items []threadItem `json:"items"`
+			} `json:"turns"`
+		} `json:"thread"`
+	}
+	if err := c.conn.request(ctx, codexproto.MethodThreadRead,
+		codexproto.ThreadReadParams{ThreadID: parent, IncludeTurns: &includeTurns}, &resp); err != nil {
+		return "", err
+	}
+	turns := resp.Thread.Turns
+	for t := len(turns) - 1; t >= 0; t-- {
+		for i := len(turns[t].Items) - 1; i >= 0; i-- {
+			it := turns[t].Items[i]
+			if slices.Contains(namedChildren(it), child) {
+				return it.itemID(), nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // route returns what to emit for one event from thread.
@@ -302,10 +378,18 @@ func (r *subagentRouter) route(root, thread string, ev ports.ChatEvent) []ports.
 	return nil
 }
 
+// replyChunk reports a piece of a child's reply as it streams. Its message's
+// completion restates the whole reply, so a chunk may be dropped under load like
+// an assistant delta, unlike tool output, which nothing restates.
+func (r *subagentRouter) replyChunk(ev ports.ChatEvent) bool {
+	return ev.Kind == ports.ChatEventActivityText && r.streaming[ev.ProviderItemID]
+}
+
 // claimable reports whether a launch may still name a thread that none has yet:
-// a spawn is in flight, or Codex announced the thread as a child.
+// a spawn is in flight, Codex announced the thread as a child, or its launch is
+// being read back.
 func (r *subagentRouter) claimable(thread string) bool {
-	return len(r.inflight) > 0 || r.expected[thread]
+	return len(r.inflight) > 0 || r.expected[thread] || r.recovering[thread]
 }
 
 // settled reports whether a thread's events can be filed now: a launch named the
@@ -381,9 +465,10 @@ func (r *subagentRouter) flush() []ports.ChatEvent {
 func (r *subagentRouter) adopt(thread string, ev ports.ChatEvent) []ports.ChatEvent {
 	parent := r.scope(r.launchOf[thread])
 	switch ev.Kind {
-	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted, ports.ChatEventPlanUpdated:
-		// A plan is a step too: on the child's turn it can never replace the
-		// parent's, and its row reads as the child's.
+	case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted, ports.ChatEventPlanUpdated, ports.ChatEventError:
+		// A plan or a fatal error is a step too: on the child's turn it can never
+		// replace the parent's plan or fail the parent's turn, and its row reads as
+		// the child's.
 		ev.Detail = withParent(ev.Detail, parent, false)
 		return []ports.ChatEvent{ev}
 

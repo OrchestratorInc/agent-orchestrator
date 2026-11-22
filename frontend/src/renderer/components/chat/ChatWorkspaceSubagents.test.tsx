@@ -354,7 +354,16 @@ describe("ChatWorkspace subagents", () => {
 		expect(screen.getByRole("button", { name: /Check the build/ })).toHaveTextContent("go build ./...");
 		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
 
-		rerender(<ChatWorkspace snapshot={codex("failed", [ownTurn(command, "failed"), ownTurn(handback("hb", 5, "call-spawn", "stream disconnected"), "failed")])} />);
+		// Codex reports the fatal error on its own before the failed turn ends.
+		const fatal: ConversationActivity = {
+			kind: "activity", id: "err", turnId: childTurn, sequence: 5, revision: 0,
+			activityKind: "error",
+			status: "failed",
+			summary: "stream disconnected",
+			detail: { error: "stream disconnected", parentProviderItemId: "call-spawn", childTurn: true } as ConversationActivity["detail"],
+			createdAt: at(5),
+		};
+		rerender(<ChatWorkspace snapshot={codex("failed", [ownTurn(command, "failed"), fatal, ownTurn(handback("hb", 6, "call-spawn", "stream disconnected"), "failed")])} />);
 
 		// The failure is the child's: its subagent says so, and the parent's turn does not
 		// read as failing.
