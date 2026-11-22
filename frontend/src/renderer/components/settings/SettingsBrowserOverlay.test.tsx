@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { createPortal } from "react-dom";
@@ -22,10 +22,27 @@ it("opens device links in a Settings-owned AO Browser without a session", () => 
 		{createPortal(<SettingsBrowserOverlay request={{ id, url }} onClose={vi.fn()} />, document.body)}
 	</>;
 	const view = render(renderOverlay(1, "https://app.cline.bot/auth/device"));
-	expect(useBrowserView).toHaveBeenCalledWith({ sessionId: "settings-login-browser", active: true, poppedOut: true, terminated: false });
+	expect(useBrowserView).toHaveBeenCalledWith({ sessionId: "settings-login-browser:1", active: true, poppedOut: true, terminated: false, transient: true });
 	expect(openLink).toHaveBeenCalledExactlyOnceWith("https://app.cline.bot/auth/device");
 	view.rerender(renderOverlay(2, "https://example.com/next"));
+	expect(useBrowserView).toHaveBeenLastCalledWith({ sessionId: "settings-login-browser:2", active: true, poppedOut: true, terminated: false, transient: true });
 	expect(openLink).toHaveBeenLastCalledWith("https://example.com/next");
+});
+
+it("explains when the native Browser is unavailable without opening an external browser", () => {
+	const previousAO = window.ao;
+	openLink.mockClear();
+	window.ao = undefined;
+	try {
+		const onClose = vi.fn();
+		render(createPortal(<SettingsBrowserOverlay request={{ id: 4, url: "https://app.cline.bot/auth/device" }} onClose={onClose} />, document.body));
+		expect(screen.getByRole("alert")).toHaveTextContent("Orchestrator Browser is unavailable in this window.");
+		expect(openLink).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("button", { name: "Close" }));
+		expect(onClose).toHaveBeenCalledOnce();
+	} finally {
+		window.ao = previousAO;
+	}
 });
 
 it("keeps the login terminal mounted and inert while focus stays in the Browser", async () => {

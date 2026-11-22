@@ -471,12 +471,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
  * Settings page rendered inside the center panel, in place of the routed page:
  * shared page topbar above a centered, scrolling content column.
  */
+let nextSettingsBrowserRequestId = 0;
+
 export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	const [browserRequest, setBrowserRequest] = useState<{ id: number; url: string } | null>(null);
 	const openSettingsBrowser = useCallback((url: string) => {
-		setBrowserRequest((current) => ({ id: (current?.id ?? 0) + 1, url }));
+		setBrowserRequest({ id: ++nextSettingsBrowserRequestId, url });
 	}, []);
 	useEffect(() => {
 		if (!page) setBrowserRequest(null);
@@ -515,7 +517,7 @@ export function SettingsPane() {
 			))}
 		</div>
 		{browserRequest ? createPortal(
-			<SettingsBrowserOverlay request={browserRequest} onClose={() => setBrowserRequest(null)} />,
+			<SettingsBrowserOverlay key={browserRequest.id} request={browserRequest} onClose={() => setBrowserRequest(null)} />,
 			document.body,
 		) : null}
 		</SettingsBrowserLinkContext.Provider>
