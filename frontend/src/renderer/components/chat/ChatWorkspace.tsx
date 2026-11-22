@@ -4748,13 +4748,15 @@ export function Timeline({
 			setRevealedActivity(activity.id);
 			// A child's step is drawn under its launch, not in its own turn: in the
 			// Subagents panel when the chat has one, else inline under the launch's team.
-			const owner = owningSubagent(groups, activity.id);
+			const members = groups.flatMap((group, outer) => turnsIn(group).map((turn) => ({ turn, outer })));
+			const found = owningSubagent(members.map((each) => each.turn), activity.id);
+			const owner = found && { ...found, groupIndex: members[found.groupIndex]!.outer };
 			const inPanel = Boolean(owner && openSubagent);
 			const holder = owner?.groupIndex ?? index;
 			if (owner && inPanel) {
 				if (openSubagentId !== owner.launchId) openSubagent!(owner.launchId);
 			} else {
-				const keys = revealKeys(groups[holder]!, (item) => item.id === activity.id);
+				const keys = revealKeys(groups[holder]!, (item) => item.id === (owner?.launchId ?? activity.id));
 				if (owner) keys.push(owner.teamKey, `${owner.teamKey}:agent:${owner.launchId}`);
 				if (keys.some((key) => !activityDisclosureOverrides[key])) {
 					setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
@@ -5196,15 +5198,17 @@ export function Timeline({
 	const captureSettle = useCallback((key: string): SettleAnchor | undefined => {
 		const node = scroller.current;
 		if (!node || !initialLayoutDone.current) return undefined;
-		if (!groups.some((group) => group.key === key && !group.live)) return undefined;
+		const folded = !groups.some((group) => group.key === key && !group.live);
+		if (folded && !(pinnedRef.current && groups.some((group) => group.folded?.members.some((member) => member.key === key)))) return undefined;
 		const wrapper = Array.from(virtualContent.current?.children ?? [])
 			.find((child) => (child as HTMLElement).dataset.chatTurn === key);
 		const turn = wrapper?.firstElementChild as HTMLElement | null | undefined;
 		if (!turn) return undefined;
+		const following = pinnedRef.current;
+		if (folded) return { turn, rows: [], tops: [], scrollTop: node.scrollTop, following, index: -1, offset: 0 };
 		const { top, bottom } = node.getBoundingClientRect();
 		const rows = Array.from(turn.children) as HTMLElement[];
 		const rects = rows.map((row) => row.getBoundingClientRect());
-		const following = pinnedRef.current;
 		const index = following ? -1 : rects.findIndex((rect) => rect.bottom > top);
 		// A reader who sees none of the turn has nothing to hold: below it, no row reaches
 		// their view; above it, the first row starts past the view's bottom edge.
@@ -5239,7 +5243,7 @@ export function Timeline({
 		// later, and only then shrinks; take it now, so the end is final before paint.
 		const wrapper = turn.parentElement;
 		const virtualIndex = Number(wrapper?.dataset.index);
-		if (virtualized && wrapper && Number.isInteger(virtualIndex)) {
+		if (virtualized && wrapper?.isConnected && Number.isInteger(virtualIndex)) {
 			spacerTakes(settle.following);
 			virtualizer.resizeItem(virtualIndex, Math.round(wrapper.getBoundingClientRect().height));
 			const total = virtualizer.getTotalSize();
@@ -7013,8 +7017,10 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 			: { key: `${kind}:${first.key}`, anchor: first.anchor, items: members.flatMap((member) => member.items), folded: { kind, members } });
 		run = undefined;
 	};
+	const segments = new Map<string, number>();
+	for (const group of groups) if (group.turnId) segments.set(group.turnId, (segments.get(group.turnId) ?? 0) + 1);
 	for (const group of groups) {
-		const outcome = group.turnId && !group.live
+		const outcome = group.turnId && !group.live && segments.get(group.turnId) === 1
 			? group.outcome ?? (known.has(group.turnId) ? undefined : { state: "completed" as const })
 			: undefined;
 		const standing = outcome ? turnStanding(group.items, outcome.state, index) : "yours";
@@ -7036,6 +7042,13 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 	return out;
 }
 
+const leadless = new WeakMap<TimelineGroup, TimelineGroup>();
+function withoutLead(member: TimelineGroup): TimelineGroup {
+	let body = leadless.get(member);
+	if (!body) leadless.set(member, body = { ...member, items: member.items.slice(1) });
+	return body;
+}
+
 function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 	group: TimelineGroup;
 	overrides: Readonly<Record<string, boolean>>;
@@ -7044,7 +7057,7 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 }) {
 	const { kind, members } = group.folded!;
 	const lineKey = `${group.key}:open`;
-	const body = (member: TimelineGroup) => renderTurn({ ...member, items: member.items.slice(1) });
+	const body = (member: TimelineGroup) => renderTurn(withoutLead(member));
 	if (kind === "replaced") {
 		return (
 			<ReplacedNotice open={Boolean(overrides[lineKey])} onOpenChange={(open) => onOpenChange(lineKey, open)}>

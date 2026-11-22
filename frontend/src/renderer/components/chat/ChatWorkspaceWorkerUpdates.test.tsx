@@ -434,6 +434,29 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.getAllByText(/The orchestrator agent is being replaced/)).toHaveLength(1);
 	});
 
+	it("leaves a replacement that failed in view", () => {
+		const base = snapshot([automation("t1", 1, "AO is replacing this project orchestrator. Stop coordinating new work now and hand off.")]);
+		renderSnapshot({ ...base, turns: base.turns.map((turn) => ({ ...turn, state: "failed", errorMessage: "Authentication required." })) });
+		expect(screen.getByText(/Authentication required/)).toBeInTheDocument();
+	});
+
+	it("leaves a worker turn the user steered in view", () => {
+		const steer: ConversationActivity = {
+			kind: "activity", id: "t2-steer", turnId: "t2", sequence: 35, revision: 0, activityKind: "system", status: "completed",
+			summary: "Also rebase #5051.", createdAt: at(3), detail: { event: "steer", text: "Also rebase #5051." },
+		};
+		renderOrchestrator([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "Noted."),
+			report("t2", 3, "[done] [iOS pages](ao://sessions/proj/proj-286)\nPages ship."),
+			{ ...reply("t2", 3, "Checking the iOS pages."), id: "t2-early" },
+			steer,
+			reply("t2", 4, "Rebased #5051 too."),
+		]);
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^1 background update · 1 worker/);
+		expect(screen.getByText("Checking the iOS pages.")).toBeInTheDocument();
+	});
+
 	it("folds a worker message AO delivered inside another turn", () => {
 		const base = snapshot([
 			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),

@@ -79,9 +79,9 @@ export type OrchestratorReplyState = "working" | "unread" | null;
  * What a project's orchestrator buttons should signal: a reply the user has not
  * seen, or a turn of theirs in progress. A reply is the orchestrator's activity
  * settling from working back to idle or waiting for input, observed live from
- * the streamed workspace, when the turns that settled include one the user
- * started or one the chat keeps in view. Worker traffic the orchestrator handled
- * on its own stays quiet. Resets to idle on restore or resume never count, and
+ * the streamed workspace, when the orchestrator waits for the user or the turns
+ * that settled include one the user started or one the chat keeps in view.
+ * Worker traffic the orchestrator handled on its own stays quiet. Resets to idle on restore or resume never count, and
  * tool calls inside a turn keep it working. Viewing the orchestrator marks its
  * replies seen; both facts persist per project across restarts.
  */
@@ -108,7 +108,7 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 		if (!key || !orchestrator || prev?.id !== orchestrator.id || !prev.working) return;
 		if (activityState !== "idle" && activityState !== "waiting_input") return;
 		const store = useOrchestratorReplyStore.getState();
-		if (!quiet || viewing || lastUserAt > (store.replyAt[key] ?? 0)) {
+		if (!quiet || viewing || activityState === "waiting_input" || lastUserAt > (store.replyAt[key] ?? 0)) {
 			store.recordReply(key, at);
 			return;
 		}

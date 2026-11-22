@@ -466,7 +466,7 @@ async function fetchConversationPage(sessionId: string, hostId?: string, beforeS
 }
 
 export async function fetchRecentConversation(sessionId: string, hostId?: string): Promise<ConversationSnapshot> {
-	return toSnapshot(await fetchConversationWire(sessionId, hostId, { limit: 200, outputLimit: REMOTE_OUTPUT_LIMIT }));
+	return toSnapshot(await fetchConversationWire(sessionId, hostId, { limit: 60, outputLimit: 64 }));
 }
 
 /** The whole output of one activity, for a page that carries only its head and tail. */

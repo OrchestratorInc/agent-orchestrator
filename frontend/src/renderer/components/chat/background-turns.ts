@@ -10,9 +10,10 @@ export function turnStanding(items: readonly ConversationItem[], state: string, 
 	const lead = items[0];
 	if (!lead || items.some(isYours)) return "yours";
 	const automation = lead.kind === "message" && lead.role === "user" ? readAutomation(lead.text) : null;
-	if (automation?.kind === "notice" && automation.notice === "orchestratorReplaced") return "replaced";
+	const settled = state === "completed" || state === "recovered";
+	if (automation?.kind === "notice" && automation.notice === "orchestratorReplaced") return settled ? "replaced" : "failed";
 	if (!isWorkerLead(lead) || (isTaskTitleUpdate(lead) && !renamedTitle(items))) return "yours";
-	if (state !== "completed" && state !== "recovered") return "failed";
+	if (!settled) return "failed";
 	if (items.some((item) => workerUpdatesOf(item).some((update) => needsYouNow(index, update)))) return "up";
 	return /\?[*_]*$/.test(finalReply(items)) ? "up" : "background";
 }

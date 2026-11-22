@@ -111,6 +111,14 @@ describe("useOrchestratorReplyState", () => {
 		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
+	it("lights up when the orchestrator waits for the user, whatever settled before", () => {
+		fetchRecentConversation.mockResolvedValue(workerTurn("Noted."));
+		const hook = afterYourReply();
+		hook.rerender({ orchestrator: orchestrator("waiting_input", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBe("unread");
+		expect(fetchRecentConversation).not.toHaveBeenCalled();
+	});
+
 	it("keeps a terminal orchestrator lighting for every turn", () => {
 		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
 		const hook = setup(orchestrator("active", "2026-11-08T10:05:00Z", "orch-1", "terminal"));
