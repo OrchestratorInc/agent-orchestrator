@@ -1126,21 +1126,13 @@ func TestGHTokenSourceUsesInjectedHook(t *testing.T) {
 	}
 }
 
-// TestObserve_CIPaginationDegradesPassingToUnknown pins the safety
-// guard for the GraphQL contexts pagination: when GitHub reports
-// hasNextPage=true, a visible "all passing" set could be hiding a
-// failure on the next page. The provider must degrade Passing /
-// Pending / Unknown to CIUnknown so downstream code doesn't treat a
-// possibly-broken PR as ready. A FAILING verdict from the visible
-// page is still safe (and must NOT degrade).
-func TestObserve_CIPaginationDegradesPassingToUnknown(t *testing.T) {
-	f := newFakeGH(t)
+// A partial visible set can hide a failing context on a later page.
+func TestCISummary_CIPaginationDegradesPassingToUnknown(t *testing.T) {
 	fx := basePRFixture()
-	fx.prData(func(pr map[string]any) {
-		commits := pr["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)
-		commit := commits["commit"].(map[string]any)
-		roll := commit["statusCheckRollup"].(map[string]any)
-		ctxs := roll["contexts"].(map[string]any)
+	var pr map[string]any
+	fx.prData(func(m map[string]any) {
+		pr = m
+		ctxs := statusRollup(m)["contexts"].(map[string]any)
 		// One visible passing context, but hasNextPage=true so a
 		// failure could be hiding in the unseen tail.
 		ctxs["nodes"] = []any{
@@ -1148,66 +1140,134 @@ func TestObserve_CIPaginationDegradesPassingToUnknown(t *testing.T) {
 		}
 		ctxs["pageInfo"] = map[string]any{"hasNextPage": true}
 	})
-	fx.install(t, f)
-	p := newProviderForTest(t, f)
-
-	obs, err := p.Observe(ctx(), fx.prURL())
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	if obs.CI != domain.CIUnknown {
-		t.Fatalf("CI = %q, want CIUnknown (hasNextPage must degrade passing)", obs.CI)
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIUnknown {
+		t.Fatalf("CI = %q, want CIUnknown (hasNextPage must degrade passing)", got)
 	}
 }
 
-func TestObserve_CIPaginationDoesNotMaskKnownFailure(t *testing.T) {
-	f := newFakeGH(t)
+func TestCISummary_CIPaginationDoesNotMaskUnmatchableFailure(t *testing.T) {
 	fx := basePRFixture()
-	fx.prData(func(pr map[string]any) {
-		commits := pr["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)
-		commit := commits["commit"].(map[string]any)
-		roll := commit["statusCheckRollup"].(map[string]any)
-		ctxs := roll["contexts"].(map[string]any)
+	var pr map[string]any
+	fx.prData(func(m map[string]any) {
+		pr = m
+		ctxs := statusRollup(m)["contexts"].(map[string]any)
 		ctxs["nodes"] = []any{
 			map[string]any{"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE", "databaseId": float64(0)},
 		}
 		ctxs["pageInfo"] = map[string]any{"hasNextPage": true}
 	})
-	fx.install(t, f)
-	p := newProviderForTest(t, f)
-
-	obs, err := p.Observe(ctx(), fx.prURL())
-	if err != nil {
-		t.Fatalf("Observe: %v", err)
-	}
-	if obs.CI != domain.CIFailing {
-		t.Fatalf("CI = %q, want CIFailing (a known failure on page 1 must NOT degrade)", obs.CI)
+	if got := ciSummaryFromGraphQL(pr); got != domain.CIFailing {
+		t.Fatalf("CI = %q, want CIFailing for a check without workflow metadata", got)
 	}
 }
 
-func TestObserve_CIPaginationDefersSupersedableFailures(t *testing.T) {
+func TestCISummary_CIPaginationDefersSupersedableFailures(t *testing.T) {
 	for _, conclusion := range []string{"FAILURE", "CANCELLED"} {
 		t.Run(conclusion, func(t *testing.T) {
-			f := newFakeGH(t)
 			fx := basePRFixture()
-			fx.prData(func(pr map[string]any) {
-				contexts := statusRollup(pr)["contexts"].(map[string]any)
+			var pr map[string]any
+			fx.prData(func(m map[string]any) {
+				pr = m
+				contexts := statusRollup(m)["contexts"].(map[string]any)
 				check := actionsCheckRun("Go", "lint", conclusion, 1)
 				check["databaseId"] = float64(0) // Skip optional job-log enrichment.
 				contexts["nodes"] = []any{check}
 				contexts["pageInfo"] = map[string]any{"hasNextPage": true}
 			})
-			fx.install(t, f)
-			p := newProviderForTest(t, f)
+			if got := ciSummaryFromGraphQL(pr); got != domain.CIUnknown {
+				t.Fatalf("CI = %q, want unknown until later pages can rule out a newer run", got)
+			}
+		})
+	}
+}
 
-			obs, err := p.Observe(ctx(), fx.prURL())
+func TestObserve_FetchesRemainingCheckContexts(t *testing.T) {
+	cases := []struct {
+		name, first, second string
+		wantCI              domain.CIState
+		wantCheckStatus     domain.PRCheckStatus
+	}{
+		{name: "superseded cancellation", first: "CANCELLED", second: "SUCCESS", wantCI: domain.CIPassing, wantCheckStatus: domain.PRCheckPassed},
+		{name: "current cancellation", first: "SUCCESS", second: "CANCELLED", wantCI: domain.CIFailing, wantCheckStatus: domain.PRCheckCancelled},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeGH(t)
+			fx := basePRFixture()
+			fx.prData(func(pr map[string]any) {
+				roll := statusRollup(pr)
+				roll["state"] = "FAILURE"
+				first := actionsCheckRun("Go", "lint", tc.first, 1)
+				first["databaseId"] = float64(0)
+				contexts := roll["contexts"].(map[string]any)
+				contexts["nodes"] = []any{first}
+				contexts["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": "cursor-1"}
+			})
+			fx.install(t, fake)
+			page := basePRFixture()
+			var pagePR map[string]any
+			page.prData(func(pr map[string]any) {
+				pagePR = pr
+				second := actionsCheckRun("Go", "lint", tc.second, 2)
+				second["databaseId"] = float64(0)
+				second["detailsUrl"] = "https://example.com/checks/current-lint"
+				contexts := statusRollup(pr)["contexts"].(map[string]any)
+				contexts["nodes"] = []any{second}
+				contexts["pageInfo"] = map[string]any{"hasNextPage": false}
+			})
+			fake.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch fake.callsTo(http.MethodPost, "/graphql") {
+				case 1:
+					_ = json.NewEncoder(w).Encode(fx.graphql)
+				case 2:
+					body, _ := io.ReadAll(r.Body)
+					if !strings.Contains(string(body), `after:\"cursor-1\"`) && !strings.Contains(string(body), `after:"cursor-1"`) {
+						t.Fatalf("fallback query missing cursor, body=%s", body)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repo": map[string]any{"pullRequest": pagePR}}})
+				default:
+					t.Fatal("unexpected GraphQL request")
+				}
+			})
+
+			obs, err := newProviderForTest(t, fake).Observe(ctx(), fx.prURL())
 			if err != nil {
 				t.Fatalf("Observe: %v", err)
 			}
-			if obs.CI != domain.CIUnknown {
-				t.Fatalf("CI = %q, want unknown until later pages can rule out a newer run", obs.CI)
+			if !obs.Fetched || obs.CI != tc.wantCI || len(obs.Checks) != 1 || obs.Checks[0].Status != tc.wantCheckStatus || obs.Checks[0].URL != "https://example.com/checks/current-lint" {
+				t.Fatalf("observation = %+v, want current %s check and CI %q", obs, tc.wantCheckStatus, tc.wantCI)
+			}
+			if got := fake.callsTo(http.MethodPost, "/graphql"); got != 2 {
+				t.Fatalf("GraphQL calls = %d, want initial and next page", got)
 			}
 		})
+	}
+}
+
+func TestObserve_CheckContextPageFailureDoesNotMarkFetched(t *testing.T) {
+	fake := newFakeGH(t)
+	fx := basePRFixture()
+	fx.prData(func(pr map[string]any) {
+		contexts := statusRollup(pr)["contexts"].(map[string]any)
+		contexts["pageInfo"] = map[string]any{"hasNextPage": true, "endCursor": "cursor-1"}
+	})
+	fx.install(t, fake)
+	fake.on(http.MethodPost, "/graphql", func(w http.ResponseWriter, r *http.Request) {
+		if fake.callsTo(http.MethodPost, "/graphql") == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(fx.graphql)
+			return
+		}
+		http.Error(w, "page unavailable", http.StatusBadGateway)
+	})
+
+	obs, err := newProviderForTest(t, fake).Observe(ctx(), fx.prURL())
+	if err == nil || obs.Fetched {
+		t.Fatalf("observation = %+v, err = %v; want failed observation on required page fetch", obs, err)
+	}
+	if got := fake.callsTo(http.MethodPost, "/graphql"); got != 2 {
+		t.Fatalf("GraphQL calls = %d, want initial and next page", got)
 	}
 }
 

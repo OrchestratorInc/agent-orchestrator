@@ -157,6 +157,15 @@ func (p *Provider) Observe(ctx context.Context, prURL string) (ports.PRObservati
 	if err != nil {
 		return out, scmObserveError(err)
 	}
+	if pageInfoHasMore(statusContexts(gq)) {
+		ref := ports.SCMPRRef{
+			Repo:   ports.SCMRepo{Provider: "github", Host: "github.com", Owner: owner, Name: repo, Repo: owner + "/" + repo},
+			Number: number,
+		}
+		if err := p.fetchRemainingCheckContexts(ctx, ref, gq); err != nil {
+			return out, scmObserveError(err)
+		}
+	}
 
 	p.markCancelledGateFailures(ctx, owner, repo, gq)
 	out.CI = ciSummaryFromGraphQL(gq)
