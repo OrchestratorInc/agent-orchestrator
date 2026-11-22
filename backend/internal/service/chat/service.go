@@ -1847,7 +1847,7 @@ func (s *Service) ArmChatHandoff(
 	if controller.State() == ports.ChatControllerStopped {
 		return nil
 	}
-	return controller.ArmHandoff(ctx, policy)
+	return controller.ArmHandoff(ctx, policy, s.accountHandoffKeepsQueue(ctx, id))
 }
 
 // PrepareChatHandoff closes source intake and makes the controller quiescent.
