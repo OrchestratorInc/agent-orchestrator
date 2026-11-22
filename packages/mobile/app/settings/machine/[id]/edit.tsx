@@ -1,4 +1,5 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { HeaderPrimaryButton } from "../../../../lib/HeaderTextButton";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform, StyleSheet, View } from "react-native";
@@ -71,7 +72,9 @@ function MachineEditor({ host, isDefault }: { host: Host; isDefault: boolean }) 
 					<Spinner accessibilityLabel="Saving changes" />
 				</Stack.Toolbar.View>
 			) : Platform.OS === "ios" ? (
-				<Stack.Toolbar.Button accessibilityLabel="Save machine changes" disabled={!canSave} style={{ fontWeight: "600" }} onPress={() => void saveRef.current()}>Save</Stack.Toolbar.Button>
+				<Stack.Toolbar.View hidesSharedBackground>
+					<HeaderPrimaryButton title="Save" accessibilityLabel="Save machine changes" disabled={!canSave} onPress={() => void saveRef.current()} testID="machine-edit-save" />
+				</Stack.Toolbar.View>
 			) : (
 				<Stack.Toolbar.Button icon={toolbarIcon("checkmark")} accessibilityLabel="Save machine changes" disabled={!canSave} onPress={() => void saveRef.current()} />
 			)}

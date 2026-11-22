@@ -1,4 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { HeaderPrimaryButton } from "../lib/HeaderTextButton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -89,7 +90,9 @@ export default function TagPage() {
 			<Stack.Screen options={{ title: editing || id ? "Edit tag" : "New tag", ...(Platform.OS === "android" ? { headerRight: () => <SaveButton enabled={canSave} onPress={() => saveRef.current()} /> } : null) }} />
 			{Platform.OS === "ios" ? (
 				<Stack.Toolbar placement="right">
-					<Stack.Toolbar.Button accessibilityLabel="Save tag" disabled={!canSave} style={{ fontWeight: "600" }} onPress={() => saveRef.current()}>Save</Stack.Toolbar.Button>
+					<Stack.Toolbar.View hidesSharedBackground>
+						<HeaderPrimaryButton title="Save" accessibilityLabel="Save tag" disabled={!canSave} onPress={() => saveRef.current()} testID="tag-save" />
+					</Stack.Toolbar.View>
 				</Stack.Toolbar>
 			) : null}
 		</>
