@@ -178,23 +178,23 @@ func (s *Service) workspaceSourcePaths(ctx context.Context, id domain.SessionID,
 }
 
 func workspacePathSourceFor(sources []workspacePathSource, path string) (workspacePathSource, string, bool) {
-	best := -1
-	for i, source := range sources {
+	var best workspacePathSource
+	found := false
+	for _, source := range sources {
 		if source.prefix != "" && (!strings.HasPrefix(path, source.prefix+"/") || len(path) == len(source.prefix)+1) {
 			continue
 		}
-		if best < 0 || len(source.prefix) > len(sources[best].prefix) {
-			best = i
+		if !found || len(source.prefix) > len(best.prefix) {
+			best, found = source, true
 		}
 	}
-	if best < 0 {
+	if !found {
 		return workspacePathSource{}, "", false
 	}
-	source := sources[best]
-	if source.prefix == "" {
-		return source, path, true
+	if best.prefix == "" {
+		return best, path, true
 	}
-	return source, strings.TrimPrefix(path, source.prefix+"/"), true
+	return best, strings.TrimPrefix(path, best.prefix+"/"), true
 }
 
 func (s *Service) workspaceSourceFileSummary(ctx context.Context, id domain.SessionID, sources []workspacePathSource, path string) (WorkspaceFileSummary, error) {
