@@ -133,7 +133,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
 	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
-	providerArgs = append(providerArgs, EndpointArgs(endpointEnv(cfg.Env, cfg.DataDir))...)
+	appendEndpointFlags(&providerArgs, cfg.Env, cfg.DataDir)
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,
@@ -174,7 +174,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	appendTerminalCompatibilityFlags(&providerArgs)
 	appendReasoningEffortFlag(&providerArgs, cfg.Config.Effort)
 	appendFastTierFlag(&providerArgs, cfg.Config.Launch)
-	providerArgs = append(providerArgs, EndpointArgs(endpointEnv(cfg.Env, cfg.DataDir))...)
+	appendEndpointFlags(&providerArgs, cfg.Env, cfg.DataDir)
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessCodex,
 		Binary:           binary,

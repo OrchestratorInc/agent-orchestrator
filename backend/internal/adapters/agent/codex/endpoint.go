@@ -35,6 +35,12 @@ func EndpointArgs(env map[string]string) []string {
 	return args
 }
 
+// appendEndpointFlags adds the overrides for the custom endpoint a launch
+// sees, if any.
+func appendEndpointFlags(args *[]string, env map[string]string, dataDir string) {
+	*args = append(*args, EndpointArgs(endpointEnv(env, dataDir))...)
+}
+
 // endpointEnv returns the variables a launch's endpoint overrides come from.
 // The session manager passes the launch env, which already carries the
 // endpoint (or a project's deliberate override of it); callers that pass no
