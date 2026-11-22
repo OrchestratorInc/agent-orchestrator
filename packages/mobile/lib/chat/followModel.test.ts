@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createReplyPacer, receiveReplyText, stepReplyPacer } from "./replyPacer";
-import { glideStep, newestSequence, sentTurnRoom } from "./timelineScroll";
+import { glideStep, isSentItem, newestSequence, optimisticSentItem, SENT_ROOM_SHARE, sentTurnRoom } from "./timelineScroll";
 
 const FRAME_MS = 1000 / 60;
 
@@ -49,6 +49,35 @@ describe("sentTurnRoom", () => {
 		expect(sentTurnRoom({ listHeight: 800, keyboard: 0, topClear: 110, endPad: 120 })).toBe(570);
 		expect(sentTurnRoom({ listHeight: 800, keyboard: 300, topClear: 110, endPad: 120 })).toBe(270);
 		expect(sentTurnRoom({ listHeight: 300, keyboard: 300, topClear: 110, endPad: 120 })).toBe(0);
+	});
+
+	it("takes three quarters of that height when asked, so the message rises three quarters of the way", () => {
+		expect(sentTurnRoom({ listHeight: 800, keyboard: 0, topClear: 110, endPad: 120, share: SENT_ROOM_SHARE })).toBe(428);
+	});
+});
+
+describe("the sent message", () => {
+	const anchor = { conversationId: "c", after: 9, at: 1_700_000_000_000 };
+
+	it("is a human message or the person's steer after the send began, not an agent's steer or anything older", () => {
+		const message = { kind: "message", id: "m", sequence: 10, revision: 1, role: "user", origin: "human", text: "hi", streaming: false, createdAt: "" } as const;
+		expect(isSentItem(message, 9)).toBe(true);
+		expect(isSentItem(message, 10)).toBe(false);
+		expect(isSentItem({ ...message, origin: "automation" }, 9)).toBe(false);
+		const steer = { kind: "activity", id: "s", sequence: 11, revision: 1, activityKind: "system", status: "completed", summary: "x", detail: { event: "steer", text: "x" }, createdAt: "" } as const;
+		expect(isSentItem(steer, 9)).toBe(true);
+		expect(isSentItem({ ...steer, detail: { event: "steer", text: "x", senderSessionId: "other" } }, 9)).toBe(false);
+	});
+
+	it("is drawn before the conversation has it, after everything loaded, as the real one will be", () => {
+		const message = optimisticSentItem({ ...anchor, kind: "send", text: "Fix the build" }, 12);
+		expect(message).toMatchObject({ kind: "message", role: "user", origin: "human", text: "Fix the build", sequence: 12.5 });
+		expect(message && isSentItem(message, anchor.after)).toBe(true);
+		const steer = optimisticSentItem({ ...anchor, kind: "steer", text: "Use the other API", turnId: "t1" }, 12);
+		expect(steer).toMatchObject({ kind: "activity", turnId: "t1", activityKind: "system", detail: { event: "steer", text: "Use the other API" } });
+		expect(steer && isSentItem(steer, anchor.after)).toBe(true);
+		// Without text (files, quotes, a queued send) nothing is drawn early.
+		expect(optimisticSentItem(anchor, 12)).toBeUndefined();
 	});
 });
 

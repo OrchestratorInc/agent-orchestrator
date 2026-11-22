@@ -1,4 +1,5 @@
 import type { NativeScrollEvent } from "react-native";
+import type { ConversationItem } from "./types";
 
 type ScrollMetrics = Pick<NativeScrollEvent, "contentOffset" | "contentSize" | "layoutMeasurement">;
 
@@ -85,9 +86,42 @@ export function newestSequence(items: readonly { sequence: number }[]): number {
  * keyboard usually stays up through a send, and the turn is laid out for the
  * part of the screen above it.
  */
-export function sentTurnRoom({ listHeight, keyboard, topClear, endPad }: { listHeight: number; keyboard: number; topClear: number; endPad: number }): number {
-	return Math.max(0, Math.round(listHeight - keyboard - topClear - endPad));
+export function sentTurnRoom({ listHeight, keyboard, topClear, endPad, share = 1 }: { listHeight: number; keyboard: number; topClear: number; endPad: number; share?: number }): number {
+	return Math.max(0, Math.round((listHeight - keyboard - topClear - endPad) * share));
 }
 
-/** A send under way: its message is the first human message after `after` in conversation `conversationId`. */
-export type SendAnchor = { conversationId: string; after: number; at: number };
+/**
+ * How much of the visible height a sent message's room takes: the message
+ * rises three quarters of the way, resting a little below the top with the
+ * conversation before it still in view, rather than all the way up.
+ */
+export const SENT_ROOM_SHARE = 0.75;
+
+/**
+ * A send under way: its message is the first human message, or the person's
+ * steer, after `after` in conversation `conversationId`. With `text`, the list
+ * shows the message the moment it is sent (`optimisticSentItem`) until the
+ * conversation has it; a steer joins the running turn `turnId`.
+ */
+export type SendAnchor = { conversationId: string; after: number; at: number; kind?: "send" | "steer"; text?: string; turnId?: string };
+
+/** Whether `item` is what a send after `after` put in the conversation: the person's message, or their steer. */
+export function isSentItem(item: ConversationItem, after: number): boolean {
+	if (item.sequence <= after) return false;
+	if (item.kind === "message") return item.role === "user" && item.origin === "human";
+	return item.activityKind === "system" && item.detail?.event === "steer" && !item.detail.senderSessionId;
+}
+
+/**
+ * The sent message as the list draws it before the conversation has it: a
+ * human message in a turn of its own, or a steer in the running turn, after
+ * everything loaded. It draws as the real one will, so the swap moves nothing.
+ */
+export function optimisticSentItem(anchor: SendAnchor, newest: number): ConversationItem | undefined {
+	if (!anchor.text) return undefined;
+	const base = { id: `optimistic:${anchor.at}`, sequence: Math.max(newest, anchor.after) + 0.5, revision: 0, createdAt: new Date(anchor.at).toISOString() };
+	if (anchor.kind === "steer") {
+		return { ...base, kind: "activity", turnId: anchor.turnId, activityKind: "system", status: "completed", summary: anchor.text, detail: { event: "steer", text: anchor.text } };
+	}
+	return { ...base, kind: "message", role: "user", origin: "human", text: anchor.text, streaming: false };
+}

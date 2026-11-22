@@ -13,6 +13,7 @@ import {
 	Text,
 	useWindowDimensions,
 	View,
+	type LayoutChangeEvent,
 	type NativeScrollEvent,
 	type NativeSyntheticEvent,
 	type ScrollViewProps,
@@ -66,7 +67,7 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, followsAfterRest, openingRow, RESUME_SLOP, sentTurnRoom, type Release, type SendAnchor } from "./timelineScroll";
+import { atTail, followsAfterRest, isSentItem, newestSequence, openingRow, optimisticSentItem, RESUME_SLOP, SENT_ROOM_SHARE, sentTurnRoom, type Release, type SendAnchor } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 import { ReplyPacingContext, usePacedReply, type ReplyPacing } from "./usePacedReply";
 import { FollowScrollView, glideStyles, useFollowGlide } from "./followGlide";
@@ -90,6 +91,8 @@ const FIELD_REVEAL_WAIT_MS = 600;
 const SEND_INTENT_MS = 5000;
 // Longest a send's scroll to its message runs before a follow it held back goes (see `sendScroll`).
 const SEND_SCROLL_MS = 600;
+// Longest a send's move waits for its room to be laid out.
+const ROOM_PLACE_CAP_MS = 300;
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
@@ -264,7 +267,7 @@ function Timeline({
 	const keyboardInset = useRef(0);
 	// A follow to the end from JS while the keyboard scrolls the list jumped it;
 	// it waits for the keyboard to stop.
-	const { moving: keyboardMoving, onEnd: onKeyboardEnd } = useKeyboardMotion();
+	const { moving: keyboardMoving, opening: keyboardOpening, onEnd: onKeyboardEnd } = useKeyboardMotion();
 	const followAfterKeyboard = useRef(false);
 	// Following new output glides on the UI thread (see useFollowGlide).
 	const glide = useFollowGlide(keyboardMoving, () => { followAfterKeyboard.current = true; });
@@ -342,7 +345,15 @@ function Timeline({
 	// Usage is snapshot state, not conversation. Reasoning stays available in the
 	// durable record but hidden on mobile: prose and work are the primary surface.
 	const openingTurnId = startup?.view.openingTurnId;
-	const items = useMemo(() => readableConversationItems(snapshot, openingTurnId), [openingTurnId, snapshot]);
+	// The send under way in this conversation (see `sendAnchor`).
+	const anchor = sendAnchor?.conversationId === snapshot.conversationId ? sendAnchor : undefined;
+	// A message just sent shows at once, drawn from the send until the conversation has it.
+	const items = useMemo(() => {
+		const readable = readableConversationItems(snapshot, openingTurnId);
+		if (!anchor?.text || readable.some((item) => isSentItem(item, anchor.after))) return readable;
+		const optimistic = optimisticSentItem(anchor, newestSequence(snapshot.items));
+		return optimistic ? [...readable, optimistic] : readable;
+	}, [anchor, openingTurnId, snapshot]);
 	// Each worker's newest report, read once per item list and kept as the same set
 	// until some worker reports again, so settled rows stay idle while a reply streams.
 	const latestKeys = useMemo(() => latestWorkerUpdateKeys(items), [items]);
@@ -364,23 +375,36 @@ function Timeline({
 		: styles.content, [bottomInset, endPad, headerPad, styles.content, topInset]);
 	// The list's height as state, for the room a sent message's turn holds open.
 	const [listHeight, setListHeight] = useState(0);
-	// The send's message, once the conversation has it: the first human message
-	// after the send began. Its turn holds the rest of the screen open below it
-	// (`sentTurnRoom`), so at the end of the list the message rests at the top
-	// and Thinking, Working, tool rows and the reply fill in beneath it without
-	// moving anything; only a reply that outgrows the room scrolls the list.
-	const anchor = sendAnchor?.conversationId === snapshot.conversationId ? sendAnchor : undefined;
-	const anchorIndex = useMemo(() => anchor
-		? groups.findIndex((group) => group.items.some((item) => item.kind === "message" && item.role === "user" && item.origin === "human" && item.sequence > anchor.after))
-		: -1, [anchor, groups]);
-	const anchorFound = anchorIndex >= 0 ? anchor : undefined;
-	// The keyboard's room as the message appeared, kept for the turn (see `sentTurnRoom`).
-	const anchorKeyboard = useRef<{ anchor: SendAnchor; keyboard: number } | undefined>(undefined);
-	if (anchorFound && anchorKeyboard.current?.anchor !== anchorFound) anchorKeyboard.current = { anchor: anchorFound, keyboard: keyboardInset.current };
+	// The send's message (or steer), drawn at once and then the conversation's
+	// own. Its turn holds open the screen below it (`sentTurnRoom`), so at the
+	// end of the list the message rests near the top and Thinking, Working, tool
+	// rows and the reply fill in beneath it without moving anything; only a
+	// reply that outgrows the room scrolls the list. A steer sits inside the
+	// running turn, so the room starts at the message, not the turn's top.
+	const sent = useMemo(() => {
+		if (!anchor) return undefined;
+		for (let index = groups.length - 1; index >= 0; index--) {
+			const item = groups[index].items.find((candidate) => isSentItem(candidate, anchor.after));
+			if (item) return { index, item };
+		}
+		return undefined;
+	}, [anchor, groups]);
+	const anchorFound = sent ? anchor : undefined;
+	// The keyboard the message is laid out above, taken once per send in an
+	// effect (a shared value is not read while rendering): none while it is
+	// closing, as it does when the send button is tapped.
+	const [roomKeyboard, setRoomKeyboard] = useState<{ anchor: SendAnchor; keyboard: number } | undefined>(undefined);
+	useEffect(() => {
+		if (!anchorFound || roomKeyboard?.anchor === anchorFound) return;
+		setRoomKeyboard({ anchor: anchorFound, keyboard: keyboardMoving.value && !keyboardOpening.value ? 0 : keyboardInset.current });
+	}, [anchorFound, keyboardMoving, keyboardOpening, roomKeyboard]);
 	// Only while the turn is the newest row: room above a later row would be a gap.
-	const roomKey = anchorFound && anchorIndex === groups.length - 1 ? groups[anchorIndex].key : undefined;
-	const room = roomKey && listHeight
-		? sentTurnRoom({ listHeight, keyboard: anchorKeyboard.current?.keyboard ?? 0, topClear: underHeader + topInset + space.md, endPad })
+	// The message's row is measured from its first frame (so it is not redrawn
+	// once the room comes); the room follows once the keyboard is known.
+	const roomKey = sent && sent.index === groups.length - 1 ? groups[sent.index].key : undefined;
+	const roomItem = roomKey ? sent?.item.id : undefined;
+	const room = roomKey && listHeight && roomKeyboard?.anchor === anchorFound
+		? sentTurnRoom({ listHeight, keyboard: roomKeyboard?.keyboard ?? 0, topClear: underHeader + topInset + space.md, endPad, share: SENT_ROOM_SHARE })
 		: 0;
 	// Recomputed per snapshot but kept by identity while its contents are the
 	// same, so `extraData` changes (and every row re-renders) only when they do.
@@ -395,7 +419,7 @@ function Timeline({
 	// leaving the conversation with the draft. A JS back listener never hears
 	// predictive back on Android, so this guards the screen's removal instead.
 	usePreventRemove(editing, cancelEdit);
-	const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room }), [editDraft, edits, openWorked, room, roomKey]);
+	const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room, roomItem }), [editDraft, edits, openWorked, room, roomItem, roomKey]);
 	const jumpViewPosition = 0.18;
 	// Where the native scrollToEnd lands: its content inset is the keyboard's room.
 	const endOffset = () => {
@@ -442,7 +466,7 @@ function Timeline({
 	// the scroll events for that, so a glide could start from where the list was
 	// and jump; the native scroll starts from where it is. Follows asked for
 	// while it runs wait for it to end (`settle`, or the cap on Android).
-	const sendScroll = useRef({ pending: false, until: 0, owed: false });
+	const sendScroll = useRef<{ awaiting?: SendAnchor; pending: boolean; until: number; owed: boolean }>({ pending: false, until: 0, owed: false });
 	const latestFollowTail = useRef<() => void>(() => {});
 	const endSendScroll = () => {
 		const send = sendScroll.current;
@@ -456,6 +480,8 @@ function Timeline({
 	// however often the end moves; the opening list, still measuring, snaps.
 	const followToLatest = () => {
 		const send = sendScroll.current;
+		// The message is in but its room is not laid out yet; the move waits for it (`roomPlaced`).
+		if (send.awaiting) return;
 		if (send.pending) {
 			send.pending = false;
 			if (glides()) {
@@ -496,9 +522,10 @@ function Timeline({
 	};
 	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
 
-	// The send's message arrived: bring it to the top once, unless the person has
-	// their finger on the list. The room below it is already in this layout, so
-	// the list's end holds the message at the top; the move is `sendScroll`'s.
+	// The send's message is in the list: bring it up once, unless the person has
+	// their finger on the list. The move waits for the room below the message
+	// (its turn reports it laid out, `roomPlaced`), so the list's end already
+	// holds the message near the top; the move itself is `sendScroll`'s.
 	const broughtUp = useRef<SendAnchor | undefined>(undefined);
 	useEffect(() => {
 		if (!anchorFound || broughtUp.current === anchorFound) return;
@@ -506,11 +533,20 @@ function Timeline({
 		if (dragging.current || (!followsTail.current && Date.now() - anchorFound.at > SEND_INTENT_MS)) return;
 		followsTail.current = true;
 		setShowJump(false);
-		sendScroll.current.pending = true;
-		requestAnimationFrame(followTail);
-		// Once per send; `followTail` is this render's.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
+		sendScroll.current.awaiting = anchorFound;
+		// A message whose row cannot report (drawn inside a folded run) moves without waiting long.
+		const cap = setTimeout(() => latestRoomPlaced.current(), ROOM_PLACE_CAP_MS);
+		return () => clearTimeout(cap);
 	}, [anchorFound]);
+	const roomPlaced = useCallback(() => latestRoomPlaced.current(), []);
+	const latestRoomPlaced = useRef(() => {});
+	latestRoomPlaced.current = () => {
+		const send = sendScroll.current;
+		if (!send.awaiting) return;
+		send.awaiting = undefined;
+		send.pending = true;
+		requestAnimationFrame(() => latestFollowTail.current());
+	};
 
 	// Live replies' pacing, kept per conversation: a switch to another session
 	// starts clean, and its replies already streaming are not replayed.
@@ -716,7 +752,7 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; endSendScroll(); }}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; sendScroll.current.awaiting = undefined; endSendScroll(); }}
 							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
@@ -786,6 +822,8 @@ function Timeline({
 								onToggleWorked={rowHandlers.toggleWorked}
 								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 								room={group.key === roomKey ? room : undefined}
+								roomItem={group.key === roomKey ? roomItem : undefined}
+								onRoomPlaced={roomPlaced}
 							/>}
 						/>
 						</RevealFocusedField.Provider>
@@ -811,7 +849,7 @@ function Timeline({
  * useStableGroups) and its handlers stable, so a streamed word re-renders the
  * turn it lands in and leaves every other turn on screen alone.
  */
-const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessionId, conversationId, canRollBack, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup, room }: {
+const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessionId, conversationId, canRollBack, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup, room, roomItem, onRoomPlaced }: {
 	group: ConversationGroup;
 	sessionId: string;
 	conversationId: string;
@@ -835,9 +873,25 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	startup?: TimelineStartup;
 	/** The room a just-sent message's turn holds open below it (see `sentTurnRoom`). */
 	room?: number;
+	/** The sent message the room starts at: the turn's prompt, or a steer partway down. */
+	roomItem?: string;
+	/** Told once the room below `roomItem` is laid out, so the list can move to it. */
+	onRoomPlaced?(): void;
 }) {
+	// Where the sent message sits in the turn, measured, so the room starts at it.
+	const [placed, setPlaced] = useState<{ item: string; y: number } | undefined>(undefined);
+	const roomOffset = placed && placed.item === roomItem ? placed.y : 0;
 	// Laid out with the turn, so what fills it in moves nothing below or above.
-	const roomStyle = room ? { minHeight: room } : undefined;
+	const roomStyle = room ? { minHeight: roomOffset + room } : undefined;
+	const placeRoom = (item: string) => (event: LayoutChangeEvent) => {
+		const y = Math.round(event.nativeEvent.layout.y);
+		setPlaced((current) => current?.item === item && current.y === y ? current : { item, y });
+	};
+	// After the commit that laid the room out at the measured message.
+	const placedItem = placed?.item;
+	useEffect(() => {
+		if (room && roomItem && placedItem === roomItem) onRoomPlaced?.();
+	}, [onRoomPlaced, placedItem, room, roomItem, roomOffset]);
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
@@ -851,7 +905,10 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 		: undefined;
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={sessionId} conversationId={conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} />);
+		: row.items[0].id === roomItem
+			? <View key={row.key} onLayout={placeRoom(row.items[0].id)}>{renderItem(row.items[0])}</View>
+			: renderItem(row.items[0], row.key));
+	const renderItem = (item: ConversationItem, key?: string) => <TimelineItem key={key} item={item} sessionId={sessionId} conversationId={conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={item.turnId && editableTurns?.has(item.turnId) ? onEditMessage : undefined} editor={editorFor(item)} answeredBelow={answeredBelow} />;
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.

@@ -71,9 +71,16 @@ describe("chat composer pill", () => {
 	});
 
 	it("does not clear a newer draft when an earlier send completes", () => {
-		expect(composer).toContain('const unchanged = current === text && currentQuotes === quotes;');
+		expect(composer).toContain('const unchanged = (clearedAtSend ? current === "" : current === text) && currentQuotes === quotes;');
 		expect(composer).toContain('unchanged ? AsyncStorage.removeItem(draftKey)');
-		expect(composer).toContain('if (latestText.current === text && latestQuotes.current === quotes) {');
+		expect(composer).toContain('if (!clearedAtSend && latestText.current === text && latestQuotes.current === quotes) {');
+	});
+
+	// The conversation shows a plain message the moment it is sent, so the field
+	// empties then too; a failed send puts the text back unless more was typed.
+	it("empties the field at send for a plain message and restores it if the send fails", () => {
+		expect(composer).toContain("const clearedAtSend = attachments.length === 0 && quotes.length === 0;");
+		expect(composer).toContain("if (clearedAtSend && latestText.current === \"\") {\n\t\t\t\tlatestText.current = text;");
 	});
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {

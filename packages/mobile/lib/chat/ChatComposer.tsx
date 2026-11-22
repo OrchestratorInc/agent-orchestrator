@@ -447,6 +447,15 @@ function Composer({
 		dismissAttachmentNotice();
 		setSubmitting(true);
 		if (draftTimer.current) clearTimeout(draftTimer.current);
+		// A plain message leaves the field the moment it is sent, as the
+		// conversation shows it at once (ChatTimeline's optimistic message); a send
+		// that fails puts it back. One with files or quotes stays until it lands.
+		const clearedAtSend = attachments.length === 0 && quotes.length === 0;
+		if (clearedAtSend) {
+			latestText.current = "";
+			setText("");
+			setCursor(undefined);
+		}
 		try {
 			// Submission cancels the debounce; persist before a preflight can reject.
 			if (draftKey) {
@@ -462,11 +471,11 @@ function Composer({
 			if (draftKey) {
 				const current = latestText.current;
 				const currentQuotes = latestQuotes.current;
-				const unchanged = current === text && currentQuotes === quotes;
+				const unchanged = (clearedAtSend ? current === "" : current === text) && currentQuotes === quotes;
 				await afterDraftWrites(draftKey, () => unchanged ? AsyncStorage.removeItem(draftKey) : AsyncStorage.setItem(draftKey, encodeResponseDraft(current, currentQuotes)));
 			}
 			await onAcknowledgeSend(id);
-			if (latestText.current === text && latestQuotes.current === quotes) {
+			if (!clearedAtSend && latestText.current === text && latestQuotes.current === quotes) {
 				latestText.current = "";
 				setText("");
 				latestQuotes.current = [];
@@ -475,6 +484,11 @@ function Composer({
 			forgetComposerAttachments(sentKey, sent);
 			haptics.success();
 		} catch (cause) {
+			// Unless something new was typed meanwhile.
+			if (clearedAtSend && latestText.current === "") {
+				latestText.current = text;
+				setText(text);
+			}
 			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }

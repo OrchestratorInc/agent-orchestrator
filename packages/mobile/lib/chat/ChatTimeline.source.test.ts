@@ -36,7 +36,7 @@ describe("chat turn summary styling", () => {
 
 	it("folds a settled turn's work behind the Worked for row and keeps its state above the list", () => {
 		expect(source).toContain("partitionTurnItems(items, group.turn)");
-		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room }), [editDraft, edits, openWorked, room, roomKey]);");
+		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room, roomItem }), [editDraft, edits, openWorked, room, roomItem, roomKey]);");
 		expect(source).toContain("extraData={rowState}");
 		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
@@ -92,9 +92,11 @@ describe("a sent message", () => {
 	// so what fills it in (Thinking, Working, tools, the reply, its fold) moves
 	// nothing; only a reply that outgrows the room scrolls the list.
 	it("holds room below its turn while it is the newest row", () => {
-		expect(source).toContain("const roomKey = anchorFound && anchorIndex === groups.length - 1 ? groups[anchorIndex].key : undefined;");
+		expect(source).toContain("const roomKey = sent && sent.index === groups.length - 1 ? groups[sent.index].key : undefined;");
 		expect(source).toContain("room={group.key === roomKey ? room : undefined}");
-		expect(source).toContain("const roomStyle = room ? { minHeight: room } : undefined;");
+		expect(source).toContain("const roomStyle = room ? { minHeight: roomOffset + room } : undefined;");
+		// Three quarters of the way up, not all the way.
+		expect(source).toContain("share: SENT_ROOM_SHARE");
 		expect(source.match(/<View style=\{roomStyle\}>/g)).toHaveLength(3);
 	});
 
@@ -108,8 +110,23 @@ describe("a sent message", () => {
 	// jump, and the old follow once the keyboard stopped snapped. The move is
 	// one native animated scroll from where the list really is, made once the
 	// keyboard has closed, and follows wait for it to end.
+	// Shown the moment it is sent, drawn from the send, until the conversation
+	// has it; a steer joins the running turn and its room starts at the steer.
+	it("shows at once, and a steer gets room below it inside the running turn", () => {
+		expect(source).toContain("const optimistic = optimisticSentItem(anchor, newestSequence(snapshot.items));");
+		expect(source).toContain("if (!anchor?.text || readable.some((item) => isSentItem(item, anchor.after))) return readable;");
+		expect(source).toContain("? <View key={row.key} onLayout={placeRoom(row.items[0].id)}>{renderItem(row.items[0])}</View>");
+		expect(source).toContain("if (room && roomItem && placedItem === roomItem) onRoomPlaced?.();");
+	});
+
+	// The send button closes the keyboard: the room is laid out for none.
+	it("lays the room out for the keyboard left after the send", () => {
+		expect(source).toContain("keyboard: keyboardMoving.value && !keyboardOpening.value ? 0 : keyboardInset.current");
+	});
+
 	it("moves to it in one native animated scroll after the keyboard closes", () => {
-		expect(source).toContain("sendScroll.current.pending = true;\n\t\trequestAnimationFrame(followTail);");
+		expect(source).toContain("sendScroll.current.awaiting = anchorFound;");
+		expect(source).toContain("send.awaiting = undefined;\n\t\tsend.pending = true;");
 		expect(source).toContain("scrollToLatest(true, true);");
 		expect(source).toContain("if (viewportHeight.current && !native) glide.place(endOffset());");
 		expect(source).toContain("if (sendScroll.current.pending) followToLatest();\n\t\telse scrollToLatest(false);");
@@ -235,7 +252,7 @@ describe("jump to latest", () => {
 	// followed. It must not count against coming to rest at the end, and a
 	// follow that resumes catches up on it.
 	it("keeps the release's verdict through Android's still momentum and catches up when the follow resumes", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; endSendScroll(); }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; sendScroll.current.awaiting = undefined; endSendScroll(); }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);");
 		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);\n\t};");
@@ -452,7 +469,7 @@ describe("state in words", () => {
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");
-		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room }), [editDraft, edits, openWorked, room, roomKey]);");
+		expect(source).toContain("const rowState = useMemo(() => ({ openWorked, edits, editDraft, roomKey, room, roomItem }), [editDraft, edits, openWorked, room, roomItem, roomKey]);");
 	});
 });
 
@@ -474,7 +491,7 @@ describe("following the newest message", () => {
 	});
 
 	it("stops following on the person's own drag and resumes only at rest at the end", () => {
-		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; endSendScroll(); }}");
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; glide.stop(); sendScroll.current.pending = false; sendScroll.current.awaiting = undefined; endSendScroll(); }}");
 		expect(source).toContain("onScrollEndDrag={(event) => settle(event, true)}");
 		expect(source).toContain("onMomentumScrollEnd={settle}");
 		expect(source).toContain("if (!dragging.current && resting) followsTail.current = true;");
