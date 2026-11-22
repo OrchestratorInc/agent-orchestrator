@@ -148,6 +148,8 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	AGENT_SWITCH_FAILED,
 	// The new chat page could not create the session this brief would start.
 	"TASK_CREATE_FAILED",
+	// An archived chat could not be restored, so its message was never sent.
+	"SESSION_RESTORE_FAILED",
 	"CHAT_FILE_REFERENCE_INVALID", "CHAT_ANNOTATION_LIMIT", "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",

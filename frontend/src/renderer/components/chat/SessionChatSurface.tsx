@@ -385,6 +385,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
+	// An archived chat has no agent until a message restores it; meanwhile its bar
+	// shows the saved settings too, as a sleeping one does.
+	const archivedAgent = !sessionIsActive(session) && snapshot?.harness === session.provider && snapshot.controller?.state === "stopped";
+	const savedSettingsOnly = waking || archivedAgent;
 	const controllerCatalogsEnabled = !hostUnreachable && targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
 	const configOptions = useConversationConfigOptions(
 		session.id,
@@ -610,7 +614,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		const word = reveal.text.trim();
 		if (word && reveal.find) openFind({ id: crypto.randomUUID(), query: word, messageId: reveal.messageId });
 	}, [conversationShown, heldReveal, navigateToAnnotation, openFind, uiSessionId]);
-	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
+	const settingsLoading = savedSettingsOnly || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
 	// The model the running agent reports, kept so this chat names it at once the next time it loads.
 	const liveModel = settingsLoading || !targetChatControllerReady || controllerTransitioning ? undefined
 		: providerOptions.find((option) => option.category === "model" || option.id === "model")?.currentValue ?? snapshot?.settings?.model;
@@ -641,7 +645,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 
 	// Until the agent's own settings arrive the bar shows the saved ones, disabled. With
 	// none saved yet it waits, so defaults never pass for the chat's own.
-	const settingsReady = Boolean(renderSnapshot) && !optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
+	const settingsReady = Boolean(renderSnapshot) && !optimisticChat && (targetChatControllerReady || agentResuming || savedSettingsOnly) &&
 		(!settingsLoading || Boolean(renderSnapshot?.settings?.model || renderSnapshot?.settings?.approvalMode));
 	// The session's own settings have taken over; a later restart must not bring the launch chips back.
 	useEffect(() => {
@@ -933,7 +937,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				filePathsTruncated={truncated}
 				filePathsLoading={filePathsLoading}
 				localEchos={localEchos}
-				onStageAttachments={stageAttachments}
+				// An archived session's worktree is gone until the restore its first message
+				// runs, so files are taken once it is back, as an archived Cloud chat does.
+				onStageAttachments={sessionIsActive(session) ? stageAttachments : undefined}
 				nativeImages={can(renderSnapshot, "images")}
 				// Gated on what the daemon advertises, so the control is never drawn for a
 				// harness that cannot steer. The refusal check stays as a backstop: it
