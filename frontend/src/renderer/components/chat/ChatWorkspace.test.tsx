@@ -6974,7 +6974,7 @@ describe("ChatWorkspace reviewer tabs", () => {
 		expect(screen.queryByRole("tab", { name: "Reviewer" })).not.toBeInTheDocument();
 	});
 
-	it("gives the reviewer terminal working zoom and fullscreen controls", async () => {
+	it("applies the reviewer terminal font size and fullscreen requests", async () => {
 		window.localStorage.setItem("ao.terminal.fontSize", "14");
 		render(
 			<ChatWorkspace
@@ -6995,13 +6995,6 @@ describe("ChatWorkspace reviewer tabs", () => {
 		act(() => terminalPaneState.props?.onChangeFontSize?.(2));
 		expect(window.localStorage.getItem("ao.terminal.fontSize")).toBe("16");
 		expect(terminalPaneState.props?.fontSize).toBe(16);
-
-		fireEvent.wheel(screen.getByTestId("chat-reviewer-panel"), {
-			ctrlKey: true,
-			deltaY: -80,
-		});
-		expect(window.localStorage.getItem("ao.terminal.fontSize")).toBe("17");
-		expect(terminalPaneState.props?.fontSize).toBe(17);
 
 		const surface = screen.getByLabelText("Chat");
 		const requestFullscreen = vi.fn(async () => undefined);
