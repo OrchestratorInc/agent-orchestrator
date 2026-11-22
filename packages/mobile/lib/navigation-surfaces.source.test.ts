@@ -36,7 +36,7 @@ describe("navigation surfaces", () => {
 		const sidebar = source("./sidebar/Sidebar.tsx");
 		expect(sidebar).toContain('label="Pull requests" onPress={() => go("/prs")}');
 		expect(sidebar).toContain('label="Notifications" onPress={() => go("/notifications")}');
-		expect(sidebar).toContain('label="All workers" onPress={() => go("/board")}');
+		expect(sidebar).toContain('label="Artifacts" onPress={() => go("/artifacts")}');
 		expect(sidebar).toContain('onSettings={() => go("/settings")}');
 		expect(sidebar).toContain("router.navigate(href)");
 		expect(source("./BoardHeaderItems.tsx")).not.toContain("router.");

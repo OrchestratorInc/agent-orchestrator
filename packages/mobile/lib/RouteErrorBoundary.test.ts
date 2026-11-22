@@ -19,6 +19,7 @@ const screenRoutes = [
 	"artifact/[sessionId].tsx",
 	"artifact-version/[sessionId].tsx",
 	"artifacts/[sessionId].tsx",
+	"artifacts/index.tsx",
 	"connect.tsx",
 	"conversation-actions.tsx",
 	"files/[sessionId]/file.tsx",

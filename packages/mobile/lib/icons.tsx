@@ -86,6 +86,7 @@ import ChevronRight from "lucide-react-native/icons/chevron-right";
 import ChevronDown from "lucide-react-native/icons/chevron-down";
 import ChevronUp from "lucide-react-native/icons/chevron-up";
 import Tag from "lucide-react-native/icons/tag";
+import Package from "lucide-react-native/icons/package";
 import User from "lucide-react-native/icons/user";
 import CircleX from "lucide-react-native/icons/circle-x";
 import Info from "lucide-react-native/icons/info";
@@ -177,6 +178,7 @@ export const glyphs = {
 	"play": Play,
 	"plus": Plus,
 	"tag": Tag,
+	"package": Package,
 	"user": User,
 	"x-circle": CircleX,
 	"info": Info,

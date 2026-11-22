@@ -148,7 +148,7 @@ function useSidebarPrefs() {
  * `home` is the app's main view: Sessions (agents with no project) and Projects
  * with their sessions, a header with the sidebar button and Search, and New
  * chat floating at the bottom right. `drawer` is the side bar that slides in
- * from the left with the rest: Pull requests, All workers, Notifications,
+ * from the left with the rest: Pull requests, Artifacts, Notifications,
  * Pinned, and the footer with the account, machines and Settings. Both read
  * the same rows and run the same actions.
  */
@@ -462,7 +462,7 @@ export function Sidebar({ part, close }: { part: "home" | "drawer"; close?: () =
 				</View>
 				<View style={styles.fixed}>
 					<NavRow icon="git-pull-request" label="Pull requests" onPress={() => go("/prs")} styles={styles} colors={colors} active={pathname.startsWith("/prs")} />
-					<NavRow icon="layout-grid" label="All workers" onPress={() => go("/board")} styles={styles} colors={colors} disabled={!paired} />
+					<NavRow icon="package" label="Artifacts" onPress={() => go("/artifacts")} styles={styles} colors={colors} active={pathname === "/artifacts"} disabled={!paired} />
 					<NavRow icon="bell" label="Notifications" onPress={() => go("/notifications")} styles={styles} colors={colors} active={pathname.startsWith("/notifications")} trailing={unread > 0 ? String(unread) : undefined} />
 				</View>
 				<ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} onLayout={onListLayout}>
