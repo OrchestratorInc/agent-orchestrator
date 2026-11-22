@@ -24,7 +24,7 @@ function workerTurn(reply: string): ConversationSnapshot {
 }
 
 function afterYourReply() {
-	act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") } }));
+	act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, handledAt: { ":project-a": Date.parse("2026-11-08T09:59:00Z") } }));
 	const hook = setup(orchestrator("active", "2026-11-08T10:05:00Z"));
 	expect(hook.result.current).toBeNull();
 	return hook;
@@ -41,7 +41,7 @@ describe("useOrchestratorReplyState", () => {
 	beforeEach(() => {
 		fetchRecentConversation.mockReset();
 		window.localStorage.clear();
-		act(() => useOrchestratorReplyStore.setState({ replyAt: {}, seenAt: {} }));
+		act(() => useOrchestratorReplyStore.setState({ replyAt: {}, seenAt: {}, handledAt: {} }));
 	});
 
 	it("marks a reply unread when a working orchestrator settles", () => {
@@ -136,10 +136,33 @@ describe("useOrchestratorReplyState", () => {
 		const missed = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:01:00Z" }) as WorkspaceSession;
 		const hook = setup(missed("active", "2026-11-08T10:05:00Z"));
 		hook.rerender({ orchestrator: missed("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalled());
 		await act(async () => {});
 		expect(hook.result.current).toBeNull();
-		hook.rerender({ orchestrator: missed("active", "2026-11-08T10:06:00Z"), viewing: false, projectId: "project-a" });
-		expect(hook.result.current).toBeNull();
+	});
+
+	it("shows working for the user's queued message after a background turn they watched settle", () => {
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, handledAt: { ":project-a": Date.parse("2026-11-08T09:59:00Z") } }));
+		const sent = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:05:10Z" }) as WorkspaceSession;
+		const hook = setup(orchestrator("idle", "2026-11-08T10:04:00Z"), true);
+		hook.rerender({ orchestrator: orchestrator("active", "2026-11-08T10:05:00Z"), viewing: true, projectId: "project-a" });
+		hook.rerender({ orchestrator: sent("active", "2026-11-08T10:05:10Z"), viewing: true, projectId: "project-a" });
+		hook.rerender({ orchestrator: sent("idle", "2026-11-08T10:05:30Z"), viewing: true, projectId: "project-a" });
+		hook.rerender({ orchestrator: sent("active", "2026-11-08T10:05:31Z"), viewing: true, projectId: "project-a" });
+		hook.rerender({ orchestrator: sent("active", "2026-11-08T10:05:40Z"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBe("working");
+	});
+
+	it("leaves a queued message pending when a button mounted after the work began", async () => {
+		fetchRecentConversation.mockResolvedValue(workerTurn("Noted."));
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, handledAt: { ":project-a": Date.parse("2026-11-08T09:59:00Z") } }));
+		const sent = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:05:00Z" }) as WorkspaceSession;
+		const hook = setup(sent("active", "2026-11-08T10:05:03Z"));
+		hook.rerender({ orchestrator: sent("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalled());
+		await act(async () => {});
+		hook.rerender({ orchestrator: sent("active", "2026-11-08T10:05:31Z"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBe("working");
 	});
 
 	it("lights up when the user's own turn settles", async () => {
@@ -344,6 +367,7 @@ describe("useOrchestratorReplyState", () => {
 		expect(JSON.parse(window.localStorage.getItem("ao.orchestrator.replies") ?? "{}")).toEqual({
 			replyAt: { ":project-a": 5 },
 			seenAt: {},
+			handledAt: {},
 		});
 	});
 });

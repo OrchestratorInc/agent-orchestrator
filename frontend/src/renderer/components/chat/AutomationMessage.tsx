@@ -480,7 +480,7 @@ function NoticeLine({ notice }: { notice: AutomationNotice }) {
 export function ReplacedNotice({ open, onOpenChange, children }: { open: boolean; onOpenChange: (open: boolean) => void; children: ReactNode }) {
 	const { t } = useTranslation();
 	return (
-		<div className="min-w-0" data-testid="automation-notice">
+		<div className="min-w-0" data-testid="replaced-notice">
 			<Pressable
 				aria-expanded={open}
 				onClick={() => onOpenChange(!open)}
