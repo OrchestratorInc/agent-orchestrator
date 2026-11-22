@@ -63,5 +63,9 @@ describe("turnFileOpenPath", () => {
 		const hints = { byBase: new Map([["workspace-test.txt", `${cwd}/alpha/workspace-test.txt`]]), cwd };
 		expect(turnFileOpenPath("beta/workspace-test.txt", hints)).toBe("beta/workspace-test.txt");
 		expect(resolveTurnFilePath("beta/workspace-test.txt", hints)).toBe(`${cwd}/beta/workspace-test.txt`);
+		expect(turnFileOpenPath("./beta/workspace-test.txt", hints)).toBe("beta/workspace-test.txt");
+		expect(resolveTurnFilePath("./beta/workspace-test.txt", hints)).toBe(`${cwd}/beta/workspace-test.txt`);
+		expect(turnFileOpenPath("./workspace-test.txt", hints)).toBe("alpha/workspace-test.txt");
+		expect(resolveTurnFilePath("./workspace-test.txt", hints)).toBe(`${cwd}/alpha/workspace-test.txt`);
 	});
 });

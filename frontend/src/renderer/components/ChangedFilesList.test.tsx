@@ -11,6 +11,8 @@ describe("ChangedFilesList", () => {
 		render(<ChangedFilesList files={[file("src/b.ts", "modified", 2, 1), file("README.md", "added", 4, 0)]} id="l" onOpenAll={() => {}} onOpenFile={onOpenFile} />);
 		const rows = screen.getAllByRole("listitem");
 		expect(rows.map((row) => row.textContent)).toEqual(["README.md+4A, added", "src/b.ts+2−1M, modified", "View all changes"]);
+		expect(screen.getByText("src/")).toHaveClass("truncate");
+		expect(screen.getByText("b.ts")).toHaveClass("shrink-0");
 		await userEvent.click(screen.getByRole("button", { name: /b\.ts/ }));
 		expect(onOpenFile).toHaveBeenCalledWith("src/b.ts");
 	});
@@ -23,7 +25,7 @@ describe("ChangedFilesList", () => {
 		];
 		render(<ChangedFilesList files={files} id="l" onOpenAll={() => {}} />);
 		for (const path of ["alpha/workspace-test.txt", "beta/workspace-test.txt", "alpha/new-name.txt"]) {
-			expect(screen.getByText(path)).toBeInTheDocument();
+			expect(screen.getAllByRole("listitem").some((row) => row.textContent?.includes(path))).toBe(true);
 		}
 		expect(screen.getByRole("button", { name: /alpha\/new-name\.txt/ })).toHaveAttribute("title", "alpha/old-name.txt → alpha/new-name.txt");
 	});

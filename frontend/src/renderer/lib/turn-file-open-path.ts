@@ -47,11 +47,11 @@ export function turnPathHints(items: ConversationItem[] | undefined): TurnPathHi
 /** Prefer an absolute path from the turn; otherwise join the worktree cwd. */
 export function resolveTurnFilePath(path: string, hints: TurnPathHints): string {
 	if (looksAbsolutePath(path)) return path;
-	const fromBasename = path === fileBasename(path) ? hints.byBase.get(path) : undefined;
+	const normalized = path.replace(/^\.\//, "");
+	const fromBasename = normalized === fileBasename(normalized) ? hints.byBase.get(normalized) : undefined;
 	if (fromBasename) return fromBasename;
 	if (hints.cwd) {
-		const rel = path.replace(/^\.\//, "");
-		return `${hints.cwd.replace(/\/$/, "")}/${rel}`;
+		return `${hints.cwd.replace(/\/$/, "")}/${normalized}`;
 	}
 	return path;
 }

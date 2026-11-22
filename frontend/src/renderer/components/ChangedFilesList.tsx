@@ -48,6 +48,7 @@ export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
 				const mark = statusMark[file.status] ?? statusMark.modified;
 				const slash = file.path.lastIndexOf("/");
 				const name = file.path.slice(slash + 1);
+				const dir = slash < 0 ? "" : file.path.slice(0, slash + 1);
 				return (
 					<li className="min-w-0" key={file.path}>
 						<button
@@ -57,7 +58,10 @@ export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
 							type="button"
 						>
 							<WorkspaceEntryIcon className="size-icon-2xs" kind="file" name={name} />
-							<span className="min-w-0 flex-1 truncate text-foreground">{file.path}</span>
+							<span className="flex min-w-0 flex-1">
+								{dir ? <span className="min-w-0 truncate text-passive">{dir}</span> : null}
+								<span className="max-w-full shrink-0 truncate text-foreground">{name}</span>
+							</span>
 							<ChangeCounts additions={file.additions ?? 0} deletions={file.deletions ?? 0} className="text-micro" />
 							<span aria-hidden="true" className={cn("w-3 shrink-0 text-center font-mono text-micro font-semibold", mark.className)}>{mark.letter}</span>
 							<span className="sr-only">, {t(`inspector.git.fileStatus.${mark.key}`)}</span>
