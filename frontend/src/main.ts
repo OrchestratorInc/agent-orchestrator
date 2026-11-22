@@ -2409,7 +2409,9 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 	let replacementKeepAlive: boolean | undefined;
 	// On Windows a listener that accepts but never answers must not cost three
 	// serial 2s timeouts and then be mistaken for an absent daemon. Keep the
-	// timeout fact separate from a refused connection or invalid response.
+	// timeout fact separate from a refused connection or invalid response. Only
+	// the port the new daemon would bind can block spawning; a stale run-file
+	// port may time out while the configured port is free.
 	let timedOutProbe: { port: number; endpoint: "healthz" | "readyz" } | null = null;
 	const timedOutEndpoints = new Set<string>();
 	const startupProbe: DaemonProber = process.platform === "win32"
@@ -2417,7 +2419,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 			const key = `${port}/${endpoint}`;
 			if (timedOutEndpoints.has(key)) return Promise.resolve(null);
 			return readDaemonProbe(port, endpoint, () => {
-				timedOutProbe ??= { port, endpoint };
+				if (port === resolvedDaemonPort()) timedOutProbe ??= { port, endpoint };
 				timedOutEndpoints.add(key);
 			});
 		}

@@ -270,6 +270,27 @@ describe("main.ts daemon lifecycle wiring with controlled I/O", () => {
 		expect(h.spawn).not.toHaveBeenCalled();
 	});
 
+	it("spawns when a stale run-file port times out but the expected port is free", async () => {
+		const h = setup("win32");
+		h.setMarker(JSON.stringify({ pid: 42, port: 4000, owner: "app", appRunId: "previous-app" }));
+		h.inspect.mockImplementation(async (_launch, probe) => {
+			await probe!(4000, "healthz");
+			return null;
+		});
+		h.direct.mockImplementation((deps) => resolveDaemonFromPort(deps!));
+		h.probe.mockImplementation((port, _endpoint, onTimeout) => port === 4000
+			? new Promise((resolve) => { setTimeout(() => { onTimeout?.(); resolve(null); }, 2_000); })
+			: Promise.resolve(null));
+		const starting = h.start();
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(2_000);
+		await starting;
+		expect(h.probe.mock.calls.map(([port]) => port)).toEqual([4000, 3001, 3001]);
+		expect(h.replace).not.toHaveBeenCalled();
+		expect(h.spawn).toHaveBeenCalledOnce();
+		expect(h.status()).toMatchObject({ state: "starting" });
+	});
+
 	it("finishes replacing a live daemon after a different run-file port times out", async () => {
 		const h = setup("win32");
 		h.setMarker(JSON.stringify({ pid: 42, port: 3001, owner: "app", appRunId: "previous-app" }));
