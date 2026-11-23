@@ -291,7 +291,7 @@ func newConnectorConnectCommand(ctx *commandContext) *cobra.Command {
 				if err := ctx.getJSON(waitCtx, path, &current); err != nil {
 					return err
 				}
-				if current.Connector.SignedIn {
+				if current.Connector.SignedIn && current.Connector.Status != "needs_signin" {
 					return printConnectorStatus(out, &current.Connector)
 				}
 				if detail := current.Connector.StatusDetail; detail != nil && detail.Step == "sign-in" && detail.Error != "" {

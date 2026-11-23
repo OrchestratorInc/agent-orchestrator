@@ -284,15 +284,16 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 			return match
 		})
 	}
-	fill := func(source map[string]string) map[string]string {
+	fill := func(source map[string]string, asked string) map[string]string {
 		out := make(map[string]string, len(source))
 		for name, value := range source {
-			if value == "" {
-				if value = typed[name]; value == "" {
-					needs = append(needs, name)
-				}
-			} else {
+			switch {
+			case value != "":
 				value = expand(value)
+			case name != asked:
+				continue
+			default:
+				needs = append(needs, name)
 			}
 			out[name] = value
 		}
@@ -312,11 +313,11 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 				headers["Authorization"] = "Bearer " + token
 			}
 		}
-		if in.Headers = fill(headers); len(in.Headers) > 0 {
+		if in.Headers = fill(headers, "Authorization"); len(in.Headers) > 0 {
 			in.Auth = AuthHeader
 		}
 	case f.def.Command != "" && (kind == "" || kind == "stdio"):
-		in.Transport, in.Command, in.Env = TransportStdio, expand(f.def.Command), fill(f.def.Env)
+		in.Transport, in.Command, in.Env = TransportStdio, expand(f.def.Command), fill(f.def.Env, "")
 		for _, arg := range f.def.Args {
 			in.Args = append(in.Args, expand(arg))
 		}

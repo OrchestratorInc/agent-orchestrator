@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -255,5 +256,30 @@ func TestRelaySendsANotificationBeforeTheRequestThatFollowsIt(t *testing.T) {
 	defer mu.Unlock()
 	if len(order) != 2 || order[0] != "notifications/initialized" || order[1] != "tools/list" {
 		t.Fatalf("the server got %v", order)
+	}
+}
+
+func TestRelayGivesOneAnswerWhenTheStreamBreaksAfterTheResult(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"tools\":[]}}\n\n")
+		w.(http.Flusher).Flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer upstream.Close()
+	relayIn, agentOut := io.Pipe()
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- Relay(context.Background(), relayIn, &out, upstream.URL, "") }()
+	_, _ = io.WriteString(agentOut, `{"jsonrpc":"2.0","id":7,"method":"tools/list"}`+"\n")
+	_ = agentOut.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(out.String(), `"id":7`); got != 1 || strings.Contains(out.String(), `"error"`) {
+		t.Fatalf("answers for one request = %d: %s", got, out.String())
 	}
 }

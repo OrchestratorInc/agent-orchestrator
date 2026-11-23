@@ -78,7 +78,7 @@ func TestASessionCallsAToolThroughTheProxy(t *testing.T) {
 	if _, err := svc.Create(ctx, Input{Name: "context7", Transport: TransportHTTP, URL: "https://c7.example/mcp"}); err != nil {
 		t.Fatal(err)
 	}
-	servers := svc.ForSession(ctx, SessionInput{SessionID: "ao-12", ProjectID: "demo", Native: map[string]bool{"context7": true}})
+	servers := svc.ForSession(ctx, SessionInput{SessionID: "ao-12", ProjectID: "demo", Native: func() map[string]bool { return map[string]bool{"context7": true} }})
 	if len(servers) != 2 || servers[0].Name != "fake" || servers[0].Type != "http" || servers[1].Name != "local" || servers[1].Type != "stdio" ||
 		servers[1].Command != "" || len(servers[1].Env) != 0 || !strings.HasSuffix(servers[1].URL, "/mcp/s/ao-12/connectors/local/launch") {
 		t.Fatalf("servers = %+v", servers)
@@ -374,5 +374,31 @@ func TestARefusedRequestThatIsNotACallGetsNoMessageBody(t *testing.T) {
 		if resp.StatusCode != http.StatusMethodNotAllowed || len(body) != 0 || resp.Header.Get("WWW-Authenticate") != "" {
 			t.Fatalf("%s of a connector that needs sign-in = %d %q", method, resp.StatusCode, body)
 		}
+	}
+}
+
+func TestTheAgentsOwnConfigurationIsReadOnlyWhenAConnectorCouldClash(t *testing.T) {
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	reads := 0
+	native := func() map[string]bool {
+		reads++
+		return map[string]bool{"docs": true}
+	}
+	if got := svc.ForSession(ctx, SessionInput{SessionID: "ao-1", ProjectID: "demo", Native: native}); len(got) != 0 || reads != 0 {
+		t.Fatalf("without a connector: %+v, reads %d", got, reads)
+	}
+	for _, name := range []string{"docs", "wiki", "elsewhere"} {
+		in := Input{Name: name, Transport: TransportHTTP, URL: "https://" + name + ".example.com/mcp"}
+		if name == "elsewhere" {
+			in.ProjectID = "other"
+		}
+		if _, err := svc.Create(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := svc.ForSession(ctx, SessionInput{SessionID: "ao-1", ProjectID: "demo", Native: native})
+	if len(got) != 1 || got[0].Name != "wiki" || reads != 1 {
+		t.Fatalf("with connectors: %+v, reads %d", got, reads)
 	}
 }

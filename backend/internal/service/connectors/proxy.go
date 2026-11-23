@@ -40,7 +40,7 @@ const (
 type SessionInput struct {
 	SessionID string
 	ProjectID string
-	Native    map[string]bool
+	Native    func() map[string]bool
 }
 
 // SessionConnector is one connector a session got, with its use in that session.
@@ -87,9 +87,16 @@ func (s *Service) ForSession(ctx context.Context, in SessionInput) []ports.ChatM
 		s.sessions[in.SessionID] = use
 	}
 	use.keys, use.issued = use.keys[:0], s.now()
+	var native map[string]bool
 	for i := range s.records {
 		rec := &s.records[i]
-		if !rec.Enabled || (rec.ProjectID != "" && rec.ProjectID != in.ProjectID) || in.Native[rec.Key] {
+		if !rec.Enabled || (rec.ProjectID != "" && rec.ProjectID != in.ProjectID) {
+			continue
+		}
+		if native == nil && in.Native != nil {
+			native = in.Native()
+		}
+		if native[rec.Key] {
 			continue
 		}
 		use.keys = append(use.keys, rec.Key)

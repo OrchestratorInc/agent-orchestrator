@@ -154,8 +154,8 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, target, authorizati
 }
 
 func (r *relay) pass(ctx context.Context, line []byte, msg mcpRequest) {
-	err := r.post(ctx, line, msg)
-	if err == nil || ctx.Err() != nil || len(msg.ID) == 0 || msg.Method == "" {
+	answered, err := r.post(ctx, line, msg)
+	if err == nil || answered || ctx.Err() != nil || len(msg.ID) == 0 || msg.Method == "" {
 		return
 	}
 	if body, encodeErr := json.Marshal(mcpResponse{JSONRPC: "2.0", ID: msg.ID, Error: &mcpError{Code: relayErrorCode, Message: err.Error()}}); encodeErr == nil {
@@ -211,7 +211,6 @@ func (r *relay) end() {
 	}
 }
 
-// restart opens a new session with the server after it dropped the one named lost.
 func (r *relay) restart(ctx context.Context, lost string) (err error) {
 	r.restarting.Lock()
 	defer r.restarting.Unlock()
@@ -253,21 +252,21 @@ func (r *relay) restart(ctx context.Context, lost string) (err error) {
 	return nil
 }
 
-func (r *relay) post(ctx context.Context, line []byte, msg mcpRequest) error {
+func (r *relay) post(ctx context.Context, line []byte, msg mcpRequest) (answered bool, err error) {
 	resp, session, err := r.send(ctx, line)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if resp.StatusCode == http.StatusNotFound && session != "" && msg.Method != "initialize" && r.restart(ctx, session) == nil {
 		_ = resp.Body.Close()
 		if resp, _, err = r.send(ctx, line); err != nil {
-			return err
+			return false, err
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= http.StatusBadRequest {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("the tool server answered %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return false, fmt.Errorf("the tool server answered %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	if id := resp.Header.Get("Mcp-Session-Id"); id != "" {
 		r.mu.Lock()
@@ -278,9 +277,9 @@ func (r *relay) post(ctx context.Context, line []byte, msg mcpRequest) error {
 	case "application/json":
 		body, err := io.ReadAll(io.LimitReader(resp.Body, maxRelayMessage))
 		if err != nil {
-			return err
+			return false, err
 		}
-		r.write(body, msg)
+		return r.write(body, msg), nil
 	case "text/event-stream":
 		scanner := bufio.NewScanner(resp.Body)
 		scanner.Buffer(make([]byte, 64<<10), maxRelayMessage)
@@ -288,33 +287,37 @@ func (r *relay) post(ctx context.Context, line []byte, msg mcpRequest) error {
 		for scanner.Scan() {
 			text := scanner.Bytes()
 			if len(text) == 0 {
-				r.write(data, msg)
+				answered = r.write(data, msg) || answered
 				data = nil
 			} else if value, ok := bytes.CutPrefix(text, []byte("data:")); ok {
 				data = append(append(data, bytes.TrimPrefix(value, []byte(" "))...), '\n')
 			}
 		}
-		r.write(data, msg)
-		return scanner.Err()
+		answered = r.write(data, msg) || answered
+		return answered, scanner.Err()
 	}
-	return nil
+	return false, nil
 }
 
-func (r *relay) write(body []byte, msg mcpRequest) {
+func (r *relay) write(body []byte, msg mcpRequest) (answered bool) {
 	var line bytes.Buffer
 	if len(bytes.TrimSpace(body)) == 0 || json.Compact(&line, body) != nil {
-		return
+		return false
 	}
 	var reply struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
 		Result struct {
 			ProtocolVersion string `json:"protocolVersion"`
 		} `json:"result"`
 	}
+	_ = json.Unmarshal(body, &reply)
 	line.WriteByte('\n')
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if msg.Method == "initialize" && json.Unmarshal(body, &reply) == nil && reply.Result.ProtocolVersion != "" {
+	if msg.Method == "initialize" && reply.Result.ProtocolVersion != "" {
 		r.version = reply.Result.ProtocolVersion
 	}
 	_, _ = r.out.Write(line.Bytes())
+	return len(msg.ID) > 0 && reply.Method == "" && bytes.Equal(bytes.TrimSpace(reply.ID), bytes.TrimSpace(msg.ID))
 }

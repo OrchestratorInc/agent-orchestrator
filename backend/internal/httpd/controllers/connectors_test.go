@@ -81,6 +81,10 @@ func TestConnectorRoutesHideStoredValues(t *testing.T) {
 		!strings.Contains(body, `"oauthClientId":"client-9"`) || !strings.Contains(body, `"name":"Own (work)"`) || !strings.Contains(body, `"auth":"oauth"`) {
 		t.Fatalf("an edit of the name only = %d %s", status, body)
 	}
+	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/own", `{"auth":"header","headers":{"Authorization":"Bearer hidden-value"}}`); status != http.StatusOK ||
+		!strings.Contains(body, `"auth":"header"`) || strings.Contains(body, `client-9`) {
+		t.Fatalf("an edit of the sign-in only = %d %s", status, body)
+	}
 	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/scoped", `{"enabled":false,"name":"Scoped v2"}`); status != http.StatusOK ||
 		!strings.Contains(body, `"enabled":false`) || !strings.Contains(body, `"name":"Scoped v2"`) || !strings.Contains(body, `/v2/mcp`) {
 		t.Fatalf("an edit of the name with a toggle = %d %s", status, body)
@@ -276,5 +280,33 @@ func TestConnectorProposalRoutesAddNothingBeforeApproval(t *testing.T) {
 	}
 	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", `{"name":"proposals","transport":"http","url":"https://x.example/mcp"}`); status != http.StatusBadRequest {
 		t.Fatalf("reserved key = %d %s", status, body)
+	}
+}
+
+func TestARemoteClientCannotTurnOnAConnectorThatRunsACommand(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	router := httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Connectors: connectors.New(t.TempDir(), "http://127.0.0.1:3001")}, httpd.ControlDeps{})
+	remote := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if remote {
+			r = r.WithContext(requestscope.WithLAN(r.Context()))
+		}
+		router.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", `{"name":"paper","transport":"stdio","command":"npx","enabled":false}`); status != http.StatusCreated {
+		t.Fatalf("create = %d %s", status, body)
+	}
+	remote = true
+	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/paper", `{"enabled":true}`); status != http.StatusForbidden || !strings.Contains(body, "CONNECTOR_COMMAND_LOOPBACK_REQUIRED") {
+		t.Fatalf("turn on from another machine = %d %s", status, body)
+	}
+	remote = false
+	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/paper", `{"enabled":true}`); status != http.StatusOK || !strings.Contains(body, `"enabled":true`) {
+		t.Fatalf("turn on from this machine = %d %s", status, body)
+	}
+	remote = true
+	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/paper", `{"enabled":false}`); status != http.StatusOK || !strings.Contains(body, `"enabled":false`) {
+		t.Fatalf("turn off from another machine = %d %s", status, body)
 	}
 }

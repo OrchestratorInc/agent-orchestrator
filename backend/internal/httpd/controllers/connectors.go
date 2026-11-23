@@ -322,21 +322,27 @@ func (c *ConnectorsController) update(w http.ResponseWriter, r *http.Request) {
 	ref := connectorRef(r)
 	var updated connectors.Connector
 	var err error
+	current, getErr := c.Svc.Get(r.Context(), ref)
+	if getErr != nil {
+		envelope.WriteError(w, r, getErr)
+		return
+	}
 	if req.Enabled != nil && reflect.DeepEqual(req, ConnectorRequest{Enabled: req.Enabled}) {
-		updated, err = c.Svc.SetEnabled(r.Context(), ref, *req.Enabled)
-	} else {
-		current, getErr := c.Svc.Get(r.Context(), ref)
-		if getErr != nil {
-			envelope.WriteError(w, r, getErr)
+		if *req.Enabled && rejectLANCommandConnector(w, r, string(current.Transport)) {
 			return
 		}
+		updated, err = c.Svc.SetEnabled(r.Context(), ref, *req.Enabled)
+	} else {
 		if rejectLANCommandConnector(w, r, req.Transport, string(current.Transport)) {
 			return
 		}
 		in := connectorInput(&req)
 		if in.Transport == "" {
 			in.Transport, in.URL, in.Auth = current.Transport, cmp.Or(in.URL, current.URL), cmp.Or(in.Auth, current.Auth)
-			in.Command, in.PresetID, in.OAuthClientID = cmp.Or(in.Command, current.Command), cmp.Or(in.PresetID, current.PresetID), cmp.Or(in.OAuthClientID, current.OwnClientID)
+			in.Command, in.PresetID = cmp.Or(in.Command, current.Command), cmp.Or(in.PresetID, current.PresetID)
+			if in.Auth == connectors.AuthOAuth {
+				in.OAuthClientID = cmp.Or(in.OAuthClientID, current.OwnClientID)
+			}
 			if in.Args == nil {
 				in.Args = current.Args
 			}

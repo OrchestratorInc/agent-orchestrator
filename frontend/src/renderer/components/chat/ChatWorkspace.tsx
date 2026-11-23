@@ -1926,6 +1926,7 @@ function ChatWorkspaceContent({
 		[
 			stableMcpServers,
 			uiSessionId,
+			activeRemoteHostId,
 			settingsReady,
 			settingsLocked,
 			settingsLoading,
@@ -7044,9 +7045,9 @@ function useStableCallback<Args extends unknown[], Result>(
 	return useCallback((...args: Args) => latest.current?.(...args), []);
 }
 
-/** Retain an unchanged JSON-shaped value across snapshot refreshes. */
 const NO_MCP_SERVERS: readonly McpServer[] = [];
 
+/** Retain an unchanged JSON-shaped value across snapshot refreshes. */
 function useStableValue<T>(value: T): T {
 	const previous = useRef(value);
 	if (!sameContent(previous.current, value)) previous.current = value;

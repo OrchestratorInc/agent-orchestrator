@@ -30,7 +30,7 @@ func sourceHome(t *testing.T) (home, project string) {
 		"mcpServers": {
 			"Linear": {"type": "http", "url": "https://mcp.linear.app/mcp?team=1"},
 			"old": {"type": "sse", "url": "https://sse.example.com/sse"},
-			"files": {"command": "npx", "args": ["-y", "files"], "env": {"ROOT": "/tmp", "TOKEN": "tok-${FILES_TOKEN}"}}
+			"files": {"command": "npx", "args": ["-y", "files"], "env": {"ROOT": "/tmp", "TOKEN": "tok-${FILES_TOKEN}", "DEBUG": ""}}
 		},
 		"projects": {"`+filepath.ToSlash(project)+`": {"mcpServers": {"scoped": {"command": "scoped-server"}, "off": {"command": "x"}},
 			"disabledMcpServers": ["off"], "enabledMcpjsonServers": ["repo"]}}
