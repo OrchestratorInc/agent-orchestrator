@@ -112,6 +112,13 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		if err != nil {
 			return err
 		}
+		// An agent can go idle while a command it started still runs in its
+		// terminal: a test run, a build, a dev server. Tearing the session down
+		// now would kill that command partway through. Defer as for an active
+		// agent; the next observation of the merged PR retries.
+		if done && m.completionWorkloadRunning(ctx, id) {
+			return nil
+		}
 		if done {
 			return m.terminateCompletedSession(ctx, id)
 		}
@@ -337,6 +344,31 @@ func (m *Manager) terminateCompletedSession(ctx context.Context, id domain.Sessi
 		return fmt.Errorf("terminate completed session %s: %w", id, err)
 	}
 	return nil
+}
+
+// completionWorkloadRunning reports whether the session's agent still runs a
+// command in its terminal. Only a proved count defers the teardown. A
+// terminator that cannot count, or a count that fails (because the agent has
+// already exited, for example), keeps the teardown going, so a probe error can
+// never hold a merged session open forever.
+func (m *Manager) completionWorkloadRunning(ctx context.Context, id domain.SessionID) bool {
+	m.mu.Lock()
+	terminator := m.completionTerminator
+	m.mu.Unlock()
+	inspector, ok := terminator.(sessionWorkloadInspector)
+	if !ok {
+		return false
+	}
+	commands, err := inspector.RunningWorkloadCommands(ctx, id)
+	if err != nil {
+		slog.Default().Debug("lifecycle: count running commands before merge teardown", "session", id, "err", err)
+		return false
+	}
+	if commands > 0 {
+		slog.Default().Info("lifecycle: merge teardown waits for running commands", "session", id, "commands", commands)
+		return true
+	}
+	return false
 }
 
 // sessionComplete reports whether the session has reached the multi-PR
