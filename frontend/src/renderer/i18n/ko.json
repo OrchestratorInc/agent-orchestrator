@@ -4806,7 +4806,7 @@
 	"automations.new.scratch": "처음부터 만들기",
 	"automations.noMatches": "일치하는 자동화가 없습니다",
 	"automations.clearFilters": "필터 지우기",
-	"automations.nextRunRelative": "{{day}} {{time}}",
+	"automations.relativeDayTime": "{{day}} {{time}}",
 	"automations.nextRunAt": "다음 실행 {{time}}",
 	"automations.runStatus.pending": "대기 중",
 	"automations.runStatus.spawning": "시작 중",

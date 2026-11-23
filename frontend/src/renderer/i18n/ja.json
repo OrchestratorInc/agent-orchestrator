@@ -4806,7 +4806,7 @@
 	"automations.new.scratch": "最初から作成",
 	"automations.noMatches": "一致するオートメーションはありません",
 	"automations.clearFilters": "フィルターをクリア",
-	"automations.nextRunRelative": "{{day}} {{time}}",
+	"automations.relativeDayTime": "{{day}} {{time}}",
 	"automations.nextRunAt": "次回 {{time}}",
 	"automations.runStatus.pending": "保留中",
 	"automations.runStatus.spawning": "起動中",

@@ -909,6 +909,36 @@ describe("AutomationsView", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("Could not pause");
 		await userEvent.click(within(details).getByRole("button", { name: "Close" }));
 		expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+		expect(row).toHaveFocus();
+	});
+
+	it("moves focus into the details when a narrow window hides the list", async () => {
+		mocks.automations = [{ id: "active", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", harness: "codex", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=30;BYSECOND=0", timezone: "UTC", enabled: true }];
+		const realStyle = window.getComputedStyle;
+		const style = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+			const computed = realStyle(element, pseudo);
+			if (element.classList.contains("@max-3xl/automations:hidden")) Object.defineProperty(computed, "display", { value: "none" });
+			return computed;
+		});
+		try {
+			renderView();
+			await userEvent.click(screen.getByRole("button", { name: "Show details for Morning triage" }));
+			expect(within(screen.getByRole("complementary", { name: "Morning triage" })).getByRole("button", { name: "Close" })).toHaveFocus();
+		} finally {
+			style.mockRestore();
+		}
+	});
+
+	it("does not reopen details for an automation a filter hid", async () => {
+		const base = { projectId: "demo", prompt: "Review", kind: "worker", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "UTC" };
+		mocks.automations = [{ ...base, id: "active", displayName: "Friday review", enabled: true }, { ...base, id: "paused", displayName: "Paused review", enabled: false }];
+		renderView();
+		await userEvent.click(screen.getByRole("button", { name: "Show details for Friday review" }));
+		const status = screen.getByRole("group", { name: "Status" });
+		await userEvent.click(within(status).getByRole("button", { name: "Paused 1" }));
+		expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+		await userEvent.click(within(status).getByRole("button", { name: "All 2" }));
+		expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
 	});
 
 	it("marks a failed latest run in the list and lists runs with durations in the details", async () => {

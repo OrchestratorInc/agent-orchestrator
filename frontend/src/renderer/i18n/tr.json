@@ -4867,7 +4867,7 @@
 	"automations.new.scratch": "Sıfırdan başlayın",
 	"automations.noMatches": "Eşleşen otomasyon yok",
 	"automations.clearFilters": "Filtreleri temizleyin",
-	"automations.nextRunRelative": "{{day}}, {{time}}",
+	"automations.relativeDayTime": "{{day}}, {{time}}",
 	"automations.nextRunAt": "Sonraki çalışma: {{time}}",
 	"automations.runStatus.pending": "Bekliyor",
 	"automations.runStatus.spawning": "Başlatılıyor",

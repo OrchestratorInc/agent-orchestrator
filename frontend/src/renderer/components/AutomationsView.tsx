@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { flushSync } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
@@ -98,16 +99,17 @@ const SORT_ORDERS: SortOrder[] = ["nextRun", "name", "created"];
 const FORM_CAPTION_CLASS = "text-xs font-medium text-muted-foreground";
 const TEMPLATE_ICONS = { daily_pr_review_v1: GitPullRequest, daily_issue_triage_v1: ListChecks, weekly_release_notes_v1: FileText };
 
-/** "Yesterday, 9:15 AM" to "Tomorrow, …", then "Mon, 9:00 AM" within the coming week and "Fri, Nov 13, 9:15 AM" otherwise. */
+/** "Yesterday, 9:15 AM" to "Tomorrow, …", then "Mon, 9:00 AM" within the coming week, "Fri, Nov 13, 9:15 AM" otherwise, and the year when it isn't this one. */
 function displayRelativeTime(date: Date, t: TFunction, locale?: string) {
 	const days = Math.round((new Date(date).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86_400_000);
 	if (Math.abs(days) <= 1) {
 		const day = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(days, "day");
 		const time = new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(date);
-		return t("automations.nextRunRelative", { day: day.charAt(0).toLocaleUpperCase(locale) + day.slice(1), time });
+		return t("automations.relativeDayTime", { day: day.charAt(0).toLocaleUpperCase(locale) + day.slice(1), time });
 	}
 	const withinWeek = days > 1 && days < 7;
-	return new Intl.DateTimeFormat(locale, { weekday: "short", ...(withinWeek ? {} : { month: "short", day: "numeric" }), hour: "numeric", minute: "2-digit" }).format(date);
+	const otherYear = date.getFullYear() !== new Date().getFullYear();
+	return new Intl.DateTimeFormat(locale, { weekday: "short", ...(withinWeek ? {} : { month: "short", day: "numeric" }), ...(otherYear ? { year: "numeric" } : {}), hour: "numeric", minute: "2-digit" }).format(date);
 }
 
 function timestamp(value?: string) {
@@ -195,6 +197,22 @@ export function AutomationsView() {
 	const hasAutomations = automations.length > 0;
 	// Details stay open only while their automation is in the visible list.
 	const selected = visibleAutomations.find((item) => item.id === selectedId);
+	// Forget a selection that left the list, so clearing a filter doesn't reopen it unasked.
+	useEffect(() => {
+		if (selectedId && !selected) setSelectedId(null);
+	}, [selectedId, selected]);
+	// Re-render when the day turns, so the rows' Today/Tomorrow labels stay true between refetches.
+	const [dayTick, setDayTick] = useState(0);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setDayTick((tick) => tick + 1), new Date().setHours(24, 0, 0, 0) - Date.now() + 1000);
+		return () => window.clearTimeout(timer);
+	}, [dayTick]);
+	// Closing the details hands focus back to the row that opened them.
+	function closeDetails() {
+		const id = selectedId;
+		flushSync(() => setSelectedId(null));
+		if (id) document.getElementById(automationRowId(id))?.focus();
+	}
 	async function toggle(item: Automation, enabled: boolean) {
 		setActionError(null);
 		try {
@@ -324,7 +342,7 @@ export function AutomationsView() {
 			</ScrollArea.Root>
 			{selected ? (
 				<AutomationDetails key={selected.id} item={selected} projectName={projectName(selected.projectId)} busy={update.isPending}
-					onClose={() => setSelectedId(null)} onEdit={() => setEditTarget(selected)} onDelete={() => setDeleteTarget(selected)} onToggle={(enabled) => toggle(selected, enabled)} />
+					onClose={closeDetails} onEdit={() => setEditTarget(selected)} onDelete={() => setDeleteTarget(selected)} onToggle={(enabled) => toggle(selected, enabled)} />
 			) : null}
 			</main>
 			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} busy={create.isPending} error={create.error?.message ?? null} onOpenChange={setCreateOpen} onSubmit={async (input) => { await create.mutateAsync(input as CreateAutomationInput); setCreateOpen(false); }} />
@@ -417,7 +435,7 @@ function AutomationRow({ item, projectName, selected, onSelect }: { item: Automa
 	const failed = item.enabled && item.latestRun?.status === "failed";
 	const failedAt = item.latestRun?.finishedAt ?? item.latestRun?.scheduledFor;
 	return <article>
-		<Pressable aria-label={t("automations.details.show", { name: item.displayName })} aria-expanded={selected} aria-controls={selected ? AUTOMATION_DETAILS_ID : undefined} onClick={onSelect}
+		<Pressable id={automationRowId(item.id)} aria-label={t("automations.details.show", { name: item.displayName })} aria-expanded={selected} aria-controls={selected ? AUTOMATION_DETAILS_ID : undefined} onClick={onSelect}
 			className={cn("flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2.5 text-start", selected ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
 			<StatusMark state={!item.enabled ? "paused" : failed ? "failed" : item.latestRun ? "ran" : "waiting"} />
 			<div className="min-w-0 flex-1">
@@ -440,6 +458,7 @@ function AutomationRow({ item, projectName, selected, onSelect }: { item: Automa
 }
 
 const AUTOMATION_DETAILS_ID = "automation-details";
+const automationRowId = (id: string) => `automation-row-${id}`;
 const DETAILS_WIDTH_VAR = "--automation-details-w";
 const DETAILS_DEFAULT_WIDTH_PX = 400;
 const DETAILS_MIN_WIDTH_PX = 340;
@@ -457,6 +476,12 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 	const locale = i18n.resolvedLanguage;
 	const scheduleLabel = useScheduleLabel();
 	const asideRef = useRef<HTMLElement>(null);
+	const closeRef = useRef<HTMLButtonElement>(null);
+	// A narrow window hides the list, and the row that had focus with it, so focus moves into the panel.
+	useEffect(() => {
+		const list = asideRef.current?.previousElementSibling;
+		if (list && window.getComputedStyle(list).display === "none") closeRef.current?.focus();
+	}, []);
 	const getResizeTargets = useCallback(() => [asideRef.current], []);
 	// At most DETAILS_MAX_WIDTH_PX, and never so wide that the list loses its minimum.
 	const maxWidth = useCallback(() => {
@@ -486,7 +511,7 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 	return (
 		// Beside the list when there is room, at the width its handle sets; in its place in a narrow window, closed with its X.
 		<aside ref={asideRef} id={AUTOMATION_DETAILS_ID} aria-label={item.displayName}
-			className="relative flex min-h-0 flex-1 flex-col @3xl/automations:w-(--automation-details-w) @3xl/automations:max-w-[calc(100%-480px)] @3xl/automations:flex-none @3xl/automations:border-s @3xl/automations:border-border">
+			className="relative flex min-h-0 flex-1 flex-col @3xl/automations:w-(--automation-details-w) @3xl/automations:max-w-[max(340px,calc(100%-480px))] @3xl/automations:flex-none @3xl/automations:border-s @3xl/automations:border-border">
 			<div className="min-h-0 flex-1 overflow-y-auto">
 			<div className="flex flex-col gap-6 p-4">
 				<header className="flex flex-col gap-3">
@@ -495,7 +520,7 @@ function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete,
 							<h2 className="truncate text-subtitle font-semibold leading-6 text-foreground">{item.displayName}</h2>
 							<p className="truncate text-xs text-muted-foreground">{projectName} · {item.harness ? agentLabel(item.harness) : t("automations.projectDefault")}</p>
 						</div>
-						<CloseButton aria-label={t("common.close")} onClick={onClose} />
+						<CloseButton ref={closeRef} aria-label={t("common.close")} onClick={onClose} />
 					</div>
 					<div className="flex items-center gap-1">
 						<Button type="button" size="sm" variant="secondary" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}>

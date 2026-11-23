@@ -4806,7 +4806,7 @@
 	"automations.new.scratch": "Ohne Vorlage beginnen",
 	"automations.noMatches": "Keine passenden Automationen",
 	"automations.clearFilters": "Filter zurücksetzen",
-	"automations.nextRunRelative": "{{day}}, {{time}}",
+	"automations.relativeDayTime": "{{day}}, {{time}}",
 	"automations.nextRunAt": "Nächste Ausführung {{time}}",
 	"automations.runStatus.pending": "Ausstehend",
 	"automations.runStatus.spawning": "Wird gestartet",

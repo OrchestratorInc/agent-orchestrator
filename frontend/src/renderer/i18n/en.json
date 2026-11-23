@@ -4867,7 +4867,7 @@
 	"automations.new.scratch": "Start from scratch",
 	"automations.noMatches": "No automations match",
 	"automations.clearFilters": "Clear filters",
-	"automations.nextRunRelative": "{{day}}, {{time}}",
+	"automations.relativeDayTime": "{{day}}, {{time}}",
 	"automations.nextRunAt": "Next run {{time}}",
 	"automations.runStatus.pending": "Pending",
 	"automations.runStatus.spawning": "Starting",

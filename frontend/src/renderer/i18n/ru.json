@@ -5058,7 +5058,7 @@
 	"automations.new.scratch": "Начать с нуля",
 	"automations.noMatches": "Нет подходящих автоматизаций",
 	"automations.clearFilters": "Сбросить фильтры",
-	"automations.nextRunRelative": "{{day}}, {{time}}",
+	"automations.relativeDayTime": "{{day}}, {{time}}",
 	"automations.nextRunAt": "Следующий запуск {{time}}",
 	"automations.runStatus.pending": "Ожидает",
 	"automations.runStatus.spawning": "Запускается",

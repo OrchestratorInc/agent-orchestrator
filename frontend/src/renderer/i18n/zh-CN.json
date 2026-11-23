@@ -4788,7 +4788,7 @@
 	"automations.new.scratch": "从头开始",
 	"automations.noMatches": "没有匹配的自动化",
 	"automations.clearFilters": "清除筛选",
-	"automations.nextRunRelative": "{{day}} {{time}}",
+	"automations.relativeDayTime": "{{day}} {{time}}",
 	"automations.nextRunAt": "下次运行 {{time}}",
 	"automations.runStatus.pending": "等待中",
 	"automations.runStatus.spawning": "启动中",
