@@ -35,7 +35,26 @@ func toContractKanbanSessionFacts(rec domain.SessionRecord, interrupted, signalC
 		AutoReview:        rec.AutoReviewEnabled,
 		AutoInjectReview:  rec.AutoInjectReview,
 		AutoInjectCI:      rec.AutoInjectCI,
+		DirectedAt:        latestDirectedAt(rec.Metadata),
 	}
+}
+
+// latestDirectedAt is the newest deliberate direction: a human prompt or a
+// message from another session, the same instant the sidebar's age shows.
+func latestDirectedAt(md domain.SessionMetadata) time.Time {
+	if md.LatestInteractionAt.After(md.LatestUserPromptAt) {
+		return md.LatestInteractionAt
+	}
+	return md.LatestUserPromptAt
+}
+
+// prSettledAt is when a merged or closed PR reached that state; zero while it
+// is open.
+func prSettledAt(pr domain.PRFacts) time.Time {
+	if !pr.Merged && !pr.Closed {
+		return time.Time{}
+	}
+	return pr.StateChangedAt
 }
 
 func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun) []contract.KanbanPRFacts {
@@ -67,6 +86,7 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 			Review:       pr.Review,
 			Mergeability: pr.Mergeability,
 			UpdatedAt:    pr.UpdatedAt,
+			SettledAt:    prSettledAt(pr),
 			ReviewRun:    byPR[pr.URL],
 			ExternalReview: contract.KanbanExternalReviewFacts{
 				Approved:         pr.ExternalApproved,
