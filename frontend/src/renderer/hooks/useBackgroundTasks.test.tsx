@@ -51,6 +51,22 @@ describe("background task queries", () => {
 		client.clear();
 	});
 
+	it("never presents a shell task's description as its command", async () => {
+		getMock.mockResolvedValue({ data: { sessionId: "s", availability: "ready", controllerGeneration: "g", tasks: [
+			{ id: "claude", kind: "shell", description: "Start the dev server", state: "running" },
+			{ id: "codex", kind: "shell", description: "npm run dev", command: "npm run dev", state: "running" },
+		] } });
+		function Commands() {
+			const { data } = useBackgroundTasks("s", true);
+			return <span>{data ? data.tasks.map((task) => `${task.id}:${task.command ?? "none"}`).join(",") : "loading"}</span>;
+		}
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Commands /></QueryClientProvider>);
+		expect(await screen.findByText("claude:none,codex:npm run dev")).toBeVisible();
+		view.unmount();
+		client.clear();
+	});
+
 	it.each([
 		["session", { status: "ok" }],
 		["session", { sessionId: "s", availability: "ready", tasks: null }],
