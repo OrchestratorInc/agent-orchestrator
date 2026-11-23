@@ -139,6 +139,7 @@ export type ReviewTarget = {
 
 /** A failed workspace read that keeps the daemon's error code, for callers that act on it. */
 export class WorkspaceRequestError extends Error {
+	readonly telemetryCode: string = "WORKSPACE_REQUEST_ERROR";
 	constructor(
 		message: string,
 		readonly code?: string,
@@ -346,7 +347,9 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|mmd|mermaid|txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|diff|patch|html?)$/i;
 
 /** A cloud artifact read refused because the access prefix expired or the user lost access. */
-export class CloudArtifactAccessError extends Error {}
+export class CloudArtifactAccessError extends Error {
+	readonly code: string = "CLOUD_ARTIFACT_ACCESS_ERROR";
+}
 
 // Artifact files live in the session's artifact directory, outside the git
 // workspace, so they have no diff/status and aren't reachable through the

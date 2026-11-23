@@ -437,6 +437,7 @@ export function ownMessageTurns(events: readonly CloudCpClientEvent[] | undefine
  * which leaves the queue with the steer.
  */
 export class AlreadyDeliveredError extends Error {
+	readonly code: string = "ALREADY_DELIVERED_ERROR";
 	constructor() {
 		super("Not deleted: the agent had already taken this message as a steer into its running turn, so it was delivered.");
 		this.name = "AlreadyDeliveredError";

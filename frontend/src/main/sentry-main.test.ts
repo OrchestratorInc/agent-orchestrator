@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
@@ -7,6 +9,8 @@ import type { ElectronMainOptions, ErrorEvent } from "@sentry/electron/main";
 import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
 import { DesktopTelemetryController } from "./desktop-telemetry-controller";
 import { clearMainSentryCache, createErrorBudget, ERROR_BUDGET_FILE, electronMainSentryDsn, initMainSentry, installInErrorSample, sanitizeRendererCapture } from "./sentry-main";
+
+const hashParts = (text: string) => ["sha256", createHash("sha256").update(text).digest("hex").slice(0, 10)];
 
 const sdkTransport = vi.hoisted(() => vi.fn());
 const sdk = vi.hoisted(() => ({
@@ -85,7 +89,7 @@ describe("Electron main Sentry configuration", () => {
 		random.mockReturnValue(0.99);
 		expect(options.sampleRate).toBe(1);
 		expect(beforeSend({ type: undefined, message: "ordinary main error" })).not.toBeNull();
-		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "error", exception: { type: "TypeError", frames: [] } });
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "", level: "error", exception: { type: "TypeError", frames: [] } });
 		expect(sdk.captureEvent).toHaveBeenCalledOnce();
 		expect(beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent)).not.toBeNull();
 		expect(beforeSend({ type: undefined, level: "fatal", message: "'renderer' process exited with 'crashed'" })).not.toBeNull();
@@ -101,7 +105,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(event)).not.toContain("/private/session");
 	});
 
-	it("reports handled main failures with fixed titles and no error text", async () => {
+	it("reports handled main failures with a scrubbed title", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		const secret = "/Users/dave/private-project";
@@ -111,10 +115,10 @@ describe("Electron main Sentry configuration", () => {
 		expect(sdk.captureEvent).toHaveBeenCalledTimes(2);
 		const first = beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent);
 		expect(first).toMatchObject({
-			message: "Electron main daemon failure (exited)",
-			fingerprint: ["electron", "handled", "daemon", "exited", "electron-main"],
+			message: "spawn <path>",
+			fingerprint: ["electron", "handled", "daemon", "exited", "electron-main", ...hashParts("spawn <path>")],
 			tags: { surface: "electron-main", kind: "handled", category: "daemon", reason: "exited", detail: "signal:SIGKILL" },
-			exception: { values: [{ type: "TypeError", value: "Electron main daemon failure (exited)" }] },
+			exception: { values: [{ type: "TypeError", value: "spawn <path> (in electron-main, daemon/exited)" }] },
 		});
 		const second = beforeSend(sdk.captureEvent.mock.calls[1]?.[0] as ErrorEvent);
 		expect(second?.tags).not.toHaveProperty("detail");
@@ -124,9 +128,9 @@ describe("Electron main Sentry configuration", () => {
 	it("scrubs side-chat recovery faults before the SDK sends them", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
-		transport.captureMain?.({ category: "side_chat", reason: "recovery", error: new TypeError("private-session /Users/private token=secret"), detail: "private-project" });
+		transport.captureMain?.({ category: "side_chat", reason: "recovery", error: new TypeError("Could not restore session-123 from /Users/private token=secret"), detail: "private-project" });
 		const event = beforeSend(sdk.captureEvent.mock.calls[0][0]);
-		expect(event).toMatchObject({ message: "Electron main side_chat failure (recovery)", tags: { category: "side_chat", reason: "recovery" }, exception: { values: [{ type: "TypeError", value: "Electron main side_chat failure (recovery)" }] } });
+		expect(event).toMatchObject({ message: "Could not restore <id> from <path> <credential>", tags: { category: "side_chat", reason: "recovery" }, exception: { values: [{ type: "TypeError", value: "Could not restore <id> from <path> <credential> (in electron-main, side_chat/recovery)" }] } });
 		expect(JSON.stringify(event)).not.toMatch(/private|Users|secret/);
 	});
 
@@ -163,8 +167,10 @@ describe("Electron main Sentry configuration", () => {
 		const request = { consentGeneration: "generation-1", kind: "exception", message: "get project ai-sports-coach-113 failed", level: "error", tags: { category: "http_5xx", code: "WORKSPACE_GIT_READ_FAILED" } } as const;
 		transport.capture(request);
 		expect(sdk.captureEvent).toHaveBeenCalledOnce();
-		expect(JSON.stringify(sdk.captureEvent.mock.calls[0])).not.toContain("ai-sports-coach-113");
-		expect(sdk.captureEvent.mock.calls[0]?.[0]).toMatchObject({ message: "Renderer error", tags: { "ao.origin": "renderer", "ao.category": "http_5xx", "ao.code": "WORKSPACE_GIT_READ_FAILED" } });
+		const beforeSend = sdk.init.mock.calls[0][0].beforeSend!;
+		const event = await beforeSend(sdk.captureEvent.mock.calls[0][0], {});
+		expect(event).toMatchObject({ message: "Renderer Error in unknown (WORKSPACE_GIT_READ_FAILED)", tags: { surface: "renderer", category: "http_5xx", code: "WORKSPACE_GIT_READ_FAILED" } });
+		expect(JSON.stringify(event)).not.toContain("ai-sports-coach-113");
 		transport.capture({ ...request, kind: "breadcrumb" });
 		transport.capture({ ...request, tags: { category: "daemon_unavailable" } });
 		expect(sdk.captureEvent).toHaveBeenCalledOnce();
@@ -326,13 +332,13 @@ describe("Electron main Sentry configuration", () => {
 			tags: { "ao.origin": "renderer", "ao.kind": "exception", "ao.category": "http_5xx", "ao.code": "WORKSPACE_GIT_READ_FAILED", branch: "private" },
 			exception: { values: [{ type: "Error", value: "get project ai-sports-coach-113", stacktrace: { frames: [{ function: "ChatWorkspace", filename: "/Users/alice/private-repo/file.ts", context_line: "private" }] } }] },
 		});
-		expect(result).toMatchObject({ message: "Renderer Error in ChatWorkspace (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_sampled_5" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "ChatWorkspace", "renderer"] });
+		expect(result).toMatchObject({ message: "Renderer Error in ChatWorkspace (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_sampled_5" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "ChatWorkspace", "renderer", "code", "WORKSPACE_GIT_READ_FAILED"] });
 		const encoded = JSON.stringify(result);
 		for (const secret of ["ai-sports-coach-113", "private-repo", "private branch", "private@example.test", "private-host", "file:///"]) expect(encoded).not.toContain(secret);
 		expect(result.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({ function: "ChatWorkspace", in_app: true });
 	});
 
-	it("groups renderer exceptions by safe type and top frame without using messages", async () => {
+	it("groups renderer exceptions by type, top frame, and normalized message", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const capture = (type: string, functionName: string, message: string) => {
@@ -340,11 +346,13 @@ describe("Electron main Sentry configuration", () => {
 			return beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
 		};
 		const first = capture("TypeError", "ChatWorkspace", "resume agent ai-sports-coach-113");
-		const same = capture("TypeError", "ChatWorkspace", "get project private-repo");
-		const otherType = capture("RangeError", "ChatWorkspace", "get project private-repo");
-		const otherFrame = capture("TypeError", "SessionView", "get project private-repo");
-		expect(first.fingerprint).toEqual(["electron", "exception", "unknown", "TypeError", "ChatWorkspace", "renderer"]);
+		const same = capture("TypeError", "ChatWorkspace", "resume agent sample-123");
+		const otherMessage = capture("TypeError", "ChatWorkspace", "get project sample-123");
+		const otherType = capture("RangeError", "ChatWorkspace", "resume agent sample-123");
+		const otherFrame = capture("TypeError", "SessionView", "resume agent sample-123");
+		expect(first.fingerprint).toEqual(["electron", "exception", "unknown", "TypeError", "ChatWorkspace", "renderer", ...hashParts("resume agent <id>")]);
 		expect(same.fingerprint).toEqual(first.fingerprint);
+		expect(otherMessage.fingerprint).not.toEqual(first.fingerprint);
 		expect(otherType.fingerprint).not.toEqual(first.fingerprint);
 		expect(otherFrame.fingerprint).not.toEqual(first.fingerprint);
 		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", abs_path: "app://renderer/assets/app-A1B2C3D4.js", lineno: 42, in_app: true }]);
@@ -355,7 +363,7 @@ describe("Electron main Sentry configuration", () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const capture = (filename: string, lineno: number, colno: number, functionName: string) => {
-			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", exception: { type: "TypeError", frames: [{ function: functionName, filename, lineno, colno }] } });
+			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "", exception: { type: "TypeError", frames: [{ function: functionName, filename, lineno, colno }] } });
 			return beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
 		};
 		const first = capture("assets/_shell-A1B2C3D4.js", 42, 7, "a");
@@ -371,7 +379,7 @@ describe("Electron main Sentry configuration", () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const capture = (functionName: string, lineno: number) => {
-			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", exception: { type: "TypeError", frames: [{ function: functionName, lineno }] } });
+			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "", exception: { type: "TypeError", frames: [{ function: functionName, lineno }] } });
 			return beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
 		};
 		const first = capture("openSessionPanel", 3);
@@ -381,13 +389,13 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(first)).not.toContain("openSessionPanel");
 	});
 
-	it("titles renderer API failures with the actual allowlisted code", async () => {
+	it("titles renderer API failures with any well-formed code", async () => {
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
-		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "private session", tags: { category: "http_5xx", code: "CHAT_DELIVERY_FAILED" } });
+		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "private session", tags: { category: "http_5xx", code: "NEW_API_FAILURE", operation: "new_api_operation" } });
 		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
-		expect(event.message).toBe("Renderer API error (CHAT_DELIVERY_FAILED)");
-		expect(event.tags).toMatchObject({ code: "CHAT_DELIVERY_FAILED", category: "http_5xx" });
+		expect(event.message).toBe("Renderer API error in new_api_operation (NEW_API_FAILURE)");
+		expect(event.tags).toMatchObject({ code: "NEW_API_FAILURE", category: "http_5xx", operation: "new_api_operation" });
 		expect(JSON.stringify(event)).not.toContain("private session");
 	});
 
@@ -399,10 +407,10 @@ describe("Electron main Sentry configuration", () => {
 			exception: { values: [{ type, value: message, stacktrace: { frames: [{ function: "startup", in_app: false }, { function: top, filename: "/Users/alice/private-repo/main.ts", in_app: true }] } }] },
 		});
 		const first = mainError("TypeError", "startDaemon", "resume agent ai-sports-coach-113");
-		expect(mainError("TypeError", "startDaemon", "get project private-repo").fingerprint).toEqual(first.fingerprint);
+		expect(mainError("TypeError", "startDaemon", "resume agent project-16").fingerprint).toEqual(first.fingerprint);
 		expect(mainError("RangeError", "startDaemon", "other").fingerprint).not.toEqual(first.fingerprint);
 		expect(mainError("TypeError", "initMainSentry", "other").fingerprint).not.toEqual(first.fingerprint);
-		expect(first.fingerprint).toEqual(["electron", "main_error", "unknown", "TypeError", "startDaemon", "electron-main"]);
+		expect(first.fingerprint).toEqual(["electron", "main_error", "unknown", "TypeError", "startDaemon", "electron-main", ...hashParts("resume agent <id>")]);
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo|\/Users\/alice/);
 	});
 
@@ -410,8 +418,8 @@ describe("Electron main Sentry configuration", () => {
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const mainError = (colno: number, functionName: string) => beforeSend({
-			type: undefined, message: "private project",
-			exception: { values: [{ type: "TypeError", value: "private project", stacktrace: { frames: [{ function: functionName, filename: "/Users/alice/private-repo/main.js", lineno: 1, colno, in_app: true }] } }] },
+			type: undefined,
+			exception: { values: [{ type: "TypeError", stacktrace: { frames: [{ function: functionName, filename: "/Users/alice/private-repo/main.js", lineno: 1, colno, in_app: true }] } }] },
 		});
 		const first = mainError(321, "a");
 		expect(mainError(321, "b").fingerprint).toEqual(first.fingerprint);
@@ -421,7 +429,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(JSON.stringify(first)).not.toContain("private-repo");
 	});
 
-	it("drops expected noise and groups main failures without message text", async () => {
+	it("drops expected noise and keeps process-failure and uncaught labels", async () => {
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		for (const message of ["AbortError", "net::ERR_NETWORK_CHANGED", "net::ERR_INTERNET_DISCONNECTED"]) {
@@ -432,10 +440,10 @@ describe("Electron main Sentry configuration", () => {
 			type: undefined, message,
 				exception: { values: [{ type: "Error", value: message, mechanism: { type: "auto.node.onunhandledrejection" } }] },
 		});
-		expect(mainError("resume agent ai-sports-coach-113")?.fingerprint).toEqual(["electron", "unhandled_rejection", "unknown", "Error", "unknown", "electron-main"]);
-		expect(mainError("get project private-repo")?.fingerprint).toEqual(mainError("resume agent ai-sports-coach-113")?.fingerprint);
+		expect(mainError("resume agent ai-sports-coach-113")?.fingerprint).toEqual(["electron", "unhandled_rejection", "unknown", "Error", "unknown", "electron-main", ...hashParts("resume agent <id>")]);
+		expect(mainError("get project private-repo")?.fingerprint).not.toEqual(mainError("resume agent ai-sports-coach-113")?.fingerprint);
 		expect(beforeSend({ type: undefined, message: "'renderer' process exited with 'crashed'" })?.fingerprint).toEqual(["electron", "process_exit", "crashed", "Error", "unknown", "electron-main"]);
-		expect(beforeSend({ type: undefined, level: "fatal", exception: { values: [{ type: "TypeError", value: "private", mechanism: { type: "generic" } }] } })?.fingerprint).toEqual(["electron", "uncaught_exception", "unknown", "TypeError", "unknown", "electron-main"]);
+		expect(beforeSend({ type: undefined, level: "fatal", exception: { values: [{ type: "TypeError", mechanism: { type: "generic" } }] } })?.fingerprint).toEqual(["electron", "uncaught_exception", "unknown", "TypeError", "unknown", "electron-main"]);
 	});
 
 	it("does not start a client when the environment explicitly sets a blank DSN", async () => {
@@ -457,7 +465,7 @@ describe("Electron main Sentry configuration", () => {
 });
 
 describe("sanitizeRendererCapture", () => {
-	it("scrubs local paths and loopback URLs at the Electron-main boundary", () => {
+	it("bounds message text and scrubs local paths in tags at IPC intake", () => {
 		const input = {
 			consentGeneration: "generation-1",
 			kind: "exception",
@@ -475,7 +483,7 @@ describe("sanitizeRendererCapture", () => {
 			consentGeneration: "generation-1",
 			kind: "exception",
 			level: "error",
-			message: "",
+			message: input.message,
 			tags: {
 				operation: "GET [redacted-url]",
 				category: "[redacted-url]",
@@ -531,7 +539,7 @@ describe("Electron main error sampling and budget", () => {
 	it("titles an anonymous renderer frame by bundle file and line and keeps its debug ID", async () => {
 		const debugId = "8a1f4c2e-1b3d-4e5f-9a6b-7c8d9e0f1a2b";
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
-		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "error", exception: { type: "TypeError", frames: [{ function: "<anonymous>", filename: "/home/alice/private.js" }, { function: "Object.a [as then]", filename: "assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45, debug_id: debugId }] } });
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "", level: "error", exception: { type: "TypeError", frames: [{ function: "<anonymous>", filename: "/home/alice/private.js" }, { function: "Object.a [as then]", filename: "assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45, debug_id: debugId }] } });
 		const sent = sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent;
 		expect(sent.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
 		const event = beforeSendOf()(sent);
@@ -580,11 +588,11 @@ describe("Electron main error sampling and budget", () => {
 	it("keeps the budget across a restart and caps on the scrubbed fingerprint", async () => {
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		// Different raw text, same scrubbed fingerprint.
-		const sent = ["private one", "private two", "private three", "private four"].map((message) => beforeSendOf()({ ...mainError("main"), message }));
+		const sent = ["failed 1", "failed 2", "failed 3", "failed 4"].map((message) => beforeSendOf()({ ...mainError("main"), message }));
 		expect(sent.map((event) => event !== null)).toEqual([true, true, true, false]);
 		// A fresh init, as after a reload or restart, reads the persisted counters.
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
-		expect(beforeSendOf()(mainError("main"))).toBeNull();
+		expect(beforeSendOf()({ ...mainError("main"), message: "failed 5" })).toBeNull();
 		expect(beforeSendOf()(mainError("other"))).not.toBeNull();
 	});
 });
@@ -602,11 +610,13 @@ it("uses scrubbed renderer exception text for titles and grouping", async () => 
 	const first = send("HTTP error 500: /etc/private http://localhost:8080/token alice@example.test '0xdeadbeef'");
 	const same = send("HTTP error 503: ~/private http://127.0.0.1/x bob@example.test '12345678-1234-1234-1234-123456789abc'");
 	const other = send("Cannot read properties of undefined (reading 'id')");
-	expect(first?.exception?.values?.[0]?.value).toBe("HTTP error 500 (in unknown, render_crash)");
+	expect(first?.exception?.values?.[0]?.value).toBe("HTTP error <n>: <path> <url> <email> '?' (in unknown, render_crash)");
 	expect(same?.fingerprint).toEqual(first?.fingerprint);
 	expect(other?.fingerprint).not.toEqual(first?.fingerprint);
-	expect(other?.exception?.values?.[0]?.value).toBe("Cannot read properties of undefined (reading 'id') (in unknown, render_crash)");
-	expect(send("/home/alice/private.txt")?.exception?.values?.[0]?.value).toBe("Renderer TypeError in unknown (render_crash)");
+	expect(other?.message).toBe("Cannot read properties of undefined (reading '?')");
+	expect(other?.exception?.values?.[0]?.value).toBe("Cannot read properties of undefined (reading '?') (in unknown, render_crash)");
+	expect(other?.fingerprint?.slice(-2)).toEqual(hashParts("cannot read properties of undefined (reading '?')"));
+	expect(send("/home/alice/private.txt")?.message).toBe("<path>");
 });
 
 it("uses scrubbed messages for handled and SDK-originated main errors", async () => {
@@ -615,8 +625,131 @@ it("uses scrubbed messages for handled and SDK-originated main errors", async ()
 	const value = "ENOENT: no such file or directory, open '/var/projects/alice/private'";
 	transport.captureMain?.({ category: "ipc", reason: "handler", detail: "channel:project:read", error: new Error(value) });
 	const handled = beforeSend(sdk.captureEvent.mock.calls[0][0]);
-	expect(handled?.exception?.values?.[0]?.value).toBe("ENOENT: no such file or directory, open [redacted] (in channel:project:read, ipc/handler)");
-	expect(handled?.fingerprint?.at(-1)).toBe("enoent: no such file or directory, open [redacted]");
+	expect(handled?.exception?.values?.[0]?.value).toBe("Electron main ipc failure (handler)");
+	expect(handled?.fingerprint?.slice(-2)).toEqual(hashParts("enoent: no such file or directory, open '?'"));
 	const uncaught = beforeSend({ type: undefined, exception: { values: [{ type: "Error", value }] } });
-	expect(uncaught?.exception?.values?.[0]?.value).toBe("ENOENT: no such file or directory, open [redacted] (in unknown, main_error)");
+	expect(uncaught?.exception?.values?.[0]?.value).toBe("Electron main Error in unknown");
+});
+
+it("uses the IPC channel and cause code, or the normalized IPC message without one", async () => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	const beforeSend = sdk.init.mock.calls[0][0].beforeSend!;
+	const send = (channel: string, text: string, code?: string) => {
+		transport.capture({
+			consentGeneration: "g", kind: "exception",
+			message: "Error invoking remote method '" + channel + "': Error: " + text,
+			tags: code ? { error_code: code } : undefined,
+			exception: { type: "Error", frames: [] },
+		});
+		return beforeSend(sdk.captureEvent.mock.calls.at(-1)![0], {});
+	};
+	const first = await send("remotes:list", "Internal server error", "REMOTES_READ_FAILED");
+	expect(first).toMatchObject({ message: "Renderer Error in remotes:list (unknown) (REMOTES_READ_FAILED)", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], "code", "REMOTES_READ_FAILED"] });
+	expect((await send("remotes:list", "Erreur interne", "REMOTES_READ_FAILED"))?.fingerprint).toEqual(first?.fingerprint);
+	expect((await send("remotes:sync", "Internal server error", "REMOTES_READ_FAILED"))?.fingerprint).not.toEqual(first?.fingerprint);
+	const uncoded = await send("remotes:list", "Cannot read /home/alice/private");
+	expect(uncoded).toMatchObject({ message: "Renderer Error in remotes:list (unknown)", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], ...hashParts("cannot read <path>")] });
+
+	expect(uncoded?.tags?.ipc_channel).toBe("remotes:list");
+
+	const cause = new AoError("WORKSPACE_NO_READY_REPOS", "Workspace project must contain at least one fully resolved git repository");
+	const sdkError = await beforeSend({ type: undefined, message: "Wrapped" }, { originalException: new Error("Wrapped", { cause }) });
+	expect(sdkError).toMatchObject({ message: "Electron main Error in unknown (WORKSPACE_NO_READY_REPOS)", fingerprint: ["electron", "main_error", "unknown", "Error", "unknown", "electron-main", "code", "WORKSPACE_NO_READY_REPOS"] });
+});
+
+it.each(["private ".repeat(26).trim(), "x".repeat(301)])("hashes unsafe text and uses the computed title", async (message) => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	transport.capture({ consentGeneration: "g", kind: "exception", message, exception: { type: "TypeError", frames: [] } });
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.message).toBe("Renderer TypeError in unknown (unknown)");
+	expect(event?.fingerprint?.slice(-2)).toEqual(["sha256", createHash("sha256").update(message).digest("hex").slice(0, 10)]);
+	expect(JSON.stringify(event)).not.toContain(message);
+});
+
+it("omits quoted prompts, email addresses, home paths and remote URLs from the final event", async () => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	transport.capture({
+		consentGeneration: "g", kind: "exception",
+		message: "Could not send 'my private prompt' to alice@example.test from /home/alice/prompt.txt via https://host.test/upload on comic-12",
+		exception: { type: "TypeError", frames: [] },
+	});
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.message).toBe("Could not send '?' to <email> from <path> via <url> on <id>");
+	expect(JSON.stringify(event)).not.toMatch(/my private prompt|alice|host\.test|comic-12/);
+});
+
+it.each([
+	["open /Users/alice/My ConfidentialProject/offer.txt failed", "open <path> failed", /alice|ConfidentialProject|offer\.txt/],
+	["request failed access_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["request failed refresh_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["request failed client_secret=supersecretvalue", "request failed <credential>", /supersecretvalue/],
+	["repository acme/secret-project not found", "repository acme/secret-project not found", /secret-project/],
+	["git checkout feature/acme-merger failed", "git checkout feature/acme-merger failed", /acme-merger/],
+	["getaddrinfo ENOTFOUND build.acme-internal.corp", "getaddrinfo enotfound build.acme-internal.corp", /acme-internal/],
+	["Session alice-laptop not found", "session alice-laptop not found", /alice-laptop/],
+	["HTTP 401 Bad credentials sk-ant-abcdefghijklmnop", "http <n> bad credentials sk-ant-abcdefghijklmnop", /abcdefghijklmnop/],
+] as const)("scrubs sensitive values in the final event", async (message, normalized, privateText) => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	transport.capture({ consentGeneration: "g", kind: "exception", message, exception: { type: "Error", frames: [] } });
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.message).toBe("Renderer Error in unknown (unknown)");
+	expect(event?.fingerprint?.slice(-2)).toEqual(hashParts(normalized));
+	expect(JSON.stringify(event)).not.toMatch(privateText);
+});
+
+it("keeps application codes scoped by source and preserves renderer source tags", async () => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	const beforeSend = sdk.init.mock.calls[0][0].beforeSend!;
+	const error = new AoError("READ_FAILED", "Private detail");
+	transport.captureMain?.({ category: "update", reason: "download", error });
+	const handled = await beforeSend(sdk.captureEvent.mock.calls.at(-1)![0], {});
+	transport.capture({
+		consentGeneration: "g", kind: "exception", message: error.message,
+		tags: { category: "renderer_rejection", code: "UNHANDLED_REJECTION", error_code: error.code },
+		exception: { type: "Error", frames: [] },
+	});
+	const renderer = await beforeSend(sdk.captureEvent.mock.calls.at(-1)![0], {});
+	expect(renderer?.tags).toMatchObject({ code: "UNHANDLED_REJECTION", error_code: "READ_FAILED" });
+	expect(renderer?.message).toContain("READ_FAILED");
+	expect(handled?.tags).toMatchObject({ error_code: "READ_FAILED" });
+	expect(renderer?.fingerprint).not.toEqual(handled?.fingerprint);
+});
+
+it("shows an IPC engine message and channel while keeping the hashed fingerprint", async () => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	const message = "Error invoking remote method 'browser:ensure': TypeError: Cannot read properties of undefined (reading 'x')";
+	transport.capture({
+		consentGeneration: "g", kind: "exception", message,
+		tags: { code: "UNHANDLED_REJECTION" },
+		exception: { type: "Error", frames: [] },
+	});
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.tags?.ipc_channel).toBe("browser:ensure");
+	expect(event?.message).toBe("Renderer Error in browser:ensure (UNHANDLED_REJECTION): Cannot read properties of undefined (reading '?')");
+	expect(event?.fingerprint).toEqual(["electron", "ipc", hashParts("browser:ensure")[1], ...hashParts("cannot read properties of undefined (reading '?')")]);
+	expect(JSON.stringify(event)).not.toContain("reading 'x'");
+});
+
+it.each([["Error", undefined], ["TypeError", "READ_FAILED"]] as const)("keeps uncoded plain and coded engine errors private", async (type, code) => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	const message = "Cannot read properties of undefined (reading 'id')";
+	transport.capture({ consentGeneration: "g", kind: "exception", message, tags: code ? { error_code: code } : undefined, exception: { type, frames: [] } });
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.message).toBe(code ? "Renderer TypeError in unknown (unknown) (READ_FAILED)" : "Renderer Error in unknown (unknown)");
+	expect(event?.fingerprint?.slice(-2)).toEqual(code ? ["code", code] : hashParts("cannot read properties of undefined (reading '?')"));
+	expect(JSON.stringify(event)).not.toContain("Cannot read properties");
+});
+
+it.each([
+	["SyntaxError", 'Unexpected token \'o\', "ok {"token":"abc"}" is not valid JSON', /['"]token['"]|abc/],
+	["SyntaxError", 'Unexpected token \'x\', "x{"custome"... is not valid JSON', /custome/],
+	["SyntaxError", "Cannot convert acme payroll to a BigInt", /acme payroll/],
+	["TypeError", "Cannot add property acmePayroll, object is not extensible", /acmePayroll/],
+] as const)("keeps unquoted engine input out of the desktop event", async (type, message, privateText) => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	transport.capture({ consentGeneration: "g", kind: "exception", message, exception: { type, frames: [] } });
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.message).toBe("Renderer " + type + " in unknown (unknown)");
+	expect(event?.fingerprint?.at(-2)).toBe("sha256");
+	expect(JSON.stringify(event)).not.toMatch(privateText);
 });

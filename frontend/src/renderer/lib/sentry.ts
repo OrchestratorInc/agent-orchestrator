@@ -2,7 +2,7 @@
 // the latest main-owned generation before forwarding to Electron main.
 import { classifyError, type ClassifyInput, type Triage } from "../../shared/observability";
 import { SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName } from "../../shared/sentry-config";
-import { scrubSentryMessage } from "../../../../packages/shared/telemetry/sentry-message";
+import { isExpectedSentryError, sentryErrorCode } from "../../../../packages/shared/telemetry/ao-error";
 import { aoBridge } from "./bridge";
 import type { RendererTelemetryCaptureInput } from "../../shared/telemetry-policy";
 
@@ -79,20 +79,22 @@ function safeRendererFrames(error: unknown, event?: ErrorEvent): RendererFrame[]
 }
 
 export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {}, event?: ErrorEvent): void {
+	if (isExpectedSentryError(error)) return;
 	const triage = classifyError(meta);
+	const errorCode = sentryErrorCode(error);
 	const isError = error instanceof Error || error instanceof DOMException;
 	const message = isError ? error.message : event?.message ?? error;
 	const type = isError ? error.name : typeof message === "string" ? /^(?:Uncaught(?: \(in promise\))? )?(\w+): /.exec(message)?.[1] : undefined;
 	forwardCapture({
 		kind: triage.report ? "exception" : "breadcrumb",
-		message: scrubSentryMessage(message) || "Renderer error",
+		message: triage.report && typeof message === "string" && message.length <= 4096 ? message : "",
 		level: triage.level,
-		tags: tagsFor(meta, triage),
+		tags: { ...tagsFor(meta, triage), ...(errorCode ? { error_code: errorCode } : {}) },
 		...(triage.report ? { exception: { type: safeSentryExceptionType(type), frames: safeRendererFrames(error, event) } } : {}),
 	});
 }
-export function captureApiErrorToSentry(operation: string, category: string, status?: number, code?: string, requestId?: string): void {
+export function captureApiErrorToSentry(operation: string, category: string, status?: number, code?: string, requestId?: string, message?: string): void {
 	const meta: CaptureMeta = { operation, category, httpStatus: status, code, requestId, domain: domainOf(operation) };
 	const triage = classifyError(meta);
-	forwardCapture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: tagsFor(meta, triage) });
+	forwardCapture({ kind: triage.report ? "message" : "breadcrumb", message: typeof message === "string" && message.length <= 4096 ? message : "", level: triage.level, tags: tagsFor(meta, triage) });
 }

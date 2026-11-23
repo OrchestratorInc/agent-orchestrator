@@ -1,6 +1,7 @@
 import type { ErrorEvent, StackFrame } from "@sentry/react-native";
 import { classifyError, type ClassifyInput } from "./observability";
-import { safeSentryExceptionType, scrubSentryMessage, sentryExceptionValue, sentryMessageFingerprint } from "../../shared/telemetry/sentry-message";
+import { safeSentryExceptionType, sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue } from "../../shared/telemetry/sentry-message";
+import { safeSentryCode, sentryErrorCode } from "../../shared/telemetry/ao-error";
 import { DEFAULT_SENTRY_DSN } from "./sentry-config";
 
 const SAFE_CATEGORIES = new Set(["native_crash", "render_crash", "http_5xx", "http_4xx", "offline", "timeout"]);
@@ -33,23 +34,37 @@ function safeFrame(frame: StackFrame): StackFrame {
 	};
 }
 
-export function sanitizeMobileSentryEvent(event: ErrorEvent): ErrorEvent | null {
+export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { originalException?: unknown }): Promise<ErrorEvent | null> {
 	if (!permitted) return null;
 	if (event.tags?.["ao.consent_generation"] !== String(consentGeneration)) return null;
 	const category = typeof event.tags?.["ao.category"] === "string" && SAFE_CATEGORIES.has(event.tags["ao.category"])
 		? event.tags["ao.category"] : "other";
 	const severity = typeof event.tags?.["ao.severity"] === "string" && /^P[0-3]$/.test(event.tags["ao.severity"])
 		? event.tags["ao.severity"] : undefined;
-	const title = event.message === "Mobile API error" ? "Mobile API error" : "Mobile error";
+	const title = event.tags?.["ao.kind"] === "api" ? "Mobile API error" : "Mobile error";
 	const exceptions = event.exception?.values ?? [];
-	const messages = exceptions.map((value) => scrubSentryMessage(value.value));
+	const identity = sentryMessageIdentity(
+		exceptions.at(-1)?.value ?? (event.message === "Mobile API error" ? undefined : event.message),
+		sentryErrorCode(hint?.originalException) ?? event.tags?.["ao.code"],
+		safeSentryExceptionType(exceptions.at(-1)?.type),
+	);
+	let messageFingerprint: string[] = [];
+	if (identity.hashInput !== undefined) {
+		try {
+			const { CryptoDigestAlgorithm, digestStringAsync } = await import("expo-crypto");
+			const hash = await digestStringAsync(CryptoDigestAlgorithm.SHA256, identity.hashInput);
+			messageFingerprint = ["sha256", hash.slice(0, 10)];
+		} catch { /* Keep the fallback title if the device could not hash. */ }
+		// Opt-out can happen while the native digest is pending.
+		if (!permitted || event.tags?.["ao.consent_generation"] !== String(consentGeneration)) return null;
+	}
 	const values = exceptions.map((value, index) => {
 		const frames = value.stacktrace?.frames?.map(safeFrame);
 		const top = frames?.at(-1);
 		const location = top?.lineno ? `mobile:${top.lineno}` : "mobile";
 		return {
 			type: safeSentryExceptionType(value.type),
-			value: sentryExceptionValue(messages[index], title, location, category),
+			value: sentryExceptionValue(index === exceptions.length - 1 ? sentryIdentityTitle(identity, "") : "", title, location, category),
 			stacktrace: frames ? { frames } : undefined,
 		};
 	});
@@ -62,15 +77,17 @@ export function sanitizeMobileSentryEvent(event: ErrorEvent): ErrorEvent | null 
 		platform: "javascript",
 		release: observabilityContext.release,
 		environment: environment(observabilityContext.channel),
-		message: title,
+		message: sentryIdentityTitle(identity, title),
 		exception: values?.length ? { values } : undefined,
 		tags: {
 			"ao.platform": "mobile",
 			"ao.category": category,
+			...(identity.code ? { "ao.code": identity.code } : {}),
 			...(severity ? { "ao.severity": severity } : {}),
 			...(daemonVersion && /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/.test(daemonVersion) ? { "ao.daemon_version": daemonVersion } : {}),
 		},
-		fingerprint: ["mobile", title, category, ...(primary ? [primary.type] : []), ...sentryMessageFingerprint(messages.at(-1) ?? "")],
+		fingerprint: ["mobile", title, category, ...(primary ? [primary.type] : []),
+			...(identity.code ? ["code", identity.code] : messageFingerprint)],
 		user: pairedInstallId ? { id: pairedInstallId } : undefined,
 	};
 	if (clean.event_id) allowedEventIds.add(clean.event_id);
@@ -142,6 +159,7 @@ async function initialize(configuredDsn: string, generation: number): Promise<vo
 		enableCaptureFailedRequests: false,
 		tracesSampleRate: 0,
 		maxBreadcrumbs: 0,
+		maxValueLength: 4097,
 		maxQueueSize: 1,
 		// TelemetryManager owns uncaught JS capture so it can attach the consent
 		// generation before Sentry's duplicate-event guard sees the exception.
@@ -178,19 +196,20 @@ export function captureMobileException(error: unknown, meta: CaptureMeta = {}): 
 	if (!initialized || !permitted) return;
 	const triage = classifyError(meta);
 	if (!triage.report) return;
+	const code = sentryErrorCode(error) ?? safeSentryCode(meta.code);
 	sentry?.captureException(error, {
 		level: triage.level,
-		tags: { "ao.category": SAFE_CATEGORIES.has(meta.category ?? "") ? meta.category : "other", "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
+		tags: { "ao.category": SAFE_CATEGORIES.has(meta.category ?? "") ? meta.category : "other", ...(code ? { "ao.code": code } : {}), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
 	});
 }
 
-export function captureMobileApiError(_path: string, category: string, status?: number, code?: string, _requestId?: string): void {
+export function captureMobileApiError(_path: string, category: string, status?: number, code?: string, _requestId?: string, message?: string): void {
 	if (!initialized || !permitted) return;
 	const triage = classifyError({ category, httpStatus: status, code });
 	if (!triage.report) return;
-	sentry?.captureMessage("Mobile API error", {
+	sentry?.captureMessage(typeof message === "string" && message.length <= 4096 && message ? message : "Mobile API error", {
 		level: triage.level,
-		tags: { "ao.category": SAFE_CATEGORIES.has(category) ? category : "other", "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
+		tags: { "ao.category": SAFE_CATEGORIES.has(category) ? category : "other", "ao.kind": "api", ...(safeSentryCode(code) ? { "ao.code": code } : {}), "ao.severity": triage.severity, "ao.consent_generation": String(consentGeneration) },
 	});
 }
 

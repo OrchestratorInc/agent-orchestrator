@@ -61,6 +61,7 @@ export function canSaveDraft(draft: EnvironmentMachineDraft): boolean {
 
 /** A save the machine refused, said against the field it is about. */
 export class MachineSaveError extends Error {
+	readonly code: string = "MACHINE_SAVE_ERROR";
 	constructor(message: string, readonly field: "host" | "password") {
 		super(message);
 		this.name = "MachineSaveError";

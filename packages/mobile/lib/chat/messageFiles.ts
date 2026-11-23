@@ -14,6 +14,7 @@ export const MessageFileSourceContext = createContext<((file: MessageFile) => Pr
  * them when it is restored.
  */
 export class MessageFileGoneError extends Error {
+	readonly code: string = "MESSAGE_FILE_GONE_ERROR";
 	constructor(name: string) {
 		super(`${name} is no longer available.`);
 		this.name = "MessageFileGoneError";
