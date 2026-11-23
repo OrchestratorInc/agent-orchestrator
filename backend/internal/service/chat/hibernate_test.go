@@ -1377,3 +1377,90 @@ func TestRelayWhileHibernatedKeepsSenderAndInteraction(t *testing.T) {
 		t.Fatalf("worker latest interaction = %v (found=%v err=%v), want %v", rec.Metadata.LatestInteractionAt, found, err, interactionAt)
 	}
 }
+
+func TestMessageToChatAsleepAfterCrashSurvivesTheWake(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "do work", ClientMessageID: "before-crash"}); err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateRunning
+	})
+
+	resumed := newFakeConversation()
+	var ids atomic.Int32
+	restarted := chatsvc.New(chatsvc.Options{
+		Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st,
+		Drivers:  fakeRegistry{driver: fakeDriver{conv: resumed}},
+		Activity: h.activity, Log: slog.New(slog.DiscardHandler), Now: h.now,
+		NewID: func() string { return fmt.Sprintf("restarted-%d", ids.Add(1)) },
+	})
+	t.Cleanup(func() { _ = restarted.Stop(context.Background(), testSession) })
+	restarted.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
+		rec, _, err := h.st.GetSession(ctx, id)
+		if err != nil {
+			return err
+		}
+		if _, err := h.st.SetSessionHibernated(ctx, id, rec.Revision, nil); err != nil {
+			return err
+		}
+		_, err = restarted.Start(ctx, chatsvc.StartConfig{
+			SessionID: id, ProjectID: testProject, Harness: domain.HarnessCodex,
+			WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1",
+		})
+		return err
+	})
+
+	if err := restarted.SettleAbandonedWork(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asleepAt := h.now()
+	if applied, err := h.st.SetSessionHibernated(ctx, testSession, rec.Revision, &asleepAt); err != nil || !applied {
+		t.Fatalf("sleep = %v, %v", applied, err)
+	}
+	turn, err := restarted.Send(ctx, testSession, ports.ChatUserMessage{Text: "after crash", ClientMessageID: "after-crash"})
+	if err != nil || turn.State != domain.TurnStateQueued {
+		t.Fatalf("send to sleeping chat = %+v, %v", turn, err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := resumed.sentTexts(); len(got) == 1 && got[0] == "after crash" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("message to the sleeping chat was not delivered after the wake: sent=%v turns=%v", resumed.sentTexts(), h.storedTurnStates(t))
+}
+
+func TestSettleAbandonedWorkLeavesARunningControllerAlone(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "do work", ClientMessageID: "live-1"}); err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateRunning
+	})
+	if err := h.svc.SettleAbandonedWork(ctx, testSession); err == nil {
+		t.Fatal("settled the work of a controller that is still running")
+	}
+	if got := h.storedTurnStates(t); len(got) != 1 || got[0] != domain.TurnStateRunning {
+		t.Fatalf("live turn = %v, want running", got)
+	}
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.SettleAbandonedWork(ctx, testSession); err != nil {
+		t.Fatalf("settle after the controller stopped: %v", err)
+	}
+	if got := h.storedTurnStates(t); len(got) != 1 || got[0] == domain.TurnStateRunning {
+		t.Fatalf("turn after stop = %v, want settled", got)
+	}
+}
