@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
-import { actionDetailLines, describeConversationActivity, isOrdinaryActivity, isSpawnFailure, mergeFailedSpawns, summarizeAOActions } from "./activity-action";
+import { actionDetailLines, describeConversationActivity, isFailedSpawn, isOrdinaryActivity, isSpawnFailure, mergeFailedSpawns, summarizeAOActions } from "./activity-action";
 
 function activity(overrides: Partial<ConversationActivity>): ConversationActivity {
 	return {
@@ -145,6 +145,22 @@ describe("mergeFailedSpawns", () => {
 		const merged = mergeFailedSpawns([spawnCall("c1", 1), spawnCall("c2", 10), record("r2", 11), record("r1", 2)]);
 		expect(merged.map((each) => each.id)).toEqual(["c1", "c2"]);
 		expect(merged.every(isSpawnFailure)).toBe(true);
+	});
+
+	it("keeps the call's own error when the record gives no reason", () => {
+		const call = { ...spawnCall("c1", 1), detail: { command: "ao spawn --name 'snapshot'", exitCode: 1, error: "spawn: no account" } };
+		const bare = { ...record("r1", 2), detail: { action: "session.spawned", operationId: "failed:r1" } };
+		const merged = mergeFailedSpawns([call, bare]);
+		expect(merged.map((each) => each.id)).toEqual(["c1"]);
+		expect(merged[0]!.detail).toMatchObject({ error: "spawn: no account", exitCode: undefined });
+		expect(isSpawnFailure(merged[0]!)).toBe(true);
+	});
+
+	it("takes a failed command for a spawn only when it runs `ao spawn`", () => {
+		const search = { ...spawnCall("c1", 1), summary: "grep -rn 'ao spawn' docs/", detail: { command: "grep -rn 'ao spawn' docs/", exitCode: 1 } };
+		expect(isFailedSpawn(search)).toBe(false);
+		const activities = [search, record("r1", 2)];
+		expect(mergeFailedSpawns(activities)).toBe(activities);
 	});
 
 	it("leaves a record with no failed call beside it, and every successful spawn", () => {

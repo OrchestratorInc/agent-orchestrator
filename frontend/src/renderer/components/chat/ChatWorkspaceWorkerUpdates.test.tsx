@@ -264,6 +264,7 @@ describe("orchestrator worker updates", () => {
 		["idle", { status: "idle", activity: { state: "idle" } }, "Idle", false],
 		["exited", { status: "exited", activity: { state: "exited" } }, "Exited", false],
 		["terminated", { status: "terminated", isTerminated: true }, "Terminated", false],
+		["terminated while waiting for input", { status: "terminated", isTerminated: true, activity: { state: "waiting_input" } }, "Terminated", false],
 		["failed start", { provisionState: "failed" }, "Start failed", false],
 		["status needs input", { status: "needs_input" }, "Needs input", false],
 		["PR waiting input", { status: "needs_input", prs: [{ number: 94, state: "open", ci: "pending", review: "pending", mergeability: "unknown" }] }, "Needs input", false],

@@ -166,6 +166,22 @@ export function describeCommandStep(command: string): CommandStep {
 }
 
 /**
+ * Whether the command runs `ao spawn`: `ao` (by any path, quoted or not) in a
+ * command's place with `spawn` as its subcommand, here or in a `bash -lc` script.
+ * `grep "ao spawn" docs.md` only mentions it.
+ */
+export function runsAOSpawn(command: string): boolean {
+	return commandSegments(command).some((segment) => isAOSpawn(segment, 0));
+}
+
+function isAOSpawn(segment: Segment, depth: number): boolean {
+	if (segment.binary === "ao") return positionals(segment.args, AO_VALUE_FLAGS)[0] === "spawn";
+	if (depth > 1 || !SHELLS.has(segment.binary)) return false;
+	const inline = flagValue(segment.args, ["-c", "-lc", "-ic"]);
+	return inline !== undefined && commandSegments(inline).some((inner) => isAOSpawn(inner, depth + 1));
+}
+
+/**
  * A line with no program to name, only shell setup, names that instead: `cd src`,
  * `export CI=1`, `source .env`, `test -f a`.
  */

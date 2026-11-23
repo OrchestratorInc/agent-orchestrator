@@ -674,10 +674,11 @@ function prState(session: WorkspaceSession): WaitingState | undefined {
 
 /** Where a worker that has not answered yet is now, read from its session's durable facts. */
 function waitingState(session: WorkspaceSession | undefined): WaitingState {
+	// A terminated session can't answer, whatever activity it last reported.
+	if (session?.isTerminated || session?.status === "terminated") return { label: "Terminated", glyph: "terminated" };
 	if (session?.status === "needs_input" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked") {
 		return { label: "Needs input", glyph: "alert" };
 	}
-	if (session?.isTerminated || session?.status === "terminated") return { label: "Terminated", glyph: "terminated" };
 	if (session?.provisionState === "provisioning") return { label: "Starting", glyph: "loader" };
 	if (session?.provisionState === "failed") return { label: "Start failed", glyph: "alert" };
 	if (session?.activity?.state === "exited" || session?.status === "exited") return { label: "Exited", glyph: "exited" };

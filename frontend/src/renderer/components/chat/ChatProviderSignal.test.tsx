@@ -227,6 +227,13 @@ describe("auto review", () => {
 		expect(screen.getByTitle("curl -s https://proxy.golang.org/")).toBeInTheDocument();
 	});
 
+	it("shows the command it allowed as typed, not read as Markdown", async () => {
+		const command = "echo '**done**' > /Users/me/notes_v2_final.md";
+		render(<ActivityRow activity={activity({ activityKind: "auto_review", summary: command, detail: { status: "approved", command } })} />);
+		await userEvent.click(screen.getByRole("button"));
+		expect(screen.getByTitle(command).textContent).toBe(command);
+	});
+
 	it("calls a denial a denial", () => {
 		render(
 			<ActivityRow

@@ -2,6 +2,7 @@ import { appI18n } from "../../i18n/instance";
 import { isSessionLink } from "../../lib/session-links";
 import { isWebLink } from "../../lib/external-link-policy";
 import type { ActivityStatus, ConversationActivity, ConversationItem } from "../../types/conversation";
+import { runsAOSpawn } from "./activity-step";
 
 export type ActivityDisplayState = "running" | "success" | "failed" | "cancelled" | "recovered" | "pending";
 
@@ -183,15 +184,12 @@ function text(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
 
-// The command that runs a spawn: `ao spawn`, or `ao' spawn` as a shell quotes it.
-const SPAWN_COMMAND = /\bao'?\s+spawn\b/;
-
 function isFailedSpawnRecord(activity: ConversationActivity): boolean {
 	return activity.activityKind === "ao_action" && activity.status === "failed" && activity.detail?.action === "session.spawned";
 }
 
 function isFailedSpawnCommand(activity: ConversationActivity): boolean {
-	return activity.activityKind === "command" && activity.status === "failed" && SPAWN_COMMAND.test(activity.detail?.command ?? activity.summary);
+	return activity.activityKind === "command" && activity.status === "failed" && runsAOSpawn(activity.detail?.command ?? activity.summary);
 }
 
 /** Either half of a spawn that failed: the `ao spawn` call or the daemon's record of it. */
@@ -234,6 +232,7 @@ export function mergeFailedSpawns(activities: ConversationActivity[]): Conversat
 			const reason = reasons.get(activity.id);
 			if (reason === undefined) return activity;
 			// The daemon's reason replaces the bare exit code, so the call reads and counts as failed.
-			return { ...activity, detail: { ...activity.detail, exitCode: undefined, error: reason || undefined } };
+			// A record with no reason leaves the call's own error in place.
+			return { ...activity, detail: { ...activity.detail, exitCode: undefined, error: reason || text(activity.detail?.error) || undefined } };
 		});
 }

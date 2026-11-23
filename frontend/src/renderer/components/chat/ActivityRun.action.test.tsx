@@ -106,6 +106,19 @@ describe("a failed spawn", () => {
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
+	it("opens onto the daemon's reason when the call printed nothing", () => {
+		const bare: ConversationActivity = {
+			kind: "activity", id: "2", sequence: 2, revision: 1, activityKind: "command", status: "failed",
+			summary: "ao spawn --project market-place --name 'background config snapshot'",
+			detail: { exitCode: 1 },
+			createdAt: "",
+		};
+		render(<ChatLinkProvider><ActivityRun activities={[activities[0]!, bare, activities[2]!]} /></ChatLinkProvider>);
+		const step = screen.getByRole("button", { name: /background config snapshot'\s*failed$/ });
+		expect(step).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText(reason)).toBeInTheDocument();
+	});
+
 	it("opens the approval onto the command it allowed, its chevron turned down", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={activities[0]!} />);

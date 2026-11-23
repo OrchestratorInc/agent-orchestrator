@@ -2144,6 +2144,7 @@ function genericActivityHasBody(activity: ConversationActivity): boolean {
 	const hasFileBody =
 		files.length > 1 || (files.length === 1 && Boolean(fileChangePatch(files[0])));
 	return Boolean(
+		isSpawnFailure(activity) ||
 		detail?.command ||
 		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
 	);
@@ -3197,7 +3198,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 							<p className="sr-only">{onYourBehalf}</p>
 							{command ? (
 								<p className="truncate font-mono text-caption leading-relaxed text-muted-foreground" title={command}>
-									<ActivityTitle text={shortenPaths(command)} />
+									{command}
 								</p>
 							) : null}
 							{detail?.rationale ? (
