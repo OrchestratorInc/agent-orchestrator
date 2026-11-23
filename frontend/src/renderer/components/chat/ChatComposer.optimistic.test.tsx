@@ -91,7 +91,9 @@ describe("optimistic message delivery", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 
 		expect(pending.onSend).toHaveBeenCalledOnce();
-		expect(field).toHaveTextContent("second message");
+		// Its Enter took it out of the box, as a send does; it waits in the queue dock.
+		expect(field.textContent).toBe("");
+		expect(screen.getByTestId("queued-message-dock")).toHaveTextContent("second message");
 
 		await act(async () => pending.resolve());
 
@@ -103,6 +105,119 @@ describe("optimistic message delivery", () => {
 		expect(field.textContent).toBe("");
 		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("sends three messages pasted and entered in quick succession as three messages, in order", async () => {
+		// The live repro: three messages pasted and entered about 140 ms apart, each
+		// while the previous send was still on its way. The second and third used to
+		// go out as one message.
+		const sessionId = "optimistic-rapid-three-messages";
+		const sends: Array<() => void> = [];
+		const onSend = vi.fn().mockImplementation(() => new Promise<void>((resolve) => { sends.push(resolve); }));
+		renderComposer(sessionId, onSend);
+		const field = await startSend(onSend, "R3-N1: reply with exactly N1-RAN.");
+		await typeInLexicalEditor(field, "R3-N2: reply with exactly N2-RAN.");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await typeInLexicalEditor(field, "R3-N3: reply with exactly N3-RAN.");
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		await act(async () => sends[0]());
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+		await act(async () => sends[1]());
+		await waitFor(() => expect(onSend.mock.calls.map(([text]) => text)).toEqual([
+			"R3-N1: reply with exactly N1-RAN.",
+			"R3-N2: reply with exactly N2-RAN.",
+			"R3-N3: reply with exactly N3-RAN.",
+		]));
+		await act(async () => sends[2]());
+
+		expect(new Set(onSend.mock.calls.map((call) => call[2])).size).toBe(3);
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
+		expect(field.textContent).toBe("");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+	});
+
+	it("takes each message entered during a send out of the box and lists it as pending, in order", async () => {
+		const sessionId = "optimistic-rapid-pending-rows";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "first message");
+		await typeInLexicalEditor(field, "second message");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(field.textContent).toBe("");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+		await typeInLexicalEditor(field, "third message");
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		expect(field.textContent).toBe("");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+		const dock = screen.getByTestId("queued-message-dock");
+		expect(Array.from(dock.querySelectorAll(".queue-dock-row-text"), (row) => row.textContent)).toEqual([
+			"second message",
+			"third message",
+		]);
+		expect(pending.onSend).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("keeps what is typed after a held message as the next draft instead of joining them", async () => {
+		const sessionId = "optimistic-held-then-typing";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "first message");
+		await typeInLexicalEditor(field, "second message");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await typeInLexicalEditor(field, "third, still typing");
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
+		expect(pending.onSend.mock.calls.map(([text]) => text)).toEqual(["first message", "second message"]);
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(field).toHaveTextContent("third, still typing");
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("third, still typing");
+	});
+
+	it("brings messages held behind a send that got no answer back to the box in order, unsent", async () => {
+		const sessionId = "optimistic-held-behind-lost-send";
+		const pending = pendingSend();
+		renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "first message");
+		await typeInLexicalEditor(field, "second message");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await typeInLexicalEditor(field, "third message");
+		fireEvent.keyDown(field, { key: "Enter" });
+
+		await act(async () => pending.reject(new Error("response lost")));
+
+		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("first message");
+		await act(async () => {});
+		expect(pending.onSend).toHaveBeenCalledOnce();
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("second message\n\nthird message");
+		expect(field).toHaveTextContent(/^second message\s*third message$/);
+		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
+	});
+
+	it("keeps a held message as the saved draft when Chat closes before it goes out", async () => {
+		const sessionId = "optimistic-held-unmount";
+		const pending = pendingSend();
+		const view = renderComposer(sessionId, pending.onSend);
+		const field = await startSend(pending.onSend, "first message");
+		await typeInLexicalEditor(field, "second message");
+		fireEvent.keyDown(field, { key: "Enter" });
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+
+		view.unmount();
+
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("second message");
+		renderComposer(sessionId, pending.onSend);
+		const reopened = screen.getByLabelText("Message the agent");
+		await waitFor(() => expect(reopened).toHaveTextContent("second message"));
+		await act(async () => pending.resolve());
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		expect(pending.onSend).toHaveBeenCalledOnce();
+		expect(reopened).toHaveTextContent("second message");
 	});
 
 	it("sends nothing extra when Enter is pressed again on the cleared box during a send", async () => {

@@ -56,15 +56,18 @@ describe("handing a follow-up from the new chat page to its session", () => {
 		expect(brief.ref.current?.takeDraft()).toEqual({ text: "Also add", send: false });
 	});
 
-	it("does not send a follow-up edited after Enter", async () => {
+	it("hands a follow-up entered during the brief and what was typed after it over as a draft, unsent", async () => {
 		const sessionId = "new-chat:handoff-edited";
 		const brief = await startBrief(sessionId);
 		await typeInLexicalEditor(brief.field, "Also add tests");
 		fireEvent.keyDown(brief.field, { key: "Enter" });
-		await typeInLexicalEditor(brief.field, " please");
+		// The Enter took the follow-up out of the box: what is typed next is a new draft.
+		await typeInLexicalEditor(brief.field, "please");
 		await brief.resolve();
 
-		expect(brief.ref.current?.takeDraft()).toEqual({ text: "Also add tests please", send: false });
+		// Two messages cannot go over as one send, so neither is sent by itself.
+		expect(brief.ref.current?.takeDraft()).toEqual({ text: "Also add tests\n\nplease", send: false });
+		expect(readChatSessionDraft(sessionId).composer.text).toBe("");
 	});
 
 	it("takes nothing from an empty box", async () => {
