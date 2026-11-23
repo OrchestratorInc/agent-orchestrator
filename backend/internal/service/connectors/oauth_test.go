@@ -248,3 +248,12 @@ func TestAnExpiredTokenIsRenewedAndSaved(t *testing.T) {
 		t.Fatalf("refresh used %v, registrations = %d", got, fake.registered.Load())
 	}
 }
+
+func mustParse(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}

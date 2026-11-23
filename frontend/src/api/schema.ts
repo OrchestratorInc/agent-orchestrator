@@ -3233,6 +3233,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/connectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the connectors a session got when it started, with its tool call counts */
+        get: operations["listSessionConnectors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/conversation": {
         parameters: {
             query?: never;
@@ -7880,6 +7897,9 @@ export interface components {
             reviews: components["schemas"]["PRReviewState"][];
             runs: components["schemas"]["ReviewRun"][];
         };
+        ListSessionConnectorsResponse: {
+            connectors: components["schemas"]["SessionConnectorResponse"][];
+        };
         ListSessionMemoryResponse: {
             app?: components["schemas"]["AppMemoryResponse"];
             sessions: components["schemas"]["SessionMemoryResponse"][];
@@ -8703,6 +8723,16 @@ export interface components {
             remoteBranch?: string;
             remoteHead?: string;
             unpushed: number;
+        };
+        SessionConnectorResponse: {
+            /** @description Tool calls of this session to the connector since the daemon started. */
+            calls: number;
+            enabled: boolean;
+            key: string;
+            lastTool?: string;
+            name: string;
+            /** @enum {string} */
+            status: "unchecked" | "connected" | "needs_signin" | "unavailable";
         };
         SessionHistoryResponse: {
             offset: number;
@@ -21780,6 +21810,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionConnectors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListSessionConnectorsResponse"];
                 };
             };
             /** @description Internal Server Error */

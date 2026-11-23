@@ -32,6 +32,8 @@ type ConnectorService interface {
 	FinishFromAddress(ctx context.Context, ref, address string) (connectors.Connector, error)
 	SignOut(ctx context.Context, ref string) (connectors.Connector, error)
 	CallbackURL() string
+	SessionConnectors(ctx context.Context, sessionID string) ([]connectors.SessionConnector, error)
+	ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, key string)
 }
 
 // ConnectorsController owns the connector routes.
@@ -50,11 +52,37 @@ func (c *ConnectorsController) Register(r chi.Router) {
 	r.Post("/connectors/{connectorId}/connect", c.connect)
 	r.Post("/connectors/{connectorId}/connect/finish", c.finishConnect)
 	r.Post("/connectors/{connectorId}/disconnect", c.disconnect)
+	r.Get("/sessions/{sessionId}/connectors", c.forSession)
 }
 
-// RegisterCallback mounts the page a sign-in server sends the browser back to.
-func (c *ConnectorsController) RegisterCallback(root chi.Router) {
+// RegisterRoot mounts the two routes outside /api/v1: the page a sign-in server sends the browser back to, and the address agents call.
+func (c *ConnectorsController) RegisterRoot(root chi.Router) {
 	root.Get(connectorCallbackPath, c.callback)
+	root.HandleFunc("/mcp/s/{sessionId}/connectors/{key}", func(w http.ResponseWriter, r *http.Request) {
+		if c.Svc == nil {
+			http.NotFound(w, r)
+			return
+		}
+		c.Svc.ServeProxy(w, r, chi.URLParam(r, "sessionId"), chi.URLParam(r, "key"))
+	})
+}
+
+func (c *ConnectorsController) forSession(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodGet, "/api/v1/sessions/{sessionId}/connectors") {
+		return
+	}
+	used, err := c.Svc.SessionConnectors(r.Context(), chi.URLParam(r, "sessionId"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := make([]SessionConnectorResponse, 0, len(used))
+	for _, one := range used {
+		out = append(out, SessionConnectorResponse{
+			Key: one.Key, Name: one.Name, Status: string(one.Status), Enabled: one.Enabled, Calls: one.Calls, LastTool: one.LastTool,
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListSessionConnectorsResponse{Connectors: out})
 }
 
 func (c *ConnectorsController) ready(w http.ResponseWriter, r *http.Request, method, path string) bool {

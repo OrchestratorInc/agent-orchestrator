@@ -140,3 +140,16 @@ func TestConnectorSignInRoutesAndCallbackPage(t *testing.T) {
 		t.Fatal("the sign-in callback must not answer on the remote listener")
 	}
 }
+
+func TestConnectorProxyRouteIsMountedAndLoopbackOnly(t *testing.T) {
+	srv := newConnectorTestServer(t, false)
+	if status, body := connectorCall(t, srv, http.MethodPost, "/mcp/s/ao-1/connectors/linear", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`); status != http.StatusUnauthorized {
+		t.Fatalf("proxy without a session token = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/connectors", ""); status != http.StatusOK || !strings.Contains(body, `"connectors":[]`) {
+		t.Fatalf("session connectors = %d %s", status, body)
+	}
+	if !httpd.IsLANControlBlockedPathForTest("/mcp/s/ao-1/connectors/linear") {
+		t.Fatal("the agent proxy must not answer on the remote listener")
+	}
+}

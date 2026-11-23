@@ -3086,6 +3086,21 @@ type ConnectorSignInResponse struct {
 	Connector        ConnectorResponse `json:"connector"`
 }
 
+// SessionConnectorResponse is one connector a session got when it started, with its use in that session.
+type SessionConnectorResponse struct {
+	Key      string `json:"key"`
+	Name     string `json:"name"`
+	Status   string `json:"status" enum:"unchecked,connected,needs_signin,unavailable"`
+	Enabled  bool   `json:"enabled"`
+	Calls    int    `json:"calls" description:"Tool calls of this session to the connector since the daemon started."`
+	LastTool string `json:"lastTool,omitempty"`
+}
+
+// ListSessionConnectorsResponse is the body of GET /api/v1/sessions/{sessionId}/connectors.
+type ListSessionConnectorsResponse struct {
+	Connectors []SessionConnectorResponse `json:"connectors"`
+}
+
 // FinishConnectorSignInRequest is the body of POST /api/v1/connectors/{connectorId}/connect/finish.
 type FinishConnectorSignInRequest struct {
 	CallbackURL string `json:"callbackUrl" maxLength:"16384" description:"Address the user's browser opened after approval, pasted as it is."`

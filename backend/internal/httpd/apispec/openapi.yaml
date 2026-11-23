@@ -9054,6 +9054,40 @@ paths:
       summary: Keep a viewed chat awake or release its view lease
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/connectors:
+    get:
+      operationId: listSessionConnectors
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListSessionConnectorsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the connectors a session got when it started, with its tool call
+        counts
+      tags:
+      - connectors
   /api/v1/sessions/{sessionId}/conversation:
     get:
       operationId: getSessionConversation
@@ -22786,6 +22820,15 @@ components:
       - runs
       - activeReviewers
       type: object
+    ListSessionConnectorsResponse:
+      properties:
+        connectors:
+          items:
+            $ref: '#/components/schemas/SessionConnectorResponse'
+          type: array
+      required:
+      - connectors
+      type: object
     ListSessionMemoryResponse:
       properties:
         app:
@@ -24874,6 +24917,34 @@ components:
       - unpushed
       - behind
       - conflicts
+      type: object
+    SessionConnectorResponse:
+      properties:
+        calls:
+          description: Tool calls of this session to the connector since the daemon
+            started.
+          type: integer
+        enabled:
+          type: boolean
+        key:
+          type: string
+        lastTool:
+          type: string
+        name:
+          type: string
+        status:
+          enum:
+          - unchecked
+          - connected
+          - needs_signin
+          - unavailable
+          type: string
+      required:
+      - key
+      - name
+      - status
+      - enabled
+      - calls
       type: object
     SessionHistoryResponse:
       properties:

@@ -1,0 +1,295 @@
+package connectors
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"io/fs"
+	"maps"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+const (
+	proxyPrefix    = "/mcp/s/"
+	keyFileName    = "mcp-connectors.key"
+	maxProxyBody   = 32 << 20
+	rpcServerError = -32001
+)
+
+// SessionInput names the session that asks for its connectors.
+type SessionInput struct {
+	SessionID string
+	ProjectID string
+	Native    map[string]bool
+}
+
+// SessionConnector is one connector a session got, with its use in that session.
+type SessionConnector struct {
+	Key      string
+	Name     string
+	Status   Status
+	Enabled  bool
+	Calls    int
+	LastTool string
+}
+
+type sessionUse struct {
+	keys  []string
+	calls map[string]int
+	last  map[string]string
+}
+
+// SetSessionLookup sets how the proxy learns the project of a session and whether the session is open.
+func (s *Service) SetSessionLookup(lookup func(ctx context.Context, sessionID string) (projectID string, open bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionLookup = lookup
+}
+
+// ForSession returns the tool servers a new or restored session gets, and records them for the session.
+func (s *Service) ForSession(_ context.Context, in SessionInput) []ports.ChatMCPServerConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if in.SessionID == "" || s.load() != nil {
+		return nil
+	}
+	token, err := s.sessionToken(in.SessionID)
+	if err != nil {
+		return nil
+	}
+	var out []ports.ChatMCPServerConfig
+	use := s.sessions[in.SessionID]
+	if use == nil {
+		use = &sessionUse{calls: map[string]int{}, last: map[string]string{}}
+		s.sessions[in.SessionID] = use
+	}
+	use.keys = use.keys[:0]
+	for i := range s.records {
+		rec := &s.records[i]
+		if !rec.Enabled || (rec.ProjectID != "" && rec.ProjectID != in.ProjectID) || in.Native[rec.Key] {
+			continue
+		}
+		use.keys = append(use.keys, rec.Key)
+		if rec.Transport == TransportStdio {
+			out = append(out, ports.ChatMCPServerConfig{Name: rec.Key, Type: "stdio", Command: rec.Command, Args: slices.Clone(rec.Args), Env: maps.Clone(rec.Env)})
+			continue
+		}
+		out = append(out, ports.ChatMCPServerConfig{
+			Name: rec.Key, Type: "http",
+			URL:     s.baseURL + proxyPrefix + url.PathEscape(in.SessionID) + "/connectors/" + url.PathEscape(rec.Key),
+			Headers: map[string]string{"Authorization": "Bearer " + token},
+		})
+	}
+	return out
+}
+
+// SessionConnectors returns the connectors a session got and how it used them.
+func (s *Service) SessionConnectors(_ context.Context, sessionID string) ([]SessionConnector, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.load(); err != nil {
+		return nil, err
+	}
+	use := s.sessions[sessionID]
+	if use == nil {
+		return []SessionConnector{}, nil
+	}
+	out := make([]SessionConnector, 0, len(use.keys))
+	for _, key := range use.keys {
+		one := SessionConnector{Key: key, Name: key, Status: StatusUnavailable, Calls: use.calls[key], LastTool: use.last[key]}
+		if i := s.index(key); i >= 0 {
+			one.Name, one.Status, one.Enabled = s.records[i].Name, s.records[i].Status, s.records[i].Enabled
+		}
+		out = append(out, one)
+	}
+	return out, nil
+}
+
+// ServeProxy passes one request of a session to a connector's server and adds the connector's sign-in.
+func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, key string) {
+	rec, problem := s.admit(r, sessionID, key)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxProxyBody+1))
+	if err != nil || len(body) > maxProxyBody {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	var call struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	_ = json.Unmarshal(body, &call)
+	if problem != "" {
+		if rec == nil {
+			http.Error(w, problem, http.StatusUnauthorized)
+			return
+		}
+		writeRPCError(w, call.ID, problem)
+		return
+	}
+	target, err := url.Parse(rec.URL)
+	if err != nil {
+		writeRPCError(w, call.ID, rec.Name+" has a bad address. Ask the user to open Settings, Connectors.")
+		return
+	}
+	signed, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rec.URL, http.NoBody)
+	if err == nil {
+		err = s.authorize(signed, rec)
+	}
+	if err != nil {
+		s.observe(rec.ID, StatusNeedsSignIn, "sign-in", err.Error())
+		writeRPCError(w, call.ID, needsSignIn(rec.Name))
+		return
+	}
+	s.count(sessionID, rec.Key, call.Method, call.Params.Name)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	r.ContentLength = int64(len(body))
+	(&httputil.ReverseProxy{
+		Rewrite: func(p *httputil.ProxyRequest) {
+			p.Out.URL = target
+			p.Out.Host = target.Host
+			p.Out.Header.Del("Authorization")
+			p.Out.Header.Del("Cookie")
+			for name, values := range signed.Header {
+				p.Out.Header[name] = values
+			}
+		},
+		FlushInterval: -1,
+		ModifyResponse: func(resp *http.Response) error {
+			refused := resp.StatusCode == http.StatusUnauthorized ||
+				(resp.StatusCode == http.StatusForbidden && resp.Header.Get("WWW-Authenticate") != "")
+			switch {
+			case refused:
+				s.observe(rec.ID, StatusNeedsSignIn, "sign-in", "the server refused the sign-in")
+				answer := rpcError(call.ID, needsSignIn(rec.Name))
+				_ = resp.Body.Close()
+				resp.StatusCode, resp.Status = http.StatusOK, "200 OK"
+				resp.Header = http.Header{"Content-Type": {"application/json"}}
+				resp.Body, resp.ContentLength = io.NopCloser(bytes.NewReader(answer)), int64(len(answer))
+			case resp.StatusCode >= http.StatusInternalServerError:
+				s.observe(rec.ID, StatusUnavailable, "reach", resp.Status)
+			case resp.StatusCode < http.StatusMultipleChoices && (call.Method == "initialize" || call.Method == "tools/list"):
+				s.observe(rec.ID, StatusConnected, "", "")
+			}
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			if !errors.Is(err, context.Canceled) {
+				s.observe(rec.ID, StatusUnavailable, "reach", err.Error())
+			}
+			writeRPCError(w, call.ID, rec.Name+" did not answer: "+err.Error())
+		},
+	}).ServeHTTP(w, r)
+}
+
+func (s *Service) admit(r *http.Request, sessionID, key string) (*record, string) {
+	s.mu.Lock()
+	lookup := s.sessionLookup
+	want, tokenErr := s.sessionToken(sessionID)
+	loadErr := s.load()
+	var rec *record
+	if i := s.index(key); loadErr == nil && i >= 0 && s.records[i].Key == key {
+		found := s.records[i]
+		rec = &found
+	}
+	s.mu.Unlock()
+	given := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if tokenErr != nil || sessionID == "" || !hmac.Equal([]byte(want), []byte(given)) {
+		return nil, "unknown session"
+	}
+	projectID := ""
+	if lookup != nil {
+		var open bool
+		if projectID, open = lookup(r.Context(), sessionID); !open {
+			return nil, "unknown session"
+		}
+	}
+	switch {
+	case rec == nil || rec.Transport != TransportHTTP || (lookup != nil && rec.ProjectID != "" && rec.ProjectID != projectID):
+		return &record{}, "This session has no connector named " + key + "."
+	case !rec.Enabled:
+		return rec, rec.Name + " is turned off. Ask the user to open Settings, Connectors, and turn it on."
+	}
+	return rec, ""
+}
+
+func (s *Service) count(sessionID, key, method, tool string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	use := s.sessions[sessionID]
+	if use == nil || method != "tools/call" {
+		return
+	}
+	use.calls[key]++
+	use.last[key] = tool
+}
+
+func (s *Service) observe(id string, status Status, step, detail string) {
+	s.mu.Lock()
+	i := s.index(id)
+	same := i < 0 || s.records[i].Status == status
+	s.mu.Unlock()
+	if !same {
+		_, _ = s.setStatus(id, status, step, detail, nil)
+	}
+}
+
+func (s *Service) sessionToken(sessionID string) (string, error) {
+	if s.tokenKey == nil {
+		path := filepath.Join(filepath.Dir(s.path), keyFileName)
+		key, err := os.ReadFile(path) // #nosec G304 -- path is the daemon's own data file.
+		if errors.Is(err, fs.ErrNotExist) || (err == nil && len(key) < sha256.Size) {
+			key = make([]byte, sha256.Size)
+			if _, err := rand.Read(key); err != nil {
+				return "", err
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				return "", err
+			}
+			err = os.WriteFile(path, key, 0o600)
+		}
+		if err != nil {
+			return "", err
+		}
+		s.tokenKey = key
+	}
+	mac := hmac.New(sha256.New, s.tokenKey)
+	mac.Write([]byte(sessionID))
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+func needsSignIn(name string) string {
+	return name + " needs sign-in. Ask the user to open Settings, Connectors, and press Sign in."
+}
+
+func rpcError(id json.RawMessage, message string) []byte {
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
+	body, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": rpcServerError, "message": message},
+	})
+	return body
+}
+
+func writeRPCError(w http.ResponseWriter, id json.RawMessage, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(rpcError(id, message))
+}

@@ -46,6 +46,10 @@ type Service struct {
 	records []record
 	signIns map[string]*signIn
 	sources map[string]oauth2.TokenSource
+
+	sessions      map[string]*sessionUse
+	sessionLookup func(ctx context.Context, sessionID string) (projectID string, open bool)
+	tokenKey      []byte
 }
 
 // New returns a Service that keeps its file in dataDir. baseURL is the loopback address of the daemon.
@@ -53,7 +57,7 @@ func New(dataDir, baseURL string) *Service {
 	return &Service{
 		path: filepath.Join(dataDir, fileName), baseURL: strings.TrimRight(baseURL, "/"),
 		http: &http.Client{Timeout: 30 * time.Second}, now: time.Now,
-		signIns: map[string]*signIn{}, sources: map[string]oauth2.TokenSource{},
+		signIns: map[string]*signIn{}, sources: map[string]oauth2.TokenSource{}, sessions: map[string]*sessionUse{},
 	}
 }
 
