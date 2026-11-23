@@ -1786,7 +1786,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const countSend = () => {
 			const draft = textRef.current.trim();
 			if (draft === "/compact" && onCompact) return;
-			if (input && !typingLocked && (draft || fileAttachments.attachments.length > 0)) {
+			if (input && !typingLocked && (draft || fileAttachments.attachments.length > 0 || contextReferences.length > 0)) {
 				uiUsage.messageSent(input, forceSteer && canSteerDraft ? "steer" : queuesDraft ? "queue" : "send", fileAttachments.attachments.length > 0);
 			}
 		};
