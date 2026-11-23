@@ -319,6 +319,9 @@ describe("Orchestrator CLI", () => {
 		expect(runsAOSpawn("'/Users/me/.ao/bin/ao' spawn --name 'snapshot'")).toBe(true);
 		expect(runsAOSpawn("\"/opt/ao tools/ao\" spawn")).toBe(true);
 		expect(runsAOSpawn("bash -lc 'ao spawn --name snapshot'")).toBe(true);
+		expect(runsAOSpawn("bash -lc 'cd /repo\nao spawn --name snapshot'")).toBe(true);
+		expect(runsAOSpawn("zsh -lc \"cd /repo\nexport AO_DEBUG=1\nao spawn --name 'snapshot'\"")).toBe(true);
+		expect(runsAOSpawn("bash -lc 'cd /repo\ngrep -rn \"ao spawn\" docs/'")).toBe(false);
 		expect(runsAOSpawn("grep -rn 'ao spawn' docs/")).toBe(false);
 		expect(runsAOSpawn("echo \"run ao spawn later\"")).toBe(false);
 		expect(runsAOSpawn("ao send --session s-1 --message 'ao spawn failed'")).toBe(false);

@@ -171,14 +171,14 @@ export function describeCommandStep(command: string): CommandStep {
  * `grep "ao spawn" docs.md` only mentions it.
  */
 export function runsAOSpawn(command: string): boolean {
-	return commandSegments(command).some((segment) => isAOSpawn(segment, 0));
+	return commandSegments(command, true).some((segment) => isAOSpawn(segment, 0));
 }
 
 function isAOSpawn(segment: Segment, depth: number): boolean {
 	if (segment.binary === "ao") return positionals(segment.args, AO_VALUE_FLAGS)[0] === "spawn";
 	if (depth > 1 || !SHELLS.has(segment.binary)) return false;
 	const inline = flagValue(segment.args, ["-c", "-lc", "-ic"]);
-	return inline !== undefined && commandSegments(inline).some((inner) => isAOSpawn(inner, depth + 1));
+	return inline !== undefined && commandSegments(inline, true).some((inner) => isAOSpawn(inner, depth + 1));
 }
 
 /**
@@ -1059,11 +1059,13 @@ function onlyObserves(segment: Segment): boolean {
 
 /**
  * Every segment that does something, in order, without `cd` and the like. A
- * `command -v gh &&` check in front of the real work is left out too.
+ * `command -v gh &&` check in front of the real work is left out too. With
+ * `keepQuotedNewlines`, a quoted script keeps its lines, so a `bash -lc` script
+ * whose first line is `cd repo` and second `ao spawn` reads as running `ao spawn`.
  */
-function commandSegments(command: string): Segment[] {
+function commandSegments(command: string, keepQuotedNewlines = false): Segment[] {
 	const segments: Segment[] = [];
-	for (const line of logicalLines(command)) {
+	for (const line of logicalLines(command, keepQuotedNewlines)) {
 		for (const words of splitSegments(tokenize(line))) {
 			const segment = toSegment(words);
 			if (segment && !NAVIGATION.has(segment.binary) && !SHELL_SYNTAX.has(segment.binary)) segments.push(segment);
@@ -1086,7 +1088,7 @@ const HEREDOC_START = /(?<!<)<<(?!<)-?\s*["']?([\w.-]+)["']?/;
  * on to the next line and so does an open quote, comments go, and a heredoc's body
  * is the file's content, not more commands.
  */
-function logicalLines(command: string): string[] {
+function logicalLines(command: string, keepQuotedNewlines = false): string[] {
 	const lines: string[] = [];
 	let line = "";
 	let quote: string | undefined;
@@ -1100,7 +1102,7 @@ function logicalLines(command: string): string[] {
 		quote = scanned.quote;
 		heredoc = HEREDOC_START.exec(scanned.text)?.[1];
 		const text = scanned.text.trimEnd();
-		if (quote) line += `${scanned.text} `;
+		if (quote) line += `${scanned.text}${keepQuotedNewlines ? "\n" : " "}`;
 		else if (text.endsWith("\\")) line += `${text.slice(0, -1)} `;
 		else if (/(?:&&|\|)$/.test(text)) line += `${text} `;
 		else {
