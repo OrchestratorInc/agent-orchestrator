@@ -15,6 +15,8 @@ type NotificationPreferencesState = {
 	setSourceMuted: (source: NotificationSource, muted: boolean) => Promise<void>;
 };
 
+type Preferences = Pick<NotificationPreferencesState, "enabled" | "filters">;
+
 let settingRevision = 0;
 let pendingLoad: Promise<void> | undefined;
 
@@ -26,16 +28,23 @@ function toggled(list: string[], value: string, include: boolean): string[] {
 export const useNotificationPreferencesStore = create<NotificationPreferencesState>((set, get) => {
 	// Shows the change at once and rolls it back if it cannot be saved, so a
 	// toggle never lags behind the click.
-	const save = async (patch: Pick<NotificationPreferencesState, "enabled" | "filters">) => {
+	const save = async (patch: Preferences) => {
 		const revision = ++settingRevision;
 		const previous = { enabled: get().enabled, filters: get().filters };
 		set({ ...patch, saving: true, saveError: false });
 		try {
 			await aoBridge.uiSettings.set({ notificationsEnabled: patch.enabled, notificationFilters: patch.filters });
-			if (revision === settingRevision) set({ loaded: true, saving: false });
+			if (revision === settingRevision) set({ saving: false });
 		} catch {
 			if (revision === settingRevision) set({ ...previous, saving: false, saveError: true });
 		}
+	};
+	// Every save writes the whole preferences, so an edit waits for the saved
+	// ones and changes only its own field. Built from the defaults instead, an
+	// edit made while loading would wipe the saved mutes.
+	const edit = async (change: (current: Preferences) => Preferences) => {
+		if (!get().loaded) await get().load();
+		return save(change(get()));
 	};
 	return {
 		enabled: DEFAULT_UI_SETTINGS.notificationsEnabled,
@@ -46,7 +55,6 @@ export const useNotificationPreferencesStore = create<NotificationPreferencesSta
 		load: async () => {
 			if (get().loaded) return;
 			if (pendingLoad) return pendingLoad;
-			const revisionAtStart = settingRevision;
 			pendingLoad = (async () => {
 				let enabled = DEFAULT_UI_SETTINGS.notificationsEnabled;
 				let filters = DEFAULT_UI_SETTINGS.notificationFilters;
@@ -57,7 +65,7 @@ export const useNotificationPreferencesStore = create<NotificationPreferencesSta
 				} catch {
 					// A missing bridge or unreadable setting must not prevent the UI from starting.
 				}
-				if (revisionAtStart === settingRevision) set({ enabled, filters, loaded: true });
+				set({ enabled, filters, loaded: true });
 			})();
 			try {
 				await pendingLoad;
@@ -65,14 +73,10 @@ export const useNotificationPreferencesStore = create<NotificationPreferencesSta
 				pendingLoad = undefined;
 			}
 		},
-		setEnabled: (enabled) => save({ enabled, filters: get().filters }),
-		setKindMuted: (kind, muted) => {
-			const { enabled, filters } = get();
-			return save({ enabled, filters: { ...filters, mutedKinds: toggled(filters.mutedKinds, kind, muted) } });
-		},
-		setSourceMuted: (source, muted) => {
-			const { enabled, filters } = get();
-			return save({ enabled, filters: { ...filters, mutedSources: toggled(filters.mutedSources, source, muted) } });
-		},
+		setEnabled: (enabled) => edit(({ filters }) => ({ enabled, filters })),
+		setKindMuted: (kind, muted) =>
+			edit(({ enabled, filters }) => ({ enabled, filters: { ...filters, mutedKinds: toggled(filters.mutedKinds, kind, muted) } })),
+		setSourceMuted: (source, muted) =>
+			edit(({ enabled, filters }) => ({ enabled, filters: { ...filters, mutedSources: toggled(filters.mutedSources, source, muted) } })),
 	};
 });

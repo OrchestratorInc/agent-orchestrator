@@ -106,6 +106,7 @@ const KIND_COPY: Record<NotificationKindId, { icon: AppIcon; label: MessageKey; 
 export function NotificationsSettingsSection({ onManage, focusManage }: { onManage: () => void; focusManage: boolean }) {
 	const { t } = useTranslation();
 	const enabled = useNotificationPreferencesStore((state) => state.enabled);
+	const loaded = useNotificationPreferencesStore((state) => state.loaded);
 	const saving = useNotificationPreferencesStore((state) => state.saving);
 	const saveError = useNotificationPreferencesStore((state) => state.saveError);
 	const setEnabled = useNotificationPreferencesStore((state) => state.setEnabled);
@@ -134,6 +135,7 @@ export function NotificationsSettingsSection({ onManage, focusManage }: { onMana
 				<Switch
 					aria-label={t("settings.notifications")}
 					checked={enabled}
+					disabled={!loaded || saving}
 					onCheckedChange={(next) => {
 						void setEnabled(next);
 					}}
@@ -178,6 +180,10 @@ export function NotificationsSettingsSection({ onManage, focusManage }: { onMana
 export function ManageNotificationsPage({ onBack }: { onBack: () => void }) {
 	const { t } = useTranslation();
 	const filters = useNotificationPreferencesStore((state) => state.filters);
+	// Each save writes every preference, so the switches wait until the saved
+	// ones have loaded, and for one save to finish before the next: a second in
+	// flight would carry the first's change past its rollback.
+	const locked = useNotificationPreferencesStore((state) => !state.loaded || state.saving);
 	const saveError = useNotificationPreferencesStore((state) => state.saveError);
 	const setKindMuted = useNotificationPreferencesStore((state) => state.setKindMuted);
 	const setSourceMuted = useNotificationPreferencesStore((state) => state.setSourceMuted);
@@ -221,6 +227,7 @@ export function ManageNotificationsPage({ onBack }: { onBack: () => void }) {
 							<Switch
 								aria-label={t(copy.label)}
 								checked={!filters.mutedKinds.includes(id)}
+								disabled={locked}
 								onCheckedChange={(on) => {
 									void setKindMuted(id, !on);
 								}}
@@ -235,6 +242,7 @@ export function ManageNotificationsPage({ onBack }: { onBack: () => void }) {
 						<Switch
 							aria-label={machine.label}
 							checked={!filters.mutedSources.includes(machine.source)}
+							disabled={locked}
 							onCheckedChange={(on) => {
 								void setSourceMuted(machine.source, !on);
 							}}

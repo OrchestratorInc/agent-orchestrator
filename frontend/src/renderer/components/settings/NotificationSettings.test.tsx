@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
@@ -110,6 +110,32 @@ describe("General › Notifications", () => {
 
 		const row = screen.getByRole("switch", { name: "Pull request merged" }).closest<HTMLElement>("[data-notification-kind]")!;
 		expect(within(row).getByText("A pull request was merged.")).toBeInTheDocument();
+	});
+
+	it("holds the switch until the saved preferences have loaded", () => {
+		useNotificationPreferencesStore.setState({ loaded: false });
+		renderGeneral();
+
+		expect(screen.getByRole("switch", { name: "Notifications" })).toBeDisabled();
+		act(() => useNotificationPreferencesStore.setState({ loaded: true }));
+		expect(screen.getByRole("switch", { name: "Notifications" })).toBeEnabled();
+	});
+
+	it("takes one change at a time, so a failed one rolls back to what was saved", async () => {
+		renderGeneral();
+		await userEvent.click(screen.getByRole("button", { name: /Manage notifications/ }));
+		let reject!: (error: Error) => void;
+		setUiSettings.mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail; }));
+
+		await userEvent.click(screen.getByRole("switch", { name: "Pull request merged" }));
+		expect(screen.getByRole("switch", { name: "Pull request merged" })).not.toBeChecked();
+		expect(screen.getByRole("switch", { name: "Studio Mac" })).toBeDisabled();
+		expect(screen.getByRole("switch", { name: "CI failed" })).toBeDisabled();
+
+		await act(async () => reject(new Error("disk full")));
+		expect(screen.getByRole("switch", { name: "Pull request merged" })).toBeChecked();
+		expect(screen.getByRole("switch", { name: "Studio Mac" })).toBeEnabled();
+		expect(screen.getByRole("alert")).toBeInTheDocument();
 	});
 
 	it("leaves Cloud out of the machines without AO Cloud", async () => {

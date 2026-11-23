@@ -251,7 +251,7 @@ beforeEach(() => {
 	connectMock.mockReset();
 	paramsMock.mockReset().mockReturnValue({});
 	useUiStore.setState({ visibleTerminalKindBySession: {} });
-	useNotificationPreferencesStore.setState({ enabled: true, filters: { mutedKinds: [], mutedSources: [] } });
+	useNotificationPreferencesStore.setState({ enabled: true, filters: { mutedKinds: [], mutedSources: [] }, loaded: true });
 	fetchNextPageMock.mockReset().mockResolvedValue(undefined);
 	markAllMock.mockReset().mockResolvedValue(0);
 	navigateMock.mockReset();
@@ -1211,6 +1211,59 @@ describe("NotificationCenter with notification preferences", () => {
 		expect(screen.queryByRole("list")).not.toBeInTheDocument();
 		expect(markAllMock).not.toHaveBeenCalled();
 		expect(cloudMarkReadMock).not.toHaveBeenCalled();
+	});
+
+	it("shows notifications as off ahead of a failed or pending history load", async () => {
+		useNotificationPreferencesStore.setState({ enabled: false });
+		notificationQueryMock.mockImplementation((status: NotificationListStatus) =>
+			status === "all" ? { ...notificationQueryResult(status, { isError: true }), data: undefined } : notificationQueryResult(status),
+		);
+		renderNotificationCenter();
+		await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+		await screen.findByRole("dialog", { name: "Notifications" });
+
+		expect(screen.getByText("Notifications are off. Turn them on in Settings › General.")).toBeInTheDocument();
+		expect(screen.queryByText("Could not load notifications.")).not.toBeInTheDocument();
+	});
+
+	it("keeps Clear all for rows the preferences hide", async () => {
+		mute({ mutedSources: ["local", "cloud"] });
+		renderNotificationCenter();
+		await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+		await screen.findByText("No notifications yet.");
+
+		await userEvent.click(screen.getByRole("button", { name: "Clear all" }));
+		expect(clearAllMock).toHaveBeenCalledTimes(1);
+		expect(cloudClearAllMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps loading earlier history while every loaded row is hidden", async () => {
+		cloudNotificationsMock.mockReturnValue(emptyCloudResult);
+		mute({ mutedKinds: ["ready_to_merge", "needs_input"] });
+		notificationQueryMock.mockImplementation((status: NotificationListStatus) =>
+			notificationQueryResult(status, { hasNextPage: status === "all" }),
+		);
+		renderNotificationCenter();
+		await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+		await screen.findByRole("dialog", { name: "Notifications" });
+
+		await waitFor(() => expect(fetchNextPageMock).toHaveBeenCalledTimes(1));
+		expect(screen.queryByText("No notifications yet.")).not.toBeInTheDocument();
+		expect(screen.getByRole("list")).toBeInTheDocument();
+	});
+
+	it("raises no OS alert before the saved preferences have loaded", () => {
+		useNotificationPreferencesStore.setState({ loaded: false });
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<NotificationRuntime />
+			</QueryClientProvider>,
+		);
+		const shouldAlert = connectMock.mock.calls[0][2] as (notification: NotificationDTO) => boolean;
+
+		expect(shouldAlert(allNotifications[1])).toBe(false);
+		act(() => useNotificationPreferencesStore.setState({ loaded: true }));
+		expect(shouldAlert(allNotifications[1])).toBe(true);
 	});
 
 	it("only lets allowed local notifications raise an OS alert, as preferences change", () => {

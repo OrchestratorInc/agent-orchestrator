@@ -247,9 +247,16 @@ export function NotificationRuntime() {
 	// Whose Cloud inbox is loaded; a new account or organization is a new inbox.
 	const cloudScope = cloudAll.data ? `${cloudUserId}:${cloudOrg?.id ?? ""}` : undefined;
 	const preferences = useNotificationPreferences();
-	// Read by the long-lived streams and effects below, which need the current value.
-	const preferencesRef = useRef(preferences);
-	preferencesRef.current = preferences;
+	const preferencesLoaded = useNotificationPreferencesStore((state) => state.loaded);
+	// Read by the long-lived streams and effects below, which need the current
+	// value. Nothing alerts until the saved preferences have loaded, so a muted
+	// notification cannot slip through on startup.
+	const preferencesRef = useRef({ preferences, loaded: preferencesLoaded });
+	preferencesRef.current = { preferences, loaded: preferencesLoaded };
+	const shouldAlert = useCallback((type: string, source: NotificationSource) => {
+		const { preferences: current, loaded } = preferencesRef.current;
+		return loaded && isNotificationAllowed(current, type, source);
+	}, []);
 	// The same count as the bell's.
 	const unreadCount = bellUnreadCount(
 		preferences,
@@ -277,8 +284,8 @@ export function NotificationRuntime() {
 	}, []);
 
 	const shouldAlertLocal = useCallback(
-		(notification: NotificationDTO) => isNotificationAllowed(preferencesRef.current, notification.type, "local"),
-		[],
+		(notification: NotificationDTO) => shouldAlert(notification.type, "local"),
+		[shouldAlert],
 	);
 	useEffect(
 		() => createNotificationsTransport(queryClient, getVisibleAgentSessionId, shouldAlertLocal).connect(),
@@ -303,7 +310,7 @@ export function NotificationRuntime() {
 			}
 			for (const notification of host.data.notifications) {
 				if (previousIds.has(notification.id)) continue;
-				if (!isNotificationAllowed(preferencesRef.current, notification.type, remoteNotificationSource(host.hostId))) continue;
+				if (!shouldAlert(notification.type, remoteNotificationSource(host.hostId))) continue;
 				const id = `${REMOTE_NOTIFICATION_PREFIX}${notificationKey(host.hostId, notification.id)}`;
 				shownRemoteNotifications.current.set(id, notification);
 				if (shownRemoteNotifications.current.size > 256) {
@@ -327,7 +334,7 @@ export function NotificationRuntime() {
 				if (previousIds.size > 512) previousIds.delete(previousIds.values().next().value!);
 			}
 		}
-	}, [remoteUnread.hosts]);
+	}, [remoteUnread.hosts, shouldAlert]);
 
 	// A Cloud row that arrives while the list is loaded raises an OS
 	// notification, as a local one does; the list as first loaded (or after
@@ -344,7 +351,7 @@ export function NotificationRuntime() {
 			previous.add(notification.id);
 			if (previous.size > 512) previous.delete(previous.values().next().value!);
 			if (notification.status !== "unread" || notification.resolvedAt) continue;
-			if (!isNotificationAllowed(preferencesRef.current, notification.type, "cloud")) continue;
+			if (!shouldAlert(notification.type, "cloud")) continue;
 			const id = `${CLOUD_NOTIFICATION_PREFIX}${notification.id}`;
 			shownCloudNotifications.current.set(id, notification);
 			if (shownCloudNotifications.current.size > 256) {
@@ -362,7 +369,7 @@ export function NotificationRuntime() {
 				watched,
 			});
 		}
-	}, [cloudItems, cloudScope]);
+	}, [cloudItems, cloudScope, shouldAlert]);
 
 	useEffect(() => {
 		return aoBridge.notifications.onClick((id) => {
@@ -823,6 +830,25 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		return merged.sort((a, b) => Date.parse(b.kind === "cloud" ? b.item.createdAt : b.notification.createdAt) - Date.parse(a.kind === "cloud" ? a.item.createdAt : a.notification.createdAt));
 	}, [entries, visibleCloudItems]);
 	const isEmpty = rows.length === 0;
+	// Clear all also clears the rows the preferences hide, so it counts them too.
+	const nothingToClear = localEmpty && allCloudItems.length === 0 &&
+		[...remoteAll.hosts, ...remoteUnread.hosts].every((host) => !host.data?.notifications.length);
+	const remoteEarlierCursor = (host: (typeof remoteAll.hosts)[number]) => {
+		const older = remoteOlderPages[host.hostId] ?? [];
+		if (!host.data) return undefined;
+		return older.length > 0 ? older[older.length - 1].nextCursor : host.data.nextCursor;
+	};
+	// Loaded rows can all be ones the preferences hide while older ones remain,
+	// so the list (and its way to load more) stays up until history runs out.
+	const hasEarlier = localHasMore || remoteAll.hosts.some((host) => Boolean(remoteEarlierCursor(host)));
+	// An empty list has nothing to scroll, so local history keeps loading on
+	// its own until an allowed row shows or it ends.
+	const seekLocal = open && preferences.enabled && isEmpty && localHasMore;
+	const fetchNextLocalPage = allQuery.fetchNextPage;
+	useEffect(() => {
+		if (!seekLocal || allQuery.isFetchingNextPage || allQuery.isFetchNextPageError) return;
+		void fetchNextLocalPage();
+	}, [allQuery.isFetchNextPageError, allQuery.isFetchingNextPage, fetchNextLocalPage, seekLocal]);
 
 	return (
 		<Popover onOpenChange={setPanelOpen} open={open}>
@@ -868,7 +894,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 					</div>
 					<div className="flex shrink-0 items-center gap-1">
 						<Button
-							disabled={isEmpty || localLoading || clearingAll || clearAll.isPending}
+							disabled={nothingToClear || localLoading || clearingAll || clearAll.isPending}
 							onClick={handleClearAll}
 							size="sm"
 							type="button"
@@ -939,13 +965,13 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						</Button>
 					</div>
 				) : null}
-				{(localLoadFailed || remoteLoadFailed) && isEmpty ? (
+				{!preferences.enabled ? (
+					<NotificationEmpty icon={Bell} message={t("notify.off")} />
+				) : (localLoadFailed || remoteLoadFailed) && isEmpty ? (
 					<NotificationEmpty icon={CircleAlert} message={t("notify.loadFailed")} />
 				) : localLoading || (remoteLoading && isEmpty) ? (
 					<NotificationEmpty icon={LoaderCircle} message={t("notify.loading")} />
-				) : !preferences.enabled ? (
-					<NotificationEmpty icon={Bell} message={t("notify.off")} />
-				) : isEmpty ? (
+				) : isEmpty && !hasEarlier ? (
 					<NotificationEmpty icon={CheckCheck} message={t("notify.emptyAll")} />
 					) : (
 						<>
@@ -1044,9 +1070,8 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							</div>
 						) : null}
 						{remoteAll.hosts.map((host) => {
-							const older = remoteOlderPages[host.hostId] ?? [];
-							const cursor = older.length > 0 ? older[older.length - 1].nextCursor : host.data?.nextCursor;
-							if (!cursor || !host.data) return null;
+							const cursor = remoteEarlierCursor(host);
+							if (!cursor) return null;
 							return (
 								<Pressable
 									className="block w-full border-t border-border bg-surface px-3 py-3 text-center text-caption font-medium text-muted-foreground transition-none hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"

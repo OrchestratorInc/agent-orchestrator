@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
 import type { NotificationDTO, NotificationListStatus, NotificationsPage } from "../lib/notifications";
+import { useNotificationPreferencesStore } from "../stores/notification-preferences-store";
 import { NotificationCenter, NotificationRuntime } from "./NotificationCenter";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -111,6 +112,7 @@ beforeEach(() => {
 	remoteWorkspaceFailed = false;
 	remoteTerminatedA = false;
 	remoteErrorB = false;
+	useNotificationPreferencesStore.setState({ enabled: true, filters: { mutedKinds: [], mutedSources: [] }, loaded: true });
 	mocks.markLocal.mockResolvedValue(1);
 	mocks.markRemote.mockResolvedValue({ data: { updatedCount: 1 } });
 	mocks.clearRemote.mockResolvedValue({ data: { notification: hostB }, response: { status: 200 } });
@@ -252,6 +254,20 @@ it("loads and acknowledges older notifications from the correct host", async () 
 	expect(screen.queryByRole("button", { name: "Load earlier from Host A" })).not.toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Clear notification: Host A: Older A ping" }));
 	await waitFor(() => expect(screen.queryByText("Older A ping")).not.toBeInTheDocument());
+});
+
+it("still offers older notifications from a host when every loaded row is hidden", async () => {
+	nextCursorA = "older-a";
+	useNotificationPreferencesStore.setState({ filters: { mutedKinds: ["needs_input"], mutedSources: [] } });
+	render(
+		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+			<TooltipProvider><NotificationCenter /></TooltipProvider>
+		</QueryClientProvider>,
+	);
+	await userEvent.click(screen.getByRole("button", { name: "Notifications" }));
+
+	expect(await screen.findByRole("button", { name: "Load earlier from Host A" })).toBeInTheDocument();
+	expect(screen.queryByText("No notifications yet.")).not.toBeInTheDocument();
 });
 
 it("drops older pages when polling moves the first-page cursor", async () => {

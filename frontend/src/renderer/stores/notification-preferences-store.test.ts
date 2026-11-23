@@ -36,6 +36,7 @@ describe("notification-preferences-store", () => {
 	});
 
 	it("saves a muted kind and machine alongside the master switch", async () => {
+		useNotificationPreferencesStore.setState({ loaded: true });
 		const store = useNotificationPreferencesStore.getState();
 		await store.setKindMuted("ci_failed", true);
 		await useNotificationPreferencesStore.getState().setSourceMuted("remote:host-a", true);
@@ -48,6 +49,7 @@ describe("notification-preferences-store", () => {
 	});
 
 	it("shows a change at once and rolls it back when it cannot be saved", async () => {
+		useNotificationPreferencesStore.setState({ loaded: true });
 		let reject!: (error: Error) => void;
 		setUiSettings.mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail; }));
 		const saving = useNotificationPreferencesStore.getState().setEnabled(false);
@@ -57,13 +59,25 @@ describe("notification-preferences-store", () => {
 		expect(useNotificationPreferencesStore.getState()).toMatchObject({ enabled: true, saveError: true, saving: false });
 	});
 
-	it("keeps a change made while the saved settings were still loading", async () => {
+	it("applies a change made while loading to the saved settings, keeping the rest", async () => {
 		let resolveGet!: (settings: object) => void;
 		getUiSettings.mockReturnValueOnce(new Promise((resolve) => { resolveGet = resolve; }));
 		const loading = useNotificationPreferencesStore.getState().load();
-		await useNotificationPreferencesStore.getState().setEnabled(false);
-		resolveGet({ notificationsEnabled: true, notificationFilters: none });
-		await loading;
-		expect(useNotificationPreferencesStore.getState().enabled).toBe(false);
+		const saving = useNotificationPreferencesStore.getState().setEnabled(false);
+		await Promise.resolve();
+		expect(setUiSettings).not.toHaveBeenCalled();
+		resolveGet({ notificationsEnabled: true, notificationFilters: { mutedKinds: [], mutedSources: ["cloud"] } });
+		await Promise.all([loading, saving]);
+		const saved = { mutedKinds: [], mutedSources: ["cloud"] };
+		expect(setUiSettings).toHaveBeenCalledWith({ notificationsEnabled: false, notificationFilters: saved });
+		expect(useNotificationPreferencesStore.getState()).toMatchObject({ enabled: false, filters: saved, loaded: true });
+	});
+
+	it("reads the saved settings before an edit made without a load", async () => {
+		await useNotificationPreferencesStore.getState().setKindMuted("ci_failed", true);
+		expect(setUiSettings).toHaveBeenCalledWith({
+			notificationsEnabled: false,
+			notificationFilters: { mutedKinds: ["pr_merged", "ci_failed"], mutedSources: ["cloud"] },
+		});
 	});
 });
