@@ -316,7 +316,8 @@ type Controller struct {
 	// Interface drain keeps dispatching accepted rows; interface interrupt and an
 	// idle branch mutation stop dispatch entirely. The target controller is not
 	// started until this controller reports quiescent and is closed.
-	handoff controllerHandoff
+	handoff  controllerHandoff
+	keepHeld bool
 	// handoffInterrupted is the provider turn an interrupt-policy handoff
 	// stopped, so the move can say on that exact turn why it ended.
 	handoffInterrupted string
@@ -2484,6 +2485,17 @@ func (c *Controller) BeginHandoff(
 	if err := c.ArmHandoff(ctx, policy); err != nil {
 		return err
 	}
+	moving, err := c.accountMoveActive(ctx)
+	if err == nil && !moving {
+		err = releaseHeldQueue(ctx, c.store, c.conversation.ID)
+	}
+	if err != nil {
+		c.AbortHandoff()
+		return fmt.Errorf("check account move before handoff: %w", err)
+	}
+	c.mu.Lock()
+	c.keepHeld = moving
+	c.mu.Unlock()
 
 	if policy == domain.SessionInterfaceTransitionInterrupt {
 		// Target preflight has succeeded. Settle every accepted queue row while
@@ -2546,16 +2558,12 @@ func (c *Controller) BeginHandoff(
 				c.AbortHandoff()
 				return fmt.Errorf("check queued turns before handoff: %w", err)
 			case policy == domain.SessionInterfaceTransitionDrain:
-				moving, err := c.accountMoveActive(ctx)
-				held := false
-				if err == nil && moving {
-					held, err = c.queueHeld(ctx)
-				}
-				if err == nil && held {
+				held, err := c.queueHeld(ctx)
+				if err == nil && held && moving {
 					c.sendMu.Unlock()
 					return nil
 				}
-				if err == nil && !moving {
+				if err == nil && held {
 					err = releaseHeldQueue(ctx, c.store, c.conversation.ID)
 				}
 				if err == nil {
@@ -3487,13 +3495,11 @@ func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Ti
 		return err
 	}
 	c.mu.Lock()
-	moving := c.handoff == controllerHandoffInterfaceDrain
+	keepHeld := c.handoff == controllerHandoffInterfaceDrain && c.keepHeld
 	c.mu.Unlock()
-	if store, ok := c.store.(queueHoldStore); ok && moving {
-		if account, err := c.accountMoveActive(ctx); err == nil && account {
-			_, err := store.CleanupOwnedControllerWorkKeepingHeldQueue(ctx, c.sessionID, c.conversation.ID, c.generation, now)
-			return err
-		}
+	if store, ok := c.store.(queueHoldStore); ok && keepHeld {
+		_, err := store.CleanupOwnedControllerWorkKeepingHeldQueue(ctx, c.sessionID, c.conversation.ID, c.generation, now)
+		return err
 	}
 	_, err := c.store.CleanupOwnedControllerWork(ctx, c.sessionID, c.conversation.ID, c.generation, now)
 	return err

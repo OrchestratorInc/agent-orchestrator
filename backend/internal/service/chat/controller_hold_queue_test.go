@@ -231,6 +231,30 @@ func TestInterfaceHandoffDrainsTheHeldQueue(t *testing.T) {
 	}
 }
 
+func TestInterfaceHandoffReleasesAHoldWithNothingQueued(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "finish this task", ClientMessageID: "c1", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, turn.ID)
+	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID()); err != nil || !held {
+		t.Fatalf("queue held = %v, %v after the prompt hit the limit", held, err)
+	}
+
+	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
+		t.Fatalf("prepare handoff: %v", err)
+	}
+	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID()); err != nil || held {
+		t.Fatalf("queue held = %v, %v after a terminal switch", held, err)
+	}
+}
+
 func TestInterfaceHandoffDrainsPastANewUsageLimit(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -275,5 +299,12 @@ func TestInterfaceHandoffDrainsPastANewUsageLimit(t *testing.T) {
 	}
 	if err := <-prepared; err != nil {
 		t.Fatalf("prepare handoff: %v", err)
+	}
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		states := turnStateByText(t, s)
+		return states["note 1"] == domain.TurnStateFailed && states["note 2"] == domain.TurnStateCompleted
+	})
+	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID()); err != nil || held {
+		t.Fatalf("queue held = %v, %v after a terminal switch drained it", held, err)
 	}
 }
