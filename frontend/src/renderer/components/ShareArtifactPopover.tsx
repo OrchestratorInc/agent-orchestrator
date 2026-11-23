@@ -21,7 +21,6 @@ import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
-import { onCloudPlan, useCloudBilling } from "../hooks/useCloudBilling";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
@@ -670,10 +669,9 @@ function SharePanel({
 	const [staged, setStaged] = useState<string[]>([]);
 	// Adding past what one publish can share the link with: said under the field.
 	const [stagedOver, setStagedOver] = useState(false);
-	// On a team workspace: its teams, and whether everyone in it, a file on
-	// this computer is shared with once its Publish has made the link.
+	// On a team workspace: the teams a file on this computer is shared with
+	// once its Publish has made the link.
 	const [stagedTeams, setStagedTeams] = useState<ArtifactTeam[]>([]);
-	const [stagedWorkspace, setStagedWorkspace] = useState(false);
 	const [removing, setRemoving] = useState<string>();
 	const [changingAccess, setChangingAccess] = useState(false);
 	// Teams and workspaces are for a team workspace on a paid Cloud plan, as
@@ -684,8 +682,6 @@ function SharePanel({
 	const { org } = useCloudOrg(signedIn);
 	const teamWorkspace = teamsBuild && org && !isPersonalWorkspace(org) ? org : undefined;
 	const workspaceName = workspaceDisplayName(teamWorkspace?.displayName) ?? t("artifacts.share.access.yourWorkspace");
-	const billing = useCloudBilling();
-	const cloudPlan = onCloudPlan(billing.offering.billingMode, billing.data);
 	const shareFile = { ...file, baseUrl };
 	const key = pendingKey(baseUrl, file);
 	// A cloud session's file is already in the bucket: the click publishes it.
@@ -770,7 +766,6 @@ function SharePanel({
 			case "published":
 				setStaged([]);
 				setStagedTeams([]);
-				setStagedWorkspace(false);
 				showPublished(result.share, result.pageFiles ? { pageFiles: result.pageFiles } : {});
 				onChanged?.();
 				refreshArtifacts();
@@ -1110,12 +1105,11 @@ function SharePanel({
 	const meta = (text: string) => <span className="block truncate text-caption text-muted-foreground tabular-nums">{text}</span>;
 	const spinner = <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" />;
 	const ownerIdentity = { name: owner?.displayName, email: owner?.email };
-	// Everyone at a workspace is offered only on a Cloud plan (paid, exempt or
-	// contract): a free account in a team org is not offered it. A link
-	// already shared with its workspace still shows that choice, as the one it
-	// has, and choosing another access stops it.
-	const workspaceChoice = (audience: ArtifactAudience) =>
-		teamWorkspace && (cloudPlan || audience === "workspace") ? { name: workspaceName } : undefined;
+	// Sharing a link with everyone at a workspace is off for now: the app
+	// cannot yet tell a workspace on a Cloud plan from a free one. Only a
+	// published link already shared with its workspace shows that choice, as
+	// the one it has, and choosing another access stops it.
+	const workspaceChoice = (audience: ArtifactAudience) => teamWorkspace && audience === "workspace" ? { name: workspaceName } : undefined;
 
 	switch (phase.kind) {
 		case "loading":
@@ -1169,11 +1163,6 @@ function SharePanel({
 				setStagedTeams([...stagedTeams, ...added.map((team) => ({ teamId: team.teamId, name: team.name, memberCount: team.memberCount, pending: true }))]);
 				return true;
 			};
-			// A workspace picked before Publish counts only while the org is on a
-			// Cloud plan: losing it falls back to people invited, and Publish does
-			// not send it. Only a published link keeps a workspace it already has.
-			const stagesWorkspace = stagedWorkspace && Boolean(teamWorkspace) && cloudPlan;
-			const stagedAudience: ArtifactAudience = stagesWorkspace ? "workspace" : stagedAccess;
 			return (
 				<>
 					{titled(t("artifacts.share.title.publish"))}
@@ -1201,13 +1190,9 @@ function SharePanel({
 								teams={stagedTeams}
 							/>
 							<ArtifactGeneralAccess
-								access={stagedAudience}
+								access={stagedAccess}
 								invited={staged.length + stagedTeams.length}
-								onChange={(next) => {
-									setStagedWorkspace(next === "workspace");
-									setStagedAccess(next === "workspace" ? "restricted" : next);
-								}}
-								workspace={teamWorkspace && cloudPlan ? { name: workspaceName } : undefined}
+								onChange={(next) => setStagedAccess(next === "workspace" ? "restricted" : next)}
 							/>
 						</div>
 					) : null}
@@ -1218,7 +1203,6 @@ function SharePanel({
 								access: stagedAccess,
 								emails: staged,
 								teamIds: stagedTeams.map((team) => team.teamId),
-								workspace: stagesWorkspace,
 							})}
 							size="sm"
 							type="button"
