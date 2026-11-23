@@ -36,7 +36,9 @@ func TestIsHTMLMediaType(t *testing.T) {
 		{"text/html", true},
 		{"TEXT/HTML; charset=utf-8", true},
 		{"application/xhtml+xml", true},
-		{"text/html; charset", true}, // malformed parameter, still HTML
+		{"text/html; charset", true},
+		{"text/html; charset=UTF-8; charset=utf-8", true},
+		{" Application/XHTML+XML ; charset=utf-8", true},
 		{"text/plain; charset=utf-8", false},
 		{"text/css", false},
 		{"", false},

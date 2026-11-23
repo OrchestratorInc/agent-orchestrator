@@ -909,13 +909,12 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 }
 
 // isHTMLMediaType reports whether contentType names an HTML or XHTML document.
-// A malformed parameter still names the type: mime.ParseMediaType returns it
-// with ErrInvalidMediaParameter, and clients and Cloudflare treat it as HTML.
+// Only the type before the first ";" decides: clients and Cloudflare treat a
+// response as HTML even when its parameters are malformed or repeated, which
+// mime.ParseMediaType rejects without returning the type.
 func isHTMLMediaType(contentType string) bool {
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil && !errors.Is(err, mime.ErrInvalidMediaParameter) {
-		return false
-	}
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
 	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
 }
 

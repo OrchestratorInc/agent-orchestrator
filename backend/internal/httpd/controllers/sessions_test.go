@@ -3853,6 +3853,7 @@ func TestSessionsAPI_ManagedPreviewPreservesEmailHTML(t *testing.T) {
 		{"html with cache policy", "text/html", "private, max-age=60", "private, max-age=60, no-transform"},
 		{"html already protected", "application/xhtml+xml", "private, no-transform", "private, no-transform"},
 		{"html with a malformed parameter", "text/html; charset", "", "no-transform"},
+		{"html with a repeated parameter", "text/html; charset=UTF-8; charset=utf-8", "", "no-transform"},
 		{"quoted directive argument", "text/html", `no-cache="Set-Cookie, no-transform, ETag"`, `no-cache="Set-Cookie, no-transform, ETag", no-transform`},
 		{"non-html unchanged", "text/plain", "private, max-age=60", "private, max-age=60"},
 	} {
