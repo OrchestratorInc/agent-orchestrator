@@ -7047,8 +7047,8 @@ describe("SessionInspector branch summary", () => {
     expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "false");
 
     const tree = within(screen.getByTestId("changed-files-list"));
-    // One flat line per file: name, its folder, counts and change.
-    expect(tree.getByRole("button", { name: /page\.tsx.*src\/app.*\+4.*−2/ })).toBeInTheDocument();
+    // One flat line per file: repository-qualified path, counts and change.
+    expect(tree.getByRole("button", { name: /src\/app\/page\.tsx.*\+4.*−2/ })).toBeInTheDocument();
     await userEvent.click(tree.getByRole("button", { name: /page\.tsx/ }));
     expect(onOpenReviewFile).toHaveBeenCalledWith({ path: "src/app/page.tsx" });
 
