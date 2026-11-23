@@ -110,6 +110,16 @@ func NativeNames(harness domain.AgentHarness, workspace string, env map[string]s
 		for name := range readCodexSource(filepath.Join(dir, "config.toml")) {
 			names[name] = true
 		}
+	case domain.HarnessCursor:
+		files := []string{filepath.Join(home, ".cursor", "mcp.json")}
+		if workspace != "" {
+			files = append(files, filepath.Join(workspace, ".cursor", "mcp.json"))
+		}
+		for _, file := range files {
+			for name := range readJSONSource(file).MCPServers {
+				names[name] = true
+			}
+		}
 	}
 	for name := range maps.Clone(names) {
 		names[importKey(name)] = true

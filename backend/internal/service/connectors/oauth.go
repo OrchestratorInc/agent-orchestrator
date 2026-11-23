@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -189,6 +190,9 @@ func (s *Service) SignOut(_ context.Context, ref string) (Connector, error) {
 	i := s.index(ref)
 	if i < 0 {
 		return Connector{}, errNotFound()
+	}
+	if s.records[i].Transport != TransportHTTP || s.records[i].Auth != AuthOAuth {
+		return Connector{}, invalid("CONNECTOR_SIGNIN_NOT_SUPPORTED", "Only a server URL with automatic sign-in can sign out")
 	}
 	next := slices.Clone(s.records)
 	next[i].OAuth, next[i].Status, next[i].StatusStep, next[i].StatusError = nil, StatusNeedsSignIn, "", ""
@@ -406,6 +410,55 @@ func (s *Service) authorize(req *http.Request, rec *record) error {
 	token.SetAuthHeader(req)
 	return nil
 }
+
+func (s *Service) renew(id, refused string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(id)
+	if i < 0 || s.records[i].OAuth == nil || refused == "" {
+		return false
+	}
+	saved := s.records[i].OAuth
+	if !strings.HasSuffix(refused, " "+saved.AccessToken) {
+		return true
+	}
+	if saved.RefreshToken == "" {
+		return false
+	}
+	next := slices.Clone(s.records)
+	expired := *saved
+	expired.Expiry = s.now().Add(-time.Minute)
+	next[i].OAuth = &expired
+	if s.save(next) != nil {
+		return false
+	}
+	delete(s.sources, id)
+	return true
+}
+
+func (s *Service) send(base http.RoundTripper, rec *record, req *http.Request, body func() (io.ReadCloser, error)) (*http.Response, error) {
+	resp, err := base.RoundTrip(req)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized || rec.Auth != AuthOAuth || !s.renew(rec.ID, req.Header.Get("Authorization")) {
+		return resp, err
+	}
+	again := req.Clone(req.Context())
+	if body != nil {
+		fresh, _ := body()
+		if fresh == nil {
+			return resp, nil
+		}
+		again.Body = fresh
+	}
+	if signed := s.authorize(again, rec) == nil; !signed {
+		return resp, nil
+	}
+	_ = resp.Body.Close()
+	return base.RoundTrip(again)
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func signInFailed(err error) error {
 	return invalid("CONNECTOR_SIGNIN_FAILED", "The sign-in did not complete: "+safeError(err, ""))

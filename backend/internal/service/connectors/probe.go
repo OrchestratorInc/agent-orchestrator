@@ -16,7 +16,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-const probeTimeout = 20 * time.Second
+const (
+	probeTimeout        = 20 * time.Second
+	commandProbeTimeout = 90 * time.Second
+)
 
 // Test connects to a connector, lists its tools and saves the result as its status.
 func (s *Service) Test(ctx context.Context, ref string) (Connector, error) {
@@ -24,7 +27,11 @@ func (s *Service) Test(ctx context.Context, ref string) (Connector, error) {
 	if err != nil {
 		return Connector{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	budget := probeTimeout
+	if rec.Transport == TransportStdio {
+		budget = commandProbeTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	tools, step, err := s.probe(ctx, &rec)
 	switch {
@@ -55,6 +62,7 @@ func (s *Service) probe(ctx context.Context, rec *record) (tools []string, step 
 	} else {
 		step = "start"
 		cmd := process.CommandContext(ctx, rec.Command, rec.Args...)
+		process.ConfigureTreeCancellation(cmd)
 		cmd.Env = os.Environ()
 		for name, value := range rec.Env {
 			cmd.Env = append(cmd.Env, name+"="+value)
@@ -108,7 +116,13 @@ func (t *probeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		return nil, err
 	}
-	resp, err := t.base.RoundTrip(req)
+	var resp *http.Response
+	var err error
+	if req.GetBody == nil && req.Body != nil && req.Body != http.NoBody {
+		resp, err = t.base.RoundTrip(req)
+	} else {
+		resp, err = t.service.send(t.base, t.rec, req, req.GetBody)
+	}
 	if err == nil && asksForSignIn(resp.StatusCode, resp.Header) {
 		t.refused.Store(true)
 	}

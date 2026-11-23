@@ -28,9 +28,10 @@ func TestRelayPassesAnAgentsCallsToAnHTTPToolServer(t *testing.T) {
 		})
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 	var mu sync.Mutex
-	var authorizations, versions []string
+	var authorizations, versions, methods []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
+		methods = append(methods, r.Method)
 		authorizations = append(authorizations, r.Header.Get("Authorization"))
 		versions = append(versions, r.Header.Get("Mcp-Protocol-Version"))
 		mu.Unlock()
@@ -74,6 +75,9 @@ func TestRelayPassesAnAgentsCallsToAnHTTPToolServer(t *testing.T) {
 	}
 	if len(versions) < 3 || versions[len(versions)-1] == "" {
 		t.Fatalf("protocol versions sent = %v", versions)
+	}
+	if methods[len(methods)-1] != http.MethodDelete {
+		t.Fatalf("the relay did not end the server's session: %v", methods)
 	}
 }
 

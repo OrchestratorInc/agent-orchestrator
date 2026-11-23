@@ -64,6 +64,16 @@ func TestConnectorRoutesHideStoredValues(t *testing.T) {
 	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/docs", `{"enabled":false}`); status != http.StatusOK || !strings.Contains(body, `"enabled":false`) {
 		t.Fatalf("disable = %d %s", status, body)
 	}
+	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", `{"name":"Scoped Docs","key":"scoped","projectId":"p1","transport":"http","url":"https://scoped.example.com/mcp"}`); status != http.StatusCreated {
+		t.Fatalf("create scoped = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/scoped", `{"transport":"http","url":"https://scoped.example.com/v2/mcp"}`); status != http.StatusOK ||
+		!strings.Contains(body, `"projectId":"p1"`) || !strings.Contains(body, `"name":"Scoped Docs"`) || !strings.Contains(body, `/v2/mcp`) {
+		t.Fatalf("an edit that leaves the project and the name out = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/scoped", `{"transport":"http","url":"https://scoped.example.com/v2/mcp","projectId":""}`); status != http.StatusOK || strings.Contains(body, `"projectId":"p1"`) {
+		t.Fatalf("an edit to all projects = %d %s", status, body)
+	}
 	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", `{"name":"Docs","transport":"http","url":"https://other.example.com/mcp"}`); status != http.StatusConflict {
 		t.Fatalf("duplicate = %d %s", status, body)
 	}

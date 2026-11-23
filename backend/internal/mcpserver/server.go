@@ -152,7 +152,7 @@ func classifyMCPLine(line []byte) (string, mcpLineKind) {
 	switch {
 	case peek.Method == "notifications/cancelled":
 		return string(peek.Params.RequestID), mcpLineCancel
-	case peek.Method == "tools/call" && peek.Params.Name == "session_wait" && peek.ID != nil:
+	case peek.Method == "tools/call" && (peek.Params.Name == "session_wait" || peek.Params.Name == "connector_propose") && peek.ID != nil:
 		return string(peek.ID), mcpLineWait
 	}
 	return "", mcpLineOther

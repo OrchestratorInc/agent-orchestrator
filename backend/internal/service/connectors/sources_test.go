@@ -62,7 +62,9 @@ func TestNativeNamesReadTheAgentsOwnConfiguration(t *testing.T) {
 	if got := NativeNames(domain.HarnessClaudeCode, "", map[string]string{"CLAUDE_CONFIG_DIR": other}); !got["account-only"] || got["Linear"] {
 		t.Errorf("account folder names = %v", got)
 	}
-	if got := NativeNames(domain.HarnessCursor, project, nil); len(got) != 0 {
+	writeSource(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers": {"Figma": {"url": "https://mcp.figma.com/mcp"}}}`)
+	writeSource(t, filepath.Join(project, ".cursor", "mcp.json"), `{"mcpServers": {"repo-cursor": {"command": "x"}}}`)
+	if got := NativeNames(domain.HarnessCursor, project, nil); !got["figma"] || !got["repo-cursor"] || got["Linear"] {
 		t.Errorf("cursor names = %v", got)
 	}
 }

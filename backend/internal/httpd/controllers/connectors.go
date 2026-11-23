@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -330,7 +331,14 @@ func (c *ConnectorsController) update(w http.ResponseWriter, r *http.Request) {
 		if rejectLANCommandConnector(w, r, req.Transport, string(current.Transport)) {
 			return
 		}
-		updated, err = c.Svc.Update(r.Context(), ref, connectorInput(&req))
+		in := connectorInput(&req)
+		if req.ProjectID == nil {
+			in.ProjectID = current.ProjectID
+		}
+		if strings.TrimSpace(req.Name) == "" {
+			in.Name = current.Name
+		}
+		updated, err = c.Svc.Update(r.Context(), ref, in)
 	}
 	if err != nil {
 		envelope.WriteError(w, r, err)

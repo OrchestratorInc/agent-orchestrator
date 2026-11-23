@@ -148,7 +148,7 @@ describe("ConnectorsSection", () => {
 		expect(screen.getByLabelText("Name")).toHaveValue("linear");
 		fireEvent.click(dialog.querySelector('button[type="submit"]') as HTMLButtonElement);
 		await waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/connectors", {
-			body: { key: "linear", name: "Linear", projectId: null, presetId: "linear", transport: "http", url: "https://mcp.linear.app/mcp", auth: "oauth" },
+			body: { key: "linear", name: "Linear", projectId: "", presetId: "linear", transport: "http", url: "https://mcp.linear.app/mcp", auth: "oauth" },
 		}));
 		expect(await screen.findByRole("heading", { name: "Sign in to Linear" })).toBeInTheDocument();
 	});
@@ -203,7 +203,7 @@ describe("ConnectorsSection", () => {
 		fireEvent.change(screen.getByLabelText("Name"), { target: { value: "files" } });
 		fireEvent.click(submit);
 		await waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/connectors", {
-			body: { key: "files", name: "files", projectId: null, transport: "stdio", command: "npx", args: ["-y", "files-mcp", "/my notes"], env: { TOKEN: "a=b" } },
+			body: { key: "files", name: "files", projectId: "", transport: "stdio", command: "npx", args: ["-y", "files-mcp", "/my notes"], env: { TOKEN: "a=b" } },
 		}));
 	});
 });

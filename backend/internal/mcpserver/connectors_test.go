@@ -80,3 +80,12 @@ func TestConnectorProposeGivesTheDaemonsRefusal(t *testing.T) {
 		t.Fatalf("connector_propose = %s (error %v)", text, isError)
 	}
 }
+
+func TestAWaitForTheUsersAnswerDoesNotHoldTheOtherCalls(t *testing.T) {
+	for name, want := range map[string]mcpLineKind{"session_wait": mcpLineWait, "connector_propose": mcpLineWait, "connector_list": mcpLineOther} {
+		id, kind := classifyMCPLine([]byte(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"` + name + `"}}`))
+		if kind != want || (want == mcpLineWait && id != "4") {
+			t.Errorf("%s = %q, %v", name, id, kind)
+		}
+	}
+}

@@ -107,9 +107,10 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, target, authorizati
 	r := &relay{target: target, authorization: authorization, client: &http.Client{}, out: out}
 	reader := bufio.NewReader(in)
 	var calls sync.WaitGroup
-	defer calls.Wait()
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
+	defer r.end()
+	defer calls.Wait()
 	for {
 		line, err := reader.ReadBytes('\n')
 		if line = bytes.TrimSpace(line); len(line) > 0 {
@@ -166,6 +167,31 @@ func (r *relay) send(ctx context.Context, line []byte) (resp *http.Response, ses
 	r.mu.Unlock()
 	resp, err = r.client.Do(req)
 	return resp, session, err
+}
+
+func (r *relay) end() {
+	r.mu.Lock()
+	session, version := r.session, r.version
+	r.mu.Unlock()
+	if session == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, r.target, http.NoBody)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Mcp-Session-Id", session)
+	if version != "" {
+		req.Header.Set("Mcp-Protocol-Version", version)
+	}
+	if r.authorization != "" {
+		req.Header.Set("Authorization", r.authorization)
+	}
+	if resp, err := r.client.Do(req); err == nil {
+		_ = resp.Body.Close()
+	}
 }
 
 // restart opens a new session with the server after it dropped the one named lost.

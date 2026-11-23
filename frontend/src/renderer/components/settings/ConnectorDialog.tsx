@@ -85,7 +85,7 @@ export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 	const save = useMutation({
 		mutationFn: async (): Promise<Connector[]> => {
 			if (mode === "import") return connectorsApi.importChosen([...chosen], typed);
-			const input: ConnectorInput = { key: shownKey, name: name.trim() || shownKey, projectId: projectId || null };
+			const input: ConnectorInput = { key: shownKey, name: name.trim() || shownKey, projectId };
 			if (presetId) input.presetId = presetId;
 			if (mode === "url") {
 				Object.assign(input, { transport: "http", url: url.trim(), auth });

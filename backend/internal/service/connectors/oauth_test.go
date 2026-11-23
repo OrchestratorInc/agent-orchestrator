@@ -480,3 +480,46 @@ func TestARenewalOfAReplacedSignInIsNotSaved(t *testing.T) {
 		t.Fatal("a refused renewal of a replaced sign-in signed the new one out")
 	}
 }
+
+func TestARefusedTokenIsRenewedOnceBeforeTheUserIsAsked(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc, _ := newProxiedService(t)
+	ctx := context.Background()
+	signInFake(t, svc, fake, Input{Name: "fake"})
+	entry := svc.ForSession(ctx, SessionInput{SessionID: "ao-12"})[0]
+	call := `{"jsonrpc":"2.0","id":7,"method":"tools/list"}`
+
+	fake.minToken.Store(2)
+	status, body := proxyPost(t, entry.URL, entry.Headers["Authorization"], call)
+	if status != http.StatusOK || strings.Contains(body, "needs sign-in") {
+		t.Fatalf("a call after the server dropped the token = %d %s", status, body)
+	}
+	if got := svc.records[0].OAuth; got == nil || got.AccessToken != "access-2" || fake.lastRefresh.Load() != "refresh-1" {
+		t.Fatalf("the token was not renewed: %+v, refresh %v", got, fake.lastRefresh.Load())
+	}
+	if tested, err := svc.Test(ctx, "fake"); err != nil || tested.Status != StatusConnected {
+		t.Fatalf("test after the renewal = %+v, %v", tested, err)
+	}
+
+	fake.minToken.Store(9)
+	if _, body := proxyPost(t, entry.URL, entry.Headers["Authorization"], call); !strings.Contains(body, "needs sign-in") {
+		t.Fatalf("a call the server refuses with a new token too = %s", body)
+	}
+	if got, _ := svc.Get(ctx, "fake"); got.Status != StatusNeedsSignIn {
+		t.Fatalf("status = %s", got.Status)
+	}
+}
+
+func TestOnlyAnAutomaticSignInCanBeSignedOut(t *testing.T) {
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, Input{Name: "files", Transport: TransportStdio, Command: "npx"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SignOut(ctx, "files"); errCode(err) != "CONNECTOR_SIGNIN_NOT_SUPPORTED" {
+		t.Fatalf("sign out of a command = %v", err)
+	}
+	if got, _ := svc.Get(ctx, "files"); got.Status != StatusUnchecked {
+		t.Fatalf("status = %s", got.Status)
+	}
+}

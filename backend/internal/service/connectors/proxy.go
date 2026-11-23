@@ -191,7 +191,14 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 	s.count(sessionID, rec.Key, call.Method, call.Params.Name)
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
+	base := s.http.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
 	(&httputil.ReverseProxy{
+		Transport: roundTrip(func(out *http.Request) (*http.Response, error) {
+			return s.send(base, rec, out, func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil })
+		}),
 		Rewrite: func(p *httputil.ProxyRequest) {
 			p.Out.URL = target
 			p.Out.Host = target.Host
