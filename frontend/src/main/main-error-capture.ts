@@ -4,7 +4,7 @@ import type { IpcMain, IpcMainInvokeEvent } from "electron";
 // Electron main's handled failures (daemon start and exit, auto-update, IPC
 // handlers, hung windows) used to reach only the console and PostHog. This
 // module is the single path from those sites to the consented Sentry
-// transport. Only fixed categories and reasons cross it; error text never does.
+// transport. Error messages are scrubbed by the transport before sending.
 
 export const MAIN_ERROR_CATEGORIES = ["daemon", "update", "ipc", "window", "acp_runtime", "side_chat"] as const;
 export type MainErrorCategory = (typeof MAIN_ERROR_CATEGORIES)[number];
@@ -27,7 +27,7 @@ export type MainErrorReason = (typeof MAIN_ERROR_REASONS)[number];
 export type MainErrorCapture = {
 	category: MainErrorCategory;
 	reason: MainErrorReason;
-	// Only the error's standard type is used.
+	// The transport extracts the error type and a scrubbed message.
 	error?: unknown;
 	// A short fixed detail such as "signal:SIGKILL" or "code:1".
 	detail?: string;

@@ -87,6 +87,7 @@ import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useHeldSession } from "../hooks/useHeldSession";
+import { useSwitchHistoryRead } from "../hooks/useSwitchHistoryRead";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -223,7 +224,8 @@ function LocalSessionHost() {
 	const cloudOrgId = org?.id;
 	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
 	const liveProjectId = projectSession?.projectId;
-	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
+	const historyPending = useSwitchHistoryRead(liveSessionId);
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId, historyPending);
 	useSessionOpenTiming(liveSessionId, sessionId);
 	const view = useMemo(
 		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),

@@ -1623,6 +1623,87 @@ waitForCompletion:
 	}
 }
 
+// Stop pressed again while the provider is still winding the turn down is the
+// same request. It used to fail with "session/cancel is already in progress",
+// which reached the user as a 500 although their first Stop was working.
+func TestACPRepeatedInterruptWhileCancellingIsIdempotent(t *testing.T) {
+	cancelReceived := make(chan struct{}, 1)
+	promptReceived := make(chan struct{}, 1)
+	completePrompt := make(chan struct{})
+	responseSent := make(chan error, 1)
+	driver := New(Config{
+		Harness: domain.HarnessOpenCode,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true,
+			ports.ChatCapabilityInterrupt: true,
+		},
+		Probe: func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(delayedCancelSpawn(promptReceived, cancelReceived, completePrompt, responseSent))
+
+	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conversation.Close()
+	_ = nextEvent(t, conversation.Events()) // controller.ready
+	ref, err := conversation.SendTurn(context.Background(), ports.ChatUserMessage{Text: "wait"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conversation.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	select {
+	case <-promptReceived:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not receive ACP prompt request")
+	}
+	if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	select {
+	case <-cancelReceived:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not receive ACP cancel notification")
+	}
+
+	for range 3 {
+		if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+			t.Fatalf("repeated Interrupt while cancelling = %v, want nil", err)
+		}
+	}
+	if err := conversation.Interrupt(context.Background(), ""); err != nil {
+		t.Fatalf("repeated untargeted Interrupt while cancelling = %v, want nil", err)
+	}
+
+	close(completePrompt)
+	if err := <-responseSent; err != nil {
+		t.Fatalf("provider prompt response: %v", err)
+	}
+	for {
+		event := nextEvent(t, conversation.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if event.TurnState != domain.TurnStateInterrupted {
+				t.Fatalf("turn state = %q, want interrupted", event.TurnState)
+			}
+			break
+		}
+	}
+	select {
+	case <-cancelReceived:
+		t.Fatal("repeated Stop sent the provider a second session/cancel")
+	case <-time.After(100 * time.Millisecond):
+	}
+	// Once the turn has settled there is genuinely nothing to stop.
+	if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); !errors.Is(err, ports.ErrChatNoActiveTurn) {
+		t.Fatalf("Interrupt after settlement = %v, want ErrChatNoActiveTurn", err)
+	}
+}
+
 func delayedCancelSpawn(
 	promptReceived chan<- struct{},
 	cancelReceived chan<- struct{},
@@ -3824,12 +3905,8 @@ func TestACPDriverNormalizesClaudeRetryStatus(t *testing.T) {
 	air, _ := jetbrains["air"].(map[string]any)
 	version, versionOK := number(air["version"])
 	capabilities, _ := air["capabilities"].([]any)
-	capability := ""
-	if len(capabilities) == 1 {
-		capability, _ = capabilities[0].(string)
-	}
-	if !versionOK || version != 1 || capability != "sessionFailure" {
-		t.Fatalf("session failure capability = %#v", air)
+	if !versionOK || version != 1 || len(capabilities) != 1 || capabilities[0] != "sessionFailure" {
+		t.Fatalf("session failure and async-task capabilities = %#v", air)
 	}
 
 	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
@@ -6597,5 +6674,25 @@ func TestACPEarlyHiddenCompactKeepsCompactionInStart(t *testing.T) {
 	skills := awaitSkillCount(t, opened.(ports.ChatSkillLister), 1)
 	if skills[0].Name != "goal" {
 		t.Fatalf("skills = %#v, want only goal", skills)
+	}
+}
+
+func TestACPAsyncTasksRequiresBindingOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		agent := &fakeAgent{}
+		driver := New(Config{Harness: domain.HarnessClaudeCode, AsyncTasks: enabled, Probe: func(context.Context) error { return nil }, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent.mu.Lock()
+		air := nestedMap(nestedMap(agent.initParams.ClientCapabilities.Meta, "jetbrains"), "air")
+		capabilities, _ := air["capabilities"].([]any)
+		agent.mu.Unlock()
+		if got := len(capabilities) == 2 && capabilities[1] == "asyncTasks"; got != enabled {
+			t.Fatalf("enabled=%v capabilities=%v", enabled, capabilities)
+		}
+		_ = conv.Close()
 	}
 }

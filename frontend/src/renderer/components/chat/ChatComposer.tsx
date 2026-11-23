@@ -131,7 +131,7 @@ import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
-import { subscribeChatComposerReferences, subscribeChatComposerText } from "../../lib/chat-context-bus";
+import { subscribeChatComposerReferences, subscribeChatComposerText, takeComposerHandoff, type ComposerHandoff } from "../../lib/chat-context-bus";
 
 /**
  * AO's own `/model`: it opens the composer's agent and model menu instead of
@@ -148,6 +148,8 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	AGENT_SWITCH_FAILED,
 	// The new chat page could not create the session this brief would start.
 	"TASK_CREATE_FAILED",
+	// An archived chat could not be restored, so its message was never sent.
+	"SESSION_RESTORE_FAILED",
 	"CHAT_FILE_REFERENCE_INVALID", "CHAT_ANNOTATION_LIMIT", "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
@@ -275,6 +277,12 @@ export type ChatComposerHandle = {
 	isEmpty(): boolean;
 	/** Replaces the draft with text, saved like typed input, and focuses the editor. */
 	setDraft(text: string): void;
+	/**
+	 * Takes the typed text for the surface that replaces this one, with whether
+	 * Enter was pressed on exactly that text. The saved draft is cleared, so it
+	 * does not come back here; the box itself is left for the surface to unmount.
+	 */
+	takeDraft(): ComposerHandoff | undefined;
 };
 
 /**
@@ -310,6 +318,7 @@ export const ChatComposer = memo(function ChatComposer({
 	elicitation,
 	skills = [],
 	skillsLoading = false,
+	filePathsLoading = false,
 	filePaths = [],
 	filePathsTruncated,
 	onFileQuery,
@@ -319,6 +328,7 @@ export const ChatComposer = memo(function ChatComposer({
 	onSteer,
 	showSteerButton,
 	onInterrupt,
+	stopping,
 	onContinue,
 	canSteer,
 	sendPending,
@@ -347,6 +357,7 @@ export const ChatComposer = memo(function ChatComposer({
 	autoFocus = true,
 	draftSessionId,
 	draftSessionIncarnation,
+	handoffSessionId,
 	assetBaseUrl,
 	remoteHost = false,
 	assetSessionId,
@@ -430,6 +441,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 * belong to the editor.
 	 */
 	skillsLoading?: boolean;
+	filePathsLoading?: boolean;
 	/** Worktree-relative paths offered for `@`. Empty leaves `@` ordinary. */
 	filePaths?: string[];
 	/**
@@ -463,6 +475,8 @@ export const ChatComposer = memo(function ChatComposer({
 	showSteerButton?: boolean;
 	/** Stop the turn already running when there is no draft to send. */
 	onInterrupt?: () => void;
+	/** Stop already landed; the turn is winding down, so Stop shows progress instead of firing again. */
+	stopping?: boolean;
 	/**
 	 * Pick a stopped turn back up when there is no draft to send: the same button
 	 * that stopped it continues it, like play after pause. Present only while the
@@ -517,6 +531,12 @@ export const ChatComposer = memo(function ChatComposer({
 	draftSessionId?: string;
 	/** Immutable daemon identity for this exact incarnation of the session id. */
 	draftSessionIncarnation?: string;
+	/**
+	 * The session whose follow-up from the new chat page this composer takes
+	 * (takeComposerHandoff). Set even where drafts cannot be saved, when
+	 * draftSessionId is not.
+	 */
+	handoffSessionId?: string;
 	/** Host-specific proxy origin for staged attachment reads. */
 	assetBaseUrl?: string;
 	/** The session belongs to a remote host, even if its proxy is disconnected. */
@@ -638,7 +658,13 @@ export const ChatComposer = memo(function ChatComposer({
 	 * own Enter. A held message never overtakes a send that did not go through.
 	 * The daemon then queues each one behind the running turn as usual.
 	 */
-	const [heldSubmit, setHeldSubmit] = useState<HeldSubmit | null>(null);
+	const [heldSubmit, setHeldSubmitState] = useState<HeldSubmit | null>(null);
+	// Read outside render (takeDraft) before React commits the state.
+	const heldSubmitRef = useRef<HeldSubmit | null>(null);
+	const setHeldSubmit = useCallback((held: HeldSubmit | null) => {
+		heldSubmitRef.current = held;
+		setHeldSubmitState(held);
+	}, []);
 	// Held during a submit, and decided when that submit settles.
 	const heldDuringSubmit = useRef<HeldSubmit | null>(null);
 	const submitAccepted = useRef(false);
@@ -715,6 +741,8 @@ export const ChatComposer = memo(function ChatComposer({
  const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
 	const composerRevision = useRef(persistedDraft?.composer.revision ?? 0);
 	const unsavedText = useRef<{ text: string; revision: number } | undefined>(undefined);
+	// A handed-off follow-up the session's draft could not save (see the hand-off).
+	const unsavedHandoff = useRef<string | undefined>(undefined);
 	const synchronouslyClearedDeliveryRevision = useRef<number | undefined>(undefined);
 	const restoredAttachments = useMemo<FileAttachment[]>(
 		() =>
@@ -791,6 +819,24 @@ export const ChatComposer = memo(function ChatComposer({
 		setAttachmentDraftPersistenceError(null);
 		automaticDeliveryRecoveryAttempted.current = undefined;
 	}, [draftScope, draftScopeKey, parkUnsentSends]);
+	// A handed-off follow-up that could not be saved stays in the box and in memory,
+	// like typing whose save failed: beside the save error, or under the in-memory
+	// composer's own storage notice. It runs after the reset above, which starts
+	// the scope with nothing unsaved, and before the restore, which then leaves the
+	// unsaved text alone. Nothing sends it by itself; the person sends it.
+	useEffect(() => {
+		const text = unsavedHandoff.current;
+		if (text === undefined) return;
+		unsavedHandoff.current = undefined;
+		if (draftScope) {
+			unsavedText.current = { text, revision: composerRevision.current };
+			setTextDraftPersistenceError("chat.draft.saveFailed");
+		}
+		textRef.current = text;
+		hasTextRef.current = text.trim().length > 0;
+		setHasText(hasTextRef.current);
+		editor.current?.setText(text);
+	}, [draftScope]);
 	const fileAttachments = useFileAttachments({
 		initialAttachments: restoredAttachments,
 		initialKey: attachmentScopeKey,
@@ -870,7 +916,8 @@ export const ChatComposer = memo(function ChatComposer({
 	// Drawn even with nothing to pick while the skills are on their way, so `/` is
 	// never answered with silence. Keyboard handling still follows `menuOpen`.
 	const skillsNote = skillsLoading && trigger?.kind === "skill" && trigger.key !== dismissedKey;
-	const menuShown = menuOpen || skillsNote;
+	const filesNote = filePathsLoading && trigger?.kind === "file" && trigger.key !== dismissedKey;
+	const menuShown = menuOpen || skillsNote || filesNote;
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
 	// index from the previous list can point past the end of this one.
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
@@ -1502,6 +1549,35 @@ export const ChatComposer = memo(function ChatComposer({
 			);
 		}
 	}, [draftScope]);
+	// A follow-up typed on the new chat page while this session was being created
+	// becomes the draft, saved before the restore below loads it into the editor.
+	// Entered there, it is held here and sent once the box can send, which queues
+	// it behind the brief. A draft of the session's own keeps its place: the
+	// follow-up goes below it, for the person to send.
+	// Where drafts cannot be saved (an in-memory composer), it is shown as unsaved
+	// typing instead.
+	useLayoutEffect(() => {
+		const sessionId = draftSessionId ?? handoffSessionId;
+		if (!sessionId) return;
+		const handoff = takeComposerHandoff(sessionId);
+		if (!handoff) return;
+		if (!draftScope) {
+			unsavedHandoff.current = handoff.text;
+			return;
+		}
+		const own = readChatSessionDraft(draftScope).composer;
+		const kept = own.text.trim() ? own.text.replace(/\s+$/, "") : "";
+		const text = kept ? `${kept}\n\n${handoff.text}` : handoff.text;
+		const result = writeChatComposerText(draftScope, text);
+		if (!result.ok) {
+			// Shown once the scope's reset has run (see unsavedHandoff).
+			unsavedHandoff.current = text;
+			return;
+		}
+		composerRevision.current = result.draft.composer.revision;
+		textRef.current = text;
+		if (handoff.send && !kept && !own.delivery) setHeldSubmit({ text, steer: false, own: true });
+	}, [draftScope, draftSessionId, handoffSessionId, setHeldSubmit]);
 	// Quoted text from outside the chat (a PR comment's "Add to chat") joins the
 	// draft below what is already typed, ready for the person's own words.
 	useEffect(() => {
@@ -1580,8 +1656,20 @@ export const ChatComposer = memo(function ChatComposer({
 				if (snapshot) onEditorChange(snapshot);
 				editor.current?.focus();
 			},
+			takeDraft: () => {
+				// The saved draft, not the box: a recalled message is only shown, and a
+				// draft its owner cleared (a launched brief) is not the person's text.
+				const text = unsavedText.current?.text ?? (draftScope ? readChatSessionDraft(draftScope).composer.text : textRef.current);
+				if (!text.trim()) return undefined;
+				// Entered during a send that is still settling, or after it settled.
+				const held = heldDuringSubmit.current ?? heldSubmitRef.current;
+				heldDuringSubmit.current = null;
+				setHeldSubmit(null);
+				persistComposerText("");
+				return { text, send: held?.text === text };
+			},
 		}),
-		[focusEditor, hasDraft, onEditorChange],
+		[draftScope, focusEditor, hasDraft, onEditorChange, persistComposerText, setHeldSubmit],
 	);
 
 	const pick = useCallback((value: string) => {
@@ -2177,7 +2265,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const parked = parkedUnsentId();
 		if (parked && parked !== heldSubmit.unsentId) return;
 		void submitLatest.current(undefined, heldSubmit.steer && canSteerDraft);
-	}, [canSteerDraft, heldSubmit, heldSubmitReady]);
+	}, [canSteerDraft, heldSubmit, heldSubmitReady, setHeldSubmit]);
 
 	function onEditorEnter(
 		snapshot: ComposerEditorSnapshot,
@@ -2263,7 +2351,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 		}
 		// The "Loading skills…" note closes the same way a menu does.
-		if (event.key === "Escape" && skillsLoading && liveTrigger?.kind === "skill" && liveTrigger.key !== dismissedKeyRef.current) {
+		if (event.key === "Escape" && liveTrigger && ((skillsLoading && liveTrigger.kind === "skill") || (filePathsLoading && liveTrigger.kind === "file")) && liveTrigger.key !== dismissedKeyRef.current) {
 			event.preventDefault();
 			event.stopPropagation();
 			dismissedKeyRef.current = liveTrigger.key;
@@ -2496,7 +2584,7 @@ export const ChatComposer = memo(function ChatComposer({
 						highlighted={activeIndex}
 						onPick={pick}
 						truncated={trigger?.kind === "file" && filePathsTruncated}
-						loadingNote={skillsNote ? "Loading skills…" : undefined}
+						loadingNote={skillsNote ? "Loading skills…" : filesNote ? "Loading files…" : undefined}
 					/>
 				) : null}
 
@@ -2820,11 +2908,13 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="primary"
 										size="icon-sm"
 										shape="pill"
-										disabled={canStopTurn ? false : canContinueTurn ? continuing : !sendActionEnabled}
+										disabled={canStopTurn ? Boolean(stopping) : canContinueTurn ? continuing : !sendActionEnabled}
 										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
-										aria-label={canStopTurn ? "Stop turn" : canContinueTurn ? "Continue turn" : sendActionLabel}
+										aria-label={canStopTurn ? (stopping ? "Stopping turn" : "Stop turn") : canContinueTurn ? "Continue turn" : sendActionLabel}
 									>
-										{canStopTurn ? (
+										{canStopTurn && stopping ? (
+											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+										) : canStopTurn ? (
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : canContinueTurn && !continuing ? (
 											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
@@ -2838,7 +2928,7 @@ export const ChatComposer = memo(function ChatComposer({
 									</Button>
 								</span>
 							</TooltipTrigger>
-							<TooltipContent side="bottom">{canStopTurn ? "Stop turn" : canContinueTurn ? "Continue from where it stopped" : sendBlockedReason ?? (durableDelivery ? sendActionLabel : sendHint)}</TooltipContent>
+							<TooltipContent side="bottom">{canStopTurn ? (stopping ? "Stopping…" : "Stop turn") : canContinueTurn ? "Continue from where it stopped" : sendBlockedReason ?? (durableDelivery ? sendActionLabel : sendHint)}</TooltipContent>
 						</Tooltip>
 					</div>
 				</div>

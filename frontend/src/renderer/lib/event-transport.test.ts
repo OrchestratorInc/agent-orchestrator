@@ -1093,6 +1093,8 @@ describe("id-only session updates", () => {
 		vi.useFakeTimers();
 		const client = fakeQueryClient();
 		const disconnect = createEventTransport(client).connect();
+		const taskRefreshes = () => vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["background-tasks"]').length;
+		const initialTasks = taskRefreshes();
 		idOnly("busy");
 		await vi.advanceTimersByTimeAsync(1_000);
 		idOnly("busy");
@@ -1108,9 +1110,11 @@ describe("id-only session updates", () => {
 		sessionRow("a", "active");
 		await vi.advanceTimersByTimeAsync(150);
 		expect(workspaceRefreshes(client)).toBe(3);
+		expect(taskRefreshes()).toBe(initialTasks);
 		cdcSources()[0].emit("session_created", JSON.stringify({ sessionId: "new", type: "session_created", payload: { id: "new" } }));
 		await vi.advanceTimersByTimeAsync(150);
 		expect(workspaceRefreshes(client)).toBe(4);
+		expect(taskRefreshes()).toBe(initialTasks + 1);
 		// Those refreshes already covered the waiting id-only update.
 		await vi.advanceTimersByTimeAsync(6_000);
 		expect(workspaceRefreshes(client)).toBe(4);

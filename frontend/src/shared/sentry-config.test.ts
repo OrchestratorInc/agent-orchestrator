@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_DAEMON_SENTRY_DSN, daemonSentryDsn, isPublishedSentryBuild } from "./sentry-config";
+import { DEFAULT_DAEMON_SENTRY_DSN, daemonSentryDsn, isPublishedSentryBuild, safeSentryExceptionType } from "./sentry-config";
+
+import { scrubSentryMessage, sentryExceptionValue } from "../../../packages/shared/telemetry/sentry-message";
 
 beforeEach(() => { vi.stubEnv("AO_PUBLISHED_BUILD", "1"); });
 afterEach(() => { vi.unstubAllEnvs(); });
@@ -39,5 +41,31 @@ describe("published Sentry builds", () => {
 	it("requires the release build marker even for a stable-looking version", () => {
 		vi.stubEnv("AO_PUBLISHED_BUILD", "");
 		expect(isPublishedSentryBuild("0.13.0", false)).toBe(false);
+	});
+});
+
+describe("Sentry exception fields", () => {
+	it("keeps registered names and rejects arbitrary custom names", () => {
+		expect(safeSentryExceptionType("WorkspaceRequestError")).toBe("WorkspaceRequestError");
+		expect(safeSentryExceptionType("PrivateProjectError")).toBe("Error");
+	});
+
+	it("rebuilds known error formats without copying paths, tokens or file contents", () => {
+		expect(scrubSentryMessage("ENOENT: no such file or directory, open '/var/private/token'")).toBe("ENOENT: no such file or directory, open [redacted]");
+		expect(scrubSentryMessage("Unexpected token 's', secret source file contents")).toBe("Unexpected token");
+		expect(scrubSentryMessage("Cannot read properties of undefined (reading 'private@example.test')")).toBe("Cannot read properties of undefined (reading '[redacted]')");
+		expect(scrubSentryMessage("Please summarize the following private prompt")).toBe("");
+		expect(scrubSentryMessage("token=private")).toBe("");
+	});
+
+	it("keeps chunk failures through repeated scrubbing", () => {
+		const message = scrubSentryMessage("Loading chunk 123 failed: http://localhost:8080/private");
+		expect(message).toBe("Loading chunk failed");
+		expect(scrubSentryMessage(message)).toBe(message);
+	});
+
+	it("caps the complete exception value including its location", () => {
+		expect(sentryExceptionValue("Invalid array length", "Fallback", "x".repeat(180), "render_crash").length).toBe(200);
+		expect(sentryExceptionValue("", "Fallback", "unknown", "other")).toBe("Fallback");
 	});
 });

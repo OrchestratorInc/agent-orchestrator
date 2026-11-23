@@ -663,6 +663,13 @@ export interface PageFilesOutcome {
 	 * page was published alone, and an active link kept the files it had.
 	 */
 	unsupported: boolean;
+	/**
+	 * The paths of the videos the control plane refused to include (it does
+	 * not serve videos yet): left out, as a page's missing files are.
+	 */
+	refusedVideos: string[];
+	/** The paths of the videos over the control plane's size limit: left out too. */
+	tooLargeVideos: string[];
 }
 
 interface UploadStart {
@@ -768,12 +775,31 @@ function isMissingRoute(error: unknown): boolean {
 	return error instanceof CloudShareError && error.status === 404;
 }
 
+/** Whether a refusal says the control plane does not publish this type: a video while it serves none. */
+function isRefusedType(error: unknown): boolean {
+	return error instanceof CloudShareError && error.code === "artifact_share_type_unsupported";
+}
+
+/** Whether a refusal says a video is over the control plane's size limit. */
+function isVideoTooLarge(error: unknown): boolean {
+	return error instanceof CloudShareError && error.code === "artifact_share_video_too_large";
+}
+
+/** The file tokens of a page's uploaded files, and the videos the control plane refused. */
+interface UploadedPageFiles {
+	tokens: string[];
+	refusedVideos: string[];
+	tooLargeVideos: string[];
+}
+
 /**
  * Uploads the files a page uses under the page's upload (pageToken) and
  * returns their file tokens for finalizing, or null when the control plane
  * predates included files: it then cannot take a files list either, since it
  * refuses fields it does not know. With no files, one request that is refused
  * either way tells which: an unknown route (404) or a path it checks (400).
+ * A video the control plane refuses (415: it serves no videos yet) is left
+ * out and the page is published without it.
  */
 async function uploadPageFiles(
 	api: CloudShareApi,
@@ -782,19 +808,21 @@ async function uploadPageFiles(
 	files: PageFileSnapshot[],
 	onSent: (bytes: number) => void,
 	signal?: AbortSignal,
-): Promise<string[] | null> {
+): Promise<UploadedPageFiles | null> {
 	if (files.length === 0) {
 		try {
 			await callApi<unknown>(api, baseUrl, "POST", "/me/artifact-shares/uploads/files",
 				{ uploadToken: pageToken, path: "", size: 0, sha256: "0".repeat(64) }, signal);
 		} catch (error) {
 			if (isMissingRoute(error)) return null;
-			if (error instanceof CloudShareError && error.status === 400) return [];
+			if (error instanceof CloudShareError && error.status === 400) return { tokens: [], refusedVideos: [], tooLargeVideos: [] };
 			throw error;
 		}
-		return [];
+		return { tokens: [], refusedVideos: [], tooLargeVideos: [] };
 	}
 	const tokens: string[] = [];
+	const refusedVideos: string[] = [];
+	const tooLargeVideos: string[] = [];
 	for (const [index, file] of files.entries()) {
 		let start: UploadStart;
 		try {
@@ -802,6 +830,11 @@ async function uploadPageFiles(
 				{ uploadToken: pageToken, path: file.path, size: file.snapshot.size, sha256: file.snapshot.sha256 }, signal);
 		} catch (error) {
 			if (index === 0 && isMissingRoute(error)) return null;
+			if (isRefusedType(error) || isVideoTooLarge(error)) {
+				(isRefusedType(error) ? refusedVideos : tooLargeVideos).push(file.path);
+				onSent(file.snapshot.size);
+				continue;
+			}
 			throw error;
 		}
 		try {
@@ -814,7 +847,7 @@ async function uploadPageFiles(
 			throw error;
 		}
 	}
-	return tokens;
+	return { tokens, refusedVideos, tooLargeVideos };
 }
 
 /**
@@ -844,7 +877,8 @@ export async function uploadShare(
 		onProgress(sent);
 	};
 	try {
-		const fileTokens = input.page ? await uploadPageFiles(api, baseUrl, start.uploadToken, input.page.files, onSent, signal) : null;
+		const uploaded = input.page ? await uploadPageFiles(api, baseUrl, start.uploadToken, input.page.files, onSent, signal) : null;
+		const fileTokens = uploaded?.tokens ?? null;
 		const parts = await putSnapshotParts(api, baseUrl, start, snapshot, onSent, signal);
 		const result = await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize", {
 			uploadToken: start.uploadToken,
@@ -853,7 +887,7 @@ export async function uploadShare(
 			...(fileTokens ? { files: fileTokens.map((fileToken) => ({ fileToken })) } : {}),
 		}, signal, SHARE_TIMEOUTS.publish);
 		if (!input.page) return result;
-		return { ...result, pageFiles: { included: fileTokens?.length ?? 0, unsupported: fileTokens === null } };
+		return { ...result, pageFiles: { included: fileTokens?.length ?? 0, unsupported: uploaded === null, refusedVideos: uploaded?.refusedVideos ?? [], tooLargeVideos: uploaded?.tooLargeVideos ?? [] } };
 	} catch (error) {
 		// The upload was never finalized: discard its parts. Finalize itself
 		// failing leaves nothing to discard but aborting is harmless.

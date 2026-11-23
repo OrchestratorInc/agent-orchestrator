@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -607,6 +608,11 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 	var err error
 	switch method {
 	case acpsdk.ClientMethodSessionUpdate:
+		// Decode for an async task only when its discriminator can be present,
+		// so ordinary frames are not decoded twice on the frame reader.
+		if bytes.Contains(params, []byte("async_task")) && c.observeAsyncTaskNotification(params) {
+			return true
+		}
 		var update acpsdk.SessionNotification
 		if err = json.Unmarshal(params, &update); err == nil {
 			err = update.Validate()
@@ -793,6 +799,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		c.mu.Lock()
 		c.tools[tool.id] = tool
 		c.mu.Unlock()
+		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 	case update.ToolCallUpdate != nil:
@@ -801,6 +808,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			emit(ports.ChatEvent{Kind: ports.ChatEventCommandOutputDelta, ProviderTurnID: turnID,
 				ProviderItemID: c.providerItemID(tool.id), Delta: delta})
 		}
+		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 	case update.Plan != nil:

@@ -51,6 +51,24 @@ describe("theme tokens", () => {
 		}
 	});
 
+	// Add project, Clone repository and their pickers paint fields with the
+	// import-card surface on the import-modal surface. Dark lifts the field
+	// above the dialog; light must not paint both the same white, or the
+	// fields (folder, owner, repository URL) have no visible edge.
+	it("keeps light-theme import fields off the dialog surface", () => {
+		const block = tokensCss.match(/:root\[data-theme="light"\]\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+		const declared = new Map([...block.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(([, name, value]) => [name, value.trim()]));
+		const resolve = (value: string, seen = new Set<string>()): string => {
+			const reference = value.match(/^var\((--[\w-]+)\)$/)?.[1];
+			if (!reference || seen.has(reference) || !declared.has(reference)) return value;
+			return resolve(declared.get(reference)!, new Set(seen).add(reference));
+		};
+		const field = resolve("var(--color-bg-import-card)");
+		const dialog = resolve("var(--color-bg-import-modal)");
+		expect(field).not.toBe("var(--color-bg-import-card)");
+		expect(field).not.toBe(dialog);
+	});
+
 	it("resolves every derived value to a concrete hex color for xterm", () => {
 		for (const theme of THEMES) {
 			for (const mode of ["dark", "light"] as const) {

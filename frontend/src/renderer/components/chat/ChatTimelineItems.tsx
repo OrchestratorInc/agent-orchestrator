@@ -26,7 +26,7 @@ import { useChatArtifactFiles, useChatSessionId } from "./chat-image-source";
 import { ArtifactThumbnail } from "../ArtifactThumbnail";
 import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
 import type { ArtifactRow } from "../../lib/artifacts";
-import { useChatEntrance } from "./chat-entrance";
+import { useChatEntrance, useRequestedEntrance } from "./chat-entrance";
 import { pageHidden } from "../../lib/page-hidden";
 import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -1147,7 +1147,8 @@ export function HumanMessage({
 	sessionId,
 	apiBaseUrl = getApiBaseUrl(),
 	queued,
-	animateIn = false,
+	animateIn: animateInRequested = false,
+	entranceKey,
 	onEdit,
 	editing = false,
 	editText,
@@ -1178,6 +1179,8 @@ export function HumanMessage({
 	queued?: boolean;
 	/** True only for a human message added after the timeline first mounted. */
 	animateIn?: boolean;
+	/** The timeline's key for this prompt, shared by its local echo and durable row; the entrance plays once per key. */
+	entranceKey?: string;
 	onEdit?: (turnId: string, text: string) => Promise<unknown> | void;
 	editing?: boolean;
 	editText?: string;
@@ -1203,6 +1206,7 @@ export function HumanMessage({
 	 */
 	status?: ReactNode;
 }) {
+	const animateIn = useRequestedEntrance(entranceKey ?? message.id, animateInRequested);
 	// A cloud message's files are listed by the message itself; the references
 	// its local echo carries until the server's copy arrives are not prose.
 	const visibleMessageText = humanVisibleText(splitCloudAttachmentReferences(message.text).text);
@@ -1424,7 +1428,7 @@ function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onCl
 		<Pressable
 			onClick={onClick}
 			aria-expanded={expanded}
-			className="mt-2 flex items-center gap-1 text-xs font-medium text-logo-accent transition-colors hover:text-markdown-link-hover"
+			className="mt-2 flex items-center gap-1 text-xs font-medium text-logo-accent-text transition-colors hover:text-markdown-link-hover"
 		>
 			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
 			{expanded ? "Hide report" : "Show full report"}

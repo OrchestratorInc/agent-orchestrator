@@ -6023,6 +6023,63 @@ paths:
       summary: Post a pull request conversation comment or review-thread reply
       tags:
       - prs
+  /api/v1/prs/{id}/dequeue:
+    post:
+      operationId: dequeuePR
+      parameters:
+      - description: PR number.
+        in: path
+        name: id
+        required: true
+        schema:
+          description: PR number.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DequeuePRRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DequeuePRResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unprocessable Entity
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Remove a pull request from its base branch's merge queue
+      tags:
+      - prs
   /api/v1/prs/{id}/details:
     post:
       operationId: loadPRDetails
@@ -8469,6 +8526,69 @@ paths:
       summary: Enable or disable automatic review for a session
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/background-tasks:
+    get:
+      operationId: getBackgroundTasks
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackgroundTasksResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Inspect native background work without waking the session
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop:
+    post:
+      operationId: stopBackgroundTask
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Provider-scoped background task identifier.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Provider-scoped background task identifier.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+      summary: Stop one native background task without waking the session
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/chat-view:
     post:
       operationId: setSessionChatView
@@ -9003,6 +9123,11 @@ paths:
         schema:
           description: Session identifier, e.g. project-1.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersInterruptConversationRequest'
       responses:
         "204":
           description: No Content
@@ -14306,6 +14431,46 @@ paths:
         paint
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/workspace/paths:
+    get:
+      operationId: listSessionWorkspaceFilePaths
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListWorkspaceFilePathsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the visible file paths in a session workspace, without per-file
+        status
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/resolve:
     get:
       operationId: resolveSessionWorkspacePath
@@ -14593,6 +14758,26 @@ paths:
         decorated
       tags:
       - sessions
+  /api/v1/sessions/background-tasks:
+    get:
+      operationId: listBackgroundTasks
+      parameters:
+      - description: Optional project id filter for dashboard cards.
+        in: query
+        name: projectId
+        schema:
+          description: Optional project id filter for dashboard cards.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListBackgroundTasksResponse'
+          description: OK
+      summary: List native background work for attached session controllers
+      tags:
+      - conversations
   /api/v1/sessions/cleanup:
     post:
       operationId: cleanupSessions
@@ -17421,6 +17606,76 @@ components:
       - paused
       - networkOutcome
       type: object
+    BackgroundTaskResponse:
+      properties:
+        description:
+          type: string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        kind:
+          enum:
+          - shell
+          - agent
+          - other
+          type: string
+        runId:
+          type: string
+        startedAt:
+          description: When the provider started the task, or else when the daemon
+            first observed it.
+          format: date-time
+          type:
+          - "null"
+          - string
+        state:
+          enum:
+          - running
+          - paused
+          - completed
+          - failed
+          - stopped
+          type: string
+        stoppable:
+          description: True when this provider can stop this running task.
+          type: boolean
+      required:
+      - id
+      - kind
+      - description
+      - state
+      type: object
+    BackgroundTasksResponse:
+      properties:
+        availability:
+          enum:
+          - ready
+          - partial
+          - unavailable
+          type: string
+        controllerGeneration:
+          type: string
+        observedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        sessionId:
+          type: string
+        tasks:
+          items:
+            $ref: '#/components/schemas/BackgroundTaskResponse'
+          type: array
+      required:
+      - sessionId
+      - controllerGeneration
+      - availability
+      - tasks
+      type: object
     BrowserCommandRequest:
       properties:
         action:
@@ -18746,6 +19001,11 @@ components:
       - sessionId
       - displayName
       type: object
+    ControllersInterruptConversationRequest:
+      properties:
+        turnId:
+          type: string
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -19702,6 +19962,7 @@ components:
       - id
       - name
       - type
+      - choices
       type: object
     ConversationConfigOptionsResponse:
       properties:
@@ -20773,6 +21034,28 @@ components:
       - ok
       - sessionId
       type: object
+    DequeuePRRequest:
+      properties:
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      type: object
+    DequeuePRResponse:
+      properties:
+        changedAt:
+          format: date-time
+          type: string
+        ok:
+          type: boolean
+        prNumber:
+          type: integer
+      required:
+      - ok
+      - prNumber
+      - changedAt
+      type: object
     DesktopArtifactLocationResponse:
       properties:
         artifactDir:
@@ -21701,6 +21984,15 @@ components:
       required:
       - automations
       type: object
+    ListBackgroundTasksResponse:
+      properties:
+        sessions:
+          items:
+            $ref: '#/components/schemas/BackgroundTasksResponse'
+          type: array
+      required:
+      - sessions
+      type: object
     ListCatalogModelsResponse:
       properties:
         models:
@@ -21931,6 +22223,21 @@ components:
       required:
       - shellTerminals
       type: object
+    ListWorkspaceFilePathsResponse:
+      properties:
+        paths:
+          items:
+            type: string
+          type: array
+        sessionId:
+          type: string
+        truncated:
+          type: boolean
+      required:
+      - sessionId
+      - paths
+      - truncated
+      type: object
     ListWorkspaceFilesResponse:
       properties:
         ahead:
@@ -22096,9 +22403,12 @@ components:
           type: boolean
         prNumber:
           type: integer
+        queue:
+          $ref: '#/components/schemas/SessionPRMergeQueueEntry'
         state:
           enum:
           - merged
+          - open
           type: string
         stateChangedAt:
           format: date-time
@@ -24368,6 +24678,29 @@ components:
       required:
       - name
       type: object
+    SessionPRMergeQueueEntry:
+      properties:
+        enqueuedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        estimatedSecondsToMerge:
+          type: integer
+        position:
+          type: integer
+        state:
+          enum:
+          - queued
+          - awaiting_checks
+          - mergeable
+          - unmergeable
+          - locked
+          type: string
+      required:
+      - state
+      - position
+      type: object
     SessionPRMergeabilitySummary:
       properties:
         conflictFiles:
@@ -24552,6 +24885,10 @@ components:
           items:
             $ref: '#/components/schemas/SessionPRLabel'
           type: array
+        mergeQueue:
+          $ref: '#/components/schemas/SessionPRMergeQueueEntry'
+        mergeQueueRequired:
+          type: boolean
         mergeability:
           $ref: '#/components/schemas/SessionPRMergeabilitySummary'
         number:

@@ -647,6 +647,33 @@ describe("Sidebar", () => {
 		}
 	});
 
+	it("reads a chat's history once the pointer rests on its row, not while it sweeps past", async () => {
+		vi.useFakeTimers();
+		try {
+			trustedApi.current = true;
+			renderSidebar({ workspaces: [{ ...workspace, sessions: [{ ...session, mode: "chat" }] }] });
+			const row = screen.getByLabelText("Open fix login");
+			const conversationReads = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/conversation").length;
+			fireEvent.mouseEnter(row);
+			// A slow sweep: well past the rest time on the row, but never still for it.
+			for (let i = 0; i < 6; i++) {
+				await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+				fireEvent.mouseMove(row);
+			}
+			expect(conversationReads()).toBe(0);
+			fireEvent.mouseLeave(row);
+			await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+			expect(conversationReads()).toBe(0);
+
+			fireEvent.mouseEnter(row);
+			fireEvent.mouseMove(row);
+			await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+			expect(conversationReads()).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("creates local or remote projects from the header button", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
@@ -742,7 +769,56 @@ describe("Sidebar", () => {
 		expect(within(menu).getByText("Ada Park")).toBeVisible();
 		expect(within(menu).getByText("ada@example.com")).toBeVisible();
 		await user.click(within(menu).getByRole("menuitem", { name: "Sign out" }));
+		// Signing out asks first, like logging out of an agent.
+		expect(await screen.findByRole("dialog", { name: "Sign out of Orchestrator Cloud?" })).toBeVisible();
+		expect(cloudSessionState.signOut).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Cloud sign-in when the sign-out is cancelled", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "ada@example.com", displayName: "Ada Park" } };
+		renderSidebar();
+
+		await user.click(screen.getAllByLabelText("Signed in as ada@example.com").find((el) => el.tabIndex === 0)!);
+		await user.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Sign out" }));
+		const dialog = await screen.findByRole("dialog", { name: "Sign out of Orchestrator Cloud?" });
+		await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(cloudSessionState.signOut).not.toHaveBeenCalled();
+	});
+
+	it("signs out once the sign-out is confirmed", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "ada@example.com", displayName: "Ada Park" } };
+		renderSidebar();
+
+		await user.click(screen.getAllByLabelText("Signed in as ada@example.com").find((el) => el.tabIndex === 0)!);
+		await user.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Sign out" }));
+		const dialog = await screen.findByRole("dialog", { name: "Sign out of Orchestrator Cloud?" });
+		expect(dialog).toHaveTextContent("Cached Cloud previews on this computer will be cleared");
+		await user.click(within(dialog).getByRole("button", { name: "Sign out" }));
+
 		expect(cloudSessionState.signOut).toHaveBeenCalledOnce();
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
+	it("asks before signing out from the collapsed rail's account menu too", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "user@example.com" } };
+		renderSidebar({ initialOpen: false });
+
+		await user.click(screen.getAllByLabelText("Signed in as user@example.com").find((el) => el.tabIndex === 0)!);
+		await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+
+		expect(await screen.findByRole("dialog", { name: "Sign out of Orchestrator Cloud?" })).toBeVisible();
+		expect(cloudSessionState.signOut).not.toHaveBeenCalled();
 	});
 
 	it("opens the account menu from the collapsed rail avatar instead of signing out", async () => {
@@ -4379,8 +4455,9 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const failedRow = await screen.findByTestId("sidebar-update-failed");
-		// One row: the reason is in the row's tooltip and screen-reader text.
-		expect(failedRow).toHaveTextContent("Update failed · Couldn't download");
+		expect(within(failedRow).getByText("Retry")).toBeVisible();
+		expect(failedRow).toHaveAccessibleName("Retry");
+		expect(failedRow).toHaveAccessibleDescription("Update failed · Couldn't download");
 		await userEvent.click(failedRow);
 		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
 	});
@@ -4441,7 +4518,7 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
 	});
 
-	it("asks to restart a staged build from the same tinted pill", async () => {
+	it("asks to restart a staged build from a neutral Restart button", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
 			version: "9.9.9",
@@ -4452,8 +4529,11 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const readyRow = await screen.findByTestId("sidebar-update-ready");
-		expect(within(readyRow).getByText("Ready to install")).toBeVisible();
-		expect(readyRow).not.toHaveTextContent("Restart to finish");
+		expect(within(readyRow).getByText("Update ready")).toBeVisible();
+		// The next step is named in words, on the app's primary surface, not brand blue.
+		const action = within(readyRow).getByText("Restart");
+		expect(action).toHaveClass("button-raised", "[--button-color:var(--primary)]");
+		expect(readyRow.querySelector(".bg-logo-accent")).toBeNull();
 		const pill = readyRow;
 		expect(pill).toHaveRole("button");
 		expect(pill).toHaveAccessibleName("Restart to install update v9.9.9");
