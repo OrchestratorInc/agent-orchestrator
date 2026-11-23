@@ -38,10 +38,3 @@ func SetForcedHandoffInterruptLimit(limit time.Duration) (restore func()) {
 	forcedHandoffInterruptLimit = limit
 	return func() { forcedHandoffInterruptLimit = previous }
 }
-
-// HandoffArmed reports whether an interface handoff has closed the controller's intake.
-func (c *Controller) HandoffArmed() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.handoff == controllerHandoffInterfaceDrain || c.handoff == controllerHandoffInterfaceInterrupt
-}

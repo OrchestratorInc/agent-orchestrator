@@ -2460,29 +2460,18 @@ func (c *Controller) ArmHandoff(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	armed := c.handoff == want
-	c.mu.Unlock()
-	if armed {
-		return nil
-	}
 	moving, err := c.accountMoveActive(ctx)
 	if err != nil {
 		return fmt.Errorf("check account move before handoff: %w", err)
 	}
 
 	c.mu.Lock()
-	if c.handoff == want {
-		c.mu.Unlock()
-		return nil
-	}
-	if c.handoff != controllerHandoffNone {
-		c.mu.Unlock()
+	defer c.mu.Unlock()
+	if c.handoff != want && c.handoff != controllerHandoffNone {
 		return ErrControllerHandoff
 	}
 	c.handoff = want
 	c.keepHeld = moving && policy == domain.SessionInterfaceTransitionDrain
-	c.mu.Unlock()
 	return nil
 }
 
@@ -2515,7 +2504,6 @@ func (c *Controller) BeginHandoff(
 			c.AbortHandoff()
 			return fmt.Errorf("prepare interrupt handoff: cancel queued turns: %w", err)
 		}
-		c.releaseHeldQueueForHandoff(ctx)
 		if active {
 			if err := c.interruptForHandoff(ctx); err != nil {
 				c.AbortHandoff()
@@ -2557,9 +2545,6 @@ func (c *Controller) BeginHandoff(
 			switch {
 			case errors.Is(err, domain.ErrNoQueuedTurn):
 				c.sendMu.Unlock()
-				if !keepHeld {
-					c.releaseHeldQueueForHandoff(ctx)
-				}
 				return nil
 			case err != nil:
 				c.sendMu.Unlock()
@@ -2590,9 +2575,6 @@ func (c *Controller) BeginHandoff(
 			c.AbortHandoff()
 			return ctx.Err()
 		case <-c.stopped:
-			if !keepHeld {
-				c.releaseHeldQueueForHandoff(ctx)
-			}
 			return nil
 		case <-ticker.C:
 		}
