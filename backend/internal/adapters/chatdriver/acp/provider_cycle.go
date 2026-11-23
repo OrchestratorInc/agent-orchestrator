@@ -46,15 +46,15 @@ type settledCycle struct {
 	nested   map[string]nestedMessageState
 }
 
-// enterProviderCycle returns the cycle a turn-less update belongs to, opening
-// one for agent output. Updates that are not output (usage, a late update for
-// an earlier turn's tool) join an open cycle but never open one. It stops the
-// cycle's settle timer: the update re-arms it once it has been applied.
-func (c *conversation) enterProviderCycle(update acpsdk.SessionUpdate) (*providerCycle, bool) {
+// enterProviderCycleLocked returns the cycle a turn-less update belongs to,
+// opening one for agent output. Updates that are not output (usage, a late
+// update for an earlier turn's tool) join an open cycle but never open one. It
+// stops the cycle's settle timer: the update re-arms it once it has been
+// applied. The caller holds mu, and read activeTurn as empty under that same
+// hold, so a cycle never opens once a turn has started.
+func (c *conversation) enterProviderCycleLocked(update acpsdk.SessionUpdate) (*providerCycle, bool) {
 	output := update.AgentMessageChunk != nil || update.AgentThoughtChunk != nil ||
 		update.ToolCall != nil || update.Plan != nil
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if update.ToolCallUpdate != nil && c.tools[string(update.ToolCallUpdate.ToolCallId)] == nil {
 		// A tool AO never saw start is output of the cycle it belongs to.
 		output = true
@@ -121,6 +121,10 @@ func (c *conversation) armProviderCycle(cycle *providerCycle, update acpsdk.Sess
 }
 
 func (c *conversation) endQuietProviderCycle(cycle *providerCycle, gen int) {
+	// Held through the idle report: a cycle opening meanwhile waits to report
+	// active until this one has reported idle.
+	c.cycleStateMu.Lock()
+	defer c.cycleStateMu.Unlock()
 	c.mu.Lock()
 	if c.cycle != cycle || cycle.timerGen != gen || c.closed {
 		c.mu.Unlock()
@@ -214,20 +218,21 @@ func (c *conversation) keepToolsOutlivingTurn(interrupted bool, resp acpsdk.Prom
 	if !c.toolsOutliveTurn || interrupted || err != nil || resp.StopReason != acpsdk.StopReasonEndTurn {
 		return nil
 	}
+	// The tracker is updated under mu, the lock a completion's status update
+	// takes: a completion merged first leaves the tool out here, and one merged
+	// after finds the task to finish. Updating after mu was released could
+	// record a tool that had just completed as running.
 	c.mu.Lock()
-	tools := make([]toolState, 0, len(c.tools))
-	for _, tool := range c.tools {
-		if tool.status == acpsdk.ToolCallStatusInProgress {
-			tools = append(tools, *tool)
-		}
-	}
-	c.mu.Unlock()
-	if len(tools) == 0 {
-		return nil
-	}
+	defer c.mu.Unlock()
 	now := time.Now()
-	kept := make(map[string]bool, len(tools))
-	for _, tool := range tools {
+	var kept map[string]bool
+	for _, tool := range c.tools {
+		if tool.status != acpsdk.ToolCallStatusInProgress {
+			continue
+		}
+		if kept == nil {
+			kept = map[string]bool{}
+		}
 		kept[tool.id] = true
 		input := backgroundObject(tool.rawInput)
 		kind, command := "other", ""

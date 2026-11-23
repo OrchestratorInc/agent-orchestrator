@@ -1217,8 +1217,12 @@ func TestProviderCycleItemsSettleAsTheirOwnRows(t *testing.T) {
 	awaitActivityEvent(t, h.activity, "chat.provider.idle", domain.ActivityIdle)
 	cycle("cycle-2", "Second note.")
 
+	// Each event commits on its own, and the reasoning completes after the
+	// message, so wait for both.
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return len(s.Messages) == 2 && !s.Messages[1].Streaming
+		return len(s.Messages) == 2 && !s.Messages[1].Streaming &&
+			activityByItem(s, "thought-cycle-1").Status == domain.ActivityStatusCompleted &&
+			activityByItem(s, "thought-cycle-2").Status == domain.ActivityStatusCompleted
 	})
 	for i, want := range []string{"All checks passed.", "Second note."} {
 		message := snapshot.Messages[i]

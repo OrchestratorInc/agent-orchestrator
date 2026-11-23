@@ -250,6 +250,11 @@ type conversation struct {
 	// own running and idle states, so its idle, not quiet, ends a cycle.
 	cycle                *providerCycle
 	providerReportsState bool
+	// cycleStateMu orders a cycle's active and idle reports: it is held, before
+	// mu, from opening a cycle through reporting it active, and from ending one
+	// through reporting it idle, so a cycle that opens as another ends cannot
+	// report active before the ended one reports idle.
+	cycleStateMu sync.Mutex
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute

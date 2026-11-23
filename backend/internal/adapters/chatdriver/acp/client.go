@@ -701,12 +701,39 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	if c.prepareHistoryUpdate(params.Update) {
 		return nil
 	}
+	update := params.Update
+	// Outside a turn, the update belongs to the agent's own cycle. The turn is
+	// read and the cycle entered under one hold of mu, so a turn starting in
+	// between cannot find a cycle open, or this update's items in its maps.
+	replaying := c.historyReplayActive()
+	if !replaying {
+		c.cycleStateMu.Lock()
+	}
 	c.mu.Lock()
 	sessionID := c.sessionID
 	turnID := c.activeTurn
+	sessionMatches := sessionID == "" || string(params.SessionId) == sessionID
+	var cycle *providerCycle
+	opened := false
+	if sessionMatches && turnID == "" && !replaying {
+		cycle, opened = c.enterProviderCycleLocked(update)
+	}
 	c.mu.Unlock()
-	if sessionID != "" && string(params.SessionId) != sessionID {
+	if opened {
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}})
+	}
+	if !replaying {
+		c.cycleStateMu.Unlock()
+	}
+	if !sessionMatches {
 		return fmt.Errorf("ACP update for unexpected session %q", params.SessionId)
+	}
+	// itemTurn names this update's message and reasoning items: the turn's, or
+	// in a cycle the cycle's, so each cycle gets items of its own.
+	itemTurn := turnID
+	if cycle != nil {
+		itemTurn = cycle.id
+		defer c.armProviderCycle(cycle, update)
 	}
 	sourceID := stableACPEventID(params.Meta)
 	sourceIndex := 0
@@ -718,22 +745,6 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		c.emit(event)
 	}
 
-	update := params.Update
-	// itemTurn names this update's message and reasoning items. Outside a turn
-	// it is the agent's own cycle, so each cycle gets items of its own.
-	itemTurn := turnID
-	var cycle *providerCycle
-	if turnID == "" && !c.historyReplayActive() {
-		var opened bool
-		cycle, opened = c.enterProviderCycle(update)
-		if cycle != nil {
-			itemTurn = cycle.id
-			defer c.armProviderCycle(cycle, update)
-		}
-		if opened {
-			c.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}})
-		}
-	}
 	providerOutputResumed := update.AgentMessageChunk != nil ||
 		update.AgentThoughtChunk != nil ||
 		update.ToolCall != nil ||
