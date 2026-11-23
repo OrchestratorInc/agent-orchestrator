@@ -2,7 +2,10 @@ package notify
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -20,7 +23,11 @@ func enrich(intent Intent) (domain.NotificationRecord, error) {
 	if !intent.Type.Valid() {
 		return domain.NotificationRecord{}, domain.ErrInvalidNotificationType
 	}
-	if intent.Type != domain.NotificationNeedsInput && rec.PRURL == "" {
+	if intent.Type == domain.NotificationBrowserApproval {
+		if rec.SourceKey == "" {
+			return domain.NotificationRecord{}, domain.ErrInvalidNotificationRecord
+		}
+	} else if intent.Type != domain.NotificationNeedsInput && rec.PRURL == "" {
 		return domain.NotificationRecord{}, domain.ErrInvalidNotificationRecord
 	}
 	rec.Title = titleForIntent(intent)
@@ -51,6 +58,8 @@ func titleForIntent(intent Intent) string {
 		return fmt.Sprintf("Review complete for %s", prLabel(intent))
 	case domain.NotificationReviewChangesRequested:
 		return fmt.Sprintf("Review found changes for %s", prLabel(intent))
+	case domain.NotificationBrowserApproval:
+		return "Approval needed"
 	default:
 		return "Notification"
 	}
@@ -83,6 +92,8 @@ func bodyForIntent(intent Intent) string {
 		return "Orchestrator finished reviewing this pull request and approved it."
 	case domain.NotificationReviewChangesRequested:
 		return "Orchestrator finished reviewing this pull request and found changes to address."
+	case domain.NotificationBrowserApproval:
+		return approvalBody(intent)
 	default:
 		return ""
 	}
@@ -106,4 +117,46 @@ func prLabel(intent Intent) string {
 		return "PR " + title
 	}
 	return "PR"
+}
+
+// maxApprovalBody caps the agent- and page-supplied text an approval shows on
+// a lock screen.
+const maxApprovalBody = 140
+
+// approvalBody reads "<agent> wants to <action>[ on <site>]" as one plain line.
+func approvalBody(intent Intent) string {
+	action := oneLine(intent.ApprovalAction)
+	if action == "" {
+		action = "act in the browser"
+	}
+	if r, size := utf8.DecodeRuneInString(action); size > 0 {
+		action = string(unicode.ToLower(r)) + action[size:]
+	}
+	text := fmt.Sprintf("%s wants to %s", oneLine(sessionLabel(intent)), action)
+	if host := siteHost(intent.ApprovalSite); host != "" && !strings.Contains(action, host) {
+		text += " on " + host
+	}
+	if runes := []rune(text); len(runes) > maxApprovalBody {
+		text = strings.TrimSpace(string(runes[:maxApprovalBody-1])) + "…"
+	}
+	return text
+}
+
+// oneLine drops line breaks, control and format characters (bidi overrides)
+// so untrusted text cannot change how a banner reads.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ' '
+		}
+		return r
+	}, s)), " ")
+}
+
+func siteHost(site string) string {
+	u, err := url.Parse(strings.TrimSpace(site))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Host
 }

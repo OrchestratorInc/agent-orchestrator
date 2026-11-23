@@ -167,6 +167,9 @@ type Gate struct {
 	policy  policyFile
 	subs    map[int]chan Event
 	nextSub int
+	// observers see every event, in order, without drops. They are called
+	// with mu held and must not block or call back into the gate.
+	observers []func(Event)
 	auditMu sync.Mutex
 }
 
@@ -310,7 +313,19 @@ func (g *Gate) Subscribe() (<-chan Event, func()) {
 	}
 }
 
+// Observe registers fn for every pending-set change, delivered in order and
+// never dropped, unlike Subscribe. fn runs with the gate locked: it must only
+// hand the event off (queue it) and return.
+func (g *Gate) Observe(fn func(Event)) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.observers = append(g.observers, fn)
+}
+
 func (g *Gate) publishLocked(ev Event) {
+	for _, fn := range g.observers {
+		fn(ev)
+	}
 	for _, ch := range g.subs {
 		select {
 		case ch <- ev:

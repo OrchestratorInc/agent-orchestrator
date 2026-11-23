@@ -21,13 +21,16 @@ const (
 	NotificationReviewCompleted NotificationType = "review_completed"
 	// NotificationReviewChangesRequested means an AO reviewer found changes to make.
 	NotificationReviewChangesRequested NotificationType = "review_changes_requested"
+	// NotificationBrowserApproval means an agent's browser action is waiting for
+	// the user's approval. It is resolved when the approval ends.
+	NotificationBrowserApproval NotificationType = "browser_approval"
 )
 
 // Valid reports whether t is one of the v1 notification kinds.
 func (t NotificationType) Valid() bool {
 	switch t {
 	case NotificationNeedsInput, NotificationReadyToMerge, NotificationPRMerged, NotificationPRClosedUnmerged,
-		NotificationReviewCompleted, NotificationReviewChangesRequested:
+		NotificationReviewCompleted, NotificationReviewChangesRequested, NotificationBrowserApproval:
 		return true
 	default:
 		return false
@@ -39,7 +42,7 @@ func (t NotificationType) Valid() bool {
 // Terminal facts — a PR that merged or closed — describe something that already
 // happened, so they are surfaced once as unseen and never held as unresolved.
 func (t NotificationType) NeedsResolution() bool {
-	return t == NotificationNeedsInput || t == NotificationReadyToMerge
+	return t == NotificationNeedsInput || t == NotificationReadyToMerge || t == NotificationBrowserApproval
 }
 
 // NotificationStatus is the seen state for a stored notification. The stored

@@ -39,6 +39,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
+	"github.com/aoagents/agent-orchestrator/backend/internal/approvalnotify"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/autoreview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
@@ -983,6 +984,17 @@ func Run(buildVersion string) (retErr error) {
 	} else {
 		browserService.UseApprovals(gate, 0)
 		approvals = gate
+		// Each waiting approval is a notification, so a paired phone is pushed
+		// and the row closes when the approval ends.
+		approvalNotifier := approvalnotify.New(notificationWriter, func(id string) (string, domain.ProjectID) {
+			rec, ok, err := store.GetSession(ctx, domain.SessionID(id))
+			if err != nil || !ok {
+				return "", ""
+			}
+			return rec.DisplayName, rec.ProjectID
+		}, log)
+		gate.Observe(approvalNotifier.Observe)
+		go approvalNotifier.Run(ctx)
 	}
 	var browserChrome controllers.BrowserChromeService
 	if chrome != nil {

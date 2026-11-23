@@ -192,10 +192,35 @@ func (s *Store) ResolvePRNotifications(
 	return notificationsFromGen(rows), nil
 }
 
+// ResolveNotificationBySourceKey marks the open notification with this source
+// key resolved and returns the rows it changed (none when it already was).
+func (s *Store) ResolveNotificationBySourceKey(ctx context.Context, sourceKey string, at time.Time) ([]domain.NotificationRecord, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var rows []gen.Notification
+	err := s.inTx(ctx, "resolve notification by source key", func(q *gen.Queries) error {
+		var err error
+		rows, err = q.ResolveNotificationBySourceKey(ctx, gen.ResolveNotificationBySourceKeyParams{
+			ResolvedAt: nullTime(at),
+			SourceKey:  sourceKey,
+		})
+		if err != nil {
+			return err
+		}
+		_, err = q.DeleteDismissedNotificationBySourceKey(ctx, sourceKey)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve notification %s: %w", sourceKey, err)
+	}
+	return notificationsFromGen(rows), nil
+}
+
 // ReconcileResolvedNotifications closes open notifications whose resolving
 // transition happened while the daemon was down, by re-reading the durable
 // session and PR facts. Without it a restart can strand a needs-input row in
-// the unresolved list forever.
+// the unresolved list forever. Browser approvals never outlive the daemon, so
+// every one still open is closed.
 //
 // Ready-to-merge is judged in Go rather than SQL: readiness is more than
 // open/closed, and the SCM observer persists PR facts before it asks lifecycle
@@ -250,6 +275,14 @@ func (s *Store) ReconcileResolvedNotifications(ctx context.Context, at time.Time
 			return fmt.Errorf("delete dismissed needs-input notifications: %w", err)
 		}
 		resolved = notificationsFromGen(needsInput)
+		approvals, err := q.ResolveOpenBrowserApprovalNotifications(ctx, nullTime(at))
+		if err != nil {
+			return fmt.Errorf("reconcile browser approval notifications: %w", err)
+		}
+		if _, err := q.DeleteOpenDismissedBrowserApprovalNotifications(ctx); err != nil {
+			return fmt.Errorf("delete dismissed browser approval notifications: %w", err)
+		}
+		resolved = append(resolved, notificationsFromGen(approvals)...)
 		for _, prURL := range stalePRs {
 			rows, err := q.ResolvePRNotificationsByType(ctx, gen.ResolvePRNotificationsByTypeParams{
 				ResolvedAt: nullTime(at),
