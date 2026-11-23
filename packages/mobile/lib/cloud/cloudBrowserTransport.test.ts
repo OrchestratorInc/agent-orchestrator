@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserViewState } from "../browserTransport";
-import { CloudBrowserTransport, cloudBrowserURL, parseViewerFrame } from "./cloudBrowserTransport";
+import { CloudBrowserTransport, cloudBrowserURL, jpegSize, parseViewerFrame } from "./cloudBrowserTransport";
 
 class FakeSocket {
 	static OPEN = 1;
@@ -65,6 +65,22 @@ describe("cloud browser transport", () => {
 		expect([...new Uint8Array(frame.frame.jpeg)]).toEqual([1, 2, 3, 4]);
 		expect(() => parseViewerFrame(new ArrayBuffer(2))).toThrow();
 		expect(() => parseViewerFrame(viewerFrame({ seq: 1 }).slice(0, 6))).toThrow();
+	});
+
+	it("carries a fullscreen crop as the page part of a larger JPEG", () => {
+		// A JPEG whose SOF0 says 1920×1080: SOI, then SOF0 with height, width.
+		const jpeg = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x04, 0x38, 0x07, 0x80, 0x03];
+		const { frame } = parseViewerFrame(viewerFrame({ seq: 1, crop: [1280, 720], meta: { deviceWidth: 1280, deviceHeight: 720 } }, jpeg));
+		expect(frame).toMatchObject({ width: 1280, height: 720, crop: { width: 1280, height: 720, imageWidth: 1920, imageHeight: 1080 } });
+		// No crop, or one the JPEG can't be measured for, draws the whole image.
+		expect(parseViewerFrame(viewerFrame({ seq: 2, meta: { deviceWidth: 1280, deviceHeight: 720 } }, jpeg)).frame.crop).toBeUndefined();
+		expect(parseViewerFrame(viewerFrame({ seq: 3, crop: [1280, 720] }, [0xff, 0xd8])).frame.crop).toBeUndefined();
+	});
+
+	it("reads a JPEG's size from its frame header, skipping other markers", () => {
+		expect(jpegSize(Uint8Array.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x03, 0x00, 0xff, 0xc2, 0x00, 0x11, 0x08, 0x00, 0x64, 0x00, 0xc8]))).toEqual({ width: 200, height: 100 });
+		expect(jpegSize(Uint8Array.from([0x00, 0x01]))).toBeNull();
+		expect(jpegSize(Uint8Array.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x40]))).toBeNull();
 	});
 
 	it("acks every frame", async () => {
@@ -162,6 +178,23 @@ describe("cloud browser transport", () => {
 		expect(onStatus).toHaveBeenLastCalledWith("error", "The browser stream paused while the app was in the background.");
 		transport.close();
 		expect(appState.removed).toBe(true);
+	});
+
+	it("doesn't dial after backgrounding while the token loads", async () => {
+		let listener!: (state: string) => void;
+		let resolveToken!: (token: string) => void;
+		const createSocket = vi.fn();
+		const transport = new CloudBrowserTransport({
+			baseUrl: "https://api.example.dev", orgId: "o", sessionId: "s",
+			getToken: () => new Promise((resolve) => { resolveToken = resolve; }),
+			createSocket,
+			subscribeAppState: (next) => { listener = next; return () => {}; },
+		});
+		transport.connect({ onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn() });
+		listener("background");
+		resolveToken("tok");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(createSocket).not.toHaveBeenCalled();
 	});
 
 	it("reports a missing sign-in without dialing", async () => {

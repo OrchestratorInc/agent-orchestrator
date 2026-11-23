@@ -45,6 +45,27 @@ export function cloudBrowserURL(baseUrl: string, orgId: string, sessionId: strin
 	return `${cloudWebSocketBase(baseUrl.replace(/\/+$/, ""))}${CLOUD_API_PREFIX}/orgs/${encodeURIComponent(orgId)}/sessions/${encodeURIComponent(sessionId)}/agent-browser/ws/cdp`;
 }
 
+/** A JPEG's pixel size from its start-of-frame marker, or null if it has none. */
+export function jpegSize(bytes: Uint8Array): { width: number; height: number } | null {
+	if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+	let offset = 2;
+	while (offset + 4 <= bytes.length) {
+		if (bytes[offset] !== 0xff) return null;
+		const marker = bytes[offset + 1];
+		const length = (bytes[offset + 2] << 8) | bytes[offset + 3];
+		// SOF0–SOF15, less DHT (C4), JPG (C8) and DAC (CC).
+		if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+			if (offset + 9 > bytes.length) return null;
+			const height = (bytes[offset + 5] << 8) | bytes[offset + 6];
+			const width = (bytes[offset + 7] << 8) | bytes[offset + 8];
+			return width > 0 && height > 0 ? { width, height } : null;
+		}
+		if (length < 2) return null;
+		offset += 2 + length;
+	}
+	return null;
+}
+
 type FrameHeader = { seq: number; ts?: number; inputSeq?: number; q?: number; crop?: number[]; meta?: { deviceWidth?: number; deviceHeight?: number } };
 
 /** A viewer frame as the pane's BrowserFrame, plus the sequence to ack. */
@@ -59,6 +80,11 @@ export function parseViewerFrame(buffer: ArrayBuffer, fallback = { width: 1280, 
 	const [cropWidth, cropHeight] = header.crop ?? [];
 	const width = Math.round(cropWidth || header.meta?.deviceWidth || fallback.width);
 	const height = Math.round(cropHeight || header.meta?.deviceHeight || fallback.height);
+	const jpeg = buffer.slice(4 + headerLength);
+	const image = cropWidth && cropHeight ? jpegSize(new Uint8Array(jpeg)) : null;
+	const crop = image && cropWidth && cropHeight && (cropWidth < image.width || cropHeight < image.height)
+		? { width: Math.min(cropWidth, image.width), height: Math.min(cropHeight, image.height), imageWidth: image.width, imageHeight: image.height }
+		: undefined;
 	return {
 		seq: header.seq,
 		frame: {
@@ -66,7 +92,8 @@ export function parseViewerFrame(buffer: ArrayBuffer, fallback = { width: 1280, 
 			capturedAtMs: BigInt(Math.trunc(header.ts ?? 0)),
 			width: Math.max(1, width),
 			height: Math.max(1, height),
-			jpeg: buffer.slice(4 + headerLength),
+			jpeg,
+			...(crop ? { crop } : {}),
 		},
 	};
 }
@@ -77,6 +104,9 @@ export class CloudBrowserTransport implements BrowserTransport {
 	readonly capabilities: BrowserCapabilities = { text: true, keys: true, viewport: true, quality: true, control: true, dialogs: true };
 	private socket: SocketLike | null = null;
 	private closed = false;
+	// Bumped by every connect, close and trip to the background: a dial that
+	// was waiting for the token gives up if its generation has passed.
+	private generation = 0;
 	private inputSeq = 0;
 	private unsubscribe: (() => void) | null = null;
 	private handlers: BrowserTransportHandlers = { onStatus() {}, onState() {}, onFrame() {} };
@@ -91,24 +121,26 @@ export class CloudBrowserTransport implements BrowserTransport {
 	connect(handlers: BrowserTransportHandlers): void {
 		this.handlers = handlers;
 		this.closed = false;
+		const generation = ++this.generation;
 		handlers.onStatus("connecting");
 		this.unsubscribe?.();
 		this.unsubscribe = this.options.subscribeAppState?.((next) => {
 			if (next !== "background" || this.closed) return;
+			this.generation++;
 			this.drop();
 			handlers.onStatus("error", "The browser stream paused while the app was in the background.");
 		}) ?? null;
-		void this.dial();
+		void this.dial(generation);
 	}
 
-	private async dial(): Promise<void> {
+	private async dial(generation: number): Promise<void> {
 		let token: string | null;
 		try {
 			token = await this.options.getToken();
 		} catch {
 			token = null;
 		}
-		if (this.closed) return;
+		if (this.closed || generation !== this.generation) return;
 		if (!token) {
 			this.handlers.onStatus("error", "Sign in to Orchestrator Cloud first.");
 			return;
@@ -150,6 +182,7 @@ export class CloudBrowserTransport implements BrowserTransport {
 
 	close(): void {
 		this.closed = true;
+		this.generation++;
 		this.unsubscribe?.();
 		this.unsubscribe = null;
 		this.drop();

@@ -496,6 +496,22 @@ describe("transport contract", () => {
 		expect(nodes("View").some((node) => node.props.accessibilityLabel === "Agent browser, Todo app")).toBe(true);
 	});
 
+	it("draws only a fullscreen frame's page part, so taps land where it shows", async () => {
+		const fake = fakeTransport();
+		await act(async () => { screen = create(<BrowserLivePane sessionID="cloud-1" transport={fake.factory} />); });
+		await act(async () => {
+			fake.record.handlers!.onStatus("open");
+			fake.record.handlers!.onState(page);
+			nodes("View").find((node) => typeof node.props.onLayout === "function")!.props.onLayout({ nativeEvent: { layout: { width: 400, height: 225 } } });
+			fake.record.handlers!.onFrame({ sequence: 1n, capturedAtMs: 1n, width: 1280, height: 720, jpeg: new ArrayBuffer(3), crop: { width: 1280, height: 720, imageWidth: 1920, imageHeight: 1080 } } as never);
+		});
+		const [image] = nodes("Image");
+		// The 400×225 frame shows the 1280×720 crop; the 1920×1080 image overflows it, clipped.
+		expect(image.props.style).toEqual({ position: "absolute", left: 0, top: 0, width: 600, height: 337.5 });
+		await act(async () => { gesture("tap").onEnd({ x: 400, y: 225 }, true); });
+		expect(fake.record.sent.at(-1)).toMatchObject({ payload: { kind: "pointer", x: 1, y: 1 } });
+	});
+
 	it("shows an error when an active transport reports it closed", async () => {
 		const fake = fakeTransport();
 		await act(async () => { screen = create(<BrowserLivePane sessionID="cloud-1" transport={fake.factory} />); });
