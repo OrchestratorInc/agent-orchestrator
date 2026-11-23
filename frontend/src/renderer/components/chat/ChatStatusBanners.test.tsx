@@ -2,7 +2,8 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner, VersionSwitchChip } from "./ChatStatusBanners";
+import { TooltipProvider } from "../ui/tooltip";
+import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchChip } from "./ChatStatusBanners";
 
 const versionRefreshSetting = vi.hoisted(() => ({ enabled: true }));
 vi.mock("../../hooks/useSettings", () => ({
@@ -223,8 +224,18 @@ describe("VersionSwitchChip", () => {
 	const stale = { version: "2.1.300", since: "2026-10-15T00:00:00Z" };
 
 	it("says nothing for a session on the installed release", () => {
-		const { container } = render(<VersionSwitchChip harness="claude-code" />);
-		expect(container).toBeEmptyDOMElement();
+		render(<VersionSwitchChip harness="claude-code" />);
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toBeEmptyDOMElement();
+	});
+
+	it("announces the chip when an update arrives mid-session", () => {
+		const { rerender } = render(<VersionSwitchChip harness="claude-code" />);
+		const status = screen.getByRole("status");
+		rerender(<VersionSwitchChip staleBinary={stale} harness="claude-code" />);
+		// The same polite region carries the news, so a screen reader hears it.
+		expect(screen.getByRole("status")).toBe(status);
+		expect(status).toHaveTextContent("Update ready: Claude Code v2.1.300 is installed");
 	});
 
 	it("is one chip whose popover says what was installed and when the chat moves to it", async () => {
@@ -252,27 +263,65 @@ describe("VersionSwitchChip", () => {
 
 	it("stays quiet when moving sessions is turned off", () => {
 		versionRefreshSetting.enabled = false;
-		const { container } = render(<VersionSwitchChip staleBinary={stale} harness="claude-code" />);
-		expect(container).toBeEmptyDOMElement();
+		render(<VersionSwitchChip staleBinary={stale} harness="claude-code" />);
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toBeEmptyDOMElement();
 	});
 
-	it("leaves a failed switch to the warning banner", () => {
-		const { container } = render(<VersionSwitchChip staleBinary={{ ...stale, switchFailedAt: "2026-10-15T00:10:00Z" }} harness="claude-code" />);
-		expect(container).toBeEmptyDOMElement();
-	});
 });
 
-describe("VersionSwitchBanner", () => {
-	it("says nothing while a switch is only waiting", () => {
-		const { container } = render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z" }} />);
-		expect(container).toBeEmptyDOMElement();
+describe("VersionSwitchChip after a failed switch", () => {
+	afterEach(() => { versionRefreshSetting.enabled = true; });
+	const failed = { version: "2.1.300", since: "2026-10-15T00:00:00Z", switchFailedAt: "2026-10-15T00:10:00Z" };
+	const renderChip = (props: Partial<Parameters<typeof VersionSwitchChip>[0]> = {}) =>
+		render(<TooltipProvider><VersionSwitchChip staleBinary={failed} harness="claude-code" {...props} /></TooltipProvider>);
+
+	it("is one Retry update chip in place of a banner, announced once", () => {
+		renderChip({ onResume: vi.fn() });
+		expect(screen.getByRole("button", { name: /^Retry update/ })).toHaveTextContent("Retry update");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveTextContent("Couldn't switch to v2.1.300");
 	});
 
-	it("explains a failed switch and that queued messages were kept", () => {
+	it("says why on hover, without a delay", async () => {
+		const user = userEvent.setup();
+		renderChip({ onResume: vi.fn() });
+		await user.hover(screen.getByRole("button", { name: /^Retry update/ }));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(
+			"Couldn't switch to v2.1.300. Queued messages are kept; click to resume the agent on it.",
+		);
+	});
+
+	it("resumes the agent when clicked", async () => {
+		const user = userEvent.setup();
+		const onResume = vi.fn();
+		renderChip({ onResume });
+		await user.click(screen.getByRole("button", { name: /^Retry update/ }));
+		expect(onResume).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not resume twice while a resume is under way", async () => {
+		const user = userEvent.setup();
+		const onResume = vi.fn();
+		renderChip({ onResume, resuming: true });
+		await user.click(screen.getByRole("button", { name: /^Retry update/ }));
+		expect(onResume).not.toHaveBeenCalled();
+	});
+
+	it("promises no click when the agent cannot be resumed from here", async () => {
+		const user = userEvent.setup();
+		renderChip();
+		const chip = screen.getByRole("button", { name: /^Retry update/ });
+		expect(chip).toHaveAttribute("aria-disabled", "true");
+		await user.hover(chip);
+		const tooltip = await screen.findByRole("tooltip");
+		expect(tooltip).toHaveTextContent("Couldn't switch to v2.1.300");
+		expect(tooltip).not.toHaveTextContent("click");
+	});
+
+	it("shows even when moving sessions is turned off", () => {
 		versionRefreshSetting.enabled = false;
-		render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z", switchFailedAt: "2026-10-15T00:10:00Z" }} />);
-		expect(screen.getByRole("alert")).toHaveTextContent("Couldn't switch to v2.1.300");
-		expect(screen.getByRole("alert")).toHaveTextContent("queued messages are kept");
-		versionRefreshSetting.enabled = true;
+		renderChip({ onResume: vi.fn() });
+		expect(screen.getByRole("button", { name: /^Retry update/ })).toBeInTheDocument();
 	});
 });
