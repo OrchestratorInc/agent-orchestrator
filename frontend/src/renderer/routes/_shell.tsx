@@ -104,6 +104,8 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
+import { markLaunchUsable } from "../lib/launch-telemetry";
+import { useSessionOpenTiming } from "../lib/performance-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
 
@@ -222,6 +224,7 @@ function LocalSessionHost() {
 	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
 	const liveProjectId = projectSession?.projectId;
 	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
+	useSessionOpenTiming(liveSessionId, sessionId);
 	const view = useMemo(
 		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
 		[cloudOrgId, projectId, sessionId],
@@ -657,7 +660,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(() => {
 		if (!workspaceShown) return;
 		let frame = requestAnimationFrame(() => {
-			frame = requestAnimationFrame(() => aoBridge.app.reportSessionsShown());
+			frame = requestAnimationFrame(() => {
+				markLaunchUsable();
+				aoBridge.app.reportSessionsShown();
+			});
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [workspaceShown]);

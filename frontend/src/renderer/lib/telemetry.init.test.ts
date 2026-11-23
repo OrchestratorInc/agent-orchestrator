@@ -218,6 +218,48 @@ describe("initTelemetry recovery", () => {
 		}
 	});
 
+	async function initializedWithLaunchStart() {
+		localStorage.clear();
+		mockPosthog();
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: {
+					getBootstrap: vi.fn(async () => ({
+						appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test",
+						disabledEvents: [], eventsEnabled: true, consentGeneration: "generation-1",
+					})),
+					takeLaunchStart: vi.fn(async () => ({ kind: "cold", startedAtMs: Date.now() - 500 })),
+				},
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const telemetry = await import("./telemetry");
+		const launch = await import("./launch-telemetry");
+		expect(await telemetry.initTelemetry()).toBe(true);
+		return { ...telemetry, markLaunchUsable: launch.markLaunchUsable };
+	}
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+	const launchTimedCaptures = () => posthogStub.capture.mock.calls.filter(([event]) => event === "ao.launches.timed");
+
+	it("sends launch timings once the window is usable", async () => {
+		const { markLaunchUsable } = await initializedWithLaunchStart();
+		markLaunchUsable();
+		await settle();
+		await settle();
+		expect(launchTimedCaptures()).toHaveLength(1);
+		expect(launchTimedCaptures()[0]![1]).toMatchObject({ launch_kind: "cold" });
+	});
+
+	it("does not send a launch measured before an opt-out after a later opt-in", async () => {
+		const { applyAnalyticsOptOut, markLaunchUsable } = await initializedWithLaunchStart();
+		await applyAnalyticsOptOut(true);
+		await applyAnalyticsOptOut(false);
+		markLaunchUsable();
+		await settle();
+		await settle();
+		expect(launchTimedCaptures()).toHaveLength(0);
+	});
+
 	it("does not export updater failures counted while opted out", async () => {
 		const captureRendererEvent = await initializedUpdateCapture();
 		const { applyAnalyticsOptOut } = await import("./telemetry");

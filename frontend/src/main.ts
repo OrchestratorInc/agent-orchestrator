@@ -71,6 +71,8 @@ import { cliShadowEnabled } from "./shared/cli-shadow";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { createLaunchTiming } from "./main/launch-timing";
+import { createResourceSampler } from "./main/resource-sampler";
+import type { LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import { readNativeAppIcon } from "./main/native-app-icon";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -365,7 +367,8 @@ app.setPath(
 // Resolve once against the launch cwd, before the daemon can chdir. The exact
 // absolute value is shared by policy bootstrap and every daemon spawn.
 const desktopLaunchWorkingDirectory = process.cwd();
-const launchTiming = createLaunchTiming(process.getCreationTime() ?? performance.timeOrigin);
+const processStartedAt = process.getCreationTime() ?? performance.timeOrigin;
+const launchTiming = createLaunchTiming(processStartedAt);
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
@@ -382,6 +385,19 @@ const telemetryIdentity = new TelemetryIdentityController(
 	},
 );
 const trustedShellWebContents = new Map<number, WebContents>();
+// Launch start per shell page for ao.launches.timed, handed out once so a reload
+// does not report a launch. The first shell window is a cold launch; later
+// ones (reopened from the Dock) start when the window was requested.
+const shellLaunchStarts = new Map<number, LaunchTimingStart>();
+let shellWindowsCreated = 0;
+let windowRequestedAt = 0;
+const resourceSampler = createResourceSampler(
+	() => app.getAppMetrics(),
+	() => {
+		const contents = getShellWebContents();
+		return contents && !contents.isDestroyed() ? contents.getOSProcessId() : undefined;
+	},
+);
 const pendingRendererQueuePurges = new Map<string, {
 	senderId: number;
 	contents: WebContents;
@@ -1127,9 +1143,20 @@ async function createWindowInternal(): Promise<void> {
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("Orchestrator shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
+	shellLaunchStarts.set(
+		shellWebContents.id,
+		shellWindowsCreated++ === 0 ? { kind: "cold", startedAtMs: processStartedAt } : { kind: "warm", startedAtMs: windowRequestedAt },
+	);
+	// The start belongs to the first document. A reload that lands before that
+	// page read it must not report a launch, so later documents get none.
+	let shellDocuments = 0;
+	shellWebContents.on("did-navigate", () => {
+		if (++shellDocuments > 1) shellLaunchStarts.delete(shellWebContents.id);
+	});
 	relayScrollPhases(shellWebContents);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
+		shellLaunchStarts.delete(shellWebContents.id);
 		quitConfirm.reset();
 		applyAppMenuAvailability({});
 	});
@@ -1462,6 +1489,7 @@ function createWindow(): Promise<void> {
 	if (createWindowPromise) return createWindowPromise;
 	// A background quit hid the Dock icon; bring it back with the window.
 	void app.dock?.show();
+	windowRequestedAt = Date.now();
 	const pending = createWindowInternal();
 	createWindowPromise = pending;
 	void pending.then(
@@ -3653,7 +3681,10 @@ ipcMain.handle("telemetry:setAnalyticsOptOut", async (event, optedOut: unknown) 
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
 	if (trustedSender !== event.sender || typeof optedOut !== "boolean") throw new Error("invalid analytics opt-out request");
 	const result = await telemetryIdentity.setOptedOut(optedOut);
-	if (optedOut) void flushDaemonUsage();
+	if (optedOut) {
+		void flushDaemonUsage();
+		resourceSampler.clear();
+	}
 	return result;
 });
 ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
@@ -3663,6 +3694,18 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 });
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
 ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
+// Performance telemetry: the launch start (once per shell page) and the
+// resource use since the previous read. Neither carries an identifier.
+ipcMain.handle("telemetry:takeLaunchStart", (event): LaunchTimingStart | null => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;
+	const start = shellLaunchStarts.get(event.sender.id) ?? null;
+	shellLaunchStarts.delete(event.sender.id);
+	return start;
+});
+ipcMain.handle("telemetry:takeResourceSummary", (event): ResourceSummary | null => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;
+	return resourceSampler.take();
+});
 // The renderer claims ao.app.first_opened only when it is about to send it,
 // so an opt-out or a kill-switch entry never spends the one-time marker.
 ipcMain.handle("telemetry:claimFirstOpen", async () => {
@@ -4677,6 +4720,16 @@ async function writeAppStateOnLaunch(): Promise<void> {
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
 	launchTiming.mark("appReady");
+	// Memory and CPU for ao.usage.ui_performance. getAppMetrics is cheap; the
+	// renderer reads the kept peaks and average when its window flushes. Nothing
+	// is kept during an analytics opt-out; the first sample after it only sets
+	// the CPU baseline, so the average leaves the opt-out out.
+	const sampleResources = () => {
+		if (telemetryIdentity.isOptedOut()) resourceSampler.clear();
+		else resourceSampler.sample();
+	};
+	sampleResources();
+	setInterval(sampleResources, 10 * 60_000).unref();
 	// Before any browser partition exists; both run in the background.
 	void sweepTemporaryBrowserPartitions(app.getPath("userData")).then(({ removed, failed }) => {
 		if (removed || failed) console.info(`browser storage: removed ${removed} leftover temporary profiles${failed ? `, ${failed} failed` : ""}`);
