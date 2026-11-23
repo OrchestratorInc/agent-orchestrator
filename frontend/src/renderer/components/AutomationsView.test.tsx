@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 	baseTuning: {} as { model?: string; mode?: string; effort?: string },
 	workspaces: [] as Array<Record<string, unknown>>,
 	catalogWarning: "",
+	cachedWarning: "",
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -47,6 +48,7 @@ vi.mock("../hooks/useAgentModelsQuery", () => ({
 		queryKey: ["agent-models", agentId, projectId],
 		queryFn: async () => agentId === "amp" ? ({ models: [{ id: "smart", label: "Smart", isDefault: true }, { id: "rush", label: "Rush" }], allowCustom: false, customModelEntry: "none", selectionMode: "mode" }) : mocks.catalogWarning ? ({ models: [], warning: mocks.catalogWarning, allowCustom: false, customModelEntry: "none", selectionMode: "catalog" }) : ({
 			models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }, { id: "capable", label: "Capable", efforts: ["low", "high"], defaultEffort: "high" }, { id: "plain", label: "Plain", efforts: [] }, { id: "project-model", label: "Project model", efforts: ["minimal", "low"], defaultEffort: "low" }],
+			warning: mocks.cachedWarning || undefined,
 			allowCustom: false,
 			customModelEntry: "none",
 			selectionMode: "catalog",
@@ -105,7 +107,7 @@ async function choose(user: Clicker, dialog: HTMLElement, row: "Agent" | "Model"
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.catalogWarning = ""; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.catalogWarning = ""; mocks.cachedWarning = ""; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -696,6 +698,20 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByRole("button", { name: "Create automation" })).toBeDisabled();
 		await choose(user, dialog, "Agent", /Amp/);
 		await waitFor(() => expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument());
+		expect(within(dialog).getByRole("button", { name: "Create automation" })).toBeEnabled();
+	});
+
+	it("shows a warning beside a usable model list without holding Create", async () => {
+		mocks.cachedWarning = "Model discovery failed; showing cached models";
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "New automation" });
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Review");
+		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
+		expect(await within(dialog).findByRole("alert")).toHaveTextContent("Model discovery failed; showing cached models");
 		expect(within(dialog).getByRole("button", { name: "Create automation" })).toBeEnabled();
 	});
 
