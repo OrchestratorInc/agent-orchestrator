@@ -231,9 +231,9 @@ describe("ChatMarkdown", () => {
 	it("shows an openable file with its Files-tree icon and leaves code names plain", () => {
 		renderWithLinkHandler("Open `backend/service.go:42` but keep `--resume` as code.", vi.fn(), ["backend/service.go"], vi.fn());
 
-		const chip = screen.getByRole("button", { name: "Open backend/service.go in Files" }).querySelector("code");
-		expect(chip).toHaveClass("text-chat-file-foreground");
-		expect(chip?.querySelector("svg")).toHaveAttribute("data-file-icon", "go");
+		const button = screen.getByRole("button", { name: "Open backend/service.go in Files" });
+		expect(button.querySelector("code")).toHaveClass("text-chat-file-foreground");
+		expect(button.querySelector("svg")).toHaveAttribute("data-file-icon", "go");
 		expect(screen.getByText("--resume")).toHaveClass("text-markdown-code");
 	});
 

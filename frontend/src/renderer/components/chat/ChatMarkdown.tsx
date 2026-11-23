@@ -834,10 +834,13 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 				aria-label={`Open ${file.filePath} in Files`}
 				className="mx-0.5 inline rounded transition-colors hover:bg-interactive-hover"
 			>
-				<code {...positions} data-excerpt-kind="inline-code" className="rounded bg-chat-file py-[2px] pr-[5px] pl-1 font-mono text-xs text-chat-file-foreground">
+				<span className="rounded bg-chat-file py-[2px] pr-[5px] pl-1">
+					{/* Outside the code element, whose text alone carries the excerpt offsets. */}
 					<ChatFileIcon path={file.filePath} className="mr-[5px] align-[-2px]" />
-					{children}
-				</code>
+					<code {...positions} data-excerpt-kind="inline-code" className="font-mono text-xs text-chat-file-foreground">
+						{children}
+					</code>
+				</span>
 			</Pressable>
 		</ChatPathMenu>
 	);

@@ -12,7 +12,8 @@ function glyph(name: string): Glyph | undefined {
 	if (!glyphs) {
 		glyphs = new Map();
 		for (const match of getBuiltInSpriteSheet("complete").matchAll(/<symbol id="([^"]+)" viewBox="([^"]+)">([\s\S]*?)<\/symbol>/g)) {
-			glyphs.set(match[1], { viewBox: match[2], body: match[3] });
+			// No whitespace text nodes, so the icon adds nothing to quoted or found text.
+			glyphs.set(match[1], { viewBox: match[2], body: match[3].replace(/>\s+</g, "><").trim() });
 		}
 	}
 	return glyphs.get(name);
@@ -32,14 +33,15 @@ const PALETTE = {
 	purple: "light-dark(#a631be, #d568ea)",
 	red: "light-dark(#d52c36, #ff6762)",
 	teal: "light-dark(#17a5af, #64d1db)",
+	vermilion: "light-dark(#ff8c5b, #d5512f)",
 	yellow: "light-dark(#d5a910, #ffd452)",
 } as const;
 
 const TOKEN_COLOR: Record<string, keyof typeof PALETTE> = {
 	astro: "purple", babel: "yellow", bash: "green", biome: "blue", bootstrap: "indigo", browserslist: "yellow",
 	bun: "mauve", c: "blue", claude: "orange", cpp: "blue", css: "indigo", database: "purple", docker: "blue",
-	eslint: "indigo", go: "cyan", graphql: "pink", html: "orange", image: "pink", javascript: "yellow", json: "orange",
-	markdown: "green", mcp: "teal", npm: "red", postcss: "red", prettier: "teal", python: "blue", react: "cyan",
+	eslint: "indigo", git: "vermilion", go: "cyan", graphql: "pink", html: "orange", image: "pink", javascript: "yellow", json: "orange",
+	markdown: "green", mcp: "teal", npm: "red", oxc: "cyan", postcss: "red", prettier: "teal", python: "blue", react: "cyan",
 	ruby: "red", rust: "orange", sass: "pink", svelte: "red", svg: "orange", svgo: "green", swift: "orange",
 	table: "teal", tailwind: "cyan", terraform: "indigo", typescript: "blue", vite: "purple", vscode: "blue",
 	vue: "green", wasm: "indigo", webpack: "blue", yml: "red", zig: "orange", zip: "orange",

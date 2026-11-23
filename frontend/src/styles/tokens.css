@@ -743,7 +743,8 @@
 	--color-text-markdown-link: var(--color-brand-logo-text);
 	--color-text-markdown-link-hover: #295984;
 	--color-chat-file-bg: color-mix(in srgb, var(--color-brand-logo) 12%, transparent);
-	--color-chat-file-text: color-mix(in srgb, var(--color-brand-logo-text) 85%, var(--foreground));
+	/* More foreground than in dark, so the text stays above 4.5:1 on its tint in every palette. */
+	--color-chat-file-text: color-mix(in srgb, var(--color-brand-logo-text) 40%, var(--foreground));
 	--color-text-terminal: #3d3d3d;
 	--color-text-terminal-dim: #757575;
 
