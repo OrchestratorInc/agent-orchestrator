@@ -547,7 +547,7 @@ describe("background turns in the orchestrator chat", () => {
 		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
 		renderOrchestrator([
 			human("t1", 1, "How is the browser work going?"),
-			reply("t1", 2, `#8906 and iOS pages are merged; remote host waits on your call.\n\n${detail}`),
+			reply("t1", 2, `#8906 and iOS pages are merged; remote host waits on your call.\n\n${detail}\n\n\`\`\`\n?? notes.md\n\`\`\``),
 		]);
 
 		expect(screen.getByText(/and iOS pages are merged; remote host waits on your call\./)).toBeInTheDocument();
@@ -567,10 +567,12 @@ describe("background turns in the orchestrator chat", () => {
 			reply("t3", 6, `Status\n======\n\n${detail}`),
 			human("t4", 7, "And the PRs?"),
 			reply("t4", 8, `See [the PR] for the rest.\n\n${detail}\n\n[the PR]: https://example.com/pr/1`),
+			human("t5", 9, "Which sessions?"),
+			reply("t5", 10, `Session | State\n--- | ---\nproj-285 | done\n\n${detail}`),
 		]);
 
 		expect(screen.getByText(/Should I close the remote host PR\?/)).toBeInTheDocument();
-		expect(screen.getAllByText(/Session 12:/)).toHaveLength(4);
+		expect(screen.getAllByText(/Session 12:/)).toHaveLength(5);
 		expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
 	});
 

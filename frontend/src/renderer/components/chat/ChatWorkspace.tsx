@@ -7121,7 +7121,7 @@ function withoutLead(member: TimelineGroup): TimelineGroup {
 }
 
 function backgroundRows(members: readonly TimelineGroup[]) {
-	const rows: { key: string; members: TimelineGroup[]; sender?: string; latest?: WorkerUpdate; count: number }[] = [];
+	const rows: { key: string; members: TimelineGroup[]; sender?: string; latest?: WorkerUpdate; at?: string; count: number }[] = [];
 	const latest = new Map<string, WorkerUpdate>();
 	for (const member of members) {
 		const updates = isLooseNotices(member) ? [] : workerUpdatesOf(member.items[0]!);
@@ -7132,7 +7132,10 @@ function backgroundRows(members: readonly TimelineGroup[]) {
 		const row = at >= 0 ? rows.splice(at, 1)[0]! : { key: member.key, members: [], sender, count: 0 };
 		row.members.push(member);
 		if (sender !== undefined) {
-			if (!isAccountFailure(member) || !row.latest) row.latest = updates.at(-1);
+			if (!isAccountFailure(member) || !row.latest) {
+				row.latest = updates.at(-1);
+				row.at = member.items[0]!.createdAt;
+			}
 			row.count += updates.length;
 		}
 		rows.push(row);
@@ -7200,7 +7203,7 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 						key={row.key}
 						update={row.latest!}
 						count={row.count}
-						at={row.members.at(-1)!.items[0]!.createdAt}
+						at={row.at!}
 						open={worker.open || row.members.some((member) => overrides[`${member.key}:open`])}
 						onOpenChange={(open) => {
 							worker.onOpenChange(open);
