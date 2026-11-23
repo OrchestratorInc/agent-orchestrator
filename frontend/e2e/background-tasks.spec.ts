@@ -222,6 +222,22 @@ test("task rows stay static, scroll vertically and return keyboard focus @T0", a
 	await expect(page.locator("form.cursor-chat-composer [contenteditable=true]")).toBeFocused();
 });
 
+test("a later task completion leaves outside focus alone @T0", async ({ page }) => {
+	const fixture: { tasks: Task[] } = {
+		tasks: [{ id: "shell", kind: "shell", description: "Dev server", state: "running", stoppable: true }],
+	};
+	await openWorker(page, fixture);
+	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
+	const tab = page.getByRole("region", { name: "Background tasks" });
+	await tab.getByRole("button", { name: "Stop Dev server" }).focus();
+	await page.locator("body").click({ position: { x: 1, y: 1 } });
+	await expect(page.locator("body")).toBeFocused();
+	fixture.tasks = [];
+	// A normal poll observes independent completion; this is not a Stop request.
+	await expect(tab).toHaveCount(0, { timeout: 10_000 });
+	await expect(page.locator("body")).toBeFocused();
+});
+
 test("a task opens in the side panel's Background tasks tab and follows its output @T0", async ({ page }, testInfo) => {
 	let ticks = 60;
 	const lines = () => Array.from({ length: ticks }, (_, i) => `tick-${i + 1}`).join("\n");
@@ -279,7 +295,7 @@ test("a task opens in the side panel's Background tasks tab and follows its outp
 	const list = testInfo.outputPath("background-tasks-list.png");
 	await page.screenshot({ path: list });
 	await testInfo.attach("background tasks list", { path: list, contentType: "image/png" });
-	await running.getByRole("button", { name: /^Running tests/ }).click();
-	await expect(page.getByRole("region", { name: "Running tests" }).getByText("No output yet")).toBeVisible();
+	await running.getByRole("button", { name: /^Tests/ }).click();
+	await expect(page.getByRole("region", { name: "Tests" }).getByText("No output yet")).toBeVisible();
 	await expect(tasksTab).toHaveAttribute("aria-selected", "true");
 });

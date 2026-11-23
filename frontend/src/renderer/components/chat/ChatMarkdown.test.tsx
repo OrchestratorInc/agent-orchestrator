@@ -3,12 +3,14 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as appLinks from "../AppLink";
+import { captureExcerptSnapshot } from "../../lib/chat-excerpt-snapshot";
 import { aoBridge } from "../../lib/bridge";
 import { findBlocks, findRange, findTextOccurrences, renderedFindBlocks } from "../../lib/chat-find";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { useUiStore } from "../../stores/ui-store";
-import { ActivityTitle, ArtifactPathCode, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
+import { ActivityTitle, ArtifactPathCode, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
 import { WorkerUpdateRows } from "./WorkerUpdates";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
@@ -21,7 +23,7 @@ vi.mock("../SessionLinkPreviewCard", () => ({
 	},
 }));
 
-const linkSource = vi.hoisted(() => ({ reads: 0, workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> }> }));
+const linkSource = vi.hoisted(() => ({ reads: 0, workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; title?: string; artifactFiles?: Array<{ path: string }> }> }> }));
 // Like the real source, this reads through the query client, so a render
 // without one fails here as it would in the app.
 vi.mock("../../lib/use-session-link-navigation", async () => {
@@ -180,7 +182,7 @@ describe("ChatMarkdown", () => {
 	it("renders a fenced code block with its language and a copy control, and no stray backticks", () => {
 		render(<ChatMarkdown text={"```go\nfunc main() {}\n```"} />);
 		expect(screen.getByText("go")).toBeInTheDocument();
-		expect(screen.getByText("func main() {}")).toBeInTheDocument();
+		expect(document.querySelector("pre")?.textContent).toBe("func main() {}");
 		expect(screen.getByRole("button", { name: /copy code/i })).toBeInTheDocument();
 		expect(document.body.textContent).not.toContain("```");
 	});
@@ -491,11 +493,128 @@ describe("ChatMarkdown", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
-	it("does not auto-activate a session link while streaming", () => {
+	it("shows the worker name and hover card for an inline session ID", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		const open = vi.fn();
+		renderWithSessionLinkHandler("I've asked `worker-94` to start. `worker-999` is unknown.", open);
+		const link = screen.getByRole("link", { name: "Trace session sharing" });
+		expect(link).toHaveAttribute("href", "ao://sessions/project/worker-94");
+		expect(screen.getByText("worker-999").tagName).toBe("CODE");
+		fireEvent.pointerOver(link, { pointerType: "mouse" });
+		await screen.findByTestId("session-link-preview");
+		await userEvent.click(link);
+		expect(open).toHaveBeenCalledWith("ao://sessions/project/worker-94");
+	});
+
+	it("names an inline session ID while streaming, as once settled", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()}><ChatMarkdown streaming text="Ask `worker-94` now." /></ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "Trace session sharing" })).toHaveAttribute("href", "ao://sessions/project/worker-94");
+	});
+
+	it("updates a late or renamed session title and skips rendering the link on unrelated refreshes", () => {
+		const message = <ChatMarkdown text="Ask `worker-94`." />;
+		const open = vi.fn();
+		const chat = () => <ChatLinkProvider onSessionLinkOpen={open}>{message}</ChatLinkProvider>;
+		const view = renderWithQueries(chat());
+		expect(screen.getByText("worker-94").tagName).toBe("CODE");
+		const refresh = (title: string) => {
+			linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title }] }];
+			view.rerender(chat());
+		};
+		const renderLink = vi.spyOn(appLinks, "AppLink");
+		try {
+			refresh("Trace session sharing");
+			expect(screen.getByRole("link")).toHaveTextContent("Trace session sharing");
+			const renders = renderLink.mock.calls.length;
+			expect(renders).toBeGreaterThan(0);
+			refresh("Trace session sharing");
+			expect(renderLink).toHaveBeenCalledTimes(renders);
+			refresh("Review sharing");
+			expect(screen.getByRole("link")).toHaveTextContent("Review sharing");
+		} finally {
+			renderLink.mockRestore();
+		}
+	});
+
+	it("quotes a selection inside a session title using the original worker token", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		const source = "Ask `worker-94` for an update.";
+		const { container } = renderWithSessionLinkHandler(source, vi.fn());
+		const label = screen.getByText("Trace session sharing").firstChild!;
+		const range = document.createRange();
+		range.setStart(label, 6);
+		range.setEnd(label, 13);
+		const quote = captureExcerptSnapshot(container, range, source);
+		expect(quote.text).toBe("session");
+		expect(quote.snapshot.rawText).toBe("`worker-94`");
+	});
+
+	it("requires an explicit session link in safe-origin content", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-94", title: "Trace session sharing" }] }];
+		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()}>
+			<ChatMarkdown safeOrigin text="See `worker-94` or [open worker](ao://sessions/project/worker-94)." />
+		</ChatLinkProvider>);
+		expect(screen.getByText("worker-94").tagName).toBe("CODE");
+		expect(screen.getAllByRole("link")).toHaveLength(1);
+		expect(screen.getByRole("link", { name: "open worker" })).toHaveAttribute("href", "ao://sessions/project/worker-94");
+	});
+
+	it("keeps an inline session ID as code when two projects claim it", () => {
+		linkSource.workspaces = ["first", "second"].map((id) => ({ id, sessions: [{ id: "worker-1", title: id }] }));
+		renderWithSessionLinkHandler("`worker-1`", vi.fn());
+		expect(screen.queryByRole("link")).toBeNull();
+		expect(screen.getByText("worker-1").tagName).toBe("CODE");
+	});
+
+	it("opens links while streaming, as once settled", async () => {
 		const onSessionLinkOpen = vi.fn();
-		render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown streaming text="ao://sessions/project/session" /></ChatLinkProvider>);
-		expect(screen.getByRole("link")).toBeInTheDocument();
-		expect(onSessionLinkOpen).not.toHaveBeenCalled();
+		const onLinkOpen = vi.fn();
+		const { container } = renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onLinkOpen={onLinkOpen}><ChatMarkdown streaming text="[open](ao://sessions/project/session), ao://sessions/project/other and [site](https://example.com)" /></ChatLinkProvider>);
+		expect(screen.getByRole("link", { name: "site" })).toHaveAttribute("href", "https://example.com");
+		expect(container.querySelector("[data-link-favicon]")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "ao://sessions/project/other" })).toHaveAttribute("href", "ao://sessions/project/other");
+		const user = userEvent.setup();
+		await user.click(screen.getByRole("link", { name: "open" }));
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+		await user.click(screen.getByRole("link", { name: "site" }));
+		expect(onLinkOpen).toHaveBeenCalledWith("https://example.com");
+	});
+
+	it("shows a finished image while streaming and still escapes raw HTML", () => {
+		const { unmount } = render(<ChatMarkdown streaming text={"Chart:\n\n![the chart](https://example.com/chart.png)\n\nmore"} />);
+		expect(screen.getByRole("img", { name: "the chart" })).toHaveAttribute("src", "https://example.com/chart.png");
+		unmount();
+		const badge = render(<ChatMarkdown streaming text={"[![CI](https://example.com/ci.svg)](https://ci.example.com) done"} />);
+		expect(screen.getByRole("img", { name: "CI" }).closest("a")).toHaveAttribute("href", "https://ci.example.com");
+		expect(badge.container.querySelector("[data-link-favicon]")).toBeNull();
+		badge.unmount();
+		const linked = (container: HTMLElement) => [...container.querySelectorAll("a")].map((link) => ({
+			href: link.getAttribute("href"),
+			text: link.textContent,
+			images: [...link.querySelectorAll("img")].map((image) => `${image.getAttribute("alt")} ${image.getAttribute("src")}`),
+			favicon: Boolean(link.querySelector("[data-link-favicon]")),
+		}));
+		for (const text of ["[![CI](https://example.com/ci.svg) build **passing**](https://ci.example.com) done", "[*![Docs](https://example.com/d.svg)* the docs](https://docs.example.com)"]) {
+			const streamed = render(<ChatMarkdown streaming text={text} />);
+			const settled = render(<ChatMarkdown text={text} />);
+			expect(linked(streamed.container)).toEqual(linked(settled.container));
+			expect(linked(streamed.container)[0]!.images).toHaveLength(1);
+			streamed.unmount();
+			settled.unmount();
+		}
+		render(<ChatMarkdown streaming text={'before <img src=x onerror="alert(1)"> after'} />);
+		expect(document.querySelector("img")).toBeNull();
+	});
+
+	it("opens inline-code file paths while streaming and keeps code inside a link plain", async () => {
+		const onFileOpen = vi.fn();
+		const text = "Open `backend/service.go:42` or [`backend/service.go`](https://example.com/s) now";
+		const { container } = render(<ChatLinkProvider onLinkOpen={vi.fn()} onFileOpen={onFileOpen} workspacePaths={["backend/service.go"]}><ChatMarkdown streaming text={text} /></ChatLinkProvider>);
+		expect(screen.getAllByRole("button", { name: /in Files$/ })).toHaveLength(1);
+		await userEvent.click(screen.getByRole("button", { name: "Open backend/service.go in Files" }));
+		expect(onFileOpen).toHaveBeenCalledWith("backend/service.go", 42);
+		expect(renderedFindBlocks(container).map((block) => block.text)).toEqual(findBlocks(text, true));
 	});
 
 	it.each([
@@ -921,7 +1040,7 @@ describe("ChatMarkdown", () => {
 		render(<ChatMarkdown text={"```mermaid\nflowchart TD\n    A --> B\n```"} streaming />);
 
 		expect(screen.queryByTestId("mermaid-diagram")).not.toBeInTheDocument();
-		expect(screen.getByText(/A --> B/)).toBeInTheDocument();
+		expect(document.querySelector("pre")?.textContent).toContain("A --> B");
 		expect(vi.mocked(renderMermaidDiagram)).not.toHaveBeenCalled();
 	});
 
@@ -1098,9 +1217,8 @@ describe("ChatMarkdown image sources", () => {
 describe("ChatMarkdown code highlighting", () => {
 	const block = (language: string, code: string) => `\`\`\`${language}\n${code}\n\`\`\``;
 
-	/** The tokens land as `hljs-*` classes; `code-theme.css` colours them. */
 	function tokens(): Element[] {
-		return [...document.querySelectorAll("pre [class*='hljs-']")];
+		return [...document.querySelectorAll("pre [class*='hljs-'], pre [style*='--ao-code-']")];
 	}
 
 	it("highlights a known language, leaving the code itself untouched", async () => {
@@ -1118,11 +1236,11 @@ describe("ChatMarkdown code highlighting", () => {
 		expect(screen.getByText("brainfuck")).toBeInTheDocument();
 	});
 
-	it("does not tokenize a fence that is still streaming, and does once it settles", async () => {
+	it("highlights a streaming fence and keeps it highlighted when it settles", async () => {
 		const code = "type Session struct {\n\tID string\n}";
 		const { rerender } = render(<ChatMarkdown text={block("go", code)} streaming />);
-		expect(tokens()).toHaveLength(0);
-		expect(document.querySelector("pre")?.textContent).toBe(code);
+		expect(tokens().length).toBeGreaterThan(0);
+		expect(document.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 
 		rerender(<ChatMarkdown text={block("go", code)} />);
 		await waitFor(() => expect(tokens().length).toBeGreaterThan(0));
@@ -1168,7 +1286,7 @@ describe("ChatMarkdown block streaming", () => {
 		["[ref]: https://example.com\n\n    **literal", "**literal"],
 	])("preserves streamed code source: %s", (text, code) => {
 		const { container } = render(<ChatMarkdown text={text} streaming />);
-		expect(container.querySelector("pre")?.textContent).toBe(code);
+		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 	});
 
 	it("repairs incomplete inline formatting for display only and keeps partial links inert", () => {
@@ -1178,18 +1296,44 @@ describe("ChatMarkdown block streaming", () => {
 		expect(container.querySelector("strong")).toBeNull();
 		expect(container.textContent).toBe("Some **unfinished");
 		rerender(<ChatMarkdown text="See [docs](https://exam" streaming />);
-		expect(container.querySelector("a")).toBeNull();
-		expect(container.textContent).toBe("See docs");
+		expect(container.querySelector("a[href]")).toBeNull();
+		expect(container.textContent?.trim()).toBe("See docs");
 	});
 
 	it("leaves open fences literal and highlights a completed fence before the reply ends", async () => {
 		const code = 'const literal = "**unfinished";';
 		const fence = "```js\n" + code;
 		const { container, rerender } = render(<ChatMarkdown text={fence} streaming />);
-		expect(container.querySelector("pre")?.textContent).toBe(code);
+		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 		rerender(<ChatMarkdown text={fence + "\n```\n\nMore prose"} streaming />);
-		await waitFor(() => expect(container.querySelector("pre .hljs-keyword")).toBeInTheDocument());
-		expect(container.querySelector("pre")?.textContent).toBe(code);
+		await waitFor(() => expect(container.querySelector("pre [style*='--ao-code-keyword']")).toBeInTheDocument());
+		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
+	});
+
+	it("offers Copy on a finished code block while the reply is still streaming", async () => {
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const code = "func main() {\n\tfmt.Println(\"<hi>\")\n}";
+		const fence = "```go\n" + code;
+		const { container, rerender } = render(<ChatMarkdown text={fence} streaming />);
+		expect(screen.queryByRole("button", { name: "Copy code" })).toBeNull();
+		rerender(<ChatMarkdown text={fence + "\n```\n\nThen:\n\n```sh\nls"} streaming />);
+		await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+		expect(copy).toHaveBeenCalledExactlyOnceWith(code);
+		rerender(<ChatMarkdown text={fence + "\n```\n\nThen:\n\n```sh\nls\n```\n\nDone"} streaming />);
+		const buttons = container.querySelectorAll<HTMLElement>('[data-markdown="code-header"] button');
+		expect(buttons).toHaveLength(2);
+		await userEvent.click(buttons[1]!);
+		expect(copy).toHaveBeenLastCalledWith("ls");
+		copy.mockRestore();
+	});
+
+	it("copies an indented code block's current source as it grows", async () => {
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const { rerender } = render(<ChatMarkdown text={"Run:\n\n    echo one"} streaming />);
+		rerender(<ChatMarkdown text={"Run:\n\n    echo one\n    echo two"} streaming />);
+		await userEvent.click(screen.getByRole("button", { name: "Copy code" }));
+		expect(copy).toHaveBeenCalledExactlyOnceWith("echo one\necho two");
+		copy.mockRestore();
 	});
 
 	it("resolves late reference definitions and keeps footnote IDs document-wide", () => {
@@ -1204,17 +1348,6 @@ describe("ChatMarkdown block streaming", () => {
 		expect(container.textContent).toContain("Beta");
 	});
 
-	it("keeps source-relative fade offsets when a chat opens across several blocks", () => {
-		const text = "First\n\nSecond\n\nAlready visible";
-		const view = (source: string) => <ChatOpeningRef.Provider value={{ current: true }}><ChatMarkdown text={source} streaming /></ChatOpeningRef.Provider>;
-		const { container, rerender } = render(view(text));
-		expect(container.querySelectorAll(".stream-char")).toHaveLength(0);
-		rerender(view(text + " new"));
-		expect(container.querySelectorAll(".stream-char")).toHaveLength(4);
-		const first = container.querySelector("p");
-		rerender(view(text + " new\n\nTail"));
-		expect(container.querySelector("p")).toBe(first);
-	});
 });
 
 
@@ -1234,140 +1367,41 @@ describe("ActivityTitle", () => {
 	});
 });
 
-describe("ChatMarkdown streaming fade", () => {
-	afterEach(() => {
-		vi.useRealTimers();
-		vi.restoreAllMocks();
-	});
-	const fading = (container: HTMLElement) => container.querySelectorAll(".stream-char").length;
-
-	it("never wraps a reply that mounts settled", () => {
-		const { container } = render(<ChatMarkdown text="from history" />);
-		expect(fading(container)).toBe(0);
-	});
-
-	it("fades a grapheme cluster in one span and keeps emoji plain", () => {
-		const { container } = render(<ChatMarkdown text={"é a👨‍👩‍👧b"} streaming />);
-		expect(fading(container)).toBe(4);
-		expect(container.querySelector(".chat-md-emoji")).toHaveTextContent("👨‍👩‍👧");
-		expect(container.querySelector(".stream-char .chat-md-emoji")).toBeNull();
-	});
-
-	it("keeps a fading character's element while earlier text settles", () => {
-		let now = 1_000;
-		vi.spyOn(performance, "now").mockImplementation(() => now);
-		const { container, rerender } = render(<ChatMarkdown text="foo **bar**" streaming />);
-		now += 200;
-		rerender(<ChatMarkdown text="foo **bar** baz" streaming />);
-		const z = [...container.querySelectorAll(".stream-char")].at(-1);
-		expect(z).toHaveTextContent("z");
-		// "foo bar" arrived 350 ms ago and has finished fading; " baz" has not.
-		now += 150;
-		rerender(<ChatMarkdown text="foo **bar** bazz" streaming />);
-		expect(fading(container)).toBe(" bazz".length);
-		expect(container.querySelectorAll(".stream-char")[3]).toBe(z);
-		expect(container.textContent).toBe("foo bar bazz");
-	});
-
-	it("does not fade text already on screen when a chat opens mid-stream", () => {
-		const opening = { current: true };
-		const reply = (text: string) => (
-			<ChatOpeningRef.Provider value={opening}>
-				<ChatMarkdown text={text} streaming />
-			</ChatOpeningRef.Provider>
-		);
-		const { container, rerender } = render(reply("already shown"));
-		opening.current = false;
-		expect(fading(container)).toBe(0);
-		expect(container.textContent).toBe("already shown");
-
-		rerender(reply("already shown and more"));
-		expect(fading(container)).toBe(" and more".length);
-		expect(container.textContent).toBe("already shown and more");
-	});
-
-	it("does not fade text that streamed while the window was hidden", () => {
-		const { container, rerender } = render(<ChatMarkdown text="seen" streaming />);
-		Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
-		try {
-			// Its fade could only play once the reader is back, replaying the whole stretch.
-			rerender(<ChatMarkdown text="seen while away" streaming />);
-		} finally {
-			Reflect.deleteProperty(document, "visibilityState");
-		}
-		const afterReturn = fading(container);
-		expect(container.textContent).toBe("seen while away");
-		// Only what arrives once the reader is back fades in.
-		rerender(<ChatMarkdown text="seen while away, back" streaming />);
-		expect(fading(container)).toBe(afterReturn + ", back".length);
-		expect(afterReturn).toBeLessThanOrEqual("seen".length);
-	});
-
-	it("fades while streaming and sheds the spans shortly after it settles", () => {
-		vi.useFakeTimers();
-		const { container, rerender } = render(<ChatMarkdown text="live text" streaming />);
-		expect(fading(container)).toBeGreaterThan(0);
-		expect(container.textContent).toBe("live text");
-
-		rerender(<ChatMarkdown text="live text" />);
-		expect(fading(container)).toBeGreaterThan(0);
-		act(() => vi.advanceTimersByTime(500));
-		expect(fading(container)).toBe(0);
-		expect(container.textContent).toBe("live text");
-	});
-
-	it("keeps fading across a retry that restarts the stream inside the grace period", () => {
-		vi.useFakeTimers();
-		const { container, rerender } = render(<ChatMarkdown text="one" streaming />);
-		rerender(<ChatMarkdown text="one" />);
-		act(() => vi.advanceTimersByTime(200));
-		rerender(<ChatMarkdown text="one two" streaming />);
-		act(() => vi.advanceTimersByTime(500));
-		expect(fading(container)).toBeGreaterThan(0);
-	});
-
-	it("renders plain text under reduced motion", () => {
-		vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
-			matches: query === "(prefers-reduced-motion: reduce)",
-			media: query,
-			onchange: null,
-			addEventListener: vi.fn(),
-			removeEventListener: vi.fn(),
-			addListener: vi.fn(),
-			removeListener: vi.fn(),
-			dispatchEvent: vi.fn(() => false),
-		}));
-		const { container } = render(<ChatMarkdown text="no motion" streaming />);
-		expect(fading(container)).toBe(0);
-		expect(screen.getByText("no motion")).toBeInTheDocument();
-	});
-
-	it("still compacts emoji while the fade is on", () => {
-		const { container } = render(<ChatMarkdown text="done ✅ now" streaming />);
-		expect(container.querySelector(".chat-md-emoji")).toHaveTextContent("✅");
-		expect(container.textContent).toBe("done ✅ now");
-	});
-
-	it("keeps links working while their text fades", () => {
-		const onLinkOpen = vi.fn();
-		render(
-			<ChatLinkProvider onLinkOpen={onLinkOpen}>
-				<ChatMarkdown text="see [docs](https://example.com/docs)" streaming />
-			</ChatLinkProvider>,
-		);
-		expect(screen.getByRole("link")).toHaveTextContent("docs");
-	});
-});
 
 describe("ChatMarkdown math", () => {
 	afterEach(() => useUiStore.setState({ renderMath: false }));
 
 	it("stops repairing a paused stream's prose once math turns it into a formula", async () => {
-		// With math off, `$a~b$` is prose, and streaming repair escapes its `~`.
 		const { container } = render(<ChatMarkdown text="Paused at $a~b$" streaming />);
 		act(() => useUiStore.setState({ renderMath: true }));
 		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
 		expect(container.querySelector("[data-tex]")).toHaveAttribute("data-tex", "a~b");
+	});
+
+	it("typesets the same formulas while streaming as once settled", async () => {
+		useUiStore.setState({ renderMath: true });
+		const text = "Euler $e^{i\\pi}+1=0$, \\(x^2\\), \\[y\\] and $$z$$.\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n\n$$\nE=mc^2\n$$\n\n$$\n\nF=ma\n$$\n\n```math\na^2\n```\n\nCode `\\(no\\)` stays.\n\n```ts\nconst s = \"\\\\(no\\\\)\";\n```\n\n    \\(indented\\)\n\n> ~~~\n> \\(quoted\\)\n> ~~~\n\n\\[w\\]";
+		const formulas = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>("[data-math]")].map((node) => `${node.dataset.math} ${node.dataset.tex} ${node.querySelector(".katex") ? "typeset" : "source"}`);
+		const streamed = render(<ChatMarkdown text={text} streaming />).container;
+		await waitFor(() => expect(streamed.querySelector(".katex")).not.toBeNull());
+		const settled = render(<ChatMarkdown text={text} />).container;
+		expect(formulas(streamed)).toEqual(formulas(settled));
+		expect(formulas(streamed)).toHaveLength(9);
+		expect(formulas(streamed)).toContain("display F=ma typeset");
+		expect(streamed.querySelector("code")).toHaveTextContent("\\(no\\)");
+		expect([...streamed.querySelectorAll("pre")].map((pre) => pre.textContent)).toEqual(['const s = "\\\\(no\\\\)";\n', "\\(indented\\)\n", "\\(quoted\\)\n"]);
+	});
+
+	it("typesets padded and digit-followed dollar formulas while streaming as once settled", async () => {
+		useUiStore.setState({ renderMath: true });
+		const text = "The result is $ x^2 $. Costs $5 and $10, $  w $ or $$ y $$.";
+		const formulas = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>("[data-math]")].map((node) => `${node.dataset.math} ${node.dataset.tex} ${node.querySelector(".katex") ? "typeset" : "source"}`);
+		const streamed = render(<ChatMarkdown text={text} streaming />).container;
+		await waitFor(() => expect(streamed.querySelector(".katex")).not.toBeNull());
+		const settled = render(<ChatMarkdown text={text} />).container;
+		await waitFor(() => expect(settled.querySelector(".katex")).not.toBeNull());
+		expect(formulas(streamed)).toEqual(formulas(settled));
+		expect(formulas(settled)).toHaveLength(4);
 	});
 
 	it("leaves dollar signs as text while the setting is off", () => {

@@ -12,7 +12,10 @@ import type { WorkspaceSummary } from "../types/workspace";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 export type RestoreSessionResult =
-	{ status: "success" } | { status: "not_resumable"; message: string } | { status: "error"; message: string };
+	| { status: "success" }
+	| { status: "not_resumable"; message: string }
+	/** `code` is the daemon's error code, when it answered with one. */
+	| { status: "error"; message: string; code?: string };
 
 /**
  * A deleted cloud session stays in the cloud sessions listing (flagged
@@ -93,7 +96,7 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 					if (code === "SESSION_NOT_RESUMABLE") {
 						return { status: "not_resumable", message };
 					}
-					return { status: "error", message };
+					return { status: "error", message, code };
 				}
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				if (data?.restoreMode === "saved_prompt") {

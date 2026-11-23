@@ -78,16 +78,19 @@ type conversation struct {
 	// backgroundStopping holds the terminals AO asked the app-server to
 	// terminate, so their completion reads as stopped, not failed.
 	backgroundStopping map[string]bool
-	// Command starts are observational until the native background list or a process ID confirms background work.
-	backgroundCommands map[string]ports.ChatBackgroundTask
+	// Command starts are observational; only the native inventory confirms background work.
+	backgroundCommands map[string]backgroundCommand
+	// A surviving host reconnect needs launch evidence without transcript replay.
+	backgroundHistoryPending bool
 	// backgroundRuns maps a terminal's process ID to the exec item its output
 	// streams on, oldest first in backgroundRunOrder.
 	backgroundRuns     map[string]string
 	backgroundRunOrder []string
 	// backgroundStarted holds the exec items whose start this controller saw,
 	// oldest first in backgroundStartOrder, so a terminal started before it
-	// attached (a daemon restart) can read as missing its earlier output.
-	backgroundStarted    map[string]bool
+	// attached (a daemon restart) can read as missing its earlier output. The
+	// value says whether it printed, so output evicted since reads as missing.
+	backgroundStarted    map[string]backgroundStart
 	backgroundStartOrder []string
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider

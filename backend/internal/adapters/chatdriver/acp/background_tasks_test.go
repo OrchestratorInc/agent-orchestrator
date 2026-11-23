@@ -277,6 +277,37 @@ func TestBackgroundTasksDoNotUseSharedSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestBackgroundTasksAgentSessionReferencesDoNotBecomeIdentity(t *testing.T) {
+	for _, key := range []string{"sessionId", "sessionID", "session_id"} {
+		for _, terminal := range []string{"completed", "failed", "stopped"} {
+			t.Run(key+terminal, func(t *testing.T) {
+				c := &conversation{}
+				launch := &toolState{id: "launch", kind: acpsdk.ToolKindThink, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"agent": "general", "background": true}, rawOutput: map[string]any{key: "child", "status": "running"}}
+				c.observeBackgroundTool(launch)
+				c.observeBackgroundTool(&toolState{id: "status", status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{key: "child"}, rawOutput: map[string]any{"status": terminal}})
+				tasks, _ := c.BackgroundTasks(t.Context())
+				if len(tasks) != 1 || tasks[0].ID != "launch" || tasks[0].State != terminal {
+					t.Fatal(tasks)
+				}
+			})
+		}
+	}
+	c := &conversation{}
+	for _, id := range []string{"one", "two"} {
+		c.observeBackgroundTool(&toolState{id: id, kind: acpsdk.ToolKindThink, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"agent": "general", "background": true}, rawOutput: map[string]any{"sessionID": "shared", "status": "running"}})
+	}
+	c.observeBackgroundTool(&toolState{id: "status", status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"sessionID": "shared"}, rawOutput: map[string]any{"status": "completed"}})
+	tasks, _ := c.BackgroundTasks(t.Context())
+	if len(tasks) != 2 {
+		t.Fatal(tasks)
+	}
+	for _, task := range tasks {
+		if task.State != "running" {
+			t.Fatal("ambiguous session reference settled a job", tasks)
+		}
+	}
+}
+
 func TestBackgroundTaskOutputNeedsAProviderSource(t *testing.T) {
 	c := &conversation{tools: make(map[string]*toolState)}
 	if _, err := c.BackgroundTaskOutput(context.Background(), "launch"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {

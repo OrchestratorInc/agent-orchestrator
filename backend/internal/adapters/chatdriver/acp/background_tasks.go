@@ -89,7 +89,7 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 		return
 	}
 	if !flagged {
-		if referenced := backgroundTaskID(input); referenced != "" {
+		if referenced := c.backgroundTaskReference(input, now); referenced != "" {
 			switch state := stringField(output, "state", "status"); state {
 			case "completed", "failed", "stopped":
 				c.backgroundObserved.Finish(referenced, state, now)
@@ -135,6 +135,55 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 		command = stringField(input, "command", "cmd")
 	}
 	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, RunID: tool.id, Kind: kind, Description: description, Command: command, State: state, StartedAt: &now}, now)
+	if kind == "agent" {
+		if session := stringField(output, "sessionId", "sessionID", "session_id"); session != "" {
+			c.mu.Lock()
+			if c.backgroundAgentSessions == nil {
+				c.backgroundAgentSessions = make(map[string]string)
+			}
+			c.backgroundAgentSessions[id] = session
+			c.mu.Unlock()
+		}
+	}
+	// Prune aliases with the live task view, rather than retaining old sessions.
+	c.backgroundTaskReference(nil, now)
+}
+
+// Session IDs are reference-only aliases for already observed agents. They
+// never identify a new job, and ambiguous shared sessions cannot settle either job.
+func (c *conversation) backgroundTaskReference(input map[string]any, now time.Time) string {
+	nativeID := backgroundTaskID(input)
+	session := stringField(input, "sessionId", "sessionID", "session_id")
+	tasks := c.backgroundObserved.Snapshot(now)
+	live := make(map[string]bool)
+	for _, task := range tasks {
+		if task.Kind == "agent" && (task.State == "running" || task.State == "paused") {
+			live[task.ID] = true
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	match := ""
+	ambiguous := false
+	for id, alias := range c.backgroundAgentSessions {
+		if !live[id] {
+			delete(c.backgroundAgentSessions, id)
+			continue
+		}
+		if session != "" && alias == session {
+			if match != "" {
+				ambiguous = true
+			}
+			match = id
+		}
+	}
+	if nativeID != "" {
+		return nativeID
+	}
+	if ambiguous {
+		return ""
+	}
+	return match
 }
 
 func backgroundTaskID(value map[string]any) string {

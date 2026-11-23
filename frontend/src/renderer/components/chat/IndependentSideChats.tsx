@@ -14,10 +14,10 @@ import type { ChatModel } from "../../types/conversation";
 import { apiClient, apiErrorMessage, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { ApprovalCard } from "./ChatTimelineItems";
-import { Timeline } from "./ChatWorkspace";
+import { localEchoContent, Timeline } from "./ChatWorkspace";
 import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import { attachmentURL } from "./messageAttachments";
-import { sideConversationActivity, sideConversationSnapshot } from "./sideConversation";
+import { sideConversationActivity, sideConversationSnapshot, sideTurnContent } from "./sideConversation";
 import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import { rankSkills, moveHighlight } from "./composerSuggest";
@@ -377,6 +377,10 @@ async function sideImagePayloads(sessionId: string, staged: ChatDraftAttachment[
 	return images.filter((image): image is OutgoingAttachment => image !== undefined);
 }
 
+function sameSides(previous: Side[], next: Side[]) {
+	return previous.length === next.length && previous.every((side, index) => side === next[index] || JSON.stringify(side) === JSON.stringify(next[index]));
+}
+
 export function useIndependentSideChats(
 	sessionId: string,
 	models: ChatModel[],
@@ -468,6 +472,7 @@ export function useIndependentSideChats(
 		return { ...current, [error.id]: { ...owned, [kind]: error.message } };
 	}), []);
 	const clearSideError = useCallback((id: string, kind?: string) => setSideErrors(current => {
+		if (!current[id] || (kind && !(kind in current[id]))) return current;
 		const next = { ...current };
 		if (!kind) delete next[id];
 		else { next[id] = { ...next[id] }; delete next[id][kind]; }
@@ -784,7 +789,8 @@ export function useIndependentSideChats(
 			for (const side of sidesRef.current) {
 				if (closingSidesRef.current.has(side.id) && !closedSidesRef.current.has(side.id) && !nextSides.some(current => current.id === side.id)) nextSides.push(side);
 			}
-			setSides(nextSides);
+			// The 2 s poll returns a fresh array; an unchanged list must not re-render the chat surface.
+			if (!sameSides(sidesRef.current, nextSides)) setSides(nextSides);
 			setLoaded(true);
 		} catch (cause) {
 			if (current()) { appliedListRequest.current = request; if (reportErrors) setListError(apiErrorMessage(cause)); }
@@ -1744,11 +1750,11 @@ export function useIndependentSideChats(
 		return [
 			...(snapshot.turns ?? []).filter(turn => turn.state === "queued" && turn.id !== snapshot.side.openingTurnId).map((turn, index): QueuedMessage => ({
 				turnId: turn.id,
-				message: { kind: "message", id: `queued-${turn.id}`, turnId: turn.id, clientMessageId: turn.clientMessageId, sequence: index + 1, revision: 1, role: "user", origin: "human", text: turn.text, streaming: false, createdAt: turn.createdAt },
+				message: { kind: "message", id: `queued-${turn.id}`, turnId: turn.id, clientMessageId: turn.clientMessageId, sequence: index + 1, revision: 1, role: "user", origin: "human", text: turn.text, content: sideTurnContent(turn), streaming: false, createdAt: turn.createdAt },
 			})),
 			...activeEchos.filter(echo => echo.queued && !echo.opening && !known.has(echo.clientMessageId)).map((echo): QueuedMessage => ({
 				turnId: echo.turnId ?? `local:${echo.clientMessageId}`, pending: true,
-				message: { kind: "message", id: `local:${echo.clientMessageId}`, turnId: echo.turnId ?? `local:${echo.clientMessageId}`, clientMessageId: echo.clientMessageId, sequence: (snapshot.turns?.length ?? 0) + 1, revision: 0, role: "user", origin: "human", text: echo.text, streaming: false, delivery: "queued", createdAt: echo.createdAt },
+				message: { kind: "message", id: `local:${echo.clientMessageId}`, turnId: echo.turnId ?? `local:${echo.clientMessageId}`, clientMessageId: echo.clientMessageId, sequence: (snapshot.turns?.length ?? 0) + 1, revision: 0, role: "user", origin: "human", text: echo.text, content: localEchoContent(echo), streaming: false, delivery: "queued", createdAt: echo.createdAt },
 			})),
 		];
 	}, [snapshot, activeEchos]);

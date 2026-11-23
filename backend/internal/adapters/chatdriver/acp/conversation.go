@@ -99,6 +99,9 @@ type conversation struct {
 	providerScopeID      string
 	decodeConversationID func(string) (string, error)
 	canDeleteFork        bool
+	// task ID to reference-only native session alias; guarded by mu.
+	backgroundAgentSessions map[string]string
+
 	// handshake is the agent's initialize answer, for steering details that
 	// vary by agent version.
 	handshake       acpsdk.InitializeResponse
@@ -132,9 +135,10 @@ type conversation struct {
 	closed            bool
 	// sessionLost records that the agent stopped holding this conversation's
 	// session and the provider was stopped for it. See providerSessionLost.
-	sessionLost bool
-	modeFor     func(ports.PermissionMode) string
-	optionsFor  func(ports.ChatTurnSettings) []SessionOption
+	sessionLost       bool
+	modeFor           func(ports.PermissionMode) string
+	optionsFor        func(ports.ChatTurnSettings) []SessionOption
+	splitModelVariant func(string) (string, SessionOption, bool)
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
@@ -656,28 +660,42 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	if legacyModel && settings.Model != "" {
 		// A binding may name the model differently from the turn settings.
 		model := settings.Model
+		modelOptional := false
 		for _, option := range options {
 			if option.ID == "model" && option.Value != "" {
 				model = option.Value
+				modelOptional = option.Optional
 			}
 		}
-		modelOptionFound := false
+		modelOptionFound, modelSkipped := false, false
 		for _, option := range configOptions {
 			if option.ID != "model" {
 				continue
 			}
 			modelOptionFound = true
 			resolved, ok := resolveModelChoice(c.harness, option.Choices, model)
-			if !ok {
+			if !ok && c.splitModelVariant != nil {
+				if base, variant, split := c.splitModelVariant(model); split {
+					if resolved, ok = resolveModelChoice(c.harness, option.Choices, base); ok {
+						options = append(options, variant)
+					}
+				}
+			}
+			if !ok && !modelOptional {
 				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, model)
 			}
-			model = resolved
+			model, modelSkipped = resolved, !ok
 			break
 		}
 		if !modelOptionFound {
 			return fmt.Errorf("%w: ACP session does not advertise a model option", ports.ErrChatConfigOptionInvalid)
 		}
-		if c.configOptionCurrent("model") != model {
+		switch {
+		case modelSkipped:
+			c.log.Warn("ACP session does not offer the chosen model; keeping its default", "model", settings.Model)
+		case c.configOptionCurrent("model") == model:
+			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
+		default:
 			if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
 				if isACPMethodNotFound(err) {
 					return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
@@ -685,8 +703,29 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 				return fmt.Errorf("set ACP session model %q: %w", model, err)
 			}
 			catalogStale = true
+			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 		}
-		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
+	}
+	if !legacyModel && c.splitModelVariant != nil {
+		// The modern selector may offer only the base model, with the variant as
+		// its own option (Antigravity server 1.4 lists gemini-3.8-flash plus a
+		// thinking level rather than gemini-3.8-flash-high).
+		for i, option := range options {
+			if option.ID != "model" || option.Value == "" {
+				continue
+			}
+			if offered, known := c.configOptionOffers("model", option.Value); !known || offered {
+				break
+			}
+			if base, variant, split := c.splitModelVariant(option.Value); split {
+				if offered, _ := c.configOptionOffers("model", base); offered {
+					options[i].Value = base
+					options[i].Name = ""
+					options = append(options, variant)
+				}
+			}
+			break
+		}
 	}
 	applyOption := func(option SessionOption) error {
 		if option.ID == "" || option.Value == "" {
@@ -1279,9 +1318,24 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 		c.mu.Unlock()
 		return ports.ErrChatNoActiveTurn
 	}
-	if c.interrupt != nil {
+	if prior := c.interrupt; prior != nil {
 		c.mu.Unlock()
-		return fmt.Errorf("ACP session/cancel is already in progress")
+		// A repeated Stop for the turn already being cancelled is the same request,
+		// not a new one: ACP's session/cancel is a notification with no turn id, so
+		// sending it again cannot be scoped and adds nothing. Answer with the first
+		// attempt's outcome. The turn stays busy until its Prompt returns either way.
+		select {
+		case <-prior.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		c.mu.Lock()
+		err := prior.err
+		c.mu.Unlock()
+		if err != nil {
+			return fmt.Errorf("ACP session/cancel: %w", err)
+		}
+		return nil
 	}
 	attempt := &interruptAttempt{turnID: active, done: make(chan struct{})}
 	c.interrupt = attempt

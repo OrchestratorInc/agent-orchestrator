@@ -476,7 +476,11 @@ async function aoReadBackgroundOutput(path, maxBytes) {
 		const buffer = Buffer.alloc(stats.size - start);
 		const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
 		let output = buffer.subarray(0, bytesRead).toString("utf8");
-		if (start > 0) output = output.slice(output.indexOf("\n") + 1);
+		if (start > 0) {
+			// Drop the partial first line only when a complete line follows it.
+			const at = output.replace(/[\r\n]+$/, "").indexOf("\n");
+			if (at >= 0) output = output.slice(at + 1);
+		}
 		return { output, truncated: start > 0 };
 	} finally {
 		await file.close();
@@ -533,8 +537,15 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             try {
                 await session.query.stopTask(taskId);
             } catch (error) {
+                // A rejection may precede native completion. Reconcile briefly,
+                // but never acknowledge a failed stop while the task remains live.
+                const settleUntil = Date.now() + 1000;
+                while (session.aoBackgroundLive?.has(taskId) && !session.queryClosed && Date.now() < settleUntil) {
+                    await new Promise(resolve => setTimeout(resolve, Math.min(25, settleUntil - Date.now())));
+                }
                 if (!session.aoBackgroundLive?.has(taskId)) throw RequestError.invalidParams(undefined, "Background task is not running.");
-                throw error;
+                if (session.queryClosed) throw error;
+                throw RequestError.internalError({ retryable: true }, "Stop not acknowledged; try again.");
             }
             return {};
         })

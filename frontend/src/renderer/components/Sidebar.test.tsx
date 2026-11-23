@@ -647,6 +647,33 @@ describe("Sidebar", () => {
 		}
 	});
 
+	it("reads a chat's history once the pointer rests on its row, not while it sweeps past", async () => {
+		vi.useFakeTimers();
+		try {
+			trustedApi.current = true;
+			renderSidebar({ workspaces: [{ ...workspace, sessions: [{ ...session, mode: "chat" }] }] });
+			const row = screen.getByLabelText("Open fix login");
+			const conversationReads = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/conversation").length;
+			fireEvent.mouseEnter(row);
+			// A slow sweep: well past the rest time on the row, but never still for it.
+			for (let i = 0; i < 6; i++) {
+				await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+				fireEvent.mouseMove(row);
+			}
+			expect(conversationReads()).toBe(0);
+			fireEvent.mouseLeave(row);
+			await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+			expect(conversationReads()).toBe(0);
+
+			fireEvent.mouseEnter(row);
+			fireEvent.mouseMove(row);
+			await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+			expect(conversationReads()).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("creates local or remote projects from the header button", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
@@ -1841,7 +1868,7 @@ describe("Sidebar", () => {
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "false");
 	});
 
-	it("expands a collapsed project when opening its orchestrator", async () => {
+	it("keeps a collapsed project collapsed when opening its orchestrator, and its folder still expands it", async () => {
 		const user = userEvent.setup();
 		const orchestrator: WorkspaceSession = {
 			...session,
@@ -1863,6 +1890,10 @@ describe("Sidebar", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-1", sessionId: "proj-1-orc" },
 		});
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "false");
+
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
 		expect(screen.getByText("Project One").closest("button")).toHaveAttribute("aria-expanded", "true");
 	});
@@ -4375,8 +4406,9 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const failedRow = await screen.findByTestId("sidebar-update-failed");
-		// One row: the reason is in the row's tooltip and screen-reader text.
-		expect(failedRow).toHaveTextContent("Update failed · Couldn't download");
+		expect(within(failedRow).getByText("Retry")).toBeVisible();
+		expect(failedRow).toHaveAccessibleName("Retry");
+		expect(failedRow).toHaveAccessibleDescription("Update failed · Couldn't download");
 		await userEvent.click(failedRow);
 		expect(downloadUpdateMock).toHaveBeenCalledTimes(1);
 	});
@@ -4437,7 +4469,7 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
 	});
 
-	it("asks to restart a staged build from the same tinted pill", async () => {
+	it("asks to restart a staged build from a neutral Restart button", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
 			version: "9.9.9",
@@ -4448,8 +4480,11 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const readyRow = await screen.findByTestId("sidebar-update-ready");
-		expect(within(readyRow).getByText("Ready to install")).toBeVisible();
-		expect(readyRow).not.toHaveTextContent("Restart to finish");
+		expect(within(readyRow).getByText("Update ready")).toBeVisible();
+		// The next step is named in words, on the app's primary surface, not brand blue.
+		const action = within(readyRow).getByText("Restart");
+		expect(action).toHaveClass("button-raised", "[--button-color:var(--primary)]");
+		expect(readyRow.querySelector(".bg-logo-accent")).toBeNull();
 		const pill = readyRow;
 		expect(pill).toHaveRole("button");
 		expect(pill).toHaveAccessibleName("Restart to install update v9.9.9");
@@ -4771,7 +4806,19 @@ describe("Sidebar active-session reveal", () => {
 		sessions: [scratch],
 	};
 
-	function mount(expandedProjectIds: string[]) {
+	const projectTwo: WorkspaceSummary = {
+		...workspace,
+		id: "proj-2",
+		name: "Project Two",
+		path: "/repo/project-two",
+		sessions: [{ ...session, id: "proj-2-1", workspaceId: "proj-2", workspaceName: "Project Two", title: "other task" }],
+	};
+	const orchestratorRoute = {
+		to: "/projects/$projectId/sessions/$sessionId",
+		params: { projectId: workspace.id, sessionId: orchestrator.id },
+	};
+
+	function mount(expandedProjectIds: string[], extraProjects: WorkspaceSummary[] = []) {
 		window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify(expandedProjectIds));
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const tree = () => (
@@ -4779,7 +4826,7 @@ describe("Sidebar active-session reveal", () => {
 				<TooltipProvider>
 					<SidebarProvider>
 						<Sidebar
-							workspaces={[{ ...workspace, sessions: [session, other, orchestrator] }, scratchpad]}
+							workspaces={[{ ...workspace, sessions: [session, other, orchestrator] }, ...extraProjects, scratchpad]}
 							onCloneProject={noop()}
 							onCreateProject={noop()}
 							onInitializeProject={noop()}
@@ -4801,6 +4848,94 @@ describe("Sidebar active-session reveal", () => {
 			},
 		};
 	}
+
+	// Lets the reveal's animation frames run.
+	async function settle() {
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		});
+	}
+
+	// The mocked router only records navigation; `go` then lands on the route,
+	// as the real router would, so the reveal sees the session change.
+	async function pressOrchestratorButton(user: ReturnType<typeof userEvent.setup>, key?: "{Enter}" | " ") {
+		const button = screen.getByRole("button", { name: "Open Project One orchestrator" });
+		if (key) {
+			button.focus();
+			await user.keyboard(key);
+		} else {
+			await user.click(button);
+		}
+		expect(navigateMock).toHaveBeenLastCalledWith(orchestratorRoute);
+	}
+
+	it.each([
+		["a click", undefined],
+		["Enter", "{Enter}"],
+		["Space", " "],
+	] as const)("opens the orchestrator chat on %s without expanding its collapsed project or touching another", async (_, key) => {
+		const user = userEvent.setup();
+		const { go } = mount([projectTwo.id], [projectTwo]);
+
+		await pressOrchestratorButton(user, key);
+		go(orchestrator.id);
+		await settle();
+
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open Project One orchestrator" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByLabelText("Toggle Project Two sessions")).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByLabelText("Open other task")).toBeInTheDocument();
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([projectTwo.id]);
+	});
+
+	it("keeps an expanded project's sessions listed when its orchestrator opens from a worker", async () => {
+		const user = userEvent.setup();
+		const { go } = mount([workspace.id], [projectTwo]);
+		go(session.id);
+		expect(await screen.findByLabelText("Open fix login")).toHaveAttribute("aria-current", "page");
+
+		await pressOrchestratorButton(user);
+		go(orchestrator.id);
+		await settle();
+
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByLabelText("Open fix login")).not.toHaveAttribute("aria-current");
+		expect(screen.getByLabelText("Open second task")).toBeInTheDocument();
+		expect(screen.getByLabelText("Toggle Project Two sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([workspace.id]);
+	});
+
+	it("leaves a collapsed project collapsed when its orchestrator chat is already open", async () => {
+		const user = userEvent.setup();
+		const { go } = mount([]);
+		go(orchestrator.id);
+		await settle();
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+
+		await pressOrchestratorButton(user);
+		go(orchestrator.id);
+		await settle();
+
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.expanded-projects") ?? "null")).toEqual([]);
+	});
+
+	it("still reveals the next session after the orchestrator opened from its button", async () => {
+		const user = userEvent.setup();
+		const { go } = mount([]);
+		await pressOrchestratorButton(user);
+		go(orchestrator.id);
+		await settle();
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+
+		go(other.id);
+
+		expect(await screen.findByLabelText("Open second task")).toHaveAttribute("aria-current", "page");
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "true");
+	});
 
 	it("keeps a closed Scratchpad closed when a project's orchestrator opens", async () => {
 		window.localStorage.setItem("ao.sidebar.sections", JSON.stringify({ scratchpad: false }));

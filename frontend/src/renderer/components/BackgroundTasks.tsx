@@ -47,19 +47,57 @@ export function BackgroundTasksBadge({ session, reading, stale = false }: {
 	);
 }
 
+type TaskName = { name: string; dir?: string };
+
 /** A shell task by what it does ("Dev server on port 3000"), not the command line its provider ran. */
-export function backgroundTaskName(task: BackgroundTask, t: TFunction): string {
-	if (!task.description) return t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other");
-	if (task.kind !== "shell") return task.description;
-	const label = shellTaskLabel(task.description);
+function taskName(task: BackgroundTask, t: TFunction): TaskName {
+	const description = task.description?.trim();
+	if (!description) return { name: t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other") };
+	if (task.kind !== "shell") return { name: description };
+	const label = shellTaskLabel(description);
+	const named = (name: string) => ({ name, dir: label.dir });
 	switch (label.kind) {
-		case "devServer": return label.port ? t("backgroundTasks.label.devServerPort", { port: label.port }) : t("backgroundTasks.label.devServer");
-		case "tests": return t("backgroundTasks.label.tests");
-		case "build": return t("backgroundTasks.label.build");
-		case "lint": return t("backgroundTasks.label.lint");
-		case "install": return t("backgroundTasks.label.install");
-		case "command": return label.text;
+		case "devServer": return named(label.port ? t("backgroundTasks.label.devServerPort", { port: label.port }) : t("backgroundTasks.label.devServer"));
+		case "tests": return named(t("backgroundTasks.label.tests"));
+		case "build": return named(t("backgroundTasks.label.build"));
+		case "lint": return named(t("backgroundTasks.label.lint"));
+		case "install": return named(t("backgroundTasks.label.install"));
+		case "command": return named(label.text);
 	}
+}
+
+/** One task's name on its own, as the side panel shows it. */
+export function backgroundTaskName(task: BackgroundTask, t: TFunction): string {
+	return taskName(task, t).name;
+}
+
+/** How a row was told apart from a like one: by its folder, or by its command. */
+export type TaskNameSuffixes = Map<string, "dir" | "command">;
+
+const rowKey = (task: BackgroundTask) => `${task.id}:${task.runId ?? ""}`;
+
+/**
+ * Each task's name, told apart from the others: two "Dev server" rows become
+ * "Dev server · frontend" and "Dev server · backend", or their commands when
+ * no folder separates them. A row keeps the name it was given in `suffixes`
+ * for as long as it shows, so stopping one server doesn't rename the other.
+ */
+export function backgroundTaskNames(tasks: BackgroundTask[], t: TFunction, suffixes: TaskNameSuffixes = new Map()): Map<BackgroundTask, string> {
+	const named = tasks.map((task) => ({ task, ...taskName(task, t) }));
+	const count = (key: string, keys: string[]) => keys.filter((other) => other === key).length;
+	const names = named.map(({ name }) => name);
+	const withDirs = named.map(({ name, dir }) => (dir ? `${name} · ${dir}` : name));
+	const shown = new Set(tasks.map(rowKey));
+	for (const key of [...suffixes.keys()]) if (!shown.has(key)) suffixes.delete(key);
+	return new Map(named.map(({ task, name, dir }, i) => {
+		const key = rowKey(task);
+		let suffix = suffixes.get(key);
+		if (!suffix && count(name, names) > 1) suffix = dir && count(withDirs[i], withDirs) < 2 ? "dir" : "command";
+		if (!suffix) return [task, name];
+		suffixes.set(key, suffix);
+		if (suffix === "dir" && dir) return [task, withDirs[i]];
+		return [task, task.description?.trim() || name];
+	}));
 }
 
 export const isLive = (task: BackgroundTask) => task.state === "running" || task.state === "paused";
@@ -206,7 +244,8 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 	const listId = useId();
 	const tasks = useMemo(() => composerBackgroundTasks(reading, seenFailures), [reading, seenFailures]);
 	// Parsed once per reading, not on every elapsed-time tick.
-	const names = useMemo(() => new Map(tasks.map((task) => [task, backgroundTaskName(task, t)])), [tasks, t]);
+	const suffixes = useRef<TaskNameSuffixes>(new Map());
+	const names = useMemo(() => backgroundTaskNames(tasks, t, suffixes.current), [tasks, t]);
 	const live = tasks.filter(isLive);
 	const failedCount = tasks.length - live.length;
 	const now = useNow(tasks);
@@ -222,20 +261,32 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 	const region = useRef<HTMLElement>(null);
 	const scope = useRef<HTMLElement | null>(null);
 	const focusedElement = useRef<HTMLElement | null>(null);
+	useEffect(() => {
+		const clearFocus = () => { focusedElement.current = null; };
+		const clearOutside = (event: PointerEvent) => {
+			if (!(event.target instanceof Node) || !region.current?.contains(event.target)) clearFocus();
+		};
+		// Clicking non-focusable transcript text blurs to body with no relatedTarget.
+		// Forget ownership at the gesture, before a later poll removes the row.
+		document.addEventListener("pointerdown", clearOutside, true);
+		window.addEventListener("blur", clearFocus);
+		return () => {
+			document.removeEventListener("pointerdown", clearOutside, true);
+			window.removeEventListener("blur", clearFocus);
+		};
+	}, []);
 	useLayoutEffect(() => {
 		if (region.current) scope.current = region.current.parentElement;
 		// A poll must not move focus that still belongs to a mounted control.
 		if (!focusedElement.current || focusedElement.current.isConnected || document.activeElement !== document.body) return;
 		focusedElement.current = null;
-		if (document.activeElement === document.body || region.current?.contains(document.activeElement)) {
-			// The next row's Stop first, so repeated keyboard stops keep going.
-			const next =
-				region.current?.querySelector<HTMLElement>("[data-task-id] [data-task-stop]:not(:disabled)") ??
-				region.current?.querySelector<HTMLElement>("[data-task-id] button:not(:disabled)") ??
-				region.current?.querySelector<HTMLElement>("button:not(:disabled)");
-			const editor = scope.current?.querySelector<HTMLElement>('[contenteditable="true"], textarea, [role="textbox"]');
-			(next ?? editor)?.focus();
-		}
+		// The next row's Stop first, so repeated keyboard stops keep going.
+		const next =
+			region.current?.querySelector<HTMLElement>("[data-task-id] [data-task-stop]:not(:disabled)") ??
+			region.current?.querySelector<HTMLElement>("[data-task-id] button:not(:disabled)") ??
+			region.current?.querySelector<HTMLElement>("button:not(:disabled)");
+		const editor = scope.current?.querySelector<HTMLElement>('form.cursor-chat-composer [contenteditable="true"], form.cursor-chat-composer textarea');
+		(next ?? editor)?.focus();
 	}, [tasks]);
 	if (!tasks.length) return null;
 
@@ -298,7 +349,11 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 				focusedElement.current = event.target as HTMLElement;
 			}}
 			onBlurCapture={(event) => {
-				if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) focusedElement.current = null;
+				if (event.relatedTarget && event.currentTarget.contains(event.relatedTarget as Node)) return;
+				// Disabling/removing Stop can blur it before settlement. Outside
+				// gestures already relinquish ownership through pointerdown above.
+				if (!event.relatedTarget && (!event.target.isConnected || event.target.matches(":disabled"))) return;
+				focusedElement.current = null;
 			}}
 		>
 			{several ? (
@@ -330,9 +385,13 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 							<li key={`${task.id}:${task.runId ?? ""}`} data-task-id={task.id} className="flex h-8 min-w-0 items-center gap-2">
 								{!several ? <SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /> : null}
 								{opener(task, <>
-									<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>
+									<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={task.description?.trim() || name(task)}>
 										{name(task)}
 									</span>
+									{/* A live task shows no mark; say its state to screen readers, as failures say theirs. */}
+									{task.state === "running" || task.state === "paused" ? (
+										<span className="sr-only">{t(task.state === "paused" ? "backgroundTasks.state.paused" : "backgroundTasks.state.running")}</span>
+									) : null}
 									{time(task)}
 								</>)}
 								{trailing(task)}

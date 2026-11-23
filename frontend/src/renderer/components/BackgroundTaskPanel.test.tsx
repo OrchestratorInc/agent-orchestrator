@@ -174,8 +174,8 @@ describe("background tasks list", () => {
 		expect(within(finished).getByText("Failed")).toBeVisible();
 		expect(within(finished).getByText("2s")).toBeVisible();
 
-		await userEvent.click(within(finished).getByRole("button", { name: /Building/ }));
-		expect(screen.getByRole("region", { name: "Building" })).toBeVisible();
+		await userEvent.click(within(finished).getByRole("button", { name: /^Build/ }));
+		expect(screen.getByRole("region", { name: "Build" })).toBeVisible();
 		expect(screen.getByRole("button", { name: "All background tasks" })).toHaveFocus();
 		// Focus moved for the reader opens no tooltip over the side panel's tabs.
 		expect(screen.queryByRole("tooltip")).toBeNull();
@@ -183,7 +183,7 @@ describe("background tasks list", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "All background tasks" }));
 		expect(useUiStore.getState().inspectorSessions[uiKey]?.activeTaskTab).toBeUndefined();
-		expect(screen.getByRole("button", { name: /Building/ })).toHaveFocus();
+		expect(screen.getByRole("button", { name: /^Build/ })).toHaveFocus();
 	});
 });
 

@@ -817,7 +817,9 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
 	case update.SessionInfoUpdate != nil:
 		if update.SessionInfoUpdate.Title != nil {
-			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})
+			if title, ok := providerTitle(*update.SessionInfoUpdate.Title); ok {
+				emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: title})
+			}
 		}
 		if turnID != "" {
 			// A retry or limit notice is live status. The live run already stored

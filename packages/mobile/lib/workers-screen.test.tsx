@@ -116,8 +116,8 @@ vi.mock("./frost", () => ({ useTabBarFrost: () => ({ inset: 0, frost: null }) })
 vi.mock("./largeTitle", async () => {
 	const React = await import("react");
 	return {
-		useLargeTitle: (_title: string, onScroll?: unknown, options?: { accessory?: React.ReactNode }) => fixtures.platform === "android"
-			? { header: null, edge: React.createElement("LargeTitleEdge", null, options?.accessory), onScroll, topInset: 0, accessory: null }
+		useLargeTitle: (_title: string, onScroll?: unknown, options?: { accessory?: React.ReactNode; backdrop?: string }) => fixtures.platform === "android"
+			? { header: null, edge: React.createElement("LargeTitleEdge", { backdrop: options?.backdrop }, options?.accessory), onScroll, topInset: 0, accessory: null }
 			: { header: null, edge: null, onScroll, topInset: 0, accessory: options?.accessory ?? null },
 	};
 });
@@ -350,6 +350,8 @@ describe("Workers filter menu", () => {
 			act(() => { renderer = create(<FleetScreen />); });
 			expect(pinned()).toHaveLength(1);
 			expect(inList()).toHaveLength(0);
+			// A solid bar: the frost's tail lay over the chips and dimmed them at rest.
+			expect(renderer.root.findByType("LargeTitleEdge" as never).props.backdrop).toBe("solid");
 			act(() => renderer.unmount());
 		}
 		act(() => { renderer = create(<FleetScreen />); });

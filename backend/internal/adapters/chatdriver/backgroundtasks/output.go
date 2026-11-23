@@ -186,6 +186,13 @@ func (b *OutputBuffer) Append(key, delta string) {
 	defer b.mu.Unlock()
 	entry := b.entry(key)
 	entry.deltas++
+	if len(delta) > MaxOutputBytes {
+		// Copy only the delta's tail into a bounded array, so neither the
+		// delta nor a grown buffer stays alive.
+		entry.data = append(make([]byte, 0, 2*MaxOutputBytes), delta[len(delta)-MaxOutputBytes:]...)
+		entry.dropped, entry.midLine = true, true
+		return
+	}
 	entry.data = append(entry.data, delta...)
 	// Trim in batches so a chatty process does not copy on every line. The
 	// tail moves to the front of the same array, so later appends do not regrow.
@@ -254,8 +261,9 @@ func (b *OutputBuffer) Read(key string) (ports.ChatBackgroundTaskOutput, bool) {
 		raw, dropped, midLine = raw[len(raw)-MaxOutputBytes:], true, true
 	}
 	if midLine {
-		// The cut can land mid-line; that partial first line is not output.
-		if at := strings.IndexByte(raw, '\n'); at >= 0 {
+		// The cut can land mid-line; that partial first line is not output,
+		// unless no complete line follows it.
+		if at := strings.IndexByte(strings.TrimRight(raw, "\r\n"), '\n'); at >= 0 {
 			raw = raw[at+1:]
 		}
 	}
