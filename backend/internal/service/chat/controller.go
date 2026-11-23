@@ -313,9 +313,10 @@ type Controller struct {
 	// queue that interrupt cancels. Zero means nothing is being cancelled.
 	cancelQueuedAt time.Time
 	// handoff closes source-controller intake while ownership is being changed.
-	// Interface drain keeps dispatching accepted rows; interface interrupt and an
-	// idle branch mutation stop dispatch entirely. The target controller is not
-	// started until this controller reports quiescent and is closed.
+	// Interface drain keeps dispatching accepted rows, except a held queue during
+	// an account move; interface interrupt and an idle branch mutation stop
+	// dispatch entirely. The target controller is not started until this
+	// controller reports quiescent and is closed.
 	handoff  controllerHandoff
 	keepHeld bool
 	// handoffInterrupted is the provider turn an interrupt-policy handoff
@@ -2459,6 +2460,10 @@ func (c *Controller) ArmHandoff(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	moving, err := c.accountMoveActive(ctx)
+	if err != nil {
+		return fmt.Errorf("check account move before handoff: %w", err)
+	}
 
 	c.mu.Lock()
 	if c.handoff == want {
@@ -2470,6 +2475,7 @@ func (c *Controller) ArmHandoff(
 		return ErrControllerHandoff
 	}
 	c.handoff = want
+	c.keepHeld = moving && policy == domain.SessionInterfaceTransitionDrain
 	c.mu.Unlock()
 	return nil
 }
@@ -2485,16 +2491,8 @@ func (c *Controller) BeginHandoff(
 	if err := c.ArmHandoff(ctx, policy); err != nil {
 		return err
 	}
-	moving, err := c.accountMoveActive(ctx)
-	if err == nil && !moving {
-		err = releaseHeldQueue(ctx, c.store, c.conversation.ID)
-	}
-	if err != nil {
-		c.AbortHandoff()
-		return fmt.Errorf("check account move before handoff: %w", err)
-	}
 	c.mu.Lock()
-	c.keepHeld = moving
+	keepHeld := c.keepHeld
 	c.mu.Unlock()
 
 	if policy == domain.SessionInterfaceTransitionInterrupt {
@@ -2506,6 +2504,9 @@ func (c *Controller) BeginHandoff(
 		active := c.pendingTurnID != ""
 		c.mu.Unlock()
 		_, err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+		if err == nil {
+			err = releaseHeldQueue(ctx, c.store, c.conversation.ID)
+		}
 		c.sendMu.Unlock()
 		if err != nil {
 			c.AbortHandoff()
@@ -2551,7 +2552,15 @@ func (c *Controller) BeginHandoff(
 			_, err := c.store.NextQueuedTurn(ctx, c.conversation.ID)
 			switch {
 			case errors.Is(err, domain.ErrNoQueuedTurn):
+				var releaseErr error
+				if !keepHeld {
+					releaseErr = releaseHeldQueue(ctx, c.store, c.conversation.ID)
+				}
 				c.sendMu.Unlock()
+				if releaseErr != nil {
+					c.AbortHandoff()
+					return fmt.Errorf("release held queue before handoff: %w", releaseErr)
+				}
 				return nil
 			case err != nil:
 				c.sendMu.Unlock()
@@ -2559,7 +2568,7 @@ func (c *Controller) BeginHandoff(
 				return fmt.Errorf("check queued turns before handoff: %w", err)
 			case policy == domain.SessionInterfaceTransitionDrain:
 				held, err := c.queueHeld(ctx)
-				if err == nil && held && moving {
+				if err == nil && held && keepHeld {
 					c.sendMu.Unlock()
 					return nil
 				}

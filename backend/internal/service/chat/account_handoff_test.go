@@ -553,6 +553,21 @@ func TestAccountHandoffMoveKeepsTheHeldQueueOffTheLimitedAccount(t *testing.T) {
 	assertTurnStaysQueued(t, hh.harness, "queued note")
 }
 
+func TestAccountHandoffKeepsTheHeldQueueWhenTheAgentStopsDuringPreflight(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+
+	ctx := context.Background()
+	if err := hh.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
+		t.Fatal(err)
+	}
+	if err := hh.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+}
+
 func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
 	ctx := context.Background()
