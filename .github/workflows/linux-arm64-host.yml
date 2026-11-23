@@ -106,8 +106,7 @@ jobs:
           "$resources/daemon/ao" remote-host --help >/dev/null
           "$resources/acp-runtime/node/bin/node" --version
           "$resources/tmux/bin/tmux" -V
-      # Amazon Linux 2023 has glibc 2.34, the oldest the package supports. PR runs
-      # only, so a slow package mirror cannot hold up a release build.
+      # glibc 2.34, the package's floor. PR runs only: a slow mirror must not hold up a release.
       - name: Install on Amazon Linux 2023
         if: github.event_name == 'pull_request'
         working-directory: ${{ github.workspace }}
@@ -117,8 +116,7 @@ jobs:
           dnf install -y -q sudo shadow-utils gzip findutils gawk procps-ng
           useradd -m ao
           echo 'ao ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ao
-          # A container has no systemd. With loginctl stubbed, the bootstrap must
-          # get through its dnf installs and stop exactly at the user session check.
+          # No systemd here: with loginctl stubbed, the bootstrap must stop at its user session check.
           printf '#!/bin/sh\nexit 0\n' > /usr/bin/loginctl
           chmod 755 /usr/bin/loginctl
           if sudo -iu ao bash /src/scripts/bootstrap-self-hosted.sh > /tmp/bootstrap.out 2>&1; then

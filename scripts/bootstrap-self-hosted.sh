@@ -35,7 +35,6 @@ case "$(uname -s):$(uname -m)" in
 	Linux:aarch64|Linux:arm64) go_arch=arm64 node_arch=arm64 go_sha256=3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92 ;;
 	*) printf '%s\n' 'This bootstrap supports Linux on x64 or arm64 only.' >&2; exit 1 ;;
 esac
-# The host package's binaries need glibc 2.34 or newer.
 glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
 if [[ ! "$glibc" =~ ^glibc\ ([0-9]+)\.([0-9]+) ]] ||
 	((BASH_REMATCH[1] < 2 || (BASH_REMATCH[1] == 2 && BASH_REMATCH[2] < 34))); then

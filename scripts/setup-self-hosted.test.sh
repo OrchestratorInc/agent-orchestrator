@@ -244,7 +244,7 @@ PY
 			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/$tool"
 			chmod +x "$tmp/bin/$tool"
 		done
-		# Records each privileged command; drains piped repo files for `tee`.
+		# Reads stdin for `tee`, so the piped curl mock never writes to a closed pipe.
 		printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$TEST_SUDO_LOG"' \
 			'if [ "$1" = tee ]; then while read -r _; do :; done; fi' > "$tmp/bin/sudo"
 		printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" > "$TEST_INSTALL_ARGS"' > "$tmp/installer"
@@ -257,7 +257,6 @@ PY
 				TEST_SUDO_LOG="$tmp/sudo" TEST_CURL_LOG="$tmp/curl" TEST_GLIBC="${TEST_GLIBC:-2.35}" \
 				/bin/bash "$bootstrap" "$@" > "$tmp/out" 2>&1
 		}
-		# A release install takes base tools, gh and cloudflared from dnf, never apt.
 		run_bootstrap || { cat "$tmp/out" >&2; exit 1; }
 		for want in 'tee /etc/yum.repos.d/gh-cli.repo' 'dnf install -y ca-certificates gh git python3 tar' \
 			'tee /etc/yum.repos.d/cloudflared.repo' 'dnf install -y cloudflared'; do
@@ -265,13 +264,11 @@ PY
 		done
 		! grep -q 'apt' "$tmp/sudo" || { cat "$tmp/sudo" >&2; exit 1; }
 		[[ -f "$tmp/args" ]]
-		# A branch build adds the compiler toolchain from dnf.
 		: > "$tmp/sudo"
 		result=0
 		run_bootstrap --source-ref main || result=$?
 		[[ "$result" != 0 ]]
 		grep -Fxq 'dnf install -y gcc gcc-c++ make pkgconf-pkg-config xz' "$tmp/sudo" || { cat "$tmp/sudo" "$tmp/out" >&2; exit 1; }
-		# Too old a glibc, or none, stops before anything is installed.
 		for glibc in 2.28 none; do
 			: > "$tmp/sudo"
 			result=0
@@ -279,7 +276,6 @@ PY
 			[[ "$result" == 1 && ! -s "$tmp/sudo" ]] || { cat "$tmp/out" >&2; exit 1; }
 			grep -q "needs glibc 2.34 or newer.*found: ${glibc/2.28/glibc 2.28}$" "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		done
-		# Neither apt-get nor dnf.
 		rm "$tmp/bin/dnf"
 		result=0
 		run_bootstrap || result=$?
