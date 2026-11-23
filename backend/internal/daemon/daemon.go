@@ -71,6 +71,7 @@ import (
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/connectors"
 	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
 	devimportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/devimport"
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
@@ -1329,6 +1330,7 @@ func Run(buildVersion string) (retErr error) {
 		ShellTerminals:     shellTermSvc,
 		PaneTerminals:      shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
+		Connectors:         connectors.New(cfg.DataDir),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      sessionConversationService{Service: chatSvc, sessions: sessMgr},

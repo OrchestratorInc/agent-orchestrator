@@ -3014,6 +3014,66 @@ type CueEnvelope struct {
 	Cue CueResponse `json:"cue"`
 }
 
+// ConnectorIDParam is the {connectorId} path parameter of the /connectors/{connectorId} routes.
+type ConnectorIDParam struct {
+	ConnectorID string `path:"connectorId" description:"Connector ID or key."`
+}
+
+// ConnectorRequest is the editable definition of a connector. A PATCH with only enabled turns it on or off.
+type ConnectorRequest struct {
+	Key       string            `json:"key,omitempty" maxLength:"32" description:"Short name that starts each tool name. Lowercase letters, digits, hyphens and underscores. Made from the name when empty."`
+	Name      string            `json:"name,omitempty" maxLength:"64" description:"Display name."`
+	PresetID  string            `json:"presetId,omitempty" description:"Catalog entry this connector came from."`
+	Transport string            `json:"transport,omitempty" enum:"http,stdio" description:"http for a server URL, stdio for a local command."`
+	URL       string            `json:"url,omitempty" maxLength:"2048" description:"Server URL. https, or http on this computer."`
+	Command   string            `json:"command,omitempty" description:"Local command. Loopback callers only."`
+	Args      []string          `json:"args,omitempty" description:"Arguments of the local command."`
+	Env       map[string]string `json:"env,omitempty" description:"Environment values of the local command. An empty value keeps the stored one."`
+	Headers   map[string]string `json:"headers,omitempty" description:"Request headers of the server URL. An empty value keeps the stored one."`
+	Auth      string            `json:"auth,omitempty" enum:"none,oauth,header" description:"Sign-in of a server URL."`
+	ProjectID *string           `json:"projectId,omitempty" description:"Project that gets the connector. Omit for all projects."`
+	Enabled   *bool             `json:"enabled,omitempty" description:"Whether new sessions get the connector."`
+}
+
+// ConnectorStatusDetail names the failed step of the last test.
+type ConnectorStatusDetail struct {
+	Step  string `json:"step"`
+	Error string `json:"error"`
+}
+
+// ConnectorResponse is one connector without its secret values.
+type ConnectorResponse struct {
+	ID           string                 `json:"id"`
+	Key          string                 `json:"key" description:"Tool names start with this."`
+	Name         string                 `json:"name"`
+	PresetID     string                 `json:"presetId,omitempty"`
+	Transport    string                 `json:"transport" enum:"http,stdio"`
+	URL          string                 `json:"url,omitempty" description:"Server URL without its query string."`
+	Command      string                 `json:"command,omitempty"`
+	Args         []string               `json:"args"`
+	EnvKeys      []string               `json:"envKeys" description:"Names of the stored environment values."`
+	HeaderKeys   []string               `json:"headerKeys" description:"Names of the stored headers."`
+	Auth         string                 `json:"auth" enum:"none,oauth,header"`
+	ProjectID    *string                `json:"projectId,omitempty" description:"Absent when the connector is for all projects."`
+	Enabled      bool                   `json:"enabled"`
+	Status       string                 `json:"status" enum:"unchecked,connected,needs_signin,unavailable"`
+	StatusDetail *ConnectorStatusDetail `json:"statusDetail,omitempty"`
+	Tools        []string               `json:"tools"`
+	CheckedAt    *time.Time             `json:"checkedAt,omitempty"`
+	CreatedAt    time.Time              `json:"createdAt"`
+	UpdatedAt    time.Time              `json:"updatedAt"`
+}
+
+// ListConnectorsResponse is the body of GET /api/v1/connectors.
+type ListConnectorsResponse struct {
+	Connectors []ConnectorResponse `json:"connectors"`
+}
+
+// ConnectorEnvelope is the { connector } response body for connector reads and changes.
+type ConnectorEnvelope struct {
+	Connector ConnectorResponse `json:"connector"`
+}
+
 // MarkAllNotificationsReadRequest is the optional body of
 // POST /api/v1/notifications/read-all.
 type MarkAllNotificationsReadRequest struct {

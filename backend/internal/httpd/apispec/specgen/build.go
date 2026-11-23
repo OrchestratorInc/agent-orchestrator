@@ -646,6 +646,13 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersInvokeCueRequest":     "InvokeCueRequest",
 	"ControllersInvokeCueResponse":    "InvokeCueResponse",
 	"ControllersCueEnvelope":          "CueEnvelope",
+	// httpd/controllers — connector wire envelopes
+	"ControllersConnectorIDParam":       "ConnectorIDParam",
+	"ControllersConnectorRequest":       "ConnectorRequest",
+	"ControllersConnectorStatusDetail":  "ConnectorStatusDetail",
+	"ControllersConnectorResponse":      "ConnectorResponse",
+	"ControllersListConnectorsResponse": "ListConnectorsResponse",
+	"ControllersConnectorEnvelope":      "ConnectorEnvelope",
 	// httpd/controllers — PR wire envelopes
 	"ControllersMergePRRequest":             "MergePRRequest",
 	"ControllersPRStackLayerResponse":       "PRStackLayerResponse",
@@ -882,6 +889,7 @@ func operations() []operation {
 	ops = append(ops, paneOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
+	ops = append(ops, connectorOperations()...)
 	ops = append(ops, systemOperations()...)
 	ops = append(ops, computerUseOperations()...)
 	ops = append(ops, identityOperations()...)
@@ -2288,6 +2296,48 @@ func cueOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+	}
+}
+
+func connectorOperations() []operation {
+	failures := func(extra ...int) []respUnit {
+		out := make([]respUnit, 0, len(extra)+2)
+		for _, status := range extra {
+			out = append(out, respUnit{status, envelope.APIError{}})
+		}
+		return append(out, respUnit{http.StatusInternalServerError, envelope.APIError{}}, respUnit{http.StatusNotImplemented, envelope.APIError{}})
+	}
+	one := []any{controllers.ConnectorIDParam{}}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/connectors", id: "listConnectors", tag: "connectors",
+			summary: "List the connectors in name order",
+			resps:   append([]respUnit{{http.StatusOK, controllers.ListConnectorsResponse{}}}, failures()...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors", id: "createConnector", tag: "connectors",
+			summary: "Add a connector",
+			reqBody: controllers.ConnectorRequest{},
+			resps: append([]respUnit{{http.StatusCreated, controllers.ConnectorEnvelope{}}},
+				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/connectors/{connectorId}", id: "getConnector", tag: "connectors",
+			summary: "Get a connector by ID or key", pathParams: one,
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}}, failures(http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/connectors/{connectorId}", id: "updateConnector", tag: "connectors",
+			summary: "Replace a connector's definition, or turn it on or off", pathParams: one,
+			reqBody: controllers.ConnectorRequest{},
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}},
+				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/connectors/{connectorId}", id: "deleteConnector", tag: "connectors",
+			summary: "Remove a connector and its stored values", pathParams: one,
+			resps: append([]respUnit{{http.StatusNoContent, nil}}, failures(http.StatusNotFound)...),
 		},
 	}
 }
