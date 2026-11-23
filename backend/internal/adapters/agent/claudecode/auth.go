@@ -236,14 +236,31 @@ func (p *Plugin) resolveProviderContext(
 		WorkingDir:    workingDir,
 		CommandEnv:    env,
 	}).WithClaudeSettings(ctx)
-	report, cliOK := reportFn(ctx, binary, workingDir, opts.CommandEnv)
+	// `claude auth status` renews an expired stored login on its own, and a
+	// refused renewal wipes the login (#8724). Every Claude Code process that
+	// finds the token expired tries that renewal, and the refresh token is
+	// single-use, so checks racing the user's sessions sign the account out
+	// about eight hours after sign-in. For such a login the CLI is not asked:
+	// the network probe and model discovery already wait for it, and the next
+	// session renews it once.
+	firstParty, firstPartyFound := agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, opts)
+	report, cliOK := claudeAuthReport{}, false
+	if !firstPartyFound || !firstParty.ExpiredButRenewable(claudeNow()) {
+		report, cliOK = reportFn(ctx, binary, workingDir, opts.CommandEnv)
+		// The CLI can renew a token that expired since the read above; read the
+		// login it left, not the one before it.
+		firstParty, firstPartyFound = agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, opts)
+	}
 	reported := ""
 	if cliOK {
 		reported = report.APIProvider
 	}
 	provider, providerOK := agentcreds.ResolveProvider(reported, opts)
 	credential, found := agentcreds.Credential{}, false
-	if providerOK {
+	switch {
+	case providerOK && provider == agentcreds.ProviderFirstParty:
+		credential, found = firstParty, firstPartyFound
+	case providerOK:
 		credential, found = agentcreds.ResolveLocal(ctx, provider, opts)
 	}
 	return claudeProviderContext{
