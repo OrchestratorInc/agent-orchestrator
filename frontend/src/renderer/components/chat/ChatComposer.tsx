@@ -2441,14 +2441,17 @@ export const ChatComposer = memo(function ChatComposer({
 	// An image from another panel (the Browser panel's region snip) joins the
 	// draft the way a pasted one does, under the same conditions.
 	const acceptImageRef = useRef<(file: File) => boolean>(() => false);
-	acceptImageRef.current = (file) => {
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return false;
-		if (fileAttachments.attachments.length + fileAttachments.pendingAttachments.length >= MAX_ATTACHMENTS) return false;
-		attachFiles([file]);
-		// The Chat surface may only now be coming forward.
-		window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
-		return true;
-	};
+	// Set at commit, so the listener never runs a callback from a discarded render.
+	useLayoutEffect(() => {
+		acceptImageRef.current = (file) => {
+			if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return false;
+			if (fileAttachments.attachments.length + fileAttachments.pendingAttachments.length >= MAX_ATTACHMENTS) return false;
+			attachFiles([file]);
+			// The Chat surface may only now be coming forward.
+			window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
+			return true;
+		};
+	});
 	useEffect(() => {
 		if (!draftSessionId || !canAttach) return;
 		return subscribeChatComposerImages(draftSessionId, (file) => acceptImageRef.current(file));
