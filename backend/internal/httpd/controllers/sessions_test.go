@@ -4853,6 +4853,20 @@ func TestSessionsAPI_SendValidation(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "MESSAGE_REQUIRED")
 }
 
+// `ao send` into a chat whose next turn cannot apply its settings, such as a
+// model its agent does not offer, must say why rather than answer 500.
+func TestSessionsAPI_SendReportsAnInvalidChatSetting(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("%w: this chat can't switch to %q", ports.ErrChatConfigOptionInvalid, "claude-fable-5-2")
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"continue"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "CHAT_CONFIG_OPTION_INVALID")
+	if !strings.Contains(string(body), "claude-fable-5-2") {
+		t.Fatalf("body = %s, want the reason", body)
+	}
+}
+
 func TestSessionsAPI_DelegateTask(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)

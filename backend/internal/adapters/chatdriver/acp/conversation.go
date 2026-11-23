@@ -142,6 +142,10 @@ type conversation struct {
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
+	// unofferedModel is the optional model the session was opened on but the
+	// agent does not offer, so applyTurnSettings left the agent's own model in
+	// place. It is the session's model, not a switch, on later sends.
+	unofferedModel    string
 	permissionMode    ports.PermissionMode
 	permissionFor     PermissionPolicy
 	initialPermission ports.PermissionMode
@@ -619,11 +623,47 @@ func (c *conversation) DiscardDeferredTurn(providerTurnID string) {
 // cannot use. Only a change is checked: a session already on such a model must
 // still open, so the user can pick another one.
 func (c *conversation) checkModelSwitch(ctx context.Context, model string) error {
-	if c.validateModel == nil || model == "" || model == c.configOptionCurrent("model") {
+	if model == "" || model == c.configOptionCurrent("model") {
 		return nil
 	}
-	if err := c.validateModel(ctx, model); err != nil {
-		return fmt.Errorf("%w: %w", ports.ErrChatConfigOptionInvalid, err)
+	if c.validateModel != nil {
+		if err := c.validateModel(ctx, model); err != nil {
+			return fmt.Errorf("%w: %w", ports.ErrChatConfigOptionInvalid, err)
+		}
+	}
+	return c.checkOptionalModelOffered(model)
+}
+
+// checkOptionalModelOffered refuses a switch to an optional model the session
+// neither offers nor lists under its name. applyTurnSettings skips such a model
+// so a session opened on it still starts; for a switch, skipping would keep the
+// old model answering while AO shows the new one.
+func (c *conversation) checkOptionalModelOffered(model string) error {
+	c.mu.Lock()
+	optionsFor := c.optionsFor
+	legacyModel := c.legacyModel && !c.modelConfigOption
+	unofferedModel := c.unofferedModel
+	c.mu.Unlock()
+	if optionsFor == nil || legacyModel {
+		return nil
+	}
+	for _, option := range optionsFor(ports.ChatTurnSettings{Model: model}) {
+		if option.ID != "model" || !option.Optional {
+			continue
+		}
+		// The model the session was opened on is not a switch, even though
+		// the agent kept its own model in its place.
+		if unofferedModel != "" && option.Value == unofferedModel {
+			return nil
+		}
+		offered, known := c.configOptionOffers(option.ID, option.Value)
+		if !known || offered || c.configOptionValueNamed(option.ID, option.Name) != "" {
+			return nil
+		}
+		// A new chat on this model would not run it either: the agent keeps its
+		// own model there too, so the message points only at the models it lists.
+		return fmt.Errorf("%w: this chat can't switch to %q because its agent doesn't offer that model; pick one it lists",
+			ports.ErrChatConfigOptionInvalid, model)
 	}
 	return nil
 }
@@ -739,13 +779,31 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			}
 		}
 		if !catalogStale && c.configOptionCurrent(option.ID) == option.Value {
+			if option.ID == "model" {
+				// The agent's own model was chosen: the session no longer runs on
+				// the unoffered model it opened on.
+				c.mu.Lock()
+				c.unofferedModel = ""
+				c.mu.Unlock()
+			}
 			return nil
 		}
 		// The models offered do not depend on the model chosen, so this is final.
 		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
+			c.mu.Lock()
+			c.unofferedModel = option.Value
+			c.mu.Unlock()
 			return nil
 		}
-		return c.setSessionOption(ctx, sessionID, option)
+		if err := c.setSessionOption(ctx, sessionID, option); err != nil {
+			return err
+		}
+		if option.ID == "model" {
+			c.mu.Lock()
+			c.unofferedModel = ""
+			c.mu.Unlock()
+		}
+		return nil
 	}
 	// A model switch may change the modes an ACP agent offers. Apply a modern
 	// model config option before session/set_mode so the requested mode is
