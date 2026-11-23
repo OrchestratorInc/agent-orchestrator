@@ -807,7 +807,7 @@ func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID
 	c.switchMarks = append(c.switchMarks, accountID)
 	return nil
 }
-func (c *transitionChat) ReleaseQueueAfterAccountMove(_ context.Context, id domain.SessionID) error {
+func (c *transitionChat) ReleaseQueueAfterAccountMove(_ context.Context, id domain.SessionID, _ string) error {
 	if c.queueReleases != nil {
 		c.queueReleases <- id
 	}

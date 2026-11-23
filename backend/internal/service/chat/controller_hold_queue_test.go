@@ -239,7 +239,7 @@ func TestCompletedManualAccountMoveReleasesTheHeldQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertTurnStaysQueued(t, h, "queued note")
-	if err := h.svc.ReleaseQueueAfterAccountMove(ctx, testSession); err != nil {
+	if err := h.svc.ReleaseQueueAfterAccountMove(ctx, testSession, "manual-move"); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.svc.DrainQueued(ctx, testSession); err != nil {

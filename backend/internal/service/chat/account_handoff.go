@@ -59,7 +59,6 @@ type accountHandoff struct {
 	retryAt time.Time
 	moved   atomic.Bool
 
-	sourceAccount string
 	targetAccount string
 	transitionID  string
 	stepAt        time.Time
@@ -196,12 +195,11 @@ func (s *Service) claimAccountHandoffs(ctx context.Context, store accountHandoff
 		if _, accounts := domain.AgentAccountProviderFor(record.Harness); !found || !accounts {
 			continue
 		}
-		account, err := deps.accounts.SessionAccountID(ctx, record.ID, record.Harness)
-		if err != nil || account == "" {
+		if account, err := deps.accounts.SessionAccountID(ctx, record.ID, record.Harness); err != nil || account == "" {
 			s.log.Debug("account handoff: session account unavailable", "session", record.ID, "error", err)
 			continue
 		}
-		claimed = append(claimed, &accountHandoff{turnID: turn.ID, conversationID: turn.ConversationID, sessionID: record.ID, sourceAccount: account, stepAt: s.now()})
+		claimed = append(claimed, &accountHandoff{turnID: turn.ID, conversationID: turn.ConversationID, sessionID: record.ID, stepAt: s.now()})
 	}
 	return claimed, nil
 }
@@ -209,11 +207,7 @@ func (s *Service) claimAccountHandoffs(ctx context.Context, store accountHandoff
 func (s *Service) stepAccountHandoff(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
 	switch {
 	case h.transitionID == "":
-		done, err := s.selectAccountHandoff(ctx, store, deps, h)
-		if done && h.transitionID == "" && s.movedSinceClaim(ctx, deps, h) {
-			s.releaseAccountHandoffQueue(ctx, h)
-		}
-		return done, err
+		return s.selectAccountHandoff(ctx, store, deps, h)
 	case !h.moved.Load():
 		return s.settleAccountHandoffMove(ctx, store, deps, h)
 	}
@@ -261,14 +255,13 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	if !deps.enabled(ctx) {
 		return true, nil
 	}
-	if s.movedSinceClaim(ctx, deps, h) {
-		return true, nil
-	}
 	transition, err := deps.mover.StartAccountTransition(ctx, h.sessionID, target, domain.SessionInterfaceTransitionDrain)
 	if err != nil {
 		return s.stayOnAccount(ctx, h, source, "could not start the move: "+err.Error())
 	}
+	s.handoffMu.Lock()
 	h.targetAccount, h.transitionID, h.stepAt = transition.TargetAccountID, transition.ID, s.now()
+	s.handoffMu.Unlock()
 	return s.settleAccountHandoffMove(ctx, store, deps, h)
 }
 
@@ -326,15 +319,6 @@ func (s *Service) onHandoffTarget(ctx context.Context, deps accountHandoffDeps, 
 	return err == nil && bound == h.targetAccount, err
 }
 
-func (s *Service) movedSinceClaim(ctx context.Context, deps accountHandoffDeps, h *accountHandoff) bool {
-	record, found, err := s.sessions.GetSession(ctx, h.sessionID)
-	if err != nil || !found {
-		return false
-	}
-	bound, err := deps.accounts.SessionAccountID(ctx, h.sessionID, record.Harness)
-	return err == nil && bound != "" && bound != h.sourceAccount
-}
-
 func (s *Service) noteAccountHandoff(ctx context.Context, h *accountHandoff, retry string) error {
 	source, err := s.store.TurnByID(ctx, h.turnID)
 	if err != nil {
@@ -377,11 +361,11 @@ func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHand
 	}
 }
 
-// ReleaseQueueAfterAccountMove releases the session's held queue after a completed move the automatic handoff does not own.
-func (s *Service) ReleaseQueueAfterAccountMove(ctx context.Context, id domain.SessionID) error {
+// ReleaseQueueAfterAccountMove releases the session's held queue after a completed move the automatic handoff did not start.
+func (s *Service) ReleaseQueueAfterAccountMove(ctx context.Context, id domain.SessionID, transitionID string) error {
 	s.handoffMu.Lock()
 	for _, h := range s.handoffs {
-		if h.sessionID == id && !h.done {
+		if h.sessionID == id && !h.done && h.transitionID == transitionID {
 			s.handoffMu.Unlock()
 			return nil
 		}

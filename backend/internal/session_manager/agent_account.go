@@ -170,9 +170,9 @@ func (m *Manager) deliverQueuedAfterAccountMove(transition domain.SessionInterfa
 	ctx, cancel := context.WithTimeout(context.Background(), interfaceTransitionStepLimit)
 	defer cancel()
 	if releaser, ok := m.chat.(interface {
-		ReleaseQueueAfterAccountMove(context.Context, domain.SessionID) error
+		ReleaseQueueAfterAccountMove(context.Context, domain.SessionID, string) error
 	}); ok && completed {
-		if err := releaser.ReleaseQueueAfterAccountMove(ctx, transition.SessionID); err != nil {
+		if err := releaser.ReleaseQueueAfterAccountMove(ctx, transition.SessionID, transition.ID); err != nil {
 			m.logger.Warn("account transition: held queue not released", "sessionID", transition.SessionID, "transition", transition.ID, "error", err)
 		}
 	}

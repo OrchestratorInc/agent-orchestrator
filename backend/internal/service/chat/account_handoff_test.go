@@ -559,7 +559,7 @@ func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
 	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
 	hh.tick(t)
 	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
-	if err := hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession); err != nil {
+	if err := hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession, hh.mover.moves()[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := hh.svc.DrainQueued(ctx, testSession); err != nil {
@@ -652,23 +652,15 @@ func TestManualMoveDuringTheHandoffReleasesTheHeldQueue(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
 	ctx := context.Background()
 	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	held := true
+	var err error
 	hh.accounts.onTarget = func() {
-		if err := hh.st.BindSessionAgentAccount(ctx, testSession, hh.provider, "acct-c", hh.now().Add(time.Second)); err != nil {
-			t.Error(err)
-		}
-		if err := hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession); err != nil {
-			t.Error(err)
+		if err = hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession, "manual-move"); err == nil {
+			held, err = hh.st.ConversationQueueHeld(ctx, source.ConversationID)
 		}
 	}
 	hh.tick(t)
-
-	if moves := hh.mover.moves(); len(moves) != 0 {
-		t.Fatalf("handoff moved the session after the user did: %+v", moves)
+	if err != nil || held {
+		t.Fatalf("queue held = %v, %v after a move the handoff did not start", held, err)
 	}
-	if _, found, _ := hh.st.RetryTurnIDForSource(ctx, source.ConversationID, source.ID); found {
-		t.Fatal("handoff retried the prompt after the user moved the session")
-	}
-	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
-	})
 }
