@@ -69,7 +69,7 @@ func start(t *testing.T) (*approval.Gate, *fakeWriter) {
 	return gate, w
 }
 
-func request(gate *approval.Gate, ctx context.Context, timeout time.Duration) <-chan approval.Outcome {
+func request(ctx context.Context, gate *approval.Gate, timeout time.Duration) <-chan approval.Outcome {
 	out := make(chan approval.Outcome, 1)
 	go func() {
 		o, _ := gate.Request(ctx, approval.Request{
@@ -96,7 +96,7 @@ func pendingID(t *testing.T, gate *approval.Gate) string {
 
 func TestApprovalCreatesBrowserApprovalNotification(t *testing.T) {
 	gate, w := start(t)
-	request(gate, context.Background(), time.Minute)
+	request(context.Background(), gate, time.Minute)
 	id := pendingID(t, gate)
 	w.waitFor(t, 1, 0)
 	got := w.notified[0]
@@ -109,7 +109,7 @@ func TestApprovalCreatesBrowserApprovalNotification(t *testing.T) {
 
 func TestDecidedApprovalResolvesNotification(t *testing.T) {
 	gate, w := start(t)
-	done := request(gate, context.Background(), time.Minute)
+	done := request(context.Background(), gate, time.Minute)
 	id := pendingID(t, gate)
 	if err := gate.Decide(id, approval.DecisionDeny); err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestDecidedApprovalResolvesNotification(t *testing.T) {
 
 func TestTimedOutApprovalResolvesNotification(t *testing.T) {
 	gate, w := start(t)
-	if o := <-request(gate, context.Background(), 20*time.Millisecond); o.Decision != approval.DecisionTimeout {
+	if o := <-request(context.Background(), gate, 20*time.Millisecond); o.Decision != approval.DecisionTimeout {
 		t.Fatalf("outcome = %+v", o)
 	}
 	w.waitFor(t, 1, 1)
@@ -135,7 +135,7 @@ func TestTimedOutApprovalResolvesNotification(t *testing.T) {
 func TestCancelledApprovalResolvesNotification(t *testing.T) {
 	gate, w := start(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	done := request(gate, ctx, time.Minute)
+	done := request(ctx, gate, time.Minute)
 	pendingID(t, gate)
 	cancel()
 	<-done
@@ -159,7 +159,7 @@ func TestNotifierNeverBlocksTheGateAndKeepsOrder(t *testing.T) {
 
 	const count = 50
 	for i := 0; i < count; i++ {
-		done := request(gate, context.Background(), time.Minute)
+		done := request(context.Background(), gate, time.Minute)
 		id := pendingID(t, gate)
 		if err := gate.Decide(id, approval.DecisionAllowOnce); err != nil {
 			t.Fatal(err)

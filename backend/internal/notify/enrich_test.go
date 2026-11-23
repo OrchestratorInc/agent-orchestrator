@@ -83,7 +83,7 @@ func TestEnrichBrowserApproval(t *testing.T) {
 func TestEnrichBrowserApprovalNamesSiteAndCapsUntrustedText(t *testing.T) {
 	t.Parallel()
 
-	long := "Click \"" + strings.Repeat("x", 300) + "\"\n‮evil"
+	long := "Click \"" + strings.Repeat("x", 300) + "\"\n\u202eevil"
 	rec, err := enrich(Intent{
 		Type: domain.NotificationBrowserApproval, SessionID: "sess-1", SourceKey: "browser_approval:apr_1",
 		ApprovalAction: long, ApprovalSite: "https://shop.example", CreatedAt: time.Now(),
@@ -94,7 +94,7 @@ func TestEnrichBrowserApprovalNamesSiteAndCapsUntrustedText(t *testing.T) {
 	if n := utf8.RuneCountInString(rec.Body); n > 140 {
 		t.Fatalf("body is %d runes, want at most 140: %q", n, rec.Body)
 	}
-	if strings.ContainsAny(rec.Body, "\n‮") || !strings.HasSuffix(rec.Body, "…") {
+	if strings.ContainsAny(rec.Body, "\n\u202e") || !strings.HasSuffix(rec.Body, "…") {
 		t.Fatalf("body = %q, want one line without format characters, truncated", rec.Body)
 	}
 
