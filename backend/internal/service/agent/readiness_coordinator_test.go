@@ -1223,6 +1223,37 @@ func TestReadinessCoordinatorFindInstalledOnlyReportsMissingWhenEveryCheckSaysSo
 // "Check again" answers as soon as one agent is confirmed, without waiting for
 // slower harnesses, and never probes sign-in: those waits are what pushed a
 // full refresh past the request timeout.
+// "Check again" must re-verify. A failed re-check keeps the Installed state an
+// earlier check recorded (with the failure as its reason), and that must not
+// be reported as a confirmed agent.
+func TestReadinessCoordinatorRecheckInstalledDoesNotConfirmAFailedRecheck(t *testing.T) {
+	t.Parallel()
+	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
+	defer cancelDaemon()
+	var fail atomic.Bool
+	agent := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) {
+			if fail.Load() {
+				return "", context.DeadlineExceeded
+			}
+			return "/bin/codex", nil
+		},
+		auth: func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusUnknown, nil },
+	}
+	coordinator := newReadinessCoordinator(readinessCoordinatorConfig{
+		Agents:  []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", agent)},
+		Context: daemonCtx,
+	})
+
+	if _, got := coordinator.RecheckInstalled(context.Background(), domain.AgentReadinessPurposeLaunch); got != PresenceFound {
+		t.Fatalf("first RecheckInstalled() = %v, want found after a successful check", got)
+	}
+	fail.Store(true)
+	if _, got := coordinator.RecheckInstalled(context.Background(), domain.AgentReadinessPurposeLaunch); got != PresenceUnconfirmed {
+		t.Fatalf("RecheckInstalled() after a failed re-check = %v, want unconfirmed, not the earlier Installed state", got)
+	}
+}
+
 func TestReadinessCoordinatorRecheckInstalledAnswersEarlyWithoutAuthentication(t *testing.T) {
 	t.Parallel()
 	daemonCtx, cancelDaemon := context.WithCancel(context.Background())

@@ -240,7 +240,7 @@ func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain
 	if err != nil {
 		return domain.AgentReadinessSnapshot{}, PresenceUnconfirmed
 	}
-	return c.findInstalled(ctx, ids, purpose, true)
+	return c.findInstalled(ctx, ids, purpose, true, false)
 }
 
 // RecheckInstalled is the explicit "check again" search. It discards every
@@ -260,10 +260,16 @@ func (c *readinessCoordinator) RecheckInstalled(ctx context.Context, purpose dom
 	for _, id := range ids {
 		c.Invalidate(id, readinessInvalidateInstallation)
 	}
-	return c.findInstalled(ctx, ids, purpose, false)
+	// A recheck must re-verify: an Installed state kept from an earlier check
+	// after this check failed is not a confirmation.
+	return c.findInstalled(ctx, ids, purpose, false, true)
 }
 
-func (c *readinessCoordinator) findInstalled(ctx context.Context, ids []string, purpose domain.AgentReadinessPurpose, presenceOnly bool) (domain.AgentReadinessSnapshot, Presence) {
+// findInstalled runs the installation checks for ids and returns as soon as
+// one harness is confirmed. requireFresh accepts an Installed state only from
+// a fresh, completed check; without it, an Installed state kept from an
+// earlier check still counts, as the startup search has always allowed.
+func (c *readinessCoordinator) findInstalled(ctx context.Context, ids []string, purpose domain.AgentReadinessPurpose, presenceOnly, requireFresh bool) (domain.AgentReadinessSnapshot, Presence) {
 	if len(ids) == 0 {
 		return domain.AgentReadinessSnapshot{}, PresenceMissing
 	}
@@ -286,6 +292,10 @@ func (c *readinessCoordinator) findInstalled(ctx context.Context, ids []string, 
 				if !installationSettled(snapshot.Installation) {
 					unconfirmed.Store(true)
 				}
+				return
+			}
+			if requireFresh && !installationSettled(snapshot.Installation) {
+				unconfirmed.Store(true)
 				return
 			}
 			select {
