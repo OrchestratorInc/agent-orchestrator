@@ -256,3 +256,23 @@ it.each([
 	expect(JSON.stringify(event)).not.toContain(value);
 	if (title === "Mobile error" || code) expect(JSON.stringify(event)).not.toContain("Cannot read properties");
 });
+
+it.each([
+	["SyntaxError", 'Unexpected token \'o\', "ok {"token":"abc"}" is not valid JSON', /['"]token['"]|abc/],
+	["SyntaxError", 'Unexpected token \'x\', "x{"custome"... is not valid JSON', /custome/],
+	["SyntaxError", "Cannot convert acme payroll to a BigInt", /acme payroll/],
+	["TypeError", "Cannot add property acmePayroll, object is not extensible", /acmePayroll/],
+] as const)("keeps unquoted engine input out of the mobile event", async (type, value, privateText) => {
+	const sentry = await import("./sentry");
+	sentry.setMobileSentryConsent(true);
+	await sentry.initMobileSentry();
+	sentry.captureMobileException(new Error(value), { category: "render_crash" });
+	const event = await sentry.sanitizeMobileSentryEvent({
+		type: undefined,
+		tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags,
+		exception: { values: [{ type, value }] },
+	});
+	expect(event?.message).toBe("Mobile error");
+	expect(event?.fingerprint?.at(-2)).toBe("sha256");
+	expect(JSON.stringify(event)).not.toMatch(privateText);
+});

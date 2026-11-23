@@ -62,7 +62,8 @@ never an install path. Desktop and mobile Sentry reports use the application
 error code when available. Uncoded JavaScript engine errors such as TypeError,
 ReferenceError, RangeError, SyntaxError, and DOMException can include the first
 line of the message after paths, URLs, emails, identifiers, quoted values, and
-numbers are removed, capped at 120 characters. Long engine messages and other
+numbers are removed, capped at 120 characters. Message text is withheld when
+its quoted parts cannot be separated reliably. Long engine messages and other
 uncoded errors use a computed title. All uncoded errors group by a short
 SHA-256 hash of the locally normalized first line.
 The app's global renderer error boundary binds handlers independently of
@@ -1225,7 +1226,9 @@ and no HTTP route tag.
 An event may include a bounded `git`, `db`, `agent`, or `network` area when the
 error provides evidence. Panic events keep function and line information, but
 remove stack paths, request data, project, session, repository and branch
-names, and panic text. Electron issues use application codes, eligible engine\nmessages, or a computed title based on the type, location, and category.\nUncoded messages group by a hash of the locally normalized text.
+names, and panic text. Electron issues use application codes, eligible engine
+messages, or a computed title based on the type, location, and category.
+Uncoded messages group by a hash of the locally normalized text.
 Daemon and Electron events use the same installation ID as Sentry `user.id`.
 Canceled requests, plain transient 503 responses, and expected upstream link-preview
 502 responses do not create Sentry issues. A 503 caused by a server deadline or

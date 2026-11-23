@@ -3,6 +3,8 @@ import { safeSentryCode } from "./ao-error";
 const ERROR_PREFIX = /^(?:Uncaught(?: \(in promise\))? )?(?:[A-Za-z_$][\w$]*)?Error:\s+|^Uncaught(?: \(in promise\))? /;
 const IPC_WRAPPER = /^Error invoking remote method '([a-z][\w:-]{0,63})':\s*/;
 const ENGINE_TYPES = new Set(["TypeError", "ReferenceError", "RangeError", "SyntaxError", "EvalError", "URIError", "DOMException"]);
+// V8 interpolates the runtime value or property name without quotes.
+const UNQUOTED_ENGINE_VALUE = /^(?:Cannot convert .+ to a BigInt|Cannot add property .+, object is not extensible)$/;
 const INNER_TYPE = /^(\w+):\s+/;
 // An unquoted path may span words. Keep consuming a segment if a later word
 // contains a separator, stopping at the start of another absolute path.
@@ -34,14 +36,25 @@ function normalizeSentryMessage(value: unknown): { text: string; unsafe: boolean
 	return { text, unsafe: line.length > 300 || text.split(" ").length > 25, channel: ipc?.[1], innerType };
 }
 
+function canDisplayEngineMessage(value: string): boolean {
+	const line = value.split(/[\r\n\u2028\u2029]/, 1)[0];
+	// Nested quotes in engine snippets can leave private text between redactions.
+	if ((line.match(/["“”]/g)?.length ?? 0) > 2) return false;
+	const message = line.trim().replace(ERROR_PREFIX, "").replace(IPC_WRAPPER, "").replace(ERROR_PREFIX, "");
+	return !UNQUOTED_ENGINE_VALUE.test(message);
+}
+
 export function sentryMessageIdentity(value: unknown, errorCode?: unknown, exceptionType?: string) {
 	const { text, unsafe, channel, innerType } = normalizeSentryMessage(value);
 	const stableCode = safeSentryCode(errorCode);
+	const engineType = channel ? innerType : exceptionType;
+	const canDisplay = !stableCode && !unsafe && !!text && typeof value === "string"
+		&& ENGINE_TYPES.has(engineType ?? "") && canDisplayEngineMessage(value);
 	return {
 		code: stableCode,
 		channel,
 		label: stableCode ?? "",
-		text: !stableCode && !unsafe && text && ENGINE_TYPES.has((channel ? innerType : exceptionType) ?? "") ? text.slice(0, 120) : undefined,
+		text: canDisplay ? text.slice(0, 120) : undefined,
 		// Display eligibility does not affect grouping.
 		hashInput: !stableCode && text ? text.toLowerCase() : undefined,
 	};

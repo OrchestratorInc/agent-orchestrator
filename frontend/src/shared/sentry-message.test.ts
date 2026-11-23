@@ -17,7 +17,8 @@ describe("Sentry message normalization", () => {
 		["open file:/tmp/file", "open <url>"],
 		["open /Users/alice/My ConfidentialProject/offer.txt failed", "open <path> failed"],
 		["open /Users/alice/My Very ConfidentialProject/offer.txt failed", "open <path> failed"],
-		["quote \"prompt\" 'credential' \x60code\x60 “text” ‘value’", "quote '?' '?' '?' '?' '?'"],
+		["quote \"prompt\" 'credential' \x60code\x60 ‘value’", "quote '?' '?' '?' '?'"],
+		["quote “text”", "quote '?'"],
 		["read 12345678-1234-1234-1234-123456789abc and abcDEF1234", "read <id> and <id>"],
 		["value 0xdeadbeef was -3.14 at 200", "value <n> was <n> at <n>"],
 		["spawn project123-12 next", "spawn <id> next"],
@@ -65,4 +66,25 @@ it.each([
 	"HTTP 401 Bad credentials sk-ant-abcdefghijklmnop",
 ])("keeps short uncoded text out of the title", (message) => {
 	expect(sentryMessageIdentity(message)).toMatchObject({ label: "", hashInput: expect.any(String) });
+});
+
+it.each([
+	["SyntaxError", 'Unexpected token \'o\', "ok {"token":"abc"}" is not valid JSON', "unexpected token '?', '?'token'?'abc'?' is not valid json"],
+	["SyntaxError", 'Unexpected token \'x\', "x{"custome"... is not valid JSON', "unexpected token '?', '?'custome'?'"],
+	["SyntaxError", "Cannot convert acme payroll to a BigInt", "cannot convert acme payroll to a bigint"],
+	["TypeError", "Cannot add property acmePayroll, object is not extensible", "cannot add property acmepayroll, object is not extensible"],
+])("withholds %s text without changing the hash input", (type, message, hashInput) => {
+	expect(sentryMessageIdentity(message, undefined, type)).toMatchObject({ text: undefined, hashInput });
+});
+
+it.each([
+	["SyntaxError", 'Unexpected token \'P\', "Please sum"... is not valid JSON', "Unexpected token '?', '?'... is not valid JSON"],
+	["TypeError", "Cannot read properties of undefined (reading 'id')", "Cannot read properties of undefined (reading '?')"],
+])("keeps engine text with unambiguous quotes", (type, message, expected) => {
+	expect(sentryMessageIdentity(message, undefined, type).text).toBe(expected);
+});
+
+it("counts straight and curly quotes together on the first line only", () => {
+	expect(sentryMessageIdentity('Unexpected input “a "b" c”', undefined, "SyntaxError").text).toBeUndefined();
+	expect(sentryMessageIdentity('Unexpected input “safe”\n""""', undefined, "SyntaxError").text).toBe("Unexpected input '?'");
 });

@@ -820,3 +820,17 @@ it.each([["Error", undefined], ["TypeError", "READ_FAILED"]] as const)("keeps un
 	expect(event?.fingerprint?.slice(-2)).toEqual(code ? ["code", code] : hashParts("cannot read properties of undefined (reading '?')"));
 	expect(JSON.stringify(event)).not.toContain("Cannot read properties");
 });
+
+it.each([
+	["SyntaxError", 'Unexpected token \'o\', "ok {"token":"abc"}" is not valid JSON', /['"]token['"]|abc/],
+	["SyntaxError", 'Unexpected token \'x\', "x{"custome"... is not valid JSON', /custome/],
+	["SyntaxError", "Cannot convert acme payroll to a BigInt", /acme payroll/],
+	["TypeError", "Cannot add property acmePayroll, object is not extensible", /acmePayroll/],
+] as const)("keeps unquoted engine input out of the desktop event", async (type, message, privateText) => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	transport.capture({ consentGeneration: "g", kind: "exception", message, exception: { type, frames: [] } });
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.message).toBe("Renderer " + type + " in unknown (unknown)");
+	expect(event?.fingerprint?.at(-2)).toBe("sha256");
+	expect(JSON.stringify(event)).not.toMatch(privateText);
+});
