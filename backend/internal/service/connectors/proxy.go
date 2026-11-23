@@ -29,12 +29,16 @@ import (
 const (
 	startGrace         = 5 * time.Minute
 	maxTrackedSessions = 256
+	sweepEvery         = 10 * time.Minute
 	proxyPrefix        = "/mcp/s/"
 	launchSuffix       = "/launch"
 	keyFileName        = "mcp-connectors.key"
 	maxProxyBody       = 32 << 20
 	rpcServerError     = -32001
 )
+
+// AnyProject is the project a session lookup gives when it cannot read the session now.
+const AnyProject = "*"
 
 // SessionInput names the session that asks for its connectors.
 type SessionInput struct {
@@ -278,7 +282,7 @@ func (s *Service) admit(r *http.Request, sessionID, key string, transport Transp
 		}
 	}
 	switch {
-	case rec == nil || rec.Transport != transport || (lookup != nil && rec.ProjectID != "" && rec.ProjectID != projectID):
+	case rec == nil || rec.Transport != transport || (lookup != nil && rec.ProjectID != "" && rec.ProjectID != projectID && projectID != AnyProject):
 		return &record{}, "This session has no connector named " + key + "."
 	case !rec.Enabled:
 		return rec, rec.Name + " is turned off. Ask the user to open Settings, Connectors, and turn it on."
@@ -306,7 +310,7 @@ func (s *Service) forgetClosed(ctx context.Context) {
 	lookup := s.sessionLookup
 	ids := slices.Collect(maps.Keys(s.sessions))
 	s.mu.Unlock()
-	if lookup == nil || len(ids) < maxTrackedSessions {
+	if lookup == nil || len(ids) < maxTrackedSessions || s.now().Sub(s.sweptAt()) < sweepEvery {
 		return
 	}
 	for _, id := range ids {
@@ -316,6 +320,14 @@ func (s *Service) forgetClosed(ctx context.Context) {
 			s.mu.Unlock()
 		}
 	}
+}
+
+func (s *Service) sweptAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	last := s.swept
+	s.swept = s.now()
+	return last
 }
 
 func (s *Service) count(sessionID, key, method, tool string) {

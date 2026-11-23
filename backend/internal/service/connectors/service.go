@@ -39,15 +39,17 @@ var (
 
 // Service owns the connector list and its secret values.
 type Service struct {
-	mu      sync.Mutex
-	path    string
-	baseURL atomic.Value
-	http    *http.Client
-	now     func() time.Time
-	loaded  bool
-	records []record
-	signIns map[string]*signIn
-	sources map[string]*savingSource
+	mu       sync.Mutex
+	path     string
+	baseURL  atomic.Value
+	http     *http.Client
+	now      func() time.Time
+	loaded   bool
+	records  []record
+	signIns  map[string]*signIn
+	finished map[string]finishedSignIn
+	swept    time.Time
+	sources  map[string]*savingSource
 
 	sessions       map[string]*sessionUse
 	sessionLookup  func(ctx context.Context, sessionID string) (projectID string, open bool)
@@ -61,7 +63,7 @@ func New(dataDir, baseURL string) *Service {
 	s := &Service{
 		path: filepath.Join(dataDir, fileName),
 		http: &http.Client{Timeout: 30 * time.Second}, now: time.Now,
-		signIns: map[string]*signIn{}, sources: map[string]*savingSource{}, sessions: map[string]*sessionUse{},
+		signIns: map[string]*signIn{}, finished: map[string]finishedSignIn{}, sources: map[string]*savingSource{}, sessions: map[string]*sessionUse{},
 	}
 	s.SetBaseURL(baseURL)
 	return s

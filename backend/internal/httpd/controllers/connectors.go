@@ -33,6 +33,7 @@ type ConnectorService interface {
 	Test(ctx context.Context, ref string) (connectors.Connector, error)
 	StartSignIn(ctx context.Context, ref string) (string, error)
 	CompleteSignIn(ctx context.Context, state, code, iss, refusal string) (connectors.Connector, error)
+	SignedInBy(ctx context.Context, state string) (connectors.Connector, bool)
 	FinishFromAddress(ctx context.Context, ref, address string) (connectors.Connector, error)
 	SignOut(ctx context.Context, ref string) (connectors.Connector, error)
 	CallbackURL() string
@@ -453,6 +454,9 @@ func (c *ConnectorsController) callback(w http.ResponseWriter, r *http.Request) 
 	if c.Svc != nil {
 		query := r.URL.Query()
 		done, err := c.Svc.CompleteSignIn(r.Context(), query.Get("state"), query.Get("code"), query.Get("iss"), query.Get("error"))
+		if again, ok := c.Svc.SignedInBy(r.Context(), query.Get("state")); ok && err != nil && query.Get("error") == "" {
+			done, err = again, nil
+		}
 		switch {
 		case err == nil:
 			status = http.StatusOK

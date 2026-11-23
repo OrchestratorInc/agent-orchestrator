@@ -44,7 +44,7 @@ type relay struct {
 	out              io.Writer
 	session, version string
 	start            []byte
-	restarting       sync.Mutex
+	restarting       sync.RWMutex
 }
 
 // Run serves Orchestrator's tools, or relays to the HTTP tool server the environment names.
@@ -256,7 +256,9 @@ func (r *relay) restart(ctx context.Context, lost string) (err error) {
 }
 
 func (r *relay) post(ctx context.Context, line []byte, msg mcpRequest) (answered bool, err error) {
+	r.restarting.RLock()
 	resp, session, err := r.send(ctx, line)
+	r.restarting.RUnlock()
 	if err != nil {
 		return false, err
 	}

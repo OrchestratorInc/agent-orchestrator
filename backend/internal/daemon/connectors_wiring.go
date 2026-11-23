@@ -21,7 +21,10 @@ type connectorSessions interface {
 func wireConnectors(svc *connectors.Service, store connectorStore, sessions connectorSessions) {
 	svc.SetSessionLookup(func(ctx context.Context, sessionID string) (string, bool) {
 		rec, ok, err := store.GetSession(ctx, domain.SessionID(sessionID))
-		return string(rec.ProjectID), err != nil || (ok && !rec.IsTerminated)
+		if err != nil {
+			return connectors.AnyProject, true
+		}
+		return string(rec.ProjectID), ok && !rec.IsTerminated
 	})
 	svc.SetImportProjects(func(ctx context.Context) []connectors.ImportProject {
 		projects, err := store.ListProjects(ctx)

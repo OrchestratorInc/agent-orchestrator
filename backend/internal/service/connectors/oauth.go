@@ -38,6 +38,11 @@ type signIn struct {
 	refusal     string
 }
 
+type finishedSignIn struct {
+	connectorID string
+	at          time.Time
+}
+
 // CallbackURL is the address a sign-in server sends the browser back to.
 func (s *Service) CallbackURL() string { return s.base() + callbackPath }
 
@@ -120,9 +125,24 @@ func (s *Service) StartSignIn(ctx context.Context, ref string) (string, error) {
 		}
 		return "", nil
 	case <-ctx.Done():
+		s.mu.Lock()
+		pending.cancelled = true
+		s.mu.Unlock()
 		cancel()
 		return "", ctx.Err()
 	}
+}
+
+// SignedInBy returns the connector that the sign-in with this state signed in a short time ago.
+func (s *Service) SignedInBy(ctx context.Context, state string) (Connector, bool) {
+	s.mu.Lock()
+	finished, ok := s.finished[state]
+	s.mu.Unlock()
+	if !ok || state == "" || s.now().Sub(finished.at) > signInLifetime {
+		return Connector{}, false
+	}
+	done, err := s.Get(ctx, finished.connectorID)
+	return done, err == nil && done.SignedIn
 }
 
 // CompleteSignIn gives a waiting sign-in the code its server sent back.
@@ -239,7 +259,11 @@ func (s *Service) handlerConfig(rec *record, pending *signIn, pageReady chan<- s
 			if err := s.saveToken(rec, cfg, token); err != nil {
 				return nil, err
 			}
-			return s.tokenSource(rec.ID), nil
+			source := s.tokenSource(rec.ID)
+			if source == nil {
+				return nil, errNotFound()
+			}
+			return source, nil
 		},
 	}
 	if rec.OAuthClientID != "" {
@@ -269,7 +293,9 @@ func (s *Service) challenge(ctx context.Context, rec *record) (*http.Request, in
 	for name, value := range rec.Headers {
 		req.Header.Set(name, value)
 	}
-	resp, err := s.http.Do(req) // #nosec G107 -- the user chose this server URL.
+	client := *s.http
+	client.CheckRedirect = sameHostRedirect
+	resp, err := client.Do(req) // #nosec G107 -- the user chose this server URL.
 	if err != nil {
 		return nil, 0, nil, err
 	}
@@ -279,9 +305,17 @@ func (s *Service) challenge(ctx context.Context, rec *record) (*http.Request, in
 
 func (s *Service) endSignIn(pending *signIn, err error) {
 	s.mu.Lock()
+	for state, at := range s.finished {
+		if s.now().Sub(at.at) > signInLifetime {
+			delete(s.finished, state)
+		}
+	}
 	for state, open := range s.signIns {
 		if open == pending {
 			delete(s.signIns, state)
+			if err == nil {
+				s.finished[state] = finishedSignIn{connectorID: pending.connectorID, at: s.now()}
+			}
 		}
 	}
 	cancelled, refusal := pending.cancelled, pending.refusal
@@ -436,6 +470,9 @@ func (s *Service) keepToken(source *savingSource, token *oauth2.Token) error {
 }
 
 func (s *Service) authorize(req *http.Request, rec *record) error {
+	if target, _ := url.Parse(rec.URL); target == nil || !strings.EqualFold(target.Host, req.URL.Host) {
+		return nil
+	}
 	for name, value := range rec.Headers {
 		req.Header.Set(name, value)
 	}
@@ -482,6 +519,13 @@ func (s *Service) send(base http.RoundTripper, rec *record, req *http.Request, b
 type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func sameHostRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > 0 && !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+		return http.ErrUseLastResponse
+	}
+	return nil
+}
 
 func signInFailed(err error) error {
 	return invalid("CONNECTOR_SIGNIN_FAILED", "The sign-in did not complete: "+safeError(err, ""))

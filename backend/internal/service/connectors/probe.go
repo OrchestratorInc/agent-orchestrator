@@ -55,7 +55,7 @@ func (s *Service) probe(ctx context.Context, rec *record) (tools []string, step 
 		}
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:             rec.URL,
-			HTTPClient:           &http.Client{Transport: &probeTransport{service: s, rec: rec, base: base, refused: &refused}},
+			HTTPClient:           &http.Client{Transport: &probeTransport{service: s, rec: rec, base: base, refused: &refused}, CheckRedirect: sameHostRedirect},
 			MaxRetries:           -1,
 			DisableStandaloneSSE: true,
 		}

@@ -343,7 +343,7 @@ func (a *API) Register(root chi.Router) {
 						computerUse.ServeHTTP(w, req)
 						return
 					}
-					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/connectors/{connectorId}/test" {
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/connectors/{connectorId}/test" || pattern == "/api/v1/connectors/{connectorId}/connect" {
 						connectorTest.ServeHTTP(w, req)
 						return
 					}

@@ -3,9 +3,12 @@ package connectors
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -303,5 +306,33 @@ func TestAKeyMadeFromALongNameIsCutToFit(t *testing.T) {
 	created, err := svc.Create(context.Background(), httpInput("Internal Documentation Search Server"))
 	if err != nil || len(created.Key) > 32 || !strings.HasPrefix(created.Key, "internal-documentation-search") {
 		t.Fatalf("created = %+v, %v", created, err)
+	}
+}
+
+func TestATestDoesNotCarryStoredValuesToAnotherHost(t *testing.T) {
+	var seen atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Add(1)
+		if r.Header.Get("X-Api-Key") != "" || r.Header.Get("Authorization") != "" {
+			t.Errorf("another host got the stored values: %v", r.Header)
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer other.Close()
+	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	defer moved.Close()
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{
+		Name: "docs", Transport: TransportHTTP, URL: moved.URL + "/mcp", Auth: AuthHeader,
+		Headers: map[string]string{"X-Api-Key": "secret", "Authorization": "Bearer secret"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tested, err := svc.Test(ctx, created.ID); err != nil || tested.Status != StatusUnavailable || seen.Load() != 0 {
+		t.Fatalf("test of a moved server = %+v, %v, requests to the other host %d", tested, err, seen.Load())
 	}
 }

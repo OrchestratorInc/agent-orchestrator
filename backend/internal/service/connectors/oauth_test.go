@@ -634,3 +634,33 @@ func TestCallsAtTheSameTimeRenewAnExpiredTokenOnce(t *testing.T) {
 		t.Fatalf("token calls %d, saved %+v", fake.tokenCalls.Load(), got)
 	}
 }
+
+func TestACallbackPageThatLoadsAgainStillKnowsItsSignIn(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "fake", Transport: TransportHTTP, URL: fake.URL + "/mcp", Auth: AuthOAuth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.StartSignIn(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := signInState(t, page)
+	if _, ok := svc.SignedInBy(ctx, state); ok {
+		t.Fatal("a sign-in that is still open reads as done")
+	}
+	if _, err := svc.CompleteSignIn(ctx, state, "code-1", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CompleteSignIn(ctx, state, "code-1", "", ""); err == nil {
+		t.Fatal("a state completed a sign-in two times")
+	}
+	if done, ok := svc.SignedInBy(ctx, state); !ok || done.ID != created.ID {
+		t.Fatalf("the finished sign-in = %+v, %v", done, ok)
+	}
+	if _, ok := svc.SignedInBy(ctx, "other"); ok {
+		t.Fatal("an unknown state reads as done")
+	}
+}

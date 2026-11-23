@@ -65,7 +65,7 @@ func TestNativeNamesReadTheAgentsOwnConfiguration(t *testing.T) {
 			t.Errorf("claude names hold %q, which Claude Code does not load", name)
 		}
 	}
-	if codex := NativeNames(domain.HarnessCodex, project, nil); !codex["sentry"] || codex["Linear"] || codex["paused"] {
+	if codex := NativeNames(domain.HarnessCodex, project, nil); !codex["sentry"] || codex["Linear"] || !codex["paused"] {
 		t.Errorf("codex names = %v", codex)
 	}
 	other := filepath.Join(home, "account")

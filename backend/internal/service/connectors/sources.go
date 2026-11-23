@@ -59,7 +59,6 @@ type sourceDef struct {
 	URL       string            `json:"url" toml:"url"`
 	Headers   map[string]string `json:"headers" toml:"http_headers"`
 	BearerEnv string            `json:"-" toml:"bearer_token_env_var"`
-	Enabled   *bool             `json:"-" toml:"enabled"`
 }
 
 type sourceServer struct {
@@ -117,10 +116,8 @@ func NativeNames(harness domain.AgentHarness, workspace string, env map[string]s
 		if env["CODEX_HOME"] != "" {
 			dir = env["CODEX_HOME"]
 		}
-		for name, def := range readCodexSource(filepath.Join(dir, "config.toml")) {
-			if def.Enabled == nil || *def.Enabled {
-				names[name] = true
-			}
+		for name := range readCodexSource(filepath.Join(dir, "config.toml")) {
+			names[name] = true
 		}
 	case domain.HarnessCursor:
 		files := []string{filepath.Join(home, ".cursor", "mcp.json")}
