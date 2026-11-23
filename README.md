@@ -157,7 +157,7 @@ Control the agents running on your desktop from your phone. Install the app for 
 - **Start work.** Create a new worker and pick its agent and model.
 - **Review.** Check pull requests and reviewer results.
 
-Your code and agents stay on your computer. On the same Wi-Fi the phone connects directly. Away from home it connects through an HTTPS tunnel that Orchestrator.inc runs with `cloudflared`; sign in to an AO account and the computer keeps the same address across restarts. Each phone pairs with a one-time code and gets its own access, which you can revoke. On iPhone and iPad, use the tunnel rather than a raw Tailscale address, which iOS blocks. The desktop's main API never leaves `127.0.0.1`. See [Connect Mobile](https://docs.orchestrator.inc/configuration/remote-access) for setup and the security model.
+Your code and agents stay on your computer. On the same Wi-Fi the phone connects directly. Away from home it connects through an HTTPS tunnel that Orchestrator.inc runs with `cloudflared`, which the macOS app includes; on Windows and Linux, Orchestrator.inc downloads it for you once you sign in to an AO account, or when you choose **Install cloudflared** in Connect Mobile. Signed in, the computer also keeps the same address across restarts. Each phone pairs with a one-time code and gets its own access, which you can revoke. On iPhone and iPad, use the tunnel rather than a raw Tailscale address, which iOS blocks. The desktop's main API never leaves `127.0.0.1`. See [Connect Mobile](https://docs.orchestrator.inc/configuration/remote-access) for setup and the security model.
 
 <img src="docs/assets/readme/site/mobile.jpg" alt="The mobile app showing an agent asking which mail provider to use and the reply sent from the phone" width="100%" />
 
