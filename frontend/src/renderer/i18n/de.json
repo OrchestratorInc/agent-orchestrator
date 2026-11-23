@@ -3559,6 +3559,8 @@
 	"chat.render.remoteHost": "Öffne diese Sitzung auf ihrem Host, um die Seite zu sehen.",
 	"chat.artifact.openInPanel": "Im Artefakte-Tab öffnen",
 	"chat.artifact.label": "Artifact",
+	"chat.artifact.unavailable": "Diese Seite ist nicht mehr unter den Artefakten der Sitzung.",
+	"chat.artifact.notInline": "Diese Datei kann hier nicht angezeigt werden. Öffne sie im Artefakte-Tab.",
 	"chat.image.numbered": "Bild {{index}}",
 	"chat.edit.cancel": "Bearbeitung abbrechen",
 	"chat.edit.cancelAction": "Abbrechen",
