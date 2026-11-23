@@ -712,7 +712,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}
 
 	return (
-		<div ref={surfaceRef} className="relative h-full min-h-0">
+		<div ref={surfaceRef} className="relative h-full min-h-0" inert={showingSavedPage ? true : undefined}>
 			{refreshError && !hostUnreachable ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			{accountSwitch.dialog}
@@ -733,8 +733,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
 				newWorkDisabled={newWorkDisabled || savedCopy}
-				composerLockedPlaceholder={hostUnreachable && newWorkDisabled ? t("remote.offlineCopy") : undefined}
-				sendBlockedReason={hostUnreachable && !newWorkDisabled ? t("remote.sendWhenConnected") : showingSavedPage && !newWorkDisabled ? "Loading conversation…" : undefined}
+				composerLockedPlaceholder={hostUnreachable && newWorkDisabled ? t("remote.offlineCopy") : showingSavedPage ? "Loading conversation…" : undefined}
+				sendBlockedReason={hostUnreachable && !newWorkDisabled ? t("remote.sendWhenConnected") : undefined}
 				savedCopy={savedCopy}
 				importBlock={importBlock}
 				onLinkOpen={openLinkInBrowser}
@@ -875,8 +875,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						onDismiss={accountSwitch.clearError}
 					/>
 				) : undefined)}</>}
-				onDecide={showingSavedPage ? undefined : commands.resolve}
-				onResolveInput={showingSavedPage ? undefined : commands.resolveInput}
+				onDecide={commands.resolve}
+				onResolveInput={commands.resolveInput}
 				onInterrupt={commands.interrupt}
 				stoppingTurn={commands.stoppingTurn}
 				onContinueTurn={() => {
