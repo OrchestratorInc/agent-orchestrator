@@ -1871,15 +1871,6 @@ func (s *Service) PrepareChatHandoff(
 	if controller.State() == ports.ChatControllerStopped {
 		return nil
 	}
-	move, err := s.activeTransition(ctx, id)
-	if err != nil {
-		return fmt.Errorf("read account move: %w", err)
-	}
-	if !move.AccountMove() {
-		if err := releaseHeldQueue(ctx, s.store, controller.conversation.ID); err != nil {
-			return err
-		}
-	}
 	if err := controller.BeginHandoff(ctx, policy); err != nil {
 		return err
 	}

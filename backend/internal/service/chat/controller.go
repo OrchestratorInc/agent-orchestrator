@@ -2546,10 +2546,17 @@ func (c *Controller) BeginHandoff(
 				c.AbortHandoff()
 				return fmt.Errorf("check queued turns before handoff: %w", err)
 			case policy == domain.SessionInterfaceTransitionDrain:
-				held, err := c.queueHeld(ctx)
+				moving, err := c.accountMoveActive(ctx)
+				held := false
+				if err == nil && moving {
+					held, err = c.queueHeld(ctx)
+				}
 				if err == nil && held {
 					c.sendMu.Unlock()
 					return nil
+				}
+				if err == nil && !moving {
+					err = releaseHeldQueue(ctx, c.store, c.conversation.ID)
 				}
 				if err == nil {
 					err = c.drainLocked(ctx, true)
@@ -3483,8 +3490,10 @@ func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Ti
 	moving := c.handoff == controllerHandoffInterfaceDrain
 	c.mu.Unlock()
 	if store, ok := c.store.(queueHoldStore); ok && moving {
-		_, err := store.CleanupOwnedControllerWorkKeepingHeldQueue(ctx, c.sessionID, c.conversation.ID, c.generation, now)
-		return err
+		if account, err := c.accountMoveActive(ctx); err == nil && account {
+			_, err := store.CleanupOwnedControllerWorkKeepingHeldQueue(ctx, c.sessionID, c.conversation.ID, c.generation, now)
+			return err
+		}
 	}
 	_, err := c.store.CleanupOwnedControllerWork(ctx, c.sessionID, c.conversation.ID, c.generation, now)
 	return err

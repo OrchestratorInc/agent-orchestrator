@@ -44,6 +44,15 @@ func (c *Controller) queueHeld(ctx context.Context) (bool, error) {
 	return store.ConversationQueueHeld(ctx, c.conversation.ID)
 }
 
+func (c *Controller) accountMoveActive(ctx context.Context) (bool, error) {
+	reader, ok := c.store.(activeTransitionReader)
+	if !ok {
+		return false, nil
+	}
+	move, active, err := reader.GetActiveSessionInterfaceTransition(ctx, c.sessionID)
+	return active && move.AccountMove(), err
+}
+
 func releaseHeldQueue(ctx context.Context, store Store, conversationID string) error {
 	holds, ok := store.(queueHoldStore)
 	if !ok {

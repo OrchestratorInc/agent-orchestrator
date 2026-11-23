@@ -230,3 +230,50 @@ func TestInterfaceHandoffDrainsTheHeldQueue(t *testing.T) {
 		t.Fatalf("prepare handoff: %v", err)
 	}
 }
+
+func TestInterfaceHandoffDrainsPastANewUsageLimit(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "finish this task", ClientMessageID: "c1", Origin: domain.MessageOriginHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, text := range []string{"note 1", "note 2"} {
+		if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: text, ClientMessageID: fmt.Sprintf("q%d", i), Origin: domain.MessageOriginHuman}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, turn.ID)
+
+	prepareCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	prepared := make(chan error, 1)
+	go func() {
+		prepared <- h.svc.PrepareChatHandoff(prepareCtx, testSession, domain.SessionInterfaceTransitionDrain)
+	}()
+	for _, step := range []struct {
+		text  string
+		state domain.TurnState
+		err   error
+	}{
+		{"note 1", domain.TurnStateFailed, errors.New(timedUsageLimit)},
+		{"note 2", domain.TurnStateCompleted, nil},
+	} {
+		var running string
+		h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+			running = ""
+			for _, turn := range s.Turns {
+				if turn.State == domain.TurnStateRunning {
+					running = turn.ProviderTurnID
+				}
+			}
+			return running != "" && turnStateByText(t, s)[step.text] == domain.TurnStateRunning
+		})
+		h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running, TurnState: step.state, Err: step.err})
+	}
+	if err := <-prepared; err != nil {
+		t.Fatalf("prepare handoff: %v", err)
+	}
+}
