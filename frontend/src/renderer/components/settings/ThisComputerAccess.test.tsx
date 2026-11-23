@@ -43,6 +43,7 @@ const fake = vi.hoisted(() => {
 			enabled: daemon.enabled,
 			loopbackOnly: false,
 			noPublicTunnel: daemon.noPublicTunnel,
+			accountLinked: daemon.linked,
 			endpoints: daemon.enabled
 				? [
 					{ kind: "lan", host: "192.168.1.20", port: 3011, secure: false },
@@ -82,6 +83,8 @@ const fake = vi.hoisted(() => {
 			case "/api/v1/mobile/enable":
 				daemon.enabled = true;
 				daemon.password = `pw-${++daemon.passwordsIssued}`;
+				// A new password takes back the account token.
+				daemon.linked = false;
 				daemon.noPublicTunnel = false;
 				return { data: snapshot() };
 			case "/api/v1/mobile/remote-access":
@@ -94,6 +97,7 @@ const fake = vi.hoisted(() => {
 				if (!daemon.enabled) {
 					daemon.enabled = true;
 					daemon.password = `pw-${++daemon.passwordsIssued}`;
+					daemon.linked = false;
 				}
 				daemon.noPublicTunnel = true;
 				return { data: snapshot() };
@@ -303,7 +307,7 @@ it("gives up with an error when the tunnel never gets an address", async () => {
 });
 
 it("turns off by cutting access and removing this computer from the account", async () => {
-	Object.assign(fake.daemon, { enabled: true, password: "pw-1", tunnelHost: fake.TUNNEL });
+	Object.assign(fake.daemon, { enabled: true, password: "pw-1", tunnelHost: fake.TUNNEL, linked: true });
 	fake.cloud.hosts.set(fake.HOST_ID, { label: "Dhruv’s Mac mini", url: "https://quiet-river.trycloudflare.com:443", token: fake.TOKEN });
 	renderAccess();
 	const toggle = await readySwitch();
@@ -317,7 +321,7 @@ it("turns off by cutting access and removing this computer from the account", as
 });
 
 it("still cuts access when AO Cloud cannot remove this computer", async () => {
-	Object.assign(fake.daemon, { enabled: true, password: "pw-1", tunnelHost: fake.TUNNEL });
+	Object.assign(fake.daemon, { enabled: true, password: "pw-1", tunnelHost: fake.TUNNEL, linked: true });
 	fake.cloud.hosts.set(fake.HOST_ID, { label: "Dhruv’s Mac mini", url: "https://quiet-river.trycloudflare.com:443", token: fake.TOKEN });
 	fake.cloud.failDelete = true;
 	renderAccess();
@@ -332,7 +336,7 @@ it("still cuts access when AO Cloud cannot remove this computer", async () => {
 });
 
 it("says why remote access is down while this computer stays linked", async () => {
-	Object.assign(fake.daemon, { enabled: true, password: "pw-1", tunnelError: "cloudflared exited: network is unreachable" });
+	Object.assign(fake.daemon, { enabled: true, password: "pw-1", tunnelError: "cloudflared exited: network is unreachable", linked: true });
 	fake.cloud.hosts.set(fake.HOST_ID, { label: "Dhruv’s Mac mini", url: "https://quiet-river.trycloudflare.com:443", token: fake.TOKEN });
 	renderAccess();
 	const toggle = await readySwitch();
@@ -364,6 +368,28 @@ it("shows off while remote access is off, even if the account still lists this c
 	});
 	expect(fake.log).toEqual([]);
 	expect(toggle).toHaveAttribute("aria-checked", "false");
+});
+
+it("shows off when a new password unlinked a listed computer, and turning on links it again", async () => {
+	// The account lists this computer, but the connection password changed
+	// (signed out, or from `ao remote-host`), which took back the token its
+	// listing carries: the account's devices are refused, and the machine no
+	// longer publishes its address. On would claim they can open it.
+	Object.assign(fake.daemon, { enabled: true, password: "pw-2", tunnelHost: fake.TUNNEL, linked: false });
+	fake.cloud.hosts.set(fake.HOST_ID, { label: "Studio Mac", url: "https://old-river.trycloudflare.com:443", token: "1e".repeat(32) });
+	renderAccess();
+	const toggle = await readySwitch();
+	expect(await screen.findByText("Your devices can no longer open Studio Mac: its connection password changed. Turn this on to let them in again.")).toBeVisible();
+	expect(toggle).toHaveAttribute("aria-checked", "false");
+
+	fireEvent.click(toggle);
+
+	expect(await screen.findByText("Your devices see this computer as Studio Mac.")).toBeVisible();
+	expect(toggle).toHaveAttribute("aria-checked", "true");
+	// The running bridge keeps its password, and the listing gets the token the machine holds now.
+	expect(fake.log).not.toContain("/api/v1/mobile/enable");
+	expect(fake.tokenRequests).toEqual([{ authorization: "Bearer pw-2", account: "user_01JAO" }]);
+	expect(fake.cloud.hosts.get(fake.HOST_ID)).toMatchObject({ label: "Studio Mac", token: fake.TOKEN });
 });
 
 it("reports a failed link and stays off", async () => {
