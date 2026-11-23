@@ -3,6 +3,7 @@ package agy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,6 +22,42 @@ func testReviewer(help, version string) *Reviewer {
 			}
 			return []byte(version), nil
 		},
+	}
+}
+
+// signInReviewer answers `agy models` with the given output and error.
+func signInReviewer(models string, modelsErr error) *Reviewer {
+	r := testReviewer(strings.Join(requiredFlags, "\n"), "1.1.9")
+	base := r.run
+	r.run = func(ctx context.Context, env map[string]string, binary string, args ...string) ([]byte, error) {
+		if slices.Equal(args, []string{"models"}) {
+			return []byte(models), modelsErr
+		}
+		return base(ctx, env, binary, args...)
+	}
+	return r
+}
+
+func TestReviewCommandSignInProbe(t *testing.T) {
+	inv := func(dataDir string) ports.ReviewInvocation {
+		return ports.ReviewInvocation{DataDir: dataDir, ReviewerID: "review-worker-1", TaskPromptRoot: "/ao/prompts", WorkspacePath: "/worker", Prompt: "p"}
+	}
+
+	dataDir := t.TempDir()
+	_, err := signInReviewer("Fetching available models... Error: Please sign in to view available models.", nil).ReviewCommand(context.Background(), inv(dataDir))
+	home := filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config")
+	if err == nil || !strings.Contains(err.Error(), "not signed in") || !strings.Contains(err.Error(), home) {
+		t.Fatalf("signed-out err = %v, want sign-in guidance naming %s", err, home)
+	}
+
+	for name, r := range map[string]*Reviewer{
+		"signed in":   signInReviewer("gemini-3-flash\tGemini 3 Flash\n", nil),
+		"probe error": signInReviewer("", errors.New("deadline exceeded")),
+	} {
+		spec, err := r.ReviewCommand(context.Background(), inv(t.TempDir()))
+		if err != nil || !slices.Contains(spec.Argv, "--prompt-interactive") {
+			t.Fatalf("%s: spec = %+v, err = %v; want launch", name, spec, err)
+		}
 	}
 }
 

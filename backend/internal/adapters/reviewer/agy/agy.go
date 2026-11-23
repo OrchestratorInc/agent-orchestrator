@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	agentagy "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -78,6 +79,9 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err := r.verifyCompatibility(ctx, binary, envVars); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
+	if err := r.verifySignedIn(ctx, binary, env.ConfigRoot, envVars); err != nil {
+		return ports.ReviewCommandSpec{}, err
+	}
 	prompt := inv.Prompt
 	if strings.TrimSpace(inv.SystemPromptFile) != "" {
 		prompt = "Read and follow the reviewer system instructions at `" + filepath.ToSlash(inv.SystemPromptFile) + "`, then " + prompt
@@ -121,6 +125,26 @@ func (r *Reviewer) verifyCompatibility(ctx context.Context, binary string, env m
 		return fmt.Errorf("installed Agy %q is incompatible: version %s or newer is required", strings.TrimSpace(string(version)), minimumVersion)
 	}
 	return nil
+}
+
+// signInProbeTimeout bounds the `agy models` sign-in probe.
+const signInProbeTimeout = 20 * time.Second
+
+// verifySignedIn fails fast when Agy is not signed in inside the isolated
+// reviewer home. A signed-out Agy opens its login picker, which nobody can
+// answer in the reviewer pane, so the review would wait forever (#8862).
+//
+// `agy models` starts no login. It exits 0 even when signed out, so only its
+// sign-in message counts as signed out; any other result, including a probe
+// error, is inconclusive and the launch proceeds as before.
+func (r *Reviewer) verifySignedIn(ctx context.Context, binary, configRoot string, env map[string]string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, signInProbeTimeout)
+	defer cancel()
+	out, _ := r.run(probeCtx, env, binary, "models")
+	if !strings.Contains(strings.ToLower(string(out)), "please sign in") {
+		return nil
+	}
+	return fmt.Errorf("agy reviewer: Agy is not signed in for reviews; sign in once in the reviewer home by running `HOME=%q XDG_CONFIG_HOME=%q %q` and choosing a login method, then retry the review", configRoot, configRoot, binary)
 }
 
 func appendEnvironment(base []string, overrides map[string]string) []string {
