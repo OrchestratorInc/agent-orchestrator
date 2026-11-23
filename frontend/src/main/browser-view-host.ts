@@ -62,7 +62,7 @@ import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
 import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
 import type { UserBrowser } from "./user-browser";
-import { FOCUS_BINDING, FOCUS_PROBE_SOURCE, FOCUS_WORLD, parseFocusPayload } from "./browser-focus-probe";
+import { FOCUS_QUERY_SOURCE, FOCUS_WORLD, parseFocusPayload } from "./browser-focus-probe";
 import type {
 	BrowserFocusedEditable,
 	BrowserLiveSink,
@@ -637,9 +637,10 @@ type BrowserEntry = {
   // Compared by identity: an older, aborted load of the same URL must not clear
   // a newer one.
   pendingNavigation?: { url: string };
-  // The focus probe is installed in this tab's page (installFocusProbe).
-  focusProbe?: boolean;
-  // The page's focused text field as the probe last reported it.
+  // The isolated world the focus query runs in, for one document (queryFocus).
+  focusWorld?: { contextId: number; document: number };
+  focusQuery?: Promise<void>;
+  // The page's focused text field as the focus query last found it.
   focusedEditable?: BrowserFocusedEditable | null;
   // Tells a phone watching this tab that its focused field changed.
   onFocusChange?: () => void;
@@ -4238,7 +4239,6 @@ export function createBrowserViewHost(
 		if (session.live !== live) return;
 		const entry = activeEntry(session);
 		await ensureDebugger(entry);
-		await installFocusProbe(entry);
 		if (session.live !== live || activeEntry(session) !== entry) return;
 		applySessionBounds(session, entry);
 		const cast = new BrowserScreencast(
@@ -4273,6 +4273,7 @@ export function createBrowserViewHost(
 		try {
 			emitLiveState(session);
 			await retargetLiveStream(session);
+			watchFocus(session);
 			return emitLiveState(session);
 		} catch (error) {
 			session.live = undefined;
@@ -4280,6 +4281,22 @@ export function createBrowserViewHost(
 			if (!session.visible) applySessionBounds(session, activeEntry(session));
 			throw error;
 		}
+	}
+
+	// Focus can move without the phone: the page autofocuses a field, the agent
+	// or a desktop user clicks one. A phone that is watching asks again shortly.
+	function watchFocus(session: BrowserSessionEntry): void {
+		const live = session.live;
+		if (!live) return;
+		const timer = setInterval(() => {
+			if (session.live !== live) {
+				clearInterval(timer);
+				return;
+			}
+			void queryFocus(activeEntry(session));
+		}, FOCUS_POLL_MS);
+		timer.unref?.();
+		void queryFocus(activeEntry(session));
 	}
 
 	function detachLiveStream(session: BrowserSessionEntry): Promise<void> | undefined {
@@ -4335,7 +4352,13 @@ export function createBrowserViewHost(
 		const session = await ensureSessionReady(sessionId);
 		const scrollOnly = input.kind === "wheel";
 		assertRemoteWritable(session, scrollOnly);
-		await queueNativeOperation(session, async () => {
+		await queueNativeOperation(session, () => dispatchRemoteInput(session, input, scrollOnly));
+		// A click or key may have moved focus, and typing changed the field.
+		if (!scrollOnly) await queryFocus(activeEntry(session));
+	}
+
+	async function dispatchRemoteInput(session: BrowserSessionEntry, input: BrowserRemoteInput, scrollOnly: boolean): Promise<void> {
+		{
 			assertRemoteWritable(session, scrollOnly);
 			const entry = activeEntry(session);
 			await entry.ready;
@@ -4384,7 +4407,7 @@ export function createBrowserViewHost(
 			// and a page the phone types into is usually parked.
 			await ensureDebugger(entry);
 			await entry.view.webContents.debugger!.sendCommand("Input.dispatchKeyEvent", remoteKeyEvent(input, modifiers));
-		});
+		}
 	}
 
 	async function handleRemoteNavigation(sessionId: string, input: BrowserRemoteNavigation): Promise<void> {
@@ -6273,6 +6296,9 @@ function hostOf(url: string): string {
   }
 }
 
+/** How often a watched page is asked which field has focus. */
+const FOCUS_POLL_MS = 500;
+
 const REMOTE_KEYS: Record<string, { keyCode: number; text?: string }> = {
   Enter: { keyCode: 13, text: "\r" },
   Tab: { keyCode: 9 },
@@ -6307,35 +6333,45 @@ function remoteKeyEvent(
   };
 }
 
-function handleFocusDebuggerEvent(
-  entry: BrowserEntry,
-  method: string,
-  params: Record<string, unknown>,
-): void {
-  if (method !== "Runtime.bindingCalled" || params?.name !== FOCUS_BINDING || typeof params.payload !== "string") return;
-  const focused = parseFocusPayload(params.payload);
-  if (focused === undefined) return;
-  entry.focusedEditable = focused;
-  entry.onFocusChange?.();
+// Asks the page which field has focus, in a world of its own that the page's
+// scripts cannot see. One query at a time per tab.
+function queryFocus(entry: BrowserEntry): Promise<void> {
+  // An agent tab shows AO's viewer page, whose fields are not the agent's page.
+  if (entry.agentTab !== undefined) return Promise.resolve();
+  entry.focusQuery ??= runFocusQuery(entry).finally(() => { entry.focusQuery = undefined; });
+  return entry.focusQuery;
 }
 
-// The binding is added before the script so the probe finds it in the world
-// the script creates, in the current document and every later one.
-async function installFocusProbe(entry: BrowserEntry): Promise<void> {
-  // An agent tab shows AO's viewer page, whose fields are not the agent's page.
-  if (entry.focusProbe || entry.agentTab !== undefined) return;
-  entry.focusProbe = true;
+async function runFocusQuery(entry: BrowserEntry): Promise<void> {
   const debug = entry.view.webContents.debugger;
-  try {
-    await debug.sendCommand("Runtime.addBinding", { name: FOCUS_BINDING, executionContextName: FOCUS_WORLD });
-    await debug.sendCommand("Page.addScriptToEvaluateOnNewDocument", {
-      source: FOCUS_PROBE_SOURCE,
-      worldName: FOCUS_WORLD,
-      runImmediately: true,
-    });
-  } catch (error) {
-    // The phone then sees no focused field and offers no keyboard.
-    console.warn("Unable to install the browser focus probe", error);
+  if (!debug?.isAttached()) return;
+  // A second try for a world that went away with its document.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      if (entry.focusWorld?.document !== entry.documentGeneration) {
+        const tree = await debug.sendCommand("Page.getFrameTree") as { frameTree?: { frame?: { id?: string } } } | undefined;
+        const frameId = tree?.frameTree?.frame?.id;
+        if (!frameId) return;
+        const world = await debug.sendCommand("Page.createIsolatedWorld", { frameId, worldName: FOCUS_WORLD }) as { executionContextId?: number } | undefined;
+        if (typeof world?.executionContextId !== "number") return;
+        entry.focusWorld = { contextId: world.executionContextId, document: entry.documentGeneration };
+      }
+      const reply = await debug.sendCommand("Runtime.evaluate", {
+        expression: FOCUS_QUERY_SOURCE,
+        contextId: entry.focusWorld!.contextId,
+        returnByValue: true,
+      }) as { result?: { value?: unknown } } | undefined;
+      const value = reply?.result?.value;
+      if (typeof value !== "string") throw new Error("Focus query returned no value");
+      const focused = parseFocusPayload(value);
+      if (focused === undefined) return;
+      if (JSON.stringify(focused) === JSON.stringify(entry.focusedEditable ?? null)) return;
+      entry.focusedEditable = focused;
+      entry.onFocusChange?.();
+      return;
+    } catch {
+      entry.focusWorld = undefined;
+    }
   }
 }
 
@@ -6344,7 +6380,6 @@ function wireAutomationEvents(
   entry: BrowserEntry,
 ): void {
   contents.debugger?.on("message", (_event, method, params) => {
-    handleFocusDebuggerEvent(entry, method, params as Record<string, unknown>);
     handleNetworkDebuggerEvent(
       entry,
       method,

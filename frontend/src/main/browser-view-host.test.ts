@@ -6919,41 +6919,75 @@ describe("sites that refuse the Browser panel", () => {
 describe("browser live typing", () => {
 	const liveSink = () => ({ frame: vi.fn(), state: vi.fn(), error: vi.fn() });
 
+	// Answers the focus query the way a page would.
+	function focusPage(debuggerSendCommand: ReturnType<typeof setupHost>["debuggerSendCommand"]) {
+		const page = { focus: "null", worlds: 0 };
+		const original = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
+			if (method === "Page.createIsolatedWorld") return { executionContextId: ++page.worlds };
+			if (method === "Runtime.evaluate" && params?.contextId === page.worlds) return { result: { value: page.focus } };
+			if (method === "Runtime.evaluate") throw new Error("Cannot find context with specified id");
+			return original(method, params);
+		});
+		return page;
+	}
+
 	it("focusin emits focusedEditable", async () => {
-		const { debuggerListeners, debuggerSendCommand, host, webContentsListeners } = setupHost();
+		const { debuggerSendCommand, host, webContentsListeners } = setupHost();
+		const page = focusPage(debuggerSendCommand);
 		const sink = liveSink();
 		await host.startLiveStream("sess-1", 7, sink);
-
-		expect(debuggerSendCommand).toHaveBeenCalledWith("Runtime.addBinding", { name: "__aoFocus", executionContextName: "ao-focus" });
-		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.addScriptToEvaluateOnNewDocument", expect.objectContaining({ worldName: "ao-focus", runImmediately: true }));
-		expect(debuggerSendCommand).not.toHaveBeenCalledWith("Runtime.enable", expect.anything());
-		expect(debuggerSendCommand).not.toHaveBeenCalledWith("Runtime.enable");
 		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human", focusedEditable: null }));
 
-		const message = debuggerListeners.get("message") as unknown as (event: unknown, method: string, params: unknown) => void;
-		message({}, "Runtime.bindingCalled", { name: "__aoFocus", payload: JSON.stringify({ kind: "text", value: "hi" }) });
+		// The phone's tap focuses a field; the desktop asks the page right after.
+		page.focus = JSON.stringify({ kind: "text", value: "hi" });
+		await host.handleRemoteInput("sess-1", { kind: "pointer", phase: "up", x: 0.5, y: 0.5, button: "left" });
 		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "text", value: "hi" } }));
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.createIsolatedWorld", { frameId: "main", worldName: "ao-focus" });
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Runtime.evaluate", expect.objectContaining({ contextId: 1, returnByValue: true }));
 
-		// Only the probe's own binding is believed, and a password never carries its value.
-		message({}, "Runtime.bindingCalled", { name: "somethingElse", payload: "null" });
-		message({}, "Runtime.bindingCalled", { name: "__aoFocus", payload: "{" });
-		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "text", value: "hi" } }));
-		message({}, "Runtime.bindingCalled", { name: "__aoFocus", payload: JSON.stringify({ kind: "password", value: "hunter2" }) });
+		// The page never sees the query, so it needs nothing bot managers detect.
+		for (const method of ["Runtime.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument"]) {
+			expect(debuggerSendCommand.mock.calls.some(([called]) => called === method)).toBe(false);
+		}
+
+		// A password's value never leaves the desktop, and a malformed answer is ignored.
+		page.focus = JSON.stringify({ kind: "password", value: "hunter2" });
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "password" } }));
+		page.focus = "{";
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
 		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "password" } }));
 
-		// A new document has nothing focused until its probe reports.
+		// A new document gets a new world, and nothing focused until it is asked.
 		const navigated = webContentsListeners.get("did-navigate") as unknown as (event: unknown, url: string) => void;
 		navigated({}, "https://example.com/next");
 		await host.execute("sess-1", "tabs");
 		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: null }));
+		page.focus = JSON.stringify({ kind: "search", value: "" });
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "Tab", code: "Tab" });
+		expect(page.worlds).toBe(2);
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "search", value: "" } }));
 		await host.stopLiveStream("sess-1", 7);
 	});
 
-	it("installs the focus probe once per tab", async () => {
-		const { debuggerSendCommand, host } = setupHost();
-		await host.startLiveStream("sess-1", 7, liveSink());
-		await host.startLiveStream("sess-1", 8, liveSink());
-		expect(debuggerSendCommand.mock.calls.filter(([method]) => method === "Runtime.addBinding")).toHaveLength(1);
+	it("notices focus the phone did not move while it watches", async () => {
+		vi.useFakeTimers();
+		try {
+			const { debuggerSendCommand, host } = setupHost();
+			const page = focusPage(debuggerSendCommand);
+			const sink = liveSink();
+			await host.startLiveStream("sess-1", 7, sink);
+			page.focus = JSON.stringify({ kind: "email", value: "" });
+			await vi.advanceTimersByTimeAsync(600);
+			expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "email", value: "" } }));
+
+			await host.stopLiveStream("sess-1", 7);
+			debuggerSendCommand.mockClear();
+			await vi.advanceTimersByTimeAsync(2000);
+			expect(debuggerSendCommand).not.toHaveBeenCalledWith("Runtime.evaluate", expect.anything());
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("reports agent control while an agent command runs", async () => {
@@ -6971,21 +7005,22 @@ describe("browser live typing", () => {
 	it("types keys through CDP so a parked page receives them", async () => {
 		const { debuggerSendCommand, host, webContents } = setupHost();
 		await host.startLiveStream("sess-1", 7, liveSink());
+		const lastKey = () => debuggerSendCommand.mock.calls.filter(([method]) => method === "Input.dispatchKeyEvent").at(-1)?.[1];
 
 		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "Enter", code: "Enter" });
-		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchKeyEvent", {
+		expect(lastKey()).toEqual({
 			type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 0, text: "\r", unmodifiedText: "\r",
 		});
 		await host.handleRemoteInput("sess-1", { kind: "key", phase: "up", key: "Enter", code: "Enter" });
-		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchKeyEvent", {
+		expect(lastKey()).toEqual({
 			type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 0,
 		});
 		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "Backspace", code: "Backspace" });
-		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchKeyEvent", {
+		expect(lastKey()).toEqual({
 			type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8, modifiers: 0,
 		});
 		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "a", code: "KeyA", modifiers: ["control"] });
-		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchKeyEvent", {
+		expect(lastKey()).toEqual({
 			type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
 		});
 		await expect(host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "q", code: "KeyQ", modifiers: ["meta"] }))
