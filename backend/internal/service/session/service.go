@@ -2284,6 +2284,8 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspacePathOccupied):
 		return apierr.Conflict("WORKSPACE_PATH_OCCUPIED", err.Error(), nil)
+	case errors.Is(err, ports.ErrWorkspaceNotARepo):
+		return projectNotARepoError(err)
 	case errors.Is(err, sessionmanager.ErrCleanupScript):
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):
@@ -2295,6 +2297,25 @@ func mapSessionError(err error) error {
 	default:
 		return err
 	}
+}
+
+// projectNotARepoError turns git's raw "not a git repository" exit 128 (for
+// example a registered project or workspace root whose .git was deleted) into
+// an actionable error that names the folder and how to recover.
+func projectNotARepoError(err error) error {
+	const fix = "Restore the folder's .git directory (or run `git init` and create an initial commit there), or remove and re-add the project in Orchestrator, then try again."
+	var located interface{ RepoPath() string }
+	path := ""
+	if errors.As(err, &located) {
+		path = located.RepoPath()
+	}
+	message := "The project folder is no longer a Git repository. " + fix
+	details := map[string]any{"suggestedFix": fix}
+	if path != "" {
+		message = fmt.Sprintf("The project folder %q is no longer a Git repository. %s", path, fix)
+		details["path"] = path
+	}
+	return apierr.Invalid("PROJECT_NOT_A_REPO", message, details)
 }
 
 // toSpawnAPIError maps spawn failures to structured API errors so telemetry and

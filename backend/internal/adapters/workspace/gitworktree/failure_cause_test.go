@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"runtime"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestCommandErrorFailureCause(t *testing.T) {
@@ -44,5 +46,35 @@ func TestKilledGitProcessIsKilled(t *testing.T) {
 	err := cmd.Run()
 	if got := (commandError{err: err}).FailureCause(); got != "killed" {
 		t.Fatalf("FailureCause(%v) = %q, want killed", err, got)
+	}
+}
+
+// TestCommandErrorMatchesNotARepo covers #8905: a git command run in a folder
+// whose .git is missing matches ports.ErrWorkspaceNotARepo through wrapping
+// and names that folder, while other git failures do not match.
+func TestCommandErrorMatchesNotARepo(t *testing.T) {
+	exitErr := errors.New("exit status 128")
+	notRepo := fmt.Errorf("gitworktree: worktree list: %w", commandError{
+		args:   []string{"git", "-C", "/work/ws", "worktree", "list", "--porcelain"},
+		output: "fatal: not a git repository (or any of the parent directories): .git",
+		err:    exitErr,
+	})
+	if !errors.Is(notRepo, ports.ErrWorkspaceNotARepo) {
+		t.Fatalf("errors.Is(%v, ErrWorkspaceNotARepo) = false, want true", notRepo)
+	}
+	var located interface{ RepoPath() string }
+	if !errors.As(notRepo, &located) || located.RepoPath() != "/work/ws" {
+		t.Fatalf("RepoPath of %v, want /work/ws", notRepo)
+	}
+	other := fmt.Errorf("gitworktree: add: %w", commandError{
+		args:   []string{"git", "-C", "/work/ws", "worktree", "add"},
+		output: "fatal: '/tmp/w-1' already exists",
+		err:    exitErr,
+	})
+	if errors.Is(other, ports.ErrWorkspaceNotARepo) {
+		t.Fatalf("errors.Is(%v, ErrWorkspaceNotARepo) = true, want false", other)
+	}
+	if got := (commandError{args: []string{"git", "status"}}).RepoPath(); got != "" {
+		t.Fatalf("RepoPath without -C = %q, want empty", got)
 	}
 }

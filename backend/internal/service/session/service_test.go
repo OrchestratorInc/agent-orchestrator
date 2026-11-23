@@ -3968,6 +3968,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"runtime workspace cwd mismatch", fmt.Errorf("spawn mer-1: runtime: %w: session mer-1 started in \"/deleted/shipit\", want \"/tmp/ws\"", ports.ErrRuntimeWorkspaceCwdMismatch), apierr.KindConflict, "WORKSPACE_CWD_MISMATCH"},
 		{"workspace locked", fmt.Errorf("restore mer-1: %w: \"/tmp/ws\" (branch \"ao/mer-1\") is registered but its directory is missing", ports.ErrWorkspaceLocked), apierr.KindConflict, "WORKSPACE_LOCKED"},
 		{"workspace path occupied", fmt.Errorf("spawn todo-app-orchestrator: %w: \"/tmp/ws\" exists but is not a worktree of \"/tmp/repo\"", ports.ErrWorkspacePathOccupied), apierr.KindConflict, "WORKSPACE_PATH_OCCUPIED"},
+		{"project not a repo", fmt.Errorf("spawn mer-1: workspace: gitworktree: worktree list: %w", ports.ErrWorkspaceNotARepo), apierr.KindInvalid, "PROJECT_NOT_A_REPO"},
 		{"cleanup script failed", fmt.Errorf("kill mer-1: %w: secret output", sessionmanager.ErrCleanupScript), apierr.KindConflict, "WORKSPACE_CLEANUP_FAILED"},
 		{"delete live session", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrSessionNotTerminated), apierr.KindConflict, "SESSION_NOT_TERMINATED"},
 		{"delete unreleased workspace", fmt.Errorf("delete mer-1: %w", sessionmanager.ErrWorkspaceNotReleased), apierr.KindConflict, "WORKSPACE_NOT_RELEASED"},
@@ -4017,6 +4018,45 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 				t.Fatalf("mapped message leaked script output: %q", e.Message)
 			}
 		})
+	}
+}
+
+// notARepoGitError stands in for the gitworktree adapter's command error: it
+// matches ports.ErrWorkspaceNotARepo and names the folder git ran in.
+type notARepoGitError struct{ path string }
+
+func (e notARepoGitError) Error() string {
+	return "git -C " + e.path + " worktree list --porcelain: exit status 128: fatal: not a git repository (or any of the parent directories): .git"
+}
+
+func (e notARepoGitError) Is(target error) bool {
+	return target == ports.ErrWorkspaceNotARepo
+}
+
+func (e notARepoGitError) RepoPath() string {
+	return e.path
+}
+
+// TestToSpawnAPIErrorMapsProjectNotARepo covers #8905: a registered project
+// (or workspace root) whose .git was deleted surfaces a typed error naming the
+// folder and how to recover, not git's raw exit 128.
+func TestToSpawnAPIErrorMapsProjectNotARepo(t *testing.T) {
+	raw := fmt.Errorf("spawn ws-1: %w: gitworktree: worktree list: %w", sessionmanager.ErrWorkspaceCreate, notARepoGitError{path: "/work/ws"})
+	var e *apierr.Error
+	if !errors.As(toSpawnAPIError(raw), &e) {
+		t.Fatalf("mapped = %v, want *apierr.Error", toSpawnAPIError(raw))
+	}
+	if e.Kind != apierr.KindInvalid || e.Code != "PROJECT_NOT_A_REPO" {
+		t.Fatalf("mapped = %v %s, want invalid PROJECT_NOT_A_REPO", e.Kind, e.Code)
+	}
+	if strings.Contains(e.Message, "exit status 128") {
+		t.Fatalf("message leaked raw git failure: %q", e.Message)
+	}
+	if !strings.Contains(e.Message, "/work/ws") || !strings.Contains(e.Message, "git init") {
+		t.Fatalf("message = %q, want folder and recovery guidance", e.Message)
+	}
+	if e.Details["path"] != "/work/ws" || e.Details["suggestedFix"] == "" {
+		t.Fatalf("details = %v, want path and suggestedFix", e.Details)
 	}
 }
 

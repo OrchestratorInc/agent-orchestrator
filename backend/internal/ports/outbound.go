@@ -541,6 +541,12 @@ var (
 	// session the user deleted must leave the sidebar whether or not its
 	// worktree could be reclaimed.
 	ErrWorkspaceRepoUnavailable = errors.New("workspace: project repository is unavailable")
+	// ErrWorkspaceNotARepo reports that git refused a workspace operation
+	// because the folder it ran in is not (or is no longer) a Git repository,
+	// for example a registered project whose .git directory was deleted.
+	// Adapters match it via errors.Is so callers can surface recovery guidance
+	// instead of git's raw "not a git repository" exit 128.
+	ErrWorkspaceNotARepo = errors.New("workspace: folder is not a git repository")
 	// ErrWorkspaceStale reports an AO-managed workspace path no longer points
 	// at a registered git worktree. Replacement paths may skip preservation for
 	// this state after path-safety checks, while real preserve failures remain
