@@ -488,6 +488,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
 					hostUpdate: async () => null,
+					checkHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
 					startHostUpdate: async (url: string) => {
 						throw new Error(`No fake remote for ${url}`);
 					},
@@ -1499,6 +1502,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
 					hostUpdate: async () => null,
+					checkHostUpdate: async (url: string) => {
+						throw new Error(`No fake remote for ${url}`);
+					},
 					startHostUpdate: async (url: string) => {
 						throw new Error(`No fake remote for ${url}`);
 					},
