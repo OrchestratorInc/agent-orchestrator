@@ -801,7 +801,7 @@ func TestALoginAwaitingRenewalStaysSignedIn(t *testing.T) {
 	}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -1177,7 +1177,7 @@ func TestAWrongLoginStaysRefusedWhileItsTokenAwaitsRenewal(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}, pending: map[string]bool{}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -1215,7 +1215,7 @@ func TestFailedChecksInARowKeepTheLastGoodReadingAndAnyMismatch(t *testing.T) {
 	}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
