@@ -2,11 +2,14 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserCommand, BrowserControl, FocusedEditable } from "../browserTransport";
 
+const mounts = vi.hoisted(() => ({ count: 0 }));
+
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	const TextInput = React.forwardRef((props: object, ref) => {
 		React.useImperativeHandle(ref, () => ({ focus: vi.fn(), blur: vi.fn() }));
+		React.useEffect(() => { mounts.count++; }, []);
 		return React.createElement("TextInput", props);
 	});
 	return { Platform: { OS: "ios" }, StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 }, Text: host("Text"), TextInput, View: host("View") };
@@ -109,5 +112,18 @@ describe("PageKeyboard", () => {
 		const done = screen.root.findAll((node) => (node.type as unknown) === "Button")[0]!;
 		act(() => done.props.onPress());
 		expect(field()).toBeUndefined();
+	});
+
+	// iOS keeps a focused field's keyboard as it was: a text field that turns
+	// into a password field must be a new field, or the password is typed with
+	// suggestions and learning on.
+	it("gives a field of another kind a new input, so its keyboard changes", () => {
+		setup();
+		render({ kind: "text", value: "" });
+		render({ kind: "text", value: "a" });
+		const before = mounts.count;
+		render({ kind: "password" });
+		expect(mounts.count).toBe(before + 1);
+		expect(field()!.props).toMatchObject({ secureTextEntry: true, autoCorrect: false });
 	});
 });
