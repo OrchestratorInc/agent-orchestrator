@@ -75,7 +75,8 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 				: answered ? "Answered" : "Question closed";
 	const schema = activity.detail?.schema;
 	const properties = Object.entries(schema?.properties ?? {});
-	const groups = claudeQuestionGroups(properties);
+	const form = questionForm(properties);
+	const groups = form?.groups;
 	const message = activity.detail?.message ?? schema?.title ?? activity.summary;
 	const content = answered ? response.content : undefined;
 	// The line under the question is the answer, or how the question ended when
@@ -85,13 +86,13 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 
 	return (
 		<section aria-label="Agent question history" className="min-w-0 space-y-3 rounded-lg border border-border bg-surface/45 p-3 text-xs leading-relaxed">
-			{groups ? groups.map((group, index) => {
+			{form && groups ? groups.map((group, index) => {
 				const question = group[0];
 				if (!question) return null;
 				return (
 					<div key={question[0]} className="space-y-1">
 						<p className="whitespace-pre-wrap break-words font-medium text-foreground">
-							{questionPrompt(question, groups.length === 1 ? activity.detail?.message : undefined)}
+							{questionFormPrompt(form, question, activity.detail?.message)}
 						</p>
 						{showsAnswers ? <HistoryAnswers properties={group} content={content} /> : index === groups.length - 1 ? ending : null}
 					</div>
@@ -323,7 +324,8 @@ function FormRequest({
 }) {
 	const schema = activity.detail?.schema;
 	const properties = useMemo(() => Object.entries(schema?.properties ?? {}), [schema?.properties]);
-	const questionGroups = useMemo(() => claudeQuestionGroups(properties), [properties]);
+	const form = useMemo(() => questionForm(properties), [properties]);
+	const questionGroups = form?.groups;
 	const otherAnswers = useMemo(() => otherAnswerFields(properties), [properties]);
 	const required = useMemo(() => new Set(schema?.required ?? []), [schema?.required]);
 	const [values, setValues] = useState<Record<string, InputValue>>(() => initialValues(properties));
@@ -349,10 +351,11 @@ function FormRequest({
 	}, [activeQuestion]);
 
 	// Claude puts a single prompt in message and each prompt of a multi-question
-	// form in its field description. The field title is only a short topic label.
+	// form in its field description; its field title is only a short topic label.
+	// Antigravity puts every prompt in the field title.
 	const question = questionGroups ? visibleProperties[0] : undefined;
-	const title = question
-		? questionPrompt(question, questionGroups?.length === 1 ? activity.detail?.message : undefined)
+	const title = form && question
+		? questionFormPrompt(form, question, activity.detail?.message)
 		: activity.detail?.message ?? schema?.title ?? activity.summary;
 	const pager =
 		questionGroups && questionGroups.length > 1
@@ -820,12 +823,40 @@ function enumOptions(property: Record<string, unknown>): Array<{ value: string; 
 	});
 }
 
-function claudeQuestionGroups(properties: PropertyEntry[]): PropertyEntry[][] | undefined {
+/**
+ * Field names an AskUserQuestion bridge gives each question and its free-text
+ * "Other" field. claude-agent-acp writes `question_<n>` / `question_<n>_custom`
+ * and carries a single question's prompt in `message`. Antigravity (`agy acp`)
+ * writes `q<n>` / `q<n>_other`, puts the prompt in the field title and sends only
+ * "The agent has N questions." as `message`.
+ */
+const QUESTION_FIELD_SCHEMES = [
+	{ pattern: /^question_(\d+)(_custom)?$/, promptInTitle: false },
+	{ pattern: /^q(\d+)(_other)?$/, promptInTitle: true },
+];
+
+type QuestionForm = { groups: PropertyEntry[][]; promptInTitle: boolean };
+
+/** A question form shows one question, with its Other field, at a time. */
+function questionForm(properties: PropertyEntry[]): QuestionForm | undefined {
+	for (const scheme of QUESTION_FIELD_SCHEMES) {
+		const groups = questionGroups(properties, scheme.pattern);
+		if (groups) return { groups, promptInTitle: scheme.promptInTitle };
+	}
+	return undefined;
+}
+
+/** The prompt above a question: its description, else a single question's message, else its title. */
+function questionFormPrompt(form: QuestionForm, question: PropertyEntry, message?: string): string {
+	return questionPrompt(question, form.groups.length === 1 && !form.promptInTitle ? message : undefined);
+}
+
+function questionGroups(properties: PropertyEntry[], pattern: RegExp): PropertyEntry[][] | undefined {
 	if (properties.length === 0) return undefined;
 
 	const groups = new Map<number, { question?: PropertyEntry; custom?: PropertyEntry }>();
 	for (const entry of properties) {
-		const match = /^question_(\d+)(_custom)?$/.exec(entry[0]);
+		const match = pattern.exec(entry[0]);
 		if (!match) return undefined;
 		const index = Number(match[1]);
 		const group = groups.get(index) ?? {};

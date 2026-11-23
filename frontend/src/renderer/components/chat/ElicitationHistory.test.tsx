@@ -69,6 +69,18 @@ describe("ElicitationHistory", () => {
 		expect(screen.getByText("Which worktrees should I keep?").parentElement).toHaveTextContent("fix/settings");
 	});
 
+	it("pairs each Antigravity answer with the prompt from its field title", () => {
+		render(<ElicitationHistory activity={question({
+			detail: { message: "The agent has a question.", schema: { properties: {
+				q1: { type: "string", title: "Which color?", oneOf: [{ const: "1", title: "Red" }, { const: "2", title: "Blue" }] },
+				q1_other: { type: "string", title: "Other", description: "Optional free-form answer to: Which color?" },
+			} } },
+			inputResponse: { action: "accept", content: { q1: "2" } },
+		})} />);
+		expect(screen.getByText("Which color?").parentElement).toHaveTextContent("Blue");
+		expect(screen.queryByText("The agent has a question.")).not.toBeInTheDocument();
+	});
+
 	it.each([
 		{ action: "decline", label: "Skipped" },
 		{ action: "cancel", label: "Cancelled" },
