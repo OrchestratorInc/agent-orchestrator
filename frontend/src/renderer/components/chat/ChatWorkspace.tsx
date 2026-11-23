@@ -6318,7 +6318,7 @@ const TurnGroup = memo(function TurnGroup({
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
 	useEffect(() => {
-		if (group.live && lastAssistantId && !pageHidden()) watchedLive.add(lastAssistantId);
+		if (group.live && !pageHidden()) watchedLive.add(group.key);
 	});
 	// A running turn offers copy only while its newest item is the reply itself, so the
 	// action does not flash under prose the agent is about to follow with more work.
@@ -6468,7 +6468,7 @@ const TurnGroup = memo(function TurnGroup({
 			}
 			rollbackDisabled={rollbackDisabled}
 			onSelectAnnotation={onSelectAnnotation}
-			details={workerUpdates && group.outcome && !watchedLive.has(lastAssistantId ?? "") && run.items[0]?.id === lastAssistantId ? {
+			details={workerUpdates && group.outcome && !watchedLive.has(group.key) && run.items[0]?.id === lastAssistantId ? {
 				open: Boolean(activityDisclosureOverrides[`${group.key}:reply`]),
 				onOpenChange: (open) => onActivityDisclosureChange(`${group.key}:reply`, open),
 			} : undefined}
@@ -7121,7 +7121,7 @@ function withoutLead(member: TimelineGroup): TimelineGroup {
 }
 
 function backgroundRows(members: readonly TimelineGroup[]) {
-	const rows: { key: string; members: TimelineGroup[]; sender?: string; latest?: WorkerUpdate; at?: string; count: number }[] = [];
+	const rows: { key: string; members: TimelineGroup[]; sender?: string; latest?: WorkerUpdate; at?: string; handled?: boolean; count: number }[] = [];
 	const latest = new Map<string, WorkerUpdate>();
 	for (const member of members) {
 		const updates = isLooseNotices(member) ? [] : workerUpdatesOf(member.items[0]!);
@@ -7132,9 +7132,11 @@ function backgroundRows(members: readonly TimelineGroup[]) {
 		const row = at >= 0 ? rows.splice(at, 1)[0]! : { key: member.key, members: [], sender, count: 0 };
 		row.members.push(member);
 		if (sender !== undefined) {
-			if (!isAccountFailure(member) || !row.latest) {
+			const handled = !isAccountFailure(member);
+			if (handled || !row.handled) {
 				row.latest = updates.at(-1);
 				row.at = member.items[0]!.createdAt;
+				row.handled = handled;
 			}
 			row.count += updates.length;
 		}

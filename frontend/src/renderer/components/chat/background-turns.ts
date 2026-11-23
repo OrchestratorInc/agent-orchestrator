@@ -21,7 +21,8 @@ export function turnStanding(items: readonly ConversationItem[], outcome: Outcom
 	if (automation?.kind === "notice" && automation.notice === "orchestratorReplaced") return settled ? "replaced" : "up";
 	if (lead.kind !== "message" || !isWorkerLead(lead) || (isTaskTitleUpdate(lead) && !renamedTitle(items))) return "yours";
 	if (items.some((item) => [...workerUpdatesOf(item), ...(carried.get(item.id) ?? [])].some((update) => needsYouNow(index, update)))) return "up";
-	if (state === "failed") return accountFailure(outcome) ? "background" : "failed";
+	const asks = /[?？][*_)\]"'”’`」』）】》〉»›]*$/.test(finalReply(items));
+	if (state === "failed") return accountFailure(outcome) && !asks ? "background" : "failed";
 	if (!settled) return "up";
-	return /[?？][*_)\]"'”’`」』）】》〉»›]*$/.test(finalReply(items)) ? "up" : "background";
+	return asks ? "up" : "background";
 }

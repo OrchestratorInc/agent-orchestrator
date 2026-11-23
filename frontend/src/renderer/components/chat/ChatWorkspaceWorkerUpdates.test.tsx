@@ -569,10 +569,12 @@ describe("background turns in the orchestrator chat", () => {
 			reply("t4", 8, `See [the PR] for the rest.\n\n${detail}\n\n[the PR]: https://example.com/pr/1`),
 			human("t5", 9, "Which sessions?"),
 			reply("t5", 10, `Session | State\n--- | ---\nproj-285 | done\n\n${detail}`),
+			human("t6", 11, "Anything else?"),
+			reply("t6", 12, `Here is where things stand…\n\n${detail}`),
 		]);
 
 		expect(screen.getByText(/Should I close the remote host PR\?/)).toBeInTheDocument();
-		expect(screen.getAllByText(/Session 12:/)).toHaveLength(5);
+		expect(screen.getAllByText(/Session 12:/)).toHaveLength(6);
 		expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
 	});
 
@@ -580,7 +582,7 @@ describe("background turns in the orchestrator chat", () => {
 		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
 		const items = [human("w1", 1, "How is the browser work going?"), reply("w1", 2, `Menus and iOS pages are merged.\n\n${detail}`)];
 		const view = orchestratorView();
-		const { rerender } = render(view(snapshot(items, "running")));
+		const { rerender } = render(view(snapshot(items.slice(0, 1), "running")));
 		rerender(view(snapshot(items)));
 
 		expect(screen.getByText(/Session 12:/)).toBeInTheDocument();
@@ -619,6 +621,36 @@ describe("background turns in the orchestrator chat", () => {
 			reply("t1", 2, "Noted."),
 		]);
 		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 2 done · /);
+	});
+
+	it("keeps a background turn that asked the user something in view when it then failed on the account", () => {
+		const base = snapshot([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "Should I close #8906?"),
+			report("t2", 3, "[done] [Docs](ao://sessions/proj/proj-287)\nDocs build."),
+			reply("t2", 4, "Noted."),
+		]);
+		renderSnapshot({
+			...base,
+			turns: base.turns.map((turn) => turn.id === "t1" ? { ...turn, state: "failed", errorMessage: "You've hit your usage limit.", usageLimit: { autoResume: false } } : turn),
+		});
+		expect(screen.getByText("Should I close #8906?")).toBeInTheDocument();
+	});
+
+	it("still says how many workers reported when the line only names agent notices", () => {
+		const stopped: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.terminated:proj-9", sequence: 25, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Terminated an agent", createdAt: at(2),
+			detail: { action: "session.terminated", operationId: "proj-9", targetSessionId: "proj-9" },
+		};
+		renderOrchestrator([
+			report("t1", 1, "[checkpoint] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "Noted."),
+			stopped,
+			report("t3", 3, "[checkpoint] [iOS pages](ao://sessions/proj/proj-286)\nPages render."),
+			reply("t3", 4, "Noted."),
+		]);
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 2 workers · 1 agent stopped · /);
 	});
 
 	it("leaves an agent stopped after the last background turn in view", () => {

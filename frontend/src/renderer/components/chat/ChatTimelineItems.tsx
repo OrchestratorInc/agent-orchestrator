@@ -1442,15 +1442,18 @@ export type ReplyDetails = { open: boolean; onOpenChange: (open: boolean) => voi
 const REPLY_LEAD_AT = 2000;
 
 function replyLead(text: string): string | undefined {
+	if (text.length <= REPLY_LEAD_AT) return undefined;
 	const prose = text.replace(/```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*`/g, "");
-	if (text.length <= REPLY_LEAD_AT || /[?？][*_)\]"'”’`」』）】》〉»›]*(?:\s|$)/.test(prose) || /^ {0,3}\[[^\]\n]+\]:/m.test(text)) return undefined;
+	if (/[?？][*_)\]"'”’`」』）】》〉»›]*(?:\s|$)/.test(prose) || /^ {0,3}\[[^\]\n]+\]:/m.test(text)) return undefined;
 	const start = text.search(/\S/);
 	const end = text.slice(start).search(/\n[ \t]*\n/);
 	if (end < 0) return undefined;
 	const lead = text.slice(0, start + end);
 	const first = lead.trim();
 	if (/^(?:[ \t]*\n)*(?: {4}|\t)/.test(lead) || /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/m.test(first)) return undefined;
-	return first.length * 2 < text.length && !/^(?:#{1,6}(?:\s|$)|\||>|[-*+]\s|\d+[.)]\s|([-*_])\1{2,}\s*$)|```|~~~|\n[ \t]*(?:=+|-+)[ \t]*$|[:：]$|^(\*\*|__)[^\n]*\2$/.test(first) ? lead : undefined;
+	return first.length * 2 < text.length
+		&& /(?:[^.]\.|[!。！])[*_)\]"'”’`」』）】》〉»›]*$/.test(first)
+		&& !/^(?:#{1,6}(?:\s|$)|\||>|[-*+]\s|\d+[.)]\s)|```|~~~/.test(first) ? lead : undefined;
 }
 
 /** The agent's prose. Streaming is represented by text arriving in place. */
@@ -1486,7 +1489,9 @@ export function AssistantMessage({
 	const copyReady = showCopy && !message.streaming && !live;
 	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
 	const showActions = copyReady || rollbackReady;
-	const lead = details && !live && !renderingStreaming ? replyLead(message.text) : undefined;
+	const replyText = message.text;
+	const fullLead = useMemo(() => replyLead(replyText), [replyText]);
+	const lead = details && !live && !renderingStreaming ? fullLead : undefined;
 	const collapsed = Boolean(lead && !details?.open);
 	return (
 		<div

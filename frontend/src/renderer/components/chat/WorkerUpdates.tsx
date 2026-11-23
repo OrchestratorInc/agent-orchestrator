@@ -478,6 +478,7 @@ export const senderOf = (update: WorkerUpdate) => update.sessionId ?? update.nam
 export type BackgroundTally = Partial<Record<"notHandled" | "neededYou" | "stuck" | "done" | "started" | "stopped" | "reset", number>>;
 
 const TALLY_ORDER = ["notHandled", "neededYou", "stuck", "done", "started", "stopped", "reset"] as const;
+const STATE_TALLIES = TALLY_ORDER.slice(0, 4);
 
 function pastState(t: TFunction, state: string | undefined): string | undefined {
 	if (state === "needs_input") return t("chat.background.neededYou");
@@ -518,9 +519,8 @@ export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenCh
 							? t("chat.background.failedEarlier", { count: turns.length })
 							: t("chat.background.count", { count: turns.reduce((sum, items) => sum + Math.max(1, items[0] ? workerUpdatesOf(items[0]).length : 0), 0) })}
 					</span>
-					{tallies.length > 0
-						? tallies.map((label) => ` · ${label}`).join("")
-						: workers > 0 ? ` · ${t("chat.background.workers", { count: workers })}` : null} · {span}
+					{workers > 0 && !STATE_TALLIES.some((name) => tally?.[name]) ? ` · ${t("chat.background.workers", { count: workers })}` : null}
+					{tallies.map((label) => ` · ${label}`).join("")} · {span}
 				</span>
 				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
 			</Pressable>
