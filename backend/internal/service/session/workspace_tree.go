@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // WorkspaceTreeEntryType distinguishes files from directories in a
@@ -215,17 +216,22 @@ func (s *Service) listWorkspaceProjectTree(ctx context.Context, rec domain.Sessi
 		return WorkspaceTree{SessionID: rec.ID, Path: dir, Entries: entries, Truncated: truncated}, nil
 	}
 
-	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
-	childPrefixes := nonEmptyWorkspacePrefixes(prefixes)
+	listing, err := workspaceProjectListingPrefixes(rec.Metadata.WorkspacePath, rows)
+	if err != nil {
+		return WorkspaceTree{}, err
+	}
 	defaultBranch := defaultBranchForProject(project, true)
 
 	row, prefix, repoDir, ok := workspaceProjectDirTarget(rec.Metadata.WorkspacePath, rows, dir)
 	if !ok {
 		return WorkspaceTree{}, apierr.NotFound("WORKSPACE_PATH_NOT_FOUND", "Workspace path not found")
 	}
+	if _, ok := listing.available[row.RepoName]; !ok {
+		return WorkspaceTree{}, ports.ErrWorkspaceRepoUnavailable
+	}
 	exclude := []string(nil)
 	if prefix == "" {
-		exclude = childPrefixes
+		exclude = listing.children
 	}
 	baseRef := row.BaseRef
 	if strings.TrimSpace(baseRef) == "" {
@@ -245,7 +251,7 @@ func (s *Service) listWorkspaceProjectTree(ctx context.Context, rec domain.Sessi
 		// Root listing: the primary repo's own top-level entries (computed
 		// above, with child-repo prefixes excluded) sit alongside one
 		// synthesized directory entry per child repo.
-		for _, childPrefix := range childPrefixes {
+		for _, childPrefix := range nonEmptyWorkspacePrefixes(listing.available) {
 			name := childPrefix
 			if idx := strings.LastIndex(childPrefix, "/"); idx >= 0 {
 				name = childPrefix[idx+1:]
@@ -254,7 +260,7 @@ func (s *Service) listWorkspaceProjectTree(ctx context.Context, rec domain.Sessi
 				Name:       name,
 				Path:       childPrefix,
 				Type:       WorkspaceTreeDir,
-				HasChanges: s.workspaceProjectPrefixHasChanges(ctx, rec.ID, rows, prefixes, childPrefix, defaultBranch),
+				HasChanges: s.workspaceProjectPrefixHasChanges(ctx, rec.ID, rows, listing.available, childPrefix, defaultBranch),
 			})
 		}
 		sortWorkspaceTreeEntries(entries)

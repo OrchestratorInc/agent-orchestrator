@@ -480,9 +480,6 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q path: %w", child.Name, err)
 		}
-		if err := w.enableWorktreeConfig(ctx, repoPath); err != nil {
-			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q: %w", child.Name, err)
-		}
 		rel, err := cleanRelativePath(child.RelativePath)
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q: %w", child.Name, err)
@@ -490,6 +487,22 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		outPath, err := w.validateManagedPath(filepath.Join(rootPath, filepath.FromSlash(rel)))
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q path: %w", child.Name, err)
+		}
+		// A registered child can be moved or removed between sessions. Check
+		// its own metadata so Git cannot discover the parent repo in its place.
+		gitDir := filepath.Join(repoPath, ".git")
+		if _, err := os.Lstat(gitDir); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				w.logf("gitworktree: skipping unavailable child repo %q at %q", child.Name, repoPath)
+				continue
+			}
+			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: inspect child repo %q: %w", child.Name, err)
+		}
+		if _, err := w.run(ctx, w.binary, "rev-parse", "--resolve-git-dir", gitDir); err != nil {
+			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: inspect child repo %q: %w", child.Name, err)
+		}
+		if err := w.enableWorktreeConfig(ctx, repoPath); err != nil {
+			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q: %w", child.Name, err)
 		}
 		repos = append(repos, workspaceProjectRepo{
 			name:         child.Name,
