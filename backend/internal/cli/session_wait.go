@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -56,7 +57,9 @@ func newSessionWaitCommand(ctx *commandContext) *cobra.Command {
 		Long: `Block until the first of the given sessions stops working, then print which
 one and why. One call replaces a loop of ` + "`ao session get`" + ` checks.
 
-A session that is idle when the command starts settles at once. To message a
+A session that is idle when the command starts settles at once, unless it has
+not completed a turn yet: a new session reads as idle until its agent starts,
+so it settles as idle only after the command has watched it for a minute. To message a
 session and wait for its reply, use ` + "`ao send --wait`" + `: a message can reach
 the agent after ` + "`ao send`" + ` returns, so a wait started then can see the
 idle state from before the message.
@@ -81,7 +84,15 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 	if opts.timeout <= 0 || opts.interval <= 0 {
 		return usageError{errors.New("--timeout and --interval must be above zero")}
 	}
+	for i, arg := range ids {
+		id, err := normalizeSessionID(arg)
+		if err != nil {
+			return err
+		}
+		ids[i] = id
+	}
 	started := c.deps.Now()
+	idleSince := map[string]time.Time{}
 	waitCtx, cancel := context.WithTimeout(cmd.Context(), opts.timeout)
 	defer cancel()
 	emit := func(result sessionWaitResult) error {
@@ -97,7 +108,7 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 		return err
 	}
 	timedOut := func() error {
-		if err := emit(sessionWaitResult{SessionID: ids[0], State: "active", TimedOut: true}); err != nil {
+		if err := emit(sessionWaitResult{SessionID: strings.Join(ids, ", "), State: "active", TimedOut: true}); err != nil {
 			return err
 		}
 		return exitError{code: exitTimedOut, err: fmt.Errorf("no session settled within %s", opts.timeout)}
@@ -110,17 +121,16 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 		return err
 	}
 	for {
-		for _, arg := range ids {
-			id, err := normalizeSessionID(arg)
-			if err != nil {
-				return err
-			}
+		for _, id := range ids {
 			var res sessionResponse
 			if err := get("sessions/"+url.PathEscape(id), &res); err != nil {
 				return err
 			}
 			state := settledState(res.Session)
-			if state == "idle" && c.deps.Now().Sub(res.Session.CreatedAt) < startupGrace {
+			if _, seen := idleSince[id]; state == "idle" && !seen {
+				idleSince[id] = c.deps.Now()
+			}
+			if state == "idle" && c.deps.Now().Sub(idleSince[id]) < startupGrace {
 				var history sessionHistoryResponse
 				if err := get("sessions/"+url.PathEscape(id)+"/history?limit=1", &history); err != nil {
 					return err

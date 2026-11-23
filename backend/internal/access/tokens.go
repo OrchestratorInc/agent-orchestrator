@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // TokenPrefix marks an agent token, so it is never mistaken for a device token.
@@ -29,6 +30,9 @@ const (
 
 // ErrTooManyTokens is returned by Create when the registry is full.
 var ErrTooManyTokens = errors.New("too many agent tokens; revoke one first")
+
+// ErrNotSaved is returned by Create when the token file could not be written.
+var ErrNotSaved = errors.New("the agent token could not be saved")
 
 // Token is a named credential for an agent outside the app. Only the SHA-256 of
 // its secret is stored.
@@ -149,7 +153,7 @@ func cleanName(name string) string {
 // Create registers a token and returns it with its secret, which is shown once.
 func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, string, error) {
 	name = cleanName(name)
-	if name == "" || len(name) > maxNameLength {
+	if name == "" || utf8.RuneCountInString(name) > maxNameLength {
 		return Token{}, "", fmt.Errorf("a token name is required, up to %d characters", maxNameLength)
 	}
 	if !grant.ExpiresAt.IsZero() && !now.Before(grant.ExpiresAt) {
@@ -180,7 +184,7 @@ func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, strin
 	if err := r.persistLocked(); err != nil {
 		delete(r.tokens, token.ID)
 		delete(r.byHash, token.TokenHash)
-		return Token{}, "", err
+		return Token{}, "", fmt.Errorf("%w: %w", ErrNotSaved, err)
 	}
 	return token, value, nil
 }
@@ -278,7 +282,7 @@ func (r *Registry) SessionCreated(ctx context.Context, sessionID string) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, bound := r.sessions[sessionID]; !bound {
+	if _, bound := r.sessions[sessionID]; !bound && !r.sessionsLost {
 		return nil
 	}
 	if err := os.Remove(r.bindingPath(sessionID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -302,15 +306,32 @@ func (r *Registry) Bind(sessionID, tokenID string) error {
 }
 
 // ForSession returns the ID of the token a session started under. The token may
-// be gone. bound is true for every session when the bindings could not be read.
+// be gone. When the bindings could not be listed at start, each lookup reads
+// that session's own record, and a session whose record cannot be read counts
+// as bound.
 func (r *Registry) ForSession(sessionID string) (tokenID string, bound bool) {
 	if r == nil || sessionID == "" {
 		return "", false
 	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	tokenID, bound = r.sessions[sessionID]
-	return tokenID, bound || r.sessionsLost
+	lost := r.sessionsLost
+	r.mu.RUnlock()
+	if bound || !lost {
+		return tokenID, bound
+	}
+	raw, err := os.ReadFile(r.bindingPath(sessionID)) // #nosec G304 -- inside the daemon's own data dir.
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false
+	}
+	if err != nil {
+		return "", true
+	}
+	tokenID = strings.TrimSpace(string(raw))
+	r.mu.Lock()
+	r.sessions[sessionID] = tokenID
+	r.mu.Unlock()
+	return tokenID, true
 }
 
 func (r *Registry) persistLocked() error {

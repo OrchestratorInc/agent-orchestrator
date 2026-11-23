@@ -47,7 +47,7 @@ func newGateFixture(t *testing.T) *gateFixture {
 	gate := &accessGate{
 		registry: registry, routes: r, now: time.Now,
 		sessionProject: func(_ context.Context, sessionID string) (string, bool) {
-			project, ok := map[string]string{"api-1": "api", "web-1": "web"}[sessionID]
+			project, ok := map[string]string{"api-1": "api", "api-9": "api", "web-1": "web"}[sessionID]
 			return project, ok
 		},
 	}
@@ -82,6 +82,7 @@ func newGateFixture(t *testing.T) *gateFixture {
 	r.Get("/api/v1/projects/{id}", ok)
 	r.Get("/api/v1/projects/{projectId}/cues", ok)
 	r.Get("/api/v1/sessions/{sessionId}", ok)
+	r.Delete("/api/v1/sessions/{sessionId}", ok)
 	r.Post("/api/v1/sessions/{sessionId}/send", ok)
 	r.Get("/api/v1/projects", ok)
 	r.Delete("/api/v1/projects/{id}", ok)
@@ -230,6 +231,12 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 		}
 	}
 	ownTooling("under the grant")
+	if status, _, reason := asSession(http.MethodDelete, "/api/v1/sessions/api-9"); status != 403 || reason != access.ReasonGroup {
+		t.Errorf("the session must not run an action on itself that its grant lacks: %d %q", status, reason)
+	}
+	if status, _, _ := asSession(http.MethodPost, "/api/v1/sessions/api-9/send"); status != 200 {
+		t.Errorf("an action on itself that the grant allows: status %d, want 200", status)
+	}
 	if status, _, reason := asSession(http.MethodPost, "/api/v1/sessions/api-1/activity"); status != 403 || reason != access.ReasonCatalog {
 		t.Errorf("another session's own route: %d %q", status, reason)
 	}
@@ -253,6 +260,12 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 		t.Errorf("a session of a revoked token: %d %q", status, reason)
 	}
 	ownTooling("after the grant ended")
+	if status, _, reason := asSession(http.MethodPost, "/api/v1/sessions/api-9/send"); status != 403 || reason != access.ReasonEnded {
+		t.Errorf("an action on itself after the grant ended: %d %q", status, reason)
+	}
+	if status, _, _ := asSession(http.MethodGet, "/api/v1/sessions/api-9"); status != 200 {
+		t.Errorf("the session may still read itself after the grant ended: status %d", status)
+	}
 }
 
 func TestSpawnNeverLeavesASessionWithoutItsGrant(t *testing.T) {

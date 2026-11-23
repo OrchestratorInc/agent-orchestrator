@@ -159,7 +159,7 @@ func TestActionRequestSplitsInput(t *testing.T) {
 func TestSessionWaitExitCodes(t *testing.T) {
 	cfg := setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "")
-	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}, "stuck": {"idle"}}
+	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "api-4": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}, "stuck": {"idle"}}
 	polls := map[string]int{}
 	created := time.Date(2026, 11, 23, 11, 59, 50, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -216,14 +216,20 @@ func TestSessionWaitExitCodes(t *testing.T) {
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "api-3", "--timeout", "6s"); ExitCode(err) != exitTimedOut || !strings.Contains(out, "still working") {
 		t.Errorf("a timeout: exit %d, out %q", ExitCode(err), out)
 	}
-	clock = created.Add(10 * time.Second)
-	if out, _, err = executeCLI(t, deps(), "session", "wait", "fresh", "--json"); err != nil || json.Unmarshal([]byte(out), &result) != nil || result.State != "idle" || result.WaitedSeconds != 50 {
-		t.Errorf("a session that never started must be given the startup window: %s %v", out, err)
+	for _, age := range []time.Duration{10 * time.Second, time.Hour} {
+		clock = created.Add(age)
+		if out, _, err = executeCLI(t, deps(), "session", "wait", "fresh", "--json"); err != nil || json.Unmarshal([]byte(out), &result) != nil || result.State != "idle" || result.WaitedSeconds != 60 {
+			t.Errorf("a %s old session with no turn yet must be watched for the startup window: %s %v", age, out, err)
+		}
 	}
 	clock = created.Add(time.Hour)
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "api-3", "--timeout", "3s", "--interval", "1h", "--json"); ExitCode(err) != exitTimedOut ||
 		json.Unmarshal([]byte(out), &result) != nil || !result.TimedOut || result.WaitedSeconds != 3 {
 		t.Errorf("an interval above the timeout must not outlast it: exit %d, out %s", ExitCode(err), out)
+	}
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "api-3", "api-4", "--timeout", "6s", "--json"); ExitCode(err) != exitTimedOut ||
+		json.Unmarshal([]byte(out), &result) != nil || result.SessionID != "api-3, api-4" {
+		t.Errorf("a timeout on two sessions must name both: exit %d, out %s", ExitCode(err), out)
 	}
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "broken"); ExitCode(err) != 1 || !strings.Contains(out, "broken: failed") {
 		t.Errorf("a session that failed to start: exit %d, out %q, want exit 1", ExitCode(err), out)
@@ -258,6 +264,8 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 		case "POST /api/v1/sessions/api-1/send":
 			sent = true
 			w.WriteHeader(http.StatusNoContent)
+		case "GET /api/v1/sessions/api-1/history":
+			_ = json.NewEncoder(w).Encode(map[string]any{"turns": []any{}, "total": 1})
 		case "GET /api/v1/sessions/api-1":
 			if sent && daemonFails {
 				http.Error(w, `{"message":"storage is busy","code":"STORAGE_BUSY"}`, http.StatusInternalServerError)

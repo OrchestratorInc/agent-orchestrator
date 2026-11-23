@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -161,6 +162,10 @@ func (c *AccessController) createToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, secret, err := c.Registry.Create(req.Name, grant, now)
+	if errors.Is(err, access.ErrNotSaved) {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal_error", "AGENT_TOKEN_NOT_SAVED", err.Error(), nil)
+		return
+	}
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "AGENT_TOKEN_NOT_CREATED", err.Error(), nil)
 		return

@@ -100,11 +100,12 @@ func (g *accessGate) middleware(next http.Handler) http.Handler {
 			return
 		}
 		pattern := rctx.RoutePattern()
-		if grantOpenRoutes[r.Method+" "+pattern] || (who.Kind == access.CallerSession && ownSessionRoute(r, rctx, pattern, who.ID)) {
+		action, found := access.ActionForRoute(r.Method, pattern)
+		own := who.Kind == access.CallerSession && ownSessionRoute(r, rctx, pattern, who.ID) && (!found || r.Method == http.MethodGet)
+		if grantOpenRoutes[r.Method+" "+pattern] || own {
 			next.ServeHTTP(w, r)
 			return
 		}
-		action, found := access.ActionForRoute(r.Method, pattern)
 		if !found {
 			writeGrantRefused(w, r, &access.Refusal{Reason: access.ReasonCatalog,
 				Message: fmt.Sprintf("the action catalog has no entry for %s %s; a caller with a grant can run only catalog actions", r.Method, pattern)})

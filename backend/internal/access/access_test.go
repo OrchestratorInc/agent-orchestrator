@@ -2,6 +2,7 @@ package access
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -266,6 +267,28 @@ func TestBindingsOutliveTheTokenFile(t *testing.T) {
 	if err := lost.Bind("api-2", token.ID); err == nil {
 		t.Error("Bind must report a write that failed")
 	}
+
+	if err := os.Remove(sessions); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := LoadRegistry(path)
+	for _, session := range []string{"api-1", "api-3"} {
+		if err := other.Bind(session, token.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if tokenID, bound := lost.ForSession("api-1"); !bound || tokenID != token.ID {
+		t.Errorf("a binding that can be read again: %q %v, want it bound to %s", tokenID, bound, token.ID)
+	}
+	if _, bound := lost.ForSession("never-bound"); bound {
+		t.Error("once the bindings can be read again, a session with none must not count as bound")
+	}
+	if err := lost.SessionCreated(context.Background(), "api-3"); err != nil {
+		t.Fatal(err)
+	}
+	if _, bound := lost.ForSession("api-3"); bound {
+		t.Error("a new session of a caller with no grant must lose a leftover binding the registry had not read")
+	}
 }
 
 func TestSessionCreatedBindsOrClears(t *testing.T) {
@@ -386,5 +409,29 @@ func TestCatalogLeavesOutAutomationWrites(t *testing.T) {
 		if action, ok := ActionForRoute(route[0], route[1]); ok {
 			t.Errorf("%s is in the catalog, but the sessions an automation starts carry no grant", action.ID)
 		}
+	}
+}
+
+func TestCreateCountsNameCharactersAndMarksAFailedSave(t *testing.T) {
+	path := TokensPath(t.TempDir())
+	registry, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := mustGrant(t, PresetRead, nil, nil, time.Time{})
+	if _, _, err := registry.Create(strings.Repeat("बॉट", 20), grant, testNow); err != nil {
+		t.Errorf("a 60-character name in a non-Latin script: %v", err)
+	}
+	if _, _, err := registry.Create(strings.Repeat("ब", 65), grant, testNow); err == nil || errors.Is(err, ErrNotSaved) {
+		t.Errorf("a 65-character name must be refused as bad input: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Dir(path), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := registry.Create("ci", grant, testNow); !errors.Is(err, ErrNotSaved) {
+		t.Errorf("a token that cannot be written: %v, want ErrNotSaved", err)
 	}
 }

@@ -82,7 +82,9 @@ ao token revoke <id-or-name>
   that leaves the machine.
 - A session that a token starts carries the token's grant, and revoking the
   token refuses that session's calls too. Commands about the session itself
-  (`ao artifact`, `ao render`, `ao preview`, `ao browser`) keep working.
+  (`ao artifact`, `ao render`, `ao preview`, `ao browser`) and reading the
+  session keep working. A catalog action that changes the session, such as
+  `ao send` to itself or `ao session delete`, needs the grant like any other call.
   `ao report` reaches the orchestrator, so it is refused once the grant has ended.
 - A caller with a grant cannot create or change automations: the sessions an
   automation starts would carry no grant. It can list and delete them.
