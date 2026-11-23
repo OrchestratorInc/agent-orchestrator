@@ -14,6 +14,7 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
+import { ArtifactCommentsClientContext, type ArtifactCommentsClient } from "./artifact-comments/client";
 
 // The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
 vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
@@ -100,6 +101,11 @@ vi.mock("./CloudArtifactFrame", () => ({
 vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useCloudArtifacts")>()),
 	useCloudArtifactAccess: cloudAccessMock,
+}));
+
+// The published page, framed from its share host: a plain frame naming its link.
+vi.mock("./SharedArtifactFrame", () => ({
+	SharedArtifactFrame: ({ linkId, title }: { linkId: string; title: string }) => <iframe data-link-id={linkId} data-testid="published-frame" title={title} />,
 }));
 
 const shareAccessMock = vi.hoisted(() => ({ current: new Map<string, "restricted" | "anyone">() }));
@@ -1215,5 +1221,76 @@ describe("SessionArtifactsView", () => {
 		const viewer = screen.getByTestId("artifact-view");
 		expect(viewer).toHaveTextContent("viewer:notes.md");
 		expect(viewer).toHaveAttribute("data-feedback-key", "7");
+	});
+});
+
+describe("SessionArtifactsView comments", () => {
+	const published = (files: SessionArtifact[] = artifacts) => files.map((file) => ({ ...file, shareUrl: `https://viewer.test/artifact/${file.name.replace(/\W/g, "-")}` }));
+	const commentsClient = (): ArtifactCommentsClient => ({
+		list: vi.fn().mockResolvedValue({
+			kind: "snapshot",
+			etag: "\"r1-v2\"",
+			snapshot: {
+				version: 2, currentVersion: 2, revision: 1, you: { userId: "me-1", isOwner: true },
+				threads: [
+					{ id: "t1", version: 2, status: "open", anchor: { path: "body>h1:1", tag: "h1", textHash: "a" }, createdAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, comments: [{ id: "c1", author: { id: "sam", name: "Sam" }, body: "Title?", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
+					{ id: "t2", version: 2, status: "open", anchor: { path: "body>p:1", tag: "p", textHash: "b" }, createdAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, comments: [{ id: "c2", author: { id: "sam", name: "Sam" }, body: "Typo", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
+					{ id: "t3", version: 2, status: "resolved", anchor: { path: "body>p:2", tag: "p", textHash: "c" }, createdAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, comments: [{ id: "c3", author: { id: "sam", name: "Sam" }, body: "Done", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
+				],
+			},
+		}),
+		createThread: vi.fn(), reply: vi.fn(), setStatus: vi.fn(), edit: vi.fn(), remove: vi.fn(), markSent: vi.fn(),
+	});
+	const renderWithComments = (node: ReactNode, client = commentsClient()) => ({
+		...renderView(<ArtifactCommentsClientContext.Provider value={client}>{node}</ArtifactCommentsClientContext.Provider>),
+		commentsClient: client,
+	});
+
+	beforeEach(() => {
+		cloudAccessMock.mockReset().mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+	});
+
+	it("puts Comments between Publish and Full screen with the open-thread count", async () => {
+		const { commentsClient: client } = renderWithComments(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session(published())} />);
+		const comments = await screen.findByRole("button", { name: "Comments, 2 open" });
+		const after = (first: Element, second: Element) => Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+		expect(after(screen.getByRole("button", { name: /^(Published|Republish|Publish): notes\.md$/ }), comments)).toBe(true);
+		expect(after(comments, screen.getByRole("button", { name: "Maximize" }))).toBe(true);
+		expect(within(comments).getByTestId("artifact-comments-count")).toHaveTextContent("2");
+		expect(client.list).toHaveBeenCalledWith("notes-md", expect.anything());
+	});
+
+	it.each([
+		{ why: "an unpublished file", files: artifacts, path: "notes.md", cloud: undefined },
+		{ why: "a published file that is neither Markdown nor HTML", files: published([{ kind: "file", name: "data.csv", path: "data.csv", size: 1, updatedAt: "2026-09-22T00:00:00Z" }]), path: "data.csv", cloud: undefined },
+		{ why: "another member's cloud session", files: published(), path: "notes.md", cloud: { orgId: "org-1", createdByUserId: "someone-else" } },
+		{ why: "a shared project's session", files: published(), path: "notes.md", cloud: { orgId: "org-1", shared: true } },
+	])("shows no Comments for $why", async ({ files, path, cloud }) => {
+		const { commentsClient: client } = renderWithComments(<SessionArtifactsView request={{ key: 1, path }} session={{ ...session(files), ...(cloud ? { cloud } : {}) } as WorkspaceSession} />);
+		await screen.findByRole("button", { name: path.split("/").pop()! });
+		expect(screen.queryByRole("button", { name: /^Comments/ })).not.toBeInTheDocument();
+		expect(client.list).not.toHaveBeenCalled();
+	});
+
+	it("shows Comments for the owner's published cloud file", async () => {
+		const current = { ...cloudSession(), cloud: { orgId: "org-1", createdByUserId: "me-1" } } as WorkspaceSession;
+		current.artifactFiles = published(current.artifactFiles);
+		renderWithComments(<SessionArtifactsView request={{ key: 1, path: "docs/notes.md" }} session={current} />);
+		expect(await screen.findByRole("button", { name: "Comments, 2 open" })).toBeInTheDocument();
+	});
+
+	it("swaps the local preview for the published page while comments are open", async () => {
+		renderWithComments(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session(published())} />);
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
+		await userEvent.click(await screen.findByRole("button", { name: "Comments, 2 open" }));
+
+		expect(screen.getByTestId("published-frame")).toHaveAttribute("data-link-id", "notes-md");
+		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Comments, 2 open" })).toHaveAttribute("aria-pressed", "true");
+		expect(await screen.findByRole("complementary", { name: "Comments" })).toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Close comments" }));
+		expect(screen.queryByTestId("published-frame")).not.toBeInTheDocument();
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
 	});
 });

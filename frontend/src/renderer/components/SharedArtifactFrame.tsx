@@ -1,3 +1,4 @@
+import type { Ref } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -19,7 +20,12 @@ import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
  * a document, which a video stored without its type turns into a refused
  * download.
  */
-export function SharedArtifactFrame({ linkId, title }: { linkId: string; title: string }) {
+export function SharedArtifactFrame({ frameRef, linkId, title }: {
+	/** The page's frame, for the comments bridge; a video has none. */
+	frameRef?: Ref<HTMLIFrameElement>;
+	linkId: string;
+	title: string;
+}) {
 	const { t } = useTranslation();
 	const { client, ready, baseUrl, userId } = useCloudCp();
 	const view = useQuery({
@@ -55,6 +61,7 @@ export function SharedArtifactFrame({ linkId, title }: { linkId: string; title: 
 		<iframe
 			className="h-full w-full border-0 bg-background"
 			key={view.data.contentUrl}
+			ref={frameRef}
 			referrerPolicy="no-referrer"
 			sandbox="allow-scripts allow-forms"
 			src={view.data.contentUrl}
