@@ -1,7 +1,8 @@
 // Measures the browser stream as the phone sees it, for the debug HUD and the
 // baselines the renderer work is judged against: time to the first frame,
-// frames and kilobytes per second over the last second, decode time per frame,
-// and input to the next frame. Times are milliseconds on one clock (the
+// frames shown and kilobytes received per second over the last second, decode
+// time per shown frame, and input to the next frame shown. Every frame that
+// arrives costs bandwidth, including one replaced before it was shown. Times are milliseconds on one clock (the
 // caller's), so tests drive it without timers.
 
 export type StreamStatsSnapshot = {
@@ -15,8 +16,8 @@ export type StreamStatsSnapshot = {
 
 const WINDOW_MS = 1_000;
 // Enough for a second at 60 fps, and for the medians below.
-const MAX_FRAMES = 128;
-const MAX_SAMPLES = 64;
+const MAX_FRAMES = 96;
+const MAX_SAMPLES = 32;
 
 function median(values: number[]): number | null {
 	if (!values.length) return null;
@@ -33,7 +34,8 @@ function push<T>(list: T[], value: T, max: number): void {
 export class StreamStats {
 	private connectedAt: number | null = null;
 	private firstFrameMs: number | null = null;
-	private recent: Array<{ at: number; bytes: number }> = [];
+	private arrivals: Array<{ at: number; bytes: number }> = [];
+	private shownAt: number[] = [];
 	private decodes: number[] = [];
 	private latencies: number[] = [];
 	// The earliest input no frame has answered yet.
@@ -51,11 +53,16 @@ export class StreamStats {
 		this.pendingInput ??= now;
 	}
 
-	/** A frame shown at `now`: its size in bytes and the time it took to decode. */
-	frame(now: number, bytes: number, decodeMs: number): void {
+	/** A frame that arrived at `now`, shown or not: its size in bytes. */
+	received(now: number, bytes: number): void {
+		push(this.arrivals, { at: now, bytes }, MAX_FRAMES);
+	}
+
+	/** A frame shown at `now`, decodeMs after it arrived. */
+	shown(now: number, decodeMs: number): void {
 		this.frames++;
 		if (this.firstFrameMs === null && this.connectedAt !== null) this.firstFrameMs = now - this.connectedAt;
-		push(this.recent, { at: now, bytes }, MAX_FRAMES);
+		push(this.shownAt, now, MAX_FRAMES);
 		push(this.decodes, decodeMs, MAX_SAMPLES);
 		if (this.pendingInput !== null) {
 			push(this.latencies, now - this.pendingInput, MAX_SAMPLES);
@@ -64,11 +71,11 @@ export class StreamStats {
 	}
 
 	snapshot(now: number): StreamStatsSnapshot {
-		const inWindow = this.recent.filter((f) => f.at >= now - WINDOW_MS);
+		const since = now - WINDOW_MS;
 		return {
 			firstFrameMs: this.firstFrameMs,
-			fps: inWindow.length,
-			kbps: Math.round(inWindow.reduce((sum, f) => sum + f.bytes, 0) / 1024),
+			fps: this.shownAt.filter((at) => at >= since).length,
+			kbps: Math.round(this.arrivals.reduce((sum, f) => (f.at >= since ? sum + f.bytes : sum), 0) / 1024),
 			decodeMs: median(this.decodes),
 			inputToFrameMs: median(this.latencies),
 			frames: this.frames,
@@ -84,6 +91,6 @@ export class StreamStats {
 
 	/** How many samples it holds: bounded however long the stream runs. */
 	retained(): number {
-		return this.recent.length + this.decodes.length + this.latencies.length;
+		return this.arrivals.length + this.shownAt.length + this.decodes.length + this.latencies.length;
 	}
 }

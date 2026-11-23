@@ -485,4 +485,27 @@ describe("stream stats HUD", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it("counts every frame's bytes, including one replaced before it showed", async () => {
+		vi.stubGlobal("__DEV__", true);
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: DebugPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			const jpeg = (fill: number) => { const bytes = new Uint8Array(10_240).fill(fill); bytes.set([0xff, 0xd8, 0xff]); return bytes.buffer; };
+			await act(async () => {
+				client().handlers.onFrame({ sequence: 1n, capturedAtMs: 1n, width: 1280, height: 800, jpeg: jpeg(1) });
+				client().handlers.onFrame({ sequence: 2n, capturedAtMs: 2n, width: 1280, height: 800, jpeg: jpeg(2) });
+			});
+			// Only the newest frame reaches the screen.
+			await act(async () => { vi.advanceTimersByTime(30); nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(970); });
+			const hud = nodes("Text").map((node) => node.props.children).join("");
+			expect(hud).toMatch(/ · 1fps · 20KB\/s · decode 30ms · /);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

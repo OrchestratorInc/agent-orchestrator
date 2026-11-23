@@ -96,8 +96,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	// Debug builds measure the stream (StreamStats): a HUD line, and a log line
 	// every 5 s for recording baselines. Release builds measure nothing.
 	const stats = useRef<StreamStats | null>(MEASURE_STREAM ? new StreamStats() : null);
-	// The frame on its way to the screen: its size, and when it arrived.
-	const arriving = useRef<{ bytes: number; at: number } | null>(null);
+	// When each recent frame source arrived, until its image loads: a newer
+	// frame can replace one before it shows.
+	const arrivedAt = useRef(new Map<string, number>());
 	const [statsLine, setStatsLine] = useState("");
 	useEffect(() => {
 		if (!MEASURE_STREAM) return;
@@ -109,12 +110,16 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		}, 1_000);
 		return () => clearInterval(timer);
 	}, []);
-	const frameShown = useCallback(() => {
-		const frame = arriving.current;
-		if (!frame) return;
-		arriving.current = null;
+	const frameShown = useCallback((uri: string) => {
+		const at = arrivedAt.current.get(uri);
+		if (at === undefined) return;
+		// It and every frame that arrived before it are done with.
+		for (const key of arrivedAt.current.keys()) {
+			arrivedAt.current.delete(key);
+			if (key === uri) break;
+		}
 		const now = performance.now();
-		stats.current?.frame(now, frame.bytes, now - frame.at);
+		stats.current?.shown(now, now - at);
 	}, []);
 
 	useEffect(() => {
@@ -159,10 +164,17 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			},
 			onFrame: (frame) => {
 				if (disposed) return;
-				if (stats.current) arriving.current = { bytes: frame.jpeg.byteLength, at: performance.now() };
+				const arrived = performance.now();
+				stats.current?.received(arrived, frame.jpeg.byteLength);
 				try {
 					setFrameSize({ width: frame.width, height: frame.height });
-					setFrameURI(browserJPEGDataURI(frame.jpeg));
+					const uri = browserJPEGDataURI(frame.jpeg);
+					if (stats.current) {
+						arrivedAt.current.set(uri, arrived);
+						// Bounded: sources that never load are forgotten.
+						if (arrivedAt.current.size > 8) arrivedAt.current.delete(arrivedAt.current.keys().next().value!);
+					}
+					setFrameURI(uri);
 					setFrameIsLive(true);
 				} catch {
 					setStatus("error");
@@ -353,7 +365,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					onLayout={onViewportLayout}
 				>
 					<Animated.View pointerEvents="none" style={[styles.overlay, zoomStyle]}>
-						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} onLoad={stats.current ? frameShown : undefined} /></View> : null}
+						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} onLoad={stats.current ? () => frameShown(frameURI) : undefined} /></View> : null}
 					</Animated.View>
 					<Animated.View pointerEvents="none" style={[styles.touchMark, markStyle]} />
 				</View>
