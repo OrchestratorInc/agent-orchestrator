@@ -7,7 +7,7 @@ import { done } from "./remote-chat-cache";
 const DB_NAME = "ao-local-chats";
 const STORE = "pages";
 const MAX_CHATS = 50;
-const WRITE_DELAY_MS = 2_000;
+const WRITE_DELAY_MS = 1_000;
 
 type Entry = { sessionId: string; createdAt: string; savedAt: number; page: ConversationSnapshot };
 
@@ -75,18 +75,21 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 			void openDatabase()
 				.then((db) => done(db.transaction(STORE).objectStore(STORE).get(sessionId)))
 				.then((entry: Entry | undefined) => {
-					if (!entry || event.query.state.data !== undefined || entry.createdAt !== listedCreatedAt(queryClient, sessionId)) return;
+					const { state } = event.query;
+					if (!entry || state.data !== undefined || state.fetchStatus !== "fetching" || entry.createdAt !== listedCreatedAt(queryClient, sessionId)) return;
 					queryClient.setQueryData(savedConversationQueryKey(sessionId), entry.page);
 				})
 				.catch(() => undefined);
 		}
-		if (event.action.type === "success") queryClient.removeQueries({ queryKey: savedConversationQueryKey(sessionId), exact: true });
-		if (timers.has(sessionId)) return;
+		if (event.action.type === "success" || event.action.type === "error") {
+			queryClient.removeQueries({ queryKey: savedConversationQueryKey(sessionId), exact: true });
+		}
+		clearTimeout(timers.get(sessionId));
 		timers.set(sessionId, setTimeout(() => {
 			timers.delete(sessionId);
-			const page = (event.query.state.data as InfiniteData<ConversationSnapshot> | undefined)?.pages[0];
+			const page = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(event.query.queryKey)?.pages[0];
 			const createdAt = listedCreatedAt(queryClient, sessionId);
-			if (!page || createdAt === undefined || written.has(page)) return;
+			if (!page || page.controller.state === "busy" || createdAt === undefined || written.has(page)) return;
 			written.add(page);
 			const entry: Entry = { sessionId, createdAt, savedAt: Date.now(), page };
 			void openDatabase()
