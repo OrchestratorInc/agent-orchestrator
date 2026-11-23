@@ -113,14 +113,15 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           script="$(cat <<'SH'
-          dnf install -y -q sudo shadow-utils gzip
+          # The minimal image lacks tools every Amazon Linux 2023 VM has.
+          dnf install -y -q sudo shadow-utils gzip findutils gawk procps-ng
           useradd -m ao
           echo 'ao ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ao
           # A container has no systemd user session, so the bootstrap stops at
           # that check, after its dnf installs.
-          su - ao -c 'bash /src/scripts/bootstrap-self-hosted.sh' || true
-          su - ao -c 'gh --version && git --version && python3 --version'
-          su - ao -c 'bash /src/scripts/setup-self-hosted.sh --bundle /src/frontend/dist-host/ao-host-linux-arm64.tar.gz --install-only'
+          sudo -iu ao bash /src/scripts/bootstrap-self-hosted.sh || true
+          sudo -iu ao bash -c 'gh --version && git --version && python3 --version'
+          sudo -iu ao bash /src/scripts/setup-self-hosted.sh --bundle /src/frontend/dist-host/ao-host-linux-arm64.tar.gz --install-only
           cat > /tmp/check.sh <<'CHECK'
           set -euo pipefail
           resources="$HOME/.ao/host/current/resources"
@@ -137,7 +138,7 @@ jobs:
           ~/.local/bin/ao stop
           CHECK
           chmod 755 /tmp/check.sh
-          su - ao -c 'bash /tmp/check.sh'
+          sudo -iu ao bash /tmp/check.sh
           SH
           )"
           docker run --rm -v "$GITHUB_WORKSPACE:/src:ro" public.ecr.aws/amazonlinux/amazonlinux:2023 \
