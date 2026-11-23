@@ -353,6 +353,37 @@ func TestAutomationMaterializationUsesNextRunCompareAndSwap(t *testing.T) {
 	}
 }
 
+// Removing a project archives it. Dropping the project filter from the due
+// query must make this test fail: the scheduler would keep firing (and
+// failing) the archived project's automation on every occurrence.
+func TestAutomationDueScanSkipsArchivedProjects(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "live")
+	seedProject(t, store, "removed")
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	for _, projectID := range []domain.ProjectID{"live", "removed"} {
+		if _, err := store.CreateAutomation(ctx, domain.Automation{
+			ID: "automation-" + string(projectID), ProjectID: projectID, DisplayName: "Triage", Prompt: "Review",
+			Kind: domain.KindWorker, RRuleText: "FREQ=DAILY", Timezone: "UTC", Enabled: true,
+			NextRunAt: base, CreatedAt: base, UpdatedAt: base,
+		}); err != nil {
+			t.Fatalf("CreateAutomation(%s): %v", projectID, err)
+		}
+	}
+	if archived, err := store.ArchiveProject(ctx, "removed", base); err != nil || !archived {
+		t.Fatalf("ArchiveProject: archived=%v err=%v", archived, err)
+	}
+
+	due, err := store.ListDueAutomations(ctx, base.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListDueAutomations: %v", err)
+	}
+	if len(due) != 1 || due[0].ID != "automation-live" {
+		t.Fatalf("due automations = %#v, want only automation-live", due)
+	}
+}
+
 // The claim transaction is the non-overlap boundary. Once one occurrence is
 // spawning, later pending work for that definition cannot be leased.
 func TestAutomationClaimLeasesOldestPendingWithoutOverlap(t *testing.T) {
