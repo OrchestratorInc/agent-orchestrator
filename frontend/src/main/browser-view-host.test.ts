@@ -4501,7 +4501,7 @@ describe("agent browser runtime", () => {
 
 		it("streams the agent tab in front only while its panel is on screen", async () => {
 			const { emit, invoke, agent, viewId } = await openAgent();
-			const shows = () => agent.executeJavaScript.mock.calls.map(([script]: [string]) => script).filter((script: string) => script.includes("__rbHost.show("));
+			const shows = () => agent.executeJavaScript.mock.calls.map((call: unknown[]) => String(call[0])).filter((script) => script.includes("__rbHost.show("));
 			agent.emitConsoleMessage(0, report());
 			await invoke("browser:selectTab", { viewId, tabId: "a1" });
 			// In front of a panel nobody has laid out yet: nothing to stream to.
