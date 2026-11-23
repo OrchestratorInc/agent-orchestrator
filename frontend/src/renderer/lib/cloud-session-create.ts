@@ -99,6 +99,7 @@ export class CloudTaskFilesUndeliveredError extends Error {
  * (unsettledFileStarts). cause is the failure the cleanup followed.
  */
 export class CloudTaskFilesUncertainError extends Error {
+	readonly telemetryCode = "CLOUD_TASK_FILES_UNCERTAIN_ERROR";
 	constructor(cause: unknown) {
 		super(cause instanceof Error ? cause.message : String(cause), { cause });
 		this.name = "CloudTaskFilesUncertainError";

@@ -441,6 +441,7 @@ export function SessionArchiveModal({
 	return (
 		<>
 			<CommandDialog
+				telemetrySurface="archive_modal"
 				plain
 				open={open}
 				onOpenChange={onOpenChange}

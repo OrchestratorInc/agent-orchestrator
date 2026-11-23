@@ -51,6 +51,9 @@ type preparedTurn struct {
 	id              string
 	clientMessageID string
 	prompt          []acpsdk.ContentBlock
+	// endedCycle is the agent's own cycle this turn ended, settled when the
+	// turn runs (see settleEndedCycle).
+	endedCycle *providerCycle
 }
 
 type interruptAttempt struct {
@@ -243,6 +246,18 @@ type conversation struct {
 	historyReconciler func([]ports.ChatEvent) []ports.ChatEvent
 	// plansSpanTurns: see Config.PlansSpanTurns.
 	plansSpanTurns bool
+	// toolsOutliveTurn: see Config.ToolsOutliveTurn.
+	toolsOutliveTurn bool
+	// cycle is work the agent is running on its own between AO's turns; see
+	// providerCycle. providerReportsState records that the agent reports its
+	// own running and idle states, so its idle, not quiet, ends a cycle.
+	cycle                *providerCycle
+	providerReportsState bool
+	// cycleStateMu orders a cycle's active and idle reports: it is held, before
+	// mu, from opening a cycle through reporting it active, and from ending one
+	// through reporting it idle, so a cycle that opens as another ends cannot
+	// report active before the ended one reports idle.
+	cycleStateMu sync.Mutex
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute
@@ -1052,6 +1067,9 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 		turn.prompt = append(append([]acpsdk.ContentBlock(nil), c.preamble...), turn.prompt...)
 		c.preambleSpent = true
 	}
+	// A cycle the agent was still running on its own ends here: what it wrote
+	// so far stays its own, and the turn's output starts fresh items.
+	turn.endedCycle = c.detachProviderCycleLocked()
 	c.activeTurn = turn.id
 	c.turnModelID = turn.id
 	c.turnModel = c.configOptionCurrentLocked("model")
@@ -1072,11 +1090,14 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.providerFailure = nil
 	c.mu.Unlock()
 
+	// The ended cycle settles in runTurn: its settle can wait on an update
+	// still being emitted, and this caller may be the one that drains events.
 	go c.runTurn(turnCtx, sessionID, turn)
 	return nil
 }
 
 func (c *conversation) runTurn(ctx context.Context, sessionID string, turn preparedTurn) {
+	c.settleEndedCycle(turn.endedCycle)
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.id})
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
 	// ACP message ids are opaque idempotency/correlation keys. Preserve AO's
@@ -1163,7 +1184,8 @@ func (c *conversation) finishPrompt(
 		turnModel = c.turnModel
 	}
 	c.mu.Unlock()
-	c.settleOpenItems(turnID)
+	interruptRequested := interrupt != nil && interrupt.turnID == turnID
+	c.settleOpenItems(turnID, c.keepToolsOutlivingTurn(interruptRequested, resp, err))
 	interruptedLocally := false
 	if interrupt != nil && interrupt.turnID == turnID {
 		// ACP cancellation and Prompt completion can race. Wait for the sender's
@@ -1353,6 +1375,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	}
 	before := c.contextTokens
 	id := uuid.NewString()
+	cycle := c.detachProviderCycleLocked()
 	c.activeTurn = id
 	c.turnModelID = id
 	c.turnModel = c.configOptionCurrentLocked("model")
@@ -1373,10 +1396,23 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.providerFailure = nil
 	c.mu.Unlock()
 
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
-
-	go c.runCompactionTurn(turnCtx, sessionID, id)
+	start := func() {
+		c.settleEndedCycle(cycle)
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
+	}
+	if cycle == nil {
+		start()
+		go c.runCompactionTurn(turnCtx, sessionID, id)
+	} else {
+		// The ended cycle settles off this call, as in runTurn: its settle can
+		// wait on an update blocked emitting, and the caller may hold a lock the
+		// event drain needs. Its items still settle before the turn starts.
+		go func() {
+			start()
+			c.runCompactionTurn(turnCtx, sessionID, id)
+		}()
+	}
 	return ports.ChatCompactionResult{TokensBefore: before}, nil
 }
 
@@ -1605,6 +1641,10 @@ func (c *conversation) Terminate() error {
 const staleBackgroundTask = 30 * time.Minute
 
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
+	if c.providerCycleActive(time.Now()) {
+		// The agent is working on its own; hibernating would kill that work.
+		return false, nil
+	}
 	if c.hibernationCheck == nil {
 		return !c.backgroundObserved.Active(time.Now(), staleBackgroundTask), nil
 	}
@@ -1679,6 +1719,9 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
+		if c.cycle != nil && c.cycle.timer != nil {
+			c.cycle.timer.Stop()
+		}
 		close(c.closing)
 		c.releasePendingSteersLocked()
 		persistent := c.proc.terminate != nil
@@ -1803,7 +1846,9 @@ func (c *conversation) emit(event ports.ChatEvent) {
 	}
 }
 
-func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnState) {
+// keepOpen names tools that outlive the turn (see keepToolsOutlivingTurn);
+// they stay running instead of failing with it.
+func (c *conversation) settleOpenItems(turnID string, keepOpen map[string]bool, turnState ...domain.TurnState) {
 	// Copy what is settled while holding the lock. A late session/update for the
 	// same turn can still write these maps and tool states (processUpdate) while
 	// the items below are emitted, so iterating the live ones raced.
@@ -1846,7 +1891,7 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 	toolIDs := sortedKeys(tools)
 	for _, id := range toolIDs {
 		tool := tools[id]
-		if toolStatusOpen(tool.status) && c.toolStillOpen(liveTools, id) {
+		if toolStatusOpen(tool.status) && !keepOpen[id] && c.toolStillOpen(liveTools, id) {
 			snapshot := tool
 			snapshot.status = acpsdk.ToolCallStatusFailed
 			event := c.toolEvent(turnID, &snapshot, true)

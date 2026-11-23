@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
@@ -107,6 +108,7 @@ import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 import { markLaunchUsable } from "../lib/launch-telemetry";
 import { useSessionOpenTiming } from "../lib/performance-telemetry";
+import { uiUsage } from "../lib/ui-usage-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
 
@@ -586,6 +588,10 @@ function ShellLayout() {
 				: null,
 		);
 	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
+	// Counts a switch to another session and where it started (sidebar, tab, Cmd+K…).
+	useEffect(() => {
+		if (scopedSession?.id) uiUsage.sessionViewed(sessionUiKey(scopedSession.id, routeParams.hostId));
+	}, [routeParams.hostId, scopedSession?.id]);
 	// Warms the New Task composer's model-catalog cache while the user is just
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
@@ -881,7 +887,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
-				throw new Error(status.message || "Daemon is not ready.");
+				throw new AoError("DAEMON_NOT_READY", status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
 				body: {
