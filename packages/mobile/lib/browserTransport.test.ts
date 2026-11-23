@@ -32,7 +32,7 @@ describe("transport contract", () => {
 	});
 
 	const gated: Array<[keyof BrowserCapabilities, BrowserCommand]> = [
-		["text", { type: "input", payload: { kind: "text", text: "a" } }],
+		["text", { type: "input", payload: { kind: "text", value: "a" } }],
 		["keys", { type: "input", payload: { kind: "key", phase: "down", key: "Enter" } }],
 		["viewport", { type: "viewport", payload: null }],
 		["quality", { type: "quality", payload: { quality: 50, maxFps: 15 } }],

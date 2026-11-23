@@ -391,6 +391,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	// Each item's work, read when it is chosen.
 	const menuActions: Partial<Record<ConversationMenuAction, () => void>> = {
 		shell: () => router.push({ pathname: "/cloud/terminal", params: { sessionId, kind: "workspace" } }),
+		browser: () => router.push({ pathname: "/cloud/browser", params: { sessionId } }),
 		agent_terminal: () => setView("agent"),
 		project: () => { if (project) router.push({ pathname: "/project/[id]", params: { id: project.id, hostId: CLOUD_HOST_ID } }); },
 		pin: () => void setWorkerPinned(sessionId, !pinned, CLOUD_HOST_ID).then(() => haptics.success(), (error: unknown) => {

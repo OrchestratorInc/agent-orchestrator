@@ -29,6 +29,7 @@ const screenRoutes = [
 	"settings/machine/[id]/edit.tsx",
 	"settings/cloud/index.tsx",
 	"settings/cloud/agent/[agent].tsx",
+	"cloud/browser.tsx",
 	"cloud/terminal.tsx",
 	"browser/[id].tsx",
 	"settings/theme.tsx",

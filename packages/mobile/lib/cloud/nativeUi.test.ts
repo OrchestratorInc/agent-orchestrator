@@ -18,17 +18,23 @@ const connection = (provider: string, validationState: CloudProviderConnection["
 describe("cloud session actions sheet", () => {
 	const titles = (groups: ReturnType<typeof cloudSessionMenuGroups>) => groups.map((group) => [group.title, group.items.map((item) => item.label)]);
 
-	it("offers the shell, pin, PR Review and Archive, in the local sheet's sections", () => {
+	it("offers the shell, browser, pin, PR Review and Archive, in the local sheet's sections", () => {
 		const groups = cloudSessionMenuGroups({ terminated: false, pinned: false, canShowAgentTerminal: false, pullRequest: { number: 42 }, projectName: "web" });
 		expect(titles(groups)).toEqual([
-			["Open", ["Shell", "Project"]],
+			["Open", ["Shell", "Browser", "Project"]],
 			["Worker", ["Pin", "PR Review"]],
 			["Session", ["Archive"]],
 		]);
 		const archive = groups.at(-1)!.items[0];
 		expect(archive).toMatchObject({ action: "delete", destructive: true });
-		expect(groups[0].items[1].subtitle).toBe("web");
+		expect(groups[0].items[1]).toMatchObject({ action: "browser" });
+		expect(groups[0].items[2].subtitle).toBe("web");
 		expect(groups[1].items[1]).toMatchObject({ action: "pull_requests", subtitle: "Pull request #42" });
+	});
+
+	it("offers no browser once the session has ended", () => {
+		const open = cloudSessionMenuGroups({ terminated: true, pinned: false, canShowAgentTerminal: false, projectName: "web" })[0].items.map((item) => item.action);
+		expect(open).not.toContain("browser");
 	});
 
 	it("opens the session's artifacts, as a local session's, once there are some", () => {

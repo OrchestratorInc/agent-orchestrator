@@ -52,9 +52,11 @@ export type BrowserLivePaneProps = {
 	 * and waits for the paired connection to do so.
 	 */
 	transport?: () => BrowserTransport;
+	/** What the pane calls the browser it shows, in its own copy. */
+	browserName?: "desktop browser" | "agent browser";
 };
 
-export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = null, transport }: BrowserLivePaneProps) {
+export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = null, transport, browserName = "desktop browser" }: BrowserLivePaneProps) {
 	const app = useApp();
 	const { config } = app;
 	// A supplied stream doesn't go through the paired machine, so that
@@ -327,7 +329,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					// hear which page it shows.
 					accessible={interactive}
 					accessibilityRole="image"
-					accessibilityLabel={pageTitle ? `Desktop browser, ${pageTitle}` : "Desktop browser"}
+					accessibilityLabel={pageTitle ? `${capitalized(browserName)}, ${pageTitle}` : capitalized(browserName)}
 					// Unhandled, VoiceOver's double-tap lands as a touch on the
 					// frame's middle and clicks whatever the page has there. Its
 					// pass-through gesture still reaches the page by touch.
@@ -342,9 +344,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				</View>
 			</GestureDetector>
 			{status === "open" && blank ? <View style={styles.overlay}>
-				<EmptyState icon="desktop" title="Nothing is open in the desktop browser yet" action={<Button title="Open URL…" icon="globe" onPress={controls.onOpenURL} />} />
+				<EmptyState icon="desktop" title={`Nothing is open in the ${browserName} yet`} action={<Button title="Open URL…" icon="globe" onPress={controls.onOpenURL} />} />
 			</View> : null}
-			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title="Waiting for the desktop browser…" /></View> : null}
+			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title={`Waiting for the ${browserName}…`} /></View> : null}
 			{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
 			<LoadingBar loading={status === "open" && loading} accessibilityLabel="Loading page" />
 		</View>
@@ -352,6 +354,10 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} />
 		<ToastHost toast={toast} bottomOffset={toolbarShown ? toolbarClearance + space.md : undefined} />
 	</View>;
+}
+
+function capitalized(text: string): string {
+	return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function BrowserState({ status, error, retry }: { status: BrowserStatus; error?: string; retry(): void }) {

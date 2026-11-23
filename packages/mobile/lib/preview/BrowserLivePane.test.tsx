@@ -485,6 +485,17 @@ describe("transport contract", () => {
 		expect(fake.record.closed).toBe(true);
 	});
 
+	it("names the agent's browser in its copy for a Cloud stream", async () => {
+		const fake = fakeTransport();
+		await act(async () => { screen = create(<BrowserLivePane sessionID="cloud-1" transport={fake.factory} browserName="agent browser" />); });
+		await act(async () => {
+			fake.record.handlers!.onStatus("open");
+			fake.record.handlers!.onState(page);
+		});
+		expect(nodes("EmptyState").map((node) => node.props.title)).toContain("Waiting for the agent browser…");
+		expect(nodes("View").some((node) => node.props.accessibilityLabel === "Agent browser, Todo app")).toBe(true);
+	});
+
 	it("the pane keeps the local transport's capabilities: pointer input always reaches it", async () => {
 		await render();
 		await open();

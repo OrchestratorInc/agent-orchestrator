@@ -16,7 +16,7 @@ export type ConversationMenuAction = "shell" | "preview" | "artifacts" | "pin" |
  * terminal (a Terminal UI session's view, beside the chat), its project, and
  * Restore for an archived one. See lib/cloud/sessionMenu.
  */
-export type CloudConversationMenuAction = "agent_terminal" | "project" | "restore" | "switch_chat";
+export type CloudConversationMenuAction = "agent_terminal" | "browser" | "project" | "restore" | "switch_chat";
 
 export type ConversationMenuSection = {
 	// Switching to Terminal UI and Archive act on the session, not the
@@ -100,6 +100,7 @@ export function conversationMenuGroups(state: ConversationMenuState): Conversati
 export function conversationMenuItem(action: ConversationMenuAction, state: ConversationMenuState): ConversationMenuItem {
 	switch (action) {
 		case "shell": return { action, label: state.openingShell ? "Opening shell…" : "Shell", disabled: state.openingShell, icon: { ios: "chevron.left.forwardslash.chevron.right", android: "code" } };
+		case "browser": return { action, label: "Browser", subtitle: "The agent's browser in the sandbox", icon: { ios: "safari", android: "language" } };
 		case "preview": return { action, label: "Preview", subtitle: state.previewReady ? "Ready to open" : undefined, icon: { ios: "globe", android: "language" } };
 		case "artifacts": return { action, label: "Artifacts", subtitle: `${state.artifactCount} ${state.artifactCount === 1 ? "file" : "files"}`, icon: { ios: "doc.text", android: "description" } };
 		case "pin": return { action, label: state.pinned ? "Unpin" : "Pin", icon: state.pinned ? { ios: "pin.slash", android: "keep_off" } : { ios: "pin", android: "keep" } };
