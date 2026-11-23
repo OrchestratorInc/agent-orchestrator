@@ -1697,8 +1697,11 @@ describe("Sidebar", () => {
 			"opacity-100",
 			"focus-visible-in-session-row:opacity-0",
 		);
-		expect(openSession).toHaveClass("pl-1.5");
-		expect(openSession.closest("li")).toHaveClass("pl-0.5");
+		// A project's rows sit in its tree: the rail fills the indent and the pill
+		// starts after the arm, with the indent still pressable.
+		expect(openSession).toHaveClass("pl-0.5", "before:w-(--tree-indent)");
+		expect(openSession.closest("li")).toHaveClass("sidebar-tree-item");
+		expect(openSession.closest(".sidebar-tree")).not.toHaveAttribute("data-tree-more");
 	});
 
 	it("keeps session status and actions stable when an action receives keyboard focus", async () => {
@@ -3024,8 +3027,12 @@ describe("Sidebar", () => {
 		const list = screen.getByTestId("session-list-proj-1");
 		expect(within(list).getByText("Agent 6")).toBeInTheDocument();
 		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
+		// Show more is the tree's last leaf, so the rail's elbow ends on it.
+		const showMore = screen.getByRole("button", { name: "Show 3 more agents" });
+		expect(list.closest(".sidebar-tree")).toHaveAttribute("data-tree-more", "");
+		expect(showMore.closest(".sidebar-tree-item")).toHaveAttribute("data-tree-more", "");
 
-		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
+		await user.click(showMore);
 
 		expect(screen.getByText("Agent 7")).toBeInTheDocument();
 		expect(screen.getByText("Agent 9")).toBeInTheDocument();

@@ -220,6 +220,10 @@ const FOOTER_ICON_BUTTON_CLASS = cn(
 // and session rows.
 const SIDEBAR_ROW_CLASS = "h-8 gap-2 [&_svg]:size-icon-md";
 
+/** A project tree row's pill starts after the rail's arm; this keeps the
+ *  indent left of the pill pressable, so the row's hit target never shrinks. */
+const TREE_ROW_HIT_CLASS = "before:absolute before:inset-y-0 before:right-full before:w-(--tree-indent) before:content-['']";
+
 // Search + Pinned/Projects section chrome: same type, icon, and row size.
 const SECTION_ROW_CLASS =
 	"flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-sm font-medium text-muted-foreground [&_svg]:size-icon-md [&_svg]:shrink-0";
@@ -2239,32 +2243,38 @@ const ProjectItem = memo(function ProjectItem({
 						</div>
 						{/* end outer relative */}
 					</div>
-					{/* project-sidebar__sessions: indented under the project parent so worker
-					    sessions read as children without adding a persistent guide rail. The
-					    list opens, closes and gains its first session at full height in one
-					    frame, so the projects below never slide. */}
+					{/* project-sidebar__sessions: a tree under the project parent. A muted
+					    spine drops from the project icon and branches into each row (see
+					    .sidebar-tree in styles.css). The list opens, closes and gains its
+					    first session at full height in one frame, so the projects below
+					    never slide. */}
 					{expanded && sessions.length > 0 && (
-						<div ref={projectSessionsRef} className="sidebar-expanded-chrome overflow-hidden">
+						<div
+							ref={projectSessionsRef}
+							className="sidebar-tree sidebar-expanded-chrome overflow-hidden"
+							data-tree-more={hiddenSessionCount > 0 ? "" : undefined}
+						>
 							<SessionReorderList
 								dndId={sessionDndId(projectKey)}
 								testId={`session-list-${projectKey}`}
 								className={cn(
-									"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
+									"mx-0 ml-0 translate-x-0 gap-px border-l-0 px-0 pt-1",
 									hiddenSessionCount > 0 ? "pb-px" : "pb-1",
 								)}
 								sessions={listedSessions}
 								sessionIds={listedSessionIds}
 								activeSessionId={selection.activeSessionId}
 								plain={projectDragInProgress}
+								tree
 								onReorder={commitSessionOrder}
 								onKilled={handleSessionKilled}
 								onOpen={openSession}
 							/>
 							{hiddenSessionCount > 0 ? (
-								// Indented to the session list so its label starts on the status-dot column.
-								<div className="pl-4">
+								// The tree's last leaf: its label starts on the status-dot column.
+								<div className="sidebar-tree-item" data-tree-more="">
 									<ShowMoreRow
-										className="px-3"
+										className={cn("px-2", TREE_ROW_HIT_CLASS)}
 										expanded={showAllSessions}
 										label={
 											showAllSessions
@@ -2550,6 +2560,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active,
 	consumeDragClick,
 	indented = true,
+	tree = false,
 	listIsDragging,
 	dropTransitionDisabled,
 	cloud,
@@ -2561,6 +2572,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	consumeDragClick: (id: string) => boolean;
 	cloud?: boolean;
 	indented?: boolean;
+	tree?: boolean;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2584,6 +2596,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 			active={active}
 			cloud={cloud}
 			indented={indented}
+			tree={tree}
 			onKilled={onKilled}
 			onOpen={open}
 			listIsDragging={listIsDragging}
@@ -2603,6 +2616,7 @@ function SessionReorderList({
 	sessionIds,
 	activeSessionId,
 	indented = true,
+	tree = false,
 	plain = false,
 	cloudBadge = false,
 	onReorder,
@@ -2616,6 +2630,8 @@ function SessionReorderList({
 	sessionIds: string[];
 	activeSessionId?: string;
 	indented?: boolean;
+	/** Draw the project tree rail into each row (a project's own session list). */
+	tree?: boolean;
 	/** Badge Cloud sessions, in a list (the Scratchpad) that mixes them with local ones. */
 	cloudBadge?: boolean;
 	/** While a project is being dragged, leave the session lists as plain rows:
@@ -2668,6 +2684,7 @@ function SessionReorderList({
 						active={activeSessionId === session.id}
 						cloud={cloudBadge && Boolean(session.cloud)}
 						indented={indented}
+						tree={tree}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
 					/>
@@ -2696,6 +2713,7 @@ function SessionReorderList({
 							consumeDragClick={dragClickGuard.consumeClick}
 							cloud={cloudBadge && Boolean(session.cloud)}
 							indented={indented}
+							tree={tree}
 							listIsDragging={listDragging}
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
 							onKilled={onKilled}
@@ -2721,6 +2739,7 @@ const SessionRow = memo(function SessionRow({
 	hostLabel,
 	cloud = false,
 	indented = true,
+	tree = false,
 	listIsDragging = false,
 	onKilled,
 	onOpen,
@@ -2732,6 +2751,8 @@ const SessionRow = memo(function SessionRow({
 	/** Mark the row as a Cloud session, in a list (the Scratchpad) that mixes them with local ones. */
 	cloud?: boolean;
 	indented?: boolean;
+	/** A project tree row: the rail sits in its indent and the pill starts after the arm. */
+	tree?: boolean;
 	listIsDragging?: boolean;
 	/** Project drags pause nested session projection work. */
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2819,10 +2840,11 @@ const SessionRow = memo(function SessionRow({
 
 	if (rename.isEditing) {
 		return (
-			<SidebarMenuSubItem className={cn(indented && "pl-0.5")}>
+			<SidebarMenuSubItem className={cn(tree ? "sidebar-tree-item" : indented && "pl-0.5")}>
 				<div
 					className={cn(
-						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pl-1.5 pr-1",
+						"group/nav-row relative flex h-8 w-full items-center gap-1.5 rounded-lg py-0 pr-1",
+						tree ? "pl-0.5" : "pl-1.5",
 						active && "text-foreground",
 					)}
 					data-session-row=""
@@ -2866,7 +2888,7 @@ const SessionRow = memo(function SessionRow({
 			<ContextMenuTrigger asChild>
 				<HoverCardTrigger asChild>
 				<SidebarMenuSubItem
-					className={cn(indented && "pl-0.5", reorder?.isDragging && "z-chrome cursor-grabbing opacity-60")}
+					className={cn(tree ? "sidebar-tree-item" : indented && "pl-0.5", reorder?.isDragging && "z-chrome cursor-grabbing opacity-60")}
 					data-dragging={reorder?.isDragging ? "true" : undefined}
 					ref={rowNodeRef}
 					style={reorder ? sortableRowStyle(reorder) : undefined}
@@ -2893,7 +2915,10 @@ const SessionRow = memo(function SessionRow({
 							data-telemetry-id="sidebar.session_row"
 							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
-								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+								// In the tree the pill starts after the arm, so the dot keeps the
+								// reference's 8px inset from the pill's edge.
+								tree ? cn("pl-0.5", TREE_ROW_HIT_CLASS) : "pl-1.5",
 								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
 									"group-hover/session-row:pr-sidebar-project-actions focus-visible-in-session-row:pr-sidebar-project-actions",

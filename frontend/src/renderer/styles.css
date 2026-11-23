@@ -2169,6 +2169,90 @@ textarea,
 	}
 }
 
+/* Project → session tree rail. A muted spine drops from under the project
+   icon; each child row branches off it with a short arm into its centre (a T
+   with small filleted joins), and the last child ends the spine in a rounded
+   elbow, so nothing dangles below it. The list paints the spine once, so it
+   stays whole while a row is dragged; each row paints its own arm from its
+   indent. The row's pill starts just past the arm. */
+.sidebar-tree {
+	/* Project icon centre: the row's 10px inset plus half the 14px icon. */
+	--tree-x: calc(var(--spacing) * 2.5 + var(--size-icon-md) / 2);
+	--tree-stroke: 1.5px;
+	/* Spine centre to arm tip, then a 2px gap before the pill. */
+	--tree-arm: 8px;
+	--tree-indent: calc(var(--tree-x) + var(--tree-arm) + 2px);
+	--tree-fillet: 2px;
+	--tree-elbow: 5px;
+	/* The last row's centre above the list's bottom edge: its 4px bottom
+	   space (the list's pb-1, or Show more's mb-1) plus half the 32px row. */
+	--tree-tail: calc(var(--spacing) * 5);
+	--tree-line: color-mix(in srgb, var(--color-text-muted) 25%, transparent);
+	position: relative;
+}
+
+.sidebar-tree-item {
+	position: relative;
+	padding-left: var(--tree-indent);
+}
+
+.sidebar-tree::before,
+.sidebar-tree-item::before,
+.sidebar-tree-item::after {
+	content: "";
+	position: absolute;
+	pointer-events: none;
+}
+
+/* The spine: from the list's top edge, 8px under the icon, down to where the
+   last child's elbow takes over. */
+.sidebar-tree::before {
+	top: 0;
+	bottom: calc(var(--tree-tail) + var(--tree-elbow));
+	left: calc(var(--tree-x) - var(--tree-stroke) / 2);
+	width: var(--tree-stroke);
+	border-top-left-radius: calc(var(--tree-stroke) / 2);
+	border-top-right-radius: calc(var(--tree-stroke) / 2);
+	background: var(--tree-line);
+}
+
+/* The arm, with a concave fillet above and below where it leaves the spine. */
+.sidebar-tree-item::before {
+	top: 0;
+	bottom: 0;
+	left: calc(var(--tree-x) + var(--tree-stroke) / 2);
+	width: calc(var(--tree-arm) - var(--tree-stroke) / 2);
+	background:
+		radial-gradient(circle at 100% 0, transparent calc(var(--tree-fillet) - 0.5px), var(--tree-line) var(--tree-fillet))
+			0 calc(50% - (var(--tree-stroke) + var(--tree-fillet)) / 2) / var(--tree-fillet) var(--tree-fillet) no-repeat,
+		radial-gradient(circle at 100% 100%, transparent calc(var(--tree-fillet) - 0.5px), var(--tree-line) var(--tree-fillet))
+			0 calc(50% + (var(--tree-stroke) + var(--tree-fillet)) / 2) / var(--tree-fillet) var(--tree-fillet) no-repeat,
+		linear-gradient(var(--tree-line), var(--tree-line)) 0 50% / 100% var(--tree-stroke) no-repeat;
+}
+
+.sidebar-tree-item::after {
+	display: none;
+}
+
+/* The last child (Show more when the list is capped): the spine turns into its
+   arm through one rounded elbow and stops there. */
+.sidebar-tree:not([data-tree-more]) [data-slot="sidebar-menu-sub"] > .sidebar-tree-item:last-child::before,
+.sidebar-tree-item[data-tree-more]::before {
+	display: none;
+}
+
+.sidebar-tree:not([data-tree-more]) [data-slot="sidebar-menu-sub"] > .sidebar-tree-item:last-child::after,
+.sidebar-tree-item[data-tree-more]::after {
+	display: block;
+	top: calc(50% - var(--tree-elbow));
+	left: calc(var(--tree-x) - var(--tree-stroke) / 2);
+	width: calc(var(--tree-arm) + var(--tree-stroke) / 2);
+	height: calc(var(--tree-elbow) + var(--tree-stroke) / 2);
+	border-left: var(--tree-stroke) solid var(--tree-line);
+	border-bottom: var(--tree-stroke) solid var(--tree-line);
+	border-bottom-left-radius: var(--tree-elbow);
+}
+
 /* The live row's label (current step, retry chip, setup label) fades in once when the
    row changes what it is showing; the text inside then updates in place. */
 .chat-live-label {
