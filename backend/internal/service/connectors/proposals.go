@@ -78,6 +78,9 @@ func (s *Service) Propose(ctx context.Context, in ProposalInput) (Proposal, erro
 		if projectID, open = lookup(ctx, in.SessionID); !open {
 			return Proposal{}, apierr.NotFound("CONNECTOR_PROPOSAL_SESSION", "Unknown session")
 		}
+		if projectID == AnyProject {
+			return Proposal{}, apierr.Unavailable("CONNECTOR_PROPOSAL_SESSION", "The session could not be read now. Try again.")
+		}
 	}
 	draft := Input{
 		Key: in.Key, Name: in.Name, Transport: in.Transport, URL: in.URL, Command: in.Command, Args: in.Args,

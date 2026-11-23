@@ -402,3 +402,21 @@ func TestTheAgentsOwnConfigurationIsReadOnlyWhenAConnectorCouldClash(t *testing.
 		t.Fatalf("with connectors: %+v, reads %d", got, reads)
 	}
 }
+
+func TestARefusedNotificationGetsNoMessage(t *testing.T) {
+	svc, _ := newProxiedService(t)
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, Input{Name: "docs", Transport: TransportHTTP, URL: "https://docs.example.com/mcp"}); err != nil {
+		t.Fatal(err)
+	}
+	entry := svc.ForSession(ctx, SessionInput{SessionID: "ao-12"})[0]
+	if _, err := svc.SetEnabled(ctx, "docs", false); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := proxyPost(t, entry.URL, entry.Headers["Authorization"], `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}`); status != http.StatusAccepted || body != "" {
+		t.Fatalf("a notification to a connector that is off = %d %q", status, body)
+	}
+	if status, body := proxyPost(t, entry.URL, entry.Headers["Authorization"], `{"jsonrpc":"2.0","id":4,"method":"tools/list"}`); status != http.StatusOK || !strings.Contains(body, "is turned off") {
+		t.Fatalf("a call to a connector that is off = %d %q", status, body)
+	}
+}

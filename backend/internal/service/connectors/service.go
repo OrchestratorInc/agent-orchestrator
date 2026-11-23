@@ -500,6 +500,12 @@ func safeError(err error, address string) string {
 	return text
 }
 
+// LoopbackURL reports whether raw names a server on the machine itself.
+func LoopbackURL(raw string) bool {
+	target, err := url.Parse(raw)
+	return err == nil && loopbackHost(target.Hostname())
+}
+
 func loopbackHost(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }

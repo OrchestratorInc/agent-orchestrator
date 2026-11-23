@@ -176,11 +176,14 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 	}
 	_ = json.Unmarshal(body, &call)
 	fail := func(message string) {
-		if r.Method != http.MethodPost {
+		switch {
+		case r.Method != http.MethodPost:
 			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
+		case len(call.ID) == 0:
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			writeRPCError(w, call.ID, message)
 		}
-		writeRPCError(w, call.ID, message)
 	}
 	if problem != "" {
 		fail(problem)
@@ -234,8 +237,11 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 			case refused:
 				s.observe(rec.ID, StatusNeedsSignIn, "sign-in", "the server refused the sign-in")
 				_ = resp.Body.Close()
-				if r.Method != http.MethodPost {
+				if r.Method != http.MethodPost || len(call.ID) == 0 {
 					resp.StatusCode, resp.Status = http.StatusMethodNotAllowed, "405 Method Not Allowed"
+					if r.Method == http.MethodPost {
+						resp.StatusCode, resp.Status = http.StatusAccepted, "202 Accepted"
+					}
 					resp.Header, resp.Body, resp.ContentLength = http.Header{}, http.NoBody, 0
 					return nil
 				}
@@ -309,8 +315,12 @@ func (s *Service) forgetClosed(ctx context.Context) {
 	s.mu.Lock()
 	lookup := s.sessionLookup
 	ids := slices.Collect(maps.Keys(s.sessions))
+	due := lookup != nil && len(ids) >= maxTrackedSessions && s.now().Sub(s.swept) >= sweepEvery
+	if due {
+		s.swept = s.now()
+	}
 	s.mu.Unlock()
-	if lookup == nil || len(ids) < maxTrackedSessions || s.now().Sub(s.sweptAt()) < sweepEvery {
+	if !due {
 		return
 	}
 	for _, id := range ids {
@@ -320,14 +330,6 @@ func (s *Service) forgetClosed(ctx context.Context) {
 			s.mu.Unlock()
 		}
 	}
-}
-
-func (s *Service) sweptAt() time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	last := s.swept
-	s.swept = s.now()
-	return last
 }
 
 func (s *Service) count(sessionID, key, method, tool string) {

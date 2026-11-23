@@ -3,6 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,9 +71,21 @@ func TestASessionReadThatFailsDoesNotCloseTheSessionForItsConnectors(t *testing.
 	ctx := context.Background()
 	ask := connectors.ProposalInput{SessionID: "mer-1", Name: "docs", Transport: connectors.TransportHTTP, URL: "https://docs.example.com/mcp"}
 	busy := connectors.New(t.TempDir(), "http://127.0.0.1:3011")
-	wireConnectors(busy, fakeConnectorStore{fail: errors.New("database is locked")}, &fakeConnectorSessions{})
-	if _, err := busy.Propose(ctx, ask); err != nil {
-		t.Fatalf("a session whose read failed = %v", err)
+	sessions := &fakeConnectorSessions{}
+	wireConnectors(busy, fakeConnectorStore{fail: errors.New("database is locked")}, sessions)
+	if _, err := busy.Create(ctx, connectors.Input{Key: "scoped", Transport: connectors.TransportHTTP, URL: "http://127.0.0.1:1/mcp", ProjectID: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+	entry := sessions.servers(ctx, sessionmanager.SessionConnectorsInput{SessionID: "mer-1", ProjectID: "p1", Harness: domain.HarnessCodex})[0]
+	req := httptest.NewRequest(http.MethodPost, entry.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	req.Header.Set("Authorization", entry.Headers["Authorization"])
+	answer := httptest.NewRecorder()
+	busy.ServeProxy(answer, req, "mer-1", "scoped")
+	if answer.Code != http.StatusOK || strings.Contains(answer.Body.String(), "has no connector named") || !strings.Contains(answer.Body.String(), "did not answer") {
+		t.Fatalf("a call of a session whose read failed = %d %s", answer.Code, answer.Body.String())
+	}
+	if _, err := busy.Propose(ctx, ask); err == nil {
+		t.Fatal("a proposal took the unknown project as its project")
 	}
 	gone := connectors.New(t.TempDir(), "http://127.0.0.1:3011")
 	wireConnectors(gone, fakeConnectorStore{}, &fakeConnectorSessions{})

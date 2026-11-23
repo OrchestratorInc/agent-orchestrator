@@ -170,7 +170,7 @@ func (c *ConnectorsController) approveProposal(w http.ResponseWriter, r *http.Re
 		envelope.WriteError(w, r, err)
 		return
 	}
-	if rejectLANCommandConnector(w, r, string(pending.Transport)) {
+	if rejectLANCommandConnector(w, r, string(pending.Transport)) || rejectLANLoopbackConnector(w, r, pending.URL) {
 		return
 	}
 	approved, created, err := c.Svc.ApproveProposal(r.Context(), id, req.ProjectID, req.Values)
@@ -301,7 +301,7 @@ func (c *ConnectorsController) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req ConnectorRequest
-	if !decodeConnectorBody(w, r, &req) || rejectLANCommandConnector(w, r, req.Transport) {
+	if !decodeConnectorBody(w, r, &req) || rejectLANCommandConnector(w, r, req.Transport) || rejectLANLoopbackConnector(w, r, req.URL) {
 		return
 	}
 	created, err := c.Svc.Create(r.Context(), connectorInput(&req))
@@ -334,7 +334,7 @@ func (c *ConnectorsController) update(w http.ResponseWriter, r *http.Request) {
 		}
 		updated, err = c.Svc.SetEnabled(r.Context(), ref, *req.Enabled)
 	} else {
-		if rejectLANCommandConnector(w, r, req.Transport, string(current.Transport)) {
+		if rejectLANCommandConnector(w, r, req.Transport, string(current.Transport)) || rejectLANLoopbackConnector(w, r, req.URL, current.URL) {
 			return
 		}
 		in := connectorInput(&req)
@@ -383,7 +383,7 @@ func (c *ConnectorsController) test(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	if rejectLANCommandConnector(w, r, string(current.Transport)) {
+	if rejectLANCommandConnector(w, r, string(current.Transport)) || rejectLANLoopbackConnector(w, r, current.URL) {
 		return
 	}
 	tested, err := c.Svc.Test(r.Context(), connectorRef(r))
@@ -403,6 +403,9 @@ func (c *ConnectorsController) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ref := connectorRef(r)
+	if c.rejectLANLoopbackRef(w, r, ref) {
+		return
+	}
 	page, err := c.Svc.StartSignIn(r.Context(), ref)
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -503,6 +506,31 @@ func decodeConnectorBody(w http.ResponseWriter, r *http.Request, into any) bool 
 		envelope.WriteAPIError(w, r, http.StatusRequestEntityTooLarge, "bad_request", "CONNECTOR_BODY_TOO_LARGE", "The connector request body is too large", nil)
 	} else {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+	}
+	return false
+}
+
+func (c *ConnectorsController) rejectLANLoopbackRef(w http.ResponseWriter, r *http.Request, ref string) bool {
+	if !requestscope.IsLAN(r.Context()) {
+		return false
+	}
+	current, err := c.Svc.Get(r.Context(), ref)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return true
+	}
+	return rejectLANLoopbackConnector(w, r, current.URL)
+}
+
+func rejectLANLoopbackConnector(w http.ResponseWriter, r *http.Request, urls ...string) bool {
+	if !requestscope.IsLAN(r.Context()) {
+		return false
+	}
+	for _, raw := range urls {
+		if raw != "" && connectors.LoopbackURL(raw) {
+			envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "CONNECTOR_LOOPBACK_REQUIRED", "A connector for a server on the machine itself must be set up on that machine", nil)
+			return true
+		}
 	}
 	return false
 }

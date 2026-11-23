@@ -321,3 +321,34 @@ func TestARemoteClientCannotTurnOnAConnectorThatRunsACommand(t *testing.T) {
 		t.Fatalf("turn off from another machine = %d %s", status, body)
 	}
 }
+
+func TestARemoteClientCannotAimAConnectorAtTheMachineItself(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	router := httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Connectors: connectors.New(t.TempDir(), "http://127.0.0.1:3001")}, httpd.ControlDeps{})
+	remote := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if remote {
+			r = r.WithContext(requestscope.WithLAN(r.Context()))
+		}
+		router.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	local := `{"name":"local","transport":"http","url":"http://127.0.0.1:1/shutdown"}`
+	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", local); status != http.StatusCreated {
+		t.Fatalf("create on the machine = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", `{"name":"far","transport":"http","url":"https://far.example.com/mcp"}`); status != http.StatusCreated {
+		t.Fatalf("create far = %d %s", status, body)
+	}
+	remote = true
+	for name, call := range map[string][3]string{
+		"create": {http.MethodPost, "/api/v1/connectors", `{"name":"aimed","transport":"http","url":"http://localhost:3011/shutdown"}`},
+		"edit":   {http.MethodPatch, "/api/v1/connectors/far", `{"url":"http://127.0.0.1:3011/shutdown"}`},
+		"test":   {http.MethodPost, "/api/v1/connectors/local/test", ""},
+		"signin": {http.MethodPost, "/api/v1/connectors/local/connect", ""},
+	} {
+		if status, body := connectorCall(t, srv, call[0], call[1], call[2]); status != http.StatusForbidden || !strings.Contains(body, "CONNECTOR_LOOPBACK_REQUIRED") {
+			t.Errorf("%s from another machine = %d %s", name, status, body)
+		}
+	}
+}
