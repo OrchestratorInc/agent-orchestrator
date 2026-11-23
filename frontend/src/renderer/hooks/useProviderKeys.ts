@@ -26,6 +26,15 @@ export function useInvalidateProviderKeys(hostId?: string) {
 
 // Credentials go straight to the daemon and stay out of React Query's cache.
 
+/** Saves a key AO manages, or keeps the saved one when secret is empty. */
+export async function saveProviderKey(name: string, secret: string, device = false, hostId?: string): Promise<ProviderKey> {
+	const { data, error } = await clientForSessionHost(hostId).PUT("/api/v1/agents/provider-keys/{name}", {
+		params: { path: { name } }, body: { secret, device },
+	});
+	if (error || !data) throw apiErrorException(error, "Could not save the key.");
+	return data;
+}
+
 /** Removes a key AO saved, and AO's copy of it in the OS user environment. */
 export async function removeProviderKey(name: string, hostId?: string): Promise<ProviderKey> {
 	const { data, error } = await clientForSessionHost(hostId).DELETE("/api/v1/agents/provider-keys/{name}", { params: { path: { name } } });

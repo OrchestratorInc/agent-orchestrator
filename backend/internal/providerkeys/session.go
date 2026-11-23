@@ -138,6 +138,10 @@ func loadClaims(dataDir string) (map[string][]string, error) {
 // the keys it should receive, withhold the names it must not, so a key saved
 // for another harness cannot replace its subscription sign-in. An unknown
 // harness ("") receives every key.
+//
+// A key AO's own tools read is never injected: the tool reads it from AO's
+// store, so a session's environment never carries the credential. It is
+// withheld instead, which takes AO's own copy back out of the environment.
 func ForSession(dataDir, harness string) (inject map[string]string, withhold []string, err error) {
 	keys, err := Load(dataDir)
 	if err != nil {
@@ -151,6 +155,10 @@ func ForSession(dataDir, harness string) (inject map[string]string, withhold []s
 	}
 	inject = make(map[string]string, len(keys))
 	for name, value := range keys {
+		if IsToolKey(name) {
+			withhold = append(withhold, name)
+			continue
+		}
 		if owner, ok := subscriptionKeys[name]; ok && harness != "" && owner == harness && !claimed(claims[name], harness) {
 			withhold = append(withhold, name)
 			continue
@@ -174,7 +182,7 @@ func Withheld(dataDir, harness string) map[string]string {
 	stored, storeErr := Load(dataDir)
 	_, withhold, err := ForSession(dataDir, harness)
 	if err != nil {
-		withhold = SubscriptionKeys(harness)
+		withhold = append(SubscriptionKeys(harness), ToolKeys()...)
 	}
 	out := make(map[string]string, len(withhold))
 	for _, name := range withhold {
@@ -202,7 +210,7 @@ func HoldBack(ctx context.Context, env map[string]string, dataDir, harness strin
 	}
 	withheld := map[string]string{}
 	if ctx.Err() != nil {
-		for _, name := range SubscriptionKeys(harness) {
+		for _, name := range append(SubscriptionKeys(harness), ToolKeys()...) {
 			withheld[name] = ""
 		}
 	} else {

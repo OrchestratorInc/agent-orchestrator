@@ -5302,5 +5302,11 @@
 	"shell.deleteCloudProjectTitle": "Projeyi sil",
 	"shell.deleteCloudProjectLead": "Bu işlem {{name}} projesini kalıcı olarak silecek",
 	"shell.deleteCloudProjectConfirm": "Kalıcı olarak sil",
-	"shell.cloudProjectDeleted": "{{name}} silindi"
+	"shell.cloudProjectDeleted": "{{name}} silindi",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "API anahtarı",
+	"settings.gmi.apiKeyPlaceholder": "GMI Cloud anahtarınızı yapıştırın",
+	"settings.gmi.description": "Ajanların görsel, video ve ses üretmesini sağlar. Anahtar AO içinde kalır ve asla bir ajanın ortamına ulaşmaz.",
+	"settings.gmi.save": "Kaydet",
+	"settings.gmi.getKey": "Anahtar al"
 }

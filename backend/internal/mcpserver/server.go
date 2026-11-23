@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 // This is the stdio MCP server AO passes to every chat session (ao-mcp, or
@@ -127,7 +129,9 @@ func (s *server) handleMCP(ctx context.Context, state *mcpState, line []byte) *m
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
-		tools := append(append([]map[string]any{}, mcpTools...), s.cuaTools(ctx, state)...)
+		tools := append([]map[string]any{}, s.htmlTools()...)
+		tools = append(tools, s.cuaTools(ctx, state)...)
+		tools = append(tools, s.gmiTools(state)...)
 		resp.Result = map[string]any{"tools": tools}
 	case "tools/call":
 		var p struct {
@@ -135,14 +139,18 @@ func (s *server) handleMCP(ctx context.Context, state *mcpState, line []byte) *m
 			Arguments json.RawMessage `json:"arguments"`
 		}
 		_ = json.Unmarshal(req.Params, &p)
-		switch p.Name {
-		case "html_preview":
+		switch {
+		case p.Name == "html_preview" && mcpToolGroupEnabled(config.MCPToolGroupHTML):
 			resp.Result = s.callHTMLPreview(ctx, p.Arguments)
-		case "html_render":
+		case p.Name == "html_render" && mcpToolGroupEnabled(config.MCPToolGroupHTML):
 			resp.Result = s.callHTMLRender(ctx, p.Arguments)
 		default:
 			if s.cuaTools(ctx, state) != nil && state.cuaNames[p.Name] {
 				resp.Result = s.callCua(ctx, p.Name, p.Arguments)
+				break
+			}
+			if s.gmiTools(state) != nil && state.gmiNames[p.Name] {
+				resp.Result = s.callGMI(ctx, state, p.Name, p.Arguments)
 				break
 			}
 			resp.Error = &mcpError{Code: -32602, Message: fmt.Sprintf("unknown tool %q", p.Name)}

@@ -150,6 +150,16 @@ func codexTOMLConfigString(s string) string {
 	return codexTOMLBasicString(s)
 }
 
+// codexTOMLStringArray renders values as a TOML array of strings, so a
+// command line override can carry a server's arguments.
+func codexTOMLStringArray(values []string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, codexTOMLConfigString(value))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
 func codexTOMLLiteralString(s string) string {
 	return "'" + s + "'"
 }

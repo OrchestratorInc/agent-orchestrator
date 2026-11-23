@@ -5322,5 +5322,11 @@
 	"backgroundTasks.kind.other": "Hintergrundaufgabe",
 	"backgroundTasks.state.running": "Läuft",
 	"backgroundTasks.state.paused": "Pausiert",
-	"backgroundTasks.state.failed": "Fehlgeschlagen"
+	"backgroundTasks.state.failed": "Fehlgeschlagen",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "API-Schlüssel",
+	"settings.gmi.apiKeyPlaceholder": "GMI-Cloud-Schlüssel einfügen",
+	"settings.gmi.description": "Lässt Agents Bilder, Video und Audio erzeugen. Der Schlüssel bleibt in AO und erreicht nie die Umgebung eines Agents.",
+	"settings.gmi.save": "Speichern",
+	"settings.gmi.getKey": "Schlüssel holen"
 }

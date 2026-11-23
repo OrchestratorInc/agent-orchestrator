@@ -78,6 +78,7 @@ func (p *Plugin) EmitsBlockedActivity() bool { return true }
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.AgentMCPServerCapable = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentAuthDiagnosticsChecker = (*Plugin)(nil)
 var _ ports.EmptyComposerDetector = (*Plugin)(nil)
@@ -191,21 +192,86 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
+	providerArgs := claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(permissions))
+	mcpArgs, err := p.MCPServerArgs(cfg.MCPServers)
+	if err != nil {
+		return nil, err
+	}
+	providerArgs = append(providerArgs, mcpArgs...)
 	return agentruntime.BuildLaunchCommand(agentruntime.LaunchConfig{
 		Harness:          agentruntime.HarnessClaudeCode,
 		Binary:           binary,
 		SessionID:        cfg.SessionID,
 		NativeSessionID:  nativeSessionID,
-		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(permissions)),
+		ProviderArgs:     providerArgs,
 		Model:            cfg.Config.Model,
 		Effort:           cfg.Config.Effort,
 		Prompt:           cfg.Prompt,
 		SystemPrompt:     cfg.SystemPrompt,
 		SystemPromptFile: cfg.SystemPromptFile,
 		Permission:       agentruntime.PermissionPolicy(permissions),
-		AllowedTools:     cfg.AllowedTools,
+		AllowedTools:     claudeAllowedTools(cfg.AllowedTools, cfg.MCPServers),
 		DisallowedTools:  cfg.DisallowedTools,
 	})
+}
+
+// claudeAllowedTools returns the session's allowlist plus the tools of the
+// MCP servers AO offers it. An allow rule only pre-approves a tool, so
+// adding a server's tools leaves the agent's own tools untouched. It keeps an
+// unattended worker from waiting on a permission dialog for a tool AO put in
+// its hands; a deny rule elsewhere still wins.
+func claudeAllowedTools(allowed []string, servers []ports.MCPServerConfig) []string {
+	if len(servers) == 0 {
+		return allowed
+	}
+	tools := make([]string, 0, len(allowed)+len(servers))
+	tools = append(tools, allowed...)
+	for _, server := range servers {
+		name := strings.TrimSpace(server.Name)
+		if name == "" {
+			continue
+		}
+		tools = append(tools, "mcp__"+name+"__*")
+	}
+	return tools
+}
+
+// MCPServerArgs registers AO's own tool server with Claude Code through
+// --mcp-config, as an inline JSON document on the command line. A server
+// registered that way belongs to this session only and needs no approval
+// prompt, unlike one added to the project's .mcp.json, so an unattended
+// worker can use it without a human in the loop.
+//
+// The document names no credential: the server's environment carries only the
+// pointers it needs to find AO's own state, and it reads the key it uses from
+// AO's store.
+func (p *Plugin) MCPServerArgs(servers []ports.MCPServerConfig) ([]string, error) {
+	if len(servers) == 0 {
+		return nil, nil
+	}
+	entries := map[string]any{}
+	for _, server := range servers {
+		name := strings.TrimSpace(server.Name)
+		if name == "" {
+			return nil, fmt.Errorf("claude-code: MCP server name is required")
+		}
+		if strings.TrimSpace(server.Command) == "" {
+			return nil, fmt.Errorf("claude-code: MCP server %q requires a command", name)
+		}
+		entry := map[string]any{"command": server.Command}
+		if len(server.Args) > 0 {
+			entry["args"] = server.Args
+		}
+		if len(server.Env) > 0 {
+			entry["env"] = server.Env
+		}
+		entries[name] = entry
+	}
+	encoded, err := json.Marshal(map[string]any{"mcpServers": entries})
+	if err != nil {
+		return nil, fmt.Errorf("claude-code: encode MCP servers: %w", err)
+	}
+	return []string{"--mcp-config", string(encoded)}, nil
 }
 
 // claudeLaunchSettingsArgs passes a session's launch choices to Claude Code as
@@ -415,19 +481,25 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
+	providerArgs := claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(cfg.Permissions))
+	mcpArgs, err := p.MCPServerArgs(cfg.MCPServers)
+	if err != nil {
+		return nil, false, err
+	}
+	providerArgs = append(providerArgs, mcpArgs...)
 	return agentruntime.BuildRestoreCommand(agentruntime.RestoreConfig{
 		Harness:          agentruntime.HarnessClaudeCode,
 		Binary:           binary,
 		SessionID:        cfg.Session.ID,
 		Metadata:         cfg.Session.Metadata,
-		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(cfg.Permissions)),
+		ProviderArgs:     providerArgs,
 		Model:            cfg.Config.Model,
 		Effort:           cfg.Config.Effort,
 		Prompt:           cfg.Prompt,
 		SystemPrompt:     cfg.SystemPrompt,
 		SystemPromptFile: cfg.SystemPromptFile,
 		Permission:       agentruntime.PermissionPolicy(cfg.Permissions),
-		AllowedTools:     cfg.AllowedTools,
+		AllowedTools:     claudeAllowedTools(cfg.AllowedTools, cfg.MCPServers),
 		DisallowedTools:  cfg.DisallowedTools,
 	})
 }

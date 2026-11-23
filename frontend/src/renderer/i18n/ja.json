@@ -5322,5 +5322,11 @@
 	"backgroundTasks.kind.other": "バックグラウンドタスク",
 	"backgroundTasks.state.running": "実行中",
 	"backgroundTasks.state.paused": "一時停止中",
-	"backgroundTasks.state.failed": "失敗"
+	"backgroundTasks.state.failed": "失敗",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "API キー",
+	"settings.gmi.apiKeyPlaceholder": "GMI Cloud のキーを貼り付け",
+	"settings.gmi.description": "エージェントが画像・動画・音声を生成できるようにします。キーは AO の中に留まり、エージェントの環境には渡されません。",
+	"settings.gmi.save": "保存",
+	"settings.gmi.getKey": "キーを取得"
 }

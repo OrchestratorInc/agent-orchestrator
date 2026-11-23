@@ -1132,7 +1132,7 @@ func (m *Manager) preflightTerminalLaunch(
 	var cmd []string
 	if nativeConversationID == "" {
 		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
-			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "", env)
+			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "", env, m.aoWorkerMCPServers(agent, env)...)
 	} else {
 		var resumable bool
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
@@ -1143,6 +1143,7 @@ func (m *Manager) preflightTerminalLaunch(
 			},
 			Kind: rec.Kind, DataDir: m.dataDir, SystemPrompt: systemPrompt,
 			Config: config, Permissions: config.Permissions,
+			MCPServers: m.aoWorkerMCPServers(agent, env),
 		})
 		if err == nil && !resumable {
 			return ErrNativeConversationMissing

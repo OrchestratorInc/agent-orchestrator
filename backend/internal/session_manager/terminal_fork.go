@@ -98,6 +98,7 @@ func (m *Manager) TerminalForkSource(ctx context.Context, rec domain.SessionReco
 			},
 			Kind: source.Kind, DataDir: target.DataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
 			SystemPrompt: target.SystemPrompt, SystemPromptFile: target.SystemPromptFile,
+			MCPServers: m.aoWorkerMCPServers(agent, target.Env),
 		})
 		if err != nil {
 			return ports.ForkTerminalLaunch{}, err

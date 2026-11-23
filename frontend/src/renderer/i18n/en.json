@@ -5302,5 +5302,11 @@
 	"backgroundTasks.kind.other": "Background task",
 	"backgroundTasks.state.running": "Running",
 	"backgroundTasks.state.paused": "Paused",
-	"backgroundTasks.state.failed": "Failed"
+	"backgroundTasks.state.failed": "Failed",
+	"settings.gmi": "GMI Cloud",
+	"settings.gmi.apiKey": "API key",
+	"settings.gmi.apiKeyPlaceholder": "Paste your GMI Cloud key",
+	"settings.gmi.description": "Lets agents generate images, video and audio. The key stays in AO and never reaches an agent's environment.",
+	"settings.gmi.save": "Save",
+	"settings.gmi.getKey": "Get a key"
 }
