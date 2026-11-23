@@ -906,12 +906,10 @@ export class Executor {
 		const nth = typeof args.nth === "number" && Number.isFinite(args.nth) ? Math.trunc(args.nth) : undefined;
 		return this.withPage(ctx, async (page) => {
 			const fresh = await this.refreshed(page);
-			// In a selected frame the approval is scoped to the frame's own site,
-			// read from its document; otherwise Chrome's tab address decides.
-			const inFrame = this.frameFor(ctx, fresh) !== 0;
-			// The address and title come from the same reply as the document id, so
-			// a navigation in between cannot pair one page's facts with another's
-			// site; the tab's own metadata is only a fallback.
+			// The address and title come from the same reply as the document id:
+			// in a selected frame that is the frame's own site, which the approval
+			// is scoped to, and a navigation in between cannot pair one page's
+			// facts with another's site. The tab's metadata is only a fallback.
 			const factsFor = (doc: { url?: string; title?: string }) => ({
 				pageUrl: sanitizeBrowserURL(doc.url || fresh.tab.url || ""),
 				pageTitle: sanitizeBrowserTitle(doc.title ?? fresh.tab.title ?? ""),
