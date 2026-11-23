@@ -132,12 +132,16 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				opts.kind = "worker"
 			}
 			if opts.kind == "" {
-				opts.kind = "worker"
+				if opts.review {
+					opts.kind = "reviewer"
+				} else {
+					opts.kind = "worker"
+				}
 			}
 			if opts.output != "" && opts.output != "artifact" {
 				return usageError{fmt.Errorf(`--output must be "artifact"`)}
 			}
-			if opts.output != "" && (opts.kind != "worker" || opts.review) {
+			if opts.output != "" && opts.kind != "worker" {
 				return usageError{fmt.Errorf("--output is supported for worker sessions only")}
 			}
 
@@ -169,12 +173,17 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				return err
 			}
 			opts.harness = harness
-			if opts.review && opts.model == "" && project.Config != nil {
+			reviewerHarnessMatches := false
+			if project.Config != nil && len(project.Config.Reviewers) > 0 {
+				pinned := strings.TrimSpace(project.Config.Reviewers[0].Harness)
+				reviewerHarnessMatches = pinned == "" || pinned == opts.harness
+			}
+			if opts.review && reviewerHarnessMatches && opts.model == "" {
 				if len(project.Config.Reviewers) > 0 && project.Config.Reviewers[0].AgentConfig != nil {
 					opts.model = project.Config.Reviewers[0].AgentConfig.Model
 				}
 			}
-			if opts.review && opts.effort == "" && project.Config != nil {
+			if opts.review && reviewerHarnessMatches && opts.effort == "" {
 				if len(project.Config.Reviewers) > 0 && project.Config.Reviewers[0].AgentConfig != nil {
 					opts.effort = project.Config.Reviewers[0].AgentConfig.Effort
 				}

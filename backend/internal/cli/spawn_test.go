@@ -274,7 +274,7 @@ func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	}
 }
 
-func TestSpawnReviewSelectsReviewerLaunchSettingsAndPreservesWorkerKind(t *testing.T) {
+func TestSpawnReviewSelectsReviewerLaunchSettingsAndDefaultsToReviewerKind(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var spawnReq spawnRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -304,8 +304,8 @@ func TestSpawnReviewSelectsReviewerLaunchSettingsAndPreservesWorkerKind(t *testi
 	if err != nil {
 		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
 	}
-	if spawnReq.Kind != "worker" {
-		t.Fatalf("spawnReq.Kind = %q, want worker", spawnReq.Kind)
+	if spawnReq.Kind != "reviewer" {
+		t.Fatalf("spawnReq.Kind = %q, want reviewer", spawnReq.Kind)
 	}
 	if spawnReq.Harness != "claude-code" {
 		t.Fatalf("spawnReq.Harness = %q, want claude-code", spawnReq.Harness)
@@ -315,6 +315,85 @@ func TestSpawnReviewSelectsReviewerLaunchSettingsAndPreservesWorkerKind(t *testi
 	}
 	if spawnReq.Effort != "high" {
 		t.Fatalf("spawnReq.Effort = %q, want high", spawnReq.Effort)
+	}
+}
+
+func TestSpawnReviewPreservesExplicitWorkerKind(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawnReq spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main","config":{"worker":{"harness":"codex"},"reviewers":[{"harness":"claude-code","agentConfig":{"model":"sonnet","effort":"high"}}]}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("claude-code"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(&spawnReq)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-10/auto-inject"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-10/auto-review":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-10/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-10","prs":[{"url":"https://github.com/o/r/pull/42","number":42}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--kind", "worker", "--name", "review-pr-42", "--claim-pr", "42", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	if spawnReq.Kind != "worker" {
+		t.Fatalf("spawnReq.Kind = %q, want worker", spawnReq.Kind)
+	}
+	if spawnReq.Harness != "claude-code" {
+		t.Fatalf("spawnReq.Harness = %q, want claude-code", spawnReq.Harness)
+	}
+}
+
+func TestSpawnReviewDoesNotCopyModelWhenHarnessMismatches(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawnReq spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main","config":{"worker":{"harness":"codex"},"reviewers":[{"harness":"claude-code","agentConfig":{"model":"sonnet","effort":"high"}}]}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(&spawnReq)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-10/auto-inject"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-10/auto-review":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-10/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-10","prs":[{"url":"https://github.com/o/r/pull/42","number":42}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "review-pr-42", "--claim-pr", "42", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	if spawnReq.Kind != "reviewer" {
+		t.Fatalf("spawnReq.Kind = %q, want reviewer", spawnReq.Kind)
+	}
+	if spawnReq.Harness != "codex" {
+		t.Fatalf("spawnReq.Harness = %q, want codex", spawnReq.Harness)
+	}
+	if spawnReq.Model != "" {
+		t.Fatalf("spawnReq.Model = %q, want empty (not copied from claude-code reviewer)", spawnReq.Model)
 	}
 }
 
