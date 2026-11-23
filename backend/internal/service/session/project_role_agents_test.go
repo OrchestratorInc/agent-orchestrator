@@ -110,3 +110,153 @@ func TestFillMissingRoleAgentsLeavesProjectAlone(t *testing.T) {
 		t.Fatalf("worker = %q, want empty", got.Config.Worker.Harness)
 	}
 }
+
+type perAgentReadiness struct {
+	snapshots map[string]domain.AgentReadinessSnapshot
+	calls     []string
+	purposes  []domain.AgentReadinessPurpose
+	onCheck   func(agentID string)
+}
+
+func (f *perAgentReadiness) EnsureAgentReadiness(_ context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
+	f.calls = append(f.calls, agentID)
+	f.purposes = append(f.purposes, purpose)
+	if f.onCheck != nil {
+		f.onCheck(agentID)
+	}
+	return f.snapshots[agentID], nil
+}
+
+func (f *perAgentReadiness) InvalidateAgentInstallation(string)   {}
+func (f *perAgentReadiness) InvalidateAgentAuthentication(string) {}
+func (f *perAgentReadiness) RecheckAgent(string)                  {}
+
+func TestFillMissingRoleAgentsSkipsStaleUnlaunchableCandidateWithoutPersisting(t *testing.T) {
+	cases := []struct {
+		name      string
+		candidate domain.AgentHarness
+		snapshot  domain.AgentReadinessSnapshot
+	}{
+		{
+			name:      "removed binary",
+			candidate: domain.HarnessClaudeCode,
+			snapshot: domain.AgentReadinessSnapshot{
+				ID:           "claude-code",
+				Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationNotInstalled},
+			},
+		},
+		{
+			name:      "signed-out codex",
+			candidate: domain.HarnessCodex,
+			snapshot: domain.AgentReadinessSnapshot{
+				ID:           "codex",
+				Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+				Authentication: domain.AgentAuthenticationObservation{
+					State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+				},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &roleFillingStore{fakeStore: newFakeStore()}
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+			readiness := &perAgentReadiness{
+				snapshots: map[string]domain.AgentReadinessSnapshot{string(tc.candidate): tc.snapshot},
+			}
+			svc := &Service{store: st, agentReadiness: readiness}
+			svc.SetPreferredProjectAgent(pickAgent(tc.candidate))
+
+			got := svc.fillMissingRoleAgents(context.Background(), st.projects["mer"])
+			if len(st.fills) != 0 {
+				t.Fatalf("fills = %v, want none when launch validation rejects candidate", st.fills)
+			}
+			if got.Config.Worker.Harness != "" || got.Config.Orchestrator.Harness != "" {
+				t.Fatalf("roles persisted on failure: worker %q orchestrator %q", got.Config.Worker.Harness, got.Config.Orchestrator.Harness)
+			}
+			if len(readiness.purposes) != 1 || readiness.purposes[0] != domain.AgentReadinessPurposeLaunch {
+				t.Fatalf("readiness purposes = %v, want one launch check", readiness.purposes)
+			}
+		})
+	}
+}
+
+func TestFillMissingRoleAgentsFallsBackAfterStaleCandidateFailsLaunchCheck(t *testing.T) {
+	st := &roleFillingStore{fakeStore: newFakeStore()}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	fc := &fakeCommander{}
+	// Simulate stale cached readiness: claude-code was cached as installed and
+	// authorized, but launch validation discovers it is gone and updates the cache.
+	cached := []domain.AgentReadinessSnapshot{
+		{
+			ID:             "claude-code",
+			Installation:   domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+			Authentication: domain.AgentAuthenticationObservation{State: domain.AgentAuthenticationAuthorized},
+		},
+		{
+			ID:             "codex",
+			Installation:   domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+			Authentication: domain.AgentAuthenticationObservation{State: domain.AgentAuthenticationAuthorized},
+		},
+	}
+	readiness := &perAgentReadiness{
+		snapshots: map[string]domain.AgentReadinessSnapshot{
+			"claude-code": {
+				ID:           "claude-code",
+				Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationNotInstalled},
+			},
+			"codex": {
+				ID:             "codex",
+				Installation:   domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+				Authentication: domain.AgentAuthenticationObservation{State: domain.AgentAuthenticationAuthorized, Freshness: domain.AgentReadinessFresh},
+			},
+		},
+		onCheck: func(agentID string) {
+			if agentID == "claude-code" {
+				cached[0].Installation.State = domain.AgentInstallationNotInstalled
+			}
+		},
+	}
+	svc := &Service{manager: fc, store: st, agentReadiness: readiness}
+	svc.SetPreferredProjectAgent(func(context.Context) domain.AgentHarness {
+		return domain.PreferredInstalledProjectAgent(cached)
+	})
+
+	if _, err := svc.SpawnOrchestrator(context.Background(), "mer", false, "", ""); err != nil {
+		t.Fatalf("SpawnOrchestrator: %v", err)
+	}
+	if len(st.fills) != 1 || st.fills[0] != domain.HarnessCodex {
+		t.Fatalf("fills = %v, want only [codex]", st.fills)
+	}
+	if fc.spawnedCfg.Harness != domain.HarnessCodex {
+		t.Fatalf("spawn harness = %q, want codex", fc.spawnedCfg.Harness)
+	}
+	got := st.projects["mer"].Config
+	if got.Worker.Harness != domain.HarnessCodex || got.Orchestrator.Harness != domain.HarnessCodex {
+		t.Fatalf("roles = worker %q orchestrator %q, want codex for both", got.Worker.Harness, got.Orchestrator.Harness)
+	}
+}
+
+func TestFillMissingRoleAgentsAllowsSavedAccountWhenComputerLoginUnauthorized(t *testing.T) {
+	st := &roleFillingStore{fakeStore: newFakeStore()}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	readiness := &perAgentReadiness{
+		snapshots: map[string]domain.AgentReadinessSnapshot{
+			"codex": {
+				ID:           "codex",
+				Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+				Authentication: domain.AgentAuthenticationObservation{
+					State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+				},
+			},
+		},
+	}
+	svc := &Service{store: st, agentReadiness: readiness}
+	svc.SetPreferredProjectAgent(pickAgent(domain.HarnessCodex))
+	svc.SetComputerLoginCheck(func(_ context.Context, _ domain.AgentHarness, _ string) bool { return false })
+
+	got := svc.fillMissingRoleAgents(context.Background(), st.projects["mer"])
+	if got.Config.Worker.Harness != domain.HarnessCodex || got.Config.Orchestrator.Harness != domain.HarnessCodex {
+		t.Fatalf("roles = worker %q orchestrator %q, want codex when using saved account", got.Config.Worker.Harness, got.Config.Orchestrator.Harness)
+	}
+}

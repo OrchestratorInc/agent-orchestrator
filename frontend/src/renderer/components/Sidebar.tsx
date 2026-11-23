@@ -82,7 +82,7 @@ import {
 import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
 import { dropdownMenuKit, MenuEntries, MenuKitContext, type MenuEntry } from "./menu-model";
 import { isArchivedSession } from "../lib/standalone-archive";
-import { hasTrustedApiBaseUrl } from "../lib/api-client";
+import { apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useEdgeFade } from "../hooks/useEdgeFade";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
@@ -1790,6 +1790,10 @@ const ProjectItem = memo(function ProjectItem({
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			goOrchestrator(sessionId);
 		} catch (err) {
+			if (apiErrorCode(err) === "AGENT_REQUIRED") {
+				useUiStore.getState().openProjectSettings(workspace.id, { section: "agents" });
+				return;
+			}
 			console.error("Failed to spawn orchestrator:", err);
 			void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
 		} finally {

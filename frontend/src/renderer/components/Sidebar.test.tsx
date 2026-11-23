@@ -225,6 +225,10 @@ vi.mock("../hooks/useSettings", () => ({
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	hasTrustedApiBaseUrl: () => trustedApi.current,
+	apiErrorCode: (error: unknown) =>
+		typeof error === "object" && error !== null && typeof (error as { code?: unknown }).code === "string"
+			? (error as { code: string }).code
+			: undefined,
 	apiErrorMessage: (error: unknown) => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") {
@@ -985,6 +989,19 @@ describe("Sidebar", () => {
 		// The daemon fills the empty role as it starts the orchestrator.
 		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-1", "sidebar"));
 		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("opens project agent settings when the daemon requires an orchestrator agent", async () => {
+		const user = userEvent.setup();
+		spawnMock.mockRejectedValueOnce(Object.assign(new Error("Configure an orchestrator agent"), { code: "AGENT_REQUIRED" }));
+		renderSidebar({ workspaces: [{ ...workspace, orchestratorAgent: undefined }] });
+
+		await user.click(screen.getByRole("button", { name: "Spawn Project One orchestrator" }));
+
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({
+			scope: "project", projectId: "proj-1", section: "agents",
+		}));
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	// The sidebar owns its own openOrchestrator, separate from

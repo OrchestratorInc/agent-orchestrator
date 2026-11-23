@@ -9,7 +9,7 @@ import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { apiClient } from "../lib/api-client";
+import { apiClient, apiErrorCode } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -971,7 +971,17 @@ export const CommandPalette = memo(function CommandPalette() {
 			if (!workspace) return;
 			// A project that lost its orchestrator agent starts on the ranked
 			// default: the daemon fills the empty role as it starts.
-			const sessionId = await spawnOrchestrator(projectId, "command_palette");
+			let sessionId: string;
+			try {
+				sessionId = await spawnOrchestrator(projectId, "command_palette");
+			} catch (err) {
+				if (apiErrorCode(err) === "AGENT_REQUIRED") {
+					useUiStore.getState().openProjectSettings(projectId, { section: "agents" });
+					if (isCurrentRun()) closePalette();
+					return;
+				}
+				throw err;
+			}
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			navigateToTarget(sessionRoute(projectId, sessionId));
 			// A palette reopened while the spawn ran stays open.

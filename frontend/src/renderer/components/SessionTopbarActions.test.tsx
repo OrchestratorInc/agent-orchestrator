@@ -568,6 +568,18 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
+	it("opens local project agent settings when the daemon cannot fill a missing agent", async () => {
+		spawnMock.mockRejectedValueOnce(new OrchestratorSpawnError("Configure an orchestrator agent", "AGENT_REQUIRED"));
+		renderTopbarSessions([worker], worker.id);
+
+		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
+
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({
+			scope: "project", projectId: "proj-1", section: "agents",
+		}));
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
 	it("opens remote project agent settings when the daemon cannot fill a missing agent", async () => {
 		paramsMock.hostId = "box-a";
 		spawnMock.mockRejectedValueOnce(new OrchestratorSpawnError("Configure an orchestrator agent", "AGENT_REQUIRED"));

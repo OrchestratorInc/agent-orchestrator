@@ -335,7 +335,9 @@ type projectRoleAgentFiller interface {
 
 // fillMissingRoleAgents gives every empty role the ranked default before a
 // project session starts. The transaction preserves concurrent settings edits
-// and roles that already name an agent.
+// and roles that already name an agent. Each ranked candidate is validated
+// under the launch readiness policy before saving so stale cached readiness
+// never persists a removed or signed-out agent.
 func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.ProjectRecord) domain.ProjectRecord {
 	if !project.Config.MissingRoleAgent() || s.preferredAgent == nil {
 		return project
@@ -344,7 +346,7 @@ func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.Proj
 	if !ok {
 		return project
 	}
-	agent := s.preferredAgent(ctx)
+	agent := s.pickLaunchableProjectAgent(ctx)
 	if agent == "" {
 		return project
 	}
@@ -362,6 +364,67 @@ func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.Proj
 		return project
 	}
 	return row
+}
+
+// pickLaunchableProjectAgent validates the ranked candidate under the launch
+// readiness policy before it can be saved to a project. When cached readiness
+// went stale (for example, an agent was uninstalled or signed out), the launch
+// check updates the coordinator's snapshot so the next iteration can rank any
+// remaining launchable agent without persisting the broken one.
+func (s *Service) pickLaunchableProjectAgent(ctx context.Context) domain.AgentHarness {
+	var tried map[domain.AgentHarness]struct{}
+	for {
+		agent := s.preferredAgent(ctx)
+		if agent == "" {
+			return ""
+		}
+		if _, seen := tried[agent]; seen {
+			return ""
+		}
+		ok, err := s.roleCandidateLaunchable(ctx, agent)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("validate preferred project agent", "agent", agent, "error", err)
+			}
+			if ctx.Err() != nil {
+				return ""
+			}
+			if tried == nil {
+				tried = make(map[domain.AgentHarness]struct{})
+			}
+			tried[agent] = struct{}{}
+			continue
+		}
+		if !ok {
+			if s.logger != nil {
+				s.logger.Info("skipping unlaunchable preferred project agent", "agent", agent)
+			}
+			if tried == nil {
+				tried = make(map[domain.AgentHarness]struct{})
+			}
+			tried[agent] = struct{}{}
+			continue
+		}
+		return agent
+	}
+}
+
+func (s *Service) roleCandidateLaunchable(ctx context.Context, agent domain.AgentHarness) (bool, error) {
+	if s.agentReadiness == nil || agent == "" {
+		return true, nil
+	}
+	readiness, err := s.agentReadiness.EnsureAgentReadiness(ctx, string(agent), domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		return false, err
+	}
+	if readiness.Installation.State == domain.AgentInstallationNotInstalled {
+		return false, nil
+	}
+	if readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
+		(s.runsOnComputerLogin == nil || s.runsOnComputerLogin(ctx, agent, "")) {
+		return false, nil
+	}
+	return true, nil
 }
 
 // roleHarness is the agent the project names for sessions of kind.

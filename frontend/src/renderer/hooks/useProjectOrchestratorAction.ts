@@ -108,7 +108,7 @@ export function useProjectOrchestratorAction({
 						? await spawnCloudOrchestrator(queryClient, projectId)
 						: await spawnOrchestrator(projectId, source, false, mode);
 			} catch (cause) {
-				if (!hostId || apiErrorCode(cause) !== "AGENT_REQUIRED" || activeRoute.current !== routeKey) throw cause;
+				if (apiErrorCode(cause) !== "AGENT_REQUIRED" || activeRoute.current !== routeKey) throw cause;
 				useUiStore.getState().openProjectSettings(projectId, { hostId, section: "agents" });
 				return;
 			}
