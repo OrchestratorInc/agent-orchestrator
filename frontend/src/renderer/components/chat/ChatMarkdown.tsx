@@ -832,14 +832,17 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 				data-excerpt-include=""
 				onClick={openFile}
 				aria-label={`Open ${file.filePath} in Files`}
-				// The chip and its hover share one box, so the hover fill lines up with the tint.
-				className="mx-0.5 inline rounded bg-chat-file py-[2px] pr-[5px] pl-1 transition-colors hover:bg-chat-file-hover"
+				className="group mx-0.5 inline rounded"
 			>
-				{/* Outside the code element, whose text alone carries the excerpt offsets. */}
-				<ChatFileIcon path={file.filePath} className="mr-[5px] align-[-2px]" />
-				<code {...positions} data-excerpt-kind="inline-code" className="font-mono text-xs text-chat-file-foreground">
-					{children}
-				</code>
+				{/* The tint and its hover sit on one inline span, sized like a plain code chip
+				    (a button's box follows the line height and would grow it). */}
+				<span className="rounded bg-chat-file py-[2px] pr-[5px] pl-1 font-mono text-xs transition-colors group-hover:bg-chat-file-hover">
+					{/* Outside the code element, whose text alone carries the excerpt offsets. */}
+					<ChatFileIcon path={file.filePath} className="mr-[5px] align-[-2px]" />
+					<code {...positions} data-excerpt-kind="inline-code" className="text-chat-file-foreground">
+						{children}
+					</code>
+				</span>
 			</Pressable>
 		</ChatPathMenu>
 	);
