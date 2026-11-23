@@ -35,6 +35,8 @@
 
 One coding agent can handle a task. Running several means splitting the work, keeping branches from colliding, and following every change through CI, review, and merge. Orchestrator.inc is a local desktop workspace for that: every task gets its own agent, branch, and worktree, and your code stays on your machine.
 
+Orchestrator.inc, formerly Agent Orchestrator (AO) and previously hosted at `github.com/ComposioHQ/agent-orchestrator`, is free and open source under Apache-2.0. It runs Claude Code, Codex, and the other agents under [Supported agents](#supported-agents) on macOS, Windows, and Linux, with apps for iPhone, iPad, and Android.
+
 ## Features
 
 ### The orchestrator runs the fleet
@@ -148,12 +150,14 @@ Worker, Chat, and reviewer support differ by agent; the [agent setup guides](htt
 
 ### Orchestrator for Mobile
 
-Control the agents running on your desktop from your phone. Install the app for [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) or [Android](https://play.google.com/store/apps/details?id=aoagents.dev). Scan the QR code in **Settings → Mobile** to pair it with your desktop. It works on your home Wi-Fi and away from home.
+Control the agents running on your desktop from your phone. Install the app for [iPhone and iPad](https://apps.apple.com/app/ao-mobile/id6792552173) or [Android](https://play.google.com/store/apps/details?id=aoagents.dev). Scan the QR code in **Settings → Mobile** to pair it with your desktop. It works on your home Wi-Fi and away from home.
 
 - **Get alerts.** A push notification tells you when an agent has a question or needs approval.
 - **Reply.** Answer in chat, approve the request, or open the agent's terminal.
 - **Start work.** Create a new worker and pick its agent and model.
 - **Review.** Check pull requests and reviewer results.
+
+Your code and agents stay on your computer. On the same Wi-Fi the phone connects directly. Away from home it connects through an HTTPS tunnel that Orchestrator.inc runs with `cloudflared`; sign in to an AO account and the computer keeps the same address across restarts. Each phone pairs with a one-time code and gets its own access, which you can revoke. On iPhone and iPad, use the tunnel rather than a raw Tailscale address, which iOS blocks. The desktop's main API never leaves `127.0.0.1`. See [Connect Mobile](https://docs.orchestrator.inc/configuration/remote-access) for setup and the security model.
 
 <img src="docs/assets/readme/site/mobile.jpg" alt="The mobile app showing an agent asking which mail provider to use and the reply sent from the phone" width="100%" />
 
@@ -165,7 +169,7 @@ Run workers in hosted workspaces instead of on your machine. Choose **Clone to t
 - **Follow along.** Open the chat, files, and terminal from the desktop app.
 - **Nothing on your machine.** The code, worktrees, and agents all live in the cloud.
 
-See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud) for setup.
+See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud) for setup. Local use is free; AO Cloud has paid plans, listed at [orchestrator.inc/pricing](https://orchestrator.inc/pricing).
 
 ### Remote hosts
 
@@ -203,6 +207,32 @@ winget install --id OrchestratorInc.AgentOrchestrator -e
 ```
 
 The app bundles the `ao` CLI. Without the Homebrew cask, it isn't on your `PATH`; on macOS it is at `/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao`. Signing in to a coding agent and to GitHub (`gh auth login`) still needs a person.
+
+## FAQ
+
+### What is Orchestrator.inc?
+
+Orchestrator.inc, formerly Agent Orchestrator (AO), is a free, open-source desktop app and CLI for running coding agents in parallel. Each task gets its own agent, branch, and git worktree. A project orchestrator agent plans larger work and spawns workers, and failed CI runs, review comments, and merge conflicts go back to the agent that owns the change.
+
+### What license is it under?
+
+Apache-2.0. See [LICENSE](LICENSE).
+
+### Which coding agents does it support?
+
+Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, opencode and the rest of the [Supported agents](#supported-agents) table. Chat and reviewer support differ by agent; the [agent catalog](https://docs.orchestrator.inc/plugins/agents) has the details.
+
+### Which platforms does it run on?
+
+The desktop app runs on macOS (Apple silicon and Intel), Windows, and Linux (AppImage, `.deb`, and `.rpm`). The phone apps run on iPhone, iPad, and Android.
+
+### Is it free?
+
+Yes. The desktop app, the CLI, and the phone apps are free, and you bring your own coding agent subscriptions or API keys. AO Cloud, which runs agents in hosted workspaces, has paid plans: see [orchestrator.inc/pricing](https://orchestrator.inc/pricing).
+
+### Is this the same project as `ComposioHQ/agent-orchestrator`?
+
+Yes. It was previously hosted at `github.com/ComposioHQ/agent-orchestrator` and now lives at [github.com/OrchestratorInc/agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator).
 
 ## Documentation
 
