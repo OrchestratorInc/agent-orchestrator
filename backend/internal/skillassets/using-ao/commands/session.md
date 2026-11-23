@@ -152,8 +152,9 @@ ao session get mer-3 --transcript 1 --before 142 --cap 0
 
 ### ao session history
 
-Print a session's turns, newest first, in full. Use it after taking over a
-session to read what the handoff note left out.
+Print a session's completed turns, newest first, in full. Use it after taking
+over a session to read what the handoff note left out. A turn that is still
+running is not listed; `ao session get <id>` shows whether the session is working.
 
 **Syntax:**
 ```
@@ -249,7 +250,7 @@ ao session rename mer-3 "fix-auth-bug"
 
 ### ao session restore
 
-Restore a terminated session or resume an exited agent.
+Restore a terminated session, resume an exited agent, or retry a session that failed to start.
 
 **Syntax:**
 ```
@@ -292,7 +293,7 @@ ao session exit-agent <id> [flags]
 
 ### ao session resume-agent
 
-Resume an exited agent in its existing Orchestrator-managed session.
+Resume an exited agent in its existing Orchestrator-managed session. It also retries a session that failed to start, with its saved prompt, and waits for that start: it exits 1 with the reason if the start fails again. `ao session get <id>` shows the reason as `start failed`, and `ao session ls` shows `start failed` as the activity (`provisionState: "failed"` with `--json`).
 
 **Syntax:**
 ```

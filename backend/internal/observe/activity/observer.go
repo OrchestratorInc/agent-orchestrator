@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -148,9 +149,20 @@ func (o *Observer) Poll(ctx context.Context) error {
 	previous := o.quiet
 	o.quiet = make(map[domain.SessionID]quietScreen)
 	for _, session := range sessions {
-		o.reconcile(ctx, session, now, previous[session.ID])
+		o.reconcileSession(ctx, session, now, previous[session.ID])
 	}
 	return nil
+}
+
+// reconcileSession turns a panic while reading one session's pane into a
+// skipped tick for that session, instead of stopping the observer.
+func (o *Observer) reconcileSession(ctx context.Context, session domain.SessionRecord, now time.Time, previous quietScreen) {
+	defer func() {
+		if r := recover(); r != nil {
+			o.logger.Error("activity observer: reconciliation panicked", "session", session.ID, "panic", r)
+		}
+	}()
+	o.reconcile(ctx, session, now, previous)
 }
 
 func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, now time.Time, previous quietScreen) {
@@ -206,6 +218,10 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	if available && (requiresViewport || requiresRendered || options.PreferStyledOutput) {
 		output, err = reader.GetStyledOutput(ctx, handle, o.outputLines)
+		if err != nil && options.RawOutputFallback && !requiresViewport && !requiresRendered &&
+			errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+			output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
+		}
 	} else {
 		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	}

@@ -1360,7 +1360,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					} else message = t("newTask.selectedEffortUnsupported", { defaultValue: "The selected effort is unavailable. Choose another level before starting." });
 				} else if (err.code === "AGENT_BINARY_NOT_FOUND") {
 					setErrorAction("install-agent");
-					message = t("newTask.agentNotInstalled", { defaultValue: "This agent is not installed. Open Agent Harnesses settings to install it, then try again." });
+					message = t("newTask.agentNotInstalled", { defaultValue: "This agent is not installed. Open Agents settings to install it, then try again." });
 				} else if (err.code === "DEFAULT_BRANCH_UNRESOLVED") {
 					message = t("newTask.branchUnresolved", { defaultValue: "Choose a base branch in project settings, then start again." });
 				} else if (err.code === "BRANCH_ALREADY_EXISTS") {
@@ -1525,7 +1525,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		error,
 		status,
 		errorAction: errorAction === "install-agent" ? {
-			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agent Harnesses" }),
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agents settings" }),
 			onClick: () => openGlobalSettings("harness", { focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true }),
 		} : errorAction === "choose-branch" ? {
 			label: t("newTask.chooseNewBranch", { defaultValue: "Choose new branch" }),
@@ -1543,6 +1543,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 			},
 		} : undefined,
 		remoteLoadError,
+		// "Set one up in Settings" gets the way there. A remote host's agents are set up on that host.
+		remoteLoadErrorAction: !hostId && remoteLoadError === t("newTask.noReadyAgent") ? {
+			label: t("newTask.openHarnessSettings", { defaultValue: "Open Agents settings" }),
+			onClick: () => openGlobalSettings("harness", { harnessView: isCloudProject ? "cloud" : "local", preserveProject: true }),
+		} : undefined,
 		modelWarning,
 		modelWarningRetries,
 		fallbackAction,
@@ -1721,7 +1726,7 @@ export function TaskComposer({
 				showFallbackAction: task.fallbackAction !== undefined,
 				error: task.error ?? task.remoteLoadError ?? undefined,
 				status: task.status,
-				errorAction: task.errorAction,
+				errorAction: task.error ? task.errorAction : task.remoteLoadErrorAction,
 				isSubmitting: task.isSubmitting,
 				modelWarning: task.modelWarning,
 				onFallbackAction: (brief) => settle(task.launchFallback(brief)),

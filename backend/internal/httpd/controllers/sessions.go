@@ -146,6 +146,7 @@ type SessionService interface {
 	SearchWorkspaceContent(ctx context.Context, id domain.SessionID, query string) ([]sessionsvc.WorkspaceContentHit, error)
 	ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error)
 	ListWorkspaceTree(ctx context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error)
+	ListWorkspaceFilePaths(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFilePaths, error)
 	InvalidateWorkspaceCache(id domain.SessionID)
 	Pin(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Unpin(ctx context.Context, id domain.SessionID) (domain.Session, error)
@@ -258,6 +259,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/workspace/history/selection", c.getWorkspaceCommitSelection)
 	r.Get("/sessions/{sessionId}/workspace/branches", c.listWorkspaceBranches)
 	r.Get("/sessions/{sessionId}/workspace/files", c.listWorkspaceFiles)
+	r.Get("/sessions/{sessionId}/workspace/paths", c.listWorkspaceFilePaths)
 	r.Get("/sessions/{sessionId}/workspace/file", c.getWorkspaceFile)
 	r.Put("/sessions/{sessionId}/workspace/file", c.updateWorkspaceFile)
 	r.Get("/sessions/{sessionId}/workspace/file/blob", c.getWorkspaceFileBlob)
@@ -1146,6 +1148,22 @@ func (c *SessionsController) listWorkspaceFiles(w http.ResponseWriter, r *http.R
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFilesResponse(files))
+}
+
+func (c *SessionsController) listWorkspaceFilePaths(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/paths")
+		return
+	}
+	paths, err := c.Svc.ListWorkspaceFilePaths(r.Context(), sessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	if paths.Paths == nil {
+		paths.Paths = []string{}
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListWorkspaceFilePathsResponse{SessionID: paths.SessionID, Paths: paths.Paths, Truncated: paths.Truncated})
 }
 
 func (c *SessionsController) getWorkspaceManifest(w http.ResponseWriter, r *http.Request) {
@@ -2378,6 +2396,13 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, chatsvc.ErrControllerHandoff) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_INTERFACE_TRANSITION",
 			"the session is switching agents or interfaces; send again after the handoff completes", nil)
+		return
+	}
+	if errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		// A setting the session cannot apply, such as a model its agent does not
+		// offer: the caller can fix it, as the chat composer's send path says.
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"CHAT_CONFIG_OPTION_INVALID", err.Error(), nil)
 		return
 	}
 	if err != nil {

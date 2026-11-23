@@ -203,6 +203,12 @@ type PullRequestSummary struct {
 	CIObservedAt     time.Time                      `json:"ciObservedAt"`
 	ReviewObservedAt time.Time                      `json:"reviewObservedAt"`
 
+	// MergeQueueRequired says the base branch merges through a merge queue, so
+	// merging the PR adds it to the queue. MergeQueue is its place there, nil
+	// while it isn't queued.
+	MergeQueueRequired bool                        `json:"mergeQueueRequired,omitempty"`
+	MergeQueue         *PullRequestMergeQueueEntry `json:"mergeQueue,omitempty"`
+
 	// Description is the PR body as markdown. It is untrusted provider content.
 	Description          string `json:"description,omitempty"`
 	DescriptionTruncated bool   `json:"descriptionTruncated,omitempty"`
@@ -221,6 +227,17 @@ type PullRequestSummary struct {
 	// Conversation is the newest top-level conversation comments, oldest
 	// first. It is empty until DetailsObservedAt is set.
 	Conversation []PullRequestCommentEntry `json:"conversation,omitempty"`
+}
+
+// PullRequestMergeQueueEntry is a pull request's place in its base branch's
+// merge queue. State is queued, awaiting_checks, mergeable, unmergeable or
+// locked; Position counts from 1 at the front; EstimatedSecondsToMerge is the
+// provider's estimate, 0 when it gives none.
+type PullRequestMergeQueueEntry struct {
+	State                   string    `json:"state"`
+	Position                int       `json:"position"`
+	EstimatedSecondsToMerge int       `json:"estimatedSecondsToMerge,omitempty"`
+	EnqueuedAt              time.Time `json:"enqueuedAt,omitzero"`
 }
 
 // PullRequestThread is one review thread with its stored comments, oldest

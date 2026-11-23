@@ -28,6 +28,11 @@ const RENEW_WAIT_MS = 10_000;
  * Cloud's address is signed and expires, and the native download cannot renew
  * it itself: a refused download asks for fresh access once (`backend.renew`),
  * and the renewed backend downloads again. Try again may ask once more.
+ *
+ * A download carries the machine's credential, so it waits for a verified
+ * connection (see heldBackend): Try again while the app is reconnecting
+ * downloads once the machine has answered as itself, from the address it
+ * answered on, never from the one it was last seen at.
  */
 export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint }: {
 	/** The paired machine's daemon, or Orchestrator Cloud. */
@@ -56,12 +61,11 @@ export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint 
 	useEffect(() => {
 		if (!active || settled) return;
 		let live = true;
-		const source = backend.streamSource(sessionId, artifact.path, artifact.updatedAt);
-		if (!source) {
-			setState({ key, error: "Its path isn't one the phone can request." });
-			return;
-		}
+		const waiting = new AbortController();
 		(async () => {
+			await backend.whenVerified?.(waiting.signal);
+			const source = backend.streamSource(sessionId, artifact.path, artifact.updatedAt);
+			if (!source) throw new UnrequestablePathError();
 			// The list gives the size; a file it does not list is asked (one byte, see getArtifactSize).
 			// Cloud does not say a size beforehand: the download's own check then decides.
 			const size = artifact.size > 0 ? artifact.size : await backend.size?.(sessionId, artifact.path).catch(() => undefined);
@@ -71,6 +75,10 @@ export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint 
 			(uri) => { if (live) setState({ key, uri }); },
 			(cause) => {
 				if (!live) return;
+				if (cause instanceof UnrequestablePathError) {
+					setState({ key, error: "Its path isn't one the phone can request." });
+					return;
+				}
 				if (cause instanceof ArtifactTooLargeError) {
 					setState({ key, tooLarge: true });
 					return;
@@ -84,7 +92,7 @@ export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint 
 				setState({ key, error: userFacingError(cause, "The PDF didn't download.") });
 			},
 		);
-		return () => { live = false; };
+		return () => { live = false; waiting.abort(); };
 	}, [active, artifact.path, artifact.size, artifact.updatedAt, attempt, backend, entry, key, sessionId, settled]);
 	// Renewal that brings no new access ends in the error, with Try again.
 	const renewing = state?.key === key && state.renewing === true;
@@ -113,6 +121,8 @@ export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint 
 		</View>
 	);
 }
+
+class UnrequestablePathError extends Error {}
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },

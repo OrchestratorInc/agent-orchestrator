@@ -16,6 +16,7 @@ vi.mock("./account", () => ({ loadAccount: async () => null }));
 vi.mock("./push", () => ({ unpairFromServer: async () => {}, retryPendingUnpairs: async () => {} }));
 vi.mock("./pendingUnpair", () => ({ markMachineUnpaired: async () => {} }));
 vi.mock("./chat/eventCursor", () => ({ clearEventCursorsForHost: async () => {} }));
+vi.mock("./forgetLocalState", () => ({ forgetMachineState: async () => {} }));
 
 import { forgetPairedHost, forgetServer } from "./disconnect";
 import { rememberedTurnOptions, rememberTurnOptions } from "./chat/lastTurnOptions";
