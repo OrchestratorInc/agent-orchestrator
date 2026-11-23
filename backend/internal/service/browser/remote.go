@@ -216,8 +216,14 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 		target, identified, partial, document := s.remoteTarget(discoverCtx, gate)
 		// The address is read again after the target: if the page moved on in
 		// between, the prompt would pair one page's address with another's
-		// control.
-		if afterURL, _ := s.remotePage(discoverCtx); afterURL != pageURL {
+		// control. A re-read that fails (discovery ran out of time) proves no
+		// navigation, so the facts are dropped and the user is asked about an
+		// unknown target instead.
+		afterURL, readOK := s.remoteURL(discoverCtx)
+		switch {
+		case !readOK:
+			target, identified, partial, document = approval.Target{Action: gate.action, Key: gate.key}, false, false, 0
+		case afterURL != pageURL:
 			return remoteTargetChanged()
 		}
 		target.PageURL = pageURL
@@ -268,15 +274,19 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 	// between the two reads cannot pass both checks. What remains is the gap
 	// between this read and the service running the command, which only the
 	// service can close (it takes no expected-page guard today).
-	if gate.kind == remoteDescribe {
+	// A target the user approved without seeing (it could not be read) has
+	// nothing to compare but the page itself.
+	if gate.kind == remoteDescribe && approvedIdentified {
 		now, identified, _, document := s.remoteTarget(recheckCtx, gate)
-		now.PageURL, _ = s.remotePage(recheckCtx)
-		if identified != approvedIdentified || document != approvedDocument || !sameRemoteTarget(now, approved) {
+		var readOK bool
+		now.PageURL, readOK = s.remoteURL(recheckCtx)
+		// After approval an unread address is not trusted: refuse.
+		if !readOK || identified != approvedIdentified || document != approvedDocument || !sameRemoteTarget(now, approved) {
 			return remoteTargetChanged()
 		}
 		return nil
 	}
-	if nowURL, _ := s.remotePage(recheckCtx); nowURL != pageURL {
+	if nowURL, readOK := s.remoteURL(recheckCtx); !readOK || nowURL != pageURL {
 		return remoteTargetChanged()
 	}
 	return nil
@@ -348,6 +358,16 @@ func onSite(text, pageURL string) string {
 		return text + " on " + host
 	}
 	return text
+}
+
+// remoteURL reads the active page's URL; ok is false when the read failed.
+func (s *Service) remoteURL(ctx context.Context) (string, bool) {
+	data, ok := s.remoteData(ctx, "get", "url", "--json")
+	if !ok {
+		return "", false
+	}
+	url, _ := data["url"].(string)
+	return url, true
 }
 
 // remotePage reads the active page's URL and title; empty when unavailable.

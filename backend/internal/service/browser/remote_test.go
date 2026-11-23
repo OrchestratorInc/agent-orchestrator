@@ -64,9 +64,15 @@ type fakeRemote struct {
 	// onCall runs, under the lock, before each describe call is answered,
 	// so a test can change the page at an exact point.
 	onCall func(f *fakeRemote, args []string)
+	// hangOn makes the calls it selects block until their context ends.
+	hangOn func(args []string) bool
 }
 
 func (f *fakeRemote) Forward(ctx context.Context, args []string, _ map[string]string) (RemoteResponse, error) {
+	if f.hangOn != nil && f.hangOn(args) {
+		<-ctx.Done()
+		return RemoteResponse{}, ctx.Err()
+	}
 	if f.hang && len(args) > 0 && (args[len(args)-1] == "--json") {
 		<-ctx.Done()
 		return RemoteResponse{}, ctx.Err()
@@ -496,5 +502,64 @@ func TestRemoteDiscoveryAcrossANavigationIsRefused(t *testing.T) {
 	}
 	if len(gate.Pending()) != 0 || len(remote.sent()) != 0 {
 		t.Fatalf("pending=%d forwarded=%v", len(gate.Pending()), remote.sent())
+	}
+}
+
+// nthURLRead selects the nth "get url" call.
+func nthURLRead(nth int) func([]string) bool {
+	var mu sync.Mutex
+	seen := 0
+	return func(args []string) bool {
+		if !slices.Equal(args, []string{"get", "url", "--json"}) {
+			return false
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		seen++
+		return seen == nth
+	}
+}
+
+func TestRemoteStalledURLReReadStillAsks(t *testing.T) {
+	// Discovery runs out of time on the address re-read. That says nothing
+	// about a navigation: drop the facts and ask about an unknown target.
+	remote := &fakeRemote{refs: checkoutRefs, hangOn: nthURLRead(2)}
+	svc, gate, token := remoteService(t, remote)
+	svc.describeTimeout = 100 * time.Millisecond
+	asked := answer(t, gate, approval.DecisionDeny)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	if p := <-asked; p.Category != approval.CategoryScript || p.Action != "Click @e2 on shop.example" {
+		t.Fatalf("prompt = %+v", p)
+	}
+}
+
+func TestRemoteFailedRecheckReadRefuses(t *testing.T) {
+	// After approval a failed address read is not trusted: refuse.
+	remote := &fakeRemote{refs: checkoutRefs, hangOn: nthURLRead(3)}
+	svc, gate, token := remoteService(t, remote)
+	svc.describeTimeout = 100 * time.Millisecond
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil); apiErrorCode(err) != "BROWSER_TARGET_CHANGED" {
+		t.Fatalf("err = %v", err)
+	}
+	if len(remote.sent()) != 0 {
+		t.Fatalf("forwarded %v", remote.sent())
+	}
+}
+
+func TestRemoteApprovedUnknownTargetRunsOnTheSamePage(t *testing.T) {
+	// The user approved without seeing the target (the address re-read
+	// stalled), so the recheck has no target to compare: only the page.
+	remote := &fakeRemote{refs: checkoutRefs, hangOn: nthURLRead(2)}
+	svc, gate, token := remoteService(t, remote)
+	svc.describeTimeout = 100 * time.Millisecond
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if got := remote.sent(); len(got) != 1 {
+		t.Fatalf("forwarded %v", got)
 	}
 }
