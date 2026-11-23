@@ -165,6 +165,30 @@ func TestOutputBufferReplaceKeepsOnlyTheTail(t *testing.T) {
 	}
 }
 
+func TestOutputBufferAppendBoundsAnOversizedDelta(t *testing.T) {
+	var b OutputBuffer
+	b.Append("big", "start\n")
+	b.Append("big", strings.Repeat("x\n", 4*MaxOutputBytes))
+	if data := b.entries["big"].data; len(data) != MaxOutputBytes || cap(data) > 2*MaxOutputBytes {
+		t.Fatalf("len=%d cap=%d", len(data), cap(data))
+	}
+	if got, _ := b.Read("big"); !got.Truncated || strings.Contains(got.Text, "start") {
+		t.Fatalf("truncated=%v", got.Truncated)
+	}
+}
+
+func TestOutputBufferReadKeepsAPartialLineWithNothingAfterIt(t *testing.T) {
+	var b OutputBuffer
+	b.Replace("one", strings.Repeat("x", 2*MaxOutputBytes)+"end\n")
+	if got, _ := b.Read("one"); !got.Truncated || !strings.HasSuffix(got.Text, "end") {
+		t.Fatalf("len=%d truncated=%v", len(got.Text), got.Truncated)
+	}
+	b.Replace("two", strings.Repeat("x", 2*MaxOutputBytes)+"\nlast\n")
+	if got, _ := b.Read("two"); got.Text != "last" || !got.Truncated {
+		t.Fatalf("output=%+v", got)
+	}
+}
+
 func TestTailOutputKeepsTheEndOfAnOverlongLastLine(t *testing.T) {
 	line := "é" + strings.Repeat("x", MaxOutputBytes-2) + "end"
 	got := TailOutput("before\n"+line, false)
@@ -185,5 +209,13 @@ func TestTrackerKeepsTheCommandAcrossUpdates(t *testing.T) {
 	tasks := tracker.Snapshot(now)
 	if len(tasks) != 1 || tasks[0].Command != "npm run dev" || tasks[0].Description != "Dev server" {
 		t.Fatalf("tasks=%+v", tasks)
+	}
+	// A new run that names no command does not inherit the old one's.
+	tracker.Update(ports.ChatBackgroundTask{ID: "r", RunID: "run-1", Kind: "shell", Command: "npm test", State: "running"}, now)
+	tracker.Update(ports.ChatBackgroundTask{ID: "r", RunID: "run-2", Kind: "shell", State: "running"}, now)
+	for _, task := range tracker.Snapshot(now) {
+		if task.ID == "r" && (task.RunID != "run-2" || task.Command != "") {
+			t.Fatalf("new run=%+v", task)
+		}
 	}
 }

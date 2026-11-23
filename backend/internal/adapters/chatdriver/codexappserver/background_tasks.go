@@ -23,6 +23,8 @@ var (
 // until completion so a late outcome survives inventory reconciliation.
 const maxPendingBackgroundCommands = 256
 
+type backgroundStart struct{ printed bool }
+
 type backgroundCommand struct {
 	StartedAt       *time.Time
 	Description     string
@@ -295,11 +297,12 @@ func (c *conversation) BackgroundTaskOutput(_ context.Context, taskID string) (p
 			return output, nil
 		}
 		// A terminal started before this controller attached may have printed
-		// before then; only one whose start it saw has printed nothing yet.
+		// before then, and one that printed has lost that output since; only
+		// one whose start it saw and that never printed has nothing to show.
 		c.mu.Lock()
-		started := c.backgroundStarted[task.RunID]
+		start, started := c.backgroundStarted[task.RunID]
 		c.mu.Unlock()
-		return ports.ChatBackgroundTaskOutput{Truncated: !started}, nil
+		return ports.ChatBackgroundTaskOutput{Truncated: !started || start.printed}, nil
 	}
 	// A terminal that ended, or left the listing, stays readable while its
 	// output is still buffered.
@@ -335,17 +338,25 @@ func (c *conversation) rememberBackgroundRun(processID, runID string) {
 // rememberBackgroundStartLocked records that this controller saw an exec
 // item start. Caller holds mu.
 func (c *conversation) rememberBackgroundStartLocked(runID string) {
-	if runID == "" || c.backgroundStarted[runID] {
+	if _, started := c.backgroundStarted[runID]; runID == "" || started {
 		return
 	}
 	if c.backgroundStarted == nil {
-		c.backgroundStarted = make(map[string]bool)
+		c.backgroundStarted = make(map[string]backgroundStart)
 	}
-	c.backgroundStarted[runID] = true
+	c.backgroundStarted[runID] = backgroundStart{}
 	c.backgroundStartOrder = append(c.backgroundStartOrder, runID)
 	for len(c.backgroundStartOrder) > backgroundStartsKept {
 		delete(c.backgroundStarted, c.backgroundStartOrder[0])
 		c.backgroundStartOrder = c.backgroundStartOrder[1:]
+	}
+}
+
+// markBackgroundPrintedLocked records that a started exec item printed.
+// Caller holds mu.
+func (c *conversation) markBackgroundPrintedLocked(runID string) {
+	if _, started := c.backgroundStarted[runID]; started {
+		c.backgroundStarted[runID] = backgroundStart{printed: true}
 	}
 }
 
@@ -354,7 +365,8 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 		var delta codexproto.CommandExecutionOutputDeltaNotification
 		if json.Unmarshal(n.Params, &delta) == nil && (delta.ThreadID == "" || delta.ThreadID == c.threadID) {
 			c.mu.Lock()
-			started := c.backgroundStarted[delta.ItemID]
+			_, started := c.backgroundStarted[delta.ItemID]
+			c.markBackgroundPrintedLocked(delta.ItemID)
 			c.mu.Unlock()
 			if !started {
 				// Attached after the command started, so its first output is gone.
@@ -448,6 +460,9 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 			// The whole output fills what the stream missed, such as lines after
 			// the delta cap. Codex can still drop the first chunk from both.
 			c.backgroundOutput.Replace(params.Item.ID, *params.Item.AggregatedOutput)
+			c.mu.Lock()
+			c.markBackgroundPrintedLocked(params.Item.ID)
+			c.mu.Unlock()
 		}
 		state := "completed"
 		if params.Item.ExitCode != nil && *params.Item.ExitCode != 0 {

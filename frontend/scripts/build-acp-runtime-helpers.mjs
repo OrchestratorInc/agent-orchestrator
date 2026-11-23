@@ -476,7 +476,11 @@ async function aoReadBackgroundOutput(path, maxBytes) {
 		const buffer = Buffer.alloc(stats.size - start);
 		const { bytesRead } = await file.read(buffer, 0, buffer.length, start);
 		let output = buffer.subarray(0, bytesRead).toString("utf8");
-		if (start > 0) output = output.slice(output.indexOf("\n") + 1);
+		if (start > 0) {
+			// Drop the partial first line only when a complete line follows it.
+			const at = output.replace(/[\r\n]+$/, "").indexOf("\n");
+			if (at >= 0) output = output.slice(at + 1);
+		}
 		return { output, truncated: start > 0 };
 	} finally {
 		await file.close();

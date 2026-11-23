@@ -849,6 +849,17 @@ func TestBackgroundTaskOutputCodexMarksAQuietTerminalFromBeforeAttach(t *testing
 	if got, err := c.BackgroundTaskOutput(context.Background(), "4001"); err != nil || got.Text != "" || got.Truncated {
 		t.Fatalf("output=%+v err=%v", got, err)
 	}
+	// One that printed, then lost its output and its eviction record, is missing output.
+	commandOutput(c, "fresh", "ready\n")
+	for i := range 128 {
+		commandOutput(c, fmt.Sprintf("fg-%d", i), "x\n")
+	}
+	if _, kept := c.backgroundOutput.Read("fresh"); kept {
+		t.Fatal("output still buffered")
+	}
+	if got, err := c.BackgroundTaskOutput(context.Background(), "4001"); err != nil || got.Text != "" || !got.Truncated {
+		t.Fatalf("evicted output=%+v err=%v", got, err)
+	}
 }
 
 func TestBackgroundTaskOutputCodexMarksAMissedStart(t *testing.T) {

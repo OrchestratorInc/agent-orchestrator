@@ -377,6 +377,10 @@ describe("patchClaudeBackgroundTasks output", () => {
 		// Past the byte cap, the read starts on the next whole line.
 		writeFileSync(file, `${"x".repeat(1500)}\nlast line\n`);
 		await expect(h.output("server", { maxBytes: 1024 })).resolves.toEqual({ output: "last line\n", truncated: true });
+
+		// With no complete line after the cut, the read keeps the bounded tail.
+		writeFileSync(file, `${"x".repeat(1500)}end\n`);
+		await expect(h.output("server", { maxBytes: 1024 })).resolves.toEqual({ output: `${"x".repeat(1020)}end\n`, truncated: true });
 	});
 
 	it("reads only the file Claude Code named for that task", async () => {
