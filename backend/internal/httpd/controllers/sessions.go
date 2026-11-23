@@ -873,6 +873,19 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			}
 		},
 		ModifyResponse: func(res *http.Response) error {
+			// Cloudflare can obfuscate email addresses in HTML before the remote
+			// Browser receives it. Its decoder URL would resolve on the preview
+			// origin, where the agent's app does not serve Cloudflare assets.
+			// A response without a Content-Type is typed after this hook: the
+			// server sniffs its body, which can make it text/html. Reading the
+			// body here would hold back a streamed response, so it is protected
+			// without knowing its type; no-transform is harmless on other types.
+			contentType := res.Header.Values("Content-Type")
+			if len(contentType) == 0 || strings.TrimSpace(contentType[0]) == "" || isHTMLMediaType(contentType[0]) {
+				if !hasCacheDirective(res.Header.Values("Cache-Control"), "no-transform") {
+					res.Header.Add("Cache-Control", "no-transform")
+				}
+			}
 			// Remote proxies publish this app on a separate origin, where the
 			// sandbox is removed in favor of their existing preview policy.
 			res.Header.Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
@@ -893,6 +906,62 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// isHTMLMediaType reports whether contentType names an HTML or XHTML document.
+// Only the type before the first ";" decides: clients and Cloudflare treat a
+// response as HTML even when its parameters are malformed or repeated, which
+// mime.ParseMediaType rejects without returning the type.
+func isHTMLMediaType(contentType string) bool {
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
+}
+
+// previewServedContentType is the Content-Type http.ServeContent sends for
+// content: a type already set on the response, else the type of name's
+// extension, else a sniff of the first 512 bytes. A sniff rewinds content, as
+// ServeContent does before serving it.
+func previewServedContentType(h http.Header, name string, content io.ReadSeeker) (string, error) {
+	if values, set := h["Content-Type"]; set {
+		if len(values) == 0 {
+			return "", nil
+		}
+		return values[0], nil
+	}
+	if contentType := mime.TypeByExtension(filepath.Ext(name)); contentType != "" {
+		return contentType, nil
+	}
+	var head [512]byte
+	n, _ := io.ReadFull(content, head[:])
+	if _, err := content.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	return http.DetectContentType(head[:n]), nil
+}
+
+func hasCacheDirective(values []string, directive string) bool {
+	for _, value := range values {
+		quoted, escaped, start := false, false, 0
+		for i := 0; i <= len(value); i++ {
+			if i == len(value) || (value[i] == ',' && !quoted) {
+				if strings.EqualFold(strings.TrimSpace(value[start:i]), directive) {
+					return true
+				}
+				start = i + 1
+				continue
+			}
+			switch {
+			case escaped:
+				escaped = false
+			case quoted && value[i] == '\\':
+				escaped = true
+			case value[i] == '"':
+				quoted = !quoted
+			}
+		}
+	}
+	return false
 }
 
 // inlineArtifactOrigin serves the session's artifact directory on its inline
@@ -1089,7 +1158,21 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 		// Last-Modified alone cannot distinguish replacements within one second.
 		w.Header().Set("ETag", fmt.Sprintf(`"%d-%d"`, info.Size(), info.ModTime().UnixNano()))
 		w.Header().Set("Access-Control-Expose-Headers", "ETag")
-		w.Header().Set("Cache-Control", "private, no-cache")
+		// Decide on the type ServeContent sends, sniffed HTML included, and hand
+		// it that type so the policy and the response cannot disagree.
+		contentType, err := previewServedContentType(w.Header(), info.Name(), file)
+		if err != nil {
+			envelope.WriteError(w, r, fmt.Errorf("read preview file: %w", err))
+			return
+		}
+		cacheControl := "private, no-cache"
+		if isHTMLMediaType(contentType) {
+			cacheControl += ", no-transform"
+		}
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		w.Header().Set("Cache-Control", cacheControl)
 		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 		return
 	}
@@ -1105,6 +1188,7 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-transform")
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(rendered) //nolint:gosec // G705: legacy documents are sandboxed; isolated previews have no daemon API authority
 	}
