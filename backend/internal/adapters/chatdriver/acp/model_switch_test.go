@@ -261,3 +261,84 @@ func TestSetConfigOptionForgetsTheUnofferedOpeningModel(t *testing.T) {
 		t.Fatalf("switch back to the opening model = %v, want ErrChatConfigOptionInvalid", err)
 	}
 }
+
+// Antigravity lists variant ids (claude-opus-5-5-low) as its models while its
+// model option offers only the bases, with the reasoning level in its own
+// option: thinking_level on agy_acp_server 1.4, thought_level on `agy acp` 1.5.
+// A variant whose base is offered must open and switch on either shape, and a
+// model the session cannot run at all is still refused.
+func TestSendTurnSplitsAVariantModelOntoEitherReasoningOption(t *testing.T) {
+	for _, levelOption := range []string{"thinking_level", "thought_level"} {
+		t.Run(levelOption, func(t *testing.T) {
+			agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+				selectConfigOption("model", "Model", "model", "gemini-4-neon", "gemini-4-neon", "claude-opus-5-5", "gpt-oss-120b-medium"),
+				selectConfigOption(levelOption, "Thinking", "thought_level", "high", "low", "medium", "high", "xhigh"),
+			}}
+			driver := New(Config{
+				Harness:      domain.HarnessAgy,
+				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+					return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+				},
+				// The binding names the 1.4 option, as agyacp does.
+				SplitModelVariant: func(model string) (string, SessionOption, bool) {
+					for _, level := range []string{"low", "medium", "high", "xhigh"} {
+						if base, ok := strings.CutSuffix(model, "-"+level); ok {
+							return base, SessionOption{ID: "thinking_level", Value: level, Optional: true}, true
+						}
+					}
+					return "", SessionOption{}, false
+				},
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+				WorkspacePath: t.TempDir(), Model: "claude-opus-5-5-low",
+			})
+			if err != nil {
+				t.Fatalf("Start on claude-opus-5-5-low: %v", err)
+			}
+			defer conv.Close()
+			send := func(model string) error {
+				ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
+					Text: "hi", Settings: ports.ChatTurnSettings{Model: model},
+				})
+				if err == nil {
+					conv.(*conversation).DiscardDeferredTurn(ref.ProviderTurnID)
+				}
+				return err
+			}
+			want := func(model, level string) {
+				t.Helper()
+				agent.mu.Lock()
+				defer agent.mu.Unlock()
+				if agent.options["model"] != model || agent.options[levelOption] != level {
+					t.Fatalf("options set = %v, want model=%s %s=%s", agent.options, model, levelOption, level)
+				}
+				if _, sent := agent.options["thinking_level"]; sent && levelOption != "thinking_level" {
+					t.Fatalf("options set = %v, want nothing sent to an option the session lacks", agent.options)
+				}
+			}
+
+			if err := send("claude-opus-5-5-low"); err != nil {
+				t.Fatalf("first send on claude-opus-5-5-low: %v", err)
+			}
+			want("claude-opus-5-5", "low")
+			if err := send("gemini-4-neon-xhigh"); err != nil {
+				t.Fatalf("switch to gemini-4-neon-xhigh: %v", err)
+			}
+			want("gemini-4-neon", "xhigh")
+			// An exact id that only looks like a variant is the model itself.
+			if err := send("gpt-oss-120b-medium"); err != nil {
+				t.Fatalf("switch to gpt-oss-120b-medium: %v", err)
+			}
+			want("gpt-oss-120b-medium", "xhigh")
+
+			err = send("gemini-9-ultra-high")
+			if !errors.Is(err, ports.ErrChatConfigOptionInvalid) || !strings.Contains(err.Error(), "pick one it lists") {
+				t.Fatalf("switch to unoffered gemini-9-ultra-high = %v, want the not-offered refusal", err)
+			}
+		})
+	}
+}
