@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -193,5 +194,50 @@ func TestRelayStartsANewSessionWhenTheServerDropsTheOldOne(t *testing.T) {
 	defer mu.Unlock()
 	if starts != 2 {
 		t.Fatalf("the relay started %d sessions", starts)
+	}
+}
+
+func TestRelaySendsANotificationBeforeTheRequestThatFollowsIt(t *testing.T) {
+	var mu sync.Mutex
+	var order []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var msg mcpRequest
+		_ = json.Unmarshal(body, &msg)
+		if msg.Method == "notifications/initialized" {
+			time.Sleep(150 * time.Millisecond)
+		}
+		mu.Lock()
+		order = append(order, msg.Method)
+		mu.Unlock()
+		if len(msg.ID) == 0 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`)
+	}))
+	defer upstream.Close()
+	var out strings.Builder
+	in := strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n" + `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` + "\n")
+	relayIn, feed := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- Relay(context.Background(), relayIn, &out, upstream.URL, "") }()
+	_, _ = io.Copy(feed, in)
+	for range 100 {
+		mu.Lock()
+		seen := len(order)
+		mu.Unlock()
+		if seen == 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = feed.Close()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 2 || order[0] != "notifications/initialized" || order[1] != "tools/list" {
+		t.Fatalf("the server got %v", order)
 	}
 }

@@ -417,9 +417,7 @@ type ChatMCPServerConfig struct {
 	Env     map[string]string
 	URL     string
 	Headers map[string]string
-	// Relay is the stdio server a driver uses in place of an HTTP server when
-	// the agent cannot connect to HTTP servers.
-	Relay *ChatMCPServerConfig
+	Relay   *ChatMCPServerConfig
 }
 
 // ChatInternalReplayResourceURI is reserved for AO's reconstructed edit context.

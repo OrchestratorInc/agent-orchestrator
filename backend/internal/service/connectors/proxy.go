@@ -19,6 +19,8 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/oauth2"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -169,8 +171,14 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 	if err == nil {
 		err = s.authorize(signed, rec)
 	}
+	var refused *oauth2.RetrieveError
+	if err != nil && (!errors.As(err, &refused) || refused.ErrorCode != "invalid_grant") {
+		s.observe(rec.ID, StatusUnavailable, "reach", safeError(err, rec.URL))
+		writeRPCError(w, call.ID, rec.Name+" did not answer: its sign-in could not be renewed now. Try again.")
+		return
+	}
 	if err != nil {
-		s.observe(rec.ID, StatusNeedsSignIn, "sign-in", err.Error())
+		s.observe(rec.ID, StatusNeedsSignIn, "sign-in", safeError(err, rec.URL))
 		writeRPCError(w, call.ID, signInAdvice(rec))
 		return
 	}
@@ -208,9 +216,9 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			if !errors.Is(err, context.Canceled) {
-				s.observe(rec.ID, StatusUnavailable, "reach", err.Error())
+				s.observe(rec.ID, StatusUnavailable, "reach", safeError(err, rec.URL))
 			}
-			writeRPCError(w, call.ID, rec.Name+" did not answer: "+err.Error())
+			writeRPCError(w, call.ID, rec.Name+" did not answer: "+safeError(err, rec.URL))
 		},
 	}).ServeHTTP(w, r)
 }

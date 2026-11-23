@@ -33,9 +33,12 @@ function renderSection() {
 	);
 }
 
-function mockList(connectors: Connector[] = list) {
-	return vi.spyOn(apiClient, "GET").mockImplementation((async (path: string) =>
-		path === "/api/v1/connectors/import" ? { data: { candidates: [] } } : { data: { connectors } }) as never);
+function mockList(connectors: Connector[] = list, one?: () => Connector) {
+	return vi.spyOn(apiClient, "GET").mockImplementation((async (path: string, init?: { params?: { path?: { connectorId?: string } } }) =>
+		path === "/api/v1/connectors/import" ? { data: { candidates: [] } }
+			: path === "/api/v1/connectors/{connectorId}"
+				? { data: { connector: one?.() ?? connectors.find((connector) => connector.id === init?.params?.path?.connectorId) } }
+				: { data: { connectors } }) as never);
 }
 
 describe("ConnectorsSection", () => {
@@ -54,7 +57,6 @@ describe("ConnectorsSection", () => {
 		expect(row("files").querySelector("[title]")).toHaveAttribute("title", "exec: npx: not found");
 		expect(row("docs")).toHaveTextContent("Off");
 		expect(row("linear").closest(".settings-grouped-rows")).not.toBeNull();
-		// Only the connector that needs it offers Sign in.
 		expect(screen.getAllByRole("button", { name: "Sign in" })).toHaveLength(1);
 		expect(row("sentry")).toContainElement(screen.getByRole("button", { name: "Sign in" }));
 	});
@@ -96,6 +98,22 @@ describe("ConnectorsSection", () => {
 		expect(await screen.findByText("Signed in.")).toBeInTheDocument();
 	});
 
+	it("waits for the server's approval of a refused sign-in and completes by itself", async () => {
+		const refused: Connector = { ...base, id: "c5", key: "notion", name: "Notion", signedIn: true, status: "needs_signin", tools: [] };
+		let approved = false;
+		mockList([refused], () => ({ ...refused, signedIn: approved, status: approved ? "connected" : "needs_signin" }));
+		vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined as never);
+		vi.spyOn(apiClient, "POST").mockResolvedValue({
+			data: { authorizationUrl: "https://notion.example/authorize", callbackUrl: "http://127.0.0.1:3011/oauth/mcp/callback", connector: { ...refused, signedIn: false } },
+		} as never);
+		renderSection();
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+		expect(await screen.findByText("Approve the sign-in in your browser.")).toBeInTheDocument();
+		expect(screen.queryByText("Signed in.")).not.toBeInTheDocument();
+		approved = true;
+		expect(await screen.findByText("Signed in.", undefined, { timeout: 5000 })).toBeInTheDocument();
+	});
+
 	it("adds a server from the catalog and starts its sign-in", async () => {
 		mockList([]);
 		vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined as never);
@@ -125,7 +143,6 @@ describe("ConnectorsSection", () => {
 		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: { connector: twoHeaders } } as never);
 		const user = userEvent.setup();
 		renderSection();
-		// A refused header shows what happened, and no Sign in that could not work.
 		await screen.findByText("Docs");
 		const row = document.querySelector('[data-connector="docs"]') as HTMLElement;
 		expect(row).toHaveTextContent("The server refused the sign-in");
@@ -198,7 +215,6 @@ describe("connector helpers", () => {
 		expect(needsSignIn(base)).toBe(false);
 		expect(needsSignIn({ ...base, signedIn: false, status: "unchecked" })).toBe(true);
 		expect(needsSignIn({ ...base, auth: "none", signedIn: false, status: "connected" })).toBe(false);
-		// A header the server refused cannot be fixed by Sign in.
 		expect(needsSignIn({ ...base, auth: "header", signedIn: false, status: "needs_signin" })).toBe(false);
 		expect(needsSignIn({ ...base, signedIn: true, status: "needs_signin" })).toBe(true);
 	});

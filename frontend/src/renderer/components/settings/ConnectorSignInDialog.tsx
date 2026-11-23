@@ -1,9 +1,9 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Check, Loader2 } from "@/components/app-icons";
-import { connectorsApi, type Connector } from "../../hooks/useConnectors";
+import { connectorsApi, connectorsQueryKey, type Connector } from "../../hooks/useConnectors";
 import { aoBridge } from "../../lib/bridge";
 import { Button } from "../ui/button";
 import { CloseButton } from "../ui/close-button";
@@ -19,17 +19,10 @@ import {
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 
-/** Opens the sign-in page. A client that cannot open a browser still shows the link to copy. */
 function openPage(url: string) {
 	void Promise.resolve().then(() => aoBridge.app.openExternal(url)).catch(() => undefined);
 }
 
-/**
- * Signs a connector in. The daemon gives a page; the user approves there. The
- * browser then opens an address on the computer that runs the daemon. When the
- * browser is on another device that address cannot load, so the user pastes it
- * here and the daemon reads the answer from it.
- */
 export function ConnectorSignInDialog({ connector, onClose }: { connector: Connector; onClose: () => void }) {
 	const { t } = useTranslation();
 	const [address, setAddress] = useState("");
@@ -51,7 +44,13 @@ export function ConnectorSignInDialog({ connector, onClose }: { connector: Conne
 	}, [startSignIn]);
 
 	const page = start.data?.authorizationUrl;
-	const done = finish.isSuccess || connector.signedIn || (start.isSuccess && !page);
+	const live = useQuery({
+		queryKey: [...connectorsQueryKey, connector.id],
+		queryFn: () => connectorsApi.get(connector.id),
+		enabled: Boolean(page) && !finish.isSuccess,
+		refetchInterval: (query) => (query.state.data?.signedIn ? false : 2000),
+	});
+	const done = finish.isSuccess || (start.isSuccess && (!page || Boolean(live.data?.signedIn)));
 	const error = start.error ?? finish.error;
 
 	return (

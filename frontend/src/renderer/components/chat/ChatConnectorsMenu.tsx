@@ -12,7 +12,6 @@ import { CHAT_MENU_CLASS, TRIGGER_CLASS } from "./TurnSettingsBar";
 
 type RowState = "off" | "needsSignIn" | "failed" | "starting" | "loaded" | "added";
 
-/** What a chat's connector is doing: Orchestrator knows the sign-in, the agent reports whether it loaded the server. */
 export function connectorRowState(connector: Pick<SessionConnector, "enabled" | "status">, reported?: Pick<McpServer, "status">): RowState {
 	if (!connector.enabled) return "off";
 	if (connector.status === "needs_signin") return "needsSignIn";
@@ -30,12 +29,6 @@ const stateKeys = {
 	added: "chat.connectors.added",
 } as const;
 
-/**
- * The connectors this chat started with: their state, and how many calls the
- * chat made to each server URL connector. Calls to a local command do not pass
- * through the daemon, so that row names its kind and shows no count. Nothing
- * shows for a chat without connectors.
- */
 export function ChatConnectorsMenu({ sessionId, servers }: { sessionId: string; servers: readonly McpServer[] }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);

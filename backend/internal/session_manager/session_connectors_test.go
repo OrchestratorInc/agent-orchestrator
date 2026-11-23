@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -95,5 +96,24 @@ func TestTerminalConnectorsGoAfterTheAgentBinary(t *testing.T) {
 	}
 	if got := m.terminalConnectors(ctx, &recordingAgent{}, domain.HarnessAider, "mer-1", "p1", "/work", argv, env); !slices.Equal(got, argv) {
 		t.Fatalf("an agent without connector arguments: argv = %v", got)
+	}
+}
+
+func TestASessionGetsNoConnectorsWhenTheDaemonCannotStartItsHelper(t *testing.T) {
+	st := newFakeStore()
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{},
+		Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(),
+		LookPath:   func(string) (string, error) { return "/bin/true", nil },
+		Executable: func() (string, error) { return "", errors.New("no executable") },
+	})
+	m.SetSessionConnectors(func(context.Context, SessionConnectorsInput) []ports.ChatMCPServerConfig {
+		return []ports.ChatMCPServerConfig{
+			{Name: "linear", Type: "http", URL: "http://127.0.0.1:1/mcp/s/mer-1/connectors/linear", Headers: map[string]string{"Authorization": "Bearer t"}},
+			{Name: "paper", Type: "stdio", URL: "http://127.0.0.1:1/mcp/s/mer-1/connectors/paper/launch", Headers: map[string]string{"Authorization": "Bearer t"}},
+		}
+	})
+	if got := m.connectorServers(context.Background(), domain.HarnessCursor, "p1", "/work", map[string]string{EnvSessionID: "mer-1"}); len(got) != 0 {
+		t.Fatalf("connectors without the helper = %+v", got)
 	}
 }

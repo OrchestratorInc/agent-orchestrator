@@ -30,9 +30,9 @@ func (s *Service) Test(ctx context.Context, ref string) (Connector, error) {
 	case err == nil:
 		return s.setStatus(rec.ID, StatusConnected, "", "", tools)
 	case step == "sign-in":
-		return s.setStatus(rec.ID, StatusNeedsSignIn, step, err.Error(), nil)
+		return s.setStatus(rec.ID, StatusNeedsSignIn, step, safeError(err, rec.URL), nil)
 	default:
-		return s.setStatus(rec.ID, StatusUnavailable, step, err.Error(), nil)
+		return s.setStatus(rec.ID, StatusUnavailable, step, safeError(err, rec.URL), nil)
 	}
 }
 

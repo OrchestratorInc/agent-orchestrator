@@ -49,7 +49,6 @@ describe("ChatConnectorsMenu", () => {
 		expect(rows).toHaveLength(3);
 		expect(rows[0]).toHaveTextContent("Linear4 calls · create_issueLoaded");
 		expect(rows[1]).toHaveTextContent("SentryNo calls yetNeeds sign-in");
-		// Calls to a local command are not counted, so the row does not say "No calls yet".
 		expect(rows[2]).toHaveTextContent("filesLocal commandFailed");
 		expect(screen.getByText("Failed")).toHaveAttribute("title", "spawn npx ENOENT");
 		await user.click(screen.getByRole("menuitem", { name: "Manage connectors" }));

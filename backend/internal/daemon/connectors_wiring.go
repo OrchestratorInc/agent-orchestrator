@@ -18,8 +18,6 @@ type connectorSessions interface {
 	SetSessionConnectors(servers func(context.Context, sessionmanager.SessionConnectorsInput) []ports.ChatMCPServerConfig)
 }
 
-// wireConnectors gives new sessions their connectors, and gives the connector
-// service the sessions and projects it checks calls and imports against.
 func wireConnectors(svc *connectors.Service, store connectorStore, sessions connectorSessions) {
 	svc.SetSessionLookup(func(ctx context.Context, sessionID string) (string, bool) {
 		rec, ok, err := store.GetSession(ctx, domain.SessionID(sessionID))

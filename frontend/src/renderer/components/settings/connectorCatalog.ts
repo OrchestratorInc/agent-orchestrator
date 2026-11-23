@@ -1,4 +1,3 @@
-/** A server the add dialog can fill the form with. */
 export type ConnectorPreset = {
 	id: string;
 	name: string;
@@ -6,11 +5,6 @@ export type ConnectorPreset = {
 	auth: "oauth" | "none";
 };
 
-/**
- * Servers whose sign-in a connector can do by itself: each answers an
- * unauthenticated request with a sign-in challenge, lets a client register
- * itself, and supports PKCE. Context7 needs no sign-in.
- */
 export const connectorPresets: readonly ConnectorPreset[] = [
 	{ id: "linear", name: "Linear", url: "https://mcp.linear.app/mcp", auth: "oauth" },
 	{ id: "notion", name: "Notion", url: "https://mcp.notion.com/mcp", auth: "oauth" },

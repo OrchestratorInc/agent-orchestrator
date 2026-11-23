@@ -28,7 +28,6 @@ type Mode = "url" | "command" | "import";
 type Auth = "oauth" | "header" | "none";
 const ALL_PROJECTS = "";
 
-/** Reads NAME=value lines. Returns null when a line has no name. */
 export function parseEnvLines(text: string): Record<string, string> | null {
 	const out: Record<string, string> = {};
 	for (const line of text.split("\n")) {
@@ -51,10 +50,8 @@ function Field({ id, label, hint, children }: { id: string; label: string; hint?
 	);
 }
 
-/** Adds a connector from a server URL, a local command or another agent's configuration, or edits one. */
 export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 	connector?: Connector;
-	/** Keys in use, so a preset that is already added is not offered again. */
 	taken: string[];
 	onClose: () => void;
 	onSaved: (saved: Connector[]) => void;
@@ -93,7 +90,6 @@ export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 			if (mode === "url") {
 				Object.assign(input, { transport: "http", url: url.trim(), auth });
 				if (auth === "header") {
-					// An empty value keeps the saved one, so the headers this form does not show stay as they are.
 					const first = connector?.headerKeys[0];
 					const kept = (connector?.headerKeys ?? []).filter((name) => name !== first || name === headerName.trim());
 					input.headers = { ...Object.fromEntries(kept.map((name) => [name, ""])), [headerName.trim()]: headerValue };

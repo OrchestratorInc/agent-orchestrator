@@ -16,15 +16,6 @@ const authKeys = {
 	none: "settings.connectors.dialog.authNone",
 } as const;
 
-/**
- * The connector an agent asked for in this chat, shown above the composer
- * until the user answers. It shows exactly what would be added. The agent
- * names the values a server needs and the user types them here, so a value
- * never passes through the agent. Nothing is added before Approve.
- *
- * `asked` says the conversation holds a request; without one the dock asks
- * the daemon nothing. `waiting` says the agent's request is still open.
- */
 export function ConnectorProposalDock({ sessionId, asked, waiting }: { sessionId: string; asked: boolean; waiting: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();

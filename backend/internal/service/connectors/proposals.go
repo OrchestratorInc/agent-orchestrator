@@ -29,8 +29,7 @@ const (
 	ProposalExpired  ProposalState = "expired"
 )
 
-// Proposal is a connector an agent asked the user to add. It holds no value,
-// only the names of the values the user types when they approve.
+// Proposal is a connector an agent asked the user to add; it holds the names of values, never a value.
 type Proposal struct {
 	ID           string
 	SessionID    string
@@ -166,8 +165,7 @@ func (s *Service) SessionProposals(_ context.Context, sessionID string) []Propos
 	return out
 }
 
-// ApproveProposal adds the proposed connector. values holds what the user typed for each name the
-// proposal lists. projectID, when given, replaces the project the proposal came from; empty means all projects.
+// ApproveProposal adds the proposed connector with the values the user typed, for projectID when given.
 func (s *Service) ApproveProposal(ctx context.Context, id string, projectID *string, values map[string]string) (Proposal, Connector, error) {
 	s.mu.Lock()
 	found, ok := s.proposals[id]

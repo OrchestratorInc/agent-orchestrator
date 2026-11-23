@@ -184,6 +184,9 @@ func TestConnectorImportRoutesHideValuesAndKeepCommandsOnLoopback(t *testing.T) 
 		}
 		return map[string]string{out.Candidates[0].Key: out.Candidates[0].ID, out.Candidates[1].Key: out.Candidates[1].ID}
 	}
+	if !httpd.IsLANControlBlockedPathForTest("/api/v1/connectors/import") {
+		t.Fatal("the import list reads this computer's agent configuration and must not answer on the remote listener")
+	}
 	lan := newConnectorTestServer(t, true)
 	found := ids(lan)
 	if status, body := connectorCall(t, lan, http.MethodPost, "/api/v1/connectors/import", `{"ids":["`+found["files"]+`"]}`); status != http.StatusForbidden ||

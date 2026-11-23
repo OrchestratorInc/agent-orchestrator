@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"net/http"
 	"net/url"
@@ -66,9 +67,7 @@ func New(dataDir, baseURL string) *Service {
 	return s
 }
 
-// SetBaseURL sets the loopback address the daemon answers on. The daemon calls
-// it with the bound address, which differs from the configured one when that
-// port was taken.
+// SetBaseURL sets the loopback address the daemon bound.
 func (s *Service) SetBaseURL(baseURL string) {
 	s.baseURL.Store(strings.TrimRight(baseURL, "/"))
 }
@@ -418,6 +417,18 @@ func mergeSecrets(old, in map[string]string, name *regexp.Regexp) (map[string]st
 		}
 	}
 	return out, nil
+}
+
+func safeError(err error, address string) string {
+	text := err.Error()
+	var failed *url.Error
+	if errors.As(err, &failed) {
+		text = failed.Err.Error()
+	}
+	if target, parseErr := url.Parse(address); parseErr == nil && target.RawQuery != "" {
+		text = strings.ReplaceAll(text, "?"+target.RawQuery, "")
+	}
+	return text
 }
 
 func loopbackHost(host string) bool {

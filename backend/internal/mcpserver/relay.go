@@ -119,6 +119,8 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, target, authorizati
 				r.mu.Lock()
 				r.start = bytes.Clone(line)
 				r.mu.Unlock()
+			}
+			if msg.Method == "initialize" || len(msg.ID) == 0 {
 				r.pass(ctx, line, msg)
 			} else {
 				calls.Go(func() { r.pass(ctx, line, msg) })

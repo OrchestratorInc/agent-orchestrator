@@ -320,3 +320,42 @@ func TestAnEditOfTheAddressCancelsAnOpenSignIn(t *testing.T) {
 		t.Fatalf("records = %+v, %v", records, err)
 	}
 }
+
+func TestAStatusErrorDoesNotShowTheHiddenPartOfTheAddress(t *testing.T) {
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "down", Transport: TransportHTTP, URL: "http://127.0.0.1:1/mcp?api_key=SECRET-VALUE", Auth: AuthOAuth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tested, err := svc.Test(ctx, created.ID)
+	if err != nil || tested.Status != StatusUnavailable || tested.StatusError == "" || strings.Contains(tested.StatusError, "SECRET-VALUE") {
+		t.Fatalf("test = %+v, %v", tested, err)
+	}
+	if _, err := svc.StartSignIn(ctx, created.ID); err == nil || strings.Contains(err.Error(), "SECRET-VALUE") {
+		t.Fatalf("start = %v", err)
+	}
+	if got, _ := svc.Get(ctx, created.ID); strings.Contains(got.StatusError, "SECRET-VALUE") {
+		t.Fatalf("status after a start = %+v", got)
+	}
+}
+
+func TestARefusalWithoutASignInChallengeIsNotReportedAsNoSignInNeeded(t *testing.T) {
+	refuses := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	defer refuses.Close()
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "closed", Transport: TransportHTTP, URL: refuses.URL + "/mcp", Auth: AuthOAuth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.StartSignIn(ctx, created.ID)
+	if err == nil || page != "" {
+		t.Fatalf("start = %q, %v", page, err)
+	}
+	if got, _ := svc.Get(ctx, created.ID); got.Status != StatusUnavailable || got.SignedIn {
+		t.Fatalf("after the refusal = %+v", got)
+	}
+}

@@ -21,8 +21,7 @@ type SessionConnectorsInput struct {
 	Env       map[string]string
 }
 
-// SetSessionConnectors supplies the connectors a session gets after the ao tool
-// server. Sessions already running keep what they started with.
+// SetSessionConnectors supplies the connectors a new session gets after the ao tool server.
 func (m *Manager) SetSessionConnectors(servers func(context.Context, SessionConnectorsInput) []ports.ChatMCPServerConfig) {
 	m.connectorsMu.Lock()
 	defer m.connectorsMu.Unlock()
@@ -53,31 +52,26 @@ func (m *Manager) connectorServers(ctx context.Context, harness domain.AgentHarn
 	executable, err := m.executable()
 	helper := err == nil && filepath.IsAbs(executable)
 	servers := make([]ports.ChatMCPServerConfig, 0, len(connectors))
+	if !helper && len(connectors) > 0 {
+		m.logger.Warn("session gets no connectors: the ao executable is not available", "connectors", len(connectors))
+		return servers
+	}
+	command, args := mcpServerCommand(executable)
 	for _, connector := range connectors {
-		if !helper && connector.Type == "stdio" {
-			m.logger.Warn("session gets no command connector: the ao executable is not available", "connector", connector.Name)
-			continue
-		}
-		if helper {
-			command, args := mcpServerCommand(executable)
-			via := ports.ChatMCPServerConfig{Name: connector.Name, Type: "stdio", Command: command, Args: args, Env: map[string]string{
-				mcpserver.EnvRelayURL: connector.URL, mcpserver.EnvRelayAuthorization: connector.Headers["Authorization"],
-			}}
-			if connector.Type == "stdio" {
-				via.Env = map[string]string{mcpserver.EnvLaunchURL: connector.URL, mcpserver.EnvRelayAuthorization: connector.Headers["Authorization"]}
-				connector = via
-			} else {
-				connector.Relay = &via
-			}
+		via := ports.ChatMCPServerConfig{Name: connector.Name, Type: "stdio", Command: command, Args: args, Env: map[string]string{
+			mcpserver.EnvRelayURL: connector.URL, mcpserver.EnvRelayAuthorization: connector.Headers["Authorization"],
+		}}
+		if connector.Type == "stdio" {
+			via.Env = map[string]string{mcpserver.EnvLaunchURL: connector.URL, mcpserver.EnvRelayAuthorization: connector.Headers["Authorization"]}
+			connector = via
+		} else {
+			connector.Relay = &via
 		}
 		servers = append(servers, connector)
 	}
 	return servers
 }
 
-// terminalConnectors adds the session's connectors to the command of a
-// Terminal agent whose CLI takes tool servers as arguments. It adds to env what
-// those arguments refer to. argv must still start with the agent's own binary.
 func (m *Manager) terminalConnectors(ctx context.Context, agent ports.Agent, harness domain.AgentHarness, id domain.SessionID, projectID domain.ProjectID, workspace string, argv []string, env map[string]string) []string {
 	adapter, ok := agent.(ports.AgentConnectorArgs)
 	dir := m.systemPromptDir(id)

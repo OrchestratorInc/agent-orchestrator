@@ -9,9 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ConnectorArgs returns the config overrides that give Codex the tool servers.
-// Codex reads the session token from its environment, so the token is not in
-// the command line.
+// ConnectorArgs returns the config overrides that give Codex the tool servers; the token goes in the environment.
 func (p *Plugin) ConnectorArgs(servers []ports.ChatMCPServerConfig, token, _ string) (args []string, env map[string]string, err error) {
 	set := func(key string, value any) {
 		if raw, encodeErr := json.Marshal(value); encodeErr == nil {

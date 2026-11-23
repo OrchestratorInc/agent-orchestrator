@@ -294,6 +294,9 @@ func newConnectorConnectCommand(ctx *commandContext) *cobra.Command {
 				if current.Connector.SignedIn {
 					return printConnectorStatus(out, &current.Connector)
 				}
+				if detail := current.Connector.StatusDetail; detail != nil && detail.Step == "sign-in" && detail.Error != "" {
+					return fmt.Errorf("the sign-in did not complete: %s", detail.Error)
+				}
 			}
 		},
 	}

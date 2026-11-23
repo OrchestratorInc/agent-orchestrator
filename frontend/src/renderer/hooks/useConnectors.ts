@@ -18,7 +18,6 @@ export const sessionProposalsQueryKey = (sessionId: string) => ["connectors", "p
 
 const previewStamp = new Date(0).toISOString();
 
-// The web preview build has no daemon, so it shows a fixed list.
 const previewConnectors: Connector[] = [
 	{ id: "p1", key: "linear", name: "Linear", transport: "http", url: "https://mcp.linear.app/mcp", args: [], envKeys: [], headerKeys: [], auth: "oauth", signedIn: true, enabled: true, status: "connected", tools: ["list_issues", "create_issue", "update_issue"], createdAt: previewStamp, updatedAt: previewStamp },
 	{ id: "p2", key: "sentry", name: "Sentry", transport: "http", url: "https://mcp.sentry.dev/mcp", args: [], envKeys: [], headerKeys: [], auth: "oauth", signedIn: false, enabled: true, status: "needs_signin", tools: [], createdAt: previewStamp, updatedAt: previewStamp },
@@ -38,6 +37,7 @@ export const connectorsApi = {
 		if (error || !data) throw apiErrorException(error);
 		return data.connectors;
 	},
+	get: (connectorId: string) => one(apiClient.GET("/api/v1/connectors/{connectorId}", { params: { path: { connectorId } } })),
 	create: (body: ConnectorInput) => one(apiClient.POST("/api/v1/connectors", { body })),
 	update: (connectorId: string, body: ConnectorInput) =>
 		one(apiClient.PATCH("/api/v1/connectors/{connectorId}", { params: { path: { connectorId } }, body })),
@@ -93,16 +93,10 @@ export const connectorsApi = {
 	},
 };
 
-/** The connector list. It refetches while a consumer is mounted, so a status a call or a sign-in changed shows without a reload. */
 export function useConnectors() {
 	return useQuery({ queryKey: connectorsQueryKey, queryFn: connectorsApi.list, refetchInterval: 3000 });
 }
 
-/**
- * Splits a command line into its program and arguments. Quotes group words.
- * A backslash keeps the next character outside quotes, and keeps a quote or a
- * backslash inside double quotes. Single quotes keep everything as it is.
- */
 export function splitCommandLine(line: string): string[] {
 	const out: string[] = [];
 	let word = "";
@@ -136,14 +130,12 @@ export function splitCommandLine(line: string): string[] {
 	return out;
 }
 
-/** Writes a program and its arguments as one line that splitCommandLine reads back unchanged. */
 export function joinCommandLine(words: readonly string[]): string {
 	return words
 		.map((word) => (word !== "" && !/[\s"'\\]/.test(word) ? word : `"${word.replace(/[\\"]/g, "\\$&")}"`))
 		.join(" ");
 }
 
-/** The key a connector gets from a name: lowercase letters, digits, hyphens and underscores, 32 at most. */
 export function connectorKeyFrom(name: string): string {
 	return name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
 }

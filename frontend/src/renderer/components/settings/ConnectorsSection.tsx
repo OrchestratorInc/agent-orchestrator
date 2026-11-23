@@ -20,18 +20,15 @@ const stepKeys = {
 	"list tools": "settings.connectors.status.listTools",
 } as const;
 
-/** What a connector's target is, in one line: its address without the scheme, or its command. */
 export function connectorTarget(connector: Pick<Connector, "transport" | "url" | "command" | "args">): string {
 	if (connector.transport === "http") return (connector.url ?? "").replace(/^https?:\/\//, "");
 	return [connector.command, ...connector.args].filter(Boolean).join(" ");
 }
 
-/** Whether the row offers Sign in: an automatic sign-in that is not done, or one the server refused. Only that kind can sign in. */
 export function needsSignIn(connector: Pick<Connector, "auth" | "signedIn" | "status" | "transport">): boolean {
 	return connector.transport === "http" && connector.auth === "oauth" && (connector.status === "needs_signin" || (!connector.signedIn && connector.status !== "connected"));
 }
 
-/** Settings › Connectors: the MCP servers every new session gets, with their state and sign-in. */
 export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -59,7 +56,6 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 	const statusLine = (connector: Connector) => {
 		if (!connector.enabled) return t("settings.connectors.status.off");
 		if (needsSignIn(connector)) return t("settings.connectors.status.needsSignIn");
-		// A header or a server without sign-in that the server refused: Edit fixes it, not Sign in.
 		if (connector.status === "needs_signin") return t("settings.connectors.status.signIn");
 		if (connector.status === "connected") {
 			return `${t("settings.connectors.status.connected")} · ${t("settings.connectors.status.tools", { count: connector.tools.length })}`;

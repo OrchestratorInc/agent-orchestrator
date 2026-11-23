@@ -607,9 +607,8 @@ type Manager struct {
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
 	computerUseMu sync.Mutex
 	computerUse   func(context.Context) bool
-	// connectors gives a session the tool servers of its connectors; nil gives none.
-	connectorsMu sync.Mutex
-	connectors   func(context.Context, SessionConnectorsInput) []ports.ChatMCPServerConfig
+	connectorsMu  sync.Mutex
+	connectors    func(context.Context, SessionConnectorsInput) []ports.ChatMCPServerConfig
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink

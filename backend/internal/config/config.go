@@ -23,8 +23,7 @@ import (
 // the CLI reads it.
 const EnvComputerUse = "AO_COMPUTER_USE"
 
-// EnvConnectorToken carries a session's connector token to an agent CLI that
-// reads a bearer token from its environment, and to the ao-mcp it starts.
+// EnvConnectorToken carries a session's connector token to an agent CLI and to the ao-mcp it starts.
 const EnvConnectorToken = "AO_CONNECTOR_TOKEN" // #nosec G101 -- the name of an environment variable, not a credential.
 
 const (

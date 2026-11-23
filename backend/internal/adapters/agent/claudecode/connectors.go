@@ -17,9 +17,7 @@ type connectorServer struct {
 	Env     map[string]string `json:"env,omitempty"`
 }
 
-// ConnectorArgs writes the tool servers to a private file and returns the flag
-// that makes Claude Code load it, so the session token stays out of the
-// command line.
+// ConnectorArgs writes the tool servers to a private file and returns the flag that loads it.
 func (p *Plugin) ConnectorArgs(servers []ports.ChatMCPServerConfig, _, file string) (args []string, env map[string]string, err error) {
 	entries := make(map[string]connectorServer, len(servers))
 	for _, server := range servers {
