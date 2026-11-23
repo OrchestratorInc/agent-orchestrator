@@ -17,6 +17,7 @@ type ActionManager interface {
 	Stack(ctx context.Context, prID, prURL string) (StackResult, error)
 	AddToStack(ctx context.Context, prID, prURL string) (StackResult, error)
 	MergeStack(ctx context.Context, request StackMergeRequest) (StackMergeResult, error)
+	Dequeue(ctx context.Context, prID, prURL string) (DequeueResult, error)
 	LoadDetails(ctx context.Context, prID, prURL string) error
 }
 
@@ -35,13 +36,22 @@ type MergeRequest struct {
 	AllowNoChecks bool
 }
 
-// MergeResult is the successful outcome of a PR merge.
+// MergeResult is the successful outcome of a PR merge. On a base branch that
+// requires a merge queue the PR joins the queue instead: State stays open and
+// Queue is its place there.
 type MergeResult struct {
 	PRNumber       int
 	Method         string
 	State          domain.PRState
 	MergeCommitSHA string
 	StateChangedAt time.Time
+	Queue          *domain.MergeQueueEntry
+}
+
+// DequeueResult is the successful outcome of removing a PR from its merge queue.
+type DequeueResult struct {
+	PRNumber  int
+	ChangedAt time.Time
 }
 
 // ResolveResult is the successful outcome of a resolve-comments operation.

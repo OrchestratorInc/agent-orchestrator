@@ -2198,24 +2198,7 @@ function ProjectImportDialog({
 												) : null}
 											</div>
 											<div className="space-y-1.5">
-												<div className="relative">
-													<Label htmlFor="githubRepoName" className="text-[12px] font-medium text-[var(--color-text-import-title)]">{t("createProject.githubRepositoryName")}</Label>
-													<AnimatePresence initial={false}>
-														{availability.state === "unavailable" ? (
-															<motion.p
-																id="githubRepoNameError"
-																initial={{ opacity: 0, filter: "blur(2px)" }}
-																animate={{ opacity: 1, filter: "blur(0px)" }}
-																exit={{ opacity: 0, filter: "blur(2px)" }}
-																transition={{ duration: 0.15, ease: "easeOut" }}
-																className="absolute right-0 top-0 max-w-[65%] truncate overflow-hidden whitespace-nowrap text-right text-[12px] leading-5 text-destructive"
-																role="alert"
-															>
-																{availability.message ?? t("createProject.githubRepoUnavailable")}
-															</motion.p>
-														) : null}
-													</AnimatePresence>
-												</div>
+												<Label htmlFor="githubRepoName" className="text-[12px] font-medium text-[var(--color-text-import-title)]">{t("createProject.githubRepositoryName")}</Label>
 												<div className="relative">
 													<Input
 														id="githubRepoName"
@@ -2247,6 +2230,22 @@ function ProjectImportDialog({
 														) : null}
 													</AnimatePresence>
 												</div>
+												{/* Below the field and free to wrap, so a two-clause message is never clipped. */}
+												<AnimatePresence initial={false}>
+													{availability.state === "unavailable" ? (
+														<motion.p
+															id="githubRepoNameError"
+															initial={{ opacity: 0, filter: "blur(2px)" }}
+															animate={{ opacity: 1, filter: "blur(0px)" }}
+															exit={{ opacity: 0, filter: "blur(2px)" }}
+															transition={{ duration: 0.15, ease: "easeOut" }}
+															className="text-[12px] leading-5 text-destructive"
+															role="alert"
+														>
+															{availability.message ?? t("createProject.githubRepoUnavailable")}
+														</motion.p>
+													) : null}
+												</AnimatePresence>
 												{githubNameWasNormalized ? (
 													<p id="githubRepoNameNormalization" className="text-[11px] leading-4 text-muted-foreground">
 														{t("createProject.githubRepoWillCreate", { repo: githubName })}

@@ -6766,3 +6766,31 @@ func TestWorkspaceGitRecoveryIsScopedToOperation(t *testing.T) {
 		}
 	}
 }
+
+type renewingCommander struct {
+	*fakeCommander
+	renewed []domain.TaskPreparationToken
+}
+
+func (c *renewingCommander) RenewTaskPreparation(token domain.TaskPreparationToken) {
+	c.renewed = append(c.renewed, token)
+}
+
+func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
+	st := newFakeStore()
+	// Still being created: no worktree yet, which the page polls through.
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", IsTaskPreparation: true}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2"}
+	commander := &renewingCommander{fakeCommander: &fakeCommander{}}
+	svc := &Service{store: st, manager: commander}
+
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-1"); err == nil {
+		t.Fatal("listed files of a preparation with no worktree yet")
+	}
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-2"); err == nil {
+		t.Fatal("listed files of a session with no worktree")
+	}
+	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
+		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
+	}
+}

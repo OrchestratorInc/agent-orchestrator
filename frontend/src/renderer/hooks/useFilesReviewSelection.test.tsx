@@ -158,7 +158,7 @@ describe("useFilesReviewSelection", () => {
 		expect(onBranchChange).toHaveBeenCalledTimes(1);
 		await waitFor(() => expect(result.current.target.state).toBe("ready"));
 
-		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/history", { params: { path: { sessionId: SESSION }, query: { branch: "main" } } });
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/history", { params: { path: { sessionId: SESSION }, query: { branch: "main" } }, signal: expect.any(AbortSignal) });
 		expect(selectionRequests()).toHaveLength(1);
 		expect(selectionRequests()[0]?.[1]?.body).toEqual({ branch: "main", expectedTipSha: SHA("2"), commitShas: [] });
 		expect(result.current.target).toMatchObject({ key: "branch:main:all", scope: "committed", view: { branch: "main", expectedTipSha: SHA("2") }, openable: true, files: [file("x.ts", 4, 2)] });

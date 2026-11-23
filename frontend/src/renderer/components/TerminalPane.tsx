@@ -44,6 +44,7 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
 import { terminalResetNonce, useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useSessionContentExpired } from "../stores/content-expired-sessions-store";
 import { createCloudTerminalMux } from "../lib/cloud-terminal-mux";
 import { takeCloudShellInput } from "../lib/cloud-shell-input";
 import { LazyChunkBoundary } from "./LazyChunkBoundary";
@@ -88,8 +89,12 @@ type TerminalPaneProps = {
 	switchingLabel?: string;
 	/** Focus the terminal when an in-flight controller asks for human input. */
 	focusRequested?: boolean;
+	/** Ignore standalone SGR dim in this login terminal across theme changes. */
+	suppressLoginDim?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
 	onTerminalStateChange?: (state: TerminalSessionState) => void;
+	/** Open a web link from a standalone terminal that has no session Browser owner. */
+	onLinkOpen?: (uri: string) => void;
 	/** Cloud agent screen has painted nonblank terminal content. */
 	onTerminalContentReadyChange?: (ready: boolean) => void;
 	/** One-shot input initiated by an explicit UI action. */
@@ -165,7 +170,9 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.booting === right.booting &&
 		left.switchingLabel === right.switchingLabel &&
 		left.focusRequested === right.focusRequested &&
+		left.suppressLoginDim === right.suppressLoginDim &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
+		left.onLinkOpen === right.onLinkOpen &&
 		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
 		left.inputRequest === right.inputRequest &&
 		left.onInputRequestResult === right.onInputRequestResult &&
@@ -808,7 +815,9 @@ export function TerminalPane({
 	booting,
 	switchingLabel,
 	focusRequested,
+	suppressLoginDim,
 	onTerminalStateChange,
+	onLinkOpen,
 	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
@@ -921,7 +930,9 @@ export function TerminalPane({
 		booting,
 		switchingLabel,
 		focusRequested,
+		suppressLoginDim,
 		onTerminalStateChange,
+		onLinkOpen,
 		onTerminalContentReadyChange,
 		inputRequest,
 		onInputRequestResult,
@@ -955,7 +966,9 @@ export function TerminalPane({
 			onChangeFontSize={onChangeFontSize}
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
+			suppressLoginDim={suppressLoginDim}
 			onTerminalStateChange={onTerminalStateChange}
+			onLinkOpen={onLinkOpen}
 			onTerminalContentReadyChange={onTerminalContentReadyChange}
 			inputRequest={inputRequest}
 			onInputRequestResult={onInputRequestResult}
@@ -1121,7 +1134,9 @@ function AttachedTerminal({
 	booting,
 	switchingLabel,
 	focusRequested,
+	suppressLoginDim,
 	onTerminalStateChange,
+	onLinkOpen,
 	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
@@ -1288,13 +1303,17 @@ function AttachedTerminal({
 	// A Cloud session shared from another organization is the sharer's to
 	// restore; a guest's restore would go to this machine's daemon.
 	const sharedCloudSession = session?.cloud?.shared === true;
+	// The control plane refused to restore this Cloud session for its data
+	// retention: the strip says so instead of offering Restore again.
+	const contentExpired = useSessionContentExpired(session?.cloud ? session.id : undefined) && !isSessionActive;
 	// A standalone shell is never restorable: there is no session row to restore.
 	const canRestoreSession =
 		terminalTarget?.kind !== "reviewer" &&
 		terminalTarget?.kind !== "shell" &&
 		session !== undefined &&
 		!isSessionActive &&
-		!sharedCloudSession;
+		!sharedCloudSession &&
+		!contentExpired;
 
 	const handleReady = useCallback((handle: AttachableTerminal) => {
 		setTerminal(handle);
@@ -1428,7 +1447,7 @@ function AttachedTerminal({
 	// never reports "exited" there, so without this the strip — and the resume
 	// action on it — stays hidden in exactly the state that needs it (#3875).
 	const showEndedStatePreview =
-		state === "exited" || canRestoreSession || (terminalTarget?.kind === "worker" && sessionAgentExited(session));
+		state === "exited" || canRestoreSession || contentExpired || (terminalTarget?.kind === "worker" && sessionAgentExited(session));
 	const isCloudConnecting =
 		Boolean(attachSession?.cloud) &&
 		!isCloudConnectError &&
@@ -1457,7 +1476,8 @@ function AttachedTerminal({
 			{showEndedState && (
 				<TerminalEndedStrip
 					canRestore={canRestoreSession}
-					error={restoreError}
+					contentExpired={contentExpired}
+					error={contentExpired ? undefined : restoreError}
 					isRestoring={isRestoring}
 					onRestore={restoreSession}
 					session={session}
@@ -1480,11 +1500,12 @@ function AttachedTerminal({
 					droppedFileMaxBytes={saveCloudDrop && cloudAttachmentMaxBytes !== undefined ? Math.min(cloudAttachmentMaxBytes, MAX_CLOUD_CP_BINARY_BYTES) : undefined}
 					fontSize={fontSize}
 					focusRequested={focusRequested}
+					suppressLoginDim={suppressLoginDim}
 					isFullscreen={isFullscreen}
 					isVisible={isVisible}
 					onChangeFontSize={onChangeFontSize}
 					onError={handleInitError}
-					onLinkOpen={handleLinkOpen}
+					onLinkOpen={onLinkOpen ?? handleLinkOpen}
 					onSessionLinkOpen={handleSessionLinkOpen}
 					onReady={handleReady}
 					onVisibleContent={() => setHasVisibleContent(true)}
@@ -1587,6 +1608,8 @@ function ReplayCover({ message }: { message?: string }) {
 
 type TerminalEndedStripProps = {
 	canRestore: boolean;
+	/** The control plane refused to restore the session for its data retention. */
+	contentExpired?: boolean;
 	error?: string;
 	isRestoring: boolean;
 	onRestore: () => void;
@@ -1595,7 +1618,7 @@ type TerminalEndedStripProps = {
 	variant: "reviewer" | "session" | "shell";
 };
 
-function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
+function TerminalEndedStrip({ canRestore, contentExpired, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
 	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
 	const terminated = variant === "session" && session && !sessionIsActive(session);
@@ -1612,6 +1635,8 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 					: t("terminal.ended");
 	const message = reviewDelivered
 		? t("terminal.reviewerCompleted")
+		: contentExpired
+		? t("restoreUnavailable.contentExpired")
 		: canRestore
 		? t("terminal.restoreToContinue")
 		: variant === "reviewer"

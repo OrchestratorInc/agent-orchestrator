@@ -1,9 +1,10 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, useMatch, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "@/components/app-icons";
@@ -64,6 +65,7 @@ import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
+import { reportOnboardingProjectAdded } from "../lib/onboarding-telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -86,6 +88,7 @@ import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useHeldSession } from "../hooks/useHeldSession";
+import { useSwitchHistoryRead } from "../hooks/useSwitchHistoryRead";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -103,6 +106,8 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
+import { markLaunchUsable } from "../lib/launch-telemetry";
+import { useSessionOpenTiming } from "../lib/performance-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
 
@@ -220,7 +225,9 @@ function LocalSessionHost() {
 	const cloudOrgId = org?.id;
 	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
 	const liveProjectId = projectSession?.projectId;
-	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
+	const historyPending = useSwitchHistoryRead(liveSessionId);
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId, historyPending);
+	useSessionOpenTiming(liveSessionId, sessionId);
 	const view = useMemo(
 		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
 		[cloudOrgId, projectId, sessionId],
@@ -332,6 +339,14 @@ const ShellCenter = memo(function ShellCenter({
 // the <Outlet> content (board / session / settings / …) swaps. Lifted out of
 // the old single <App>, with selection now owned by the router (route params)
 // instead of Zustand. The daemon-status effect runs here exactly once.
+// What useMatchRoute checked: "/" and "/new" exactly, the settings pages fuzzily, ignoring case.
+function shellRouteKind(pathname: string): "home" | "new" | "settings" | "" {
+	const path = pathname.toLowerCase();
+	if (path === "/") return "home";
+	if (path === "/new") return "new";
+	return /^\/(projects\/[^/]+\/)?settings(\/|$)/.test(path) ? "settings" : "";
+}
+
 function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
@@ -343,7 +358,9 @@ function ShellLayout() {
 	const router = useRouter();
 	const canGoForward = useCanGoForward();
 	const settingsPage = useSettingsPage();
-	const matchRoute = useMatchRoute();
+	// One string, so a session switch (same kind of route) does not re-render the shell
+	// while the router loads; useMatchRoute would on every location and status change.
+	const routeKind = useRouterState({ select: (state) => shellRouteKind((state.resolvedLocation ?? state.location).pathname) });
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
@@ -598,10 +615,10 @@ function ShellLayout() {
 	}, [queryClient, scopedProjectId]);
 	// The root route is the intentionally minimal home surface, regardless of
 	// whether projects have already been registered.
-	const isHomeRoute = Boolean(matchRoute({ to: "/" }));
+	const isHomeRoute = routeKind === "home";
 	// The new chat page is a session that does not exist yet, so it takes the
 	// session frame and the session view replaces it without the chrome moving.
-	const isNewChatRoute = Boolean(matchRoute({ to: "/new" }));
+	const isNewChatRoute = routeKind === "new";
 	// The new chat page keeps its host in the search, not the path.
 	const newChatHost = useRouterState({
 		select: (state) => (isNewChatRoute ? (state.location.search as { host?: string }).host : undefined),
@@ -613,9 +630,7 @@ function ShellLayout() {
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
-	const isSettingsRoute =
-		Boolean(matchRoute({ to: "/settings", fuzzy: true })) ||
-		Boolean(matchRoute({ to: "/projects/$projectId/settings", fuzzy: true }));
+	const isSettingsRoute = routeKind === "settings";
 	// Welcome/settings always self-frame. Platforms that hide the shell-owned
 	// topbar (macOS) use the same full-height inset; session actions mount
 	// inside SessionView.
@@ -656,7 +671,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(() => {
 		if (!workspaceShown) return;
 		let frame = requestAnimationFrame(() => {
-			frame = requestAnimationFrame(() => aoBridge.app.reportSessionsShown());
+			frame = requestAnimationFrame(() => {
+				markLaunchUsable();
+				aoBridge.app.reportSessionsShown();
+			});
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [workspaceShown]);
@@ -813,6 +831,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			project: components["schemas"]["Project"],
 			input: CreateProjectConfigInput,
 			source: "project_add" | "project_clone",
+			// The onboarding tour's project source; a prepared clone is added as a project but came from a clone.
+			onboardingSource: "clone" | "local_folder" = source === "project_add" ? "local_folder" : "clone",
 		) => {
 			const workspace: WorkspaceSummary = {
 				id: project.id,
@@ -825,6 +845,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				sessions: [],
 			};
 			void captureRendererEvent(source === "project_add" ? "ao.projects.added" : "ao.renderer.project_clone_succeeded", { project_id: workspace.id });
+			reportOnboardingProjectAdded(onboardingSource, workspace.id);
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
 			// Ids come from the folder name: a folder removed and added again is the same id.
@@ -861,7 +882,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
-				throw new Error(status.message || "Daemon is not ready.");
+				throw new AoError("DAEMON_NOT_READY", status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
 				body: {
@@ -907,6 +928,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					}
 					if (registeredWorkspace) {
 						if (input.clonePreparationId) {
+							// The clone registered before its response was lost: still a clone for the tour.
+							reportOnboardingProjectAdded("clone", registeredWorkspace.id);
 							setOrchestratorStartupError(registeredWorkspace.id, null);
 							setProjectProvisioning(registeredWorkspace.id, true);
 							await navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
@@ -932,7 +955,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				reportFailure("NO_PROJECT");
 				throw new Error("Project creation returned no project");
 			}
-			await completeProjectCreation(data.project, input, "project_add");
+			await completeProjectCreation(data.project, input, "project_add", input.clonePreparationId ? "clone" : "local_folder");
 		},
 		[completeProjectCreation, navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast],
 	);
@@ -1265,10 +1288,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// transparency").
 	const windowTranslucent = isMac && windowTranslucency;
 
-	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read. A translucent window
-	// paints no background, and the read forces a whole-document style recalc
-	// mid-switch, so it is skipped there.
+	// Match the native window background to the sidebar fill, following both the
+	// mode and the color theme. Deferred a frame so data-theme and
+	// data-style-theme have been applied before the token is read. A translucent
+	// window paints no background, and the read forces a whole-document style
+	// recalc mid-switch, so it is skipped there.
 	useEffect(() => {
 		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
@@ -1276,7 +1300,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, windowTranslucent]);
+	}, [resolvedTheme, themeStyle, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);

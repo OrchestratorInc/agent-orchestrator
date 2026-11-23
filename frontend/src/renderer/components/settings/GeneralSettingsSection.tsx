@@ -16,6 +16,7 @@ import { Button } from "../ui/button";
 import { ArrowRight } from "@/components/app-icons";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { checkTerminalShellPath, useTerminalShells } from "../../hooks/useTerminalShells";
+import { DataRetentionSection } from "./DataRetentionSection";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInlineInput, SettingsRow } from "./SettingsRow";
@@ -502,6 +503,8 @@ export function GeneralSettingsSection({
 
 			<DefaultCloudSandboxSection />
 
+			<DataRetentionSection />
+
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
 				<AnalyticsRow />
@@ -519,7 +522,6 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				<CliShadowSettingsRow />
-				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <PRViewRow />}
 				{developerMode && <ChromeAgentsRow />}
@@ -610,21 +612,6 @@ function DiagnosticsRow() {
 	return (
 		<SettingsRow label={t("settings.diagnostics")} description={t("settings.diagnosticsToggleHint")}>
 			<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
-		</SettingsRow>
-	);
-}
-
-/**
- * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
- * off hides the inspector tab, /btw, and "Add to side chat".
- */
-function SideChatsRow() {
-	const { t } = useTranslation();
-	const sideChats = useUiStore((state) => state.sideChats);
-	const setSideChats = useUiStore((state) => state.setSideChats);
-	return (
-		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
-			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
 		</SettingsRow>
 	);
 }
