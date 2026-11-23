@@ -464,7 +464,7 @@ describe("ActivityRun with a streaming command", () => {
 		expect(screen.queryByText("2 failed")).not.toBeInTheDocument();
 	});
 
-	it("keeps real grouped failures destructive when mixed with a command exit", () => {
+	it("counts real grouped failures beside a command exit, in the summary's color", () => {
 		const failedPlan = plan("act-2");
 		failedPlan.status = "failed";
 
@@ -478,7 +478,8 @@ describe("ActivityRun with a streaming command", () => {
 		);
 
 		expect(screen.getByText("1 exited")).toHaveClass("text-muted-foreground/70");
-		expect(screen.getByText("1 failed")).toHaveClass("text-destructive");
+		expect(screen.getByText("1 failed")).toHaveClass("text-muted-foreground");
+		expect(screen.getByText("1 failed")).not.toHaveClass("text-destructive");
 	});
 });
 

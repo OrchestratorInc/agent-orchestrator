@@ -195,8 +195,12 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByRole("button", { name: /Ran 2 tool calls/ })).not.toBeInTheDocument();
 		expect(screen.queryByText(reason)).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: /^Worked for/ }));
-		expect(await screen.findByRole("button", { name: /Ran 2 tool calls/ })).toHaveTextContent("1 failed");
-		expect(screen.getByRole("button", { name: /Starting\s*background config snapshot\s*failed/ })).toBeInTheDocument();
+		const run = await screen.findByRole("button", { name: /Ran 2 tool calls/ });
+		expect(run).toHaveTextContent("1 failed");
+		// The failed step stays inside its run until the run opens.
+		expect(screen.queryByRole("button", { name: /Starting\s*background config snapshot\s*failed/ })).not.toBeInTheDocument();
+		await userEvent.click(run);
+		expect(await screen.findByRole("button", { name: /Starting\s*background config snapshot\s*failed/ })).toBeInTheDocument();
 		expect(screen.getByText(reason)).toBeInTheDocument();
 	});
 

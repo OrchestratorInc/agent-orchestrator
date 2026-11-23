@@ -27,7 +27,7 @@ import {
 	isFailedCall,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { aoActionName, mergeFailedSpawns, summarizeAOActions } from "./activity-action";
+import { aoActionName, isFailedSpawn, mergeFailedSpawns, summarizeAOActions } from "./activity-action";
 import { activityCommandStep, activityToolStep, isExploratoryTool, type CommandStep } from "./activity-step";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
@@ -114,7 +114,7 @@ export function ActivityRun({
 					</span>
 				) : null}
 				{failed > 0 ? (
-					<span className="text-xs text-destructive">
+					<span className="text-xs text-muted-foreground">
 						{failed} failed
 					</span>
 				) : null}
@@ -179,10 +179,14 @@ export function ActivityRun({
 	);
 }
 
-/** The calls that failed, kept on screen while the disclosure holding them is folded. */
+/**
+ * The calls that failed, kept on screen while the disclosure holding them is folded.
+ * A failed spawn stays inside: its run sits in Worked for, the run's count says one
+ * failed, and the reply above says so.
+ */
 function FailedCalls({ activities, folded }: { activities: ConversationActivity[]; folded: boolean }) {
 	const reducedMotion = useReducedMotion();
-	const failed = activities.filter(isFailedCall);
+	const failed = activities.filter((activity) => isFailedCall(activity) && !isFailedSpawn(activity));
 	return (
 		<AnimatePresence initial={false}>
 			{folded && failed.length > 0 ? (

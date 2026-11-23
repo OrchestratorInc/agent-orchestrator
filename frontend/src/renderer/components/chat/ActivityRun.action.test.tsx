@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
@@ -91,22 +91,30 @@ describe("a failed spawn", () => {
 	];
 	activities[2]!.status = "failed";
 
-	it("reads as one failed step that opens onto the daemon's reason", () => {
+	it("reads as one failed step that opens onto the daemon's reason", async () => {
+		const user = userEvent.setup();
 		render(<ChatLinkProvider><ActivityRun activities={activities} /></ChatLinkProvider>);
 		// The spawn record joins its call: no second row, and the exit is not counted again.
 		const run = screen.getByRole("button", { name: /Ran 2 tool calls/ });
 		expect(run).toHaveTextContent("1 failed");
+		// Both say "failed" in the color of the text beside them, not red.
+		expect(within(run).getByText("1 failed")).not.toHaveClass("text-destructive");
 		expect(run).not.toHaveTextContent("exited");
 		expect(run).not.toHaveTextContent("Spawned an agent");
-		// Folded, the run still shows the call that failed, open onto why.
-		const step = screen.getByRole("button", { name: /Starting\s*background config snapshot\s*failed/ });
+		// Folded, the failed spawn stays inside the run rather than repeating under it.
+		expect(screen.queryByRole("button", { name: /Starting\s*background config snapshot\s*failed/ })).not.toBeInTheDocument();
+		expect(screen.queryByText(reason)).not.toBeInTheDocument();
+		// Opened, the step that failed is open onto why.
+		await user.click(run);
+		const step = await screen.findByRole("button", { name: /Starting\s*background config snapshot\s*failed/ });
 		expect(step).toHaveAttribute("aria-expanded", "true");
+		expect(within(step).getByText("failed")).toHaveClass("text-muted-foreground");
 		expect(step.querySelector("svg.icon-square-terminal")).not.toBeNull();
 		expect(screen.getByText(reason)).toBeInTheDocument();
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
-	it("opens onto the daemon's reason when the call printed nothing", () => {
+	it("opens onto the daemon's reason when the call printed nothing", async () => {
 		const bare: ConversationActivity = {
 			kind: "activity", id: "2", sequence: 2, revision: 1, activityKind: "command", status: "failed",
 			summary: "ao spawn --project market-place --name 'background config snapshot'",
@@ -114,7 +122,8 @@ describe("a failed spawn", () => {
 			createdAt: "",
 		};
 		render(<ChatLinkProvider><ActivityRun activities={[activities[0]!, bare, activities[2]!]} /></ChatLinkProvider>);
-		const step = screen.getByRole("button", { name: /background config snapshot'\s*failed$/ });
+		await userEvent.click(screen.getByRole("button", { name: /Ran 2 tool calls/ }));
+		const step = await screen.findByRole("button", { name: /background config snapshot'\s*failed$/ });
 		expect(step).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText(reason)).toBeInTheDocument();
 	});

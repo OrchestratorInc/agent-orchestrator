@@ -2504,7 +2504,7 @@ function ActivityState({
 		);
 	}
 	// A spawn that failed reads in words, as its run line counts it, not as a process exit.
-	if (isSpawnFailure(activity)) return <span className="shrink-0 text-xs text-destructive">failed</span>;
+	if (isSpawnFailure(activity)) return <span className="shrink-0 text-xs text-muted-foreground">failed</span>;
 	if (status === "failed") {
 		return (
 			<span
