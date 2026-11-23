@@ -66,7 +66,8 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 	const [width, setWidth] = useState(0);
 	const { index, label, pick } = useEffortSlider(choices, onChoose, haptics.detent);
 	const count = choices.length;
-	const step = count > 1 ? (width - END * 2) / (count - 1) : 0;
+	const stepFor = (trackWidth: number) => count > 1 ? (trackWidth - END * 2) / (count - 1) : 0;
+	const step = stepFor(width);
 	const stopX = (i: number) => END + Math.max(i, 0) * step;
 
 	// The blob's centre along the track.
@@ -123,7 +124,15 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 			<GestureDetector gesture={drag}>
 				<View
 					style={styles.track}
-					onLayout={(event: LayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)}
+					onLayout={(event: LayoutChangeEvent) => {
+						const next = event.nativeEvent.layout.width;
+						// The blob and fill mount with this width, already on the
+						// level: set in an effect after they mount, while the card
+						// fades in, the move never reached the fill on Android,
+						// and at the top level the track showed no fill at all.
+						if (!dragging.current) blobX.value = END + Math.max(index, 0) * stepFor(next);
+						setWidth(next);
+					}}
 					accessible
 					accessibilityRole="adjustable"
 					accessibilityLabel="Effort"
