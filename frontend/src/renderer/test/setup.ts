@@ -142,6 +142,10 @@ if (typeof window !== "undefined") {
 
 	window.ao = {
 		triage: { launch: async () => ({ ok: true }) },
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
+		},
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -163,6 +167,8 @@ if (typeof window !== "undefined") {
 			checkAncestorRepo: async () => undefined,
 			getRepositoryBranch: async () => undefined,
 			getGitHubLogin: async (_repoPath?: string) => "",
+			findArtifactIssues: async () => [],
+			publishIssueArtifact: async () => { throw new Error("GitHub is unavailable in this test."); },
 			listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 			refreshGitHubOwners: async () => [],
@@ -208,6 +214,7 @@ if (typeof window !== "undefined") {
 		},
 		theme: {
 			set: async () => undefined,
+			systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
 			setWindowTranslucent: async () => undefined,
@@ -241,8 +248,8 @@ if (typeof window !== "undefined") {
 			setAccess: async () => {
 				throw new Error("not stubbed");
 			},
-			grants: async () => [],
-			invite: async () => [],
+			grants: async () => ({ people: [], teams: [], workspaces: [] }),
+			invite: async () => ({ people: [], teams: [], workspaces: [] }),
 			removeGrant: async () => undefined,
 			onProgress: () => () => undefined,
 		},
@@ -300,6 +307,8 @@ if (typeof window !== "undefined") {
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
 			getLifetimeSessions: async () => null,
+			takeLaunchStart: async () => null,
+			takeResourceSummary: async () => null,
 			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
@@ -537,6 +546,9 @@ if (typeof window !== "undefined") {
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			onOpenSharedArtifact: () => () => undefined,
+			takePendingSharedArtifact: async () => null,
+			openSharedArtifactWindow: async () => undefined,
 			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "not available in tests" }),
 			previewFolderUpload: async () => ({ status: "ok", source: "import", leftOut: [] }),
 			takePendingSignIn: async () => null,

@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
 import { previewDocumentThemeStyle } from "../lib/theme";
+import { aoBridge } from "../lib/bridge";
 
 describe("sidebar visibility", () => {
 	beforeEach(() => {
@@ -46,6 +47,154 @@ describe("subagents tab availability", () => {
 		const before = useUiStore.getState().inspectorSessions;
 		useUiStore.getState().setSubagentsAvailable(sessionUiKey("session-3"), false);
 		expect(useUiStore.getState().inspectorSessions).toBe(before);
+	});
+});
+
+describe("theme preference", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		useUiStore.setState({ themePreference: "dark", resolvedTheme: "dark" });
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("resolves System from the OS appearance main reports, not the forced media query", async () => {
+		// The test media query reports dark, as a forced Dark themeSource would.
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
+		useUiStore.getState().setThemePreference("system");
+
+		await vi.waitFor(() => expect(useUiStore.getState().resolvedTheme).toBe("light"));
+		expect(useUiStore.getState().themePreference).toBe("system");
+		expect(document.documentElement.dataset.theme).toBe("light");
+		expect(window.localStorage.getItem("ao.theme")).toBe("system");
+	});
+
+	it("re-reads the OS appearance once main stops forcing a mode", async () => {
+		// The OS turns dark between the first lookup and the reveal.
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValueOnce("light").mockResolvedValue("dark");
+		useUiStore.getState().setThemePreference("system");
+
+		await vi.waitFor(() => expect(aoBridge.theme.systemAppearance).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => expect(useUiStore.getState().resolvedTheme).toBe("dark"));
+		expect(useUiStore.getState().themePreference).toBe("system");
+	});
+
+	it("keeps the OS correction until a deferred update commits System", async () => {
+		const updates: (() => void)[] = [];
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: (update: () => void) => {
+				updates.push(update);
+				return { ready: Promise.resolve(), finished: Promise.resolve() };
+			},
+		});
+		try {
+			// The OS turns dark between the first lookup and the reveal.
+			const lookup = vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValueOnce("light").mockResolvedValue("dark");
+			useUiStore.getState().setThemePreference("system");
+			await vi.waitFor(() => expect(updates).toHaveLength(1));
+			// Main has answered theme:set, but the update has not run yet.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(lookup).toHaveBeenCalledTimes(1);
+
+			updates[0]?.();
+			expect(useUiStore.getState().resolvedTheme).toBe("light");
+			await vi.waitFor(() => expect(updates).toHaveLength(2));
+			updates[1]?.();
+
+			expect(useUiStore.getState().themePreference).toBe("system");
+			expect(useUiStore.getState().resolvedTheme).toBe("dark");
+		} finally {
+			Reflect.deleteProperty(document, "startViewTransition");
+		}
+	});
+
+	it("skips the second OS lookup when a newer choice lands while System reaches main", async () => {
+		const lookup = vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
+		let releaseSet: () => void = () => undefined;
+		vi.spyOn(aoBridge.theme, "set").mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					releaseSet = resolve;
+				}),
+		);
+		useUiStore.getState().setThemePreference("system");
+		await vi.waitFor(() => expect(useUiStore.getState().themePreference).toBe("system"));
+		useUiStore.getState().setThemePreference("dark");
+		releaseSet();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(lookup).toHaveBeenCalledTimes(1);
+		expect(useUiStore.getState().themePreference).toBe("dark");
+	});
+
+	it("drops a System lookup that a newer choice overtook", async () => {
+		let reportAppearance: (theme: "light" | "dark") => void = () => undefined;
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(
+			new Promise((resolve) => {
+				reportAppearance = resolve;
+			}),
+		);
+		useUiStore.getState().setThemePreference("system");
+		useUiStore.getState().setThemePreference("light");
+		reportAppearance("dark");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(useUiStore.getState().themePreference).toBe("light");
+		expect(useUiStore.getState().resolvedTheme).toBe("light");
+	});
+
+	it("drops a System transition whose choice was overtaken before it ran", async () => {
+		let runUpdate: (() => void) | undefined;
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: (update: () => void) => {
+				runUpdate = update;
+				return { ready: Promise.resolve(), finished: Promise.resolve() };
+			},
+		});
+		try {
+			vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
+			useUiStore.getState().setThemePreference("system");
+			await vi.waitFor(() => expect(runUpdate).toBeDefined());
+			useUiStore.getState().setThemePreference("dark");
+			runUpdate?.();
+
+			expect(useUiStore.getState().themePreference).toBe("dark");
+			expect(useUiStore.getState().resolvedTheme).toBe("dark");
+		} finally {
+			Reflect.deleteProperty(document, "startViewTransition");
+		}
+	});
+
+	it("lets a newer choice cancel a pending toggle", async () => {
+		let reportAppearance: (theme: "light" | "dark") => void = () => undefined;
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(
+			new Promise((resolve) => {
+				reportAppearance = resolve;
+			}),
+		);
+		useUiStore.getState().toggleThemePreference();
+		useUiStore.getState().setThemePreference("dark");
+		reportAppearance("light");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(useUiStore.getState().themePreference).toBe("dark");
+		expect(useUiStore.getState().resolvedTheme).toBe("dark");
+	});
+
+	it("re-sends the current mode to main when it overtakes a System lookup", () => {
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(new Promise(() => undefined));
+		const set = vi.spyOn(aoBridge.theme, "set");
+		useUiStore.getState().setThemePreference("system");
+		useUiStore.getState().setThemePreference("dark");
+
+		expect(set).toHaveBeenCalledWith("dark");
+		expect(useUiStore.getState().themePreference).toBe("dark");
 	});
 });
 
@@ -245,6 +394,23 @@ describe("remoteHosts flag", () => {
 	it("honors an explicit opt-out", async () => {
 		window.localStorage.setItem("ao.remoteHosts", "false");
 		expect((await bootStore()).getState().remoteHosts).toBe(false);
+	});
+});
+
+describe("retired side chats switch", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+	});
+
+	it("leaves no switch behind and clears a stored opt-out at startup", async () => {
+		window.localStorage.setItem("ao.sideChats", "false");
+
+		const state = (await bootStore()).getState();
+
+		expect(state).not.toHaveProperty("sideChats");
+		expect(state).not.toHaveProperty("setSideChats");
+		expect(window.localStorage.getItem("ao.sideChats")).toBeNull();
 	});
 });
 

@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { backOr } from "../../lib/backNavigation";
 import { CloudSignIn } from "../../lib/cloud/components";
@@ -13,6 +13,7 @@ import { LocalProjectForm } from "../../lib/localProject/LocalProjectForm";
 import type { PlacementChoice, ProjectPlacement } from "../../lib/localProject/LocalProjectForm.types";
 import { placementFor } from "../../lib/localProject/placement";
 import { useNewLocalProject } from "../../lib/localProject/useNewLocalProject";
+import { useFormFocus } from "../../lib/formFocus";
 import { useLeaveSheetThen } from "../../lib/sheetHandoff";
 import { Spinner } from "../../lib/Spinner";
 import { useApp } from "../../lib/store";
@@ -80,10 +81,16 @@ type BodyProps = {
 function LocalBody({ placement, onCreated, onCancel, onBusyChange }: BodyProps) {
 	const project = useNewLocalProject({ onCreated });
 	useEffect(() => { onBusyChange(project.busy); }, [onBusyChange, project.busy]);
+	// Create takes focus off the form first: the sheet changes and closes as
+	// soon as the request returns, and a field still focused then aborted the app.
+	const focus = useFormFocus();
+	// The latest committed create when the submit finally runs, so text the blur commits is sent.
+	const create = useRef(project.create);
+	useLayoutEffect(() => { create.current = project.create; });
 	return (
 		<>
-			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void project.create()} />
-			<LocalProjectForm project={project} placement={placement} />
+			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void focus.submit(() => create.current())} />
+			<LocalProjectForm project={project} placement={placement} focus={focus} />
 		</>
 	);
 }
@@ -96,6 +103,10 @@ function CloudBody({ placement, onCreated, onCancel, onBusyChange, leaveFor }: B
 	const connectAgent = useCallback(() => leaveFor(() => router.push("/settings/cloud")), [leaveFor, router]);
 	const project = useNewCloudProject({ onCreated: openProject });
 	useEffect(() => { onBusyChange(project.busy); }, [onBusyChange, project.busy]);
+	// Create takes focus off the form first (see useFormFocus), as on the Local face.
+	const focus = useFormFocus();
+	const create = useRef(project.create);
+	useLayoutEffect(() => { create.current = project.create; });
 
 	let body: ReactNode;
 	if (project.status === "signed-out") {
@@ -112,12 +123,12 @@ function CloudBody({ placement, onCreated, onCancel, onBusyChange, leaveFor }: B
 	} else if (!project.org) {
 		body = <View style={styles.center}><Spinner size="large" accessibilityLabel="Loading Orchestrator Cloud" /></View>;
 	} else {
-		body = <NewProjectForm project={project} onConnectAgent={connectAgent} placement={placement} />;
+		body = <NewProjectForm project={project} onConnectAgent={connectAgent} placement={placement} focus={focus} />;
 	}
 
 	return (
 		<>
-			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void project.create()} />
+			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void focus.submit(() => create.current())} />
 			{body}
 		</>
 	);

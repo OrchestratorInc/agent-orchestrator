@@ -8,7 +8,7 @@ func TestReviewerSubmitCommandAllowed(t *testing.T) {
 			`gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'`
 	}
 	submit := func(session string) string {
-		return `printf '%s' '{"reviews":[]}' | ao review submit --session ` + session + ` --reviews -`
+		return `printf '%s' 'ok' | ao review submit --session ` + session + ` --run run-1 --verdict approved --body -`
 	}
 	tests := []struct {
 		name    string

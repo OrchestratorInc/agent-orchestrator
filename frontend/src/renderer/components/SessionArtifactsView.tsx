@@ -829,8 +829,10 @@ export function SessionArtifactsView({
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
 	};
-	// A file the agent rewrites while it is open shows the new content.
-	useArtifactFileChanges(session, Boolean(selected) && !hostId);
+	// Follow a requested file before it appears in the list too: the stream's
+	// ready event rereads files written before the view opened, and later file
+	// changes refresh the list so the pending path can resolve.
+	useArtifactFileChanges(session, Boolean(selected || (awaitedPath !== null && selectedPath === awaitedPath)) && !hostId);
 	// Versions are read back as text or, from a daemon that can, by the media
 	// viewers, so a cloud media file and any other binary file, such as an
 	// archive, get no History. This shares the viewer's cached read of the file, which for a
@@ -902,7 +904,7 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
+					<ArtifactActionsMenu artifact={selected} viewingHistoricalVersion={previewVersion !== null} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
 						<ArtifactViewMenuItems
 							fileActions={fileMenuActions}
 							history={(fileMediaKind(selected.path) ? session.cloud || (hostId && !hostServesMediaVersions) : selectedFile.data?.binary) ? null : (

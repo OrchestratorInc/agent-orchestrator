@@ -311,9 +311,12 @@ export async function sendFileFeedback(
 	sessionId: string,
 	comments: FileAnnotationComment[],
 	onSent?: (count: number) => void,
+	signal?: AbortSignal,
 ): Promise<number> {
 	let sent = 0;
 	for (const { message, count } of formatFileAnnotationMessages(comments)) {
+		// Cancelled between messages, never during one: a message cut off mid-send may still arrive.
+		if (signal?.aborted) throw Object.assign(new Error("Request cancelled"), { name: "AbortError" });
 		await sendUserAuthored(cfg, sessionId, message);
 		sent += count;
 		onSent?.(count);

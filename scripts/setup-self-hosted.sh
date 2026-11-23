@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install AO's daemon resources from a desktop release or a locally built host bundle.
+# Install AO's daemon resources from a release (the desktop app, or the Linux
+# arm64 host package) or a locally built host bundle.
 set -euo pipefail
 
 usage() {
@@ -85,10 +86,8 @@ case "$platform:$arch" in
 	Darwin:arm64) asset='agent-orchestrator-darwin-arm64.zip' ;;
 	Darwin:x86_64) asset='agent-orchestrator-darwin-x64.zip' ;;
 	Linux:x86_64) asset='agent-orchestrator-linux-x64.AppImage' ;;
-	Linux:aarch64|Linux:arm64) if [[ -z "$bundle" ]]; then
-		printf 'No published desktop artifact for %s/%s; pass --bundle from a native build.\n' "$platform" "$arch" >&2
-		exit 1
-	fi ;;
+	# No arm64 Linux desktop app: releases carry the headless host package instead.
+	Linux:aarch64|Linux:arm64) asset='ao-host-linux-arm64.tar.gz' ;;
 	*) printf 'Unsupported host platform: %s/%s\n' "$platform" "$arch" >&2; exit 1 ;;
 esac
 command -v git >/dev/null || { printf '%s\n' 'git is required for Orchestrator projects and worktrees.' >&2; exit 1; }
@@ -98,9 +97,8 @@ if "$upgrade" && [[ ! -L "$host_root/current" || ! -x "$host_root/run-daemon.sh"
 	printf '%s\n' '--upgrade needs a host installed as a service by this script.' >&2; exit 1
 fi
 
-if [[ -n "$bundle" ]]; then
-	[[ -f "$bundle" ]] || { printf 'Bundle not found: %s\n' "$bundle" >&2; exit 1; }
-	python3 - "$bundle" <<'PY'
+extract_host_package() {
+	python3 - "$1" <<'PY'
 import posixpath, sys, tarfile
 with tarfile.open(sys.argv[1], 'r:gz') as archive:
     for entry in archive:
@@ -114,8 +112,13 @@ with tarfile.open(sys.argv[1], 'r:gz') as archive:
         elif not (entry.isfile() or entry.isdir()):
             raise SystemExit(f'Unsafe host bundle entry: {name}')
 PY
-	tar -xzf "$bundle" -C "$stage"
+	tar -xzf "$1" -C "$stage"
 	resources="$stage/resources"
+}
+
+if [[ -n "$bundle" ]]; then
+	[[ -f "$bundle" ]] || { printf 'Bundle not found: %s\n' "$bundle" >&2; exit 1; }
+	extract_host_package "$bundle"
 else
 	command -v curl >/dev/null || { printf '%s\n' 'curl is required.' >&2; exit 1; }
 	metadata="$stage/release.json"
@@ -133,7 +136,9 @@ if sys.argv[3] == 'true':
     release = max(candidates, key=lambda r: r['published_at'])
 item = next((a for a in release.get('assets', []) if a['name'] == sys.argv[2]), None)
 if not item or not re.fullmatch(r'sha256:[0-9a-f]{64}', item.get('digest') or ''):
-    raise SystemExit(f'No verified release asset: {sys.argv[2]}')
+    hint = ('; this release predates Linux arm64 support: build from source with'
+            ' bootstrap-self-hosted.sh --source-ref main, or pass --bundle') if sys.argv[2].startswith('ao-host-') else ''
+    raise SystemExit(f'No verified release asset: {sys.argv[2]}{hint}')
 print(f"Downloading Orchestrator release: {release['tag_name']}", file=sys.stderr)
 print(item['browser_download_url'])
 print(item['digest'][7:])
@@ -149,15 +154,19 @@ PY
 		actual="$(sha256sum "$archive" | awk '{print $1}')"
 	fi
 	[[ "$actual" == "$digest" ]] || { printf '%s\n' 'Release SHA-256 mismatch.' >&2; exit 1; }
-	if [[ "$platform" == Darwin ]]; then
-		ditto -x -k "$archive" "$stage/extracted"
+	if [[ "$asset" == *.tar.gz ]]; then
+		extract_host_package "$archive"
 	else
-		mkdir "$stage/extracted"
-		(cd "$stage/extracted" && chmod +x "$archive" && "$archive" --appimage-extract >/dev/null)
+		if [[ "$platform" == Darwin ]]; then
+			ditto -x -k "$archive" "$stage/extracted"
+		else
+			mkdir "$stage/extracted"
+			(cd "$stage/extracted" && chmod +x "$archive" && "$archive" --appimage-extract >/dev/null)
+		fi
+		mapfile_path="$(find "$stage/extracted" \( -path '*/resources/daemon/ao' -o -path '*/Resources/daemon/ao' \) -type f -print -quit)"
+		[[ -n "$mapfile_path" ]] || { printf '%s\n' 'Orchestrator daemon missing from release artifact.' >&2; exit 1; }
+		resources="$(dirname "$(dirname "$mapfile_path")")"
 	fi
-	mapfile_path="$(find "$stage/extracted" \( -path '*/resources/daemon/ao' -o -path '*/Resources/daemon/ao' \) -type f -print -quit)"
-	[[ -n "$mapfile_path" ]] || { printf '%s\n' 'Orchestrator daemon missing from release artifact.' >&2; exit 1; }
-	resources="$(dirname "$(dirname "$mapfile_path")")"
 fi
 
 ao="$resources/daemon/ao"

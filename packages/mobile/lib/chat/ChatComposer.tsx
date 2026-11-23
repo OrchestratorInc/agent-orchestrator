@@ -699,6 +699,10 @@ function Composer({
 		// Not while the keyboard moves: nothing is typed then.
 		const progress = keyboard.progress.value;
 		if (progress > 0 && progress < 1) return;
+		// Nor while a request card stands in for the row. The unmounted row reads
+		// null here, and measure() passes that to the native side (it only checks
+		// for -1), which throws on the UI thread and takes the whole app down.
+		if (!fieldRow()) return;
 		const layout = measure(fieldRow);
 		if (layout) takeFieldRow(layout.y, layout.height);
 	}, false);
