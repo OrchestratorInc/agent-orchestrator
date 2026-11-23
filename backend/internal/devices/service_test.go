@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -957,5 +958,78 @@ func TestEndingALeaseRevokesTheAgentCommand(t *testing.T) {
 	defer p.mu.Unlock()
 	if len(p.revoked) != 1 || p.revoked[0] != "s-1" {
 		t.Fatalf("revoked = %v, want s-1 once its lease ended", p.revoked)
+	}
+}
+
+// A viewer still connected to a session that was killed cannot keep reaching
+// its device, and the device is freed.
+func TestHubTargetRefusesAnEndedSession(t *testing.T) {
+	ctx := context.Background()
+	var terminated atomic.Bool
+	svc := New(Config{DataDir: t.TempDir(), Provider: iosFleet(), MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
+		Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) {
+			return SessionInfo{Terminated: terminated.Load()}, nil
+		}})
+	t.Cleanup(func() { _ = svc.Shutdown() })
+	if _, err := svc.Setup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	terminated.Store(true)
+	if _, _, _, err := svc.HubTarget(ctx, "s-1"); apiCode(err) != "NO_DEVICE_LEASE" {
+		t.Fatalf("hub target for an ended session = %v, want NO_DEVICE_LEASE", err)
+	}
+	if _, ok := svc.Lease("s-1"); ok {
+		t.Fatal("the ended session kept its device")
+	}
+}
+
+// An ended session frees its device on its own, without anyone asking.
+func TestEndedSessionsAreReapedInTheBackground(t *testing.T) {
+	previous := reapEvery
+	reapEvery = 20 * time.Millisecond
+	t.Cleanup(func() { reapEvery = previous })
+	ctx := context.Background()
+	var terminated atomic.Bool
+	svc := New(Config{DataDir: t.TempDir(), Provider: iosFleet(), MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
+		Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) {
+			return SessionInfo{Terminated: terminated.Load()}, nil
+		}})
+	t.Cleanup(func() { _ = svc.Shutdown() })
+	if _, err := svc.Setup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	terminated.Store(true)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := svc.Lease("s-1"); !ok {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("an ended session's device was never freed")
+}
+
+// A device another open is still booting is busy: its listed state is stale,
+// and opening it again would reset it.
+func TestADeviceBeingBootedIsBusy(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	svc := newTestService(t, p, 3)
+	p.gateDevice, p.bootGate, p.bootEntered = "A", make(chan struct{}), make(chan string, 1)
+	first := make(chan error, 1)
+	go func() { _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); first <- err }()
+	<-p.bootEntered
+	if _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "A"}); apiCode(err) != "DEVICE_IN_USE" {
+		t.Fatalf("open of a device being booted = %v, want DEVICE_IN_USE", err)
+	}
+	close(p.bootGate)
+	if err := <-first; err != nil {
+		t.Fatal(err)
 	}
 }

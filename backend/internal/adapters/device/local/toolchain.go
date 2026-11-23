@@ -2,6 +2,8 @@ package local
 
 import (
 	"context"
+	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -62,10 +64,19 @@ func ensureTool(ctx context.Context, root, npm string, t tool) error {
 		return fmt.Errorf("stage %s install: %w", t.pkg, err)
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	cmd := process.CommandContext(ctx, npm, "install", "--prefix", staging, "--no-audit", "--no-fund", "--omit=dev", t.pkg+"@"+t.version)
+	// Installed from a lockfile shipped with AO (npm ci), so every machine gets
+	// the same dependency tree, and without install scripts: none of the
+	// locked packages has one.
+	if err := writeToolManifest(staging, t); err != nil {
+		return err
+	}
+	// Run inside the staging dir: npm ci with --prefix reports the manifest
+	// and lockfile out of sync.
+	cmd := process.CommandContext(ctx, npm, "ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund")
+	cmd.Dir = staging
 	cmd.Env = append(os.Environ(), "npm_config_update_notifier=false")
 	if out, runErr := cmd.CombinedOutput(); runErr != nil {
-		return fmt.Errorf("npm install %s@%s: %w: %s", t.pkg, t.version, runErr, lastLines(string(out), 6))
+		return fmt.Errorf("npm ci %s@%s: %w: %s", t.pkg, t.version, runErr, lastLines(string(out), 6))
 	}
 	if err := os.WriteFile(filepath.Join(staging, installedSentinel), []byte(t.version+"\n"), 0o600); err != nil {
 		return fmt.Errorf("mark %s installed: %w", t.pkg, err)
@@ -75,6 +86,38 @@ func ensureTool(ctx context.Context, root, npm string, t tool) error {
 	}
 	if err := os.Rename(staging, dir); err != nil {
 		return fmt.Errorf("publish %s install: %w", t.pkg, err)
+	}
+	return nil
+}
+
+// toolLocks holds the lockfile each pinned tool installs from.
+//
+//go:embed locks/*.package-lock.json
+var toolLocks embed.FS
+
+// toolManifestName is the package name the lockfiles were made under.
+const toolManifestName = "ao-device-tool"
+
+// writeToolManifest writes the package.json and lockfile npm ci installs one
+// tool from.
+func writeToolManifest(dir string, t tool) error {
+	lock, err := toolLocks.ReadFile("locks/" + t.pkg + ".package-lock.json")
+	if err != nil {
+		return fmt.Errorf("no lockfile for %s: %w", t.pkg, err)
+	}
+	manifest, err := json.MarshalIndent(map[string]any{
+		"name":         toolManifestName,
+		"private":      true,
+		"dependencies": map[string]string{t.pkg: t.version},
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), append(manifest, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write %s manifest: %w", t.pkg, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"), lock, 0o600); err != nil {
+		return fmt.Errorf("write %s lockfile: %w", t.pkg, err)
 	}
 	return nil
 }
