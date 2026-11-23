@@ -26,6 +26,7 @@ import { cn, truncateMiddle } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
 export function ImportedAgentBlocked({ agent, block }: { agent: string; block: AgentBlock }) {
@@ -263,51 +264,79 @@ export const McpServerBanner = memo(function McpServerBanner({
 });
 
 /**
- * A harness update replaced the release this session's agent runs. With
- * "move open sessions to new versions" on, the daemon restarts the agent on
- * the new release once it is idle, or before the next message; a failed
- * restart keeps the queued messages for a manual resume. A stopped agent is
- * never moved on its own: resuming it starts the new release.
+ * A harness update replaced the release this session's agent runs, and moving
+ * it to the new release failed. The queued messages are kept for a manual
+ * resume. A failure needs the user, so it stays a banner above the
+ * conversation; the routine wait lives in the topbar (VersionSwitchChip).
  */
-export const VersionSwitchBanner = memo(function VersionSwitchBanner({
+export const VersionSwitchBanner = memo(function VersionSwitchBanner({ staleBinary }: { staleBinary?: SessionStaleBinary }) {
+	const { t } = useTranslation();
+	if (!staleBinary?.version || !staleBinary.switchFailedAt) return null;
+	const version = truncateMiddle(versionLabel(staleBinary.version));
+	return (
+		<div role="alert" className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5">
+			<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning" />
+			<div className="flex min-w-0 flex-col gap-0.5">
+				<strong className="text-xs font-medium text-warning">{t("chat.versionSwitch.failedTitle", { version })}</strong>
+				<span className="text-xs leading-snug text-muted-foreground">{t("chat.versionSwitch.failedBody")}</span>
+			</div>
+		</div>
+	);
+});
+
+/**
+ * The routine side of a harness update, in the chat's topbar. With "move open
+ * sessions to new versions" on, the daemon restarts the agent on the new
+ * release once it is idle, or before the next message. That is ordinary
+ * state, not a problem, so it is one small chip rather than a strip across
+ * the conversation; its popover says what happened and why it waits. A
+ * stopped agent is never moved on its own: resuming it starts the new release.
+ */
+export const VersionSwitchChip = memo(function VersionSwitchChip({
 	staleBinary,
 	hostId,
+	harness,
 	agentStopped,
 }: {
 	staleBinary?: SessionStaleBinary;
 	hostId?: string;
+	/** The session's harness, named in the popover title. */
+	harness: string;
 	/** The agent controller stopped and waits for the user to resume it. */
 	agentStopped?: boolean;
 }) {
 	// Most sessions are current; only a marked one reads the setting.
-	return staleBinary?.version ? <VersionSwitchNotice staleBinary={staleBinary} hostId={hostId} agentStopped={agentStopped} /> : null;
+	return staleBinary?.version && !staleBinary.switchFailedAt
+		? <VersionSwitchPopover staleBinary={staleBinary} hostId={hostId} harness={harness} agentStopped={agentStopped} />
+		: null;
 });
 
-function VersionSwitchNotice({ staleBinary, hostId, agentStopped }: { staleBinary: SessionStaleBinary; hostId?: string; agentStopped?: boolean }) {
+function VersionSwitchPopover({ staleBinary, hostId, harness, agentStopped }: { staleBinary: SessionStaleBinary; hostId?: string; harness: string; agentStopped?: boolean }) {
 	const { t } = useTranslation();
 	const { settings } = useSettings(hostId);
-	const version = truncateMiddle(versionLabel(staleBinary.version));
-	if (staleBinary.switchFailedAt) {
-		return (
-			<div role="alert" className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5">
-				<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning" />
-				<div className="flex min-w-0 flex-col gap-0.5">
-					<strong className="text-xs font-medium text-warning">{t("chat.versionSwitch.failedTitle", { version })}</strong>
-					<span className="text-xs leading-snug text-muted-foreground">{t("chat.versionSwitch.failedBody")}</span>
-				</div>
-			</div>
-		);
-	}
 	if (!settings?.versionRefresh) return null;
+	const version = truncateMiddle(versionLabel(staleBinary.version));
+	const title = t("chat.versionSwitch.title", { agent: agentLabel(harness), version });
+	const chip = t("chat.versionSwitch.chip");
+	// Its own action group: the class gives it the topbar's no-drag region,
+	// control height and label compaction, like the session's other actions.
 	return (
-		<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-1.5">
-			<span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-caption text-muted-foreground">
-				<CircleArrowUp aria-hidden="true" className="size-3 shrink-0 text-settings-accent" />
-				{t(agentStopped ? "chat.versionSwitch.installed" : "chat.versionSwitch.pending", { version })}
-			</span>
-			<span className="min-w-0 truncate text-caption text-muted-foreground">
-				{t(agentStopped ? "chat.versionSwitch.stoppedHint" : "chat.versionSwitch.pendingHint")}
-			</span>
+		<div className="workspace-topbar-actions">
+			<Popover>
+				<PopoverTrigger asChild>
+					<Button type="button" variant="secondary" size="xs" aria-label={`${chip}: ${title}`} data-priority="secondary" data-version-switch-chip="">
+						<CircleArrowUp aria-hidden="true" className="size-icon-sm shrink-0" />
+						<span data-compact-label="">{chip}</span>
+					</Button>
+				</PopoverTrigger>
+				<PopoverContent align="end" aria-label={title} className="flex w-80 max-w-[calc(100vw-1rem)] flex-col gap-2 p-3.5">
+					<h2 className="text-control font-medium text-foreground">{title}</h2>
+					<p className="text-xs leading-normal text-muted-foreground">
+						{t(agentStopped ? "chat.versionSwitch.stoppedHint" : "chat.versionSwitch.pendingBody")}
+					</p>
+					{agentStopped ? null : <p className="text-xs leading-normal text-muted-foreground">{t("chat.versionSwitch.waitReason")}</p>}
+				</PopoverContent>
+			</Popover>
 		</div>
 	);
 }

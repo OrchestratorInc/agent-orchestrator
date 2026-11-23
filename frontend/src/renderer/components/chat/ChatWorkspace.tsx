@@ -213,7 +213,7 @@ import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
-import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner, VersionSwitchChip } from "./ChatStatusBanners";
 import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
 import type { OutgoingAttachment } from "../../lib/attachment-uploads";
@@ -2199,7 +2199,18 @@ function ChatWorkspaceContent({
 				onCloseShellTerminal={onCloseShellTerminal}
 				onRenameShellTerminal={onRenameShellTerminal}
 				onTabsKeyDown={handleChatTabsKeyDown}
-				headerActions={headerActions}
+				headerActions={
+					<>
+						<VersionSwitchChip
+							staleBinary={session?.staleBinary}
+							hostId={activeRemoteHostId}
+							harness={snapshot.harness}
+							// Only a resume starts a stopped agent, on the new release.
+							agentStopped={controllerStopped}
+						/>
+						{headerActions}
+					</>
+				}
 				session={session}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
@@ -2308,12 +2319,7 @@ function ChatWorkspaceContent({
 						/>
 					)}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
-					<VersionSwitchBanner
-						staleBinary={session?.staleBinary}
-						hostId={activeRemoteHostId}
-						// Only a resume starts a stopped agent, on the new release.
-						agentStopped={controllerStopped}
-					/>
+					<VersionSwitchBanner staleBinary={session?.staleBinary} />
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", (arrivingWithHistory || openedDocked) && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}

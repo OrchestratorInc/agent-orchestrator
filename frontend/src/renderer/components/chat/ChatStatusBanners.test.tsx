@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
-import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner, VersionSwitchChip } from "./ChatStatusBanners";
 
 const versionRefreshSetting = vi.hoisted(() => ({ enabled: true }));
 vi.mock("../../hooks/useSettings", () => ({
@@ -218,29 +218,52 @@ describe("McpServerBanner", () => {
 	});
 });
 
-describe("VersionSwitchBanner", () => {
+describe("VersionSwitchChip", () => {
 	afterEach(() => { versionRefreshSetting.enabled = true; });
+	const stale = { version: "2.1.300", since: "2026-10-15T00:00:00Z" };
 
 	it("says nothing for a session on the installed release", () => {
-		const { container } = render(<VersionSwitchBanner />);
+		const { container } = render(<VersionSwitchChip harness="claude-code" />);
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("tells the user the session moves to the new release when idle", () => {
-		render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z" }} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Switching to v2.1.300…");
+	it("is one chip whose popover says what was installed and when the chat moves to it", async () => {
+		const user = userEvent.setup();
+		render(<VersionSwitchChip staleBinary={stale} harness="claude-code" />);
+		const chip = screen.getByRole("button", { name: /^Update ready/ });
+		expect(chip).toHaveTextContent("Update ready");
+		// The detail waits behind the chip rather than spreading across the chat.
+		expect(screen.queryByText(/still runs the previous version/)).not.toBeInTheDocument();
+
+		await user.click(chip);
+		const details = screen.getByRole("dialog", { name: "Claude Code v2.1.300 is installed" });
+		expect(details).toHaveTextContent("It moves to the new one when the agent is idle, or with your next message.");
+		expect(details).toHaveTextContent("a restart clears the agent's cached context");
 	});
 
-	it("asks for a resume instead of promising a switch when the agent stopped", () => {
-		render(<VersionSwitchBanner staleBinary={{ version: "2.1.308", since: "2026-10-20T00:00:00Z" }} agentStopped />);
-		const status = screen.getByRole("status");
-		expect(status).toHaveTextContent("v2.1.308 installed");
-		expect(status).toHaveTextContent("Resume the agent to start it on the new version.");
-		expect(status).not.toHaveTextContent("Switching");
+	it("asks for a resume instead of promising a switch when the agent stopped", async () => {
+		const user = userEvent.setup();
+		render(<VersionSwitchChip staleBinary={{ version: "2.1.308", since: "2026-10-20T00:00:00Z" }} harness="claude-code" agentStopped />);
+		await user.click(screen.getByRole("button", { name: /^Update ready/ }));
+		const details = screen.getByRole("dialog", { name: "Claude Code v2.1.308 is installed" });
+		expect(details).toHaveTextContent("Resume the agent to start it on the new version.");
+		expect(details).not.toHaveTextContent("with your next message");
 	});
 
 	it("stays quiet when moving sessions is turned off", () => {
 		versionRefreshSetting.enabled = false;
+		const { container } = render(<VersionSwitchChip staleBinary={stale} harness="claude-code" />);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("leaves a failed switch to the warning banner", () => {
+		const { container } = render(<VersionSwitchChip staleBinary={{ ...stale, switchFailedAt: "2026-10-15T00:10:00Z" }} harness="claude-code" />);
+		expect(container).toBeEmptyDOMElement();
+	});
+});
+
+describe("VersionSwitchBanner", () => {
+	it("says nothing while a switch is only waiting", () => {
 		const { container } = render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z" }} />);
 		expect(container).toBeEmptyDOMElement();
 	});
@@ -250,5 +273,6 @@ describe("VersionSwitchBanner", () => {
 		render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z", switchFailedAt: "2026-10-15T00:10:00Z" }} />);
 		expect(screen.getByRole("alert")).toHaveTextContent("Couldn't switch to v2.1.300");
 		expect(screen.getByRole("alert")).toHaveTextContent("queued messages are kept");
+		versionRefreshSetting.enabled = true;
 	});
 });
