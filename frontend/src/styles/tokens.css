@@ -86,10 +86,10 @@
 	--color-text-markdown-code: var(--color-brand-logo-text);
 	--color-text-markdown-link: var(--color-brand-logo-text); /* underline distinguishes links */
 	--color-text-markdown-link-hover: #88b8e5;
-	/* A workspace file named in chat: the brand blue as a faint wash, with a
-	 * pale shade of it as text. */
+	/* A workspace file named in chat: the accent as a faint wash, with a pale
+	 * shade of it as text. Both mix from the accent, so a named theme recolours them. */
 	--color-chat-file-bg: color-mix(in srgb, var(--color-brand-logo) 16%, transparent);
-	--color-chat-file-text: #b4d4f1;
+	--color-chat-file-text: color-mix(in srgb, var(--color-brand-logo-text) 45%, var(--foreground));
 	--color-text-terminal: #d6d6d6;
 	--color-text-terminal-dim: #8e8e8e;
 
@@ -743,7 +743,7 @@
 	--color-text-markdown-link: var(--color-brand-logo-text);
 	--color-text-markdown-link-hover: #295984;
 	--color-chat-file-bg: color-mix(in srgb, var(--color-brand-logo) 12%, transparent);
-	--color-chat-file-text: #295984;
+	--color-chat-file-text: color-mix(in srgb, var(--color-brand-logo-text) 85%, var(--foreground));
 	--color-text-terminal: #3d3d3d;
 	--color-text-terminal-dim: #757575;
 
