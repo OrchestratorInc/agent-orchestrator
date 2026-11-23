@@ -57,7 +57,7 @@ import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, Notebook
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
-import { CommentMarkersContext, CommentTarget } from "./AsideMarker";
+import { COMMENT_COLUMN_CLASS, COMMENT_EMPTY_COLUMN_CLASS, CommentMarkersContext, CommentTarget } from "./AsideMarker";
 import { ChatAnnotationMarkers, DraftAnnotationMarkers, numberedReferences } from "./ChatAnnotationMarkers";
 import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
@@ -2096,6 +2096,8 @@ function ChatWorkspaceContent({
 	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
 	const openedDocked = settledDocked !== false;
 	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
+	// With comments, the composer keeps the messages' column (the Timeline's), whose margin holds their icons.
+	const commentColumn = Boolean(useContext(CommentMarkersContext));
 	const [emptyChatPlaceholder] = useState(
 		() => sessionRole === "orchestrator"
 			? "Ask anything about this project"
@@ -2411,7 +2413,8 @@ function ChatWorkspaceContent({
 						<div ref={composerDockRef} className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
 							<div
 								data-empty={conversationEmpty || undefined}
-								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
+								data-chat-column="composer"
+								className={cn("mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl", commentColumn && [COMMENT_COLUMN_CLASS, COMMENT_EMPTY_COLUMN_CLASS])}
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								{limitedTurn?.usageLimit && retryControl ? (
@@ -3568,8 +3571,8 @@ export function Timeline({
 		edgeFadeRef(node);
 	}, [edgeFadeRef]);
 	const scrollContent = useRef<HTMLDivElement>(null);
-	// A shared Cloud session with comments keeps a right margin for their icons.
-	const commentGutter = Boolean(useContext(CommentMarkersContext));
+	// A shared Cloud session with comments: the composer's column, with room beside it for their icons.
+	const commentColumn = Boolean(useContext(CommentMarkersContext));
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
 	const measuredVirtualGroups = useRef(new WeakSet<TimelineGroup>());
@@ -5863,7 +5866,7 @@ export function Timeline({
 				{/* Before the settle snapshot: its restore reads how far this one moved the view. */}
 				<HistoryAnchorSnapshot historyKey={`${oldestRow}:${hasOlder ? 1 : 0}`} capture={captureHistoryAnchor} restore={restoreHistoryAnchor} />
 				<TurnSettleSnapshot liveKey={groups.find((group) => group.live)?.key} capture={captureSettle} restore={restoreSettle} />
-				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", commentGutter && "max-w-[calc(48rem+2.5rem)] pr-10", revealTranscript && "chat-transcript-reveal")}>
+				<div ref={scrollContent} data-chat-column="messages" className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", commentColumn && COMMENT_COLUMN_CLASS, revealTranscript && "chat-transcript-reveal")}>
 					{annotationNavigationError ? <p role="status" className="text-xs text-muted-foreground">{annotationNavigationError}</p> : null}
 					{hasOlder ? (
 						<div className="flex justify-center pb-1">

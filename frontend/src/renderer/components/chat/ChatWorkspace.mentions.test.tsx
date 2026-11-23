@@ -4,6 +4,7 @@ import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { mentionFallbackEvents } from "../../lib/cloud-mention-open";
 import { renderChat as render } from "../../test/render-chat";
 import type { WorkspaceSession } from "../../types/workspace";
+import { COMMENT_COLUMN_CLASS, CommentMarkersContext, type CommentMarkers } from "./AsideMarker";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { toSnapshot } from "./CloudSessionChatSurface";
 import { MentionTintContext } from "./MentionChip";
@@ -116,5 +117,60 @@ describe("opening a chat at a mention", () => {
 		);
 		expect(done).toHaveBeenCalledWith("2:loaded");
 		expect(document.querySelector("[data-mention-focus]")).toBeNull();
+	});
+});
+
+describe("the column of a Cloud chat with comments", () => {
+	const markers: CommentMarkers = {
+		canComment: true,
+		// Every message has a thread, so each draws its margin icon.
+		forMessage: () => ({ state: "idle", asideIds: ["a-1"], quotes: [] }),
+		openMessage: vi.fn(),
+		openThread: vi.fn(),
+		startComment: vi.fn(),
+	};
+	const column = (name: "messages" | "composer") => document.querySelector<HTMLElement>(`[data-chat-column="${name}"]`);
+	const widthClasses = (element: HTMLElement | null) => Array.from(element?.classList ?? []).filter((name) => /^(max-w-|w-|p[xrl]?-|m[xrl]-)/.test(name)).sort();
+
+	it("gives the messages exactly the composer's column, with no gutter of their own", () => {
+		render(
+			<CommentMarkersContext.Provider value={markers}>
+				<ChatWorkspace snapshot={toSnapshot(session, events.slice(0, 3), "u-priya")} session={session} />
+			</CommentMarkersContext.Provider>,
+		);
+		expect(column("messages")).toHaveClass(COMMENT_COLUMN_CLASS);
+		expect(column("composer")).toHaveClass(COMMENT_COLUMN_CLASS);
+		expect(widthClasses(column("messages"))).toEqual(widthClasses(column("composer")));
+	});
+
+	it("keeps the column of a chat without comments", () => {
+		render(<ChatWorkspace snapshot={toSnapshot(session, events.slice(0, 3), "u-priya")} session={session} />);
+		expect(widthClasses(column("messages"))).toEqual(["max-w-3xl", "mx-auto", "w-full"]);
+		expect(widthClasses(column("composer"))).toEqual(widthClasses(column("messages")));
+	});
+
+	it("draws the margin icon beside a message, never around it", () => {
+		render(
+			<CommentMarkersContext.Provider value={markers}>
+				<ChatWorkspace snapshot={toSnapshot(session, events.slice(0, 3), "u-priya")} session={session} />
+			</CommentMarkersContext.Provider>,
+		);
+		const icons = Array.from(document.querySelectorAll<HTMLElement>("[data-comment-marker]"));
+		// The person's message and the agent's answer.
+		expect(icons).toHaveLength(2);
+		for (const icon of icons) {
+			const target = icon.parentElement!;
+			expect(target).toHaveAttribute("data-comment-anchor");
+			// Out of the flow, so the message keeps the column's full width.
+			expect(icon).toHaveClass("absolute");
+			expect(icon.querySelector("[data-chat-message-body], [data-chat-message-id], [data-chat-message-role]")).toBeNull();
+			// The target only positions its icon: no width, padding or margin of its own.
+			expect(widthClasses(target)).toEqual([]);
+			expect(target.querySelector("[data-chat-message-body]")).not.toBeNull();
+		}
+		for (const toolbar of document.querySelectorAll<HTMLElement>("[data-comment-toolbar]")) {
+			expect(toolbar).toHaveClass("absolute");
+			expect(toolbar.querySelector("[data-chat-message-body]")).toBeNull();
+		}
 	});
 });

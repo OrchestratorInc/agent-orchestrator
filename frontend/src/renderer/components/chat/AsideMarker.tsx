@@ -46,6 +46,19 @@ export interface CommentMarkers {
 
 export const CommentMarkersContext = createContext<CommentMarkers | undefined>(undefined);
 
+/**
+ * The column of a conversation with comments, for its messages and its
+ * composer alike, so both always share the same left and right edges. A
+ * message's comment icon and Comment button sit outside the column's right
+ * edge (see CommentTarget), never inside it. Where the window leaves the
+ * column a margin anyway, it stays the composer's usual 48rem; where it
+ * doesn't, messages and composer narrow together, keeping 3rem more each
+ * side: room for the icon, clear of the conversation scrollbar.
+ */
+export const COMMENT_COLUMN_CLASS = "max-w-[min(48rem,calc(100%_-_6rem))]";
+/** The same for the composer of a conversation with nothing in it yet (its 42rem). */
+export const COMMENT_EMPTY_COLUMN_CLASS = "data-[empty]:max-w-[min(42rem,calc(100%_-_6rem))]";
+
 /** Whether a message that tags people draws as an aside's dashed box: it started one and the conversation knows its threads. */
 export function useAsideMarker(asideId: string | undefined): boolean {
 	const markers = useContext(CommentMarkersContext);
