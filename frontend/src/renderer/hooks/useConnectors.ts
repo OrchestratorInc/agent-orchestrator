@@ -9,10 +9,12 @@ export type ConnectorInput = components["schemas"]["ConnectorRequest"];
 export type ConnectorImportCandidate = components["schemas"]["ConnectorImportCandidateResponse"];
 export type ConnectorSignIn = components["schemas"]["ConnectorSignInResponse"];
 export type SessionConnector = components["schemas"]["SessionConnectorResponse"];
+export type ConnectorProposal = components["schemas"]["ConnectorProposalResponse"];
 
 export const connectorsQueryKey = ["connectors"] as const;
 export const connectorImportQueryKey = ["connectors", "import"] as const;
 export const sessionConnectorsQueryKey = (sessionId: string) => ["connectors", "session", sessionId] as const;
+export const sessionProposalsQueryKey = (sessionId: string) => ["connectors", "proposals", sessionId] as const;
 
 const previewStamp = new Date(0).toISOString();
 
@@ -67,6 +69,21 @@ export const connectorsApi = {
 		const { data, error } = await apiClient.POST("/api/v1/connectors/import", { body: { ids, values } });
 		if (error || !data) throw apiErrorException(error);
 		return data.connectors;
+	},
+	async sessionProposals(sessionId: string): Promise<ConnectorProposal[]> {
+		if (usesPreviewWorkspaceData) return [];
+		const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/connectors/proposals", { params: { path: { sessionId } } });
+		if (error || !data) throw apiErrorException(error);
+		return data.proposals;
+	},
+	async approveProposal(proposalId: string, body: { projectId?: string; values?: Record<string, string> }): Promise<Connector> {
+		const { data, error } = await apiClient.POST("/api/v1/connectors/proposals/{proposalId}/approve", { params: { path: { proposalId } }, body });
+		if (error || !data) throw apiErrorException(error);
+		return data.connector;
+	},
+	async declineProposal(proposalId: string): Promise<void> {
+		const { error } = await apiClient.POST("/api/v1/connectors/proposals/{proposalId}/decline", { params: { path: { proposalId } } });
+		if (error) throw apiErrorException(error);
 	},
 	async forSession(sessionId: string): Promise<SessionConnector[]> {
 		if (usesPreviewWorkspaceData) return [];

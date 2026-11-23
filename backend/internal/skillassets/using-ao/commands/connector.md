@@ -37,4 +37,13 @@ When a tool call answers that the connector needs sign-in, stop and tell the use
 
 `ao connector import` lists the MCP servers found in the configuration of Claude Code, Codex and Cursor, without their values. `ao connector import <id>...` adds the ones you name. When the list shows `needs --value`, the file holds a variable and not a value: the user supplies it with `--value NAME=value` for one ID.
 
-Add, remove or import a connector only when the user asks for it.
+## From a Chat session
+
+The `ao` tool server has two connector tools.
+
+- `connector_list` lists the connectors with their status, and says which ones this session started with.
+- `connector_propose` asks the user to add a connector. The user sees the request above the message box and approves or declines it. Nothing is added before they approve. Give a `key`, a `url` or a `command` with `args`, and a one-sentence `reason`. For a value the server needs, give only its name in `envKeys` or `headerKeys`; the user types the value. The call waits for the answer for up to 100 seconds. When it says the request is still pending, do not ask again.
+
+An approved connector reaches sessions that start later. This session keeps the tools it started with.
+
+Add, remove or import a connector only when the user asks for it. Propose one only when the task needs it.

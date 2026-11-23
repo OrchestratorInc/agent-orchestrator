@@ -38,6 +38,11 @@ type ConnectorService interface {
 	Import(ctx context.Context, ids []string, values map[string]map[string]string) ([]connectors.Connector, error)
 	ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, key string)
 	ServeLaunch(w http.ResponseWriter, r *http.Request, sessionID, key string)
+	Propose(ctx context.Context, in connectors.ProposalInput) (connectors.Proposal, error)
+	GetProposal(ctx context.Context, id string) (connectors.Proposal, error)
+	SessionProposals(ctx context.Context, sessionID string) []connectors.Proposal
+	ApproveProposal(ctx context.Context, id string, projectID *string, values map[string]string) (connectors.Proposal, connectors.Connector, error)
+	DeclineProposal(ctx context.Context, id string) (connectors.Proposal, error)
 }
 
 // ConnectorsController owns the connector routes.
@@ -59,6 +64,11 @@ func (c *ConnectorsController) Register(r chi.Router) {
 	r.Post("/connectors/{connectorId}/connect/finish", c.finishConnect)
 	r.Post("/connectors/{connectorId}/disconnect", c.disconnect)
 	r.Get("/sessions/{sessionId}/connectors", c.forSession)
+	r.Post("/connectors/proposals", c.propose)
+	r.Get("/connectors/proposals/{proposalId}", c.proposal)
+	r.Post("/connectors/proposals/{proposalId}/approve", c.approveProposal)
+	r.Post("/connectors/proposals/{proposalId}/decline", c.declineProposal)
+	r.Get("/sessions/{sessionId}/connectors/proposals", c.sessionProposals)
 }
 
 // RegisterRoot mounts the two routes outside /api/v1: the page a sign-in server sends the browser back to, and the address agents call.
@@ -97,6 +107,98 @@ func (c *ConnectorsController) forSession(w http.ResponseWriter, r *http.Request
 		})
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListSessionConnectorsResponse{Connectors: out})
+}
+
+func (c *ConnectorsController) propose(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodPost, "/api/v1/connectors/proposals") {
+		return
+	}
+	var req ConnectorProposalRequest
+	if !decodeConnectorBody(w, r, &req) {
+		return
+	}
+	created, err := c.Svc.Propose(r.Context(), connectors.ProposalInput{
+		SessionID: req.SessionID, Key: req.Key, Name: req.Name, Transport: connectors.Transport(req.Transport), URL: req.URL,
+		Command: req.Command, Args: req.Args, EnvKeys: req.EnvKeys, HeaderKeys: req.HeaderKeys, Auth: connectors.Auth(req.Auth), Reason: req.Reason,
+	})
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusCreated, ConnectorProposalEnvelope{Proposal: proposalResponse(&created)})
+}
+
+func (c *ConnectorsController) proposal(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodGet, "/api/v1/connectors/proposals/{proposalId}") {
+		return
+	}
+	found, err := c.Svc.GetProposal(r.Context(), chi.URLParam(r, "proposalId"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ConnectorProposalEnvelope{Proposal: proposalResponse(&found)})
+}
+
+func (c *ConnectorsController) sessionProposals(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodGet, "/api/v1/sessions/{sessionId}/connectors/proposals") {
+		return
+	}
+	pending := c.Svc.SessionProposals(r.Context(), chi.URLParam(r, "sessionId"))
+	out := make([]ConnectorProposalResponse, 0, len(pending))
+	for i := range pending {
+		out = append(out, proposalResponse(&pending[i]))
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListConnectorProposalsResponse{Proposals: out})
+}
+
+func (c *ConnectorsController) approveProposal(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodPost, "/api/v1/connectors/proposals/{proposalId}/approve") {
+		return
+	}
+	var req ApproveConnectorProposalRequest
+	if !decodeConnectorBody(w, r, &req) {
+		return
+	}
+	id := chi.URLParam(r, "proposalId")
+	pending, err := c.Svc.GetProposal(r.Context(), id)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	if rejectLANCommandConnector(w, r, string(pending.Transport)) {
+		return
+	}
+	approved, created, err := c.Svc.ApproveProposal(r.Context(), id, req.ProjectID, req.Values)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ApproveConnectorProposalResponse{Proposal: proposalResponse(&approved), Connector: connectorResponse(&created)})
+}
+
+func (c *ConnectorsController) declineProposal(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodPost, "/api/v1/connectors/proposals/{proposalId}/decline") {
+		return
+	}
+	declined, err := c.Svc.DeclineProposal(r.Context(), chi.URLParam(r, "proposalId"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ConnectorProposalEnvelope{Proposal: proposalResponse(&declined)})
+}
+
+func proposalResponse(p *connectors.Proposal) ConnectorProposalResponse {
+	out := ConnectorProposalResponse{
+		ID: p.ID, SessionID: p.SessionID, Key: p.Key, Name: p.Name, Transport: string(p.Transport), URL: withoutQuery(p.URL),
+		Command: p.Command, Args: nonNil(p.Args), EnvKeys: nonNil(p.EnvKeys), HeaderKeys: nonNil(p.HeaderKeys), Auth: string(p.Auth),
+		Reason: p.Reason, State: string(p.State), ConnectorKey: p.ConnectorKey, CreatedAt: p.CreatedAt,
+	}
+	if p.ProjectID != "" {
+		out.ProjectID = &p.ProjectID
+	}
+	return out
 }
 
 func (c *ConnectorsController) ready(w http.ResponseWriter, r *http.Request, method, path string) bool {

@@ -5685,5 +5685,11 @@
 	"chat.connectors.starting": "Запускается",
 	"chat.connectors.failed": "Сбой",
 	"chat.connectors.added": "В этом чате",
-	"chat.connectors.manage": "Управление коннекторами"
+	"chat.connectors.manage": "Управление коннекторами",
+	"chat.connectorProposal.dock": "Запрос коннектора",
+	"chat.connectorProposal.title": "Добавить коннектор?",
+	"chat.connectorProposal.asked": "Агент запросил его в этом чате.",
+	"chat.connectorProposal.thisProject": "Этот проект",
+	"chat.connectorProposal.approve": "Одобрить",
+	"chat.connectorProposal.decline": "Отклонить"
 }

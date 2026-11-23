@@ -3130,6 +3130,68 @@ type ImportConnectorsRequest struct {
 	Values map[string]map[string]string `json:"values,omitempty" description:"Values the user typed, by candidate ID and then by name."`
 }
 
+// ConnectorProposalIDParam names a proposal.
+type ConnectorProposalIDParam struct {
+	ProposalID string `path:"proposalId"`
+}
+
+// ConnectorProposalRequest is the body of POST /api/v1/connectors/proposals. A proposal carries no value.
+type ConnectorProposalRequest struct {
+	SessionID  string   `json:"sessionId" description:"Session whose agent asks for the connector."`
+	Key        string   `json:"key,omitempty"`
+	Name       string   `json:"name,omitempty"`
+	Transport  string   `json:"transport" enum:"http,stdio"`
+	URL        string   `json:"url,omitempty"`
+	Command    string   `json:"command,omitempty"`
+	Args       []string `json:"args,omitempty"`
+	EnvKeys    []string `json:"envKeys,omitempty" description:"Names of the environment values the user types on approval."`
+	HeaderKeys []string `json:"headerKeys,omitempty" description:"Names of the headers the user types on approval."`
+	Auth       string   `json:"auth,omitempty" enum:"none,oauth,header"`
+	Reason     string   `json:"reason,omitempty" maxLength:"300" description:"Why the agent asks, shown to the user."`
+}
+
+// ConnectorProposalResponse is a connector an agent asked the user to add.
+type ConnectorProposalResponse struct {
+	ID           string    `json:"id"`
+	SessionID    string    `json:"sessionId"`
+	Key          string    `json:"key"`
+	Name         string    `json:"name"`
+	Transport    string    `json:"transport" enum:"http,stdio"`
+	URL          string    `json:"url,omitempty"`
+	Command      string    `json:"command,omitempty"`
+	Args         []string  `json:"args"`
+	EnvKeys      []string  `json:"envKeys"`
+	HeaderKeys   []string  `json:"headerKeys"`
+	Auth         string    `json:"auth" enum:"none,oauth,header"`
+	ProjectID    *string   `json:"projectId,omitempty" description:"Project of the session that asked. Omitted for a session without a project."`
+	Reason       string    `json:"reason,omitempty"`
+	State        string    `json:"state" enum:"pending,approved,declined,expired"`
+	ConnectorKey string    `json:"connectorKey,omitempty" description:"Key of the connector an approval added."`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// ConnectorProposalEnvelope wraps one proposal.
+type ConnectorProposalEnvelope struct {
+	Proposal ConnectorProposalResponse `json:"proposal"`
+}
+
+// ListConnectorProposalsResponse is the body of GET /api/v1/sessions/{sessionId}/connectors/proposals.
+type ListConnectorProposalsResponse struct {
+	Proposals []ConnectorProposalResponse `json:"proposals"`
+}
+
+// ApproveConnectorProposalRequest is the body of POST /api/v1/connectors/proposals/{proposalId}/approve.
+type ApproveConnectorProposalRequest struct {
+	ProjectID *string           `json:"projectId,omitempty" description:"Replaces the project of the session that asked. An empty string means all projects."`
+	Values    map[string]string `json:"values,omitempty" description:"What the user typed for each environment value and header the proposal names."`
+}
+
+// ApproveConnectorProposalResponse is the proposal after approval and the connector it added.
+type ApproveConnectorProposalResponse struct {
+	Proposal  ConnectorProposalResponse `json:"proposal"`
+	Connector ConnectorResponse         `json:"connector"`
+}
+
 // FinishConnectorSignInRequest is the body of POST /api/v1/connectors/{connectorId}/connect/finish.
 type FinishConnectorSignInRequest struct {
 	CallbackURL string `json:"callbackUrl" maxLength:"16384" description:"Address the user's browser opened after approval, pasted as it is."`

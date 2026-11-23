@@ -5361,5 +5361,11 @@
 	"chat.connectors.starting": "Başlatılıyor",
 	"chat.connectors.failed": "Başarısız",
 	"chat.connectors.added": "Bu sohbette",
-	"chat.connectors.manage": "Bağlayıcıları yönet"
+	"chat.connectors.manage": "Bağlayıcıları yönet",
+	"chat.connectorProposal.dock": "Bağlayıcı isteği",
+	"chat.connectorProposal.title": "Bağlayıcı eklensin mi?",
+	"chat.connectorProposal.asked": "Aracı bunu bu sohbette istedi.",
+	"chat.connectorProposal.thisProject": "Bu proje",
+	"chat.connectorProposal.approve": "Onayla",
+	"chat.connectorProposal.decline": "Reddet"
 }

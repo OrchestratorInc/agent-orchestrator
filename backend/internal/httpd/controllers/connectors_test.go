@@ -202,3 +202,55 @@ func TestConnectorImportRoutesHideValuesAndKeepCommandsOnLoopback(t *testing.T) 
 		t.Fatalf("reserved key = %d %s", status, body)
 	}
 }
+
+func TestConnectorProposalRoutesAddNothingBeforeApproval(t *testing.T) {
+	srv := newConnectorTestServer(t, false)
+	status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors/proposals",
+		`{"sessionId":"ao-1","key":"paper","transport":"stdio","command":"npx","args":["-y","paper-mcp"],"envKeys":["PAPER_KEY"],"reason":"To read the design."}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"state":"pending"`) || !strings.Contains(body, `"envKeys":["PAPER_KEY"]`) {
+		t.Fatalf("propose = %d %s", status, body)
+	}
+	var created struct {
+		Proposal struct{ ID string }
+	}
+	if err := json.Unmarshal([]byte(body), &created); err != nil || created.Proposal.ID == "" {
+		t.Fatalf("proposal = %s (%v)", body, err)
+	}
+	id := created.Proposal.ID
+	if status, body := connectorCall(t, srv, http.MethodGet, "/api/v1/connectors", ""); status != http.StatusOK || !strings.Contains(body, `"connectors":[]`) {
+		t.Fatalf("connectors after a proposal = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/connectors/proposals", ""); status != http.StatusOK || !strings.Contains(body, id) {
+		t.Fatalf("session proposals = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors/proposals/"+id+"/approve", `{}`); status != http.StatusBadRequest ||
+		!strings.Contains(body, "CONNECTOR_PROPOSAL_VALUE") {
+		t.Fatalf("approve without the value = %d %s", status, body)
+	}
+	lan := newConnectorTestServer(t, true)
+	lanStatus, lanBody := connectorCall(t, lan, http.MethodPost, "/api/v1/connectors/proposals",
+		`{"sessionId":"ao-1","key":"paper","transport":"stdio","command":"npx"}`)
+	var remote struct {
+		Proposal struct{ ID string }
+	}
+	if lanStatus != http.StatusCreated || json.Unmarshal([]byte(lanBody), &remote) != nil {
+		t.Fatalf("propose over LAN = %d %s", lanStatus, lanBody)
+	}
+	if status, body := connectorCall(t, lan, http.MethodPost, "/api/v1/connectors/proposals/"+remote.Proposal.ID+"/approve", `{}`); status != http.StatusForbidden ||
+		!strings.Contains(body, "CONNECTOR_COMMAND_LOOPBACK_REQUIRED") {
+		t.Fatalf("approve a command over LAN = %d %s", status, body)
+	}
+	status, body = connectorCall(t, srv, http.MethodPost, "/api/v1/connectors/proposals/"+id+"/approve", `{"projectId":"","values":{"PAPER_KEY":"hidden-value"}}`)
+	if status != http.StatusOK || !strings.Contains(body, `"state":"approved"`) || !strings.Contains(body, `"key":"paper"`) || strings.Contains(body, "hidden-value") {
+		t.Fatalf("approve = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors/proposals/"+id+"/decline", ``); status != http.StatusOK || !strings.Contains(body, `"state":"approved"`) {
+		t.Fatalf("decline after approval = %d %s", status, body)
+	}
+	if status, _ := connectorCall(t, srv, http.MethodGet, "/api/v1/connectors/proposals/none", ""); status != http.StatusNotFound {
+		t.Fatalf("unknown proposal = %d", status)
+	}
+	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", `{"name":"proposals","transport":"http","url":"https://x.example/mcp"}`); status != http.StatusBadRequest {
+		t.Fatalf("reserved key = %d %s", status, body)
+	}
+}

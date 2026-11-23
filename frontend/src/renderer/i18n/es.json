@@ -5537,5 +5537,11 @@
 	"chat.connectors.starting": "Iniciando",
 	"chat.connectors.failed": "Falló",
 	"chat.connectors.added": "En este chat",
-	"chat.connectors.manage": "Gestionar conectores"
+	"chat.connectors.manage": "Gestionar conectores",
+	"chat.connectorProposal.dock": "Solicitud de conector",
+	"chat.connectorProposal.title": "¿Añadir un conector?",
+	"chat.connectorProposal.asked": "El agente lo pidió en este chat.",
+	"chat.connectorProposal.thisProject": "Este proyecto",
+	"chat.connectorProposal.approve": "Aprobar",
+	"chat.connectorProposal.decline": "Rechazar"
 }

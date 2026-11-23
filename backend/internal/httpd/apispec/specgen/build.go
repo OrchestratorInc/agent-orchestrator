@@ -660,6 +660,12 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersConnectorImportCandidateResponse":      "ConnectorImportCandidateResponse",
 	"ControllersListConnectorImportCandidatesResponse": "ListConnectorImportCandidatesResponse",
 	"ControllersImportConnectorsRequest":               "ImportConnectorsRequest",
+	"ControllersConnectorProposalRequest":              "ConnectorProposalRequest",
+	"ControllersConnectorProposalResponse":             "ConnectorProposalResponse",
+	"ControllersConnectorProposalEnvelope":             "ConnectorProposalEnvelope",
+	"ControllersListConnectorProposalsResponse":        "ListConnectorProposalsResponse",
+	"ControllersApproveConnectorProposalRequest":       "ApproveConnectorProposalRequest",
+	"ControllersApproveConnectorProposalResponse":      "ApproveConnectorProposalResponse",
 	// httpd/controllers — PR wire envelopes
 	"ControllersMergePRRequest":             "MergePRRequest",
 	"ControllersPRStackLayerResponse":       "PRStackLayerResponse",
@@ -2340,6 +2346,35 @@ func connectorOperations() []operation {
 			reqBody: controllers.ImportConnectorsRequest{},
 			resps: append([]respUnit{{http.StatusCreated, controllers.ListConnectorsResponse{}}},
 				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/proposals", id: "proposeConnector", tag: "connectors",
+			summary: "Record a connector that a session's agent asks the user to add; nothing is added",
+			reqBody: controllers.ConnectorProposalRequest{},
+			resps: append([]respUnit{{http.StatusCreated, controllers.ConnectorProposalEnvelope{}}},
+				failures(http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/connectors/proposals/{proposalId}", id: "getConnectorProposal", tag: "connectors",
+			summary: "Get a proposal and its state", pathParams: []any{controllers.ConnectorProposalIDParam{}},
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorProposalEnvelope{}}}, failures(http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/proposals/{proposalId}/approve", id: "approveConnectorProposal", tag: "connectors",
+			summary: "Add the proposed connector with the values the user typed", pathParams: []any{controllers.ConnectorProposalIDParam{}},
+			reqBody: controllers.ApproveConnectorProposalRequest{},
+			resps: append([]respUnit{{http.StatusOK, controllers.ApproveConnectorProposalResponse{}}},
+				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/proposals/{proposalId}/decline", id: "declineConnectorProposal", tag: "connectors",
+			summary: "Decline a proposal", pathParams: []any{controllers.ConnectorProposalIDParam{}},
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorProposalEnvelope{}}}, failures(http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/connectors/proposals", id: "listSessionConnectorProposals", tag: "connectors",
+			summary: "List the proposals of a session that wait for an answer", pathParams: []any{controllers.SessionIDParam{}},
+			resps: append([]respUnit{{http.StatusOK, controllers.ListConnectorProposalsResponse{}}}, failures()...),
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/connectors/{connectorId}", id: "getConnector", tag: "connectors",

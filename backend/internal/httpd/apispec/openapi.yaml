@@ -3999,6 +3999,203 @@ paths:
       summary: Add the chosen found servers as connectors
       tags:
       - connectors
+  /api/v1/connectors/proposals:
+    post:
+      operationId: proposeConnector
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectorProposalRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorProposalEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Record a connector that a session's agent asks the user to add; nothing
+        is added
+      tags:
+      - connectors
+  /api/v1/connectors/proposals/{proposalId}:
+    get:
+      operationId: getConnectorProposal
+      parameters:
+      - in: path
+        name: proposalId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorProposalEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a proposal and its state
+      tags:
+      - connectors
+  /api/v1/connectors/proposals/{proposalId}/approve:
+    post:
+      operationId: approveConnectorProposal
+      parameters:
+      - in: path
+        name: proposalId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveConnectorProposalRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApproveConnectorProposalResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Add the proposed connector with the values the user typed
+      tags:
+      - connectors
+  /api/v1/connectors/proposals/{proposalId}/decline:
+    post:
+      operationId: declineConnectorProposal
+      parameters:
+      - in: path
+        name: proposalId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorProposalEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Decline a proposal
+      tags:
+      - connectors
   /api/v1/conversations/{conversationId}/find:
     get:
       operationId: findConversation
@@ -9172,6 +9369,39 @@ paths:
           description: Not Implemented
       summary: List the connectors a session got when it started, with its tool call
         counts
+      tags:
+      - connectors
+  /api/v1/sessions/{sessionId}/connectors/proposals:
+    get:
+      operationId: listSessionConnectorProposals
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListConnectorProposalsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the proposals of a session that wait for an answer
       tags:
       - connectors
   /api/v1/sessions/{sessionId}/conversation:
@@ -17469,6 +17699,31 @@ components:
       - cpuPercent
       - cpuMeasured
       type: object
+    ApproveConnectorProposalRequest:
+      properties:
+        projectId:
+          description: Replaces the project of the session that asked. An empty string
+            means all projects.
+          type:
+          - "null"
+          - string
+        values:
+          additionalProperties:
+            type: string
+          description: What the user typed for each environment value and header the
+            proposal names.
+          type: object
+      type: object
+    ApproveConnectorProposalResponse:
+      properties:
+        connector:
+          $ref: '#/components/schemas/ConnectorResponse'
+        proposal:
+          $ref: '#/components/schemas/ConnectorProposalResponse'
+      required:
+      - proposal
+      - connector
+      type: object
     ArtifactFileResponse:
       properties:
         fileFingerprint:
@@ -19456,6 +19711,130 @@ components:
       - key
       - transport
       - exists
+      type: object
+    ConnectorProposalEnvelope:
+      properties:
+        proposal:
+          $ref: '#/components/schemas/ConnectorProposalResponse'
+      required:
+      - proposal
+      type: object
+    ConnectorProposalRequest:
+      properties:
+        args:
+          items:
+            type: string
+          type: array
+        auth:
+          enum:
+          - none
+          - oauth
+          - header
+          type: string
+        command:
+          type: string
+        envKeys:
+          description: Names of the environment values the user types on approval.
+          items:
+            type: string
+          type: array
+        headerKeys:
+          description: Names of the headers the user types on approval.
+          items:
+            type: string
+          type: array
+        key:
+          type: string
+        name:
+          type: string
+        reason:
+          description: Why the agent asks, shown to the user.
+          maxLength: 300
+          type: string
+        sessionId:
+          description: Session whose agent asks for the connector.
+          type: string
+        transport:
+          enum:
+          - http
+          - stdio
+          type: string
+        url:
+          type: string
+      required:
+      - sessionId
+      - transport
+      type: object
+    ConnectorProposalResponse:
+      properties:
+        args:
+          items:
+            type: string
+          type: array
+        auth:
+          enum:
+          - none
+          - oauth
+          - header
+          type: string
+        command:
+          type: string
+        connectorKey:
+          description: Key of the connector an approval added.
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        envKeys:
+          items:
+            type: string
+          type: array
+        headerKeys:
+          items:
+            type: string
+          type: array
+        id:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        projectId:
+          description: Project of the session that asked. Omitted for a session without
+            a project.
+          type:
+          - "null"
+          - string
+        reason:
+          type: string
+        sessionId:
+          type: string
+        state:
+          enum:
+          - pending
+          - approved
+          - declined
+          - expired
+          type: string
+        transport:
+          enum:
+          - http
+          - stdio
+          type: string
+        url:
+          type: string
+      required:
+      - id
+      - sessionId
+      - key
+      - name
+      - transport
+      - args
+      - envKeys
+      - headerKeys
+      - auth
+      - state
+      - createdAt
       type: object
     ConnectorRequest:
       properties:
@@ -22839,6 +23218,15 @@ components:
           type: array
       required:
       - candidates
+      type: object
+    ListConnectorProposalsResponse:
+      properties:
+        proposals:
+          items:
+            $ref: '#/components/schemas/ConnectorProposalResponse'
+          type: array
+      required:
+      - proposals
       type: object
     ListConnectorsResponse:
       properties:

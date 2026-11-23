@@ -562,4 +562,6 @@ var catalog = []catalogTool{
 		required: []string{"state"},
 		call:     callReport,
 	},
+	connectorTools[0],
+	connectorTools[1],
 }

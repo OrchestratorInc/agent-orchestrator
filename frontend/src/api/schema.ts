@@ -1496,6 +1496,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/connectors/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record a connector that a session's agent asks the user to add; nothing is added */
+        post: operations["proposeConnector"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/proposals/{proposalId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a proposal and its state */
+        get: operations["getConnectorProposal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/proposals/{proposalId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add the proposed connector with the values the user typed */
+        post: operations["approveConnectorProposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/proposals/{proposalId}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decline a proposal */
+        post: operations["declineConnectorProposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/{conversationId}/find": {
         parameters: {
             query?: never;
@@ -3260,6 +3328,23 @@ export interface paths {
         };
         /** List the connectors a session got when it started, with its tool call counts */
         get: operations["listSessionConnectors"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/connectors/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the proposals of a session that wait for an answer */
+        get: operations["listSessionConnectorProposals"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5834,6 +5919,18 @@ export interface components {
             reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
         };
+        ApproveConnectorProposalRequest: {
+            /** @description Replaces the project of the session that asked. An empty string means all projects. */
+            projectId?: null | string;
+            /** @description What the user typed for each environment value and header the proposal names. */
+            values?: {
+                [key: string]: string;
+            };
+        };
+        ApproveConnectorProposalResponse: {
+            connector: components["schemas"]["ConnectorResponse"];
+            proposal: components["schemas"]["ConnectorProposalResponse"];
+        };
         ArtifactFileResponse: {
             /** @description Hex SHA-256 of the file's content. */
             fileFingerprint: string;
@@ -6592,6 +6689,52 @@ export interface components {
             /** @enum {string} */
             transport: "http" | "stdio";
             /** @description Server address without its query string. */
+            url?: string;
+        };
+        ConnectorProposalEnvelope: {
+            proposal: components["schemas"]["ConnectorProposalResponse"];
+        };
+        ConnectorProposalRequest: {
+            args?: string[];
+            /** @enum {string} */
+            auth?: "none" | "oauth" | "header";
+            command?: string;
+            /** @description Names of the environment values the user types on approval. */
+            envKeys?: string[];
+            /** @description Names of the headers the user types on approval. */
+            headerKeys?: string[];
+            key?: string;
+            name?: string;
+            /** @description Why the agent asks, shown to the user. */
+            reason?: string;
+            /** @description Session whose agent asks for the connector. */
+            sessionId: string;
+            /** @enum {string} */
+            transport: "http" | "stdio";
+            url?: string;
+        };
+        ConnectorProposalResponse: {
+            args: string[];
+            /** @enum {string} */
+            auth: "none" | "oauth" | "header";
+            command?: string;
+            /** @description Key of the connector an approval added. */
+            connectorKey?: string;
+            /** Format: date-time */
+            createdAt: string;
+            envKeys: string[];
+            headerKeys: string[];
+            id: string;
+            key: string;
+            name: string;
+            /** @description Project of the session that asked. Omitted for a session without a project. */
+            projectId?: null | string;
+            reason?: string;
+            sessionId: string;
+            /** @enum {string} */
+            state: "pending" | "approved" | "declined" | "expired";
+            /** @enum {string} */
+            transport: "http" | "stdio";
             url?: string;
         };
         ConnectorRequest: {
@@ -7899,6 +8042,9 @@ export interface components {
         };
         ListConnectorImportCandidatesResponse: {
             candidates: components["schemas"]["ConnectorImportCandidateResponse"][];
+        };
+        ListConnectorProposalsResponse: {
+            proposals: components["schemas"]["ConnectorProposalResponse"][];
         };
         ListConnectorsResponse: {
             connectors: components["schemas"]["ConnectorResponse"][];
@@ -15580,6 +15726,271 @@ export interface operations {
             };
         };
     };
+    proposeConnector: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectorProposalRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorProposalEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getConnectorProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposalId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorProposalEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    approveConnectorProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposalId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveConnectorProposalRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApproveConnectorProposalResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    declineConnectorProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposalId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorProposalEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     findConversation: {
         parameters: {
             query?: {
@@ -22034,6 +22445,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListSessionConnectorsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionConnectorProposals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListConnectorProposalsResponse"];
                 };
             };
             /** @description Internal Server Error */

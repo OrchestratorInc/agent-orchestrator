@@ -33,7 +33,7 @@ var (
 	envPattern    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	headerPattern = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+.^_` + "`" + `|~-]+$`)
 	slugRun       = regexp.MustCompile(`[^a-z0-9]+`)
-	reservedKeys  = map[string]bool{"ao": true, "import": true}
+	reservedKeys  = map[string]bool{"ao": true, "import": true, "proposals": true}
 )
 
 // Service owns the connector list and its secret values.
@@ -51,6 +51,7 @@ type Service struct {
 	sessions       map[string]*sessionUse
 	sessionLookup  func(ctx context.Context, sessionID string) (projectID string, open bool)
 	importProjects func(ctx context.Context) []ImportProject
+	proposals      map[string]*Proposal
 	tokenKey       []byte
 }
 
@@ -312,7 +313,7 @@ func normalize(in Input, old record) (record, error) {
 		rec.Name = rec.Key
 	}
 	if !keyPattern.MatchString(rec.Key) || reservedKeys[rec.Key] {
-		return record{}, invalid("INVALID_CONNECTOR_KEY", "The key must be 1 to 32 lowercase letters, digits, hyphens or underscores, and it cannot be \"ao\" or \"import\"")
+		return record{}, invalid("INVALID_CONNECTOR_KEY", "The key must be 1 to 32 lowercase letters, digits, hyphens or underscores, and it cannot be \"ao\", \"import\" or \"proposals\"")
 	}
 	if rec.Name == "" || len(rec.Name) > maxNameBytes {
 		return record{}, invalid("INVALID_CONNECTOR_NAME", "The name is required and must be at most 64 bytes")

@@ -5381,5 +5381,11 @@
 	"chat.connectors.starting": "시작 중",
 	"chat.connectors.failed": "실패",
 	"chat.connectors.added": "이 채팅에 포함",
-	"chat.connectors.manage": "커넥터 관리"
+	"chat.connectors.manage": "커넥터 관리",
+	"chat.connectorProposal.dock": "커넥터 요청",
+	"chat.connectorProposal.title": "커넥터를 추가할까요?",
+	"chat.connectorProposal.asked": "에이전트가 이 채팅에서 요청했습니다.",
+	"chat.connectorProposal.thisProject": "이 프로젝트",
+	"chat.connectorProposal.approve": "승인",
+	"chat.connectorProposal.decline": "거절"
 }
