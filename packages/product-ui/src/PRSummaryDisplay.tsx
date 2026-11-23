@@ -569,10 +569,10 @@ function ChecksTally({ tally }: { tally: PRChecksTally }) {
 			<span className={rowLabelClass}>{tally.title}</span>
 			{lead ? (
 				<span
-					className={`${rowStateClass} ${cn("inline-flex items-center gap-1 tabular-nums", lead.state === "failed" ? "text-error" : "font-normal text-muted-foreground")}`}
+					className={`${rowStateClass} ${cn("tabular-nums", lead.state === "failed" ? "text-error" : "font-normal text-muted-foreground")}`}
 					data-state={lead.state}
 				>
-					<CheckStateGlyph state={lead.state} />
+					{/* Words only, as on GitHub's merge box: the bar under the row carries the colours. */}
 					{lead.label}
 				</span>
 			) : null}

@@ -294,8 +294,9 @@ describe("portable leaf components", () => {
 		expect(screen.queryByText("Checks failing")).not.toBeInTheDocument();
 		const shown = tally.querySelector('[data-state]:not(.sr-only)');
 		expect(shown).toHaveAttribute("data-state", "failed");
-		// The lead count has a shape, not only a colour.
-		expect(shown?.querySelector("svg")).toHaveClass("icon-check-failed");
+		// The lead count is words only, as on GitHub; "failing" says it without the colour.
+		expect(shown).toHaveTextContent("2 failing");
+		expect(shown?.querySelector("svg")).toBeNull();
 		expect([...tally.querySelectorAll("[data-state].sr-only")].map((count) => count.getAttribute("data-state"))).toEqual(["running", "passed"]);
 		// The bar: done on the left, each state sized by its count; only the running segment pulses.
 		const bar = screen.getByTestId("pr-checks-bar");
