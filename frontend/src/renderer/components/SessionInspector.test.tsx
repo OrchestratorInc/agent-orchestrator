@@ -1033,14 +1033,17 @@ describe("SessionInspector PR section", () => {
     expect(screen.queryByRole("button", { name: /(Squash|Rebase) and merge/ })).not.toBeInTheDocument();
   });
 
-  it("shows a failed state change under the PR's action button", async () => {
+  it("shows a failed state change under the PR's card, below the title row that holds its button", async () => {
     postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/state"
       ? { data: undefined, error: { error: { code: "PR_ACTION_REJECTED", message: "GitHub refused the change" } } }
       : { data: { ok: true }, error: undefined });
     servePR(prSummary(7, "draft", { url: "https://example.com/pr/7" }));
 
     await userEvent.click(await screen.findByRole("button", { name: "Ready for review" }));
-    expect(await within(screen.getByTestId("pr-action-button")).findByRole("status")).toHaveTextContent(/GitHub refused the change|Could not mark PR #7 ready/);
+    const status = await within(await screen.findByTestId("pr-action-status")).findByRole("status");
+    expect(status).toHaveTextContent(/GitHub refused the change|Could not mark PR #7 ready/);
+    // The line goes under the card, not into the title row beside the button.
+    expect(within(screen.getByTestId("pr-action-button")).queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("keeps Merge visible but greyed out with the reason", async () => {
@@ -1155,7 +1158,7 @@ describe("SessionInspector PR section", () => {
         : { data: { ok: true }, error: undefined });
       await userEvent.click(await screen.findByRole("button", { name: "More actions for PR #7" }));
       await userEvent.click(screen.getByRole("menuitem", { name: "Remove from queue" }));
-      const statuses = await within(screen.getByTestId("pr-action-button")).findAllByRole("status");
+      const statuses = await within(await screen.findByTestId("pr-action-status")).findAllByRole("status");
       expect(statuses.some((node) => /GitHub refused the change|Could not remove PR #7/.test(node.textContent ?? ""))).toBe(true);
     });
 
@@ -1223,10 +1226,10 @@ describe("SessionInspector PR section", () => {
     expect(within(comments.getByTestId("pr-comments-resolved")).getByRole("button", { name: "Resolved · 1" })).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("keeps the description and comments off the card: the title opens the description in a drawer, Open tab opens the tab", async () => {
+  it("opens the PR's tab from its title, with the one action button beside it and no drawer", async () => {
     function OpenTabs() {
       const tabs = usePRTabs(sessionUiKey("sess-1"));
-      return <output data-testid="pr-tabs">{`${tabs.active ?? ""}|${tabs.request?.section ?? ""}`}</output>;
+      return <output data-testid="pr-tabs">{tabs.active ?? ""}</output>;
     }
     const summary = { ...conversationPR(), description: "Adds the search box." };
     const respond = commonGetsResponder();
@@ -1246,53 +1249,16 @@ describe("SessionInspector PR section", () => {
     expect(screen.queryByTestId("pr-comments")).not.toBeInTheDocument();
     expect(screen.queryByTestId("pr-comment-composer")).not.toBeInTheDocument();
 
-    const title = card.getByRole("button", { name: /^PR #7.*Show description$/ });
-    expect(title).toHaveAttribute("aria-haspopup", "dialog");
-    await userEvent.click(title);
-    const drawer = await screen.findByRole("dialog", { name: /^PR #7/ });
-    expect(within(drawer).getByText("Adds the search box.")).toBeInTheDocument();
-    expect(title).toHaveAttribute("aria-expanded", "true");
-    // The drawer is not the tab.
-    expect(screen.getByTestId("pr-tabs")).toHaveTextContent(/^\|$/);
-    await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(title).toHaveFocus();
-
-    await userEvent.click(card.getByRole("button", { name: "Open tab" }));
-    expect(screen.getByTestId("pr-tabs")).toHaveTextContent(`${summary.url}|summary`);
-    // With the tab showing, the description is already on screen: the title goes to its Summary.
-    expect(card.getByRole("button", { name: /^PR #7/ })).not.toHaveAttribute("aria-haspopup");
+    // The PR's action button sits in the title row, where Open tab was, not at the card's foot.
+    const title = card.getByRole("button", { name: /^PR #7/ });
+    const row = title.parentElement!;
+    expect(within(row).getByTestId("pr-action-button")).toBeInTheDocument();
     expect(card.queryByRole("button", { name: "Open tab" })).not.toBeInTheDocument();
-  });
+    expect(title).not.toHaveAttribute("aria-haspopup");
 
-  it("closes the description drawer with its close button", async () => {
-    const summary = { ...conversationPR(), description: "Adds the search box." };
-    const respond = commonGetsResponder();
-    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr" ? { data: { prs: [summary], linkedPrs: [] } } : respond(path));
-    renderWithQuery(<SessionInspector session={session([pr(7, "open", { url: summary.url })])} />, undefined, (client) => seedPRSummaries(client, [summary]));
-    await userEvent.click(within(await screen.findByTestId("pr-card")).getByRole("button", { name: /^PR #7/ }));
-    await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  });
-
-  it("moves Tab between the description and Close when the text has no links", async () => {
-    const summary = { ...conversationPR(), description: "Adds the search box." };
-    const respond = commonGetsResponder();
-    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr" ? { data: { prs: [summary], linkedPrs: [] } } : respond(path));
-    renderWithQuery(<SessionInspector session={session([pr(7, "open", { url: summary.url })])} />, undefined, (client) => seedPRSummaries(client, [summary]));
-    within(await screen.findByTestId("pr-card")).getByRole("button", { name: /^PR #7/ }).focus();
-    await userEvent.keyboard("{Enter}");
-    const drawer = within(await screen.findByRole("dialog"));
-    // Focus starts on the text, so the arrow keys scroll it.
-    const text = drawer.getByRole("region", { name: "Description" });
-    await waitFor(() => expect(text).toHaveFocus());
-    const close = drawer.getByRole("button", { name: "Close" });
-    await userEvent.tab();
-    expect(close).toHaveFocus();
-    await userEvent.tab();
-    expect(text).toHaveFocus();
-    await userEvent.tab({ shift: true });
-    expect(close).toHaveFocus();
+    await userEvent.click(title);
+    expect(screen.getByTestId("pr-tabs")).toHaveTextContent(summary.url);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -7608,14 +7574,19 @@ describe("SessionInspector branch summary", () => {
     expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-micro");
   });
 
-  it("says the PR row opens a tab, until that tab is showing", async () => {
+  it("opens the PR's tab from the PR row's title", async () => {
+    function OpenTabs() {
+      const tabs = usePRTabs(sessionUiKey("sess-1"));
+      return <output data-testid="pr-tabs">{tabs.active ?? ""}</output>;
+    }
     const sessionValue = session([pr(7, "open")], { branchState: pushed(2) });
     const open = prSummary(7, "open");
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [open] });
-    renderWithQuery(<SessionInspector session={sessionValue} />, undefined, (client) => seedPRSummaries(client, [open]));
+    renderWithQuery(<><SessionInspector session={sessionValue} /><OpenTabs /></>, undefined, (client) => seedPRSummaries(client, [open]));
 
-    await userEvent.click(await screen.findByRole("button", { name: /Open tab/ }));
-    await waitFor(() => expect(screen.queryByText("Open tab")).not.toBeInTheDocument());
+    await userEvent.click(within(await screen.findByTestId("pr-card")).getByRole("button", { name: /^PR #7/ }));
+    expect(screen.getByTestId("pr-tabs")).toHaveTextContent(open.url);
+    expect(screen.queryByText("Open tab")).not.toBeInTheDocument();
   });
 
   it("lists the passed checks once they all pass, with the skipped folded away", async () => {
