@@ -67,13 +67,13 @@ export function CloudPRGitStepButton({ git, messages }: {
 	const label = git.pending ?? primary!.label;
 	const error = git.error ? <p className="m-0 text-xs leading-normal text-error" role="status">{git.error}</p> : null;
 	return (
-		<div className={cn("flex min-w-0 flex-col gap-1", messages === undefined ? "items-stretch" : "max-w-[60%] shrink-0 items-end")} data-testid="pr-git-step">
+		<div className={cn("flex min-w-0 flex-col gap-1", messages === undefined ? "items-stretch" : "mr-1.5 ml-2 max-w-[45%] shrink-0 items-end")} data-testid="pr-git-step">
 			<Button
 				aria-busy={git.pending ? "true" : undefined}
 				className="min-w-0 gap-1 px-2 text-xs"
 				disabled={Boolean(git.pending)}
 				onClick={() => primary && git.run(primary.kind)}
-				size="sm"
+				size={messages === undefined ? "sm" : "xs"}
 				type="button"
 				variant="secondary"
 			>
@@ -295,7 +295,7 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 	) : null;
 
 	return (
-		<div className={cn("flex min-w-0 flex-col gap-1", messages === undefined ? "items-stretch" : "max-w-[60%] shrink-0 items-end")} data-testid="pr-action-button">
+		<div className={cn("flex min-w-0 flex-col gap-1", messages === undefined ? "items-stretch" : "mr-1.5 ml-2 max-w-[45%] shrink-0 items-end")} data-testid="pr-action-button">
 			<div className={cn("flex min-w-0 items-stretch", messages === undefined && "w-full")}>
 				<Button
 					aria-label={primary.aria}
@@ -309,7 +309,7 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 					disabled={primary.disabled}
 					key={gitPrimary ? "git" : "pr"}
 					onClick={primary.run}
-					size="sm"
+					size={messages === undefined ? "sm" : "xs"}
 					title={!gitPrimary && pr.state === "open" && blocker ? blocker : undefined}
 					type="button"
 					variant={primary.tone === "go" ? "primary" : "secondary"}
@@ -323,11 +323,11 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 							aria-label={t("pr.actions.menu", { number: pr.number })}
 							className={cn(
 								"rounded-l-none border-l px-1",
-								"w-control-md px-0",
+								messages === undefined ? "w-control-md px-0" : "w-control-sm px-0",
 								primary.tone === "go" ? "[--button-color:var(--color-success)] border-l-on-foreground/25 text-on-foreground" : "border-border",
 							)}
 							disabled={busy || Boolean(git?.pending)}
-							size="sm"
+							size={messages === undefined ? "sm" : "xs"}
 							type="button"
 							variant={primary.tone === "go" ? "primary" : "secondary"}
 						>

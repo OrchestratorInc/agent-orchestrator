@@ -1270,7 +1270,9 @@ function PRViewSummaryCard({
 	) : cloudOrgId && !guest && pr.state !== "merged" && work?.git ? (
 		<CloudPRGitStepButton git={work.git} messages={actionMessages} />
 	) : null;
-	const action = <>{actionButton}{providerLink}</>;
+	// A local PR's tab has Open on GitHub, so the row keeps its width for the button;
+	// where the title can't open a tab (AO Cloud, a guest), the logo still links out.
+	const action = <>{actionButton}{opensTab ? null : providerLink}</>;
 	return (
 		<section className="flex min-w-0 flex-col py-1" data-testid="pr-focus">
 			{/* The title opens the PR's tab, where its description already is. */}

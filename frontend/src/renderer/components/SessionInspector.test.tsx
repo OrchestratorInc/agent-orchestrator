@@ -784,10 +784,9 @@ describe("SessionInspector PR section", () => {
     expect(
       prSection("Pull request").getByText("Checks passing"),
     ).toBeInTheDocument();
-    // The section header carries the number, title and an external link; its icon carries the state.
-    expect(
-      prSection("Pull request").getByRole("link", { name: "Open PR #7" }),
-    ).toHaveAttribute("href", "https://github.com/acme/repo/pull/7");
+    // The section header carries the number and title, and its icon carries the state. No GitHub
+    // link beside it: the title opens the PR's tab, which has Open on GitHub.
+    expect(prSection("Pull request").queryByRole("link", { name: "Open PR #7" })).not.toBeInTheDocument();
     expect(prSection("Pull request").getByText("open")).toHaveClass("sr-only");
     expect(
       prSection("Pull request").getByRole("button", { name: "Squash and merge: PR #7" }),
@@ -2378,14 +2377,15 @@ describe("SessionInspector PR section", () => {
     expect(within(screen.getByTestId("pr-pills")).queryByTestId("pr-pills-earlier")).not.toBeInTheDocument();
   });
 
-  it("links the PR on screen to its url", async () => {
+  it("titles the card with the PR on screen, with no GitHub link beside it", async () => {
     renderWithQuery(
       <SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />,
     );
     const card = within(screen.getByTestId("pr-card"));
-    expect(card.getByRole("link", { name: "Open PR #41" })).toHaveAttribute("href", "https://example.com/pr/41");
+    expect(card.getByRole("button", { name: /^PR #41/ })).toBeInTheDocument();
+    expect(card.queryByRole("link", { name: "Open PR #41" })).not.toBeInTheDocument();
     await userEvent.click(within(screen.getByTestId("pr-pills")).getByRole("button", { name: /^#42/ }));
-    expect(within(screen.getByTestId("pr-card")).getByRole("link", { name: "Open PR #42" })).toHaveAttribute("href", "https://example.com/pr/42");
+    expect(within(screen.getByTestId("pr-card")).getByRole("button", { name: /^PR #42/ })).toBeInTheDocument();
   });
 });
 
