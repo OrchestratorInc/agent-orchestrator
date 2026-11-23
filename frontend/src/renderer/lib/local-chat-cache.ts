@@ -19,8 +19,11 @@ let database: Promise<IDBDatabase> | undefined;
 
 function openDatabase(): Promise<IDBDatabase> {
 	database ??= new Promise((resolve, reject) => {
-		const request = indexedDB.open(DB_NAME, 1);
-		request.onupgradeneeded = () => request.result.createObjectStore(STORE, { keyPath: "sessionId" });
+		const request = indexedDB.open(DB_NAME, 2);
+		request.onupgradeneeded = () => {
+			if (request.result.objectStoreNames.contains(STORE)) request.result.deleteObjectStore(STORE);
+			request.result.createObjectStore(STORE, { keyPath: ["build", "sessionId"] });
+		};
 		request.onsuccess = () => resolve(request.result);
 		request.onerror = () => {
 			database = undefined;
@@ -44,8 +47,8 @@ function keepLocalChats(sessionIds: string[]): Promise<void> {
 	return openDatabase()
 		.then(async (db) => {
 			const store = db.transaction(STORE, "readwrite").objectStore(STORE);
-			for (const key of (await done(store.getAllKeys())) as string[]) {
-				if (!keep.has(key)) store.delete(key);
+			for (const key of (await done(store.getAllKeys())) as [string, string][]) {
+				if (key[0] !== DEV_BUILD_INFO.commit || !keep.has(key[1])) store.delete(key);
 			}
 		})
 		.catch(() => undefined);
@@ -73,10 +76,10 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 		if (!sessionId) return;
 		if (event.action.type === "fetch" && event.query.state.data === undefined) {
 			void openDatabase()
-				.then((db) => done(db.transaction(STORE).objectStore(STORE).get(sessionId)))
+				.then((db) => done(db.transaction(STORE).objectStore(STORE).get([DEV_BUILD_INFO.commit, sessionId])))
 				.then((entry: Entry | undefined) => {
 					const { state } = event.query;
-					if (!entry || entry.build !== DEV_BUILD_INFO.commit || state.data !== undefined || state.fetchStatus !== "fetching") return;
+					if (!entry || state.data !== undefined || state.fetchStatus !== "fetching") return;
 					if (entry.createdAt !== savableCreatedAt(queryClient, sessionId)) return;
 					queryClient.setQueryData(savedConversationQueryKey(sessionId), entry.page);
 				})
@@ -96,7 +99,7 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 			void openDatabase()
 				.then((db) => {
 					const store = db.transaction(STORE, "readwrite").objectStore(STORE);
-					if (tooLarge) return done(store.delete(sessionId));
+					if (tooLarge) return done(store.delete([DEV_BUILD_INFO.commit, sessionId]));
 					return done(store.put({ sessionId, createdAt, build: DEV_BUILD_INFO.commit, page } satisfies Entry));
 				})
 				.catch(() => written.delete(page));
