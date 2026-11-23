@@ -473,11 +473,6 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 	);
 }
 
-function leadUpdate(items: readonly ConversationItem[]): WorkerUpdate | undefined {
-	const updates = items[0] ? workerUpdatesOf(items[0]) : [];
-	return updates.find((update) => update.state && STATES[update.state]?.attention) ?? updates[0];
-}
-
 export const senderOf = (update: WorkerUpdate) => update.sessionId ?? update.name;
 
 export type BackgroundTally = Partial<Record<"notHandled" | "neededYou" | "stuck" | "done" | "started" | "stopped" | "reset", number>>;
@@ -575,7 +570,7 @@ export function BackgroundTurnRow({ items, open, onOpenChange, children }: {
 	const { t } = useTranslation();
 	const lead = items[0];
 	const updates = lead ? workerUpdatesOf(lead) : [];
-	const top = leadUpdate(items);
+	const top = updates.find((update) => update.state && STATES[update.state]?.attention) ?? updates[0];
 	const senders = [...new Set(updates.map(senderOf))];
 	const session = useWorkerSession(top?.sessionId, top?.projectId);
 	const title = top ? undefined : renamedTitle(items);

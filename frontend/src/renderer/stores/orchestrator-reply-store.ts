@@ -67,7 +67,7 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 				if (turn.hasHumanPrompt) return true;
 				const items = snapshot.items.filter((item) => item.turnId === turn.id);
 				if (items.length === 0 && !ids.has(turn.id)) return false;
-				const standing = turnStanding(items, turn.state, index, under);
+				const standing = turnStanding(items, turn, index, under);
 				return standing !== "background" && standing !== "replaced";
 			});
 			const started = snapshot.turns.some((turn) => {

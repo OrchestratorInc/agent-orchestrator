@@ -198,7 +198,7 @@ import {
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 import { AutomationMessage, ReplacedNotice, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
-import { turnStanding } from "./background-turns";
+import { accountFailure, turnStanding } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
@@ -4527,6 +4527,7 @@ export function Timeline({
 	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
+	const watchedLive = useRef(new Set<string>());
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4714,7 +4715,7 @@ export function Timeline({
 		const index = groups.findIndex((group) => group.items.some((item) => item.id === findTarget.messageId));
 		if (index < 0) return;
 		const mounted = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-find-message-id]") ?? [])
-			.some((element) => element.dataset.findMessageId === findTarget.messageId);
+			.some((element) => element.dataset.findMessageId === findTarget.messageId && element.dataset.chatMessageCollapsed === undefined);
 		// The active highlight persists; mounting completes this one reveal request.
 		if (mounted) { setFindTarget(undefined); return; }
 		const keys = revealKeys(groups[index], (item) => item.id === findTarget.messageId);
@@ -5831,6 +5832,7 @@ export function Timeline({
 										? loginLines?.get(turn.turnId)
 										: undefined}
 									workerUpdates={workerUpdates}
+									watchedLive={watchedLive.current}
 									startup={turn.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
@@ -6250,6 +6252,7 @@ const TurnGroup = memo(function TurnGroup({
 	startup,
 	onSelectAnnotation,
 	workerUpdates = false,
+	watchedLive,
 }: {
 	group: TimelineGroup;
 	harness: string;
@@ -6298,14 +6301,14 @@ const TurnGroup = memo(function TurnGroup({
 	startup?: ComponentProps<typeof SessionStartup> & { label?: string };
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
+	watchedLive: Set<string>;
 }) {
 	const hostId = useContext(ChatHostId);
 	const batched = useContext(BatchedReportsContext);
 	const updateIndex = useContext(WorkerUpdateIndexContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
-	const sawLive = useRef(false);
-	if (group.live) sawLive.current = true;
+	if (group.live) watchedLive.add(group.key);
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
 		() => runsOf(turnFlowItems(group)),
@@ -6463,7 +6466,7 @@ const TurnGroup = memo(function TurnGroup({
 			}
 			rollbackDisabled={rollbackDisabled}
 			onSelectAnnotation={onSelectAnnotation}
-			details={workerUpdates && group.outcome && !sawLive.current && run.items[0]?.id === lastAssistantId ? {
+			details={workerUpdates && group.outcome && !watchedLive.has(group.key) && run.items[0]?.id === lastAssistantId ? {
 				open: Boolean(activityDisclosureOverrides[`${group.key}:reply`]),
 				onOpenChange: (open) => onActivityDisclosureChange(`${group.key}:reply`, open),
 			} : undefined}
@@ -7029,7 +7032,8 @@ function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boo
 	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
 	const turn = member ?? group;
 	const hit = turn.items.find(holds);
-	const inside = [`${turn.key}:worked`, ...(hit?.kind === "message" && hit.role === "assistant" ? [`${turn.key}:reply`] : [])];
+	const reply = turn.items.findLast((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "");
+	const inside = [hit && hit === reply ? `${turn.key}:reply` : `${turn.key}:worked`];
 	if (!member) return inside;
 	const { kind } = group.folded!;
 	if (member === bannerOf(group) && (kind === "failed" || !holds(member.items[0]!))) return inside;
@@ -7037,8 +7041,7 @@ function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boo
 	return [`${member.key}:line`, `${member.key}:worker`, `${member.key}:open`, ...inside];
 }
 
-const isAccountFailure = (group: TimelineGroup) =>
-	group.outcome?.state === "failed" && Boolean(group.outcome.usageLimit || group.outcome.failureCode === "auth_required");
+const isAccountFailure = (group: TimelineGroup) => Boolean(group.outcome && accountFailure(group.outcome));
 
 const LOOSE_ACTIONS: Readonly<Record<string, "started" | "stopped">> = { "session.spawned": "started", "session.terminated": "stopped" };
 
@@ -7087,8 +7090,7 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 			: undefined;
 		const { steps, live, stopped } = groupSubagents(group);
 		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
-		const turnStands = outcome && !teamWorking ? turnStanding(group.items, outcome.state, index, carried) : "yours";
-		const standing = turnStands === "failed" && isAccountFailure(group) ? "background" : turnStands;
+		const standing = outcome && !teamWorking ? turnStanding(group.items, outcome, index, carried) : "yours";
 		if (standing !== "background" && standing !== "failed") {
 			close();
 			out.push(standing === "replaced"
@@ -7125,10 +7127,12 @@ function backgroundRows(members: readonly TimelineGroup[]) {
 		const at = sender === undefined ? -1 : rows.findIndex((row) => row.sender === sender);
 		const row = at >= 0 ? rows.splice(at, 1)[0]! : { key: member.key, members: [], sender, count: 0 };
 		row.members.push(member);
-		row.count += sender === undefined ? 0 : updates.length;
+		if (sender !== undefined) {
+			row.latest = updates.at(-1);
+			row.count += updates.length;
+		}
 		rows.push(row);
 	}
-	for (const row of rows) if (row.sender !== undefined) row.latest = latest.get(row.sender);
 	const tally: BackgroundTally = {};
 	const add = (name: keyof BackgroundTally) => { tally[name] = (tally[name] ?? 0) + 1; };
 	for (const { state } of latest.values()) {

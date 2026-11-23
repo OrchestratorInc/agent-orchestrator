@@ -5,11 +5,16 @@ import { finalReply, isTaskTitleUpdate, isWorkerLead, needsYouNow, relayedVia, r
 
 export type TurnStanding = "yours" | "replaced" | "failed" | "up" | "background";
 
+type Outcome = { state: string; usageLimit?: unknown; failureCode?: string };
+
+export const accountFailure = ({ state, usageLimit, failureCode }: Outcome) => state === "failed" && Boolean(usageLimit || failureCode === "auth_required");
+
 const isYours = (item: ConversationItem) =>
 	isUserQueuePrompt(item) || relayedVia(item) !== null ||
 	(item.kind === "activity" && ((isSteer(item) && !item.detail?.senderSessionId) || item.activityKind === "approval" || item.activityKind === "user_input"));
 
-export function turnStanding(items: readonly ConversationItem[], state: string, index: WorkerUpdateIndex | null, carried: ReadonlyMap<string, readonly WorkerUpdate[]>): TurnStanding {
+export function turnStanding(items: readonly ConversationItem[], outcome: Outcome, index: WorkerUpdateIndex | null, carried: ReadonlyMap<string, readonly WorkerUpdate[]>): TurnStanding {
+	const { state } = outcome;
 	const lead = items[0];
 	if (!lead || items.some(isYours)) return "yours";
 	const automation = lead.kind === "message" && lead.role === "user" ? automationOf(lead) : null;
@@ -17,7 +22,7 @@ export function turnStanding(items: readonly ConversationItem[], state: string, 
 	if (automation?.kind === "notice" && automation.notice === "orchestratorReplaced") return settled ? "replaced" : "up";
 	if (lead.kind !== "message" || !isWorkerLead(lead) || (isTaskTitleUpdate(lead) && !renamedTitle(items))) return "yours";
 	if (items.some((item) => [...workerUpdatesOf(item), ...(carried.get(item.id) ?? [])].some((update) => needsYouNow(index, update)))) return "up";
-	if (state === "failed") return "failed";
+	if (state === "failed") return accountFailure(outcome) ? "background" : "failed";
 	if (!settled) return "up";
 	return asksQuestion(finalReply(items)) ? "up" : "background";
 }

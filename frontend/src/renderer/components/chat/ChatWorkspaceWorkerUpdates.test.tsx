@@ -547,10 +547,10 @@ describe("background turns in the orchestrator chat", () => {
 		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
 		renderOrchestrator([
 			human("t1", 1, "How is the browser work going?"),
-			reply("t1", 2, `Menus and iOS pages are merged; remote host waits on your call.\n\n${detail}`),
+			reply("t1", 2, `#8906 and iOS pages are merged; remote host waits on your call.\n\n${detail}`),
 		]);
 
-		expect(screen.getByText("Menus and iOS pages are merged; remote host waits on your call.")).toBeInTheDocument();
+		expect(screen.getByText(/and iOS pages are merged; remote host waits on your call\./)).toBeInTheDocument();
 		expect(screen.queryByText(/Session 12:/)).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Details" }));
 		expect(screen.getByText(/Session 12:/)).toBeInTheDocument();
@@ -572,7 +572,7 @@ describe("background turns in the orchestrator chat", () => {
 
 	it("keeps a long reply the user watched arrive in full once its turn settles", () => {
 		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
-		const items = [human("t1", 1, "How is the browser work going?"), reply("t1", 2, `Menus and iOS pages are merged.\n\n${detail}`)];
+		const items = [human("w1", 1, "How is the browser work going?"), reply("w1", 2, `Menus and iOS pages are merged.\n\n${detail}`)];
 		const view = orchestratorView();
 		const { rerender } = render(view(snapshot(items, "running")));
 		rerender(view(snapshot(items)));
@@ -583,7 +583,7 @@ describe("background turns in the orchestrator chat", () => {
 
 	it("opens a long reply's Details to bring a quote from its rest into view", async () => {
 		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
-		const items = [human("t1", 1, "How is the browser work going?"), reply("t1", 2, `Menus and iOS pages are merged.\n\n${detail}`)];
+		const items = [human("t1", 1, "How is the browser work going?"), command("t1", 1, "ao status"), reply("t1", 2, `Menus and iOS pages are merged.\n\n${detail}`)];
 		const view = orchestratorView();
 		const { rerender } = render(view(snapshot(items)));
 		expect(screen.queryByText(/Session 12:/)).not.toBeInTheDocument();
@@ -591,6 +591,7 @@ describe("background turns in the orchestrator chat", () => {
 		rerender(view(snapshot(items), { id: "quote:1", text: "Session 12", messageId: "t1-reply" }));
 		await waitFor(() => expect(screen.getByText(/Session 12:/)).toBeInTheDocument());
 		expect(screen.getByRole("button", { name: "Details" })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByRole("button", { name: /^Worked for/ })).toHaveAttribute("aria-expanded", "false");
 	});
 
 	it("counts every worker a batch of reports came from on the line", () => {

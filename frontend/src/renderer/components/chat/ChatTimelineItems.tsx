@@ -1450,7 +1450,7 @@ function replyLead(text: string): string | undefined {
 	if (end < 0) return undefined;
 	const lead = text.slice(0, start + end);
 	const first = lead.trim();
-	return first.length * 2 < text.length && !/^(?:#|\||>|[-*+]\s|\d+[.)]\s)|```|~~~|[:：]$|^(\*\*|__)[^\n]*\1$/.test(first) ? lead : undefined;
+	return first.length * 2 < text.length && !/^(?:#{1,6}(?:\s|$)|\||>|[-*+]\s|\d+[.)]\s|([-*_])\1{2,}\s*$)|```|~~~|[:：]$|^(\*\*|__)[^\n]*\2$/.test(first) ? lead : undefined;
 }
 
 /** The agent's prose. Streaming is represented by text arriving in place. */
@@ -1492,7 +1492,7 @@ export function AssistantMessage({
 		<div
 			className="group/message relative"
 			data-chat-streaming-output={renderingStreaming ? "" : undefined}
-			data-find-message-id={!collapsed && message.origin !== "automation" && message.origin !== "daemon" ? message.id : undefined}
+			data-find-message-id={message.origin !== "automation" && message.origin !== "daemon" ? message.id : undefined}
 			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
 			data-chat-message-collapsed={collapsed ? "" : undefined}
 			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
