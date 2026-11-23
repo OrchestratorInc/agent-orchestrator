@@ -1170,3 +1170,44 @@ func TestDeviceFailuresAreServiceUnavailable(t *testing.T) {
 		unavailable(t, err, "DEVICES_NOT_READY")
 	})
 }
+
+// platformListFails is a provider whose List succeeds while one platform's
+// listing failed (simctl erroring while emulators still list).
+type platformListFails struct {
+	*fakeProvider
+	failing ports.DevicePlatform
+}
+
+func (f platformListFails) ListPlatform(ctx context.Context, platform ports.DevicePlatform) ([]ports.DeviceInfo, error) {
+	if platform == f.failing {
+		return nil, errors.New("simctl list failed")
+	}
+	all, _ := f.List(ctx)
+	var out []ports.DeviceInfo
+	for _, d := range all {
+		if d.Platform == platform {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+// A simulator missing from a list whose iOS half failed may still exist:
+// its lease is kept, not dropped as deleted.
+func TestOpenKeepsALeaseWhenItsPlatformFailedToList(t *testing.T) {
+	p := iosFleet()
+	svc := newServiceWith(t, platformListFails{fakeProvider: p, failing: ports.DevicePlatformIOS})
+	ctx := context.Background()
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	p.removeDevice("A")
+	p.bootErr = map[string]error{"A": errors.New("simctl boot failed")}
+
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{}); apiCode(err) != "DEVICE_BOOT_FAILED" {
+		t.Fatalf("reopen err = %v, want DEVICE_BOOT_FAILED", err)
+	}
+	if l, held := svc.Lease("s-1"); !held || l.Device.ID != "A" {
+		t.Fatalf("lease = %+v (held %v), want A kept", l, held)
+	}
+}
