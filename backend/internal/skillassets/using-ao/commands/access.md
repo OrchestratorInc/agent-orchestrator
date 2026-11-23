@@ -103,6 +103,9 @@ ao token revoke <id-or-name>
   workers and message the orchestrator that exists.
 - A token limited to projects cannot change machine-wide settings or the
   default account. It can read them.
+- `projects.manage` (in the `manage` preset) lets a token change what later
+  runs in a project: its configuration and its cues. Give it only to a caller
+  you would let start sessions there.
 - With remote access on (`ao remote-host`), the token also works from another
   machine as `Authorization: Bearer aoa_...`, held to the same grant.
 

@@ -262,7 +262,7 @@ func bodyField(r *http.Request, key string) (string, error) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&fields); err != nil {
 		return "", nil //nolint:nilerr // the handler reports the malformed body itself
 	}
 	for name := range fields {

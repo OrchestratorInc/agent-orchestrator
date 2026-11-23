@@ -33,8 +33,7 @@ type Action struct {
 	Method  string
 	Path    string
 	Project ProjectSource
-	// Key is the parameter, query or body field that Project reads.
-	Key string
+	Key     string
 }
 
 const (

@@ -70,8 +70,7 @@ type Grant struct {
 	Groups    []Group   `json:"groups"`
 	Projects  []string  `json:"projects,omitempty"`
 	ExpiresAt time.Time `json:"expiresAt,omitzero"`
-	// Ended marks the grant of a session whose token is gone.
-	Ended bool `json:"-"`
+	Ended     bool      `json:"-"`
 }
 
 // NewGrant builds a grant from a preset or from named groups, not both.
@@ -171,11 +170,10 @@ const (
 
 // Caller is who made a request. A nil Grant means no limit.
 type Caller struct {
-	Kind  string `json:"kind"`
-	ID    string `json:"id,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Grant *Grant `json:"grant,omitempty"`
-	// TokenID is the token whose grant applies, also for a session it started.
+	Kind    string `json:"kind"`
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Grant   *Grant `json:"grant,omitempty"`
 	TokenID string `json:"tokenId,omitempty"`
 }
 

@@ -385,9 +385,11 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 			}
 			if authenticated {
 				lock.reset(src)
-				connected.report(remoteSrc)
 				state.noteUse(credential, lock.now())
-				maybeSetPreviewAuthCookie(w, r, tok)
+				if credential.Kind != requestscope.CredentialAgent {
+					connected.report(remoteSrc)
+					maybeSetPreviewAuthCookie(w, r, tok)
+				}
 				ctx := requestscope.WithCredential(r.Context(), credential)
 				if bearerToken(r) != "" {
 					ctx = context.WithValue(ctx, lanBearerContextKey{}, true)

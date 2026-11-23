@@ -4944,10 +4944,9 @@ type AccessGrantResponse struct {
 
 // WhoamiResponse is who the daemon resolved the caller to be.
 type WhoamiResponse struct {
-	Kind string `json:"kind" enum:"user,session,token,device" description:"user is a caller on this machine with no token. A session is named by its own header, which is not a proof."`
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty" description:"The token name, also for a session that a token started."`
-	// Grant is absent for a caller with no limit.
+	Kind  string               `json:"kind" enum:"user,session,token,device" description:"user is a caller on this machine with no token. A session is named by its own header, which is not a proof."`
+	ID    string               `json:"id,omitempty"`
+	Name  string               `json:"name,omitempty" description:"The token name, also for a session that a token started."`
 	Grant *AccessGrantResponse `json:"grant,omitempty"`
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 type gateFixture struct {
@@ -184,7 +185,8 @@ func TestGateHoldsATokenToItsGrant(t *testing.T) {
 		"manage removes a project":        {gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", token: manage}, 200, "", ""},
 		"limited: second spelling of key": {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api","ProjectId":"web"}`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
 		"limited: other spelling of key":  {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"PROJECTID":"api"}`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
-		"limited: two values in the body": {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("api") + spawn("web"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: first of two values":    {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("api") + spawn("web"), token: operateAPI}, 200, "", ""},
+		"limited: first value elsewhere":  {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("web") + spawn("api"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
 		"limited: cues of its project":    {gateCall{method: http.MethodGet, path: "/api/v1/projects/api/cues", token: operateAPI}, 200, "", ""},
 		"limited: escaped slash in an id": {gateCall{method: http.MethodGet, path: "/api/v1/projects/api%2Fcues", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
 	} {
@@ -262,9 +264,12 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 	if status, _, _ := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"}`, session: "api-9"}); status != 200 {
 		t.Errorf("the session may start a session in its project: status %d", status)
 	}
-	for _, body := range []string{`{"projectId":"api","kind":"orchestrator"}`, `{"projectId":"api","Kind":"orchestrator"}`} {
-		if status, _, _ := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: body, token: operateAPI}); status != 403 && status != 400 {
-			t.Errorf("a token must not start a project's orchestrator with %s: status %d", body, status)
+	everyProject := f.token("free-bot", access.PresetOperate)
+	for _, body := range []string{`{"projectId":"api","kind":"orchestrator"}`, `{"projectId":"api","Kind":"orchestrator"}`, `{"projectId":"api","kind":"orchestrator"} trailing`} {
+		for _, token := range []string{operateAPI, everyProject} {
+			if status, _, _ := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: body, token: token}); status != 403 && status != 400 {
+				t.Errorf("a token must not start a project's orchestrator with %s: status %d", body, status)
+			}
 		}
 	}
 
@@ -454,6 +459,11 @@ func TestOwnSessionRoutesExistInTheAPISpec(t *testing.T) {
 	}
 }
 
+type connectSink struct{ events int }
+
+func (s *connectSink) Emit(context.Context, ports.TelemetryEvent) { s.events++ }
+func (s *connectSink) Close(context.Context) error                { return nil }
+
 func TestRemoteListenerAcceptsAnAgentTokenAndKeepsItGated(t *testing.T) {
 	registry, err := access.LoadRegistry(access.TokensPath(t.TempDir()))
 	if err != nil {
@@ -467,7 +477,8 @@ func TestRemoteListenerAcceptsAnAgentTokenAndKeepsItGated(t *testing.T) {
 	router := NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, APIDeps{Access: registry}, ControlDeps{})
 	state := &authState{agents: registry}
 	state.setHash(mobilebridge.HashPassword("secret12"))
-	lan := NewLANManager(router, state, 0, slog.Default(), nil)
+	connects := &connectSink{}
+	lan := NewLANManager(router, state, 0, slog.Default(), connects)
 	call := func(method, path, token string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, http.NoBody)
 		req.RemoteAddr = "192.168.1.50:5555"
@@ -481,6 +492,9 @@ func TestRemoteListenerAcceptsAnAgentTokenAndKeepsItGated(t *testing.T) {
 	}
 	if w := call(http.MethodGet, "/api/v1/sessions/x/workspace/file?path=.env", secret); w.Code != 403 {
 		t.Errorf("a token off the catalog over the remote listener: status %d, want 403", w.Code)
+	}
+	if connects.events != 0 {
+		t.Errorf("an agent token was reported as a connected device %d time(s)", connects.events)
 	}
 	if w := call(http.MethodGet, "/api/v1/sessions/x/workspace/file?path=.env", "secret12"); w.Code == 403 || w.Code == 401 {
 		t.Errorf("the pairing password must keep its reach: status %d", w.Code)
