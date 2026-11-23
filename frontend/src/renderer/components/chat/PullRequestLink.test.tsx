@@ -1,14 +1,24 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { linkPreviewQueryKey } from "../../hooks/useLinkPreview";
 import { pullRequestPreviewQueryKey, type PullRequestPreview } from "../../hooks/usePullRequestPreview";
 import { queryClient } from "../../lib/query-client";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { pullRequestChipLabel } from "./PullRequestLink";
 
+const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
+vi.mock("../../lib/api-client", async (importOriginal) => ({
+	...await importOriginal<typeof import("../../lib/api-client")>(),
+	apiClient: { GET: getMock },
+}));
+
 const PR = "https://github.com/acme/api/pull/12";
 
-afterEach(() => queryClient.clear());
+afterEach(() => {
+	queryClient.clear();
+	getMock.mockReset();
+});
 
 function seed(url: string, preview: Partial<PullRequestPreview>) {
 	queryClient.setQueryData(pullRequestPreviewQueryKey(url), {
@@ -82,5 +92,16 @@ describe("pull request links in chat", () => {
 		expect(within(card).getByText("Checks passing")).toBeInTheDocument();
 		expect(within(card).getByText("+42")).toBeInTheDocument();
 		expect(within(card).getByText(/3 files/)).toBeInTheDocument();
+	});
+
+	it("shows the page's own preview when the daemon cannot read the PR", async () => {
+		// No GitHub provider: the daemon answers 501.
+		getMock.mockResolvedValue({ data: undefined, error: { error: { code: "NOT_IMPLEMENTED", message: "Not implemented" } } });
+		queryClient.setQueryData(linkPreviewQueryKey(PR), { url: PR, title: "Fix the share menu by mira" });
+		render(<ChatMarkdown text={`See ${PR}`} />);
+		await userEvent.setup().hover(screen.getByRole("link", { name: "#12" }));
+		expect(await screen.findByTestId("link-preview-card", undefined, { timeout: 3_000 })).toHaveTextContent("Fix the share menu by mira");
+		expect(screen.queryByTestId("pr-preview-card")).not.toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledWith("/api/v1/pr-preview", expect.objectContaining({ params: { query: { url: PR } } }));
 	});
 });

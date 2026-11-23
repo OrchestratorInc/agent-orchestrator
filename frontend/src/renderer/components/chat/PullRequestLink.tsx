@@ -1,11 +1,12 @@
 import { useTranslation } from "react-i18next";
 import { Check, CircleDashed, X } from "@/components/app-icons";
+import { useLinkPreview } from "../../hooks/useLinkPreview";
 import { usePullRequestPreview, type PullRequestPreview } from "../../hooks/usePullRequestPreview";
 import { openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { isPullRequestLink } from "../../lib/link-preload";
 import { formatRelativeTime } from "../../lib/usage-format";
 import { cn } from "../../lib/utils";
-import { LinkPreviewCardLoading, LinkPreviewFallback } from "../LinkPreviewCard";
+import { LinkPreviewCardLoading, LinkPreviewHoverCard } from "../LinkPreviewCard";
 import { prStateIcon } from "../PRPills";
 import { HoverCardContent } from "../ui/hover-card";
 
@@ -148,20 +149,21 @@ function PullRequestCard({ url, preview, onBrowserOpen }: { url: string; preview
 }
 
 /**
- * The hover card for any GitHub pull request link in a chat. Falls back to
- * the plain link card when the daemon cannot read the PR (no GitHub account,
- * no access, or it does not exist).
+ * The hover card for any GitHub pull request link in a chat. When the daemon
+ * cannot read the PR (no GitHub account, no access, or it does not exist), it
+ * shows the page's own preview, as any other web link does.
  */
 export function PullRequestHoverCard({ url, onBrowserOpen }: { url: string; onBrowserOpen?: (url: string) => void }) {
 	const query = usePullRequestPreview(url, true);
+	const unreadable = !query.data && query.isError;
+	const pageQuery = useLinkPreview(url, unreadable);
+	if (unreadable) return <LinkPreviewHoverCard url={url} query={pageQuery} onBrowserOpen={onBrowserOpen} />;
 	return (
 		<HoverCardContent collisionPadding={8} className="w-80">
 			{query.data ? (
 				<PullRequestCard url={url} preview={query.data} onBrowserOpen={onBrowserOpen} />
-			) : query.isPending ? (
-				<LinkPreviewCardLoading url={url} />
 			) : (
-				<LinkPreviewFallback url={url} onBrowserOpen={onBrowserOpen} />
+				<LinkPreviewCardLoading url={url} />
 			)}
 		</HoverCardContent>
 	);
