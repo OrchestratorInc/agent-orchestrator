@@ -61,6 +61,9 @@ type fakeRemote struct {
 	hang bool
 	// url overrides the page address the fake reports.
 	url string
+	// onCall runs, under the lock, before each describe call is answered,
+	// so a test can change the page at an exact point.
+	onCall func(f *fakeRemote, args []string)
 }
 
 func (f *fakeRemote) Forward(ctx context.Context, args []string, _ map[string]string) (RemoteResponse, error) {
@@ -70,6 +73,9 @@ func (f *fakeRemote) Forward(ctx context.Context, args []string, _ map[string]st
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onCall != nil && len(args) > 0 && args[len(args)-1] == "--json" {
+		f.onCall(f, args)
+	}
 	if f.failAll {
 		return RemoteResponse{}, errors.New("browser service down")
 	}
@@ -422,5 +428,73 @@ func TestRemoteApprovalIsRefusedWhenThePageChangedWhileWaiting(t *testing.T) {
 				t.Fatalf("forwarded %v after the page changed", remote.sent())
 			}
 		})
+	}
+}
+
+// countCalls returns an onCall hook that runs change on the nth call of verb.
+func countCalls(verb string, nth int, change func(*fakeRemote)) func(*fakeRemote, []string) {
+	seen := 0
+	return func(f *fakeRemote, args []string) {
+		if args[0] != verb {
+			return
+		}
+		seen++
+		if seen == nth {
+			change(f)
+		}
+	}
+}
+
+func TestRemoteRecheckReadsTheURLAfterTheTarget(t *testing.T) {
+	// The page navigates right after the recheck reads the target, to a page
+	// with the same control: the URL read that follows must catch it.
+	remote := &fakeRemote{refs: checkoutRefs}
+	remote.onCall = countCalls("snapshot", 2, func(f *fakeRemote) { f.url = "https://shop.example/other" })
+	svc, gate, token := remoteService(t, remote)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil); apiErrorCode(err) != "BROWSER_TARGET_CHANGED" {
+		t.Fatalf("err = %v", err)
+	}
+	if len(remote.sent()) != 0 {
+		t.Fatalf("forwarded %v", remote.sent())
+	}
+}
+
+func TestRemoteRecheckCatchesAReloadOfTheSamePage(t *testing.T) {
+	// Same address and same control, but a new document: what the user
+	// approved is gone.
+	field := func(origin string) string {
+		return `{"success":true,"data":{"result":{"role":"textbox","name":"Card number","isSubmit":true,"formMethod":"post","formHasPayment":true,"documentOrigin":` + origin + `}}}`
+	}
+	remote := &fakeRemote{focused: field("1000.5")}
+	remote.onCall = countCalls("eval", 2, func(f *fakeRemote) { f.focused = field("2000.25") })
+	svc, gate, token := remoteService(t, remote)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"press", "Enter"}, nil); apiErrorCode(err) != "BROWSER_TARGET_CHANGED" {
+		t.Fatalf("err = %v", err)
+	}
+	if len(remote.sent()) != 0 {
+		t.Fatalf("forwarded %v", remote.sent())
+	}
+	// The same document passes the recheck.
+	steady := &fakeRemote{focused: field("1000.5")}
+	svc2, gate2, token2 := remoteService(t, steady)
+	answer(t, gate2, approval.DecisionAllowOnce)
+	if _, err := svc2.ExecuteRemote(context.Background(), "s1", token2, []string{"press", "Enter"}, nil); err != nil || len(steady.sent()) != 1 {
+		t.Fatalf("err=%v forwarded=%v", err, steady.sent())
+	}
+}
+
+func TestRemoteDiscoveryAcrossANavigationIsRefused(t *testing.T) {
+	// The page moves on between the first URL read and the target read: the
+	// prompt would pair one page's address with another's control.
+	remote := &fakeRemote{refs: checkoutRefs}
+	remote.onCall = countCalls("snapshot", 1, func(f *fakeRemote) { f.url = "https://shop.example/other" })
+	svc, gate, token := remoteService(t, remote)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil); apiErrorCode(err) != "BROWSER_TARGET_CHANGED" {
+		t.Fatalf("err = %v", err)
+	}
+	if len(gate.Pending()) != 0 || len(remote.sent()) != 0 {
+		t.Fatalf("pending=%d forwarded=%v", len(gate.Pending()), remote.sent())
 	}
 }
