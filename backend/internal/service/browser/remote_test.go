@@ -59,6 +59,8 @@ type fakeRemote struct {
 	failAll   bool
 	// hang makes every describe call block until its context ends.
 	hang bool
+	// url overrides the page address the fake reports.
+	url string
 }
 
 func (f *fakeRemote) Forward(ctx context.Context, args []string, _ map[string]string) (RemoteResponse, error) {
@@ -75,7 +77,11 @@ func (f *fakeRemote) Forward(ctx context.Context, args []string, _ map[string]st
 	case slices.Equal(args, []string{"snapshot", "--interactive", "--json"}):
 		return RemoteResponse{Output: f.refs}, nil
 	case slices.Equal(args, []string{"get", "url", "--json"}):
-		return RemoteResponse{Output: `{"success":true,"data":{"url":"https://shop.example/checkout"}}`}, nil
+		url := f.url
+		if url == "" {
+			url = "https://shop.example/checkout"
+		}
+		return RemoteResponse{Output: `{"success":true,"data":{"url":"` + url + `"}}`}, nil
 	case slices.Equal(args, []string{"get", "title", "--json"}):
 		return RemoteResponse{Output: `{"success":true,"data":{"title":"Checkout"}}`}, nil
 	case len(args) == 3 && args[0] == "eval" && args[2] == "--json":
@@ -383,5 +389,38 @@ func TestRemoteStuckDiscoveryStillLeavesTimeToDecide(t *testing.T) {
 	}
 	if p.Category != approval.CategoryScript || p.Action != "Click @e2" {
 		t.Fatalf("prompt = %+v", p)
+	}
+}
+
+func TestRemoteApprovalIsRefusedWhenThePageChangedWhileWaiting(t *testing.T) {
+	for name, change := range map[string]func(*fakeRemote){
+		"navigated": func(f *fakeRemote) { f.url = "https://shop.example/other" },
+		"target changed": func(f *fakeRemote) {
+			f.refs = `{"success":true,"data":{"refs":{"e2":{"role":"button","name":"Delete account"}}}}`
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			remote := &fakeRemote{refs: checkoutRefs}
+			svc, gate, token := remoteService(t, remote)
+			go func() {
+				for range 400 {
+					if list := gate.Pending(); len(list) > 0 {
+						remote.mu.Lock()
+						change(remote)
+						remote.mu.Unlock()
+						_ = gate.Decide(list[0].ID, approval.DecisionAllowOnce)
+						return
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}()
+			_, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil)
+			if apiErrorCode(err) != "BROWSER_TARGET_CHANGED" {
+				t.Fatalf("err = %v", err)
+			}
+			if len(remote.sent()) != 0 {
+				t.Fatalf("forwarded %v after the page changed", remote.sent())
+			}
+		})
 	}
 }

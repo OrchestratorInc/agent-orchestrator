@@ -209,8 +209,11 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 	pageURL, pageTitle := s.remotePage(discoverCtx)
 	summary := onSite(remoteSummary(gate, args), pageURL)
 	var verdict approval.Verdict
+	var approved approval.Target
+	var approvedIdentified bool
 	if gate.kind == remoteDescribe {
 		target, identified, partial := s.remoteTarget(discoverCtx, gate)
+		approved, approvedIdentified = target, identified
 		target.PageURL, target.PageTitle = pageURL, pageTitle
 		if identified {
 			verdict = approval.Classify(target, mode)
@@ -246,10 +249,35 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 	if err != nil {
 		return err
 	}
-	if outcome.Allowed() {
-		return nil
+	if !outcome.Allowed() {
+		return approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
 	}
-	return approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
+	// The service runs refs and selectors when the command arrives, not when
+	// the user approved it: read the page again and refuse if it moved on.
+	recheckCtx, cancelRecheck := context.WithTimeout(ctx, limit)
+	defer cancelRecheck()
+	if nowURL, _ := s.remotePage(recheckCtx); nowURL != pageURL {
+		return remoteTargetChanged()
+	}
+	if gate.kind == remoteDescribe {
+		now, identified, _ := s.remoteTarget(recheckCtx, gate)
+		if identified != approvedIdentified || !sameRemoteTarget(now, approved) {
+			return remoteTargetChanged()
+		}
+	}
+	return nil
+}
+
+// sameRemoteTarget compares what the user was shown and judged by.
+func sameRemoteTarget(a, b approval.Target) bool {
+	return a.Role == b.Role && a.Name == b.Name && a.IsSubmit == b.IsSubmit &&
+		a.FormAction == b.FormAction && a.FormMethod == b.FormMethod && a.FormHasPayment == b.FormHasPayment &&
+		a.FormHasPassword == b.FormHasPassword && a.FormHasNewPassword == b.FormHasNewPassword && a.SubmitName == b.SubmitName
+}
+
+func remoteTargetChanged() error {
+	return apierr.Conflict("BROWSER_TARGET_CHANGED",
+		"The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.", nil)
 }
 
 // remoteSummary says what a gated command does from its verb and target
