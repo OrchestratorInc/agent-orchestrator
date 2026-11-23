@@ -178,6 +178,12 @@ class FakeChrome {
 					if (!self.injected.has(tabId)) throw new Error("Could not establish connection. Receiving end does not exist.");
 					try {
 						const value = await handleContentRequest(document, self.registries.get(tabId)!, message as never);
+						// jsdom's document lives at its own address; in Chrome a top
+						// frame's document is at the tab's, so report that.
+						if ((options?.frameId ?? 0) === 0 && value && typeof value === "object" && "documentId" in value) {
+							const tab = self.tabs.get(tabId);
+							return { ok: true, value: { ...value, url: tab?.url ?? "", title: tab?.title ?? "" } };
+						}
 						return { ok: true, value };
 					} catch (error) {
 						const bridge = error as BridgeError;
@@ -623,6 +629,59 @@ describe("Executor", () => {
 		expect(field.value).toContain("shoes");
 		expect(keys).not.toContain("Enter");
 		expect(fake.debuggerCalls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(false);
+	});
+
+	it("refuses an approved synthetic Enter if focus moves after the binding check", async () => {
+		const { chrome, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const keys: string[] = [];
+		buy.addEventListener("keydown", (event) => keys.push(event.key));
+		// The page moves focus between the binding check and the key.
+		const original = chrome.tabs.sendMessage;
+		vi.spyOn(chrome.tabs, "sendMessage").mockImplementation(async (tabId, message, options) => {
+			const result = await original(tabId, message, options);
+			if ((message as { op?: string }).op === "ping") buy.focus();
+			return result;
+		});
+		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(keys).toEqual([]);
+	});
+
+	it("describes with the URL and title of the document it read", async () => {
+		const { chrome, run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		// The tab navigated between reading the tab and the content reply.
+		const original = chrome.tabs.sendMessage;
+		vi.spyOn(chrome.tabs, "sendMessage").mockImplementation(async (tabId, message, options) => {
+			const result = (await original(tabId, message, options)) as { ok: boolean; value?: Record<string, unknown> };
+			if ((message as { op?: string }).op === "describe" && result?.ok && result.value) {
+				return { ...result, value: { ...result.value, url: "https://other.test/after", title: "After" } };
+			}
+			return result;
+		});
+		(document.getElementById("q") as HTMLInputElement).focus();
+		expect(await run("describe", { action: "press", key: "Enter" })).toMatchObject({
+			target: { pageUrl: "https://other.test/after", pageTitle: "After" },
+		});
+	});
+
+	it("refuses an approved act whose description found no element", async () => {
+		const { run, approve } = setup();
+		await approve("s1", false);
+		await run("open", { url: "https://shop.test/" });
+		let clicks = 0;
+		document.getElementById("buy")!.addEventListener("click", () => clicks++);
+		// Nothing matched when the user was asked, so they approved no element.
+		const { binding } = (await run("describe", { action: "act", instruction: "the checkout button" })) as { binding: Record<string, unknown> };
+		expect(binding.ref).toBeUndefined();
+		await expect(run("act", { instruction: "the buy now button", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(clicks).toBe(0);
 	});
 
 	it("refuses an approved Enter once focus has moved", async () => {
