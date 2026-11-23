@@ -1397,32 +1397,6 @@ export const Sidebar = memo(function Sidebar({
 						daemon {daemonStatus.state}
 					</span>
 				)}
-				{settingsPage ? (
-					<>
-						<div className={FOOTER_UPDATES_CLASS}>
-							<SidebarUpdateRow
-								onRequestInstall={openUpdateInstallPrompt}
-								status={updateStatus}
-								tabIndex={isCollapsed ? -1 : 0}
-							/>
-						</div>
-						<div className={FOOTER_BOTTOM_ROW_CLASS}>
-							<Pressable
-								className={FOOTER_NAV_BUTTON_CLASS}
-								disabled={settingsPage.cueBusy}
-								onClick={settingsPage.close}
-								type="button"
-							>
-								<NavRowHighlight />
-								<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
-									<ArrowLeft aria-hidden="true" />
-									<span className="tracking-tight">{t("settings.back")}</span>
-								</span>
-							</Pressable>
-						</div>
-					</>
-				) : (
-				<>
 				<div
 					aria-hidden={isCollapsed || undefined}
 					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
@@ -1439,62 +1413,84 @@ export const Sidebar = memo(function Sidebar({
 							tabIndex={isCollapsed ? -1 : 0}
 						/>
 					</div>
-					<FooterAccountRow
-						onConnectMobile={() => selection.goConnectMobile()}
-						onOpenSettings={() => selection.goGlobalSettings()}
-						tabIndex={isCollapsed ? -1 : 0}
-					/>
-				</div>
-				<div
-					aria-hidden={!isCollapsed || undefined}
-					className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
-				>
-					<SidebarUpdateRail
-						onRequestInstall={openUpdateInstallPrompt}
-						status={updateStatus}
-						tabIndex={isCollapsed ? 0 : -1}
-					/>
-					<CloudSignInRailButton tabIndex={isCollapsed ? 0 : -1} />
-					<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
-					<Tooltip>
-						<TooltipTrigger asChild>
+					{settingsPage ? (
+						<div className={FOOTER_BOTTOM_ROW_CLASS}>
 							<Pressable
-								data-telemetry-id="sidebar.connect_mobile"
-								aria-label={t("settings.connectMobile")}
-								className={FOOTER_RAIL_BUTTON_CLASS}
-								onClick={() => selection.goConnectMobile()}
-								tabIndex={isCollapsed ? 0 : -1}
+								className={FOOTER_NAV_BUTTON_CLASS}
+								disabled={settingsPage.cueBusy}
+								onClick={settingsPage.close}
+								tabIndex={isCollapsed ? -1 : 0}
 								type="button"
 							>
 								<NavRowHighlight />
-								<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
-									<Smartphone aria-hidden="true" />
+								<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
+									<ArrowLeft aria-hidden="true" />
+									<span className="tracking-tight">{t("settings.back")}</span>
 								</span>
 							</Pressable>
-						</TooltipTrigger>
-						<TooltipContent side="right">{t("settings.connectMobile")}</TooltipContent>
-					</Tooltip>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Pressable
-								data-telemetry-id="sidebar.settings"
-								aria-label={t("shell.settings")}
-								className={FOOTER_RAIL_BUTTON_CLASS}
-								onClick={() => selection.goGlobalSettings()}
-								tabIndex={isCollapsed ? 0 : -1}
-								type="button"
-							>
-								<NavRowHighlight />
-								<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
-									<Settings aria-hidden="true" />
-								</span>
-							</Pressable>
-						</TooltipTrigger>
-						<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
-					</Tooltip>
+						</div>
+					) : (
+						<FooterAccountRow
+							onConnectMobile={() => selection.goConnectMobile()}
+							onOpenSettings={() => selection.goGlobalSettings()}
+							tabIndex={isCollapsed ? -1 : 0}
+						/>
+					)}
 				</div>
-				</>
-				)}
+				{/* Keep the collapsed icon rail in its own slot instead of pairing it
+				    with an opaque Settings footer row: reusing that DOM node on close
+				    triggers transition-opacity from 1 to 0 and flashes the centered
+				    Settings icon in the middle of the footer. */}
+				{!settingsPage ? (
+					<div
+						aria-hidden={!isCollapsed || undefined}
+						className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
+					>
+						<SidebarUpdateRail
+							onRequestInstall={openUpdateInstallPrompt}
+							status={updateStatus}
+							tabIndex={isCollapsed ? 0 : -1}
+						/>
+						<CloudSignInRailButton tabIndex={isCollapsed ? 0 : -1} />
+						<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									data-telemetry-id="sidebar.connect_mobile"
+									aria-label={t("settings.connectMobile")}
+									className={FOOTER_RAIL_BUTTON_CLASS}
+									onClick={() => selection.goConnectMobile()}
+									tabIndex={isCollapsed ? 0 : -1}
+									type="button"
+								>
+									<NavRowHighlight />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
+										<Smartphone aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent side="right">{t("settings.connectMobile")}</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									data-telemetry-id="sidebar.settings"
+									aria-label={t("shell.settings")}
+									className={FOOTER_RAIL_BUTTON_CLASS}
+									onClick={() => selection.goGlobalSettings()}
+									tabIndex={isCollapsed ? 0 : -1}
+									type="button"
+								>
+									<NavRowHighlight />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
+										<Settings aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
+						</Tooltip>
+					</div>
+				) : null}
 			</SidebarFooter>
 
 			{/* useResizable owns clamp. */}
