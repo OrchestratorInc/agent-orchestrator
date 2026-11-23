@@ -99,7 +99,10 @@ func NewGrant(preset string, groups []Group, projects []string, expiresAt time.T
 		return Grant{}, fmt.Errorf("give a preset or at least one group")
 	}
 	for _, project := range projects {
-		if project = strings.TrimSpace(project); project != "" && !slices.Contains(grant.Projects, project) {
+		if project = strings.TrimSpace(project); project == "" {
+			return Grant{}, fmt.Errorf("a project id is empty; an empty limit would mean every project")
+		}
+		if !slices.Contains(grant.Projects, project) {
 			grant.Projects = append(grant.Projects, project)
 		}
 	}

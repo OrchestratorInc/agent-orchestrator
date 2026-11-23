@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/access"
 	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 )
 
@@ -70,6 +71,11 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 	}
 	if _, err = runAccess(t, "token", "create", "bad", "--preset", "read", "--group", "sessions.read"); ExitCode(err) != 2 {
 		t.Errorf("--preset with --group: exit %d, want 2", ExitCode(err))
+	}
+	for _, project := range []string{"", " ", "api,"} {
+		if _, err = runAccess(t, "token", "create", "blank", "--preset", "operate", "--project", project); ExitCode(err) != 2 {
+			t.Errorf("--project %q: exit %d, want 2: an empty project must not become every project", project, ExitCode(err))
+		}
 	}
 	for _, span := range []string{"soon", "0d", "-1h", "300000d"} {
 		if _, err = runAccess(t, "token", "create", "bad", "--expires", span); ExitCode(err) != 2 {
@@ -261,14 +267,14 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 		at    time.Time
 	}
 	afterSend := []observed{{"idle", idleSince}, {"idle", idleSince}, {"active", picksUp}, {"idle", finishes}}
-	sent, polls, daemonFails, unverified, busy := false, 0, false, false, false
+	sent, polls, daemonFails, unverified, busy, turns := false, 0, false, false, false, 1
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/sessions/api-1/send":
 			sent = true
 			w.WriteHeader(http.StatusNoContent)
 		case "GET /api/v1/sessions/api-1/history":
-			_ = json.NewEncoder(w).Encode(map[string]any{"turns": []any{}, "total": 1})
+			_ = json.NewEncoder(w).Encode(map[string]any{"turns": []any{}, "total": turns})
 		case "GET /api/v1/sessions/api-1":
 			if sent && daemonFails {
 				http.Error(w, `{"message":"storage is busy","code":"STORAGE_BUSY"}`, http.StatusInternalServerError)
@@ -318,6 +324,12 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 	if polls != len(afterSend) {
 		t.Errorf("polls after the send = %d, want %d: the idle state from before the message must not count", polls, len(afterSend))
 	}
+	sent, polls, turns = false, 0, 0
+	clock = created.Add(3 * time.Hour)
+	if out, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait"); err != nil || !strings.Contains(out, "api-1: idle after 6s") {
+		t.Errorf("send --wait must not hold a finished turn for the startup window when the session has no history: %q %v", out, err)
+	}
+	turns = 1
 	sent, polls, unverified = false, 0, true
 	clock = created.Add(3 * time.Hour)
 	if out, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait"); err != nil || !strings.Contains(out, "api-1: idle after 6s") {
@@ -398,5 +410,21 @@ func TestCallGivesSetupActionsNoClientTimeout(t *testing.T) {
 		if got := callTimeout(action); got != want {
 			t.Errorf("%s: client timeout %s, want %s", action, got, want)
 		}
+	}
+}
+
+func TestStopPresentsTheAgentTokenAndReportsARefusal(t *testing.T) {
+	cfg := setConfigEnv(t)
+	d := newFakeDaemon(t, cfg, daemonmeta.ServiceName, hiddenDaemonPID, http.StatusOK)
+	d.refuseShutdown.Store(true)
+	t.Setenv("AO_SESSION_ID", "")
+	t.Setenv(caller.ShellTerminalEnv, "")
+	t.Setenv(agentTokenEnv, "aoa_read")
+	_, _, err := executeCLI(t, hiddenPIDDeps(), "stop")
+	if got, _ := d.shutdownAuth.Load().(string); got != "Bearer aoa_read" {
+		t.Errorf("ao stop presented %q, want the agent token", got)
+	}
+	if ExitCode(err) != exitRefused {
+		t.Errorf("a refused stop: exit %d, want %d (%v)", ExitCode(err), exitRefused, err)
 	}
 }

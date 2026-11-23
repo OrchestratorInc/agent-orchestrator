@@ -80,6 +80,12 @@ ao token revoke <id-or-name>
 
 - A name cannot start with `tok_`: that prefix marks a token id, and `revoke`
   takes either.
+- An empty `--project` value is refused: an empty limit would mean every project.
+- With a token limited to projects, name the project in each command
+  (`ao spawn --project api`). The CLI cannot pick it from the working
+  directory, because listing every project is refused.
+- A token that has expired no longer holds its name or counts toward the
+  limit of 64 tokens.
 - `create` prints the secret once. Give it to the other agent as `AO_TOKEN`.
   Never write it into a file in the repository, a commit, a PR or a chat message
   that leaves the machine.

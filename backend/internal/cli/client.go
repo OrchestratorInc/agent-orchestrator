@@ -204,18 +204,11 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	callerID := callerSession()
-	if token := strings.TrimSpace(os.Getenv(agentTokenEnv)); token != "" && callerID == "" {
-		if !strings.HasPrefix(token, access.TokenPrefix) {
-			return exitError{code: exitRefused, err: fmt.Errorf("%s is not an agent token: it must start with %s", agentTokenEnv, access.TokenPrefix)}
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
 	for name, value := range headers {
 		req.Header.Set(name, value)
 	}
-	if callerID != "" {
-		req.Header.Set(caller.Header, callerID)
+	if err := identifyCaller(req); err != nil {
+		return err
 	}
 	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {
 		req.Header.Set("X-AO-Side-Conversation", sideID)
@@ -289,6 +282,20 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 			return fmt.Errorf("decode response: missing required response body (HTTP %d %s %s): %w", resp.StatusCode, method, path, err)
 		}
 		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
+}
+
+func identifyCaller(req *http.Request) error {
+	callerID := callerSession()
+	if token := strings.TrimSpace(os.Getenv(agentTokenEnv)); token != "" && callerID == "" && req.Header.Get("Authorization") == "" {
+		if !strings.HasPrefix(token, access.TokenPrefix) {
+			return exitError{code: exitRefused, err: fmt.Errorf("%s is not an agent token: it must start with %s", agentTokenEnv, access.TokenPrefix)}
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if callerID != "" {
+		req.Header.Set(caller.Header, callerID)
 	}
 	return nil
 }

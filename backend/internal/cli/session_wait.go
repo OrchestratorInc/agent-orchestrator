@@ -130,10 +130,12 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 				return err
 			}
 			state := settledState(res.Session)
+			before, sent := opts.after[id]
+			moved := sent && res.Session.Activity.LastActivityAt.After(before)
 			if _, seen := idleSince[id]; state == "idle" && !seen {
 				idleSince[id] = c.deps.Now()
 			}
-			if state == "idle" && c.deps.Now().Sub(idleSince[id]) < startupGrace {
+			if state == "idle" && !moved && c.deps.Now().Sub(idleSince[id]) < startupGrace {
 				var history sessionHistoryResponse
 				if err := get(id, "/history?limit=1", &history); err != nil {
 					return err
@@ -142,7 +144,7 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 					state = ""
 				}
 			}
-			if before, sent := opts.after[id]; sent && (state == "idle" || state == "needs_input" || state == "unverified") && !res.Session.Activity.LastActivityAt.After(before) {
+			if sent && !moved && (state == "idle" || state == "needs_input" || state == "unverified") {
 				state = ""
 			}
 			if state == "" {

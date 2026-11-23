@@ -48,8 +48,10 @@ type fakeDaemon struct {
 	down atomic.Bool
 	// runFileAtExit records whether the run-file still existed when the daemon
 	// finished draining, i.e. whether nobody removed it from under the daemon.
-	runFileAtExit atomic.Bool
-	stopped       chan struct{}
+	runFileAtExit  atomic.Bool
+	stopped        chan struct{}
+	refuseShutdown atomic.Bool
+	shutdownAuth   atomic.Value
 }
 
 // newFakeDaemon serves /healthz and /readyz as the daemon would, reporting the
@@ -75,6 +77,11 @@ func newFakeDaemon(t *testing.T, cfg testConfig, service string, pid int, health
 			d.apiCalls.Add(1)
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		case "/shutdown":
+			d.shutdownAuth.Store(r.Header.Get("Authorization"))
+			if d.refuseShutdown.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 			if d.shutdownOK.Swap(true) {
 				w.WriteHeader(http.StatusAccepted)
 				return

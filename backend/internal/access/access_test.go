@@ -102,6 +102,11 @@ func TestNewGrantRejectsBadInput(t *testing.T) {
 			t.Errorf("%s: want an error", name)
 		}
 	}
+	for _, projects := range [][]string{{""}, {"api", " "}} {
+		if _, err := NewGrant(PresetOperate, nil, projects, time.Time{}); err == nil {
+			t.Errorf("projects %q: a blank project must be refused, not dropped: it would lift the limit", projects)
+		}
+	}
 }
 
 func TestGrantCheck(t *testing.T) {
@@ -406,8 +411,17 @@ func TestCreateCountsNameCharactersAndMarksAFailedSave(t *testing.T) {
 	if _, _, err := registry.Create(strings.Repeat("ब", 65), grant, testNow); err == nil || errors.Is(err, ErrNotSaved) {
 		t.Errorf("a 65-character name must be refused as bad input: %v", err)
 	}
-	if _, _, err := registry.Create("tok_0123456789abcdef", grant, testNow); err == nil {
-		t.Error("a name that looks like a token id must be refused: revoke takes an id or a name")
+	for _, name := range []string{"tok_0123456789abcdef", "TOK_0123456789ABCDEF"} {
+		if _, _, err := registry.Create(name, grant, testNow); err == nil {
+			t.Errorf("%s looks like a token id and must be refused: revoke takes an id or a name", name)
+		}
+	}
+	short := mustGrant(t, PresetRead, nil, nil, testNow.Add(time.Hour))
+	if _, _, err := registry.Create("nightly", short, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := registry.Create("nightly", mustGrant(t, PresetRead, nil, nil, testNow.Add(26*time.Hour)), testNow.Add(25*time.Hour)); err != nil {
+		t.Errorf("an expired token must not keep its name or its place: %v", err)
 	}
 	if err := os.RemoveAll(filepath.Dir(path)); err != nil {
 		t.Fatal(err)

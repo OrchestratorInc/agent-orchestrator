@@ -34,8 +34,7 @@ var ErrTooManyTokens = errors.New("too many agent tokens; revoke one first")
 // ErrNotSaved is returned by Create when the token file could not be written.
 var ErrNotSaved = errors.New("the agent token could not be saved")
 
-// Token is a named credential for an agent outside the app. Only the SHA-256 of
-// its secret is stored.
+// Token is a named credential for an agent outside the app.
 type Token struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -59,10 +58,7 @@ func TokensPath(dataDir string) string {
 	return filepath.Join(dataDir, "access", "tokens.json")
 }
 
-// Registry holds the agent tokens this machine accepts and the sessions that
-// started under one. Each bound session has its own file, so losing the token
-// file never lifts a session's limit: a session bound to a token that is gone
-// is refused.
+// Registry holds the agent tokens this machine accepts and the sessions that started under one.
 type Registry struct {
 	mu           sync.RWMutex
 	path         string
@@ -74,9 +70,7 @@ type Registry struct {
 	unbound      map[string]bool
 }
 
-// LoadRegistry reads the registry. A token file that cannot be parsed is moved
-// aside and reported. One that cannot be read stays where it is, and the
-// registry refuses writes for this run.
+// LoadRegistry reads the registry from path.
 func LoadRegistry(path string) (*Registry, error) {
 	r := &Registry{path: path, tokens: map[string]Token{}, byHash: map[string]string{}, sessions: map[string]string{}, unbound: map[string]bool{}}
 	bindingsErr := r.loadBindings()
@@ -157,7 +151,7 @@ func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, strin
 	if name == "" || utf8.RuneCountInString(name) > maxNameLength {
 		return Token{}, "", fmt.Errorf("a token name is required, up to %d characters", maxNameLength)
 	}
-	if strings.HasPrefix(name, "tok_") {
+	if strings.HasPrefix(strings.ToLower(name), "tok_") {
 		return Token{}, "", errors.New("a token name cannot start with tok_, which marks a token id")
 	}
 	if !grant.ExpiresAt.IsZero() && !now.Before(grant.ExpiresAt) {
@@ -175,6 +169,12 @@ func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, strin
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for id, expired := range r.tokens {
+		if !expired.Active(now) {
+			delete(r.tokens, id)
+			delete(r.byHash, expired.TokenHash)
+		}
+	}
 	if len(r.tokens) >= maxTokens {
 		return Token{}, "", ErrTooManyTokens
 	}
@@ -234,9 +234,7 @@ func (r *Registry) Touch(id string, now time.Time) {
 	_ = r.persistLocked()
 }
 
-// Revoke removes a token, found by ID or by name. A name never looks like an
-// ID. Sessions bound to the token keep their binding, so they are refused from
-// then on.
+// Revoke removes a token, found by ID or by name.
 func (r *Registry) Revoke(idOrName string) (Token, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -273,10 +271,7 @@ func (r *Registry) List() []Token {
 	return out
 }
 
-// SessionCreated is called when a session's row is created, before its agent
-// starts. A session created by a caller with a grant is bound to that caller's
-// token. Any other new session loses the binding an earlier session with the
-// same ID left behind: a spawn that is rolled back frees its ID for the next one.
+// SessionCreated binds a new session to its caller's token, or clears a leftover binding.
 func (r *Registry) SessionCreated(ctx context.Context, sessionID string) error {
 	if who := CallerFrom(ctx); who.Grant != nil {
 		return r.Bind(sessionID, who.TokenID)
@@ -297,9 +292,7 @@ func (r *Registry) SessionCreated(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// Bind records that a session started under a token. The token need not exist
-// any more: the session is then refused. The session counts as bound for this
-// run even when the write fails.
+// Bind records that a session started under a token.
 func (r *Registry) Bind(sessionID, tokenID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -311,10 +304,7 @@ func (r *Registry) Bind(sessionID, tokenID string) error {
 	return os.WriteFile(r.bindingPath(sessionID), []byte(tokenID), 0o600)
 }
 
-// ForSession returns the ID of the token a session started under. The token may
-// be gone. When the bindings could not be listed at start, each lookup reads
-// that session's own record, and a session whose record cannot be read counts
-// as bound.
+// ForSession returns the ID of the token a session started under, which may be gone.
 func (r *Registry) ForSession(sessionID string) (tokenID string, bound bool) {
 	if r == nil || sessionID == "" {
 		return "", false
@@ -328,6 +318,9 @@ func (r *Registry) ForSession(sessionID string) (tokenID string, bound bool) {
 	}
 	raw, err := os.ReadFile(r.bindingPath(sessionID)) // #nosec G304 -- inside the daemon's own data dir.
 	if errors.Is(err, fs.ErrNotExist) {
+		r.mu.Lock()
+		r.unbound[sessionID] = true
+		r.mu.Unlock()
 		return "", false
 	}
 	if err != nil {

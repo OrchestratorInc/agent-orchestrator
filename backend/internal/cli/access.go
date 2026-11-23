@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -189,6 +190,9 @@ func newTokenCreateCommand(ctx *commandContext) *cobra.Command {
 			}
 			if preset == "" && len(groups) == 0 {
 				preset = "read"
+			}
+			if cmd.Flags().Changed("project") && (len(projects) == 0 || slices.ContainsFunc(projects, func(id string) bool { return strings.TrimSpace(id) == "" })) {
+				return usageError{errors.New("--project needs a project id; an empty one would mean every project")}
 			}
 			expiresAt, err := parseTokenExpiry(expires, ctx.deps.Now())
 			if err != nil {

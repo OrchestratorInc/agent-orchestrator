@@ -130,11 +130,17 @@ func (c *commandContext) requestShutdown(ctx context.Context, port int) error {
 	if err != nil {
 		return err
 	}
+	if err := identifyCaller(req); err != nil {
+		return err
+	}
 	resp, err := c.deps.HTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		return exitError{code: exitRefused, err: fmt.Errorf("the daemon refused to stop for this caller (HTTP %d)", resp.StatusCode)}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
