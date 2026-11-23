@@ -1490,8 +1490,8 @@ export function AssistantMessage({
 	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
 	const showActions = copyReady || rollbackReady;
 	const replyText = message.text;
-	const fullLead = useMemo(() => replyLead(replyText), [replyText]);
-	const lead = details && !live && !renderingStreaming ? fullLead : undefined;
+	const collapsible = Boolean(details) && !live && !renderingStreaming;
+	const lead = useMemo(() => collapsible ? replyLead(replyText) : undefined, [collapsible, replyText]);
 	const collapsed = Boolean(lead && !details?.open);
 	return (
 		<div
