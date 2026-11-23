@@ -536,9 +536,12 @@ export function AgentModelPicker({
 			</OptionMenuTrigger>
 			{/* Pinned to the trigger's left edge, which stays put while its label changes width.
 			    The menu sizes to its content: the model list is capped at a few rows, so a long
-			    catalog scrolls inside the list instead of stretching the menu. */}
+			    catalog scrolls inside the list instead of stretching the menu. Search, the rail and
+			    the settings under the list outgrow the shared select-menu cap, which squeezed the
+			    list to two rows, so the menu is capped by the room beside the trigger instead. A
+			    window too short for it still shrinks the list, which then scrolls. */}
 			<OptionMenuContent align="start" side={terminal ? "right" : "top"} steady
-				className="chat-settings-menu w-64 text-[12px]!"
+				className="chat-settings-menu w-64 max-h-(--radix-dropdown-menu-content-available-height)! text-[12px]!"
 				onCloseAutoFocus={(event) => {
 					management.onCloseAutoFocus(event);
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
@@ -552,6 +555,9 @@ export function AgentModelPicker({
 					searchable
 					searchPlaceholder={t("agentSwitch.search")}
 					rows={VISIBLE_MODEL_ROWS + setups.length}
+					// A search lists matches only; the favourites above the list are hidden.
+					searchHidesRows={setups.length}
+					className="max-h-none"
 					header={(
 						<AgentRail
 							agents={agents}

@@ -66,7 +66,7 @@ import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEdito
 import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
-import { atTail, openingRow } from "./timelineScroll";
+import { atTail, followsAfterRest, openingRow, RESUME_SLOP, type Release } from "./timelineScroll";
 import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
@@ -105,12 +105,11 @@ import {
 	settledTurnItems,
 	readableConversationItems,
 	startupPlacement,
-	streamingCursorMessageId,
 	summarizeActivities,
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
-import { iconSize, radius, type, space, touchTarget } from "../tokens";
+import { fontScaleCap, iconSize, radius, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
@@ -289,6 +288,8 @@ function Timeline({
 	const latestFollow = useRef<() => void>(() => {});
 	useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);
 	const dragging = useRef(false);
+	// Where the person's last drag let go (see `followsAfterRest`).
+	const releasedAt = useRef<Release | undefined>(undefined);
 	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
 	const openedAt = useRef<number | undefined>(undefined);
 	const [showJump, setShowJump] = useState(false);
@@ -378,7 +379,11 @@ function Timeline({
 		else listRef.current?.scrollToEnd({ animated });
 	};
 	// The follow to the newest message that output and measuring rows ask for.
+	// It runs a frame after it was asked for, so it checks again: a drag that
+	// began in between has stopped the follow, and scrolling to the end then
+	// carried the person back mid-fling.
 	const followTail = () => {
+		if (!followsTail.current || dragging.current) return;
 		if (keyboardOffset !== undefined && keyboardMoving.value) {
 			followAfterKeyboard.current = true;
 			return;
@@ -509,7 +514,7 @@ function Timeline({
 	}
 	openedAt.current ??= openingRow(groups.length, OPENING_ROWS);
 	const initialScrollIndex = Math.min(openedAt.current, groups.length - 1);
-	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>, released = false) => {
 		scrollOffset.current = event.nativeEvent.contentOffset.y;
 		// iOS reports the end of the list's own scrolls (the opening one, each
 		// follow) as momentum ending too. Only a drag decides whether to follow;
@@ -519,8 +524,13 @@ function Timeline({
 			return;
 		}
 		dragging.current = false;
-		followsTail.current = atTail(event.nativeEvent, keyboardInset.current);
+		const offset = event.nativeEvent.contentOffset.y;
+		const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+		followsTail.current = released ? resting : followsAfterRest(releasedAt.current, offset, resting);
+		releasedAt.current = released ? { offset, atEnd: resting } : undefined;
 		setShowJump(!followsTail.current);
+		// A follow that resumes catches up on output that arrived meanwhile.
+		if (followsTail.current) requestAnimationFrame(followTail);
 	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
@@ -573,17 +583,19 @@ function Timeline({
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}
-							onScrollEndDrag={settle}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; releasedAt.current = undefined; }}
+							onScrollEndDrag={(event) => settle(event, true)}
 							onMomentumScrollBegin={() => { dragging.current = true; }}
 							onMomentumScrollEnd={settle}
 							onScroll={(event) => {
 								// Only the person's own scrolling stops the follow (see `followsTail`);
 								// passing the end without a drag, as a jump does, resumes it.
 								scrollOffset.current = event.nativeEvent.contentOffset.y;
-								const tail = atTail(event.nativeEvent, keyboardInset.current);
-								if (tail && !dragging.current) followsTail.current = true;
-								setShowJump(!followsTail.current && !tail);
+								// Whenever the list is not following, the jump to the newest message
+								// is offered, on this path and in `settle`.
+								const resting = atTail(event.nativeEvent, keyboardInset.current, RESUME_SLOP);
+								if (!dragging.current && resting) followsTail.current = true;
+								setShowJump(!followsTail.current && !resting);
 								notifyRenderViewport();
 							}}
 							scrollEventThrottle={100}
@@ -603,7 +615,8 @@ function Timeline({
 								contentHeight.current = height;
 								measureFill();
 								notifyRenderViewport();
-								if (followsTail.current) requestAnimationFrame(followTail);
+								// Not while the person scrolls: a drag or its fling owns the list.
+								if (followsTail.current && !dragging.current) requestAnimationFrame(followTail);
 								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
@@ -691,14 +704,13 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
 		: group.items, group.turn);
-	const cursorMessageId = streamingCursorMessageId(items);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
 		? <InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked={!editableTurns?.has(editDraft.turnId)} onCancel={onCancelEdit} onEdit={onSubmitEdit} onFocus={onEditFocus} />
 		: undefined;
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={sessionId} conversationId={conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} showCursor={row.items[0].id === cursorMessageId} />);
+		: <TimelineItem key={row.key} item={row.items[0]} sessionId={sessionId} conversationId={conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={row.items[0].turnId && editableTurns?.has(row.items[0].turnId) ? onEditMessage : undefined} editor={editorFor(row.items[0])} answeredBelow={answeredBelow} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -748,7 +760,6 @@ const TimelineItem = memo(function TimelineItem({
 	onEdit,
 	editor,
 	answeredBelow,
-	showCursor = false,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -763,7 +774,6 @@ const TimelineItem = memo(function TimelineItem({
 	/** Shown in place of the bubble while this prompt is being edited. */
 	editor?: ReactNode;
 	answeredBelow?: number;
-	showCursor?: boolean;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	// The long-press menu hosts the bubble in a SwiftUI view sized to its
@@ -810,7 +820,7 @@ const TimelineItem = memo(function TimelineItem({
 		return (
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
-				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
+				<ChatMarkdown text={item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
 			</View>
 		);
 	}
@@ -867,7 +877,9 @@ function TurnActions({ turn, reply, onRollback, onFork }: { turn: ConversationTu
 			{copyText ? <CopyResponseButton text={copyText} /> : null}
 			{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} compact /> : null}
 			{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}
-			{time ? <Text style={styles.turnTime} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
+			{/* The row's height is fixed, so the time stops growing where its line
+			    still fits it; uncapped, the largest text sizes cut it off. */}
+			{time ? <Text style={styles.turnTime} maxFontSizeMultiplier={fontScaleCap.chrome} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
 		</View>
 	);
 }

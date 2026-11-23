@@ -70,6 +70,13 @@ type ReviewRefresher interface {
 	RequestReviewRefresh(prURL string)
 }
 
+// MergeQueueWriter records a provider-confirmed merge queue change locally, so
+// the PR view shows it before the next SCM observation; nil entry is a PR that
+// left the queue.
+type MergeQueueWriter interface {
+	MarkPRMergeQueue(ctx context.Context, prURL string, entry *domain.MergeQueueEntry, at time.Time) error
+}
+
 // mergedViaWriter records which client asked AO to merge, for the worker PR
 // merge measurement (ao.usage.worker_pr_merged). Optional on the merge writer.
 type mergedViaWriter interface {
@@ -106,6 +113,11 @@ type ActionDeps struct {
 	// HeadChecks confirms that nothing checks a PR's head, for a merge that
 	// asks to treat no checks as passing. Nil means it's never confirmed.
 	HeadChecks ports.SCMHeadChecksReader
+	// Queuer adds PRs to a merge queue, the way a merge lands where the base
+	// branch requires one. Nil leaves such a PR unmergeable from AO.
+	Queuer ports.SCMMergeQueuer
+	// QueueWriter records queue changes; when nil, MergeWriter is used if it can.
+	QueueWriter MergeQueueWriter
 }
 
 // ActionService validates current pull request state before applying mutations.
@@ -129,8 +141,11 @@ type ActionService struct {
 	refresher     ReviewRefresher
 	attachments   ports.SCMAttachmentStore
 	stacker       ports.SCMStacker
+	stackBehind   stackBehindCache
 	details       detailsStore
 	headChecks    ports.SCMHeadChecksReader
+	queuer        ports.SCMMergeQueuer
+	queueWriter   MergeQueueWriter
 }
 
 var _ ActionManager = (*ActionService)(nil)
@@ -159,6 +174,10 @@ func NewActionService(deps ActionDeps) *ActionService {
 	if details == nil {
 		details, _ = deps.Store.(detailsStore)
 	}
+	queueWriter := deps.QueueWriter
+	if queueWriter == nil {
+		queueWriter, _ = deps.MergeWriter.(MergeQueueWriter)
+	}
 	return &ActionService{
 		store:         deps.Store,
 		resolve:       resolve,
@@ -179,12 +198,16 @@ func NewActionService(deps ActionDeps) *ActionService {
 		stacker:       deps.Stacker,
 		headChecks:    deps.HeadChecks,
 		details:       details,
+		queuer:        deps.Queuer,
+		queueWriter:   queueWriter,
 	}
 }
 
 // Merge re-fetches authoritative SCM state and then merges (squash by default,
 // or the requested merge/rebase method) only the exact head the user saw. The
-// provider repeats the SHA guard atomically.
+// provider repeats the SHA guard atomically. Where the base branch requires a
+// merge queue, a direct merge can only be refused, so the PR joins the queue
+// instead, pinned to the same head; the queue's own settings pick the method.
 func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeResult, error) {
 	prNumber, err := parsePRNumber(request.PRID)
 	if err != nil || strings.TrimSpace(request.PRURL) == "" {
@@ -237,8 +260,14 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 	if !strings.EqualFold(fresh.PR.HeadSHA, expectedHead) {
 		return MergeResult{}, ErrPRHeadChanged
 	}
+	if fresh.PR.MergeQueue != nil {
+		return MergeResult{}, ErrPRQueued
+	}
 	if !readyToMerge(fresh, review, request.AllowNoChecks && s.noChecksSettled(ctx, repo, fresh)) {
 		return MergeResult{}, ErrPRPreconditions
+	}
+	if fresh.PR.MergeQueueRequired {
+		return s.enqueue(ctx, tracked, ref, fresh, expectedHead, method)
 	}
 
 	out, err := s.merger.MergePullRequest(ctx, ports.SCMMergeRequest{PR: ref, ExpectedHeadSHA: expectedHead, Method: method})
@@ -265,6 +294,115 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 		MergeCommitSHA: out.MergeCommitSHA,
 		StateChangedAt: mergedAt,
 	}, nil
+}
+
+// enqueue adds a PR that passed the merge guard to its base branch's merge
+// queue and records its place there.
+func (s *ActionService) enqueue(ctx context.Context, tracked domain.PullRequest, ref ports.SCMPRRef, fresh ports.SCMObservation, expectedHead string, method ports.SCMMergeMethod) (MergeResult, error) {
+	if s.queuer == nil {
+		return MergeResult{}, fmt.Errorf("%w: merge queues", ErrUnsupported)
+	}
+	entry, err := s.queuer.EnqueuePullRequest(ctx, ports.SCMEnqueueRequest{
+		PR:              ref,
+		NodeID:          firstNonEmptyString(fresh.PR.ProviderID, tracked.ProviderID),
+		ExpectedHeadSHA: expectedHead,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, ports.ErrSCMHeadChanged):
+			return MergeResult{}, fmt.Errorf("%w: %w", ErrPRHeadChanged, err)
+		default:
+			return MergeResult{}, mapMutationError("add pull request to merge queue", err)
+		}
+	}
+	at := s.clock().UTC()
+	s.recordQueue(context.WithoutCancel(ctx), tracked.URL, &entry, at)
+	return MergeResult{
+		PRNumber:       tracked.Number,
+		Method:         string(method),
+		State:          domain.PRStateOpen,
+		StateChangedAt: at,
+		Queue:          &entry,
+	}, nil
+}
+
+// Dequeue removes a tracked PR from its merge queue. It reads the PR first, so
+// a PR that already left the queue (merged, or dropped by the provider) is
+// reported rather than mutated.
+func (s *ActionService) Dequeue(ctx context.Context, prID, prURL string) (DequeueResult, error) {
+	prNumber, err := parsePRNumber(prID)
+	if err != nil || strings.TrimSpace(prURL) == "" {
+		return DequeueResult{}, fmt.Errorf("%w: invalid pull request identity", ErrInvalidPR)
+	}
+	if s.store == nil || s.reader == nil {
+		return DequeueResult{}, errors.New("pr: dequeue action is not configured")
+	}
+	if s.queuer == nil {
+		return DequeueResult{}, fmt.Errorf("%w: merge queues", ErrUnsupported)
+	}
+	tracked, ok, err := s.store.GetPR(ctx, prURL)
+	if err != nil {
+		return DequeueResult{}, fmt.Errorf("load pull request: %w", err)
+	}
+	if !ok || tracked.Number != prNumber {
+		return DequeueResult{}, ErrPRNotFound
+	}
+	repo, ok := scmRepoForPR(tracked)
+	if !ok {
+		return DequeueResult{}, fmt.Errorf("%w: pull request repository is unknown", ErrPRPreconditions)
+	}
+	ref := ports.SCMPRRef{Repo: repo, Number: tracked.Number, URL: tracked.URL}
+	observations, err := s.reader.FetchPullRequests(ctx, []ports.SCMPRRef{ref})
+	if err != nil {
+		if errors.Is(err, ports.ErrSCMNotFound) {
+			return DequeueResult{}, fmt.Errorf("%w: %w", ErrPRNotFound, err)
+		}
+		return DequeueResult{}, fmt.Errorf("refresh pull request before leaving the merge queue: %w", err)
+	}
+	if len(observations) != 1 || !observations[0].Fetched || observations[0].PR.Number != ref.Number {
+		return DequeueResult{}, ErrPRNotFound
+	}
+	fresh := observations[0]
+	if fresh.PR.MergeQueue == nil {
+		// Clear a stale entry, but only on a branch that has a queue: the
+		// write also marks the branch as merging through one.
+		if fresh.PR.MergeQueueRequired {
+			s.recordQueue(ctx, tracked.URL, nil, s.clock().UTC())
+		}
+		return DequeueResult{}, ErrPRNotQueued
+	}
+	if err := s.queuer.DequeuePullRequest(ctx, ports.SCMDequeueRequest{
+		PR:     ref,
+		NodeID: firstNonEmptyString(fresh.PR.ProviderID, tracked.ProviderID),
+	}); err != nil {
+		return DequeueResult{}, mapMutationError("remove pull request from merge queue", err)
+	}
+	at := s.clock().UTC()
+	s.recordQueue(context.WithoutCancel(ctx), tracked.URL, nil, at)
+	return DequeueResult{PRNumber: tracked.Number, ChangedAt: at}, nil
+}
+
+// recordQueue stores a confirmed queue change and asks the observer for a
+// sooner look, which brings the position and state up to date. The provider
+// already made the change, so a failure here only logs.
+func (s *ActionService) recordQueue(ctx context.Context, prURL string, entry *domain.MergeQueueEntry, at time.Time) {
+	if s.queueWriter != nil {
+		if err := s.queueWriter.MarkPRMergeQueue(ctx, prURL, entry, at); err != nil {
+			s.logger.Warn("pr merge queue change succeeded but local persistence failed", "pr", prURL, "err", err)
+		}
+	}
+	if s.refresher != nil {
+		s.refresher.RequestReviewRefresh(prURL)
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // recordMerge brings AO up to date with a merge the provider confirmed, from

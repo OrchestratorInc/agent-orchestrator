@@ -21,7 +21,7 @@ import { hasMenuIcon } from "./harnessMenuIcons";
 import { EffortGaugeButton } from "./effort-gauge";
 import { EffortSliderOverlay } from "./effort-slider";
 import { useEffortSliderOpen } from "./useEffortSlider";
-import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
+import { ApprovalMenu, Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { defaultModelChoice, listedModels } from "./spawnModel";
@@ -186,7 +186,7 @@ export function SpawnComposerControls({
 						// and its effort at the start beside attach, how freely at the
 						// end beside the round button; the space between gives way first.
 						<Host ignoreSafeArea="all" colorScheme={scheme} style={styles.settingsHost}>
-							<HStack spacing={space.none}>
+							<HStack spacing={space.none} modifiers={[controlsRowTypeSize()]}>
 								{/* The harness's mark and the model it runs (the harness's
 								    name only when the catalog names no default). Each agent in
 								    its menu opens one level down onto its models, so this is
