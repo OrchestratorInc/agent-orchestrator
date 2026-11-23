@@ -23,12 +23,12 @@ import (
 )
 
 type gateFixture struct {
-	t        *testing.T
-	dataDir  string
-	registry *access.Registry
-	router   chi.Router
-	served   []string
-	bodies   []string
+	t               *testing.T
+	dataDir         string
+	registry        *access.Registry
+	router          chi.Router
+	served          []string
+	bodies          []string
 	spawnID         string
 	returnsExisting bool
 	beforeCreate    func()
