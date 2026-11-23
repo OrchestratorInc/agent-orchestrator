@@ -113,8 +113,51 @@ export class CloudTaskFilesUncertainError extends Error {
  * uploaded to that session), so it reaches the session the attempt made
  * instead of starting a second one. It is forgotten once the attempt is
  * settled: started, refused before a session existed, or its session deleted.
+ * It is kept in localStorage, beside the page's pending launch that holds the
+ * request id, so a retry after a reload still reaches that session.
  */
-const unsettledFileStarts = new Map<string, { key: string; sessionId?: string; attachmentIds?: string[] }>();
+type FileStartAttempt = { key: string; sessionId?: string; attachmentIds?: string[] };
+
+const UNSETTLED_FILE_STARTS_KEY = "ao.newTask.unsettledFileStarts.v1";
+
+function readUnsettledFileStarts(): Record<string, FileStartAttempt> {
+	try {
+		const parsed: unknown = JSON.parse(window.localStorage.getItem(UNSETTLED_FILE_STARTS_KEY) ?? "{}");
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, FileStartAttempt> : {};
+	} catch {
+		return {};
+	}
+}
+
+const heldFileStarts = new Map<string, FileStartAttempt>();
+
+function writeUnsettledFileStarts(all: Record<string, FileStartAttempt>): void {
+	try {
+		window.localStorage.setItem(UNSETTLED_FILE_STARTS_KEY, JSON.stringify(all));
+	} catch {
+		// Without storage the attempt is still held for a retry in this page.
+	}
+}
+
+const unsettledFileStarts = {
+	get(requestId: string): FileStartAttempt | undefined {
+		const held = heldFileStarts.get(requestId);
+		if (held) return held;
+		const kept = readUnsettledFileStarts()[requestId];
+		return kept && typeof kept.key === "string" ? kept : undefined;
+	},
+	set(requestId: string, attempt: FileStartAttempt): void {
+		heldFileStarts.set(requestId, attempt);
+		writeUnsettledFileStarts({ ...readUnsettledFileStarts(), [requestId]: attempt });
+	},
+	delete(requestId: string): void {
+		heldFileStarts.delete(requestId);
+		const all = readUnsettledFileStarts();
+		if (!(requestId in all)) return;
+		delete all[requestId];
+		writeUnsettledFileStarts(all);
+	},
+};
 
 /**
  * Creates a Chat session whose brief carries files. Files are uploaded to a
@@ -209,6 +252,7 @@ async function startChatWithFiles<Body extends ChatStartBody, Created extends Cl
 				throw error;
 			});
 			Object.assign(attempt, { sessionId, attachmentIds: attachments.map((attachment) => attachment.id) });
+			if (requestId !== undefined) unsettledFileStarts.set(requestId, attempt);
 		}
 		await client.sendSessionMessage(orgId, sessionId, {
 			text: body.prompt,

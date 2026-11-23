@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp";
 import type { CloudCpCreateSessionRequest } from "./cloud-cp";
 import { CloudTaskFilesNeedChatError, CloudTaskFilesUncertainError, CloudTaskFilesUndeliveredError, cloudDefaultInterfaceMode, createCloudChatAgentWithFiles, createCloudChatSessionWithFiles, createCloudSession } from "./cloud-session-create";
@@ -65,6 +65,7 @@ describe("createCloudSession", () => {
 });
 
 describe("createCloudChatSessionWithFiles", () => {
+	afterEach(() => window.localStorage.clear());
 	const chatBody = { ...body, interfaceMode: "chat" as const, model: "opus", reasoningEffort: "high", approvalMode: "auto" as const };
 	const files = [{ mimeType: "image/png", data: "aGk=", name: "screen.png" }, { mimeType: "image/jpeg", data: "aGk=", name: "photo.jpg" }];
 	const clientFor = (interfaceMode = "chat") => ({
@@ -131,6 +132,25 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(second).toBe(first);
 		expect(upload).toHaveBeenCalledTimes(files.length);
 		expect(client.sendSessionMessage.mock.calls[1]).toEqual(client.sendSessionMessage.mock.calls[0]);
+	});
+
+	// The page that retries may be a reloaded one, with the request id from its
+	// pending launch: the attempt it continues is kept across the reload.
+	it("continues an unsettled attempt after a reload", async () => {
+		const client = clientFor();
+		client.sendSessionMessage.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		client.deleteSession.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const upload = vi.fn(async (_sessionId: string, file: { name?: string }) => ({ id: `id-${file.name}` }));
+		await expect(createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-reload" })).rejects.toBeInstanceOf(CloudTaskFilesUncertainError);
+		vi.resetModules();
+		const reloaded = await import("./cloud-session-create");
+		await reloaded.createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-reload" });
+		const [first, second] = client.createSession.mock.calls.map((call) => call[2].idempotencyKey);
+		expect(second).toBe(first);
+		expect(upload).toHaveBeenCalledTimes(files.length);
+		expect(client.sendSessionMessage.mock.calls[1]).toEqual(client.sendSessionMessage.mock.calls[0]);
+		// Settled, it is no longer kept.
+		expect(window.localStorage.getItem("ao.newTask.unsettledFileStarts.v1")).toBe("{}");
 	});
 
 	// Nothing was made by a refused create or is left of a deleted session.
