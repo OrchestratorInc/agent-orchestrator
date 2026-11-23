@@ -606,7 +606,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// closes when the real conversation replaces it, and the scroll would look
 	// for the message in an empty transcript.
 	const conversationShown = Boolean(snapshot) && renderSnapshot === snapshot;
-	const savedCopy = hostUnreachable || (Boolean(savedSnapshot) && renderSnapshot === savedSnapshot);
+	const showingSavedPage = Boolean(savedSnapshot) && renderSnapshot === savedSnapshot;
+	const savedCopy = hostUnreachable || showingSavedPage;
 	const appliedReveal = useRef<SessionSearchReveal | undefined>(undefined);
 	useEffect(() => {
 		if (!heldReveal || !conversationShown) return;
@@ -733,7 +734,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				promptSuggestion={promptSuggestion}
 				newWorkDisabled={newWorkDisabled || savedCopy}
 				composerLockedPlaceholder={hostUnreachable && newWorkDisabled ? t("remote.offlineCopy") : undefined}
-				sendBlockedReason={hostUnreachable && !newWorkDisabled ? t("remote.sendWhenConnected") : undefined}
+				sendBlockedReason={hostUnreachable && !newWorkDisabled ? t("remote.sendWhenConnected") : showingSavedPage && !newWorkDisabled ? "Loading conversation…" : undefined}
 				savedCopy={savedCopy}
 				importBlock={importBlock}
 				onLinkOpen={openLinkInBrowser}
@@ -874,8 +875,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						onDismiss={accountSwitch.clearError}
 					/>
 				) : undefined)}</>}
-				onDecide={savedCopy ? undefined : commands.resolve}
-				onResolveInput={savedCopy ? undefined : commands.resolveInput}
+				onDecide={showingSavedPage ? undefined : commands.resolve}
+				onResolveInput={showingSavedPage ? undefined : commands.resolveInput}
 				onInterrupt={commands.interrupt}
 				stoppingTurn={commands.stoppingTurn}
 				onContinueTurn={() => {

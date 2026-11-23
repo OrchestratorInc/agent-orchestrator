@@ -70,7 +70,7 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 				})
 				.catch(() => undefined);
 		}
-		clearTimeout(timers.get(sessionId));
+		if (timers.has(sessionId)) return;
 		timers.set(sessionId, setTimeout(() => {
 			timers.delete(sessionId);
 			const page = (event.query.state.data as InfiniteData<ConversationSnapshot> | undefined)?.pages[0];

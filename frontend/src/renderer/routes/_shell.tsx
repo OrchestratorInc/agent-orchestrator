@@ -368,7 +368,7 @@ function ShellLayout() {
 	useSettingsPolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const localSessionIdsKey = workspaces.flatMap((workspace) => workspace.sessions.map((session) => session.id)).join("\0");
+	const localSessionIdsKey = useMemo(() => workspaces.flatMap((workspace) => workspace.sessions.map((session) => session.id)).join("\0"), [workspaces]);
 	useEffect(() => {
 		if (localSessionIdsKey) void keepLocalChats(localSessionIdsKey.split("\0"));
 	}, [localSessionIdsKey]);
