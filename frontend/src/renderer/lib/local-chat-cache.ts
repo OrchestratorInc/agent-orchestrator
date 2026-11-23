@@ -8,10 +8,10 @@ import { done } from "./remote-chat-cache";
 
 const DB_NAME = "ao-local-chats";
 const STORE = "pages";
-const MAX_CHATS = 50;
+const MAX_PAGE_CHARS = 4 * 1024 * 1024;
 const WRITE_DELAY_MS = 1_000;
 
-type Entry = { sessionId: string; createdAt: string; build: string; savedAt: number; page: ConversationSnapshot };
+type Entry = { sessionId: string; createdAt: string; build: string; page: ConversationSnapshot };
 
 export const savedConversationQueryKey = (sessionId: string) => ["conversation-saved", sessionId] as const;
 
@@ -20,7 +20,7 @@ let database: Promise<IDBDatabase> | undefined;
 function openDatabase(): Promise<IDBDatabase> {
 	database ??= new Promise((resolve, reject) => {
 		const request = indexedDB.open(DB_NAME, 1);
-		request.onupgradeneeded = () => request.result.createObjectStore(STORE, { keyPath: "sessionId" }).createIndex("savedAt", "savedAt");
+		request.onupgradeneeded = () => request.result.createObjectStore(STORE, { keyPath: "sessionId" });
 		request.onsuccess = () => resolve(request.result);
 		request.onerror = () => {
 			database = undefined;
@@ -39,17 +39,6 @@ function savableCreatedAt(queryClient: QueryClient, sessionId: string): string |
 
 const localChat = (key: QueryKey) => (key[0] === "conversation" && key.length === 2 && typeof key[1] === "string" ? key[1] : undefined);
 
-async function pruneOldChats(): Promise<void> {
-	const store = (await openDatabase()).transaction(STORE, "readwrite").objectStore(STORE);
-	const cursor = store.index("savedAt").openKeyCursor(null, "prev");
-	let kept = 0;
-	cursor.onsuccess = () => {
-		if (!cursor.result) return;
-		if (++kept > MAX_CHATS) store.delete(cursor.result.primaryKey);
-		cursor.result.continue();
-	};
-}
-
 function keepLocalChats(sessionIds: string[]): Promise<void> {
 	const keep = new Set(sessionIds);
 	return openDatabase()
@@ -59,13 +48,11 @@ function keepLocalChats(sessionIds: string[]): Promise<void> {
 				if (!keep.has(key)) store.delete(key);
 			}
 		})
-		.then(pruneOldChats)
 		.catch(() => undefined);
 }
 
 export function persistLocalChats(queryClient: QueryClient): () => void {
 	if (typeof indexedDB === "undefined") return () => {};
-	void pruneOldChats().catch(() => undefined);
 	const written = new WeakSet<object>();
 	const timers = new Map<string, ReturnType<typeof setTimeout>>();
 	const workspacesHash = hashKey(workspaceQueryKey);
@@ -105,10 +92,13 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 			const createdAt = savableCreatedAt(queryClient, sessionId);
 			if (!page || page.controller.state === "busy" || createdAt === undefined || written.has(page)) return;
 			written.add(page);
-			const entry: Entry = { sessionId, createdAt, build: DEV_BUILD_INFO.commit, savedAt: Date.now(), page };
+			const tooLarge = JSON.stringify(page).length > MAX_PAGE_CHARS;
 			void openDatabase()
-				.then((db) => done(db.transaction(STORE, "readwrite").objectStore(STORE).put(entry)))
-				.then(pruneOldChats)
+				.then((db) => {
+					const store = db.transaction(STORE, "readwrite").objectStore(STORE);
+					if (tooLarge) return done(store.delete(sessionId));
+					return done(store.put({ sessionId, createdAt, build: DEV_BUILD_INFO.commit, page } satisfies Entry));
+				})
 				.catch(() => written.delete(page));
 		}, WRITE_DELAY_MS));
 	});
