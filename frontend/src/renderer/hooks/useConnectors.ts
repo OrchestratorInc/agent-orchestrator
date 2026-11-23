@@ -116,7 +116,7 @@ export function splitCommandLine(line: string): string[] {
 		} else if (ch === '"' || ch === "'") {
 			quote = ch;
 			open = true;
-		} else if (ch === "\\" && next !== undefined) {
+		} else if (ch === "\\" && next !== undefined && /[\s"'\\]/.test(next)) {
 			word += next;
 			open = true;
 			i += 1;

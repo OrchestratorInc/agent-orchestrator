@@ -327,7 +327,8 @@ func TestAnEditOfTheAddressCancelsAnOpenSignIn(t *testing.T) {
 		t.Fatal("a sign-in for the old address completed on the new one")
 	}
 	records, err := readFile(svc.path)
-	if err != nil || len(records) != 1 || records[0].OAuth != nil || records[0].URL != second.URL+"/mcp" {
+	if err != nil || len(records) != 1 || records[0].OAuth != nil || records[0].URL != second.URL+"/mcp" ||
+		records[0].Status != StatusUnchecked || records[0].StatusStep != "" {
 		t.Fatalf("records = %+v, %v", records, err)
 	}
 }
@@ -460,5 +461,22 @@ func TestARenewalOfAReplacedSignInIsNotSaved(t *testing.T) {
 	}
 	if got := svc.records[0].OAuth; got.AccessToken != "access-new" || got.RefreshToken != "refresh-new" {
 		t.Fatalf("the late renewal replaced the new sign-in: %+v", got)
+	}
+	svc.mu.Lock()
+	svc.records[0].OAuth.Expiry = svc.now().Add(-time.Hour)
+	delete(svc.sources, created.ID)
+	svc.mu.Unlock()
+	late := svc.tokenSource(created.ID)
+	svc.mu.Lock()
+	svc.records[0].OAuth.Expiry = svc.now().Add(time.Hour)
+	delete(svc.sources, created.ID)
+	svc.mu.Unlock()
+	svc.tokenSource(created.ID)
+	fake.tokenError.Store("invalid_grant")
+	if _, err := late.Token(); err == nil {
+		t.Fatal("the refused renewal gave a token")
+	}
+	if svc.records[0].OAuth == nil {
+		t.Fatal("a refused renewal of a replaced sign-in signed the new one out")
 	}
 }

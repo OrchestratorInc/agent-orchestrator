@@ -31,6 +31,7 @@ type signIn struct {
 	done        chan struct{}
 	err         error
 	cancel      context.CancelFunc
+	cancelled   bool
 }
 
 // CallbackURL is the address a sign-in server sends the browser back to.
@@ -269,10 +270,13 @@ func (s *Service) endSignIn(pending *signIn, err error) {
 			delete(s.signIns, state)
 		}
 	}
+	cancelled := pending.cancelled
 	s.mu.Unlock()
 	if err != nil {
 		pending.err = err
-		_, _ = s.setStatus(pending.connectorID, StatusNeedsSignIn, "sign-in", safeError(err, ""))
+		if !cancelled {
+			_, _ = s.setStatus(pending.connectorID, StatusNeedsSignIn, "sign-in", safeError(err, ""))
+		}
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 		_, _ = s.Test(ctx, pending.connectorID)
@@ -286,6 +290,7 @@ func (s *Service) cancelSignIns(connectorID string) {
 	var open []*signIn
 	for _, pending := range s.signIns {
 		if pending.connectorID == connectorID && !slices.Contains(open, pending) {
+			pending.cancelled = true
 			open = append(open, pending)
 		}
 	}
@@ -352,7 +357,10 @@ func (t *savingSource) Token() (*oauth2.Token, error) {
 	token, err := t.base.Token()
 	if err != nil {
 		var refused *oauth2.RetrieveError
-		if errors.As(err, &refused) && refused.ErrorCode == "invalid_grant" {
+		t.service.mu.Lock()
+		current := t.service.sources[t.id] == oauth2.TokenSource(t)
+		t.service.mu.Unlock()
+		if current && errors.As(err, &refused) && refused.ErrorCode == "invalid_grant" {
 			_, _ = t.service.SignOut(context.Background(), t.id)
 		}
 		return nil, err

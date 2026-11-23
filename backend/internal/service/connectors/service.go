@@ -366,7 +366,13 @@ func normalizeHTTP(in Input, old, rec record) (record, error) {
 	if rec.Auth != AuthNone && rec.Auth != AuthOAuth && rec.Auth != AuthHeader {
 		return record{}, invalid("INVALID_CONNECTOR_AUTH", "The sign-in must be none, oauth or header")
 	}
-	rec.Headers, err = mergeSecrets(old.Headers, in.Headers, headerPattern)
+	prior, _ := url.Parse(old.URL)
+	moved := old.URL != "" && (prior == nil || prior.Host != target.Host)
+	stored := old.Headers
+	if moved {
+		stored = nil
+	}
+	rec.Headers, err = mergeSecrets(stored, in.Headers, headerPattern)
 	if err != nil {
 		return record{}, err
 	}
@@ -374,6 +380,9 @@ func normalizeHTTP(in Input, old, rec record) (record, error) {
 		rec.Headers = nil
 	}
 	if rec.Auth == AuthHeader && len(rec.Headers) == 0 {
+		if moved && len(old.Headers) > 0 {
+			return record{}, invalid("INVALID_CONNECTOR_HEADERS", "Type the header value again for the new server")
+		}
 		return record{}, invalid("INVALID_CONNECTOR_HEADERS", "Header sign-in needs at least one header with a value")
 	}
 	rec.OAuthClientID = strings.TrimSpace(in.OAuthClientID)
@@ -382,7 +391,10 @@ func normalizeHTTP(in Input, old, rec record) (record, error) {
 			return record{}, invalid("INVALID_CONNECTOR_CLIENT", "Your own OAuth app needs automatic sign-in and a valid client ID")
 		}
 		rec.OAuthClientSecret = in.OAuthClientSecret
-		if rec.OAuthClientSecret == "" && rec.OAuthClientID == old.OAuthClientID {
+		if rec.OAuthClientSecret == "" && rec.OAuthClientID == old.OAuthClientID && old.OAuthClientSecret != "" {
+			if moved {
+				return record{}, invalid("INVALID_CONNECTOR_CLIENT", "Type the client secret again for the new server")
+			}
 			rec.OAuthClientSecret = old.OAuthClientSecret
 		}
 	}
@@ -438,8 +450,9 @@ func MaskedURL(raw string) string {
 	if target.RawQuery != "" {
 		parts := strings.Split(target.RawQuery, "&")
 		for i, part := range parts {
-			name, _, _ := strings.Cut(part, "=")
-			parts[i] = name + "=" + hiddenValue
+			if name, _, valued := strings.Cut(part, "="); valued {
+				parts[i] = name + "=" + hiddenValue
+			}
 		}
 		target.RawQuery = strings.Join(parts, "&")
 	}
@@ -454,8 +467,9 @@ func restoreQuery(raw, old string) (string, error) {
 	saved := map[string][]string{}
 	if prior, err := url.Parse(old); err == nil && old != "" && prior.Host == target.Host {
 		for _, part := range strings.Split(prior.RawQuery, "&") {
-			name, value, _ := strings.Cut(part, "=")
-			saved[name] = append(saved[name], value)
+			if name, value, valued := strings.Cut(part, "="); valued {
+				saved[name] = append(saved[name], value)
+			}
 		}
 	}
 	parts := strings.Split(target.RawQuery, "&")

@@ -103,7 +103,7 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 	}
 	added, err := svc.Import(ctx, []string{byKey["files"].ID, byKey["linear"].ID, byKey["sentry"].ID}, map[string]map[string]string{
 		byKey["files"].ID:  {"TOKEN": "typed"},
-		byKey["sentry"].ID: {"Authorization": "Bearer typed"},
+		byKey["sentry"].ID: {"Authorization": "typed-token"},
 	})
 	if err != nil || len(added) != 3 {
 		t.Fatalf("import = %+v, %v", added, err)
@@ -114,6 +114,11 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 	records, err := readFile(svc.path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, saved := range records {
+		if saved.Key == "sentry" && saved.Headers["Authorization"] != "Bearer typed-token" {
+			t.Errorf("the typed token of a bearer variable = %q", saved.Headers["Authorization"])
+		}
 	}
 	for _, rec := range records {
 		if rec.Key == "files" && (rec.Env["TOKEN"] != "typed" || rec.Env["ROOT"] != "/tmp") {

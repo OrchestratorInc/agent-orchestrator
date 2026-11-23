@@ -13,7 +13,7 @@ import (
 
 const (
 	proposalLife       = 30 * time.Minute
-	maxProposals       = 32
+	maxProposals       = 8
 	maxProposalReason  = 300
 	proposalValueStand = "value"
 )
@@ -113,10 +113,10 @@ func (s *Service) Propose(ctx context.Context, in ProposalInput) (Proposal, erro
 			delete(s.proposals, id)
 			continue
 		}
-		if old.State != ProposalPending {
+		if old.State != ProposalPending || old.SessionID != in.SessionID {
 			continue
 		}
-		if old.SessionID == in.SessionID && old.Key == rec.Key {
+		if old.Key == rec.Key {
 			if old.Transport == rec.Transport && old.URL == rec.URL && old.Command == rec.Command && slices.Equal(old.Args, rec.Args) &&
 				old.Auth == rec.Auth && slices.Equal(old.EnvKeys, sortedKeys(rec.Env)) && slices.Equal(old.HeaderKeys, sortedKeys(rec.Headers)) {
 				return *old, nil
@@ -127,7 +127,7 @@ func (s *Service) Propose(ctx context.Context, in ProposalInput) (Proposal, erro
 		pending++
 	}
 	if pending >= maxProposals {
-		return Proposal{}, apierr.Conflict("CONNECTOR_PROPOSAL_LIMIT", "Too many proposals wait for an answer", nil)
+		return Proposal{}, apierr.Conflict("CONNECTOR_PROPOSAL_LIMIT", "Too many proposals of this session wait for an answer", nil)
 	}
 	raw := make([]byte, 8)
 	if _, err := rand.Read(raw); err != nil {

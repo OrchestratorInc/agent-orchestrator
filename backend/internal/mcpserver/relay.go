@@ -169,9 +169,16 @@ func (r *relay) send(ctx context.Context, line []byte) (resp *http.Response, ses
 }
 
 // restart opens a new session with the server after it dropped the one named lost.
-func (r *relay) restart(ctx context.Context, lost string) error {
+func (r *relay) restart(ctx context.Context, lost string) (err error) {
 	r.restarting.Lock()
 	defer r.restarting.Unlock()
+	defer func() {
+		r.mu.Lock()
+		if err != nil && r.session == "" {
+			r.session = lost
+		}
+		r.mu.Unlock()
+	}()
 	r.mu.Lock()
 	start, current := r.start, r.session
 	if current == lost {

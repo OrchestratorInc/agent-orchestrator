@@ -1,6 +1,7 @@
 package connectors
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -284,7 +285,7 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 				headers = map[string]string{}
 			}
 			headers["Authorization"] = ""
-			if token := os.Getenv(f.def.BearerEnv); token != "" {
+			if token := cmp.Or(os.Getenv(f.def.BearerEnv), strings.TrimPrefix(typed["Authorization"], "Bearer ")); token != "" {
 				headers["Authorization"] = "Bearer " + token
 			}
 		}

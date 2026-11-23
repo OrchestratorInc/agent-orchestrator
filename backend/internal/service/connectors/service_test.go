@@ -242,3 +242,58 @@ func TestAResultIsNotSavedOnATargetThatWasNotProbed(t *testing.T) {
 		t.Fatalf("a result for the current address = %+v, %v", got, err)
 	}
 }
+
+func TestStoredSecretsDoNotFollowAnAddressToAnotherHost(t *testing.T) {
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{
+		Name: "docs", Transport: TransportHTTP, URL: "https://docs.example.com/mcp", Auth: AuthHeader, Headers: map[string]string{"Authorization": "Bearer a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := Input{Name: "docs", Transport: TransportHTTP, URL: "https://other.example.com/mcp", Auth: AuthHeader}
+	for _, headers := range []map[string]string{nil, {"Authorization": ""}} {
+		moved.Headers = headers
+		if _, err := svc.Update(ctx, created.ID, moved); errCode(err) != "INVALID_CONNECTOR_HEADERS" {
+			t.Fatalf("a new host with headers %v = %v", headers, err)
+		}
+	}
+	moved.Headers = map[string]string{"Authorization": "Bearer b"}
+	if _, err := svc.Update(ctx, created.ID, moved); err != nil {
+		t.Fatal(err)
+	}
+	if records, _ := readFile(svc.path); records[0].URL != moved.URL || records[0].Headers["Authorization"] != "Bearer b" {
+		t.Fatalf("records = %+v", records)
+	}
+
+	own, err := svc.Create(ctx, Input{Name: "own", Transport: TransportHTTP, URL: "https://own.example.com/mcp", Auth: AuthOAuth, OAuthClientID: "client", OAuthClientSecret: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := Input{Name: "own", Transport: TransportHTTP, URL: "https://own.example.com/v2/mcp", Auth: AuthOAuth, OAuthClientID: "client"}
+	if _, err := svc.Update(ctx, own.ID, next); err != nil {
+		t.Fatalf("a new path on the same host = %v", err)
+	}
+	next.URL = "https://elsewhere.example.com/mcp"
+	if _, err := svc.Update(ctx, own.ID, next); errCode(err) != "INVALID_CONNECTOR_CLIENT" {
+		t.Fatalf("a new host without the client secret = %v", err)
+	}
+}
+
+func TestAQueryNameWithoutAValueStaysAsItIs(t *testing.T) {
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "docs", Transport: TransportHTTP, URL: "https://docs.example.com/mcp?beta&team=acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.setStatus(created.ID, StatusConnected, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	shown := MaskedURL(created.URL)
+	got, err := svc.Update(ctx, created.ID, Input{Name: "docs", Transport: TransportHTTP, URL: shown, ProjectID: "p1"})
+	if err != nil || shown != "https://docs.example.com/mcp?beta&team=***" || got.URL != created.URL || got.Status != StatusConnected {
+		t.Fatalf("shown %q, after an edit of the project = %+v, %v", shown, got, err)
+	}
+}

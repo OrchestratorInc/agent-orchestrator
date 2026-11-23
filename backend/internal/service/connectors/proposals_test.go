@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -128,5 +129,25 @@ func TestAProposalCanBeDeclinedAndExpires(t *testing.T) {
 	}
 	if _, err := svc.GetProposal(ctx, "missing"); err == nil {
 		t.Fatal("an unknown proposal was found")
+	}
+}
+
+func TestOneSessionCannotUseUpTheProposalsOfTheOthers(t *testing.T) {
+	svc, _ := proposalService(t)
+	ctx := context.Background()
+	ask := func(session string, n int) error {
+		_, err := svc.Propose(ctx, ProposalInput{SessionID: session, Key: "srv-" + strconv.Itoa(n), Transport: TransportHTTP, URL: "https://x.example/mcp"})
+		return err
+	}
+	for n := range maxProposals {
+		if err := ask("ao-12", n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ask("ao-12", maxProposals); errCode(err) != "CONNECTOR_PROPOSAL_LIMIT" {
+		t.Fatalf("one more of the same session = %v", err)
+	}
+	if err := ask("ao-13", 0); err != nil {
+		t.Fatalf("another session = %v", err)
 	}
 }

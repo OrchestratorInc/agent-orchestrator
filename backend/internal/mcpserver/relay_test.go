@@ -138,13 +138,16 @@ func TestLaunchSaysWhyTheDaemonRefused(t *testing.T) {
 
 func TestRelayStartsANewSessionWhenTheServerDropsTheOldOne(t *testing.T) {
 	var mu sync.Mutex
-	valid, issued, starts := "", 0, 0
+	valid, issued, starts, failStarts := "", 0, 0, 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		defer mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.Contains(string(body), `"method":"initialize"`) && failStarts > 0:
+			failStarts--
+			http.Error(w, "starting", http.StatusServiceUnavailable)
 		case strings.Contains(string(body), `"method":"initialize"`):
 			issued++
 			starts++
@@ -186,13 +189,22 @@ func TestRelayStartsANewSessionWhenTheServerDropsTheOldOne(t *testing.T) {
 	if reply := ask(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`); !strings.Contains(reply, `"echo"`) || strings.Contains(reply, `"error"`) {
 		t.Fatalf("list after the server dropped the session = %s", reply)
 	}
+	mu.Lock()
+	valid, failStarts = "gone again", 1
+	mu.Unlock()
+	if reply := ask(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`); !strings.Contains(reply, `"error"`) {
+		t.Fatalf("list while the server cannot start a session = %s", reply)
+	}
+	if reply := ask(`{"jsonrpc":"2.0","id":4,"method":"tools/list"}`); !strings.Contains(reply, `"echo"`) || strings.Contains(reply, `"error"`) {
+		t.Fatalf("list after the server can start a session again = %s", reply)
+	}
 	_ = agentOut.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if starts != 2 {
+	if starts != 3 {
 		t.Fatalf("the relay started %d sessions", starts)
 	}
 }

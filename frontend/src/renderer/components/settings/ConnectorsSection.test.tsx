@@ -209,6 +209,11 @@ describe("ConnectorsSection", () => {
 });
 
 describe("connector helpers", () => {
+	it("keeps the backslashes of a Windows path", () => {
+		expect(splitCommandLine("C:\\Tools\\mcp\\server.exe --port 1")).toEqual(["C:\\Tools\\mcp\\server.exe", "--port", "1"]);
+		expect(splitCommandLine("my\\ server a\\\\b")).toEqual(["my server", "a\\b"]);
+	});
+
 	it("splits a command line with quotes", () => {
 		expect(splitCommandLine(`npx -y "my server" --dir '/a b' c\\ d ""`)).toEqual(["npx", "-y", "my server", "--dir", "/a b", "c d", ""]);
 		expect(splitCommandLine("   ")).toEqual([]);
