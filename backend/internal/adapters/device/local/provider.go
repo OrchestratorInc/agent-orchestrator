@@ -893,9 +893,7 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 // simulatorBooted asks simctl whether a simulator is booted now; known is
 // false when simctl cannot say.
 func (p *Provider) simulatorBooted(ctx context.Context, udid string) (booted, known bool) {
-	if runtime.GOOS != "darwin" {
-		return false, false
-	}
+	// Off macOS xcrun is missing, and the error below reads as unknown.
 	out, err := p.run(ctx, "xcrun", "simctl", "list", "devices", "-j")
 	if err != nil {
 		return false, false
