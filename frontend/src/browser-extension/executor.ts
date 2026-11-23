@@ -520,6 +520,14 @@ export class Executor {
 				return { outcome, instruction, ...(outcome === "ambiguous" ? { candidates } : {}), snapshot, untrustedExternalContent: true };
 			};
 			let dispatched = false;
+			// An approval whose description matched no element approved none: a
+			// later match would act on something the user never saw.
+			if (args.approvalBinding !== undefined && !(isRecord(args.approvalBinding) && typeof args.approvalBinding.ref === "string" && args.approvalBinding.ref !== "")) {
+				throw new BridgeError(
+					"BROWSER_TARGET_CHANGED",
+					"The user approved this action before Orchestrator could find the element it acts on. Take a new snapshot and try again.",
+				);
+			}
 			const perform = async (candidate: ActCandidate, retried: boolean, beforeSnapshot: string) => {
 				const beforeNavigations = this.navigationCounts.get(page.tabId) ?? 0;
 				const before = { tabId: page.logicalId, url: sanitizeBrowserURL(page.tab.url ?? "") };
@@ -715,7 +723,16 @@ export class Executor {
 			let input = {};
 			if (await this.useTrustedInput(ctx, page)) {
 				input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
-			} else await this.content(page, ctx, { op: "press", key });
+			} else {
+				// The page can move focus after the check above; the content script
+				// checks the approved document and focus again as it presses.
+				const bound = isRecord(approvalBinding) ? approvalBinding : undefined;
+				await this.content(page, ctx, {
+					op: "press",
+					key,
+					...(bound ? { expectDocument: bound.document, ...(typeof bound.focus === "string" && bound.focus ? { expectFocus: bound.focus } : {}) } : {}),
+				});
+			}
 			return { pressed: key, ...input, ...this.result(await this.refreshed(page)) };
 		});
 	}
@@ -889,12 +906,13 @@ export class Executor {
 		const nth = typeof args.nth === "number" && Number.isFinite(args.nth) ? Math.trunc(args.nth) : undefined;
 		return this.withPage(ctx, async (page) => {
 			const fresh = await this.refreshed(page);
-			// In a selected frame the approval is scoped to the frame's own site,
-			// read from its document; otherwise Chrome's tab address decides.
-			const inFrame = this.frameFor(ctx, fresh) !== 0;
+			// The address and title come from the same reply as the document id:
+			// in a selected frame that is the frame's own site, which the approval
+			// is scoped to, and a navigation in between cannot pair one page's
+			// facts with another's site. The tab's metadata is only a fallback.
 			const factsFor = (doc: { url?: string; title?: string }) => ({
-				pageUrl: sanitizeBrowserURL((inFrame && doc.url) || fresh.tab.url || ""),
-				pageTitle: sanitizeBrowserTitle((inFrame ? doc.title : undefined) ?? fresh.tab.title ?? ""),
+				pageUrl: sanitizeBrowserURL(doc.url || fresh.tab.url || ""),
+				pageTitle: sanitizeBrowserTitle(doc.title ?? fresh.tab.title ?? ""),
 				...(instruction ? { instruction } : {}),
 			});
 			let ref = action !== "press" && typeof args.ref === "string" ? args.ref.replace(/^@/, "") : undefined;

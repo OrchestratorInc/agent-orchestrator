@@ -99,6 +99,16 @@ export function handleContentRequest(document: Document, registry: RefRegistry, 
 			hoverSynthetic(element());
 			return { hovered: true };
 		case "press":
+			// An approved press must land on the document and focus approved.
+			if (
+				(request.expectDocument !== undefined && request.expectDocument !== documentId(document)) ||
+				(typeof request.expectFocus === "string" && request.expectFocus !== focusIdOf(document, false))
+			) {
+				throw new BridgeError(
+					"BROWSER_TARGET_CHANGED",
+					"Focus moved while the action waited for approval, so Enter would not reach what the user approved. Focus the field again and retry.",
+				);
+			}
 			pressSynthetic(document, String(request.key ?? ""));
 			return { pressed: true };
 		case "scroll":

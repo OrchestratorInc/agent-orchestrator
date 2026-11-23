@@ -134,6 +134,13 @@ func classifyRemoteArgs(args []string) remoteGate {
 		return remoteGate{}
 	case "find":
 		return classifyFind(rest)
+	case "dialog":
+		// Accepting a confirm or prompt lets the page carry on with what it
+		// asked about; reading or dismissing it does not.
+		if len(rest) > 0 && strings.EqualFold(rest[0], "accept") {
+			return remoteGate{kind: remoteAsk, action: "dialog"}
+		}
+		return remoteGate{}
 	case "eval", "js", "mouse", "batch", "run":
 		return remoteGate{kind: remoteAsk, action: command}
 	}
@@ -191,34 +198,45 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 	if mode == approval.ModeOff {
 		return nil
 	}
-	pageURL, pageTitle := s.remotePage(ctx)
-	command := strings.Join(args, " ")
-	if len(command) > 160 {
-		command = command[:160] + "…"
+	// Discovery gets its own short deadline: a stalled page must not use up
+	// the request's budget before the user is even asked.
+	limit := s.describeTimeout
+	if limit <= 0 {
+		limit = DefaultDescribeTimeout
 	}
+	discoverCtx, cancelDiscover := context.WithTimeout(ctx, limit)
+	defer cancelDiscover()
+	pageURL, pageTitle := s.remotePage(discoverCtx)
+	summary := onSite(remoteSummary(gate, args), pageURL)
 	var verdict approval.Verdict
+	var approved approval.Target
+	var approvedIdentified bool
 	if gate.kind == remoteDescribe {
-		target, identified, partial := s.remoteTarget(ctx, gate)
+		target, identified, partial := s.remoteTarget(discoverCtx, gate)
+		approved, approvedIdentified = target, identified
 		target.PageURL, target.PageTitle = pageURL, pageTitle
 		if identified {
 			verdict = approval.Classify(target, mode)
 		}
 		if identified && partial && !verdict.NeedsApproval {
 			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
-				Summary: onSite(fmt.Sprintf("Run %q", command), pageURL),
+				Summary: summary,
 				Reason:  "Orchestrator could not read the form this element belongs to, so it asks first."}
 		} else if !identified {
 			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
-				Summary: onSite(fmt.Sprintf("Run %q", command), pageURL),
+				Summary: summary,
 				Reason:  "Orchestrator could not identify the element this acts on, so it asks first."}
 		}
 	} else {
 		reason := "This runs JavaScript in the page, which can do anything the page can, including pay or send."
-		if gate.action != "eval" && gate.action != "js" {
+		switch {
+		case gate.action == "dialog":
+			reason = "Accepting the page's dialog lets the page carry on with what it asked to confirm."
+		case gate.action != "eval" && gate.action != "js":
 			reason = "Orchestrator cannot tell in advance what this command does on the page, so it asks first."
 		}
 		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
-			Summary: onSite(fmt.Sprintf("Run %q", command), pageURL), Reason: reason}
+			Summary: summary, Reason: reason}
 	}
 	if !verdict.NeedsApproval {
 		return nil
@@ -231,10 +249,84 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 	if err != nil {
 		return err
 	}
-	if outcome.Allowed() {
-		return nil
+	if !outcome.Allowed() {
+		return approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
 	}
-	return approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
+	// The service runs refs and selectors when the command arrives, not when
+	// the user approved it: read the page again and refuse if it moved on.
+	recheckCtx, cancelRecheck := context.WithTimeout(ctx, limit)
+	defer cancelRecheck()
+	if nowURL, _ := s.remotePage(recheckCtx); nowURL != pageURL {
+		return remoteTargetChanged()
+	}
+	if gate.kind == remoteDescribe {
+		now, identified, _ := s.remoteTarget(recheckCtx, gate)
+		if identified != approvedIdentified || !sameRemoteTarget(now, approved) {
+			return remoteTargetChanged()
+		}
+	}
+	return nil
+}
+
+// sameRemoteTarget compares what the user was shown and judged by.
+func sameRemoteTarget(a, b approval.Target) bool {
+	return a.Role == b.Role && a.Name == b.Name && a.IsSubmit == b.IsSubmit &&
+		a.FormAction == b.FormAction && a.FormMethod == b.FormMethod && a.FormHasPayment == b.FormHasPayment &&
+		a.FormHasPassword == b.FormHasPassword && a.FormHasNewPassword == b.FormHasNewPassword && a.SubmitName == b.SubmitName
+}
+
+func remoteTargetChanged() error {
+	return apierr.Conflict("BROWSER_TARGET_CHANGED",
+		"The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.", nil)
+}
+
+// remoteSummary says what a gated command does from its verb and target
+// only. It goes to the prompt, the audit log and push notifications, so it
+// never carries typed text or other argument values; eval and js keep their
+// script, which is the action being approved.
+func remoteSummary(gate remoteGate, args []string) string {
+	if gate.kind == remoteAsk && gate.action == "dialog" {
+		return "Accept the page's dialog"
+	}
+	if gate.kind == remoteAsk {
+		if gate.action == "eval" || gate.action == "js" {
+			script := strings.Join(remoteCommandArgs(args, gate.action), " ")
+			if len(script) > 160 {
+				script = script[:160] + "…"
+			}
+			return fmt.Sprintf("Run %q", strings.TrimSpace(gate.action+" "+script))
+		}
+		return fmt.Sprintf("Run %q", gate.action)
+	}
+	target := "the focused element"
+	switch {
+	case gate.name != "":
+		target = fmt.Sprintf("%q", gate.name)
+	case gate.selector != "":
+		target = gate.selector
+		if len(target) > 80 {
+			target = target[:80] + "…"
+		}
+	}
+	switch {
+	case gate.typed:
+		return "Type a line break into " + target
+	case gate.action == "press":
+		return fmt.Sprintf("Press %s on %s", strings.TrimSpace(gate.key), target)
+	case gate.action == "dblclick":
+		return "Double-click " + target
+	}
+	return "Click " + target
+}
+
+// remoteCommandArgs returns what follows the command verb in args.
+func remoteCommandArgs(args []string, verb string) []string {
+	for i, word := range args {
+		if strings.EqualFold(word, verb) {
+			return args[i+1:]
+		}
+	}
+	return nil
 }
 
 func onSite(text, pageURL string) string {
@@ -382,6 +474,14 @@ const nameOf = (el) => {
   const tag = el.tagName.toLowerCase(), type = (el.type || "").toLowerCase();
   let name = clean(el.getAttribute("aria-label")) || (tag === "input" && ["submit", "button"].includes(type) ? clean(el.value) : "");
   if (!name && el.id) { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]'); if (l) name = clean(l.textContent); }
+  // An editable field's content is what the agent typed: name it only by its
+  // label or hint, never by its text, so typed values stay out of the prompt.
+  const editable = tag === "textarea" || el.isContentEditable || (tag === "input" && !["submit", "button", "image", "reset", "checkbox", "radio"].includes(type));
+  if (editable) {
+    const wrap = name ? null : el.closest("label");
+    if (wrap) name = clean([...wrap.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" "));
+    return name || clean(el.placeholder || el.getAttribute("aria-placeholder") || el.getAttribute("data-placeholder") || el.title);
+  }
   return name || clean(el.innerText || el.textContent || el.placeholder);
 };
 let el;

@@ -57,9 +57,17 @@ type fakeRemote struct {
 	refs      string
 	focused   string
 	failAll   bool
+	// hang makes every describe call block until its context ends.
+	hang bool
+	// url overrides the page address the fake reports.
+	url string
 }
 
-func (f *fakeRemote) Forward(_ context.Context, args []string, _ map[string]string) (RemoteResponse, error) {
+func (f *fakeRemote) Forward(ctx context.Context, args []string, _ map[string]string) (RemoteResponse, error) {
+	if f.hang && len(args) > 0 && (args[len(args)-1] == "--json") {
+		<-ctx.Done()
+		return RemoteResponse{}, ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failAll {
@@ -69,7 +77,11 @@ func (f *fakeRemote) Forward(_ context.Context, args []string, _ map[string]stri
 	case slices.Equal(args, []string{"snapshot", "--interactive", "--json"}):
 		return RemoteResponse{Output: f.refs}, nil
 	case slices.Equal(args, []string{"get", "url", "--json"}):
-		return RemoteResponse{Output: `{"success":true,"data":{"url":"https://shop.example/checkout"}}`}, nil
+		url := f.url
+		if url == "" {
+			url = "https://shop.example/checkout"
+		}
+		return RemoteResponse{Output: `{"success":true,"data":{"url":"` + url + `"}}`}, nil
 	case slices.Equal(args, []string{"get", "title", "--json"}):
 		return RemoteResponse{Output: `{"success":true,"data":{"title":"Checkout"}}`}, nil
 	case len(args) == 3 && args[0] == "eval" && args[2] == "--json":
@@ -295,5 +307,120 @@ func TestRemoteTypedLineBreakAsks(t *testing.T) {
 	svc, gate, token := remoteService(t, remote)
 	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"type", "@e1", "4111"}, nil); err != nil || len(gate.Pending()) != 0 {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRemoteSummaryNeverCarriesTypedText(t *testing.T) {
+	// Discovery fails, so the prompt falls back to describing the command.
+	// The summary goes to the prompt, the audit log and push notifications,
+	// so typed values must never appear in it.
+	const secret = "4111111111111111"
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"type", "@e1", secret + "\n"}, `Type a line break into @e1`},
+		{[]string{"keyboard", "type", secret + "\n"}, `Type a line break into the focused element`},
+		{[]string{"find", "label", "Card", "type", secret + "\n"}, `Type a line break into "Card"`},
+		{[]string{"batch", `[["fill","@e1","` + secret + `"],["click","@e2"]]`}, `Run "batch"`},
+		{[]string{"frobnicate", secret}, `Run "frobnicate"`},
+	} {
+		remote := &fakeRemote{failAll: true}
+		svc, gate, token := remoteService(t, remote)
+		asked := answer(t, gate, approval.DecisionDeny)
+		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, tc.args, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+			t.Fatalf("%q: err = %v", tc.args, err)
+		}
+		p := <-asked
+		if strings.Contains(p.Action, secret) || strings.Contains(p.Reason, secret) {
+			t.Fatalf("%q: prompt carries the typed value: %+v", tc.args, p)
+		}
+		if p.Action != tc.want {
+			t.Fatalf("%q: summary = %q, want %q", tc.args, p.Action, tc.want)
+		}
+		entries, _ := gate.Audit(10)
+		for _, entry := range entries {
+			if strings.Contains(entry.Action, secret) || strings.Contains(entry.Reason, secret) {
+				t.Fatalf("%q: audit carries the typed value: %+v", tc.args, entry)
+			}
+		}
+	}
+}
+
+func TestRemoteDialogAcceptAsks(t *testing.T) {
+	for _, args := range [][]string{{"dialog", "accept"}, {"dialog", "accept", "my answer"}} {
+		remote := &fakeRemote{}
+		svc, gate, token := remoteService(t, remote)
+		asked := answer(t, gate, approval.DecisionDeny)
+		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, args, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" || len(remote.sent()) != 0 {
+			t.Fatalf("%q: err=%v forwarded=%v", args, err, remote.sent())
+		}
+		if p := <-asked; strings.Contains(p.Action, "my answer") || p.Action != "Accept the page's dialog on shop.example" {
+			t.Fatalf("%q: summary = %q", args, p.Action)
+		}
+	}
+	// Reading or dismissing a dialog never asks.
+	remote := &fakeRemote{}
+	svc, gate, token := remoteService(t, remote)
+	for _, args := range [][]string{{"dialog", "status"}, {"dialog", "dismiss"}} {
+		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, args, nil); err != nil {
+			t.Fatalf("%q: %v", args, err)
+		}
+	}
+	if len(gate.Pending()) != 0 || len(remote.sent()) != 2 {
+		t.Fatalf("pending=%d forwarded=%v", len(gate.Pending()), remote.sent())
+	}
+}
+
+func TestRemoteStuckDiscoveryStillLeavesTimeToDecide(t *testing.T) {
+	// The page never answers describe calls. Discovery gives up on its own
+	// short deadline and the user still gets the whole approval wait.
+	remote := &fakeRemote{hang: true}
+	svc, gate, token := remoteService(t, remote)
+	svc.describeTimeout = 50 * time.Millisecond
+	started := time.Now()
+	asked := answer(t, gate, approval.DecisionDeny)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	p := <-asked
+	if waited := p.CreatedAt.Sub(started); waited > time.Second {
+		t.Fatalf("prompt appeared after %s", waited)
+	}
+	if p.Category != approval.CategoryScript || p.Action != "Click @e2" {
+		t.Fatalf("prompt = %+v", p)
+	}
+}
+
+func TestRemoteApprovalIsRefusedWhenThePageChangedWhileWaiting(t *testing.T) {
+	for name, change := range map[string]func(*fakeRemote){
+		"navigated": func(f *fakeRemote) { f.url = "https://shop.example/other" },
+		"target changed": func(f *fakeRemote) {
+			f.refs = `{"success":true,"data":{"refs":{"e2":{"role":"button","name":"Delete account"}}}}`
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			remote := &fakeRemote{refs: checkoutRefs}
+			svc, gate, token := remoteService(t, remote)
+			go func() {
+				for range 400 {
+					if list := gate.Pending(); len(list) > 0 {
+						remote.mu.Lock()
+						change(remote)
+						remote.mu.Unlock()
+						_ = gate.Decide(list[0].ID, approval.DecisionAllowOnce)
+						return
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}()
+			_, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil)
+			if apiErrorCode(err) != "BROWSER_TARGET_CHANGED" {
+				t.Fatalf("err = %v", err)
+			}
+			if len(remote.sent()) != 0 {
+				t.Fatalf("forwarded %v after the page changed", remote.sent())
+			}
+		})
 	}
 }

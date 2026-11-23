@@ -62,6 +62,21 @@ export function describeApprovalTarget(
 		if ((el as HTMLElement).isContentEditable) return "textbox";
 		return "";
 	};
+	// A field's <label for> or wrapping <label>. A wrapping label's text leaves
+	// out the field's own content, which is what the agent typed.
+	const labelText = (el: Element): string => {
+		const id = el.id;
+		const byFor = id ? doc.querySelector(`label[for="${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(id) : id.replace(/["\\]/g, "\\$&")}"]`) : null;
+		if (byFor) return clean(byFor.textContent);
+		const wrap = el.closest("label");
+		if (!wrap) return "";
+		const parts: string[] = [];
+		const walker = doc.createTreeWalker(wrap, 4 /* NodeFilter.SHOW_TEXT */);
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			if (!el.contains(node)) parts.push(node.textContent ?? "");
+		}
+		return clean(parts.join(" "));
+	};
 	const accessibleName = (el: Element): string => {
 		const labelled = el.getAttribute("aria-labelledby");
 		if (labelled) {
@@ -78,13 +93,10 @@ export function describeApprovalTarget(
 			const input = el as HTMLInputElement;
 			if (["submit", "button", "reset"].includes(input.type)) return clean(input.value) || (input.type === "submit" ? "Submit" : "");
 			if (input.type === "image") return clean(input.alt);
-			const id = input.id;
-			const label = (id && doc.querySelector(`label[for="${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(id) : id.replace(/["\\]/g, "\\$&")}"]`)) || input.closest("label");
-			if (label) return clean(label.textContent);
-			return clean(input.placeholder) || clean(input.title);
+			return labelText(input) || clean(input.placeholder) || clean(input.title);
 		}
 		if (tag === "textarea" || (el as HTMLElement).isContentEditable) {
-			return clean(el.getAttribute("placeholder")) || clean(el.getAttribute("title")) || clean(el.getAttribute("data-placeholder"));
+			return labelText(el) || clean(el.getAttribute("placeholder")) || clean(el.getAttribute("title")) || clean(el.getAttribute("data-placeholder"));
 		}
 		return clean((el as HTMLElement).innerText ?? el.textContent) || clean(el.getAttribute("title"));
 	};

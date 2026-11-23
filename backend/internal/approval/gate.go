@@ -2,6 +2,7 @@ package approval
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -171,6 +172,8 @@ type Gate struct {
 	// with mu held and must not block or call back into the gate.
 	observers []func(Event)
 	auditMu   sync.Mutex
+	// writeAudit appends to the audit file; tests replace it to fail a write.
+	writeAudit func(f *os.File, b []byte) (int, error)
 }
 
 // Open loads (or starts) the gate state in dir.
@@ -474,11 +477,26 @@ func (g *Gate) audit(req Request, id string, at, decidedAt time.Time, decision D
 	}
 	g.auditMu.Lock()
 	defer g.auditMu.Unlock()
-	f, err := os.OpenFile(g.auditPath(), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(g.auditPath(), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("approval audit: %w", err)
 	}
-	if _, err := f.Write(append(raw, '\n')); err != nil {
+	// Start from a whole-record boundary: a write that failed part way, here
+	// or before a restart, must not glue its prefix onto this record. If the
+	// file cannot be repaired, nothing is appended and the outcome is refused.
+	boundary, err := auditBoundary(f)
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("approval audit: %w", err)
+	}
+	write := g.writeAudit
+	if write == nil {
+		write = (*os.File).Write
+	}
+	if _, err := write(f, append(raw, '\n')); err != nil {
+		// Drop whatever part of the record landed; the next append repairs
+		// it if this cannot.
+		_ = f.Truncate(boundary)
 		_ = f.Close()
 		return fmt.Errorf("approval audit: %w", err)
 	}
@@ -486,6 +504,46 @@ func (g *Gate) audit(req Request, id string, at, decidedAt time.Time, decision D
 		return fmt.Errorf("approval audit: %w", err)
 	}
 	return nil
+}
+
+// auditBoundary returns the size of f's complete records, truncating an
+// incomplete final record left by a failed or interrupted append.
+func auditBoundary(f *os.File) (int64, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	size := info.Size()
+	if size == 0 {
+		return 0, nil
+	}
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, size-1); err != nil {
+		return 0, err
+	}
+	if last[0] == '\n' {
+		return size, nil
+	}
+	// Find the newline that ends the last whole record.
+	const chunk = 64 * 1024
+	buf := make([]byte, chunk)
+	end := size
+	for end > 0 {
+		start := max(end-chunk, 0)
+		n, err := f.ReadAt(buf[:end-start], start)
+		if err != nil && n < int(end-start) {
+			return 0, err
+		}
+		if i := bytes.LastIndexByte(buf[:n], '\n'); i >= 0 {
+			end = start + int64(i) + 1
+			break
+		}
+		end = start
+	}
+	if err := f.Truncate(end); err != nil {
+		return 0, err
+	}
+	return end, nil
 }
 
 // Audit returns up to limit entries, newest first.

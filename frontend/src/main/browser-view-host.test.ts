@@ -6676,6 +6676,43 @@ describe("browser human pointer and annotated screenshots", () => {
 		expect(clicks()).toBe(1);
 	});
 
+	it("discards a description when the page navigates while it is read", async () => {
+		const { host, runtime, invoke, emit, webContentsListeners } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId: ensure.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		let navigate = false;
+		(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (...call: unknown[]) => {
+			if (call[1] === "snapshot") {
+				// The page moves on between the tab read and the snapshot reply.
+				if (navigate) webContentsListeners.get("did-navigate")?.({} as never, "http://localhost:5173/next" as never);
+				return { snapshot: "- button \"Save\" [ref=e1]", refs: { e1: { role: "button", name: "Save" } } };
+			}
+			return {};
+		});
+		await expect(host.execute("sess-1", "describe", { action: "click", ref: "e1" })).resolves.toMatchObject({ binding: { ref: "e1" } });
+		navigate = true;
+		await expect(host.execute("sess-1", "describe", { action: "click", ref: "e1" })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+	});
+
+	it("refuses an approved act whose description found no element", async () => {
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId: ensure.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (...call: unknown[]) =>
+			call[1] === "snapshot"
+				? { snapshot: "- button \"Save\" [ref=e1]", refs: { e1: { role: "button", name: "Save" } } }
+				: {},
+		);
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		// The element exists now, but nothing matched when the user was asked,
+		// so the binding names none.
+		await expect(
+			host.execute("sess-1", "act", { instruction: "the save button", approvalBinding: { tabId: tabs.activeTabId, document: 0 } }),
+		).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		const acted = (runtime.runAction as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((call: unknown[]) => call[1] === "click");
+		expect(acted).toHaveLength(0);
+	});
+
 	it("dispatches an approved line-break type only on the tab, document, and element approved", async () => {
 		const { host, runtime, invoke, emit } = setupPointerHost();
 		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };

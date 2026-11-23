@@ -30,6 +30,20 @@ describe("describeApprovalTarget", () => {
 		expect(facts?.formAction).toContain("/orders");
 	});
 
+	it("names a textarea by its associated label, never by what is typed in it", () => {
+		const doc = page(`
+			<label for="m">Message</label><textarea id="m">my secret draft</textarea>
+			<label>Reply <textarea id="r">another secret</textarea></label>`);
+		const message = doc.getElementById("m") as HTMLTextAreaElement;
+		message.value = "typed secret";
+		message.focus();
+		expect(describeApprovalTarget(doc, { mode: "focused" })).toMatchObject({ role: "textbox", name: "Message" });
+		(doc.getElementById("r") as HTMLTextAreaElement).focus();
+		const reply = describeApprovalTarget(doc, { mode: "focused" });
+		expect(reply).toMatchObject({ role: "textbox", name: "Reply" });
+		expect(JSON.stringify(reply)).not.toContain("secret");
+	});
+
 	it("reports Enter in a form's text field as a submit with the form's button label", () => {
 		const doc = page(`
 			<form method="post"><label for="m">Message</label><input id="m"><button type="submit">Send</button></form>`);
