@@ -27,9 +27,10 @@ type NotificationIntent struct {
 	Provider           string
 	Repo               string
 
-	// ApprovalAction says what a browser approval would do. It is agent- and
-	// page-supplied text: enrich keeps it to one capped plain-text line.
-	ApprovalAction string
+	// ApprovalCategory is a browser approval's kind (payment, message, ...).
+	// Only the kind and site reach the notification: the approval's summary
+	// and reason are agent- and page-supplied and can carry typed text.
+	ApprovalCategory string
 	// ApprovalSite is the origin the approval acts on.
 	ApprovalSite string
 }

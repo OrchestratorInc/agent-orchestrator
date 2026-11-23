@@ -102,7 +102,7 @@ func TestApprovalCreatesBrowserApprovalNotification(t *testing.T) {
 	got := w.notified[0]
 	if got.Type != domain.NotificationBrowserApproval || got.SessionID != "sess-1" || got.ProjectID != "proj-1" ||
 		got.SourceKey != SourceKey(id) || got.SessionDisplayName != "Checkout flow" ||
-		got.ApprovalAction != `Click "Place order" on shop.example` || got.ApprovalSite != "https://shop.example" {
+		got.ApprovalCategory != "payment" || got.ApprovalSite != "https://shop.example" {
 		t.Fatalf("intent = %+v", got)
 	}
 }

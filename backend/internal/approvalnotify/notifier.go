@@ -100,12 +100,13 @@ func (n *Notifier) write(ctx context.Context, ev approval.Event) {
 		p := ev.Pending
 		n.session[p.ID] = p.SessionID
 		intent := ports.NotificationIntent{
-			Type:           domain.NotificationBrowserApproval,
-			SessionID:      domain.SessionID(p.SessionID),
-			SourceKey:      SourceKey(p.ID),
-			CreatedAt:      p.CreatedAt.UTC(),
-			ApprovalAction: p.Action,
-			ApprovalSite:   p.Site,
+			Type:      domain.NotificationBrowserApproval,
+			SessionID: domain.SessionID(p.SessionID),
+			SourceKey: SourceKey(p.ID),
+			CreatedAt: p.CreatedAt.UTC(),
+			// Never p.Action, p.Reason or p.Element: they can carry typed text.
+			ApprovalCategory: p.Category,
+			ApprovalSite:     p.Site,
 		}
 		if n.lookup != nil {
 			intent.SessionDisplayName, intent.ProjectID = n.lookup(p.SessionID)

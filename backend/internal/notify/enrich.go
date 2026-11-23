@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/approval"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -119,21 +119,30 @@ func prLabel(intent Intent) string {
 	return "PR"
 }
 
-// maxApprovalBody caps the agent- and page-supplied text an approval shows on
-// a lock screen.
+// maxApprovalBody caps an approval banner on a lock screen.
 const maxApprovalBody = 140
 
-// approvalBody reads "<agent> wants to <action>[ on <site>]" as one plain line.
+// approvalVerbs name each approval kind. The banner is built from these, the
+// session's name and the host only: never the approval's own summary.
+var approvalVerbs = map[string]string{
+	approval.CategoryPayment:    "make a payment",
+	approval.CategoryMessage:    "send a message",
+	approval.CategoryPublish:    "post or publish",
+	approval.CategoryDelete:     "delete something",
+	approval.CategorySecurity:   "change a security setting",
+	approval.CategoryAccount:    "change account details",
+	approval.CategorySubmit:     "submit a form",
+	approval.CategoryCredential: "use a saved login",
+}
+
+// approvalBody reads "<agent> wants to <kind>[ on <host>]" as one plain line.
 func approvalBody(intent Intent) string {
-	action := oneLine(intent.ApprovalAction)
-	if action == "" {
-		action = "act in the browser"
+	verb, ok := approvalVerbs[strings.TrimSpace(intent.ApprovalCategory)]
+	if !ok {
+		verb = "run a browser action"
 	}
-	if r, size := utf8.DecodeRuneInString(action); size > 0 {
-		action = string(unicode.ToLower(r)) + action[size:]
-	}
-	text := fmt.Sprintf("%s wants to %s", oneLine(sessionLabel(intent)), action)
-	if host := siteHost(intent.ApprovalSite); host != "" && !strings.Contains(action, host) {
+	text := fmt.Sprintf("%s wants to %s", oneLine(sessionLabel(intent)), verb)
+	if host := siteHost(intent.ApprovalSite); host != "" {
 		text += " on " + host
 	}
 	if runes := []rune(text); len(runes) > maxApprovalBody {
