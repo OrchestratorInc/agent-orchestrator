@@ -171,7 +171,7 @@ export function OrchestratorLoader() {
 export function ConversationLoading({ title, message }: { title: string; message?: string }) {
 	const styles = useThemedStyles(makeStyles);
 	return (
-		<View style={styles.root} accessible accessibilityRole="progressbar" accessibilityLabel={title} accessibilityState={{ busy: true }}>
+		<View style={styles.root} accessible accessibilityRole="progressbar" accessibilityLabel={message ? `${title}, ${message}` : title} accessibilityState={{ busy: true }}>
 			<OrchestratorLoader />
 			<Text maxFontSizeMultiplier={fontScaleCap.title} style={styles.title}>{title}</Text>
 			{message ? <Text numberOfLines={2} maxFontSizeMultiplier={fontScaleCap.body} style={styles.message}>{message}</Text> : null}

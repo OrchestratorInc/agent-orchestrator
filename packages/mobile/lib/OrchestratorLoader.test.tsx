@@ -73,7 +73,13 @@ describe("ConversationLoading", () => {
 	it("announces itself as busy and names what is loading", () => {
 		const root = render(<ConversationLoading title="Orchestrating…" message="Fix the login flow" />).root;
 		const box = root.findByProps({ accessibilityRole: "progressbar" });
-		expect(box.props).toMatchObject({ accessibilityLabel: "Orchestrating…", accessibilityState: { busy: true } });
+		// The message sits inside this accessible parent, so the label must carry it for VoiceOver.
+		expect(box.props).toMatchObject({ accessibilityLabel: "Orchestrating…, Fix the login flow", accessibilityState: { busy: true } });
 		expect(root.findAllByType("Text" as never).map((node) => node.props.children)).toEqual(["Orchestrating…", "Fix the login flow"]);
+	});
+
+	it("keeps the title-only label when no message is supplied", () => {
+		const root = render(<ConversationLoading title="Orchestrating…" />).root;
+		expect(root.findByProps({ accessibilityRole: "progressbar" }).props).toMatchObject({ accessibilityLabel: "Orchestrating…" });
 	});
 });
