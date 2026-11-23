@@ -377,6 +377,14 @@ func (c *ConnectorsController) test(w http.ResponseWriter, r *http.Request) {
 	if !c.ready(w, r, http.MethodPost, "/api/v1/connectors/{connectorId}/test") {
 		return
 	}
+	current, err := c.Svc.Get(r.Context(), connectorRef(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	if rejectLANCommandConnector(w, r, string(current.Transport)) {
+		return
+	}
 	tested, err := c.Svc.Test(r.Context(), connectorRef(r))
 	c.writeOne(w, r, &tested, err)
 }

@@ -39,6 +39,11 @@ func connectorCall(t *testing.T, srv *httptest.Server, method, path, body string
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.HasPrefix(path, "/oauth/mcp/callback") || strings.HasSuffix(path, "#from-another-site") {
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		req.Header.Set("Sec-Fetch-Mode", "navigate")
+		req.Header.Set("Sec-Fetch-Dest", "document")
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -141,6 +146,9 @@ func TestConnectorSignInRoutesAndCallbackPage(t *testing.T) {
 	t.Cleanup(srv.Close)
 	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", `{"name":"linear","transport":"http","url":"https://mcp.linear.app/mcp","auth":"oauth"}`); status != http.StatusCreated {
 		t.Fatalf("create = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodGet, "/api/v1/connectors#from-another-site", ""); status != http.StatusForbidden || !strings.Contains(body, "ORIGIN_FORBIDDEN") {
+		t.Fatalf("a page of another site read the connectors = %d %s", status, body)
 	}
 	status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors/linear/connect", "")
 	if status != http.StatusOK || !strings.Contains(body, `"authorizationUrl":"https://auth.example.com/authorize?state=s1"`) ||
@@ -300,6 +308,9 @@ func TestARemoteClientCannotTurnOnAConnectorThatRunsACommand(t *testing.T) {
 	remote = true
 	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/paper", `{"enabled":true}`); status != http.StatusForbidden || !strings.Contains(body, "CONNECTOR_COMMAND_LOOPBACK_REQUIRED") {
 		t.Fatalf("turn on from another machine = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors/paper/test", ""); status != http.StatusForbidden || !strings.Contains(body, "CONNECTOR_COMMAND_LOOPBACK_REQUIRED") {
+		t.Fatalf("test from another machine = %d %s", status, body)
 	}
 	remote = false
 	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/paper", `{"enabled":true}`); status != http.StatusOK || !strings.Contains(body, `"enabled":true`) {

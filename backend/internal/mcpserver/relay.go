@@ -155,8 +155,11 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, target, authorizati
 
 func (r *relay) pass(ctx context.Context, line []byte, msg mcpRequest) {
 	answered, err := r.post(ctx, line, msg)
-	if err == nil || answered || ctx.Err() != nil || len(msg.ID) == 0 || msg.Method == "" {
+	if answered || ctx.Err() != nil || len(msg.ID) == 0 || msg.Method == "" {
 		return
+	}
+	if err == nil {
+		err = errors.New("the tool server ended its answer without a result")
 	}
 	if body, encodeErr := json.Marshal(mcpResponse{JSONRPC: "2.0", ID: msg.ID, Error: &mcpError{Code: relayErrorCode, Message: err.Error()}}); encodeErr == nil {
 		r.write(body, msg)

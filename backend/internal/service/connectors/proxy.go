@@ -71,6 +71,10 @@ func (s *Service) SetSessionLookup(lookup func(ctx context.Context, sessionID st
 // ForSession returns the tool servers a new or restored session gets, and records them for the session.
 func (s *Service) ForSession(ctx context.Context, in SessionInput) []ports.ChatMCPServerConfig {
 	s.forgetClosed(ctx)
+	var native map[string]bool
+	if in.Native != nil && s.offers(in.ProjectID) {
+		native = in.Native()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if in.SessionID == "" || s.load() != nil {
@@ -87,14 +91,10 @@ func (s *Service) ForSession(ctx context.Context, in SessionInput) []ports.ChatM
 		s.sessions[in.SessionID] = use
 	}
 	use.keys, use.issued = use.keys[:0], s.now()
-	var native map[string]bool
 	for i := range s.records {
 		rec := &s.records[i]
 		if !rec.Enabled || (rec.ProjectID != "" && rec.ProjectID != in.ProjectID) {
 			continue
-		}
-		if native == nil && in.Native != nil {
-			native = in.Native()
 		}
 		if native[rec.Key] {
 			continue
@@ -284,6 +284,14 @@ func (s *Service) admit(r *http.Request, sessionID, key string, transport Transp
 		return rec, rec.Name + " is turned off. Ask the user to open Settings, Connectors, and turn it on."
 	}
 	return rec, ""
+}
+
+func (s *Service) offers(projectID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.load() == nil && slices.ContainsFunc(s.records, func(rec record) bool {
+		return rec.Enabled && (rec.ProjectID == "" || rec.ProjectID == projectID)
+	})
 }
 
 func (s *Service) starting(sessionID string) bool {

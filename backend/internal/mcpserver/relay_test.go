@@ -197,10 +197,10 @@ func TestRelayStartsANewSessionWhenTheServerDropsTheOldOne(t *testing.T) {
 	mu.Lock()
 	valid, failStarts = "gone again", 1
 	mu.Unlock()
-	if reply := ask(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`); !strings.Contains(reply, `"error"`) {
+	if reply := ask(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`); !strings.Contains(reply, `"error"`) {
 		t.Fatalf("list while the server cannot start a session = %s", reply)
 	}
-	if reply := ask(`{"jsonrpc":"2.0","id":4,"method":"tools/list"}`); !strings.Contains(reply, `"echo"`) || strings.Contains(reply, `"error"`) {
+	if reply := ask(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`); !strings.Contains(reply, `"echo"`) || strings.Contains(reply, `"error"`) {
 		t.Fatalf("list after the server can start a session again = %s", reply)
 	}
 	_ = agentOut.Close()
@@ -281,5 +281,25 @@ func TestRelayGivesOneAnswerWhenTheStreamBreaksAfterTheResult(t *testing.T) {
 	}
 	if got := strings.Count(out.String(), `"id":7`); got != 1 || strings.Contains(out.String(), `"error"`) {
 		t.Fatalf("answers for one request = %d: %s", got, out.String())
+	}
+}
+
+func TestRelayAnswersWithAnErrorWhenTheServerGivesNoResult(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, ": keep-alive\n\n")
+	}))
+	defer upstream.Close()
+	relayIn, agentOut := io.Pipe()
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- Relay(context.Background(), relayIn, &out, upstream.URL, "") }()
+	_, _ = io.WriteString(agentOut, `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"echo"}}`+"\n")
+	_ = agentOut.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); strings.Count(got, `"id":9`) != 1 || !strings.Contains(got, "without a result") {
+		t.Fatalf("answer = %s", got)
 	}
 }

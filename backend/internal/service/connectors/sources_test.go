@@ -48,6 +48,7 @@ command = "paused-server"
 enabled = false
 `)
 	writeSource(t, filepath.Join(project, ".mcp.json"), `{"mcpServers": {"repo": {"command": "repo-server"}, "unapproved": {"command": "x"}}}`)
+	writeSource(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers": {"blank": {"url": "https://blank.example.com/mcp", "headers": {"Authorization": ""}}}}`)
 	return home, project
 }
 
@@ -94,7 +95,7 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 	for _, candidate := range candidates {
 		byKey[candidate.Key] = candidate
 	}
-	if len(byKey) != 8 || byKey["old"].ID != "" || byKey["ao"].ID != "" {
+	if len(byKey) != 9 || byKey["old"].ID != "" || byKey["ao"].ID != "" {
 		t.Fatalf("candidates = %+v", candidates)
 	}
 	if got := byKey["linear"]; got.URL != "https://mcp.linear.app/mcp?team=***" || got.Transport != TransportHTTP || len(got.NeedsValue) != 0 {
@@ -117,6 +118,9 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 		byKey["files"].ID:  {"FILES_TOKEN": "typed"},
 		byKey["sentry"].ID: {"Authorization": "typed-token"},
 	})
+	if blank, err := svc.Import(ctx, []string{byKey["blank"].ID}, map[string]map[string]string{byKey["blank"].ID: {"Authorization": "Bearer typed"}}); err != nil || len(blank) != 1 || blank[0].Auth != AuthHeader {
+		t.Fatalf("import of a server with an empty header that the user typed = %+v, %v", blank, err)
+	}
 	if err != nil || len(added) != 3 {
 		t.Fatalf("import = %+v, %v", added, err)
 	}
@@ -142,7 +146,7 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, candidate := range again {
-		if candidate.Exists != (candidate.Key == "files" || candidate.Key == "linear" || candidate.Key == "sentry") {
+		if candidate.Exists != slices.Contains([]string{"files", "linear", "sentry", "blank"}, candidate.Key) {
 			t.Errorf("exists flag wrong for %+v", candidate)
 		}
 	}

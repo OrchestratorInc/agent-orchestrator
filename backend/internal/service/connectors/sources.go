@@ -293,7 +293,9 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 			case name != asked:
 				continue
 			default:
-				needs = append(needs, name)
+				if value = typed[name]; value == "" {
+					needs = append(needs, name)
+				}
 			}
 			out[name] = value
 		}
