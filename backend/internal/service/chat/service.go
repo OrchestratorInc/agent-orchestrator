@@ -1440,6 +1440,9 @@ func (s *Service) Send(
 		}
 		return domain.ConversationTurn{}, writerErr
 	}
+	if !restarting {
+		restarting = s.restartRefusedLogin(ctx, record)
+	}
 	sharedClaudeImport := record.Harness == domain.HarnessClaudeCode && record.Metadata.ImportSource != nil &&
 		record.Metadata.ProviderConversationID == cmp.Or(record.Metadata.ImportSource.ResumeNativeID, record.Metadata.ImportSource.NativeID)
 	if restarting && !sharedClaudeImport {
@@ -2977,7 +2980,27 @@ func (s *Service) RetryTurn(
 }
 
 func (s *Service) retryTurn(ctx context.Context, id domain.SessionID, turnID string, autoResume bool) (domain.ConversationTurn, error) {
+	// A turn refused for its login is sent again by a provider started with the
+	// login AO hands sessions now; the one that refused it never sees a new one.
+	if record, err := s.requireChatSession(ctx, id); err == nil {
+		s.restartRefusedLogin(ctx, record)
+	}
 	controller, release, err := s.workingController(ctx, id)
+	if errors.Is(err, ErrNoController) && s.resumeAgent != nil && s.refusedLogin(ctx, turnID) {
+		// A start refused while the login was missing leaves no agent running.
+		// Sending the refused message again is the user's cue to start one.
+		resumeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		err = s.resumeAgent(resumeCtx, id)
+		cancel()
+		if err == nil {
+			controller, release, err = s.workingController(ctx, id)
+		}
+	}
+	if errors.Is(err, ports.ErrAgentAuthRequired) {
+		// Still signed out: the start that would send it was refused the same way.
+		// Only the login is reported; the start's own failure is in the log.
+		return domain.ConversationTurn{}, ports.ErrChatAuthRequired
+	}
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
@@ -2992,6 +3015,12 @@ func (s *Service) retryTurn(ctx context.Context, id domain.SessionID, turnID str
 		return domain.ConversationTurn{}, err
 	}
 	return result, nil
+}
+
+// refusedLogin reports a turn the provider refused for its login.
+func (s *Service) refusedLogin(ctx context.Context, turnID string) bool {
+	turn, err := s.store.TurnByID(ctx, turnID)
+	return err == nil && turn.FailureCode == domain.ConversationFailureAuthRequired
 }
 
 // SetTurnSettings records the provider choices for this session's next turn.
@@ -3123,7 +3152,7 @@ func (s *Service) relayChatTurn(
 			}
 			return "", writerErr
 		}
-		if restarting {
+		if restarting || s.restartRefusedLogin(ctx, record) {
 			stoppedForOtherWriter = true
 			continue
 		}
