@@ -54,11 +54,10 @@ type accountHandoff struct {
 	conversationID string
 	sessionID      domain.SessionID
 
-	busy       bool
-	done       bool
-	holdsQueue bool
-	retryAt    time.Time
-	moved      atomic.Bool
+	busy    bool
+	done    bool
+	retryAt time.Time
+	moved   atomic.Bool
 
 	targetAccount string
 	transitionID  string
@@ -147,17 +146,12 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 		workers.Go(func() {
 			done, err := s.stepAccountHandoff(ctx, store, deps, h)
 			s.handoffMu.Lock()
-			release := !done && h.holdsQueue && s.now().Sub(h.stepAt) >= accountHandoffGiveUp
 			h.busy, h.done = false, done
-			h.holdsQueue = h.holdsQueue && !done
 			h.retryAt = time.Time{}
 			if err != nil && ctx.Err() == nil {
 				h.retryAt = s.now().Add(accountHandoffBackoff)
 			}
 			s.handoffMu.Unlock()
-			if release {
-				s.releaseAccountHandoffQueue(ctx, h)
-			}
 			if err != nil {
 				failures <- fmt.Errorf("account handoff %s: %w", h.turnID, err)
 			}
@@ -261,38 +255,12 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	if !deps.enabled(ctx) {
 		return true, nil
 	}
-	s.holdAccountHandoffQueue(h, true)
 	transition, err := deps.mover.StartAccountTransition(ctx, h.sessionID, target, domain.SessionInterfaceTransitionDrain)
 	if err != nil {
-		s.holdAccountHandoffQueue(h, false)
 		return s.stayOnAccount(ctx, h, source, "could not start the move: "+err.Error())
 	}
 	h.targetAccount, h.transitionID, h.stepAt = transition.TargetAccountID, transition.ID, s.now()
 	return s.settleAccountHandoffMove(ctx, store, deps, h)
-}
-
-func (s *Service) holdAccountHandoffQueue(h *accountHandoff, hold bool) {
-	s.handoffMu.Lock()
-	h.holdsQueue = hold
-	s.handoffMu.Unlock()
-}
-
-func (s *Service) accountHandoffHoldsQueue(id domain.SessionID) bool {
-	s.handoffMu.Lock()
-	defer s.handoffMu.Unlock()
-	for _, h := range s.handoffs {
-		if h.sessionID == id && h.holdsQueue {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHandoff) {
-	s.holdAccountHandoffQueue(h, false)
-	if err := s.drainQueued(ctx, h.sessionID); err != nil && !errors.Is(err, ErrNoController) {
-		s.log.Warn("account handoff: queued messages not released", "session", h.sessionID, "turn", h.turnID, "error", err)
-	}
 }
 
 func (s *Service) accountHandoffRetried(turnID string) bool {
@@ -327,9 +295,6 @@ func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHan
 		return true, nil
 	}
 	if on, err := s.onHandoffTarget(ctx, deps, h); err != nil || !on {
-		if err == nil {
-			s.releaseAccountHandoffQueue(ctx, h)
-		}
 		return err == nil, err
 	}
 	if err := s.noteAccountHandoff(ctx, h, ""); err != nil {
@@ -375,9 +340,6 @@ func (s *Service) noteAccountHandoff(ctx context.Context, h *accountHandoff, ret
 func (s *Service) recordAccountHandoffRetry(ctx context.Context, h *accountHandoff, retry string) {
 	if err := s.noteAccountHandoff(ctx, h, retry); err != nil {
 		s.log.Warn("account handoff: note not updated", "session", h.sessionID, "turn", h.turnID, "retry", retry, "error", err)
-	}
-	if retry == accountHandoffRetrySkipped {
-		s.releaseAccountHandoffQueue(ctx, h)
 	}
 }
 

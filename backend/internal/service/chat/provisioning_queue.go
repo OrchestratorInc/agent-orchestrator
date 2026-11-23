@@ -167,13 +167,6 @@ func (s *Service) ensureConversation(
 
 // DrainQueued dispatches messages saved before the controller started.
 func (s *Service) DrainQueued(ctx context.Context, id domain.SessionID) error {
-	if s.accountHandoffHoldsQueue(id) {
-		return nil
-	}
-	return s.drainQueued(ctx, id)
-}
-
-func (s *Service) drainQueued(ctx context.Context, id domain.SessionID) error {
 	controller, err := s.Controller(id)
 	if err != nil {
 		return err

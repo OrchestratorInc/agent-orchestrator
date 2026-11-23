@@ -1847,7 +1847,7 @@ func (s *Service) ArmChatHandoff(
 	if controller.State() == ports.ChatControllerStopped {
 		return nil
 	}
-	return controller.ArmHandoff(ctx, policy, s.accountHandoffKeepsQueue(ctx, id))
+	return controller.ArmHandoff(ctx, policy)
 }
 
 // PrepareChatHandoff closes source intake and makes the controller quiescent.
@@ -1871,7 +1871,7 @@ func (s *Service) PrepareChatHandoff(
 	if controller.State() == ports.ChatControllerStopped {
 		return nil
 	}
-	if err := controller.BeginHandoff(ctx, policy, s.accountHandoffKeepsQueue(ctx, id)); err != nil {
+	if err := controller.BeginHandoff(ctx, policy); err != nil {
 		return err
 	}
 	s.mu.Lock()

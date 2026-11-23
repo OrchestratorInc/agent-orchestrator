@@ -508,7 +508,7 @@ func TestSteerDuringInterfaceTransitionDurablyReplaysWithoutProviderDispatch(t *
 		Origin: domain.MessageOriginHuman,
 	}
 	if err := h.ctrl.ArmHandoff(
-		context.Background(), domain.SessionInterfaceTransitionDrain, false); err != nil {
+		context.Background(), domain.SessionInterfaceTransitionDrain); err != nil {
 		t.Fatalf("ArmHandoff: %v", err)
 	}
 

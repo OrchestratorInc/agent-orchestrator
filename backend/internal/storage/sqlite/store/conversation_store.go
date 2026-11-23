@@ -1954,28 +1954,8 @@ func (s *Store) CleanupOwnedControllerWork(
 	conversationID, generation string,
 	now time.Time,
 ) (owned bool, err error) {
-	return s.cleanupControllerWork(ctx, session, conversationID, generation, now, false)
-}
-
-// CleanupOwnedControllerWorkKeepingQueue is CleanupOwnedControllerWork without failing queued turns.
-func (s *Store) CleanupOwnedControllerWorkKeepingQueue(
-	ctx context.Context,
-	session domain.SessionID,
-	conversationID, generation string,
-	now time.Time,
-) (owned bool, err error) {
-	return s.cleanupControllerWork(ctx, session, conversationID, generation, now, true)
-}
-
-func (s *Store) cleanupControllerWork(
-	ctx context.Context,
-	session domain.SessionID,
-	conversationID, generation string,
-	now time.Time,
-	keepQueued bool,
-) (owned bool, err error) {
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
-		return cleanupOwnedControllerWork(ctx, q, session, conversationID, generation, now, keepQueued)
+		return cleanupOwnedControllerWork(ctx, q, session, conversationID, generation, now)
 	}
 
 	s.writeMu.Lock()
@@ -1984,7 +1964,7 @@ func (s *Store) cleanupControllerWork(
 	err = s.inTx(ctx, "clean up owned Chat controller work", func(q *gen.Queries) error {
 		var cleanupErr error
 		owned, cleanupErr = cleanupOwnedControllerWork(
-			ctx, q, session, conversationID, generation, now, keepQueued)
+			ctx, q, session, conversationID, generation, now)
 		return cleanupErr
 	})
 	return owned, err
@@ -1996,7 +1976,6 @@ func cleanupOwnedControllerWork(
 	session domain.SessionID,
 	conversationID, generation string,
 	now time.Time,
-	keepQueued bool,
 ) (bool, error) {
 	owner, err := q.GetSession(ctx, session)
 	if err != nil {
@@ -2011,17 +1990,11 @@ func cleanupOwnedControllerWork(
 		}); err != nil {
 		return false, fmt.Errorf("settle orphaned activities for %s: %w", session, err)
 	}
-	completedAt := sql.NullTime{Time: now, Valid: true}
-	if keepQueued {
-		err = q.SettleOrphanedRunningConversationTurns(ctx, gen.SettleOrphanedRunningConversationTurnsParams{
-			CompletedAt: completedAt, HandledBySessionID: session,
-		})
-	} else {
-		err = q.SettleOrphanedConversationTurns(ctx, gen.SettleOrphanedConversationTurnsParams{
-			CompletedAt: completedAt, HandledBySessionID: session,
-		})
-	}
-	if err != nil {
+	if err := q.SettleOrphanedConversationTurns(ctx,
+		gen.SettleOrphanedConversationTurnsParams{
+			CompletedAt:        sql.NullTime{Time: now, Valid: true},
+			HandledBySessionID: session,
+		}); err != nil {
 		return false, fmt.Errorf("settle orphaned turns for %s: %w", session, err)
 	}
 	if err := q.FailPendingConversationRequestsForSession(ctx,
