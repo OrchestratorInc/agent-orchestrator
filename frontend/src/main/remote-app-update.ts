@@ -28,6 +28,19 @@ function failure(status: UpdateStatus, fallback: string): Error | undefined {
 	return undefined;
 }
 
+async function offered(deps: RemoteAppUpdateDeps): Promise<UpdateStatus> {
+	let settled = false;
+	const check = deps.check().finally(() => { settled = true; });
+	const quiet = check.catch(() => undefined);
+	while (!settled) {
+		const status = deps.status();
+		if (status.version && (status.state === "downloading" || status.state === "preparing")) return status;
+		await Promise.race([quiet, new Promise((resolve) => setTimeout(resolve, 100))]);
+	}
+	await check;
+	return deps.status();
+}
+
 export async function runRemoteAppUpdate(deps: RemoteAppUpdateDeps, args: Record<string, unknown>): Promise<{ version: string }> {
 	refuseUnsafe(deps);
 	if (args.step === "install") {
@@ -36,15 +49,18 @@ export async function runRemoteAppUpdate(deps: RemoteAppUpdateDeps, args: Record
 		if (result) throw new Error(`Orchestrator ${result.version} is ready to install instead. Try again.`);
 		return { version: args.version };
 	}
+	if (args.step === "check") {
+		const found = await offered(deps);
+		const failed = failure(found, "Couldn't check for updates.");
+		if (failed) throw failed;
+		const next = (found.state === "not-available" ? undefined : found.version) ?? stagedVersion(found);
+		if (!next) throw new Error("No newer version is available for that computer.");
+		return { version: next };
+	}
 	await deps.check();
 	let status = deps.status();
 	const checkFailure = failure(status, "Couldn't check for updates.");
 	if (checkFailure) throw checkFailure;
-	if (args.step === "check") {
-		const next = (status.state === "not-available" ? undefined : status.version) ?? stagedVersion(status);
-		if (!next) throw new Error("No newer version is available for that computer.");
-		return { version: next };
-	}
 	if (status.state === "available" && status.version !== stagedVersion(status)) {
 		await deps.download();
 		status = deps.status();

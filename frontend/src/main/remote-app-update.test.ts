@@ -85,6 +85,19 @@ describe("runRemoteAppUpdate", () => {
 		await expect(runRemoteAppUpdate(deps({ statuses: [{ state: "not-available", staged: { version: "0.16.0", stagedAt: 1, escalated: false } }] }), { step: "check" })).resolves.toEqual({ version: "0.16.0" });
 	});
 
+	it("names the version when the feed answers, without waiting for the download the check starts", async () => {
+		let status: UpdateStatus = { state: "checking" };
+		let finishDownload = () => {};
+		let checkSettled = false;
+		const check = vi.fn(() => new Promise<void>((resolve) => {
+			setTimeout(() => { status = { state: "downloading", version: "0.16.0" }; }, 150);
+			finishDownload = resolve;
+		}).finally(() => { checkSettled = true; }));
+		await expect(runRemoteAppUpdate(deps({ check, status: () => status }), { step: "check" })).resolves.toEqual({ version: "0.16.0" });
+		expect(checkSettled).toBe(false);
+		finishDownload();
+	});
+
 	it("refuses the version question when it could not update", async () => {
 		await expect(runRemoteAppUpdate(deps({ statuses: [{ state: "not-available" }] }), { step: "check" })).rejects.toThrow("No newer version is available for that computer.");
 		await expect(runRemoteAppUpdate(deps({ statuses: [{ state: "error", message: "Couldn't reach the update server." }] }), { step: "check" })).rejects.toThrow("Couldn't reach the update server.");
