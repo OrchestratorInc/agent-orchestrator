@@ -13,6 +13,8 @@ ao report --stuck --note <text> [output flags]
 ao report --done --note <text> [output flags]
 ```
 
+`--note` and free-form text are each limited to 1000 characters.
+
 Output flags are repeatable:
 
 ```text

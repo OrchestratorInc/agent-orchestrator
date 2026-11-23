@@ -10,6 +10,15 @@ export type MarkdownBlock =
 
 export type TableAlign = "left" | "center" | "right" | undefined;
 
+/**
+ * Put before a line inside a code block that would otherwise read as a fence, by
+ * text built for this parser (GitHub comments, githubHtml.ts): it keeps the block
+ * open here and in safeMarkdown, and the parser drops it from the block's text, so
+ * what is drawn, selected and copied is the line as written.
+ */
+export const FENCE_GUARD = "\u200B";
+const GUARDED_LINE = /^\u200B(?= {0,3}(?:`{3}|~{3}))/;
+
 /** Pure GFM-shaped block parser; unknown syntax remains readable paragraph text. */
 /**
  * `relativeImages` also reads `![alt](path/to.png)`, a link to a file beside a
@@ -29,7 +38,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 			flushParagraph();
 			const language = line.slice(3).trim() || undefined;
 			const code: string[] = [];
-			for (i += 1; i < lines.length && !lines[i].startsWith("```"); i++) code.push(lines[i]);
+			for (i += 1; i < lines.length && !lines[i].startsWith("```"); i++) code.push(lines[i].replace(GUARDED_LINE, ""));
 			blocks.push({ kind: "code", language, text: code.join("\n") });
 			continue;
 		}

@@ -29,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 const minimumNodeMajor = 22
@@ -100,6 +101,10 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		OnAuthRejected:        claudeAuthRejected(onAuthRejected),
 		PromptResponseFailure: claudePromptResponseFailure,
 		CanHibernate:          claudeCanHibernate,
+		BackgroundTasks:       claudeBackgroundTasks,
+		AsyncTasks:            true,
+		StopBackgroundTask:    claudeStopBackgroundTask,
+		BackgroundTaskOutput:  claudeBackgroundTaskOutput,
 		HistoryNotice:         claudeTranscriptNotice,
 		// claude-agent-acp keeps one TaskCreate/TaskUpdate list for the session
 		// and re-sends it at the start of every prompt while a task is unfinished.
@@ -150,7 +155,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			modelsStarted := time.Now()
 			if _, preserve := claudeACPModelConfig(cfg.Env); !preserve {
 				var modelErr error
-				models, modelErr = claudecode.ProviderModels(ctx, claudeBinary, cfg.WorkspacePath, cfg.Env)
+				modelCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
+				models, modelErr = claudecode.ProviderModels(modelCtx, claudeBinary, cfg.WorkspacePath, cfg.Env)
+				cancel()
 				if modelErr != nil && log != nil {
 					log.Debug("Claude provider model discovery unavailable; using ACP defaults", "error", modelErr)
 				}

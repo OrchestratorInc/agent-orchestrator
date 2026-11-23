@@ -879,6 +879,18 @@ func (f *fakeSessionService) SearchWorkspaceFiles(_ context.Context, id domain.S
 	return sessionsvc.WorkspaceFileSearch{SessionID: id, Query: query}, nil
 }
 
+func (f *fakeSessionService) ListWorkspaceFilePaths(ctx context.Context, id domain.SessionID) (sessionsvc.WorkspaceFilePaths, error) {
+	files, err := f.ListWorkspaceFiles(ctx, id)
+	if err != nil {
+		return sessionsvc.WorkspaceFilePaths{}, err
+	}
+	var paths []string
+	for _, file := range files.Files {
+		paths = append(paths, file.Path)
+	}
+	return sessionsvc.WorkspaceFilePaths{SessionID: id, Paths: paths, Truncated: files.Truncated}, nil
+}
+
 func (f *fakeSessionService) ListWorkspaceTree(_ context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error) {
 	f.workspaceTreePath = path
 	if f.workspaceErr != nil {
@@ -3977,6 +3989,42 @@ func TestSessionsAPI_KillLeavesPreviewTeardownToSessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_ListWorkspaceFilePaths(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.workspaceFiles = sessionsvc.WorkspaceFiles{
+		SessionID: "ao-1",
+		Files:     []sessionsvc.WorkspaceFileSummary{{Path: "README.md"}, {Path: "src/main.go"}},
+		Truncated: true,
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/workspace/paths", "")
+	assertJSON(t, headers)
+	if status != http.StatusOK {
+		t.Fatalf("GET workspace paths = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		SessionID string   `json:"sessionId"`
+		Paths     []string `json:"paths"`
+		Truncated bool     `json:"truncated"`
+	}
+	mustJSON(t, body, &got)
+	if got.SessionID != "ao-1" || !got.Truncated || len(got.Paths) != 2 || got.Paths[0] != "README.md" || got.Paths[1] != "src/main.go" {
+		t.Fatalf("response = %#v", got)
+	}
+
+	svc.workspaceFiles = sessionsvc.WorkspaceFiles{SessionID: "ao-1"}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/ao-1/workspace/paths", "")
+	if status != http.StatusOK || !strings.Contains(string(body), `"paths":[]`) {
+		t.Fatalf("empty workspace = %d %s, want an empty paths array", status, body)
+	}
+
+	_, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions/missing/workspace/paths", "")
+	if status != http.StatusNotFound {
+		t.Fatalf("unknown session = %d, want 404", status)
+	}
+}
+
 func TestSessionsAPI_ListWorkspaceFiles(t *testing.T) {
 	svc := newFakeSessionService()
 	svc.workspaceFiles = sessionsvc.WorkspaceFiles{
@@ -4803,6 +4851,20 @@ func TestSessionsAPI_SendValidation(t *testing.T) {
 
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":""}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "MESSAGE_REQUIRED")
+}
+
+// `ao send` into a chat whose next turn cannot apply its settings, such as a
+// model its agent does not offer, must say why rather than answer 500.
+func TestSessionsAPI_SendReportsAnInvalidChatSetting(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("%w: this chat can't switch to %q", ports.ErrChatConfigOptionInvalid, "claude-fable-5-2")
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"continue"}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "CHAT_CONFIG_OPTION_INVALID")
+	if !strings.Contains(string(body), "claude-fable-5-2") {
+		t.Fatalf("body = %s, want the reason", body)
+	}
 }
 
 func TestSessionsAPI_DelegateTask(t *testing.T) {

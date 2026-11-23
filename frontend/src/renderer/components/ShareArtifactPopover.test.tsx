@@ -831,9 +831,14 @@ describe("ShareArtifactButton states", () => {
 		expect(screen.getByRole("button", { name: "Publish: report.html" })).toBeTruthy();
 	});
 
-	it("disables Publish for a video", async () => {
+	it.each(["clip.mkv", "clip.avi", "clip.ogv"])("disables Publish for %s, a video browsers cannot play", async (name) => {
+		renderButton({ ...localFile, path: name }, name);
+		expect(await screen.findByRole("button", { name: `Publish: ${name}` })).toBeDisabled();
+	});
+
+	it("offers Publish for a video browsers play", async () => {
 		renderButton({ ...localFile, path: "clip.mp4" }, "clip.mp4");
-		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeEnabled();
 	});
 });
 
@@ -995,6 +1000,28 @@ describe("publish telemetry", () => {
 		await openPopover(cloudFile);
 		await waitFor(() => expect(sent("ao.artifacts.publish_blocked")).toEqual([{ reason: "limit", is_republish: false }]));
 		expect(sent("ao.artifacts.publish_failed")).toEqual([]);
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("says videos are coming soon when the control plane refuses a playable one", async () => {
+		const video = { ...cloudFile, path: "docs/clip.mp4" };
+		stub({ ...inspection, name: "clip.mp4" }, links, { status: "unsupported", message: "Sharing videos is coming soon." });
+		const dialog = await openPopover(video, "clip.mp4");
+		expect(await within(dialog).findByText("Publishing videos is coming soon.")).toBeInTheDocument();
+	});
+
+	it("says why a video format browsers cannot play is not published", async () => {
+		const video = { ...cloudFile, path: "docs/clip.mkv" };
+		const { publishSpy } = stub({ ...inspection, name: "clip.mkv", unsupported: true }, links);
+		render(
+			<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+				<ShareArtifactMenuPopover file={video} intent="publish" name="clip.mkv" open onOpenChange={() => undefined}>
+					<button type="button">menu</button>
+				</ShareArtifactMenuPopover>
+			</TooltipProvider></QueryClientProvider>,
+		);
+		const dialog = await screen.findByRole("dialog");
+		expect(await within(dialog).findByText("This video format can't be played in a browser. Use MP4, MOV or WebM.")).toBeInTheDocument();
 		expect(publishSpy).not.toHaveBeenCalled();
 	});
 
