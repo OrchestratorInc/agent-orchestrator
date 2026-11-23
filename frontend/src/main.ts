@@ -67,6 +67,7 @@ import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { registerCliShadowIpc } from "./main/cli-shadow-ipc";
 import { createCliShadowShellPath } from "./main/cli-shadow-shell-path";
+import { createLoginShellRunner } from "./main/login-shell-runner";
 import { cliShadowEnabled } from "./shared/cli-shadow";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
@@ -1694,43 +1695,9 @@ function telemetryOverrides(): Record<string, string> {
 	};
 }
 
-// Run the user's login shell to dump its env. stdin is ignored so an rc that
-// reads input hits EOF instead of hanging; stderr is ignored to drop banner
-// noise. Never rejects: resolves null on spawn error, non-zero exit, or timeout
-// (SIGKILLed), so the caller degrades to the static PATH floor.
-const loginShellRunner = (timeoutMs: number): ShellRunner => (shellPath, args) =>
-	new Promise((resolve) => {
-		let settled = false;
-		const finish = (value: string | null) => {
-			if (settled) return;
-			settled = true;
-			resolve(value);
-		};
-		let child: ReturnType<typeof spawn>;
-		try {
-			child = spawn(shellPath, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-		} catch {
-			finish(null);
-			return;
-		}
-		const timer = setTimeout(() => {
-			child.kill("SIGKILL");
-			finish(null);
-		}, timeoutMs);
-		let stdout = "";
-		// stdout may be typed Readable | null under this stdio config; guard it.
-		child.stdout?.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString("utf8");
-		});
-		child.once("error", () => {
-			clearTimeout(timer);
-			finish(null);
-		});
-		child.once("exit", (code) => {
-			clearTimeout(timer);
-			finish(code === 0 ? stdout : null);
-		});
-	});
+// The login-shell env probe; see main/login-shell-runner.ts for why it runs
+// in its own process group.
+const loginShellRunner = (timeoutMs: number): ShellRunner => createLoginShellRunner(timeoutMs);
 
 const runLoginShell = loginShellRunner(SHELL_ENV_TIMEOUT_MS);
 
