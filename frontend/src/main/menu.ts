@@ -51,6 +51,9 @@ function macViewCommandItems(commands: AppMenuCommands | undefined): MenuItemCon
 		commandItem(commands, "toggle-sidebar", "Toggle Sidebar"),
 		commandItem(commands, "toggle-inspector", "Toggle Inspector"),
 		{ type: "separator" },
+		// Enabled while a custom theme is showing (useApplyCustomTheme).
+		commandItem(commands, "use-default-theme", "Use Default Theme"),
+		{ type: "separator" },
 	];
 }
 
@@ -181,6 +184,11 @@ export function buildWindowsAppMenuTemplate(onToggleDevTools?: () => void, optio
 		{
 			label: "View",
 			submenu: [
+				// The way back from a custom theme whose CSS hid the interface;
+				// Alt shows this menu bar where it is hidden.
+				...(options.commands
+					? [commandItem(options.commands, "use-default-theme", "Use Default Theme"), { type: "separator" } as const]
+					: []),
 				...reloadItems(options, false),
 				...devtoolsItems,
 				{ type: "separator" },

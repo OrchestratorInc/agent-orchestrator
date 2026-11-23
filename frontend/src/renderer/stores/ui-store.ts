@@ -23,6 +23,8 @@ import {
 	type ThemeStyle,
 } from "../lib/theme";
 
+import { customThemeHasAppearance, customThemeOwnAppearance, getCustomTheme, rememberCustomThemeStyle } from "../lib/custom-theme";
+
 export type { Theme, ThemePreference, ThemeStyle } from "../lib/theme";
 export { readStoredThemePreference, readStoredThemeStyle, resolveTheme } from "../lib/theme";
 
@@ -674,16 +676,29 @@ export const useUiStore = create<UiState>((set, get) => ({
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;
+		// A custom theme with colors for one appearance only shows in that one.
+		// The appearance change below runs the transition for both.
+		const custom = getCustomTheme(themeStyle);
+		if (custom && !customThemeHasAppearance(custom, get().resolvedTheme)) {
+			getLocalStorage()?.setItem(themeStyleStorageKey, themeStyle);
+			rememberCustomThemeStyle(themeStyle);
+			applyDocumentThemeStyle(themeStyle);
+			set({ themeStyle });
+			get().setThemePreference(customThemeOwnAppearance(custom));
+			return;
+		}
 		// Choosing the theme being previewed keeps the preview as-is. A View
 		// Transition here would apply it a frame late, after the menu's close
 		// has restored the old theme, and flash between the two.
 		if (isDocumentThemeStyle(themeStyle)) {
 			getLocalStorage()?.setItem(themeStyleStorageKey, themeStyle);
+			rememberCustomThemeStyle(themeStyle);
 			set({ themeStyle });
 			return;
 		}
 		runThemeTransition(() => {
 			getLocalStorage()?.setItem(themeStyleStorageKey, themeStyle);
+			rememberCustomThemeStyle(themeStyle);
 			applyDocumentThemeStyle(themeStyle);
 			set({ themeStyle });
 		});

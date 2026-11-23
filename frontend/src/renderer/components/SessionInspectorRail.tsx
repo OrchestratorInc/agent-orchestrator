@@ -154,6 +154,7 @@ export function SessionInspectorRail({
 			data-panel=""
 			data-settled={settledClosed ? "true" : "false"}
 			data-slot="inspector-container"
+			data-workspace-area="inspector"
 			data-state={isOpen ? "expanded" : "collapsed"}
 			data-workspace-mode={sizing.mode}
 			data-testid="panel-inspector"

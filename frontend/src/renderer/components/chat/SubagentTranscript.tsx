@@ -83,7 +83,7 @@ function SubagentPrompt({ prompt }: { prompt: string }) {
 		<div className="flex min-w-0 flex-col items-end gap-1">
 			<span className="text-caption text-muted-foreground/70">{t("chat.subagent.sentBy")}</span>
 			{/* `wrap-anywhere`, not `break-words`: a long path must shrink the fit-content width too, or it spills out. */}
-			<div className="cursor-chat-human-message flex w-fit min-w-0 max-w-[min(92%,560px)] flex-col gap-1 rounded-[10px] border px-3 py-2.5 wrap-anywhere">
+			<div className="cursor-chat-human-message flex w-fit min-w-0 max-w-[min(92%,560px)] flex-col gap-1 rounded-[var(--radius-chat-bubble)] border px-3 py-2.5 wrap-anywhere">
 				<div
 					data-testid="subagent-prompt"
 					className={cn(folded && "max-h-36 overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]")}

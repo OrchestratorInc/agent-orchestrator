@@ -124,6 +124,10 @@ export function TitlebarNav({
   return (
     <div
       className={`fixed ${topClass} ${leftClass} z-titlebar flex ${heightClass} items-center gap-1`}
+      // On the frame, so a custom theme gives it the frame's text color: over
+      // the sidebar, or over the band the macOS top bar floats in. With the
+      // sidebar closed on Linux or in fullscreen it sits on the panel instead.
+      data-theme-frame={isSidebarOpen || (isMac && !isFullScreen) ? "" : undefined}
       data-slot="titlebar-nav"
     >
       <TitlebarButton

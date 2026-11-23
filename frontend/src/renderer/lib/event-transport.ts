@@ -16,6 +16,7 @@ import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { backgroundTasksQueryRoot } from "../hooks/useBackgroundTasks";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
+import { customThemeQueryKey } from "../hooks/useCustomTheme";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
 import { persistRemoteCache } from "./remote-chat-cache";
@@ -73,6 +74,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingInterfaceTransitionSessions = new Set<string>();
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
+			// A custom theme was imported, edited or deleted, or an agent asked for a switch (`ao theme`); only the custom themes reload.
+			let customThemeInvalidationPending = false;
 			let workspaceInvalidationPending = false;
 			let backgroundMembershipInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
@@ -340,6 +343,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(["session-reviews"]);
 					invalidate(["session-interface-transition"]);
 					invalidate(["agent-models"]);
+					invalidate(customThemeQueryKey);
 					allEventScopedCachesInvalidationPending = false;
 				}
 				if (allEditorHandoffsInvalidationPending) {
@@ -375,6 +379,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(["agent-models", scope.agentId]);
 				}
 				pendingModelCatalogScopes.clear();
+				if (customThemeInvalidationPending) {
+					invalidate(customThemeQueryKey);
+					customThemeInvalidationPending = false;
+				}
 			};
 			// A busy stream must not postpone visible updates until traffic
 			// stops, and the first event after a quiet period must not wait out
@@ -418,6 +426,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				if (disposed) return;
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
+				let customThemeOnly = false;
 				let idOnlySessionUpdate = false;
 				if (event === undefined || event.type === "session_created" || event.type === "session_deleted") backgroundMembershipInvalidationPending = true;
 				if (event === undefined) {
@@ -480,6 +489,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							});
 							modelCatalogOnly = true;
 						}
+						if (payload?.kind === "custom_theme") {
+							customThemeInvalidationPending = true;
+							customThemeOnly = true;
+						}
 						if (
 							typeof payload?.reviewId === "string" &&
 							payload.reviewId &&
@@ -539,7 +552,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					}
 				}
 				if (idOnlySessionUpdate) queueIdOnlyWorkspaceRefresh();
-				else if (!conversationOnly && !modelCatalogOnly) workspaceInvalidationPending = true;
+				else if (!conversationOnly && !modelCatalogOnly && !customThemeOnly) workspaceInvalidationPending = true;
 				scheduleFlush();
 			};
 

@@ -4,7 +4,7 @@ import { THEMES, type ThemeDefinition, type ThemePalette } from "./theme-palette
 type Mode = "dark" | "light";
 
 /** Match the selected 22% lighter label bias, also used by button.css. */
-function textOn(fill: string): string {
+export function textOn(fill: string): string {
 	const automatic = Math.sqrt(0.05 * 1.05) - 0.05;
 	const cutoff = automatic + (1 - automatic) * 0.22;
 	return relativeLuminance(fill) < cutoff ? "#ffffff" : "#000000";

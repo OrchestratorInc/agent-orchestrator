@@ -2574,6 +2574,8 @@ export const ChatComposer = memo(function ChatComposer({
 					}
 				}}
 				className="cursor-chat-composer relative flex cursor-text flex-col gap-1.5 px-3 pt-3 pb-3"
+				data-slot="composer-host"
+				data-workspace-area="composer"
 			>
 				<span aria-hidden="true" className="chat-composer-startup-shimmer" />
 				{menuShown && trigger ? (

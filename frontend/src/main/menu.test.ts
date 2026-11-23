@@ -182,6 +182,30 @@ describe("macOS top bar commands", () => {
 		expect(labels.indexOf("Go")).toBe(labels.indexOf("windowMenu") - 1);
 	});
 
+	it("offers the way back from a custom theme on Windows and Linux too", () => {
+		const run = vi.fn();
+		for (const build of [buildWindowsAppMenuTemplate, buildLinuxAppMenuTemplate]) {
+			const view = viewSubmenu(build(undefined, { commands: commands({ isEnabled: (id) => id === "use-default-theme", run }) }));
+			const item = view.find((entry) => entry.id === "use-default-theme");
+			expect(item).toMatchObject({ label: "Use Default Theme", enabled: true });
+			item?.click?.(undefined as never, undefined as never, {} as never);
+		}
+		expect(run.mock.calls).toEqual([["use-default-theme", false], ["use-default-theme", false]]);
+		// Without commands the menu is as before.
+		expect(viewSubmenu(buildWindowsAppMenuTemplate()).some((entry) => entry.id === "use-default-theme")).toBe(false);
+	});
+
+	it("offers a way back from a custom theme in View, with no shortcut", () => {
+		const run = vi.fn();
+		const item = viewSubmenu(macTemplate(commands({ isEnabled: (id) => id === "use-default-theme", run }))).find(
+			(entry) => entry.id === "use-default-theme",
+		);
+		expect(item).toMatchObject({ label: "Use Default Theme", enabled: true });
+		expect(item).not.toHaveProperty("accelerator");
+		item?.click?.(undefined as never, undefined as never, {} as never);
+		expect(run).toHaveBeenCalledWith("use-default-theme", false);
+	});
+
 	it("shows the binding, and omits the accelerator for a command with none", () => {
 		const view = viewSubmenu(macTemplate(commands()));
 		expect(view.find((item) => item.id === "toggle-sidebar")).toMatchObject({ accelerator: "Command+B" });

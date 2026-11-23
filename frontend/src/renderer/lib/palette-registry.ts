@@ -9,6 +9,7 @@ import { useLocaleStore } from "../stores/locale-store";
 import { useSoundNotificationsStore } from "../stores/sound-notifications-store";
 import { useUiStore, type ChatSendKeyMode } from "../stores/ui-store";
 import type { ThemePreference, ThemeStyle } from "./theme";
+import { customThemeStyle, listCustomThemes } from "./custom-theme";
 import { THEMES } from "./theme-palettes";
 import type { TerminalClickMode } from "./terminal-mouse";
 
@@ -184,7 +185,10 @@ const CHOICES: Record<string, { options: (t: TFunction) => Choice[]; current: (p
 		apply: (value) => useUiStore.getState().setThemePreference(value as ThemePreference),
 	},
 	"color-theme": {
-		options: () => THEMES.map(({ id, label }) => ({ value: id, label })),
+		options: () => [
+			...THEMES.map(({ id, label }) => ({ value: id as string, label })),
+			...listCustomThemes().map((theme) => ({ value: customThemeStyle(theme.id) as string, label: theme.name })),
+		],
 		current: (prefs) => prefs.themeStyle,
 		apply: (value) => useUiStore.getState().setThemeStyle(value as ThemeStyle),
 	},

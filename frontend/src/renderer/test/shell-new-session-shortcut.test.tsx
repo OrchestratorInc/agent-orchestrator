@@ -292,6 +292,9 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 
 // ao.setup.checked reads the startup checks' react-query cache; these
 // shortcut tests render the shell without a QueryClient.
+// The shell applies custom themes from the daemon; this file renders it
+// without a QueryClient, and useCustomTheme.test.tsx covers that hook.
+vi.mock("../hooks/useCustomTheme", () => ({ useApplyCustomTheme: () => undefined }));
 vi.mock("../hooks/useAgentInventoryTelemetry", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useAgentInventoryTelemetry")>()),
 	useSetupCheckedTelemetry: () => undefined,
