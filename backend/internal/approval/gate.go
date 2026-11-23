@@ -170,7 +170,7 @@ type Gate struct {
 	// observers see every event, in order, without drops. They are called
 	// with mu held and must not block or call back into the gate.
 	observers []func(Event)
-	auditMu sync.Mutex
+	auditMu   sync.Mutex
 }
 
 // Open loads (or starts) the gate state in dir.
