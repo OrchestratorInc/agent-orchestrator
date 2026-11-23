@@ -685,6 +685,27 @@ describe("artifact activity", () => {
 		expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/Q3%20\(final\)\.html#ao-theme=/);
 	});
 
+	it("closes the open dialog when its page is deleted, rather than framing the daemon's refusal", async () => {
+		const user = userEvent.setup();
+		const client = new QueryClient();
+		const view = (artifacts: SessionArtifact[]) => (
+			<TooltipProvider>
+				<QueryClientProvider client={client}>
+					<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
+						<ActivityRow activity={artifactActivity} />
+					</ChatImageSourceProvider>
+				</QueryClientProvider>
+			</TooltipProvider>
+		);
+		const { rerender } = rtlRender(view(listed));
+		await user.click(screen.getByRole("button", { name: "Expand page" }));
+		expect(await screen.findByRole("dialog")).toBeInTheDocument();
+		rerender(view([]));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(document.querySelector("iframe")).toBeNull();
+		expect(screen.getByText("This page is no longer in the session's artifacts.")).toBeInTheDocument();
+	});
+
 	it("says a page the session no longer lists is gone, rather than framing the daemon's refusal", () => {
 		// The card's artifact-files route refuses frames (ORIGIN_FORBIDDEN), so an old
 		// card whose page was deleted must not frame it and show that error's JSON.

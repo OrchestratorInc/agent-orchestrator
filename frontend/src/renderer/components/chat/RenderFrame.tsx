@@ -418,6 +418,9 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 	// without an inline page (renamed to another kind of file) points to the
 	// Artifacts tab.
 	const unavailable = "artifact" in props && !cloud && !page.frameUrl;
+	// A page deleted while its dialog is open closes the dialog too, which would
+	// otherwise frame that refusal.
+	if (unavailable && expanded) setExpanded(false);
 	const save = () => {
 		setSaving(true);
 		saveRender(page)
