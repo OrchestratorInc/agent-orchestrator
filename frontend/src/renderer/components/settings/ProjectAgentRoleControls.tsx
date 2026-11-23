@@ -132,6 +132,7 @@ export function AgentModelField({
 				onValidityChange={onValidityChange}
 				agentSwitch={agentSwitch ?? { projectId, hostId, agents: [], onPendingChange: () => {} }}
 				warning={warning}
+				onRetry={cloudGapWarning ? readCloudAgain : undefined}
 			/>
 		);
 	}
