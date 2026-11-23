@@ -224,7 +224,7 @@ func automationToInsert(rec domain.Automation) gen.InsertAutomationParams {
 	return gen.InsertAutomationParams{
 		TemplateID:  rec.TemplateID,
 		ID:          rec.ID,
-		ProjectID:   rec.ProjectID,
+		ProjectID:   optionalProjectID(rec.ProjectID),
 		DisplayName: rec.DisplayName,
 		Prompt:      rec.Prompt,
 		UseCase:     rec.UseCase,
@@ -246,7 +246,7 @@ func automationToInsert(rec domain.Automation) gen.InsertAutomationParams {
 func automationFromGen(row gen.Automation) domain.Automation {
 	return domain.Automation{
 		ID:          row.ID,
-		ProjectID:   row.ProjectID,
+		ProjectID:   projectIDValue(row.ProjectID),
 		DisplayName: row.DisplayName,
 		Prompt:      row.Prompt,
 		TemplateID:  row.TemplateID,

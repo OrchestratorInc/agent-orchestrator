@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ArrowDownUp, CalendarClock, Folder, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Repeat, Trash2, TriangleAlert, type AppIcon } from "@/components/app-icons";
+import { ArrowDownUp, CalendarClock, Folder, ChevronDown, ChevronRight, StickyNote, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Repeat, Trash2, TriangleAlert, type AppIcon } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -41,7 +41,7 @@ import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
-import { CLOUD_PROJECT_KIND } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -66,6 +66,7 @@ import {
 } from "../lib/automation-schedule";
 import {
 	useAutomationRuns,
+	daemonProjectId,
 	useAutomations,
 	useCreateAutomation,
 	useDeleteAutomation,
@@ -180,7 +181,7 @@ export function AutomationsView() {
 	const [expanded, setExpanded] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const automations = useMemo(() => query.data ?? [], [query.data]);
-	const projectName = (id: string) => workspaces.find((workspace) => workspace.id === id)?.name ?? id;
+	const projectName = (id: string) => id === STANDALONE_WORKSPACE_ID ? t("standalone.workspaceName") : workspaces.find((workspace) => workspace.id === id)?.name ?? id;
 	// Projects that own at least one automation, so the filter never offers an empty choice.
 	const projectOptions = [...new Set(automations.map((item) => item.projectId))].map((id) => ({ id, name: projectName(id) }));
 	const needle = search.trim().toLocaleLowerCase();
@@ -486,7 +487,7 @@ function AutomationFormDialog({
 	const editing = Boolean(automation);
 	const timezone = automation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 	const [projectId, setProjectId] = useState("");
-	const projectDefaults = useProjectWorkerDefaults(open ? (automation?.projectId || projectId) : "");
+	const projectDefaults = useProjectWorkerDefaults(open ? daemonProjectId(automation?.projectId || projectId) : "");
 	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
 	const nameRef = useRef<HTMLInputElement>(null);
@@ -585,9 +586,12 @@ function AutomationFormDialog({
 	// Automations run on this machine's daemon, which knows no Cloud project (it
 	// answers "Unknown project"), and a Cloud standalone agent takes no session
 	// but its own: neither is a project for an automation.
-	const projectOptions = workspaces
-		.filter((item) => item.kind !== CLOUD_PROJECT_KIND && !item.standaloneAgent)
-		.map((item) => ({ value: item.id, label: item.name }));
+	const projectOptions = [
+		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
+		...workspaces
+			.filter((item) => item.kind !== CLOUD_PROJECT_KIND && item.kind !== STANDALONE_PROJECT_KIND && !item.standaloneAgent)
+			.map((item) => ({ value: item.id, label: item.name })),
+	];
 	if (automation && !projectOptions.some((option) => option.value === automation.projectId)) {
 		projectOptions.unshift({ value: automation.projectId, label: automation.projectId });
 	}
@@ -609,7 +613,7 @@ function AutomationFormDialog({
 		setModel(""); setMode(""); setEffort(""); setModelValid(true);
 		if (next.model) {
 			// Some agents list launch modes in place of models.
-			const catalog = queryClient.getQueryData(agentModelsQueryOptions(next.harness, projectId).queryKey);
+			const catalog = queryClient.getQueryData(agentModelsQueryOptions(next.harness, daemonProjectId(projectId)).queryKey);
 			if (catalog?.selectionMode === "mode") setMode(next.model);
 			else setModel(next.model);
 		}
@@ -785,13 +789,13 @@ function AutomationFormDialog({
 								showCaret={false}
 								renderTrigger={(selected, placeholder) => (
 									<span className="inline-flex min-w-0 items-center gap-1.5">
-										<Folder aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+										<ProjectMark projectId={selected?.value} className="size-3.5 text-muted-foreground" />
 										<span className="min-w-0 truncate">{selected?.label ?? placeholder}</span>
 									</span>
 								)}
 								renderMenuItem={(option) => (
 									<>
-										<Folder aria-hidden="true" className="size-icon-sm shrink-0" />
+										<ProjectMark projectId={option.value} className="size-icon-sm" />
 										<span className="min-w-0 truncate">{option.label}</span>
 									</>
 								)}
@@ -803,7 +807,7 @@ function AutomationFormDialog({
 										role="worker"
 										variant="task"
 										agentId={selectedHarness}
-										projectId={projectId}
+										projectId={daemonProjectId(projectId)}
 										model={displayedModel}
 										mode={displayedMode}
 										effort={displayedEffort}
@@ -811,7 +815,7 @@ function AutomationFormDialog({
 										onModeChange={setMode}
 										onEffortChange={setEffort}
 										onValidityChange={setModelValid}
-										agentSwitch={{ projectId, agents: agentChoices, disabled: busy, onPendingChange: switchAgent }}
+										agentSwitch={{ projectId: daemonProjectId(projectId), agents: agentChoices, disabled: busy, onPendingChange: switchAgent }}
 									/>
 								</div>
 							) : null}
@@ -994,6 +998,12 @@ function AutomationFormDialog({
 			</DialogContent>
 		</Dialog>
 	);
+}
+
+/** A project's mark in the picker: the Scratchpad's note, as on the new chat page, or a folder. */
+function ProjectMark({ projectId, className }: { projectId?: string; className: string }) {
+	const Icon = projectId === STANDALONE_WORKSPACE_ID ? StickyNote : Folder;
+	return <Icon aria-hidden="true" className={cn("shrink-0", className)} />;
 }
 
 function AutomationSelect({
