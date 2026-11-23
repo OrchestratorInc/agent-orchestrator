@@ -685,6 +685,51 @@ describe("Executor", () => {
 		expect(buyKeys).toEqual([]);
 	});
 
+	it("leaves no key guard behind when an approved trusted Enter opens a dialog", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const tabId = [...fake.tabs.keys()][0]!;
+		// The page answers the Enter with a confirm dialog.
+		const opensDialog = () => fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogOpening", { type: "confirm", message: "Sure?" });
+		field.addEventListener("keydown", opensDialog, { once: true });
+		expect(await run("press", { key: "Enter", approvalBinding: binding })).toMatchObject({ pressed: "Enter", dialogOpened: true });
+		fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogClosed", {});
+		// Later keys on other controls are the page's own and must not be held.
+		const later = new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true });
+		buy.dispatchEvent(later);
+		expect(later.defaultPrevented).toBe(false);
+		expect(await run("get", { property: "title" })).toBeDefined();
+	});
+
+	it("reports a held-back trusted Enter once its dialog closes", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const tabId = [...fake.tabs.keys()][0]!;
+		// Focus moves and the page opens a dialog before the key lands: the
+		// guard holds the key back, but the page cannot report it yet.
+		fake.beforeKey = () => {
+			buy.focus();
+			fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogOpening", { type: "alert", message: "Hi" });
+		};
+		await run("press", { key: "Enter", approvalBinding: binding }).catch(() => undefined);
+		fake.beforeKey = undefined;
+		fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogClosed", {});
+		// The next command learns that the approved Enter never went through.
+		await expect(run("snapshot", { interactive: true })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		// Reported once; later commands run.
+		expect(await run("snapshot", { interactive: true })).toBeDefined();
+	});
+
 	it("describes with the URL and title of the document it read", async () => {
 		const { chrome, run, approve } = setup();
 		await approve("s1", false);

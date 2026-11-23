@@ -62,6 +62,8 @@ export class Executor {
 	/** One activate-and-capture at a time per Chrome window, across sessions. */
 	private readonly captureLocks = new Map<number, Promise<unknown>>();
 	private readonly navigationCounts = new Map<number, number>();
+	/** Tabs whose approved trusted Enter opened a dialog before its key guard could report. */
+	private readonly pendingPressChecks = new Set<number>();
 
 	constructor(private readonly deps: ExecutorDeps) {}
 
@@ -260,6 +262,18 @@ export class Executor {
 		const dialog = this.deps.trusted.pendingDialog(page.tabId);
 		if (dialog) {
 			throw new BridgeError("BROWSER_DIALOG_OPEN", `A ${dialog.type} dialog is open; answer it with \`ao browser dialog accept|dismiss\``);
+		}
+		// An approved Enter that opened a dialog could not be checked then:
+		// check it now, and report a held-back key instead of running on.
+		if (this.pendingPressChecks.has(page.tabId) && request.op !== "disarm-press") {
+			this.pendingPressChecks.delete(page.tabId);
+			const check = (await this.content(page, ctx, { op: "disarm-press" }, 0).catch(() => ({ mismatch: false }))) as { mismatch?: boolean };
+			if (check.mismatch === true) {
+				throw new BridgeError(
+					"BROWSER_TARGET_CHANGED",
+					"The approved Enter was held back because focus had moved before it landed, so nothing was pressed. Focus the field again and retry.",
+				);
+			}
 		}
 		// The tab's own address is checked by withPage; a selected frame (or an
 		// ancestor of it) may host a site the policy denies.
@@ -735,8 +749,13 @@ export class Executor {
 					} finally {
 						// The guard already cancelled a stray key in the page. If the page
 						// is gone, the approved Enter most likely navigated it (a submit):
-						// reporting that as a failure would invite a second submit.
-						mismatch = ((await this.content(page, ctx, { op: "disarm-press" }).catch(() => ({ mismatch: false }))) as { mismatch?: boolean }).mismatch === true;
+						// reporting that as a failure would invite a second submit. If the
+						// Enter opened a dialog the page cannot answer yet: the check runs
+						// before the tab's next command instead, once the dialog is closed.
+						mismatch = ((await this.content(page, ctx, { op: "disarm-press" }).catch((error: unknown) => {
+							if (error instanceof BridgeError && error.code === "BROWSER_DIALOG_OPEN") this.pendingPressChecks.add(page.tabId);
+							return { mismatch: false };
+						})) as { mismatch?: boolean }).mismatch === true;
 					}
 					if (mismatch) {
 						throw new BridgeError(

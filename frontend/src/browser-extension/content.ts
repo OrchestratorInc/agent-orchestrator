@@ -61,27 +61,44 @@ function focusIdOf(document: Document, mark: boolean): string {
 // event's own target, which is fixed when it is dispatched, and cancels the
 // key there if it is not the approved element.
 let pressGuard: { stop: () => void; mismatch: boolean } | undefined;
+// A guard only ever covers the one key it was armed for: it stops listening
+// once that key has landed (or been held back), and on its own after a short
+// time, so a missed disarm can never hold back the page's later keys. A
+// recorded mismatch stays until the executor reads it.
+const PRESS_GUARD_TTL_MS = 2000;
 function armPressGuard(document: Document, expectFocus: string): void {
 	pressGuard?.stop();
 	const view = document.defaultView;
 	if (!view) return;
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	const guard = {
 		mismatch: false,
 		stop: () => {
+			if (timer) clearTimeout(timer);
+			timer = undefined;
 			view.removeEventListener("keydown", check, true);
+			view.removeEventListener("keypress", check, true);
 			view.removeEventListener("keyup", check, true);
 		},
 	};
 	function check(event: Event) {
 		const target = event.target instanceof view!.Element ? event.target : null;
-		if (!guard.mismatch && target && focusIds.get(target) === expectFocus) return;
-		// Once a key went astray its keyup is held back too.
+		if (!guard.mismatch && target && focusIds.get(target) === expectFocus) {
+			// The key reached the approved element: nothing more to guard.
+			guard.stop();
+			return;
+		}
+		// A key that went astray is cancelled, and so are the rest of its
+		// events (keypress, keyup); the guard ends with its keyup.
 		guard.mismatch = true;
 		event.preventDefault();
 		event.stopImmediatePropagation();
+		if (event.type === "keyup") guard.stop();
 	}
 	view.addEventListener("keydown", check, true);
+	view.addEventListener("keypress", check, true);
 	view.addEventListener("keyup", check, true);
+	timer = setTimeout(guard.stop, PRESS_GUARD_TTL_MS);
 	pressGuard = guard;
 }
 
