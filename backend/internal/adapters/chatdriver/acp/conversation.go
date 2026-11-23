@@ -662,7 +662,9 @@ func (c *conversation) checkOptionalModelOffered(model string) error {
 	if optionsFor == nil || legacyModel {
 		return nil
 	}
-	for _, option := range optionsFor(ports.ChatTurnSettings{Model: model}) {
+	// A variant id whose base model the session offers is applied as that base
+	// plus its reasoning level, so it is offered too.
+	for _, option := range c.expandModelVariant(optionsFor(ports.ChatTurnSettings{Model: model})) {
 		if option.ID != "model" || !option.Optional {
 			continue
 		}
@@ -748,7 +750,7 @@ func (c *conversation) expandModelVariant(options []SessionOption) []SessionOpti
 			if offered, _ := c.configOptionOffers("model", base); offered {
 				options[i].Value = base
 				options[i].Name = ""
-				options = append(options, variant)
+				options = append(options, c.variantOptionFor(variant))
 			}
 		}
 		break
@@ -834,7 +836,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			if !ok && c.splitModelVariant != nil {
 				if base, variant, split := c.splitModelVariant(model); split {
 					if resolved, ok = resolveModelChoice(c.harness, option.Choices, base); ok {
-						options = append(options, variant)
+						options = append(options, c.variantOptionFor(variant))
 					}
 				}
 			}
