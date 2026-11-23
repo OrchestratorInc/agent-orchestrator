@@ -260,8 +260,10 @@ describe("opening an aside", () => {
 		// The message went to the agent like any other.
 		expect(cloudMocks.sendSessionMessage).toHaveBeenCalledWith("org-1", session.id, expect.objectContaining({ text: ROOT_TEXT }), { idempotencyKey: "client-1" });
 		const pane = await screen.findByTestId("aside-pane");
-		expect(within(pane).getByText("Comment")).toBeInTheDocument();
-		expect(within(pane).getByText("Fix flaky payment retry test")).toBeInTheDocument();
+		// The header is the session's title alone; "Comment" names the pane for assistive tech only.
+		expect(pane).toHaveAccessibleName("Comment");
+		expect(pane.querySelector("[data-comment-pane-title]")).toHaveTextContent(/^Fix flaky payment retry test$/);
+		expect(within(pane).queryByText("Comment")).toBeNull();
 		await waitFor(() => expect(cloudMocks.markers?.forMessage(42, "a-1")?.state).toBe("active"));
 		// Its reply box takes the caret.
 		await waitFor(() => expect(document.activeElement).toBe(within(pane).getByRole("combobox", { name: "Reply to the comment" })));
@@ -543,7 +545,11 @@ describe("comment threads", () => {
 		await waitFor(() => expect(cloudMocks.markers).toBeDefined());
 		act(() => cloudMocks.markers!.startComment({ anchor: { sequence: 41, kind: "agent_message" }, quote: "real backoff", excerpt: "The retry uses a real backoff." }));
 		const pane = await screen.findByTestId("aside-pane");
-		expect(within(pane).getByText("New comment")).toBeInTheDocument();
+		// The header is the session's title, as for a thread; the box says what it writes.
+		expect(pane).toHaveAccessibleName("New comment");
+		expect(pane.querySelector("[data-comment-pane-title]")).toHaveTextContent(/^Fix flaky payment retry test$/);
+		expect(within(pane).queryByText("New comment")).toBeNull();
+		expect(within(pane).getByText("Comment, @ to mention")).toBeInTheDocument();
 		expect(pane.querySelector("[data-comment-anchor-block]")).toHaveTextContent("“real backoff”");
 		// The first comment has no Also send to agent: there is no thread to send yet.
 		expect(within(pane).queryByRole("checkbox")).toBeNull();

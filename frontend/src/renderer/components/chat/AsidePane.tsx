@@ -96,14 +96,14 @@ export interface CommentThreadCard {
 
 /**
  * The comment pane beside the conversation, like the comment thread of a
- * shared document: its header ("Comment" and the session's title, Resolve or
- * Reopen, Mute thread, close), what the thread is about, the comments, and a
+ * shared document: its header (the session's title, Resolve or Reopen, Mute
+ * thread, close), what the thread is about, the comments, and a
  * reply box with @ mentions and, for people who can prompt the agent, "Also
  * send to agent". Comments are between people; nothing here reaches the
  * agent unless that box is ticked.
  */
 export function AsidePaneView({
-	title,
+	label,
 	sessionTitle,
 	anchor,
 	message,
@@ -124,7 +124,8 @@ export function AsidePaneView({
 	firstComment = false,
 	initialText,
 }: {
-	title: string;
+	/** The pane's accessible name ("Comment", "New comment"); its header shows only the session's title. */
+	label: string;
 	sessionTitle: string;
 	anchor?: CommentAnchorView;
 	/** The tagged message that started the thread; a comment thread has none. */
@@ -163,13 +164,12 @@ export function AsidePaneView({
 	}, [newest, message?.id]);
 	return (
 		<aside
-			aria-label={title}
+			aria-label={label}
 			className="flex h-full min-h-0 w-[min(340px,45%)] shrink-0 flex-col border-l border-border bg-background"
 			data-testid="aside-pane"
 		>
 			<header className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border pr-1.5 pl-3.5">
-				<span className="shrink-0 text-control font-medium text-foreground">{title}</span>
-				<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={sessionTitle}>{sessionTitle}</span>
+				<span className="min-w-0 flex-1 truncate text-control font-medium text-foreground" data-comment-pane-title="" title={sessionTitle}>{sessionTitle}</span>
 				{onResolve ? (
 					<Button className="h-6 gap-1 px-2 text-xs" onClick={onResolve} size="sm" type="button" variant="quiet" data-comment-resolve="">
 						<CircleCheck aria-hidden="true" className="size-3.5" />
@@ -931,7 +931,7 @@ export function CloudAsidePane({
 			replyDisabled={ended ? t("comment.ended") : undefined}
 			resolvedNote={resolvedNote}
 			sessionTitle={sessionTitle}
-			title={t("comment.title")}
+			label={t("comment.title")}
 		/>
 	);
 }
@@ -1032,7 +1032,7 @@ export function CloudCommentDraftPane({
 			onReply={onReply}
 			replies={[]}
 			sessionTitle={sessionTitle}
-			title={t("comment.newTitle")}
+			label={t("comment.newTitle")}
 			initialText={draft.initialText}
 		/>
 	);
