@@ -14,8 +14,17 @@ function characters(text: string): string[] {
 
 const ZWJ = 0x200d;
 const isRegionalIndicator = (cp: number) => cp >= 0x1f1e6 && cp <= 0x1f1ff;
+// Extended_Pictographic, in the blocks emoji come from: the only characters a
+// ZWJ joins (GB11).
+const isPictographic = (cp: number) =>
+	(cp >= 0x1f000 && cp <= 0x1faff) ||
+	(cp >= 0x2600 && cp <= 0x27bf) ||
+	(cp >= 0x2300 && cp <= 0x23ff) ||
+	(cp >= 0x2b00 && cp <= 0x2bff) ||
+	(cp >= 0x2190 && cp <= 0x21ff) ||
+	[0x00a9, 0x00ae, 0x203c, 0x2049, 0x2122, 0x2139, 0x3030, 0x303d, 0x3297, 0x3299].includes(cp);
 // Joins the code point before it: combining marks, variation selectors, skin
-// tones, the keycap mark and emoji tag characters.
+// tones, the keycap mark, emoji tag characters and ZWJ itself.
 const extendsCharacter = (cp: number) =>
 	(cp >= 0x0300 && cp <= 0x036f) ||
 	(cp >= 0x1ab0 && cp <= 0x1aff) ||
@@ -36,15 +45,20 @@ export function fallbackCharacters(text: string): string[] {
 	const out: string[] = [];
 	let previous = -1;
 	let flagHalf = false;
+	// Whether the character so far is a pictograph and its extenders, which a
+	// ZWJ may join to the next pictograph.
+	let pictograph = false;
 	for (const char of text) {
 		const cp = char.codePointAt(0)!;
+		const joinedByZWJ = previous === ZWJ && pictograph && isPictographic(cp);
 		const joins: boolean = out.length > 0 && (
 			extendsCharacter(cp) ||
-			previous === ZWJ ||
+			joinedByZWJ ||
 			(isRegionalIndicator(cp) && flagHalf)
 		);
 		if (joins) out[out.length - 1] += char;
 		else out.push(char);
+		if (!joins) pictograph = isPictographic(cp);
 		flagHalf = isRegionalIndicator(cp) ? !(joins && flagHalf) : false;
 		previous = cp;
 	}

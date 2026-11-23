@@ -81,11 +81,14 @@ describe("fallbackCharacters", () => {
 		expect(fallbackCharacters("1️⃣x")).toEqual(["1️⃣", "x"]);
 		expect(fallbackCharacters("e\u0301t")).toEqual(["e\u0301", "t"]);
 		expect(fallbackCharacters("❤️")).toEqual(["❤️"]);
+		// A ZWJ joins two pictographs, never a letter after it (GB11).
+		expect(fallbackCharacters("a\u200db")).toEqual(["a\u200d", "b"]);
+		expect(fallbackCharacters("👍\u200db")).toEqual(["👍\u200d", "b"]);
 	});
 
 	it("agrees with Intl.Segmenter on these", () => {
 		const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-		for (const text of ["a👨‍👩‍👧‍👦b", "👍🏽!", "🇮🇳🇯🇵", "1️⃣x", "e\u0301t", "plain text", "🏳️‍🌈"]) {
+		for (const text of ["a👨‍👩‍👧‍👦b", "👍🏽!", "🇮🇳🇯🇵", "1️⃣x", "e\u0301t", "plain text", "🏳️‍🌈", "a\u200db", "👍\u200db", "❤️‍🔥"]) {
 			expect(fallbackCharacters(text)).toEqual(Array.from(segmenter.segment(text), (part) => part.segment));
 		}
 	});
@@ -99,6 +102,7 @@ describe("textEdits without Intl.Segmenter", () => {
 			delete (globalThis.Intl as { Segmenter?: unknown }).Segmenter;
 			const { textEdits: fallbackEdits } = await import("./textDiff");
 			expect(fallbackEdits("hi 👨‍👩‍👧‍👦", "hi ")).toEqual([backspace]);
+			expect(fallbackEdits("a\u200db", "")).toEqual([backspace, backspace]);
 		} finally {
 			vi.unstubAllGlobals();
 			vi.resetModules();
