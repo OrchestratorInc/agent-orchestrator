@@ -88,6 +88,8 @@ class FakeChrome {
 	captures: number[] = [];
 	/** Runs during a capture, for example a user switching tabs. */
 	duringCapture?: () => void;
+	// Runs just before a CDP key event reaches the page, as a page could.
+	beforeKey?: () => void;
 
 	activate(tabId: number) {
 		const tab = this.tabs.get(tabId)!;
@@ -241,6 +243,15 @@ class FakeChrome {
 				detach: async () => undefined,
 				sendCommand: async (target, method, params) => {
 					self.debuggerCalls.push({ method, params, tabId: target.tabId });
+					if (method === "Input.dispatchKeyEvent") {
+						// Like Chrome, a CDP key event goes to whatever has focus.
+						const key = params as { type?: string; key?: string };
+						const type = key.type === "keyUp" ? "keyup" : key.type === "keyDown" || key.type === "rawKeyDown" ? "keydown" : undefined;
+						if (type) {
+							if (type === "keydown") self.beforeKey?.();
+							(document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent(type, { key: key.key, bubbles: true, cancelable: true }));
+						}
+					}
 					if (method === "Page.captureScreenshot") {
 						if (self.hangingScreenshots > 0) {
 							self.hangingScreenshots--;
@@ -650,6 +661,28 @@ describe("Executor", () => {
 		});
 		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
 		expect(keys).toEqual([]);
+	});
+
+	it("refuses an approved trusted Enter if focus moves before the CDP key lands", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const field = document.getElementById("q") as HTMLInputElement;
+		const buy = document.getElementById("buy") as HTMLButtonElement;
+		field.focus();
+		const { binding } = (await run("describe", { action: "press", key: "Enter" })) as { binding: Record<string, unknown> };
+		const fieldKeys: string[] = [];
+		const buyKeys: string[] = [];
+		field.addEventListener("keydown", (event) => fieldKeys.push(event.key));
+		buy.addEventListener("keydown", (event) => buyKeys.push(event.key));
+		// Focus is where it was approved: the trusted Enter goes through.
+		expect(await run("press", { key: "Enter", approvalBinding: binding })).toMatchObject({ pressed: "Enter" });
+		expect(fieldKeys).toEqual(["Enter"]);
+		expect(fake.debuggerCalls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(true);
+		// The page moves focus after every check, just before the key lands.
+		fake.beforeKey = () => buy.focus();
+		await expect(run("press", { key: "Enter", approvalBinding: binding })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(buyKeys).toEqual([]);
 	});
 
 	it("describes with the URL and title of the document it read", async () => {

@@ -56,6 +56,35 @@ function focusIdOf(document: Document, mark: boolean): string {
 	return id ?? "";
 }
 
+// A trusted (CDP) key can land after focus moved, since page script runs
+// between any check and Chrome delivering the key. The guard checks the key
+// event's own target, which is fixed when it is dispatched, and cancels the
+// key there if it is not the approved element.
+let pressGuard: { stop: () => void; mismatch: boolean } | undefined;
+function armPressGuard(document: Document, expectFocus: string): void {
+	pressGuard?.stop();
+	const view = document.defaultView;
+	if (!view) return;
+	const guard = {
+		mismatch: false,
+		stop: () => {
+			view.removeEventListener("keydown", check, true);
+			view.removeEventListener("keyup", check, true);
+		},
+	};
+	function check(event: Event) {
+		const target = event.target instanceof view!.Element ? event.target : null;
+		if (!guard.mismatch && target && focusIds.get(target) === expectFocus) return;
+		// Once a key went astray its keyup is held back too.
+		guard.mismatch = true;
+		event.preventDefault();
+		event.stopImmediatePropagation();
+	}
+	view.addEventListener("keydown", check, true);
+	view.addEventListener("keyup", check, true);
+	pressGuard = guard;
+}
+
 export function handleContentRequest(document: Document, registry: RefRegistry, request: ContentRequest): unknown | Promise<unknown> {
 	const element = () => registry.resolve(String(request.ref ?? ""));
 	switch (request.op) {
@@ -98,6 +127,21 @@ export function handleContentRequest(document: Document, registry: RefRegistry, 
 		case "hover":
 			hoverSynthetic(element());
 			return { hovered: true };
+		case "arm-press":
+			if (request.expectDocument !== documentId(document)) {
+				throw new BridgeError(
+					"BROWSER_TARGET_CHANGED",
+					"The page changed while the action waited for approval, so it no longer acts on what the user approved. Take a new snapshot and try again.",
+				);
+			}
+			armPressGuard(document, String(request.expectFocus ?? ""));
+			return { armed: true };
+		case "disarm-press": {
+			const mismatch = pressGuard?.mismatch ?? false;
+			pressGuard?.stop();
+			pressGuard = undefined;
+			return { mismatch };
+		}
 		case "press":
 			// An approved press must land on the document and focus approved.
 			if (
