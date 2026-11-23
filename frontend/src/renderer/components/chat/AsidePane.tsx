@@ -19,11 +19,13 @@ import {
 	invalidateCommentThreads,
 	patchCachedAside,
 	patchCommentThreadRows,
+	replaceCachedAside,
 	sentMessageSequence,
 	threadTimeline,
 	type CommentDraft,
 } from "../../lib/cloud-asides";
 import { CHAT_EVENTS_CACHE_MS } from "../../lib/cloud-chat-history";
+import { cloudMeQueryKey } from "../../lib/cloud-offering";
 import type {
 	CloudCpAside,
 	CloudCpAsideHistoryEntry,
@@ -32,6 +34,7 @@ import type {
 	CloudCpAsideThread,
 	CloudCpClientEvent,
 	CloudCpEventMention,
+	CloudCpMeResponse,
 	CloudCpMentionCandidates,
 	CloudCpNotificationListResponse,
 } from "../../lib/cloud-cp/types";
@@ -933,7 +936,7 @@ export function CloudAsidePane({
 		patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: false });
 		void client.markSessionAsideRead(orgId, sessionId, asideId)
 			.then((next) => {
-				patchCachedAside(queryClient, orgId, sessionId, asideId, next);
+				replaceCachedAside(queryClient, orgId, sessionId, asideId, next);
 				void queryClient.invalidateQueries({ queryKey: cloudUnreadThreadsKey(baseUrl, userId) });
 			})
 			.catch(() => {
@@ -948,7 +951,7 @@ export function CloudAsidePane({
 		patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: true });
 		void client.markSessionAsideUnread(orgId, sessionId, asideId)
 			.then((next) => {
-				patchCachedAside(queryClient, orgId, sessionId, asideId, next);
+				replaceCachedAside(queryClient, orgId, sessionId, asideId, next);
 				patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: next.unread });
 			})
 			.catch(() => {
@@ -962,22 +965,26 @@ export function CloudAsidePane({
 	const onMute = useCallback((next: boolean) => {
 		patchCachedAside(queryClient, orgId, sessionId, asideId, { muted: next });
 		void client.muteSessionAside(orgId, sessionId, asideId, next)
-			.then((changed) => patchCachedAside(queryClient, orgId, sessionId, asideId, changed))
+			.then((changed) => replaceCachedAside(queryClient, orgId, sessionId, asideId, changed))
 			.catch(() => patchCachedAside(queryClient, orgId, sessionId, asideId, { muted: !next }));
 	}, [asideId, client, orgId, queryClient, sessionId]);
 
 	const resolved = Boolean(aside?.resolvedAt);
+	// The person's own name, for "Resolved by {Name}" before the server answers (else it read "Someone").
+	const myName = useCachedQueryData<CloudCpMeResponse>([...cloudMeQueryKey, baseUrl, userId], true)?.user.displayName;
 	const setResolved = useCallback((next: boolean) => {
 		const before = aside ? { resolvedAt: aside.resolvedAt, resolvedBy: aside.resolvedBy } : undefined;
-		patchCachedAside(queryClient, orgId, sessionId, asideId, next ? { resolvedAt: new Date().toISOString() } : { resolvedAt: undefined, resolvedBy: undefined });
+		patchCachedAside(queryClient, orgId, sessionId, asideId, next
+			? { resolvedAt: new Date().toISOString(), ...(myName && userId ? { resolvedBy: { userId, name: myName } } : {}) }
+			: { resolvedAt: undefined, resolvedBy: undefined });
 		const request = next ? client.resolveSessionAside(orgId, sessionId, asideId) : client.reopenSessionAside(orgId, sessionId, asideId);
 		void request
 			// The aside it answers carries its new history entry ("resolved this").
-			.then((changed) => patchCachedAside(queryClient, orgId, sessionId, asideId, changed))
+			.then((changed) => replaceCachedAside(queryClient, orgId, sessionId, asideId, changed))
 			.catch(() => { if (before) patchCachedAside(queryClient, orgId, sessionId, asideId, before); })
 			// It moves between the threads view's Open and Resolved.
 			.finally(() => invalidateCommentThreads(queryClient, baseUrl, userId));
-	}, [aside, asideId, baseUrl, client, orgId, queryClient, sessionId, userId]);
+	}, [aside, asideId, baseUrl, client, myName, orgId, queryClient, sessionId, userId]);
 
 	const onReply = useCallback(async (text: string, mentions: ComposerMention[], sendToAgent: boolean) => {
 		const clientMessageId = crypto.randomUUID();
@@ -997,10 +1004,12 @@ export function CloudAsidePane({
 			if (reply) setSent((current) => [...current, reply]);
 			queryClient.setQueryData<CloudCpAsideThread>(threadKey, (current) => current && {
 				...current,
-				aside: { ...current.aside, ...(reply ? { replyCount: current.aside.replyCount + 1, lastReplyAt: reply.createdAt } : {}), unread: false, ...(result.aside ?? {}) },
+				// The server's aside is whole (a reply may have reopened the thread, or resolved it by sending).
+				aside: result.aside ?? { ...current.aside, ...(reply ? { replyCount: current.aside.replyCount + 1, lastReplyAt: reply.createdAt } : {}), unread: false },
 				replies: reply ? mergeAsideReplies(current.replies, [reply]) : current.replies,
 			});
-			patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: false, ...(reply ? { lastReplyAt: reply.createdAt } : {}), ...(result.aside ?? {}) });
+			if (result.aside) replaceCachedAside(queryClient, orgId, sessionId, asideId, result.aside);
+			else patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: false, ...(reply ? { lastReplyAt: reply.createdAt } : {}) });
 			// The comment resolved this person's mention and reply rows for the thread.
 			void queryClient.invalidateQueries({ queryKey: cloudInboxQueryKey(baseUrl, userId) });
 			// A reply can reopen the thread, or (sent to the agent) resolve it; the aside

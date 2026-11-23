@@ -208,6 +208,15 @@ describe("opening a thread from the list", () => {
 	});
 });
 
+describe("a standalone session's row", () => {
+	it("says the session's name once, not again as its project", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { sessionTitle: "Speed up session start", projectName: "Speed up session start" }), row("c-2")]));
+		renderView();
+		expect((await findRow("c-1")).querySelector("[data-thread-project]")).toBeNull();
+		expect((await findRow("c-2")).querySelector("[data-thread-project]")).toHaveTextContent("finance-controller");
+	});
+});
+
 describe("a thread on a whole message", () => {
 	it("says when the message was sent, when it still exists", async () => {
 		const whole = (asideId: string, anchor: CloudCpCommentThread["aside"]["anchor"], extra: Partial<CloudCpCommentThread["aside"]> = {}, anchorAt?: string) =>

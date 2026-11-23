@@ -309,6 +309,20 @@ export async function prefetchAside(
 	});
 }
 
+/**
+ * Puts the control plane's answer (a whole Aside: resolve, reopen, read,
+ * unread, mute, a reply) in the cache in place of what was there. Merging it
+ * instead would keep a field the answer leaves out, such as the resolvedAt of
+ * a thread a reply just reopened.
+ */
+export function replaceCachedAside(queryClient: QueryClient, orgId: string, sessionId: string, asideId: string, aside: CloudCpAside): void {
+	queryClient.setQueryData<CloudCpAsideListResponse>(cloudAsidesKey(orgId, sessionId), (list) => list && {
+		...list,
+		items: list.items.map((item) => item.asideId === asideId ? aside : item),
+	});
+	queryClient.setQueryData<CloudCpAsideThread>(cloudAsideKey(orgId, sessionId, asideId), (thread) => thread && { ...thread, aside });
+}
+
 /** Changes one aside in the cached list (and in its cached thread), if they are there. */
 export function patchCachedAside(queryClient: QueryClient, orgId: string, sessionId: string, asideId: string, patch: Partial<CloudCpAside>): void {
 	queryClient.setQueryData<CloudCpAsideListResponse>(cloudAsidesKey(orgId, sessionId), (list) => list && {

@@ -149,7 +149,8 @@ export function ThreadRow({ row, selected, onOpen }: { row: CloudCpCommentThread
 		>
 			<span className="flex min-w-0 items-baseline gap-1.5">
 				<span className={cn("truncate text-control text-foreground", row.unread && "font-semibold")}>{row.sessionTitle}</span>
-				<span className="shrink-0 truncate text-caption text-muted-foreground">{row.projectName}</span>
+				{/* A standalone session's project carries the session's own name: said once. */}
+				{row.projectName && row.projectName !== row.sessionTitle ? <span className="shrink-0 truncate text-caption text-muted-foreground" data-thread-project="">{row.projectName}</span> : null}
 			</span>
 			<span className="flex items-center justify-end gap-1.5">
 				<time className="text-caption tabular-nums text-muted-foreground" dateTime={row.lastActivityAt}>{formatTimeCompact(row.lastActivityAt)}</time>

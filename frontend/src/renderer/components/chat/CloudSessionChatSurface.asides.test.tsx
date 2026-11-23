@@ -490,6 +490,43 @@ describe("comment threads", () => {
 		await waitFor(() => expect(cloudMocks.reopenSessionAside).toHaveBeenCalledWith("org-1", session.id, "c-1"));
 	});
 
+	it("reopens a resolved thread with Reply and reopen, from the server's answer", async () => {
+		const user = userEvent.setup();
+		const resolvedAside = { ...commentAside, resolvedAt: at, resolvedBy: { userId: "u-marco", name: "Marco Rossi" } };
+		cloudMocks.listSessionAsides.mockResolvedValue({ items: [thread.aside, resolvedAside] });
+		cloudMocks.getSessionAside.mockImplementation(async (_o: string, _s: string, asideId: string) => (asideId === "c-1" ? { ...commentThread, aside: resolvedAside } : thread));
+		cloudMocks.markSessionAsideRead.mockImplementation(async () => ({ ...resolvedAside, unread: false }));
+		// The server answers with the whole aside, reopened: it has no resolvedAt at all.
+		cloudMocks.replyToSessionAside.mockImplementation(async (_o: string, _s: string, asideId: string, body: { text: string }) => ({
+			reply: { replyId: "cr-2", asideId, text: body.text, mentions: [], authorUserId: "u-priya", authorName: "Priya Shah", createdAt: at, sequence: 70 },
+			aside: { ...commentAside, replyCount: 2, history: [{ kind: "reopened", actor: { userId: "u-priya", name: "Priya Shah" }, at, sequence: 71 }] },
+		}));
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(pane).toHaveAttribute("data-comment-state", "resolved"));
+		await typeInLexicalEditor(within(pane).getByRole("combobox", { name: "Reply to the comment" }), "Still flaky on main.");
+		await user.click(within(pane).getByRole("button", { name: "Reply and reopen" }));
+		await waitFor(() => expect(pane).toHaveAttribute("data-comment-state", "open"));
+		expect(within(pane).getByRole("button", { name: "Resolve" })).toBeInTheDocument();
+		expect(pane.querySelector("[data-aside-history='reopened']")).toHaveTextContent("Priya Shah reopened this");
+	});
+
+	it("names who resolved it at once, before the server answers", async () => {
+		const user = userEvent.setup();
+		withCommentThread();
+		// The server is slow to answer.
+		cloudMocks.resolveSessionAside.mockImplementation(() => new Promise(() => undefined));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(["cloud-me", BASE, "u-priya"], { user: { id: "u-priya", email: "priya@example.com", displayName: "Priya Shah", authProvider: "workos" }, organizations: [] });
+		openAside(session.id, "c-1");
+		renderSurface(queryClient);
+		const pane = await screen.findByTestId("aside-pane");
+		await user.click(await within(pane).findByRole("button", { name: "Resolve" }));
+		expect(pane.querySelector("[data-comment-resolved]")).toHaveTextContent(/^Resolved by Priya Shah · /);
+		expect(pane).not.toHaveTextContent("Resolved by Someone");
+	});
+
 	it("sends a reply and the whole thread to the agent when the box is ticked", async () => {
 		const user = userEvent.setup();
 		withCommentThread();
