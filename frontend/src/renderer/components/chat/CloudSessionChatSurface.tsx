@@ -1692,6 +1692,14 @@ export function CloudSessionChatSurface({
 		// The newest page first, then only what came after the newest event held.
 		queryFn: async () => cloud ? loadCloudChatHistory(queryClient, client, cloud.orgId, session.id) : [] as CloudCpClientEvent[],
 	});
+	// An orchestrator still starting in place for the first time (no worker has
+	// ever connected, so it is not waking) has no history: it starts with no
+	// message. Decided as the session opens, so a worker that connects before
+	// the first read answers does not turn it into one being restored.
+	const opensNew = session.kind === "orchestrator" && cloudChatStartingInPlace(session) && !cloud?.workerEpoch;
+	const [opened, setOpened] = useState({ id: session.id, isNew: opensNew });
+	if (opened.id !== session.id) setOpened({ id: session.id, isNew: opensNew });
+	const openedNew = opened.id === session.id ? opened.isNew : opensNew;
 	// What the list holds of the history; older pages load on demand. Kept as
 	// long as the list is, so a kept list never reads as the whole history.
 	const historyKey = cloudChatHistoryKey(cloud?.orgId ?? "", session.id);
@@ -2381,13 +2389,11 @@ export function CloudSessionChatSurface({
 			snapshot={snapshot}
 			// Until the first read the chat's history is unknown, not empty: a Cloud
 			// session says nothing of its messages, so it opens as one that has some.
-			// An orchestrator still starting in place for the first time (no worker
-			// has ever connected, so it is not waking) has none: it starts with no
-			// message, so it opens as the new chat it is, not docked as one being
-			// restored for the moment the read takes. A worker may start with its
-			// task, and a woken session has history: both wait for the read.
-			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError &&
-				!(session.kind === "orchestrator" && cloudChatStartingInPlace(session) && !cloud?.workerEpoch)}
+			// A new orchestrator (openedNew) has none, so it opens as the new chat it
+			// is, not docked as one being restored for the moment the read takes. A
+			// worker may start with its task, and a woken session has history: both
+			// wait for the read.
+			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError && !openedNew}
 			hasOlder={history?.hasOlder}
 			loadingOlder={history?.loadingOlder}
 			onLoadOlder={onLoadOlder}

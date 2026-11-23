@@ -317,6 +317,31 @@ describe("CloudSessionChatSurface", () => {
 		expect(await firstFrames({ ...starting, kind: "worker" })).toContain(true);
 	});
 
+	it("keeps a new orchestrator centered when its worker connects before the first read answers", async () => {
+		const starting = {
+			...session, kind: "orchestrator", runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" },
+		} satisfies WorkspaceSession;
+		cloudMocks.listChatEvents.mockReset().mockImplementation(() => new Promise(() => {}));
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={starting} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+		// The worker connects while the read is still out: no longer starting, with an epoch.
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{
+			...starting, runtimeConnected: true, cloud: { ...starting.cloud, observedState: "running", workerEpoch: 1 },
+		}} /></QueryClientProvider>);
+		expect(cloudMocks.chatProps.mock.calls.map((call) => call[0].historyPending)).not.toContain(true);
+		// Another session opened in the same surface decides afresh.
+		view.rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{
+			...starting, id: "cloud-other", runtimeConnected: true, cloud: { ...starting.cloud, observedState: "running", workerEpoch: 3 },
+		}} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].historyPending).toBe(true));
+		view.unmount();
+	});
+
 	it("reads the next account's own chat, never the previous account's cached one", async () => {
 		const step = (output: Record<string, unknown>): CloudCpClientEvent => ({
 			sessionId: session.id, sequence: 1, type: "workspace.script.step", createdAt: "2026-11-08T10:00:00Z",
