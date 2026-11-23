@@ -97,6 +97,8 @@ export async function refreshHostUpdate(url: string): Promise<void> {
 	settle(url, view);
 }
 
+export const hostUpdateError = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause)).replace(/^Error invoking remote method '[^']*':\s*(?:[A-Za-z]*Error:\s*)?/, "");
+
 export async function startHostUpdate(url: string, version?: string): Promise<void> {
 	const { byUrl, patch } = useHostUpdateStore.getState();
 	const updating = { from: byUrl[url]?.view?.version ?? "", since: Date.now() };
@@ -111,7 +113,7 @@ export async function startHostUpdate(url: string, version?: string): Promise<vo
 		else if (view && (view.state === "failed" || view.version !== updating.from)) {
 			patch(url, { updating });
 			settle(url, view);
-		} else patch(url, { updating: undefined, error: cause instanceof Error ? cause.message : String(cause) });
+		} else patch(url, { updating: undefined, error: hostUpdateError(cause) });
 	} finally {
 		starting.delete(url);
 		generations.set(url, (generations.get(url) ?? 0) + 1);

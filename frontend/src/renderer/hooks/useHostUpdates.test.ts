@@ -66,6 +66,14 @@ describe("host update flow", () => {
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed" });
 	});
 
+	it("shows the host's reason without the IPC wrapper", async () => {
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(view("0.14.10"));
+		await refreshHostUpdate(URL);
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockRejectedValue(new Error("Error invoking remote method 'remotes:startHostUpdate': Error: could not start the update: no user bus"));
+		await startHostUpdate(URL);
+		expect(useHostUpdateStore.getState().byUrl[URL]?.error).toBe("could not start the update: no user bus");
+	});
+
 	it("sends the confirmed version only when there is one", async () => {
 		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));
 		await startHostUpdate(URL, "0.15.0");

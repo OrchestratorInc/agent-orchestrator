@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { aoBridge } from "../../lib/bridge";
 import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
-import { compareVersions, hostUpdateAction, startHostUpdate, useHostUpdateStore } from "../../hooks/useHostUpdates";
+import { compareVersions, hostUpdateAction, hostUpdateError, startHostUpdate, useHostUpdateStore } from "../../hooks/useHostUpdates";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
 import { useUpdateStatus } from "../../hooks/useUpdateStatus";
 import { useCloudSession } from "../../lib/cloud-session";
@@ -78,7 +78,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		try {
 			setConfirmingUpdate({ ...host, version: (await aoBridge.remotes.checkHostUpdate(host.url)).replace(/^v/i, "") });
 		} catch (cause) {
-			useHostUpdateStore.getState().patch(host.url, { error: cause instanceof Error ? cause.message : String(cause) });
+			useHostUpdateStore.getState().patch(host.url, { error: hostUpdateError(cause) });
 		} finally {
 			setAskingUpdate("");
 		}

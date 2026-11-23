@@ -181,10 +181,10 @@ it("asks a computer running the desktop app which version it installs, then conf
 it("shows why a computer running the desktop app named no version, and asks again on Retry", async () => {
 	saved.entries = [{ hostId: "studio", label: "Studio Mac", url: "http://studio:3011" }];
 	useHostUpdateStore.setState({ localVersion: "0.15.4", byUrl: { "http://studio:3011": { view: { version: "0.14.10", supported: true, method: "app", state: "idle" } } } });
-	remotes.checkHostUpdate.mockRejectedValueOnce(new Error("No newer version is available for that computer."));
+	remotes.checkHostUpdate.mockRejectedValueOnce(new Error("Error invoking remote method 'remotes:checkHostUpdate': Error: No newer version is available for that computer."));
 	renderSettings();
 	fireEvent.click(await screen.findByRole("button", { name: "Update Studio Mac" }));
-	expect(await screen.findByRole("alert")).toHaveTextContent("No newer version is available for that computer.");
+	expect((await screen.findByRole("alert")).textContent).toBe("No newer version is available for that computer.");
 	expect(screen.queryByText(/Update Orchestrator on Studio Mac to/)).toBeNull();
 	expect(remotes.startHostUpdate).not.toHaveBeenCalled();
 	fireEvent.click(screen.getByRole("button", { name: "Update Studio Mac" }));
