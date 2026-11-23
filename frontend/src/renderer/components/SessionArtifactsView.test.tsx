@@ -788,9 +788,27 @@ describe("SessionArtifactsView", () => {
 		const view = renderView(<SessionArtifactsView request={request} session={session()} />);
 		expect(screen.getByText("notes/fresh.md isn't in this session's artifacts yet. It opens here once the session lists it.")).toBeInTheDocument();
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		// The pending view must listen for the daemon's ready/change events so the
+		// workspace query can discover a file written before this tab opened.
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
 
 		view.rerender(<SessionArtifactsView request={request} session={session([...artifacts, { kind: "markdown", name: "fresh.md", path: "notes/fresh.md", size: 5, updatedAt: "2026-09-24T00:00:00Z" }])} />);
 		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/fresh.md");
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+	});
+
+	it("stops following an absent file on Back and follows it again on a new request", async () => {
+		const view = renderView(<SessionArtifactsView request={{ key: 1, path: "missing.html" }} session={session()} />);
+		expect(screen.getByText(/missing\.html isn't in this session's artifacts yet/)).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+
+		view.rerender(<SessionArtifactsView request={{ key: 2, path: "missing.html" }} session={session()} />);
+		expect(screen.getByText(/missing\.html isn't in this session's artifacts yet/)).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
 	});
 
 	it("opens a requested file listed under a new name, not the not-listed-yet note", () => {
@@ -822,6 +840,7 @@ describe("SessionArtifactsView", () => {
 		view.rerender(<SessionArtifactsView request={request} session={session(remaining)} />);
 		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^plan\.md/ })).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
 	});
 
 	it("returns to the gallery from a requested file that is not listed", async () => {
@@ -1041,11 +1060,11 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByRole("button", { name: "Publish: notes.md" })).toBeInTheDocument();
 	});
 
-	it("disables Publish for a video and says why", async () => {
-		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
-		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+	it("disables Publish for a video browsers cannot play and says why", async () => {
+		const video: SessionArtifact = { kind: "file", name: "clip.mkv", path: "clip.mkv", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mkv" }} session={session([video])} />);
 
-		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publish: clip.mkv" })).toBeDisabled();
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {

@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
@@ -742,6 +743,7 @@ export const Sidebar = memo(function Sidebar({
 	// List behavior (force-open sections, lifted Show more caps) belongs to the
 	// icon rail only; toggling an offcanvas sidebar must not change any list.
 	const isIconRail = isCollapsed && SIDEBAR_COLLAPSIBLE === "icon";
+	useTelemetrySurface("sidebar", !isCollapsed || isIconRail);
 	const [expandedChromeVisible, setExpandedChromeVisible] = useState(!isCollapsed);
 	// One IPC subscription for both footer variants of the restart-to-update prompt.
 	const updateStatus = useUpdateStatus();
@@ -1099,6 +1101,7 @@ export const Sidebar = memo(function Sidebar({
 		<SidebarRoot
 			collapsible={SIDEBAR_COLLAPSIBLE}
 			resizeScopeRef={resizeScopeRef}
+			data-telemetry-surface="sidebar"
 			data-expanded-chrome={expandedChromeVisible ? "visible" : "hidden"}
 			data-topbar-offset={underTopbar ? topbarOffset : undefined}
 			className={cn(
@@ -1123,6 +1126,7 @@ export const Sidebar = memo(function Sidebar({
 				 * - No separate "home" affordance on the mark — the whole brand is the control.
 				 */}
 				<Pressable
+					data-telemetry-id="sidebar.home"
 					aria-label={t("shell.goHome")}
 					className={cn(
 						"group/brand flex w-full shrink-0 items-center gap-1.5 rounded-md px-0.5 text-left",
@@ -1144,6 +1148,7 @@ export const Sidebar = memo(function Sidebar({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
+							data-telemetry-id="sidebar.collapse"
 							aria-label={isCollapsed ? t("shell.expandSidebar") : t("shell.collapseSidebar")}
 							className="hidden size-control-board rounded-lg group-data-[collapsible=icon]:inline-flex [&_svg]:size-icon-base"
 							onClick={toggleSidebar}
@@ -1392,32 +1397,6 @@ export const Sidebar = memo(function Sidebar({
 						daemon {daemonStatus.state}
 					</span>
 				)}
-				{settingsPage ? (
-					<>
-						<div className={FOOTER_UPDATES_CLASS}>
-							<SidebarUpdateRow
-								onRequestInstall={openUpdateInstallPrompt}
-								status={updateStatus}
-								tabIndex={isCollapsed ? -1 : 0}
-							/>
-						</div>
-						<div className={FOOTER_BOTTOM_ROW_CLASS}>
-							<Pressable
-								className={FOOTER_NAV_BUTTON_CLASS}
-								disabled={settingsPage.cueBusy}
-								onClick={settingsPage.close}
-								type="button"
-							>
-								<NavRowHighlight />
-								<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
-									<ArrowLeft aria-hidden="true" />
-									<span className="tracking-tight">{t("settings.back")}</span>
-								</span>
-							</Pressable>
-						</div>
-					</>
-				) : (
-				<>
 				<div
 					aria-hidden={isCollapsed || undefined}
 					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
@@ -1434,60 +1413,84 @@ export const Sidebar = memo(function Sidebar({
 							tabIndex={isCollapsed ? -1 : 0}
 						/>
 					</div>
-					<FooterAccountRow
-						onConnectMobile={() => selection.goConnectMobile()}
-						onOpenSettings={() => selection.goGlobalSettings()}
-						tabIndex={isCollapsed ? -1 : 0}
-					/>
-				</div>
-				<div
-					aria-hidden={!isCollapsed || undefined}
-					className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
-				>
-					<SidebarUpdateRail
-						onRequestInstall={openUpdateInstallPrompt}
-						status={updateStatus}
-						tabIndex={isCollapsed ? 0 : -1}
-					/>
-					<CloudSignInRailButton tabIndex={isCollapsed ? 0 : -1} />
-					<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
-					<Tooltip>
-						<TooltipTrigger asChild>
+					{settingsPage ? (
+						<div className={FOOTER_BOTTOM_ROW_CLASS}>
 							<Pressable
-								aria-label={t("settings.connectMobile")}
-								className={FOOTER_RAIL_BUTTON_CLASS}
-								onClick={() => selection.goConnectMobile()}
-								tabIndex={isCollapsed ? 0 : -1}
+								className={FOOTER_NAV_BUTTON_CLASS}
+								disabled={settingsPage.cueBusy}
+								onClick={settingsPage.close}
+								tabIndex={isCollapsed ? -1 : 0}
 								type="button"
 							>
 								<NavRowHighlight />
-								<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
-									<Smartphone aria-hidden="true" />
+								<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
+									<ArrowLeft aria-hidden="true" />
+									<span className="tracking-tight">{t("settings.back")}</span>
 								</span>
 							</Pressable>
-						</TooltipTrigger>
-						<TooltipContent side="right">{t("settings.connectMobile")}</TooltipContent>
-					</Tooltip>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Pressable
-								aria-label={t("shell.settings")}
-								className={FOOTER_RAIL_BUTTON_CLASS}
-								onClick={() => selection.goGlobalSettings()}
-								tabIndex={isCollapsed ? 0 : -1}
-								type="button"
-							>
-								<NavRowHighlight />
-								<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
-									<Settings aria-hidden="true" />
-								</span>
-							</Pressable>
-						</TooltipTrigger>
-						<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
-					</Tooltip>
+						</div>
+					) : (
+						<FooterAccountRow
+							onConnectMobile={() => selection.goConnectMobile()}
+							onOpenSettings={() => selection.goGlobalSettings()}
+							tabIndex={isCollapsed ? -1 : 0}
+						/>
+					)}
 				</div>
-				</>
-				)}
+				{/* Keep the collapsed icon rail in its own slot instead of pairing it
+				    with an opaque Settings footer row: reusing that DOM node on close
+				    triggers transition-opacity from 1 to 0 and flashes the centered
+				    Settings icon in the middle of the footer. */}
+				{!settingsPage ? (
+					<div
+						aria-hidden={!isCollapsed || undefined}
+						className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
+					>
+						<SidebarUpdateRail
+							onRequestInstall={openUpdateInstallPrompt}
+							status={updateStatus}
+							tabIndex={isCollapsed ? 0 : -1}
+						/>
+						<CloudSignInRailButton tabIndex={isCollapsed ? 0 : -1} />
+						<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									data-telemetry-id="sidebar.connect_mobile"
+									aria-label={t("settings.connectMobile")}
+									className={FOOTER_RAIL_BUTTON_CLASS}
+									onClick={() => selection.goConnectMobile()}
+									tabIndex={isCollapsed ? 0 : -1}
+									type="button"
+								>
+									<NavRowHighlight />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
+										<Smartphone aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent side="right">{t("settings.connectMobile")}</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									data-telemetry-id="sidebar.settings"
+									aria-label={t("shell.settings")}
+									className={FOOTER_RAIL_BUTTON_CLASS}
+									onClick={() => selection.goGlobalSettings()}
+									tabIndex={isCollapsed ? 0 : -1}
+									type="button"
+								>
+									<NavRowHighlight />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
+										<Settings aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
+						</Tooltip>
+					</div>
+				) : null}
 			</SidebarFooter>
 
 			{/* useResizable owns clamp. */}
@@ -1499,6 +1502,7 @@ export const Sidebar = memo(function Sidebar({
 				style={noDragStyle}
 			/>
 			<SidebarRail
+				data-telemetry-id="sidebar.collapse"
 				aria-label={t("shell.expandSidebar")}
 				className="group-data-[state=expanded]:hidden hover:after:bg-transparent"
 				onClick={() => setOpen(true)}
@@ -1998,6 +2002,7 @@ const ProjectItem = memo(function ProjectItem({
 							<div>
 								{/* project-sidebar__proj-row */}
 								<SidebarMenuButton
+									data-telemetry-id="sidebar.project_row"
 									aria-label={hostLabel ? t(isStandalone ? "shell.toggleProject" : "shell.openProjectDashboard", { name: nameWithHost }) : undefined}
 									aria-current={dashboardActive ? "page" : undefined}
 									aria-expanded={expanded}
@@ -2093,6 +2098,7 @@ const ProjectItem = memo(function ProjectItem({
 								{/* Folder disclosure toggle: sibling of the nav button, absolutely positioned over
 	    the icon area so it intercepts clicks there without nesting buttons. */}
 								<Pressable
+									data-telemetry-id="sidebar.project_toggle"
 									aria-label={t("shell.toggleProject", {
 										name: nameWithHost,
 									})}
@@ -2124,6 +2130,7 @@ const ProjectItem = memo(function ProjectItem({
 											<Button
 												size="icon-xs"
 												variant="quiet"
+												data-telemetry-id="sidebar.project_unpin"
 												aria-label={t("shell.unpinProject")}
 												className={HOVER_ACTION_CLASS}
 												data-project-pinned=""
@@ -2143,6 +2150,7 @@ const ProjectItem = memo(function ProjectItem({
 												<Button
 													size="icon-xs"
 													variant="quiet"
+													data-telemetry-id="sidebar.project_new_session"
 													aria-label={t("shell.openNewAgent")}
 													className={ROW_ACTION_BUTTON_CLASS}
 													disabled={isProjectRestarting}
@@ -2210,6 +2218,7 @@ const ProjectItem = memo(function ProjectItem({
 												<Button
 													size="icon-xs"
 													variant="quiet"
+													data-telemetry-id="sidebar.project_menu"
 													aria-label={t("shell.projectActions", {
 																name: nameWithHost,
 													})}
@@ -2422,6 +2431,7 @@ function ScratchpadSection({
 													<Button
 														size="icon-xs"
 														variant="quiet"
+														data-telemetry-id="sidebar.archived_sessions"
 														aria-label={t("shell.archivedSessions")}
 														className={ROW_ACTION_BUTTON_CLASS}
 														onClick={(event) => {
@@ -2443,6 +2453,7 @@ function ScratchpadSection({
 												<Button
 													size="icon-xs"
 													variant="quiet"
+													data-telemetry-id="sidebar.project_new_session"
 													aria-label={t("shell.openNewAgent")}
 													className={ROW_ACTION_BUTTON_CLASS}
 													onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
@@ -2500,6 +2511,7 @@ function ScratchpadSection({
 				{showArchivedRow ? (
 					<button
 						type="button"
+						data-telemetry-id="sidebar.archived_sessions"
 						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
 						className={cn(SECTION_ROW_CLASS, NAV_ROW_HIGHLIGHT_HOST_CLASS, "mb-1 shrink-0 rounded-lg text-left text-muted-foreground")}
 						data-scratchpad-archived-row=""
@@ -2879,6 +2891,7 @@ const SessionRow = memo(function SessionRow({
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-keyshortcuts="F2"
+							data-telemetry-id="sidebar.session_row"
 							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
@@ -3062,6 +3075,7 @@ const SessionActions = memo(function SessionActions({
 				{session.cloud?.shared ? null : <Button
 							size="icon-xs"
 							variant="quiet"
+							data-telemetry-id="sidebar.session_pin"
 							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 							className={SESSION_ACTION_CLASS}
 							onClick={(event) => {
@@ -3087,6 +3101,7 @@ const SessionActions = memo(function SessionActions({
 										<Button
 											size="icon-xs"
 											variant="quiet"
+											data-telemetry-id="sidebar.session_archive"
 											aria-label={t("shell.archiveSession")}
 											className={SESSION_ACTION_CLASS}
 											disabled={isKilling}
@@ -3194,6 +3209,7 @@ function FooterAccountRow({
 					</>
 				) : (
 					<Pressable
+						data-telemetry-id="sidebar.settings"
 						aria-label={t("shell.settings")}
 						className={FOOTER_NAV_BUTTON_CLASS}
 						onClick={onOpenSettings}
@@ -3213,6 +3229,7 @@ function FooterAccountRow({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Pressable
+							data-telemetry-id="sidebar.settings"
 							aria-label={t("shell.settings")}
 							className={FOOTER_ICON_BUTTON_CLASS}
 							onClick={onOpenSettings}
@@ -3314,9 +3331,9 @@ function FooterMobileMenu({ onConnectMobile, tabIndex }: { onConnectMobile: () =
  * The header carries the full name, email and plan, which the one-line footer
  * row leaves out so nothing there has to truncate.
  */
-function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
+function CloudAccountMenuContent({ side, onSignOut }: { side: "top" | "right"; onSignOut: () => void }) {
 	const { t } = useTranslation();
-	const { session, signOut } = useCloudSession();
+	const { session } = useCloudSession();
 	// The plan badge is self-serve billing only; a contract org has no plan to show.
 	const billing = useCloudBilling();
 	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
@@ -3341,12 +3358,49 @@ function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
 				</div>
 			</div>
 			<DropdownMenuSeparator />
-			<DropdownMenuItem onSelect={() => void signOut()} variant="destructive">
+			<DropdownMenuItem onSelect={onSignOut} variant="destructive">
 				<LogOut aria-hidden="true" />
 				{t("shell.signOut")}
 			</DropdownMenuItem>
 		</DropdownMenuContent>
 	);
+}
+
+/**
+ * Sign out of Orchestrator Cloud after a confirmation, as logging out of an
+ * agent asks first. The dialog sits in the account menu's root, not its
+ * content: the content unmounts as soon as the menu closes.
+ */
+function useConfirmedCloudSignOut() {
+	const { t } = useTranslation();
+	const { signOut } = useCloudSession();
+	const [open, setOpen] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const confirm = () => {
+		setBusy(true);
+		setError(null);
+		void signOut()
+			.then(() => setOpen(false), (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)))
+			.finally(() => setBusy(false));
+	};
+	const dialog = (
+		<ConfirmDialog
+			open={open}
+			title={t("shell.signOutConfirmTitle")}
+			description={t("shell.signOutConfirmDescription")}
+			confirmLabel={t("shell.signOut")}
+			destructive
+			busy={busy}
+			error={error}
+			onConfirm={confirm}
+			onOpenChange={(next) => {
+				setOpen(next);
+				if (!next) setError(null);
+			}}
+		/>
+	);
+	return { requestSignOut: () => setOpen(true), signOutDialog: dialog };
 }
 
 // CloudAccountRow: avatar and name for an existing cloud session (the
@@ -3356,6 +3410,7 @@ function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, session, status } = useCloudSession();
+	const { requestSignOut, signOutDialog } = useConfirmedCloudSignOut();
 	if (!configured || status !== "authenticated") return null;
 	const email = session?.user.email;
 
@@ -3380,7 +3435,8 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 					</span>
 				</Pressable>
 			</DropdownMenuTrigger>
-			<CloudAccountMenuContent side="top" />
+			<CloudAccountMenuContent side="top" onSignOut={requestSignOut} />
+			{signOutDialog}
 		</DropdownMenu>
 	);
 }
@@ -3444,6 +3500,7 @@ function AccountAvatar({
 function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, session, status } = useCloudSession();
+	const { requestSignOut, signOutDialog } = useConfirmedCloudSignOut();
 	if (!configured || status !== "authenticated") return null;
 	const label = t("shell.signedInAs", {
 		email: session?.user.email ?? "Orchestrator Cloud",
@@ -3469,7 +3526,8 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 				</TooltipTrigger>
 				<TooltipContent side="right">{label}</TooltipContent>
 			</Tooltip>
-			<CloudAccountMenuContent side="right" />
+			<CloudAccountMenuContent side="right" onSignOut={requestSignOut} />
+			{signOutDialog}
 		</DropdownMenu>
 	);
 }
@@ -3754,6 +3812,7 @@ function CreateProjectButton({
 							<Button
 								size="icon-xs"
 								variant="quiet"
+								data-telemetry-id="sidebar.new_project"
 								aria-label={t("shell.newProject")}
 								className={ROW_ACTION_BUTTON_CLASS}
 								disabled={disabled}
@@ -3779,6 +3838,7 @@ function CreateProjectListItem() {
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button
+						data-telemetry-id="sidebar.new_project"
 						aria-label={t("shell.newProject")}
 						className="h-control-board w-full rounded-lg"
 						onClick={() => requestCreateProject()}

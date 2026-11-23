@@ -25,10 +25,12 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
+import { appI18n } from "../i18n";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
 import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { savedConversationQueryKey } from "../lib/local-chat-cache";
 import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -71,6 +73,7 @@ type WireActivity = components["schemas"]["ConversationActivityResponse"];
 type WireImageContent = components["schemas"]["ConversationImageContentRequest"];
 type WireResourceContent = components["schemas"]["ConversationResourceContentRequest"];
 type WireExcerptReference = components["schemas"]["ConversationExcerptReferenceRequest"];
+type WireConfigOption = components["schemas"]["ConversationConfigOptionResponse"];
 
 export interface ConversationSendInput {
 	text: string;
@@ -98,6 +101,7 @@ export interface ConversationSwitchDisplay {
 
 /** A send whose agent switch was refused or failed, so the message never left. */
 export class ProviderSwitchFailed extends Error {
+	readonly code: string = "PROVIDER_SWITCH_FAILED_ERROR";
 	constructor(readonly reason: unknown) {
 		super(apiErrorMessage(reason));
 	}
@@ -434,6 +438,7 @@ const PERMANENT_CODES = new Set([
 
 export interface ConversationQueryResult {
 	snapshot?: ConversationSnapshot;
+	savedSnapshot?: ConversationSnapshot;
 	isLoading: boolean;
 	/** Set when the session exists but has no chat conversation to show. */
 	unavailable?: { code: string; message: string };
@@ -854,6 +859,11 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		initialData: false,
 		enabled: false,
 	}).data;
+	const saved = useQuery({
+		queryKey: savedConversationQueryKey(sessionId ?? ""),
+		queryFn: async (): Promise<ConversationSnapshot | null> => null,
+		enabled: false,
+	}).data;
 	const query = useInfiniteQuery({
 		...conversationQueryOptions(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
@@ -900,6 +910,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 
 	return {
 		snapshot: query.data,
+		savedSnapshot: !hostId && query.isLoading && saved ? saved : undefined,
 		refreshError: hostId && (refreshError || query.error) ? "Could not load this remote conversation." : undefined,
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
@@ -2053,6 +2064,10 @@ function offersValue(options: ChatConfigOption[], optionId: string, value: ChatC
 	return !("value" in value) || option.type !== "select" || option.choices.some((choice) => choice.value === value.value);
 }
 
+function toChatConfigOptions(options: WireConfigOption[] | undefined): ChatConfigOption[] {
+	return (options ?? []).map((option) => ({ ...option, currentBoolean: option.currentBoolean ?? undefined, choices: option.choices ?? [] }));
+}
+
 export function useConversationConfigOptions(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const queryKey = conversationConfigOptionsQueryKey(sessionId ?? "", hostId);
@@ -2109,7 +2124,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 				throw error;
 			}
 			snapshotRefreshed.current = false;
-			return (data?.options ?? []) as ChatConfigOption[];
+			return toChatConfigOptions(data?.options);
 		},
 	});
 	const mutation = useMutation({
@@ -2175,6 +2190,9 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// agent's answer to that earlier pick dropped the option or this value (a new model
 		// with other efforts), sending it would only be refused, so it is dropped instead.
 		const confirmed = writes.current.confirmed;
+		if (confirmed && "value" in value && confirmed.some((option) => option.id === optionId && option.type === "select" && option.choices.length === 0)) {
+			throw new Error(appI18n.t("chat.configOption.noChoices"));
+		}
 		if (confirmed && !offersValue(confirmed, optionId, value)) return { controllerEpoch, options: confirmed };
 		// A read already in flight when the user picked would otherwise land
 		// after this mutation's setQueryData and put the pre-change catalog
@@ -2195,7 +2213,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 			},
 		);
 		if (error) throw error;
-		const options = (data?.options ?? []) as ChatConfigOption[];
+		const options = toChatConfigOptions(data?.options);
 		writes.current.confirmed = options;
 		return { controllerEpoch, options };
 	}

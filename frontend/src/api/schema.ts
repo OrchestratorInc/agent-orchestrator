@@ -2111,6 +2111,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pr-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the state and summary of a GitHub pull request a chat links to */
+        get: operations["getPRPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects": {
         parameters: {
             query?: never;
@@ -3071,6 +3088,57 @@ export interface paths {
         /** Enable or disable automatic review for a session */
         put: operations["setSessionAutoReview"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/background-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect native background work without waking the session */
+        get: operations["getBackgroundTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one background task's recent output without waking the session */
+        get: operations["getBackgroundTaskOutput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop one native background task without waking the session */
+        post: operations["stopBackgroundTask"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4761,6 +4829,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/background-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List native background work for attached session controllers */
+        get: operations["listBackgroundTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/cleanup": {
         parameters: {
             query?: never;
@@ -5898,6 +5983,50 @@ export interface components {
             /** Format: date-time */
             startedAt?: null | string;
         };
+        BackgroundTaskOutputResponse: {
+            /**
+             * @description unavailable when this provider or session cannot report the task's output; output is then empty.
+             * @enum {string}
+             */
+            availability: "ready" | "unavailable";
+            /** @description The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed. */
+            output: string;
+            sessionId: string;
+            /** @description True when the provider stopped sending this task's output, so anything it printed since is missing. */
+            stale?: boolean;
+            taskId: string;
+            /** @description True when older output was left out or is missing. */
+            truncated?: boolean;
+        };
+        BackgroundTaskResponse: {
+            /** @description The shell command line, when the provider reports one. Credentials in it are redacted. */
+            command?: string;
+            description: string;
+            /** Format: date-time */
+            endedAt?: null | string;
+            id: string;
+            /** @enum {string} */
+            kind: "shell" | "agent" | "other";
+            runId?: string;
+            /**
+             * Format: date-time
+             * @description When the provider started the task, or else when the daemon first observed it.
+             */
+            startedAt?: null | string;
+            /** @enum {string} */
+            state: "running" | "paused" | "completed" | "failed" | "stopped";
+            /** @description True when this provider can stop this running task. */
+            stoppable?: boolean;
+        };
+        BackgroundTasksResponse: {
+            /** @enum {string} */
+            availability: "ready" | "partial" | "unavailable";
+            controllerGeneration: string;
+            /** Format: date-time */
+            observedAt?: null | string;
+            sessionId: string;
+            tasks: components["schemas"]["BackgroundTaskResponse"][];
+        };
         BrowserCommandRequest: {
             action: string;
             args?: {
@@ -6767,7 +6896,7 @@ export interface components {
         };
         ConversationConfigOptionResponse: {
             category?: string;
-            choices?: components["schemas"]["ConversationConfigChoiceResponse"][];
+            choices: components["schemas"]["ConversationConfigChoiceResponse"][];
             currentBoolean?: null | boolean;
             currentValue?: string;
             description?: string;
@@ -7541,6 +7670,9 @@ export interface components {
             automations: components["schemas"]["AutomationResponse"][];
             nextCursor?: string;
         };
+        ListBackgroundTasksResponse: {
+            sessions: components["schemas"]["BackgroundTasksResponse"][];
+        };
         ListCatalogModelsResponse: {
             models: string[];
         };
@@ -7840,6 +7972,25 @@ export interface components {
             contentType: string;
             data: string;
             name: string;
+        };
+        PRPreviewResponse: {
+            additions: number;
+            author?: string;
+            changedFiles: number;
+            /** @enum {string} */
+            checks?: "passing" | "failing" | "pending";
+            deletions: number;
+            number: number;
+            /** @description owner/name */
+            repo: string;
+            sourceBranch?: string;
+            /** @enum {string} */
+            state: "open" | "draft" | "merged" | "closed";
+            /** Format: date-time */
+            stateChangedAt?: null | string;
+            targetBranch?: string;
+            title: string;
+            url: string;
         };
         PRReviewState: {
             latestRun?: components["schemas"]["ReviewRun"];
@@ -16880,6 +17031,65 @@ export interface operations {
             };
         };
     };
+    getPRPreview: {
+        parameters: {
+            query?: {
+                /** @description A github.com pull request URL. */
+                url?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PRPreviewResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listProjects: {
         parameters: {
             query?: never;
@@ -20814,6 +21024,122 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getBackgroundTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundTasksResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getBackgroundTaskOutput: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Provider-scoped background task identifier. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackgroundTaskOutputResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    stopBackgroundTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description Provider-scoped background task identifier. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -27813,6 +28139,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listBackgroundTasks: {
+        parameters: {
+            query?: {
+                /** @description Optional project id filter for dashboard cards. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListBackgroundTasksResponse"];
                 };
             };
         };

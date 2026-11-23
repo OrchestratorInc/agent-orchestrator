@@ -22,6 +22,7 @@ import {
 	SIDEBAR_MIN_WIDTH,
 	resolveNextNavigationAfterSessionKill,
 } from "./Sidebar";
+import { SettingsProvider } from "./SettingsDialog";
 import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -347,6 +348,7 @@ function renderSidebar({
 	topbarOffset = "toolbar",
 	expandedProjectIds,
 	seed,
+	withSettingsProvider = false,
 }: {
 	onCloneProject?: CloneProjectHandler;
 	onCreateProject?: CreateProjectHandler;
@@ -363,6 +365,7 @@ function renderSidebar({
 	topbarOffset?: "toolbar" | "titlebar" | "trafficLights" | "session";
 	expandedProjectIds?: string[];
 	seed?: (client: QueryClient) => void;
+	withSettingsProvider?: boolean;
 } = {}) {
 	// Most legacy sidebar tests exercise session rows and assume their fixture
 	// project was previously open. Tests for the empty-store behavior opt out.
@@ -379,24 +382,27 @@ function renderSidebar({
 		});
 	}
 	seed?.(queryClient);
+	const sidebar = (
+		<SidebarProvider defaultOpen={initialOpen}>
+			<Sidebar
+				topbarOffset={topbarOffset}
+				onCloneProject={onCloneProject}
+				onCreateProject={onCreateProject}
+				onInitializeProject={onInitializeProject}
+				onRemoveProject={onRemoveProject}
+				workspaces={workspaces}
+				remoteHosts={remoteHosts}
+				remoteWorkspaces={remoteWorkspaces}
+				onCreateRemoteProject={onCreateRemoteProject}
+				onInitializeRemoteProject={onInitializeRemoteProject}
+				onRemoveRemoteProject={onRemoveRemoteProject}
+			/>
+		</SidebarProvider>
+	);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<SidebarProvider defaultOpen={initialOpen}>
-					<Sidebar
-						topbarOffset={topbarOffset}
-						onCloneProject={onCloneProject}
-						onCreateProject={onCreateProject}
-						onInitializeProject={onInitializeProject}
-						onRemoveProject={onRemoveProject}
-						workspaces={workspaces}
-						remoteHosts={remoteHosts}
-						remoteWorkspaces={remoteWorkspaces}
-						onCreateRemoteProject={onCreateRemoteProject}
-						onInitializeRemoteProject={onInitializeRemoteProject}
-						onRemoveRemoteProject={onRemoveRemoteProject}
-					/>
-				</SidebarProvider>
+				{withSettingsProvider ? <SettingsProvider>{sidebar}</SettingsProvider> : sidebar}
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -769,7 +775,56 @@ describe("Sidebar", () => {
 		expect(within(menu).getByText("Ada Park")).toBeVisible();
 		expect(within(menu).getByText("ada@example.com")).toBeVisible();
 		await user.click(within(menu).getByRole("menuitem", { name: "Sign out" }));
+		// Signing out asks first, like logging out of an agent.
+		expect(await screen.findByRole("dialog", { name: "Sign out of Orchestrator Cloud?" })).toBeVisible();
+		expect(cloudSessionState.signOut).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Cloud sign-in when the sign-out is cancelled", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "ada@example.com", displayName: "Ada Park" } };
+		renderSidebar();
+
+		await user.click(screen.getAllByLabelText("Signed in as ada@example.com").find((el) => el.tabIndex === 0)!);
+		await user.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Sign out" }));
+		const dialog = await screen.findByRole("dialog", { name: "Sign out of Orchestrator Cloud?" });
+		await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(cloudSessionState.signOut).not.toHaveBeenCalled();
+	});
+
+	it("signs out once the sign-out is confirmed", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "ada@example.com", displayName: "Ada Park" } };
+		renderSidebar();
+
+		await user.click(screen.getAllByLabelText("Signed in as ada@example.com").find((el) => el.tabIndex === 0)!);
+		await user.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Sign out" }));
+		const dialog = await screen.findByRole("dialog", { name: "Sign out of Orchestrator Cloud?" });
+		expect(dialog).toHaveTextContent("Cached Cloud previews on this computer will be cleared");
+		await user.click(within(dialog).getByRole("button", { name: "Sign out" }));
+
 		expect(cloudSessionState.signOut).toHaveBeenCalledOnce();
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+	});
+
+	it("asks before signing out from the collapsed rail's account menu too", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "user@example.com" } };
+		renderSidebar({ initialOpen: false });
+
+		await user.click(screen.getAllByLabelText("Signed in as user@example.com").find((el) => el.tabIndex === 0)!);
+		await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+
+		expect(await screen.findByRole("dialog", { name: "Sign out of Orchestrator Cloud?" })).toBeVisible();
+		expect(cloudSessionState.signOut).not.toHaveBeenCalled();
 	});
 
 	it("opens the account menu from the collapsed rail avatar instead of signing out", async () => {
@@ -2711,6 +2766,29 @@ describe("Sidebar", () => {
 		await user.click(screen.getAllByRole("button", { name: "Settings" })[0]);
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global" });
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("mounts a fresh collapsed footer rail instead of reusing the Settings Back row when closing Settings", async () => {
+		// Regression: both branches of SidebarFooter previously returned unkeyed
+		// two-div fragments, so leaving Settings reused the opaque Back row div
+		// as the opacity-0 collapsed rail div, triggering transition-opacity 1->0
+		// and flashing the centered Settings icon in the middle of the footer.
+		const user = userEvent.setup();
+		renderSidebar({ withSettingsProvider: true });
+
+		await user.click(screen.getAllByRole("button", { name: "Settings" })[0]);
+		const backButton = await screen.findByRole("button", { name: "Back" });
+		const settingsBackRow = backButton.parentElement;
+		expect(settingsBackRow).not.toBeNull();
+
+		await user.click(backButton);
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+
+		const settingsButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('button[aria-label="Settings"]'));
+		const collapsedRailSettings = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
+		const collapsedRailContainer = collapsedRailSettings?.closest('[aria-hidden="true"]');
+		expect(collapsedRailContainer).toBeInTheDocument();
+		expect(collapsedRailContainer).not.toBe(settingsBackRow);
 	});
 
 	it("opens the Mobile settings page from the footer and starts pairing", async () => {

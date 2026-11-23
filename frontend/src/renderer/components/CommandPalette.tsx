@@ -1,3 +1,4 @@
+import { uiUsage, useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -172,6 +173,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, removeProject } = useShell();
 	const toggleThemePreference = useUiStore((s) => s.toggleThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
+	const markCommandPick = useTelemetrySurface("cmdk", isOpen, { choice: true });
 	const setOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
 	const developerMode = useUiStore((s) => s.developerMode);
@@ -1196,9 +1198,12 @@ export const CommandPalette = memo(function CommandPalette() {
 			const chosen = secondary ? { ...item, action: item.secondaryAction } : item;
 			if (chosen.disabled || !chosen.action) return;
 			if (pendingRef.current) return;
+			markCommandPick();
+			// What this pick opens or switches to is attributed to Cmd+K.
+			uiUsage.noteIntent("cmdk");
 			void runAction(chosen);
 		},
-		[runAction],
+		[markCommandPick, runAction],
 	);
 
 	// ⌘K / ⌘⇧P and ⌘P arrive from the main process (it also yields plain Ctrl+K and
@@ -1212,6 +1217,7 @@ export const CommandPalette = memo(function CommandPalette() {
 				return;
 			}
 			if (isDialogOrMenuOpen()) return;
+			uiUsage.noteIntent("shortcut");
 			setOpen(true);
 		},
 		enabled,
@@ -1228,6 +1234,7 @@ export const CommandPalette = memo(function CommandPalette() {
 			if (isDialogOrMenuOpen()) return;
 			resetTransient();
 			setView(currentFileTarget ? { mode: "file-search", target: currentFileTarget, parent: "root" } : { mode: "root" });
+			uiUsage.noteIntent("shortcut");
 			setOpen(true);
 		},
 		enabled,
@@ -1330,6 +1337,7 @@ export const CommandPalette = memo(function CommandPalette() {
 					// every retained shell node.
 					modal={false}
 					open={isOpen}
+					telemetrySurface="cmdk"
 					title={t("command.palette")}
 					description={t("command.searchEverywherePlaceholder")}
 				onOpenChange={(open) => (open ? setOpen(true) : requestDismiss("close"))}
