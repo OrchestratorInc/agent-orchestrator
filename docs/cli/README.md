@@ -114,7 +114,7 @@ See the [command reference](../../backend/internal/skillassets/using-ao/commands
 | `ao session fork <id> [--check]` | `POST /api/v1/sessions/{id}/fork`             |
 | `ao session switch <id> [agent]` / `--from <agent> [agent]` `[--model <m>] [--effort <e>] [--permission <p>] [--force] [-m <text>]` | `--from` lists via `GET /api/v1/sessions?active=true`; each switch is `POST /api/v1/sessions/{id}/provider-switch`, then `POST /api/v1/sessions/{id}/send` for `-m` |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
-| `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
+| `ao send`                           | `POST /api/v1/sessions/{id}/send`; `--wait` then polls `GET /api/v1/sessions/{id}` |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
 | `ao preview [url]`                  | `POST /api/v1/sessions/{id}/preview`           |
 | `ao preview start/status/stop`      | `POST/GET/DELETE /api/v1/sessions/{id}/preview/server` |
@@ -294,6 +294,7 @@ The CLI's main caller is an agent. Three parts decide what a call does:
 ao token create ci-bot --preset operate --project api --expires 30d
 AO_TOKEN=aoa_... ao spawn --project api --agent claude-code --name "Fix login test" --prompt "..."
 AO_TOKEN=aoa_... ao session wait api-12 --timeout 20m     # exit 0 done, 5 needs an answer, 124 timed out
+AO_TOKEN=aoa_... ao send --session api-12 --message "Also update the changelog." --wait
 AO_TOKEN=aoa_... ao call chat.input.resolve --input '{"sessionId":"api-12","requestId":"...","action":"accept","content":{}}'
 ```
 

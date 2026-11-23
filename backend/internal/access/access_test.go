@@ -1,6 +1,7 @@
 package access
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -263,6 +264,79 @@ func TestBindingsOutliveTheTokenFile(t *testing.T) {
 	}
 	if err := lost.Bind("api-2", token.ID); err == nil {
 		t.Error("Bind must report a write that failed")
+	}
+}
+
+func TestSessionCreatedBindsOrClears(t *testing.T) {
+	path := TokensPath(t.TempDir())
+	registry, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := mustGrant(t, PresetOperate, nil, []string{"api"}, time.Time{})
+	token, _, err := registry.Create("ci", grant, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	granted := WithCaller(context.Background(), Caller{Kind: CallerToken, Grant: &grant, TokenID: token.ID})
+
+	if err := registry.SessionCreated(context.Background(), "api-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, bound := registry.ForSession("api-1"); bound {
+		t.Error("a session created by a caller with no grant must not be bound")
+	}
+	if err := registry.SessionCreated(granted, "api-2"); err != nil {
+		t.Fatal(err)
+	}
+	if tokenID, bound := registry.ForSession("api-2"); !bound || tokenID != token.ID {
+		t.Fatalf("a session created by a caller with a grant: %q %v, want it bound to %s", tokenID, bound, token.ID)
+	}
+
+	if err := registry.SessionCreated(context.Background(), "api-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, bound := registry.ForSession("api-2"); bound {
+		t.Error("a new session that reuses the ID of a deleted bound session must start with no binding")
+	}
+	reloaded, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, bound := reloaded.ForSession("api-2"); bound {
+		t.Error("the cleared binding came back after a reload")
+	}
+}
+
+func TestRevokePrefersAnExactID(t *testing.T) {
+	registry, err := LoadRegistry(TokensPath(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := mustGrant(t, PresetRead, nil, nil, time.Time{})
+	first, _, err := registry.Create("first", grant, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 20 {
+		registry, err = LoadRegistry(registry.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		impostor, _, err := registry.Create(first.ID, grant, testNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revoked, found, err := registry.Revoke(first.ID)
+		if err != nil || !found || revoked.ID != first.ID {
+			t.Fatalf("round %d: Revoke(%s) removed %s (%q), want the token with that ID", i, first.ID, revoked.ID, revoked.Name)
+		}
+		if revoked, found, err = registry.Revoke(first.ID); err != nil || !found || revoked.ID != impostor.ID {
+			t.Fatalf("round %d: the name must still revoke once no token has that ID: %s %v %v", i, revoked.ID, found, err)
+		}
+		if first, _, err = registry.Create("first", grant, testNow); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

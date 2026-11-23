@@ -1,6 +1,7 @@
 package access
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -101,6 +102,10 @@ func LoadRegistry(path string) (*Registry, error) {
 
 func (r *Registry) bindingsDir() string {
 	return filepath.Join(filepath.Dir(r.path), "sessions")
+}
+
+func (r *Registry) bindingPath(sessionID string) string {
+	return filepath.Join(r.bindingsDir(), hex.EncodeToString([]byte(sessionID)))
 }
 
 func (r *Registry) loadBindings() error {
@@ -219,13 +224,17 @@ func (r *Registry) Touch(id string, now time.Time) {
 	_ = r.persistLocked()
 }
 
-// Revoke removes a token, found by ID or name. Sessions bound to it keep their
-// binding, so they are refused from then on.
+// Revoke removes a token, found by ID, else by name. Sessions bound to it keep
+// their binding, so they are refused from then on.
 func (r *Registry) Revoke(idOrName string) (Token, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	matches := func(token Token) bool { return token.ID == idOrName }
+	if _, isID := r.tokens[idOrName]; !isID {
+		matches = func(token Token) bool { return strings.EqualFold(token.Name, idOrName) }
+	}
 	for _, token := range r.tokens {
-		if token.ID != idOrName && !strings.EqualFold(token.Name, idOrName) {
+		if !matches(token) {
 			continue
 		}
 		delete(r.tokens, token.ID)
@@ -257,21 +266,40 @@ func (r *Registry) List() []Token {
 	return out
 }
 
+// SessionCreated is called when a session's row is created, before its agent
+// starts. A session created by a caller with a grant is bound to that caller's
+// token. Any other new session loses the binding an earlier session with the
+// same ID left behind: a spawn that is rolled back frees its ID for the next one.
+func (r *Registry) SessionCreated(ctx context.Context, sessionID string) error {
+	if who := CallerFrom(ctx); who.Grant != nil {
+		return r.Bind(sessionID, who.TokenID)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, bound := r.sessions[sessionID]; !bound {
+		return nil
+	}
+	if err := os.Remove(r.bindingPath(sessionID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	delete(r.sessions, sessionID)
+	return nil
+}
+
 // Bind records that a session started under a token. The token need not exist
 // any more: the session is then refused. The session counts as bound for this
 // run even when the write fails.
 //
-// ponytail: one small file is kept for every session a token ever started.
-// Remove it when its session is deleted if the directory grows large.
+// ponytail: the file of a deleted session stays, about 20 bytes each. Remove
+// it on delete if the directory grows large.
 func (r *Registry) Bind(sessionID, tokenID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions[sessionID] = tokenID
-	dir := r.bindingsDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(r.bindingsDir(), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, hex.EncodeToString([]byte(sessionID))), []byte(tokenID), 0o600)
+	return os.WriteFile(r.bindingPath(sessionID), []byte(tokenID), 0o600)
 }
 
 // ForSession returns the ID of the token a session started under. The token may

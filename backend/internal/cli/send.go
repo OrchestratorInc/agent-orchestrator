@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -18,6 +19,8 @@ type sendOptions struct {
 	steer           bool
 	clientMessageID string
 	recoverOnly     bool
+	wait            bool
+	timeout         time.Duration
 }
 
 // sendAPIRequest mirrors the daemon's SendSessionMessageRequest body for
@@ -55,9 +58,15 @@ func newSendCommand(ctx *commandContext) *cobra.Command {
 		Long: "Send a message to a running agent session.\n\n" +
 			"This messages agents, not shell terminals. To type a command into one of\n" +
 			"this session's terminal tabs, use `ao pane run <tab> <command>` or\n" +
-			"`ao pane send <tab> <text>`; `ao pane` lists the terminal tab keys.",
+			"`ao pane send <tab> <text>`; `ao pane` lists the terminal tab keys.\n\n" +
+			"With --wait, block until the session next finishes a turn or asks for an\n" +
+			"answer, with the exit codes of `ao session wait`. A state the session was\n" +
+			"already in before the message does not count.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if opts.wait {
+				return ctx.sendAndWait(cmd, opts)
+			}
 			return ctx.sendMessage(cmd.Context(), opts)
 		},
 	}
@@ -66,7 +75,30 @@ func newSendCommand(ctx *commandContext) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.steer, "steer", false, "Steer an active Chat turn, or start the next turn when idle")
 	cmd.Flags().StringVar(&opts.clientMessageID, "client-message-id", "", "Stable steering delivery handle")
 	cmd.Flags().BoolVar(&opts.recoverOnly, "recover-only", false, "Recover a steering result without contacting the provider")
+	cmd.Flags().BoolVar(&opts.wait, "wait", false, "After sending, wait until the session finishes a turn or asks for an answer")
+	cmd.Flags().DurationVar(&opts.timeout, "timeout", 10*time.Minute, "With --wait, give up after this long and exit 124")
 	return cmd
+}
+
+func (c *commandContext) sendAndWait(cmd *cobra.Command, opts sendOptions) error {
+	if opts.recoverOnly {
+		return usageError{errors.New("usage: --wait cannot be combined with --recover-only")}
+	}
+	session := strings.TrimSpace(opts.session)
+	if session == "" {
+		return usageError{errors.New("usage: --session is required")}
+	}
+	var before sessionResponse
+	if err := c.getJSON(cmd.Context(), "sessions/"+url.PathEscape(session), &before); err != nil {
+		return err
+	}
+	if err := c.sendMessage(cmd.Context(), opts); err != nil {
+		return err
+	}
+	return c.waitForSessions(cmd, []string{session}, sessionWaitOptions{
+		timeout: opts.timeout, interval: 2 * time.Second,
+		after: map[string]time.Time{session: before.Session.Activity.LastActivityAt},
+	})
 }
 
 func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) error {

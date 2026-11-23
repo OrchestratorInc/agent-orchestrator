@@ -220,3 +220,57 @@ func TestSessionWaitExitCodes(t *testing.T) {
 		t.Errorf("no session id: exit %d, want 2", ExitCode(err))
 	}
 }
+
+func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
+	cfg := setConfigEnv(t)
+	t.Setenv("AO_SESSION_ID", "")
+	created := time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC)
+	idleSince, picksUp, finishes := created.Add(time.Hour), created.Add(3*time.Hour+3*time.Second), created.Add(3*time.Hour+5*time.Second)
+	type observed struct {
+		state string
+		at    time.Time
+	}
+	afterSend := []observed{{"idle", idleSince}, {"idle", idleSince}, {"active", picksUp}, {"idle", finishes}}
+	sent, polls := false, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/sessions/api-1/send":
+			sent = true
+			w.WriteHeader(http.StatusNoContent)
+		case "GET /api/v1/sessions/api-1":
+			now := observed{"idle", idleSince}
+			if sent {
+				now = afterSend[min(polls, len(afterSend)-1)]
+				polls++
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"session": map[string]any{
+				"id": "api-1", "status": "idle", "createdAt": created,
+				"activity": map[string]any{"state": now.state, "lastActivityAt": now.at},
+			}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	writeRunFileFor(t, cfg, server)
+	clock := created.Add(3 * time.Hour)
+	deps := Deps{
+		ProcessAlive: func(int) bool { return true },
+		Now:          func() time.Time { return clock },
+		Sleep:        func(d time.Duration) { clock = clock.Add(d) },
+	}
+
+	if out, _, err := executeCLI(t, deps, "session", "wait", "api-1"); err != nil || !strings.Contains(out, "api-1: idle after 0s") {
+		t.Fatalf("a plain wait settles on the current state: %q %v", out, err)
+	}
+	out, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait")
+	if err != nil || !sent || !strings.Contains(out, "api-1: idle after 6s") {
+		t.Errorf("send --wait must wait for the turn the message starts: sent %v, out %q, err %v", sent, out, err)
+	}
+	if polls != len(afterSend) {
+		t.Errorf("polls after the send = %d, want %d: the idle state from before the message must not count", polls, len(afterSend))
+	}
+	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--steer", "--recover-only", "--client-message-id", "m-1", "--wait"); ExitCode(err) != 2 {
+		t.Errorf("--wait with --recover-only: exit %d, want 2", ExitCode(err))
+	}
+}

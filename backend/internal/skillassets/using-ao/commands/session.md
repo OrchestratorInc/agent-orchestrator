@@ -175,8 +175,10 @@ The id defaults to the current session.
 ### ao session wait
 
 Block until the first of the given sessions stops working, then print which one
-and why. Use it once after `ao spawn` or `ao send` in place of repeated
-`ao session get` checks.
+and why. Use it once after `ao spawn` in place of repeated `ao session get`
+checks. A session that is idle when the command starts settles at once, so to
+message a session and wait for its reply use `ao send --wait`, not `ao send`
+followed by this command.
 
 **Syntax:**
 ```

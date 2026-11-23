@@ -155,8 +155,3 @@ func ActionForRoute(method, pattern string) (Action, bool) {
 	}
 	return Action{}, false
 }
-
-// StartsSession reports whether the action creates a session that keeps the caller's grant.
-func (a Action) StartsSession() bool {
-	return a.ID == "session.spawn" || a.ID == "orchestrator.spawn"
-}

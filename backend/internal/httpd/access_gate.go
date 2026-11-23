@@ -61,11 +61,10 @@ func routePath(r *http.Request) string {
 }
 
 type accessGate struct {
-	registry *access.Registry
-	routes   chi.Routes
-	session  func(ctx context.Context, sessionID string) (project string, created time.Time, found bool)
-	rollback func(ctx context.Context, sessionID string) error
-	now      func() time.Time
+	registry       *access.Registry
+	routes         chi.Routes
+	sessionProject func(ctx context.Context, sessionID string) (string, bool)
+	now            func() time.Time
 }
 
 func newAccessGate(registry *access.Registry, routes chi.Routes, sessions controllers.SessionService) *accessGate {
@@ -73,22 +72,15 @@ func newAccessGate(registry *access.Registry, routes chi.Routes, sessions contro
 		registry: registry,
 		routes:   routes,
 		now:      time.Now,
-		session: func(ctx context.Context, sessionID string) (string, time.Time, bool) {
+		sessionProject: func(ctx context.Context, sessionID string) (string, bool) {
 			if sessions == nil {
-				return "", time.Time{}, false
+				return "", false
 			}
 			session, err := sessions.Get(ctx, domain.SessionID(sessionID))
 			if err != nil {
-				return "", time.Time{}, false
+				return "", false
 			}
-			return string(session.ProjectID), session.CreatedAt, true
-		},
-		rollback: func(ctx context.Context, sessionID string) error {
-			if sessions == nil {
-				return nil
-			}
-			_, err := sessions.RollbackSpawn(ctx, domain.SessionID(sessionID))
-			return err
+			return string(session.ProjectID), true
 		},
 	}
 }
@@ -129,39 +121,8 @@ func (g *accessGate) middleware(next http.Handler) http.Handler {
 			writeGrantRefused(w, r, refusal)
 			return
 		}
-		if !action.StartsSession() {
-			next.ServeHTTP(w, r)
-			return
-		}
-		g.serveSpawn(w, r, next, who.TokenID)
+		next.ServeHTTP(w, r)
 	})
-}
-
-// ponytail: the binding is written when the handler returns, so a session can
-// call the daemon unbound while its own spawn is still finishing. Storing the
-// token with the session row at creation closes that window.
-func (g *accessGate) serveSpawn(w http.ResponseWriter, r *http.Request, next http.Handler, tokenID string) {
-	began := g.now()
-	held := &heldResponse{ResponseWriter: w}
-	next.ServeHTTP(held, r)
-	id := held.sessionID()
-	if id == "" {
-		held.release()
-		return
-	}
-	if _, created, found := g.session(r.Context(), id); found && created.Before(began) {
-		held.release()
-		return
-	}
-	if err := g.registry.Bind(id, tokenID); err != nil {
-		message := "The session's grant could not be recorded, so the session was stopped"
-		if err := g.rollback(context.WithoutCancel(r.Context()), id); err != nil {
-			message = "The session's grant could not be recorded and the session could not be stopped; stop it in the app"
-		}
-		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal_error", "GRANT_NOT_RECORDED", message, map[string]any{"sessionId": id})
-		return
-	}
-	held.release()
 }
 
 func writeGrantRefused(w http.ResponseWriter, r *http.Request, refusal *access.Refusal) {
@@ -238,7 +199,7 @@ func (g *accessGate) targetProject(r *http.Request, rctx *chi.Context, action ac
 		return value
 	}
 	fromSession := func(sessionID string) (string, bool, error) {
-		project, _, _ := g.session(r.Context(), sessionID)
+		project, _ := g.sessionProject(r.Context(), sessionID)
 		return project, true, nil
 	}
 	switch action.Project {
@@ -284,44 +245,4 @@ func bodyField(r *http.Request, key string) (string, error) {
 	var value string
 	_ = json.Unmarshal(fields[key], &value)
 	return value, nil
-}
-
-type heldResponse struct {
-	http.ResponseWriter
-	status int
-	body   bytes.Buffer
-}
-
-func (h *heldResponse) WriteHeader(status int) {
-	if h.status == 0 {
-		h.status = status
-	}
-}
-
-func (h *heldResponse) Write(b []byte) (int, error) {
-	h.WriteHeader(http.StatusOK)
-	return h.body.Write(b)
-}
-
-func (h *heldResponse) release() {
-	h.WriteHeader(http.StatusOK)
-	h.ResponseWriter.WriteHeader(h.status)
-	_, _ = h.ResponseWriter.Write(h.body.Bytes())
-}
-
-func (h *heldResponse) sessionID() string {
-	if h.status >= http.StatusMultipleChoices {
-		return ""
-	}
-	var started struct {
-		Session      struct{ ID string } `json:"session"`
-		Orchestrator struct{ ID string } `json:"orchestrator"`
-	}
-	if json.Unmarshal(h.body.Bytes(), &started) != nil {
-		return ""
-	}
-	if started.Session.ID != "" {
-		return started.Session.ID
-	}
-	return started.Orchestrator.ID
 }

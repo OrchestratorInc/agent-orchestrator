@@ -23,15 +23,16 @@ import (
 )
 
 type gateFixture struct {
-	t           *testing.T
-	dataDir     string
-	registry    *access.Registry
-	router      chi.Router
-	served      []string
-	bodies      []string
-	spawnID     string
-	duringSpawn func()
-	rolledBack  []string
+	t        *testing.T
+	dataDir  string
+	registry *access.Registry
+	router   chi.Router
+	served   []string
+	bodies   []string
+	spawnID         string
+	returnsExisting bool
+	beforeCreate    func()
+	afterCreate     func()
 }
 
 func newGateFixture(t *testing.T) *gateFixture {
@@ -42,17 +43,12 @@ func newGateFixture(t *testing.T) *gateFixture {
 		t.Fatal(err)
 	}
 	f.registry = registry
-	existedBefore := time.Now().Add(-time.Hour)
 	r := chi.NewRouter()
 	gate := &accessGate{
 		registry: registry, routes: r, now: time.Now,
-		session: func(_ context.Context, sessionID string) (string, time.Time, bool) {
+		sessionProject: func(_ context.Context, sessionID string) (string, bool) {
 			project, ok := map[string]string{"api-1": "api", "web-1": "web"}[sessionID]
-			return project, existedBefore, ok
-		},
-		rollback: func(_ context.Context, sessionID string) error {
-			f.rolledBack = append(f.rolledBack, sessionID)
-			return nil
+			return project, ok
 		},
 	}
 	r.Use(caller.Middleware)
@@ -66,9 +62,19 @@ func newGateFixture(t *testing.T) *gateFixture {
 	r.Get("/healthz", ok)
 	r.Get("/api/v1/sessions", ok)
 	r.Post("/api/v1/sessions", func(w http.ResponseWriter, req *http.Request) {
-		ok(w, req)
-		if f.duringSpawn != nil {
-			f.duringSpawn()
+		body, _ := io.ReadAll(req.Body)
+		f.bodies = append(f.bodies, string(body))
+		if f.beforeCreate != nil {
+			f.beforeCreate()
+		}
+		if !f.returnsExisting {
+			if err := f.registry.SessionCreated(req.Context(), f.spawnID); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		if f.afterCreate != nil {
+			f.afterCreate()
 		}
 		_, _ = io.WriteString(w, `{"session":{"id":"`+f.spawnID+`"}}`)
 	})
@@ -196,14 +202,14 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 	if _, bound := f.registry.ForSession("api-9"); !bound {
 		t.Fatal("the started session is not bound to the token")
 	}
-	f.spawnID = "api-1"
+	f.spawnID, f.returnsExisting = "api-1", true
 	if status, _, _ := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"}`, token: operateAPI}); status != 200 {
 		t.Fatalf("a spawn that returns an existing session: status %d", status)
 	}
 	if _, bound := f.registry.ForSession("api-1"); bound {
 		t.Error("a session that existed before the call must not be bound to the caller's token")
 	}
-	f.spawnID = "api-9"
+	f.spawnID, f.returnsExisting = "api-9", false
 	asSession := func(method, path string) (int, string, string) {
 		return f.do(gateCall{method: method, path: path, session: "api-9"})
 	}
@@ -254,8 +260,20 @@ func TestSpawnNeverLeavesASessionWithoutItsGrant(t *testing.T) {
 	operateAPI := f.token("api-bot", access.PresetOperate, "api")
 	spawn := gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"}`, token: operateAPI}
 
+	f.spawnID = "api-6"
+	f.afterCreate = func() {
+		status, _, reason := f.do(gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", session: "api-6"})
+		if status != 403 || reason != access.ReasonGroup {
+			t.Errorf("the new session calling the daemon while its own spawn still runs: %d %q, want 403 %q", status, reason, access.ReasonGroup)
+		}
+	}
+	if status, _, _ := f.do(spawn); status != 200 {
+		t.Fatalf("spawn: status %d", status)
+	}
+	f.afterCreate = nil
+
 	f.spawnID = "api-7"
-	f.duringSpawn = func() {
+	f.beforeCreate = func() {
 		if _, found, err := f.registry.Revoke("api-bot"); err != nil || !found {
 			t.Fatalf("revoke during the spawn: %v %v", found, err)
 		}
@@ -267,7 +285,7 @@ func TestSpawnNeverLeavesASessionWithoutItsGrant(t *testing.T) {
 		t.Errorf("a session whose token was revoked during its spawn: %d %q, want 403 %q", status, reason, access.ReasonEnded)
 	}
 
-	f.duringSpawn = nil
+	f.beforeCreate = nil
 	f.spawnID = "api-8"
 	operateAgain := f.token("api-bot-2", access.PresetOperate, "api")
 	spawn.token = operateAgain
@@ -278,12 +296,8 @@ func TestSpawnNeverLeavesASessionWithoutItsGrant(t *testing.T) {
 	if err := os.WriteFile(bindings, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status, code, _ := f.do(spawn)
-	if status != 500 || code != "GRANT_NOT_RECORDED" {
-		t.Errorf("a spawn whose binding cannot be written: %d %q, want 500 GRANT_NOT_RECORDED", status, code)
-	}
-	if !slices.Contains(f.rolledBack, "api-8") {
-		t.Errorf("the session must be rolled back, got %v", f.rolledBack)
+	if status, _, _ := f.do(spawn); status != 500 {
+		t.Errorf("a spawn whose binding cannot be written must fail: status %d, want 500", status)
 	}
 	if status, _, reason := f.do(gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", session: "api-8"}); status != 403 || reason != access.ReasonGroup {
 		t.Errorf("the session must stay limited for this run: %d %q", status, reason)
