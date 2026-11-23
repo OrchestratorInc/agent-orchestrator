@@ -160,13 +160,15 @@ function utcDay(now: number): string {
 	return new Date(now).toISOString().slice(0, 10);
 }
 
+type DailySlots = { date?: unknown; slots?: unknown };
+
 /** Reserves `slot` for today in a { date, slots } record. False when already taken. */
 export function reserveDailySlot(storage: Pick<Storage, "getItem" | "setItem"> | undefined, key: string, slot: string, now = Date.now()): boolean {
 	if (!storage) return false;
 	const day = utcDay(now);
-	let parsed: { date?: unknown; slots?: unknown } | null = null;
+	let parsed: DailySlots | null = null;
 	try {
-		parsed = JSON.parse(storage.getItem(key) ?? "null") as typeof parsed;
+		parsed = JSON.parse(storage.getItem(key) ?? "null") as DailySlots | null;
 	} catch {
 		// Unreadable state is replaced below, as if no slot were taken today.
 	}
