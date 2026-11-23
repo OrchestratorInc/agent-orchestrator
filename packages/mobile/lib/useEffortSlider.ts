@@ -52,7 +52,14 @@ export function useEffortSliderSwitchOpen(slider: EffortSliderSwitch): boolean {
  * also closes when the task starts sending or the model takes no effort.
  * `onClose` hears every close, however it came about.
  */
-export function useEffortSliderOpen(choices: readonly EffortChoice[], busy: boolean, onClose?: () => void, slider?: EffortSliderSwitch) {
+export function useEffortSliderOpen(
+	choices: readonly { selected: boolean }[],
+	busy: boolean,
+	onClose?: () => void,
+	slider?: EffortSliderSwitch,
+	/** How long it may stay up; `null` for no limit, as a list being read wants. */
+	timeoutMs: number | null = EFFORT_SLIDER_TIMEOUT_MS,
+) {
 	const own = useEffortSliderSwitch();
 	const store = slider ?? own;
 	const open = useEffortSliderSwitchOpen(store);
@@ -68,9 +75,9 @@ export function useEffortSliderOpen(choices: readonly EffortChoice[], busy: bool
 		const back = BackHandler.addEventListener("hardwareBackPress", () => { close(); return true; });
 		const keyboard = Keyboard.addListener("keyboardDidShow", close);
 		const outside = onTouchOutside(close);
-		const timer = setTimeout(close, EFFORT_SLIDER_TIMEOUT_MS);
-		return () => { back.remove(); keyboard.remove(); outside(); clearTimeout(timer); };
-	}, [shown, close]);
+		const timer = timeoutMs === null ? undefined : setTimeout(close, timeoutMs);
+		return () => { back.remove(); keyboard.remove(); outside(); if (timer !== undefined) clearTimeout(timer); };
+	}, [shown, close, timeoutMs]);
 	return { open: shown, toggle: () => store.setOpen(!shown), close };
 }
 
