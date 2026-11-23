@@ -164,10 +164,42 @@ function pointInRange(range: Range, x: number, y: number): boolean {
 /** The longest passage a comment can quote. */
 export const COMMENT_QUOTE_MAX = 2000;
 
+/** Splits text into words in the reader's language (CJK included), where the runtime can. */
+const wordSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter(undefined, { granularity: "word" }) : undefined;
+
+/** The word a position falls inside (strictly: not at its edges), as [start, end) in the text. */
+function wordAround(text: string, offset: number, side: "start" | "end"): [number, number] | undefined {
+	if (!wordSegmenter || offset <= 0 || offset >= text.length) return undefined;
+	// The word holding the character after the edge (for a start) or before it (for an end).
+	const found = wordSegmenter.segment(text).containing(side === "start" ? offset : offset - 1);
+	if (!found?.isWordLike) return undefined;
+	const end = found.index + found.segment.length;
+	return found.index < offset && offset < end ? [found.index, end] : undefined;
+}
+
+/**
+ * The selection grown to whole words: a drag that stops inside a word
+ * ("…I can spa") quotes the whole word ("…I can spawn"), as Medium and
+ * Kindle highlights do. Only an edge inside a word moves.
+ */
+export function wholeWordRange(range: Range): Range {
+	const grown = range.cloneRange();
+	const { startContainer, startOffset, endContainer, endOffset } = range;
+	if (startContainer.nodeType === 3 /* Node.TEXT_NODE */) {
+		const word = wordAround((startContainer as Text).data, startOffset, "start");
+		if (word) grown.setStart(startContainer, word[0]);
+	}
+	if (endContainer.nodeType === 3 /* Node.TEXT_NODE */) {
+		const word = wordAround((endContainer as Text).data, endOffset, "end");
+		if (word) grown.setEnd(endContainer, word[1]);
+	}
+	return grown;
+}
+
 /**
  * The message a selection lies in, as a new comment on that passage: only
  * when it starts and ends in the same commentable message, and isn't too
- * long to quote.
+ * long to quote. The passage is the selection grown to whole words.
  */
 export function commentDraftForSelection(range: Range): CommentDraft | undefined {
 	const anchorOf = (node: Node) => (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>("[data-comment-anchor]") ?? undefined;
@@ -176,7 +208,7 @@ export function commentDraftForSelection(range: Range): CommentDraft | undefined
 	const sequence = Number(start.dataset.commentAnchor);
 	const kind = start.dataset.commentKind;
 	if (!Number.isFinite(sequence) || (kind !== "user_message" && kind !== "steer" && kind !== "agent_message")) return undefined;
-	const quote = range.toString().replace(/\s+/g, " ").trim();
+	const quote = wholeWordRange(range).toString().replace(/\s+/g, " ").trim();
 	if (!quote || quote.length > COMMENT_QUOTE_MAX) return undefined;
 	const body = start.querySelector("[data-chat-message-body]") ?? start;
 	const authorName = start.dataset.commentAuthor;

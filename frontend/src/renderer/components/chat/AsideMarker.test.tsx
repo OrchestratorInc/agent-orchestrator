@@ -198,6 +198,25 @@ describe("quoted passages", () => {
 		expect(commentDraftForSelection(across)).toBeUndefined();
 	});
 
+	it("quotes whole words when a selection stops inside one", () => {
+		document.body.innerHTML = `<div data-comment-anchor="11" data-comment-kind="agent_message"><div data-chat-message-body><p>Hi! I'm the orchestrator for the finance-controller project. I can spawn workers.</p></div></div>`;
+		const text = document.querySelector("[data-comment-anchor='11'] p")!.firstChild as Text;
+		const at = (part: string) => text.data.indexOf(part);
+		const select = (from: number, to: number) => {
+			const range = document.createRange();
+			range.setStart(text, from);
+			range.setEnd(text, to);
+			return commentDraftForSelection(range)?.quote;
+		};
+		// The drag stopped inside "spawn" (the "…I can spa" thread): the quote takes the whole word.
+		expect(select(at("orchestrator"), at("spawn") + 3)).toBe("orchestrator for the finance-controller project. I can spawn");
+		// And one that started inside a word.
+		expect(select(at("chestrator"), at(" the finance"))).toBe("orchestrator for");
+		// Edges already on word boundaries, or on punctuation, stay where they are.
+		expect(select(at("orchestrator"), at(" for"))).toBe("orchestrator");
+		expect(select(at("project."), at(" I can"))).toBe("project.");
+	});
+
 	it("keeps an excerpt to the message's first line", () => {
 		expect(messageExcerpt("\n  First line here\nsecond")).toBe("First line here");
 		expect(messageExcerpt("x".repeat(250))).toHaveLength(200);
