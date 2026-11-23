@@ -547,3 +547,62 @@ index c38eb76..2cc8471 100644
            modifiers={modifiers}
            matchContentsVertical={
              typeof matchContents === 'object' ? matchContents.vertical : matchContents
+diff --git a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/ModifierRegistry.kt b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/ModifierRegistry.kt
+index 8683000..a55c672 100644
+--- a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/ModifierRegistry.kt
++++ b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/ModifierRegistry.kt
+@@ -244,7 +244,8 @@ internal data class AnimateContentSizeParams(
+ 
+ @OptimizedRecord
+ internal data class WeightParams(
+-  @Field val weight: Float = 1f
++  @Field val weight: Float = 1f,
++  @Field val fill: Boolean = true
+ ) : Record
+ 
+ @OptimizedRecord
+@@ -646,9 +647,9 @@ object ModifierRegistry {
+     register("weight") { map, scope, _, _ ->
+       val params = recordFromMap<WeightParams>(map)
+       scope?.rowScope?.run {
+-        Modifier.weight(params.weight)
++        Modifier.weight(params.weight, params.fill)
+       } ?: scope?.columnScope?.run {
+-        Modifier.weight(params.weight)
++        Modifier.weight(params.weight, params.fill)
+       } ?: Modifier
+     }
+ 
+diff --git a/node_modules/@expo/ui/build/jetpack-compose/modifiers/index.d.ts b/node_modules/@expo/ui/build/jetpack-compose/modifiers/index.d.ts
+index 7c6245d..81cf10c 100644
+--- a/node_modules/@expo/ui/build/jetpack-compose/modifiers/index.d.ts
++++ b/node_modules/@expo/ui/build/jetpack-compose/modifiers/index.d.ts
+@@ -218,7 +218,9 @@ export declare const animateContentSize: (dampingRatio?: number, stiffness?: num
+  * Only works when used inside Row or Column.
+  * @param weight - Weight value (relative to siblings).
+  */
+-export declare const weight: (weight: number) => import("./createModifier").ModifierConfig;
++export declare const weight: (weight: number, options?: {
++    fill?: boolean;
++}) => import("./createModifier").ModifierConfig;
+ /**
+  * Aligns the view within its container.
+  */
+diff --git a/node_modules/@expo/ui/src/jetpack-compose/modifiers/index.ts b/node_modules/@expo/ui/src/jetpack-compose/modifiers/index.ts
+index 8484690..6bc9a3d 100644
+--- a/node_modules/@expo/ui/src/jetpack-compose/modifiers/index.ts
++++ b/node_modules/@expo/ui/src/jetpack-compose/modifiers/index.ts
+@@ -303,8 +303,12 @@ export const animateContentSize = (dampingRatio?: number, stiffness?: number) =>
+  * Sets the weight for flexible sizing in Row or Column.
+  * Only works when used inside Row or Column.
+  * @param weight - Weight value (relative to siblings).
++ * @param options.fill - Whether the view fills the width (or height) its weight
++ * gives it. With `false` it takes at most that space and keeps its own size
++ * when smaller, as Compose's `Modifier.weight(weight, fill = false)` does.
+  */
+-export const weight = (weight: number) => createModifier('weight', { weight });
++export const weight = (weight: number, options?: { fill?: boolean }) =>
++  createModifier('weight', { weight, ...options });
+ 
+ /**
+  * Aligns the view within its container.

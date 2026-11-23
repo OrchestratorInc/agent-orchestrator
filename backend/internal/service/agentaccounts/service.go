@@ -99,6 +99,9 @@ type reading struct {
 	seq          uint64
 	confirmed    *domain.AgentAccountIdentityCheck
 	confirmedSeq uint64
+	// renewalPending: the check was skipped for a login waiting on its token's
+	// renewal (ports.ErrAgentAccountRenewalPending). It is still signed in.
+	renewalPending bool
 }
 
 // failedOnItsOwn reports a reading whose check failed in a way the next check
@@ -372,11 +375,27 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		r.identityProblem = problemKind(err)
 		// A failed check (a timeout under load) says nothing about the login:
 		// keep what the last good one found, so it does not read as signed out.
+		r.renewalPending = errors.Is(err, ports.ErrAgentAccountRenewalPending)
 		s.mu.Lock()
-		if prev := s.readings[account.ID]; prev != nil && prev.identityErr == "" {
+		prev := s.readings[account.ID]
+		// A failed reading already carries what the last good one found, so
+		// copying the previous reading keeps it across checks that fail in a row.
+		if prev != nil {
 			r.identity, r.limits = prev.identity, prev.limits
 		}
 		s.mu.Unlock()
+		switch {
+		case prev != nil && prev.mismatch:
+			// A failed check, a pending renewal included, says nothing about
+			// whose login the folder holds, so one last found holding another
+			// login stays refused until a check confirms its own.
+			r.identity, r.mismatch = prev.identity, true
+			r.identityProblem, r.identityErr = prev.identityProblem, prev.identityErr
+		case r.renewalPending:
+			// A login waiting on its token's renewal is signed in, even before
+			// any reading said who it is (#8724).
+			r.identity.SignedIn, r.identity.LoggedIn = true, true
+		}
 	}
 	s.mu.Lock()
 	known := s.lastOrg[account.ID]
@@ -448,6 +467,15 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		}
 		if err != nil {
 			r.confirmed, r.confirmedSeq = prev.confirmed, prev.confirmedSeq
+			// Another read may have recorded a wrong login after this failed
+			// read copied its earlier snapshot. A failed check cannot clear that
+			// refusal, including when the login is waiting for renewal.
+			if prev.mismatch {
+				r.identity, r.limits = prev.identity, prev.limits
+				r.identity.SignedIn, r.identity.LoggedIn = false, false
+				r.mismatch = true
+				r.identityProblem, r.identityErr = prev.identityProblem, prev.identityErr
+			}
 		}
 	}
 	if r.failedOnItsOwn() {
@@ -593,6 +621,32 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 		identity.Email = account.Email
 	}
 	return identity, true
+}
+
+// AccountHome is the home a session of harness runs its CLI under on
+// accountID, or, when accountID is empty, on the account BindSession would
+// start a new session on: the default, or another signed-in account when the
+// default is known to be unusable. It binds nothing. "" is the computer's own
+// login.
+func (s *Service) AccountHome(ctx context.Context, harness domain.AgentHarness, accountID string) (string, error) {
+	p, ok := domain.AgentAccountProviderFor(harness)
+	if !ok || s.providers[p] == nil {
+		return "", nil
+	}
+	var account domain.AgentAccount
+	var err error
+	if id := strings.TrimSpace(accountID); id == "" {
+		account, err = s.newSessionAccount(ctx, p)
+	} else {
+		account, err = s.find(ctx, id)
+	}
+	if err != nil {
+		return "", err
+	}
+	if account.Device() {
+		return "", nil
+	}
+	return account.Home, nil
 }
 
 // DefaultLaunchEnv gives discovery the account a new task would use, without binding a session.

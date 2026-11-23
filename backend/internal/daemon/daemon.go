@@ -664,6 +664,8 @@ func Run(buildVersion string) (retErr error) {
 	// across restarts so a model stays marked unavailable until the CLI updates.
 	claudecodeagent.ConfigureModelVersionRequirements(
 		filepath.Join(cfg.StateDir, "harnesses", "claude-code", "model-versions.json"))
+	codexagent.ConfigureUnavailableModels(
+		filepath.Join(cfg.StateDir, "harnesses", "codex", "unavailable-models.json"))
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
 
 	persistentHostsReconciled := make(chan struct{})
@@ -1128,6 +1130,7 @@ func Run(buildVersion string) (retErr error) {
 			Attachments:   prReader,
 			Stacker:       prReader,
 			HeadChecks:    prReader,
+			Queuer:        prReader,
 			Details:       store,
 			Lifecycle:     lcStack.LCM,
 			Logger:        log,

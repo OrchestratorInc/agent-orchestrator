@@ -110,6 +110,9 @@ type SwitchModelCatalog interface {
 func (c *ConversationsController) Register(r chi.Router) {
 	r.Get("/conversations/{conversationId}/find", c.findConversation)
 	r.Get("/conversations/{conversationId}/find-window", c.findConversationWindow)
+	r.Get("/sessions/background-tasks", c.listBackgroundTasks)
+	r.Get("/sessions/{sessionId}/background-tasks", c.backgroundTasks)
+	r.Post("/sessions/{sessionId}/background-tasks/{taskId}/stop", c.stopBackgroundTask)
 	r.Get("/conversations/search", c.searchConversations)
 	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/label", c.renameSideChat)
 	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", c.cancelSideQuestion)
@@ -1246,7 +1249,21 @@ func (c *ConversationsController) interrupt(w http.ResponseWriter, r *http.Reque
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/interrupt")
 		return
 	}
-	err := c.Svc.Interrupt(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")))
+	var req InterruptConversationRequest
+	if err := decodeJSON(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"INVALID_BODY", "request body is not valid JSON", nil)
+		return
+	}
+	sessionID := domain.SessionID(chi.URLParam(r, "sessionId"))
+	var err error
+	if targeted, ok := c.Svc.(interface {
+		InterruptTurn(context.Context, domain.SessionID, string) error
+	}); ok && strings.TrimSpace(req.TurnID) != "" {
+		err = targeted.InterruptTurn(r.Context(), sessionID, strings.TrimSpace(req.TurnID))
+	} else {
+		err = c.Svc.Interrupt(r.Context(), sessionID)
+	}
 	if err != nil {
 		writeConversationError(w, r, err)
 		return

@@ -45,6 +45,21 @@ describe("cloud client", () => {
 		expect(JSON.parse(String(calls[0].init.body))).toEqual({ projectId: "p", kind: "worker", harness: "codex", displayName: "Fix it", prompt: "Fix it" });
 	});
 
+	it("starts a standalone agent with no project and reads projects with or without the caller's agents", async () => {
+		const { client, calls } = harness(() => ok({ project: { id: "a1" }, session: { id: "s1" } }, 201));
+		const created = await client.createStandaloneAgent("o", { harness: "codex", displayName: "Fix it", prompt: "Fix it", interfaceMode: "chat" }, "req-1");
+		expect(created).toEqual({ project: { id: "a1" }, session: { id: "s1" } });
+		expect(calls[0].init.method).toBe("POST");
+		expect(calls[0].url).toBe("https://api.example.test/api/cloud/v1/orgs/o/standalone-agents");
+		expect((calls[0].init.headers as Record<string, string>)["Idempotency-Key"]).toBe("req-1");
+		expect(JSON.parse(String(calls[0].init.body))).toEqual({ harness: "codex", displayName: "Fix it", prompt: "Fix it", interfaceMode: "chat" });
+
+		await client.listProjects("o", { standaloneAgents: "only" });
+		await client.listProjects("o");
+		expect(calls[1].url).toBe("https://api.example.test/api/cloud/v1/orgs/o/projects?limit=100&standaloneAgents=only");
+		expect(calls[2].url).toBe("https://api.example.test/api/cloud/v1/orgs/o/projects?limit=100");
+	});
+
 	it("asks the session's switch between Chat and Terminal UI on the desktop's routes", async () => {
 		const { client, calls } = harness(() => ok({ supported: true, targetMode: "tui" }));
 		await client.getInterfaceTransition("o", "s");
