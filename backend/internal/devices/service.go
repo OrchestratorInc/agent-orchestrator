@@ -414,7 +414,7 @@ func (s *Service) awaitReady(ctx context.Context) error {
 	select {
 	case <-ready:
 	case <-ctx.Done():
-		return ctx.Err()
+		return apierr.Unavailable("DEVICES_NOT_READY", "Device support is still starting. Try again in a moment.")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -453,37 +453,15 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 			current = listed
 		}
 		device, err := s.boot(ctx, current)
-		if err != nil {
+		if err == nil {
+			return s.confirmReopen(id, existing, device)
+		}
+		// A device deleted since it was leased never boots again: let the lease
+		// go and open another, rather than fail every open until a close.
+		if !s.releaseIfGone(ctx, id, existing) {
 			return Lease{}, apierr.Unavailable("DEVICE_BOOT_FAILED", err.Error())
 		}
-		updated := existing
-		updated.Device = device
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		// The boot took a while: the lease may have been released (and the
-		// device taken by another session) meanwhile. Never bring it back.
-		cur, still := s.leases[id]
-		if !still || !cur.OpenedAt.Equal(existing.OpenedAt) || cur.Device.ID != existing.Device.ID {
-			return Lease{}, apierr.Conflict("DEVICE_LEASE_CHANGED", "This session's device was released while it was starting. Open it again.", nil)
-		}
-		if owner, clash := s.ownerOfLocked(device.ID); (clash && owner != id) || s.releasing[device.ID] {
-			return Lease{}, apierr.Conflict("DEVICE_IN_USE", device.Name+" is in use by another session.", nil)
-		}
-		if device.ID != existing.Device.ID {
-			// A restarted emulator runs under a new serial: the agent's command is
-			// bound to the old one, so bind it again. Only now, with the lease
-			// confirmed and s.mu held: the command file is shared by every lease
-			// this session holds, and a stale reopen must not rewrite a newer one.
-			control, err := s.cfg.Provider.AgentControl(device, string(id))
-			if err != nil {
-				return Lease{}, err
-			}
-			updated.AgentControl = control
-			s.stopWatchLocked(id)
-		}
-		s.leases[id] = updated
-		s.saveLocked()
-		return updated, nil
+		has, localInUse = false, localInUse-1
 	}
 	var workspace string
 	if s.cfg.Sessions != nil {
@@ -570,7 +548,7 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 	control, err := s.cfg.Provider.AgentControl(booted, string(id))
 	if err != nil {
 		s.mu.Unlock()
-		return Lease{}, err
+		return Lease{}, agentControlFailed(booted, err)
 	}
 	lease.AgentControl = control
 	replaced := hadPrevious && previous.Device.ID != booted.ID
@@ -591,6 +569,81 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 	// stale: an ended session, or one whose lease a daemon restart dropped.
 	s.releaseControl(ctx, booted, id)
 	return lease, nil
+}
+
+// confirmReopen records a reopened lease once its device is up, unless the
+// lease was released or its device taken while the boot ran.
+func (s *Service) confirmReopen(id domain.SessionID, existing Lease, device ports.DeviceInfo) (Lease, error) {
+	updated := existing
+	updated.Device = device
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// The boot took a while: the lease may have been released (and the
+	// device taken by another session) meanwhile. Never bring it back.
+	cur, still := s.leases[id]
+	if !still || !cur.OpenedAt.Equal(existing.OpenedAt) || cur.Device.ID != existing.Device.ID {
+		return Lease{}, apierr.Conflict("DEVICE_LEASE_CHANGED", "This session's device was released while it was starting. Open it again.", nil)
+	}
+	if owner, clash := s.ownerOfLocked(device.ID); (clash && owner != id) || s.releasing[device.ID] {
+		return Lease{}, apierr.Conflict("DEVICE_IN_USE", device.Name+" is in use by another session.", nil)
+	}
+	if device.ID != existing.Device.ID {
+		// A restarted emulator runs under a new serial: the agent's command is
+		// bound to the old one, so bind it again. Only now, with the lease
+		// confirmed and s.mu held: the command file is shared by every lease
+		// this session holds, and a stale reopen must not rewrite a newer one.
+		control, err := s.cfg.Provider.AgentControl(device, string(id))
+		if err != nil {
+			return Lease{}, agentControlFailed(device, err)
+		}
+		updated.AgentControl = control
+		s.stopWatchLocked(id)
+	}
+	s.leases[id] = updated
+	s.saveLocked()
+	return updated, nil
+}
+
+func agentControlFailed(device ports.DeviceInfo, err error) error {
+	return apierr.Unavailable("DEVICE_CONTROL_FAILED", "Could not set up the agent's command for "+device.Name+": "+err.Error())
+}
+
+// releaseIfGone ends the session's lease when its device no longer exists (a
+// simulator deleted in Xcode, an AVD removed) and reports whether it did.
+// Only a list that succeeds and lacks the device counts as gone.
+func (s *Service) releaseIfGone(ctx context.Context, id domain.SessionID, held Lease) bool {
+	devices, err := s.cfg.Provider.List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, d := range devices {
+		if sameDevice(d, held.Device) {
+			return false
+		}
+	}
+	s.mu.Lock()
+	cur, ok := s.leases[id]
+	if !ok || !cur.OpenedAt.Equal(held.OpenedAt) || cur.Device.ID != held.Device.ID {
+		s.mu.Unlock()
+		return false
+	}
+	delete(s.owned, held.Device.ID)
+	ended, _ := s.endLeaseLocked(id)
+	s.listed = nil
+	s.mu.Unlock()
+	_ = s.finishRelease(ctx, ended.Device, false)
+	s.log.Info("released the lease of a device that no longer exists", "session", id, "device", held.Device.ID)
+	return true
+}
+
+// sameDevice says whether a listed device is the leased one. A running
+// emulator is listed by its serial and a stopped one by its AVD name, so
+// Android also matches on the name.
+func sameDevice(listed, leased ports.DeviceInfo) bool {
+	if listed.ID == leased.ID {
+		return true
+	}
+	return leased.Platform == ports.DevicePlatformAndroid && listed.Platform == leased.Platform && listed.Name == leased.Name
 }
 
 func (s *Service) ownerOfLocked(deviceID string) (domain.SessionID, bool) {
@@ -778,7 +831,10 @@ func (s *Service) Close(ctx context.Context, id domain.SessionID, shutdown bool)
 	if !ok {
 		return nil
 	}
-	return s.finishRelease(ctx, l.Device, shutdown)
+	if err := s.finishRelease(ctx, l.Device, shutdown); err != nil {
+		return apierr.Unavailable("DEVICE_SHUTDOWN_FAILED", "Released "+l.Device.Name+", but it did not shut down: "+err.Error())
+	}
+	return nil
 }
 
 // Install installs a built app on the session's device.

@@ -40,6 +40,24 @@ type fakeProvider struct {
 	// each session whose command was turned off.
 	bound   []string
 	revoked []string
+	// bootErr fails Boot for a device id; controlErr fails AgentControl;
+	// shutdownErr fails Shutdown; readyGate holds EnsureReady until closed.
+	bootErr     map[string]error
+	controlErr  error
+	shutdownErr error
+	readyGate   chan struct{}
+}
+
+func (f *fakeProvider) removeDevice(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kept := f.devices[:0]
+	for _, d := range f.devices {
+		if d.ID != id {
+			kept = append(kept, d)
+		}
+	}
+	f.devices = kept
 }
 
 func (f *fakeProvider) RevokeControl(session string) error {
@@ -53,7 +71,12 @@ func (f *fakeProvider) Name() string { return "local" }
 func (f *fakeProvider) Platforms(context.Context) []ports.DevicePlatformAvailability {
 	return f.platforms
 }
-func (f *fakeProvider) EnsureReady(context.Context) error { return f.readyErr }
+func (f *fakeProvider) EnsureReady(context.Context) error {
+	if f.readyGate != nil {
+		<-f.readyGate
+	}
+	return f.readyErr
+}
 func (f *fakeProvider) List(context.Context) ([]ports.DeviceInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -78,6 +101,9 @@ func (f *fakeProvider) Boot(_ context.Context, d ports.DeviceInfo) (ports.Device
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.bootErr[d.ID]; err != nil {
+		return ports.DeviceInfo{}, err
+	}
 	f.booted = append(f.booted, d.ID)
 	if f.bootID != nil {
 		d.ID = f.bootID(d)
@@ -89,7 +115,7 @@ func (f *fakeProvider) Shutdown(_ context.Context, d ports.DeviceInfo) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shutdowns = append(f.shutdowns, d.ID)
-	return nil
+	return f.shutdownErr
 }
 func (f *fakeProvider) Install(_ context.Context, _ ports.DeviceInfo, path string) error {
 	f.installed = append(f.installed, path)
@@ -105,7 +131,11 @@ func (f *fakeProvider) Hub(context.Context) (ports.DeviceHubEndpoint, error) {
 func (f *fakeProvider) AgentControl(d ports.DeviceInfo, session string) (ports.DeviceAgentControl, error) {
 	f.mu.Lock()
 	f.bound = append(f.bound, session+"="+d.ID)
+	controlErr := f.controlErr
 	f.mu.Unlock()
+	if controlErr != nil {
+		return ports.DeviceAgentControl{}, controlErr
+	}
 	return ports.DeviceAgentControl{Command: "/bin/agent-device", Args: []string{"--udid", d.ID, "--session", "ao-" + session}}, nil
 }
 func (f *fakeProvider) ReleaseControl(_ context.Context, d ports.DeviceInfo, keep string) error {
@@ -1032,4 +1062,111 @@ func TestADeviceBeingBootedIsBusy(t *testing.T) {
 	if err := <-first; err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A simulator deleted after it was leased must not fail every open until a
+// close: the lease goes, and an open that names no device gets another.
+func TestOpenReplacesALeasedDeviceThatWasDeleted(t *testing.T) {
+	p := iosFleet()
+	svc := newTestService(t, p, 1)
+	ctx := context.Background()
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	p.removeDevice("A")
+	p.bootErr = map[string]error{"A": errors.New("Invalid device: A")}
+
+	lease, err := svc.Open(ctx, "s-1", OpenRequest{})
+	if err != nil {
+		t.Fatalf("reopen after the device was deleted: %v", err)
+	}
+	if lease.Device.ID == "A" {
+		t.Fatalf("lease still on the deleted device: %+v", lease)
+	}
+	if got, _ := svc.Lease("s-1"); got.Device.ID != lease.Device.ID {
+		t.Fatalf("stored lease = %+v, want %s", got, lease.Device.ID)
+	}
+	if reloaded := New(Config{DataDir: svc.cfg.DataDir, Provider: p}); reloaded.leases["s-1"].Device.ID != lease.Device.ID {
+		t.Fatalf("saved lease = %+v, want %s", reloaded.leases["s-1"], lease.Device.ID)
+	}
+}
+
+func TestOpenNamingADeletedDeviceSaysItIsGone(t *testing.T) {
+	p := iosFleet()
+	svc := newTestService(t, p, 3)
+	ctx := context.Background()
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	p.removeDevice("A")
+	p.bootErr = map[string]error{"A": errors.New("Invalid device: A")}
+
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); apiCode(err) != "DEVICE_NOT_FOUND" {
+		t.Fatalf("open of a deleted device err = %v, want DEVICE_NOT_FOUND", err)
+	}
+	if _, held := svc.Lease("s-1"); held {
+		t.Fatal("the deleted device's lease was kept")
+	}
+}
+
+// A device that is still there but fails to boot keeps its lease: the
+// failure may pass, and the session's device must not change under it.
+func TestOpenKeepsTheLeaseOfAListedDeviceThatFailsToBoot(t *testing.T) {
+	p := iosFleet()
+	svc := newTestService(t, p, 3)
+	ctx := context.Background()
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	p.setBooted("A", false)
+	p.bootErr = map[string]error{"A": errors.New("boot timed out")}
+
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{}); apiCode(err) != "DEVICE_BOOT_FAILED" {
+		t.Fatalf("reopen err = %v, want DEVICE_BOOT_FAILED", err)
+	}
+	if l, held := svc.Lease("s-1"); !held || l.Device.ID != "A" {
+		t.Fatalf("lease = %+v (held %v), want A kept", l, held)
+	}
+}
+
+// Failures the spec declares as 503s must not reach the API as raw errors
+// (undeclared 500s).
+func TestDeviceFailuresAreServiceUnavailable(t *testing.T) {
+	ctx := context.Background()
+	unavailable := func(t *testing.T, err error, code string) {
+		t.Helper()
+		var e *apierr.Error
+		if !errors.As(err, &e) || e.Code != code || e.Kind != apierr.KindUnavailable {
+			t.Fatalf("err = %#v, want unavailable %s", err, code)
+		}
+	}
+	t.Run("agent command", func(t *testing.T) {
+		p := iosFleet()
+		p.controlErr = errors.New("disk full")
+		svc := newTestService(t, p, 3)
+		_, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "B"})
+		unavailable(t, err, "DEVICE_CONTROL_FAILED")
+	})
+	t.Run("shutdown", func(t *testing.T) {
+		p := iosFleet()
+		p.shutdownErr = errors.New("simctl hung")
+		svc := newTestService(t, p, 3)
+		if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "B"}); err != nil {
+			t.Fatal(err)
+		}
+		unavailable(t, svc.Close(ctx, "s-1", true), "DEVICE_SHUTDOWN_FAILED")
+		if _, held := svc.Lease("s-1"); held {
+			t.Fatal("lease kept after a failed shutdown")
+		}
+	})
+	t.Run("still starting", func(t *testing.T) {
+		p := iosFleet()
+		p.readyGate = make(chan struct{})
+		t.Cleanup(func() { close(p.readyGate) })
+		svc := newTestService(t, p, 3)
+		short, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+		defer cancel()
+		_, err := svc.Open(short, "s-1", OpenRequest{})
+		unavailable(t, err, "DEVICES_NOT_READY")
+	})
 }
