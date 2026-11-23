@@ -171,8 +171,8 @@ describe("Android chat controls row", () => {
 
 	it("offers the approval modes from the shield", () => {
 		render();
-		expect(trigger("chat-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Ask when unsure");
-		expect(titles("chat-approval").find(([, state]) => state === "on")).toEqual(["Ask when unsure", "on"]);
+		expect(trigger("chat-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Auto-approve");
+		expect(titles("chat-approval").find(([, state]) => state === "on")).toEqual(["Auto-approve", "on"]);
 	});
 
 	// The M3 menu once listed models only, and with the settings sheet gone
@@ -206,7 +206,7 @@ describe("Android chat controls row", () => {
 		pick("chat-model", 1);
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
 		expect(menu("chat-model").props.expanded).toBe(false);
-		pick("chat-approval", 3);
+		pick("chat-approval", 2);
 		expect(onSettings).toHaveBeenLastCalledWith(expect.objectContaining({ approvalMode: "bypass-permissions" }));
 		expect(onOption).not.toHaveBeenCalled();
 		expect(fixtures.select).toHaveBeenCalledTimes(2);

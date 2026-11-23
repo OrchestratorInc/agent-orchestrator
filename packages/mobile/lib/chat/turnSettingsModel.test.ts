@@ -78,7 +78,7 @@ describe("turnSettingsRows", () => {
 		];
 		const rows = turnSettingsRows(snapshot({ settings: { approvalMode: "bypass-permissions" } }), [], options);
 		expect(rows.map((row) => row.label)).toContain("Approvals");
-		expect(rows.find((row) => row.label === "Approvals")?.value).toBe("Never ask");
+		expect(rows.find((row) => row.label === "Approvals")?.value).toBe("Bypass permissions");
 	});
 
 	it("uses a remembered provider catalog alone while the chat's snapshot still reports no capabilities", () => {
@@ -116,7 +116,7 @@ describe("turnSettingsRows", () => {
 			snapshot({ harness: "claude-code", capabilities: [], settings: { model: "opus", approvalMode: "auto" } }),
 			models,
 			[],
-		)).toBe("Opus · Ask when unsure");
+		)).toBe("Opus · Auto-approve");
 	});
 
 	it("names the model that answered when the provider rerouted the pick", () => {
@@ -354,18 +354,18 @@ describe("default labels", () => {
 		}]);
 		expect(choices(options, "mode")).toEqual([
 			["default", "Use agent permissions"],
-			["yolo", "Never ask"],
-			["edits", "Ask outside worktree"],
-			["ao-auto", "Ask when unsure"],
-			["trust", "Never ask"],
+			["yolo", "Bypass permissions"],
+			["edits", "Accept edits"],
+			["ao-auto", "Auto-approve"],
+			["trust", "Bypass permissions"],
 			["bypassPermissions", "Bypass Permissions"],
 		]);
 		const [mode] = options;
 		expect(mode.currentValue).toBe("yolo");
 		expect(mode.choices[1]).toMatchObject({ description: "Skips every prompt", permissionMode: "bypass-permissions" });
 		// The row and the summary print the selected choice's name.
-		expect(providerChoiceLabel(mode)).toBe("Never ask");
-		expect(turnSettingsSummary(claudeChat, [], options)).toContain("Never ask");
+		expect(providerChoiceLabel(mode)).toBe("Bypass permissions");
+		expect(turnSettingsSummary(claudeChat, [], options)).toContain("Bypass permissions");
 		expect(resolveDefaultChoices(options)[0]).toBe(mode);
 	});
 
@@ -392,7 +392,7 @@ describe("default labels", () => {
 		expect(providerChoiceLabel(effort("default"))).toBe(NOT_REPORTED);
 		expect(providerChoiceLabel(effort(undefined))).toBe(NOT_REPORTED);
 		expect(providerChoiceLabel(effort("ultra"))).toBe("ultra");
-		expect(turnSettingsSummary(snapshot({ harness: "claude-code", settings: { approvalMode: "auto" } }), [], [effort("default")])).toBe("Ask when unsure");
+		expect(turnSettingsSummary(snapshot({ harness: "claude-code", settings: { approvalMode: "auto" } }), [], [effort("default")])).toBe("Auto-approve");
 	});
 
 	it("names Codex's default approval mode as the full access it is", () => {
@@ -400,8 +400,34 @@ describe("default labels", () => {
 		expect(codex.find((row) => row.id === "approvals")?.value).toBe("Full access");
 		const other = turnSettingsRows(snapshot({ harness: "gemini", capabilities: [], settings: {} }), [], []);
 		expect(other.find((row) => row.id === "approvals")?.choices.map((choice) => choice.label)).toEqual([
-			"Use agent permissions", "Ask outside worktree", "Ask when unsure", "Never ask",
+			"Accept edits", "Auto-approve", "Bypass permissions",
 		]);
+	});
+
+	// Desktop's names, per agent (TurnSettingsBar's APPROVAL_COPY and its
+	// variants), each described in one short line.
+	it("names each mode as desktop does, per agent, with a line on what it does", () => {
+		const approvals = (harness: string) => turnSettingsRows(snapshot({ harness, capabilities: [], settings: {} }), [], [])
+			.find((row) => row.id === "approvals")?.choices.map((choice) => [choice.value, choice.label, choice.description]);
+		// "Use agent permissions" is not offered on the phone.
+		expect(approvals("claude-code")).toEqual([
+			["accept-edits", "Accept edits", "Edits files without asking"],
+			["auto", "Auto-approve", "Asks only about risky actions"],
+			["bypass-permissions", "Bypass permissions", "Never asks before acting"],
+		]);
+		expect(approvals("codex")).toEqual([
+			["default", "Full access", "Edits and runs commands freely"],
+			["accept-edits", "Ask for approval", "Asks before edits and commands"],
+			["auto", "Approve for me", "Asks only about unsafe actions"],
+			["bypass-permissions", "Bypass permissions", "Never asks before acting"],
+		]);
+		// Antigravity has no mode that never asks.
+		expect(approvals("agy")).toEqual([
+			["default", "Ask for approval", "Asks before acting"],
+			["accept-edits", "Accept edits", "Edits files without asking"],
+			["auto", "Auto-approve", "Asks only about risky actions"],
+		]);
+		expect(approvals("hermes")?.map(([value]) => value)).toEqual(["accept-edits", "auto", "bypass-permissions"]);
 	});
 
 	it("shows the provider's model as selected instead of hinting at it", () => {

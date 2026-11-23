@@ -1,5 +1,6 @@
 import type { ApprovalMode, ChatConfigChoice, ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
 import { can } from "./types";
+import { approvalCopy, approvalOrder } from "./approvalCopy";
 
 export type TurnSettingChoice = {
 	value: string;
@@ -42,8 +43,6 @@ export type TurnSettingRow = {
  */
 export const NOT_REPORTED = "Not reported";
 
-const USE_AGENT_PERMISSIONS = "Use agent permissions";
-
 /** Labels for a provider's `default` choice when nothing says what it resolves to (desktop's wording, #5849). */
 const FOLLOW_AGENT = {
 	model: "Use agent model",
@@ -51,26 +50,19 @@ const FOLLOW_AGENT = {
 	other: "Use agent setting",
 } as const;
 
-const APPROVALS: Array<{ value: ApprovalMode; label: string; description: string }> = [
-	{ value: "default", label: USE_AGENT_PERMISSIONS, description: "The worktree is the safety boundary" },
-	{ value: "accept-edits", label: "Ask outside worktree", description: "Edits here are allowed; anything else asks" },
-	{ value: "auto", label: "Ask when unsure", description: "The agent decides when to check with you" },
-	{ value: "bypass-permissions", label: "Never ask", description: "No approvals or sandbox prompts" },
-];
-
 /**
- * AO's own approval modes, by name. Codex's default is full access: AO runs it
- * with approval "never" and sandbox "danger-full-access" (codexappserver
- * `approvalSettings`), so it is not the agent's own permissions there. Same
- * split as desktop's CODEX_APPROVAL_COPY / APPROVAL_COPY.
+ * AO's own approval modes, by name, in desktop's words for the agent (see
+ * approvalCopy). Codex's default is full access: AO runs it with approval
+ * "never" and sandbox "danger-full-access" (codexappserver
+ * `approvalSettings`), so it is not the agent's own permissions there.
  */
 export function approvalLabel(mode: ApprovalMode, harness: string): string {
-	if (mode === "default" && harness === "codex") return "Full access";
-	return approvalModeLabel(mode);
+	return approvalCopy(harness)[mode]?.label ?? mode;
 }
 
+/** A mode by AO's generic name, for a provider's own choice that maps to it. */
 function approvalModeLabel(mode: ApprovalMode): string {
-	return APPROVALS.find((item) => item.value === mode)?.label ?? mode;
+	return approvalCopy(undefined)[mode]?.label ?? mode;
 }
 
 /** A native catalog's effort level by name; "default" names no level. */
@@ -198,7 +190,7 @@ function isDefaultPlaceholderLabel(label: string): boolean {
 /**
  * A permission choice whose name says nothing is named by the mode the daemon
  * maps it to, because picking it applies that mode: a "Default" mapped to
- * bypass-permissions reads "Never ask", not "Default" (review on #6071). An
+ * bypass-permissions reads "Bypass permissions", not "Default" (review on #6071). An
  * unmapped one reads "Use agent permissions". "Default approvals" is what
  * daemons before #5849 call OpenCode's default tier, and a phone can be paired
  * with one. The wire value is kept.
@@ -315,12 +307,12 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 			label: "Approvals",
 			value: approvalLabel(approval, snapshot.harness),
 			kind: "select",
-			choices: APPROVALS.map((item) => ({
-				value: item.value,
-				label: approvalLabel(item.value, snapshot.harness),
-				description: item.description,
-				selected: item.value === approval,
-				permissionMode: item.value,
+			choices: approvalOrder(snapshot.harness).map((mode) => ({
+				value: mode,
+				label: approvalLabel(mode, snapshot.harness),
+				description: approvalCopy(snapshot.harness)[mode].description,
+				selected: mode === approval,
+				permissionMode: mode,
 			})),
 			target: { kind: "settings", key: "approvalMode" },
 		});
