@@ -26,23 +26,27 @@ export function usePdfArtifactFind(pdf: PDFDocumentProxy | undefined, root: RefO
 					try {
 						const content = await text;
 						hasText ||= Boolean(content.trim());
-						engine.occurrences(content, query).forEach((_, occurrence) => hits.push({ page, occurrence }));
+						(await engine.occurrencesAsync(content, query, signal)).forEach((_, occurrence) => hits.push({ page, occurrence }));
 					} catch { incomplete = true; }
 				}
 				if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+				const layers = new Map<HTMLElement, Awaited<ReturnType<typeof engine.search>>>();
+				for (const page of element.querySelectorAll<HTMLElement>("[data-page-number]")) {
+					const layer = page.querySelector<HTMLElement>(".pdf-text-layer");
+					if (layer) layers.set(page, await engine.search(layer, query, signal));
+				}
 				return {
 					total: hits.length,
 					warning: incomplete ? "partial" : hasText ? undefined : "noText",
 					clear: engine.clear,
 					paint(active, reveal) {
+						if (signal.aborted) return;
 						const selected = hits[active];
 						if (reveal && selected) pendingReveal = active;
-						const ranges: Range[] = [];
-						let activeRange: Range | undefined;
+						const ranges: Awaited<ReturnType<typeof engine.search>> = [];
+						let activeRange: (typeof ranges)[number] | undefined;
 						for (const page of element.querySelectorAll<HTMLElement>("[data-page-number]")) {
-							const layer = page.querySelector<HTMLElement>(".pdf-text-layer");
-							if (!layer) continue;
-							const matches = engine.ranges(layer, query);
+							const matches = layers.get(page) ?? [];
 							if (Number(page.dataset.pageNumber) === selected?.page) {
 								activeRange = matches[selected.occurrence];
 								if (pendingReveal === active && !activeRange) {

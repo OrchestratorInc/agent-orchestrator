@@ -3,6 +3,14 @@
 const roots = new Set<HTMLElement>();
 let lastPane: Element | null = null;
 const nativeFind = ".cm-editor, .monaco-editor, .xterm, .terminal-surface, [data-editing='true']";
+export function nativeArtifactFindFocused(): boolean {
+	let focused: Element | null = document.activeElement;
+	while (focused) {
+		if (focused.closest(nativeFind) || (focused.getRootNode() instanceof ShadowRoot && focused.matches("input,textarea,select,[contenteditable]:not([contenteditable='false'])"))) return true;
+		focused = focused.shadowRoot?.activeElement ?? null;
+	}
+	return false;
+}
 function visible(element: HTMLElement): boolean {
 	return element.isConnected && element.getClientRects().length > 0 && !element.closest("[hidden], [aria-hidden='true'], [data-state='closed']");
 }
@@ -33,7 +41,7 @@ export function registerArtifactFindRoot(root: HTMLElement): () => void {
 export function claimArtifactFind(root: HTMLElement): void { lastPane = root; }
 export function artifactFindOwner(): HTMLElement | undefined {
 	const focused = document.activeElement;
-	if (focused instanceof Element && focused.closest(nativeFind)) return;
+	if (nativeArtifactFindFocused()) return;
 	const dialogs = Array.from(document.querySelectorAll<HTMLElement>("[role='dialog'], [role='alertdialog'], [aria-modal='true']")).filter(visible);
 	const dialog = dialogs.at(-1);
 	const available = Array.from(roots).filter((root) => visible(root) && (!dialog || dialog.contains(root)));

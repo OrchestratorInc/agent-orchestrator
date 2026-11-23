@@ -19,7 +19,7 @@ export type ArtifactFindAdapter = {
 
 export interface ArtifactFindMessage {
 	jsonrpc: "2.0";
-	method: "ao/find-configure" | "ao/find" | "ao/find-result" | "ao/find-open" | "ao/find-close";
+	method: "ao/find-configure" | "ao/find" | "ao/find-started" | "ao/find-cancel" | "ao/find-error" | "ao/find-result" | "ao/find-open" | "ao/find-close";
 	params: Record<string, unknown>;
 }
 

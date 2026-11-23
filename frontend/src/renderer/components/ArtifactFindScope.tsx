@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { FindBar } from "./FindBar";
 import { useAppShortcut, isSettingsPageOpen } from "../hooks/useAppShortcut";
-import { artifactFindOwner, claimArtifactFind, registerArtifactFindRoot } from "../lib/artifact-find-focus";
+import { artifactFindOwner, claimArtifactFind, nativeArtifactFindFocused, registerArtifactFindRoot } from "../lib/artifact-find-focus";
 import { createArtifactFindEngine, foldExceptions, readArtifactFindResult, type ArtifactFindAdapter, type ArtifactFindMessage, type ArtifactFindResult } from "../lib/artifact-find";
 import { currentShortcutBindings, useKeybindingsStore } from "../stores/keybindings-store";
 import { isEmptyFindQuery } from "../lib/chat-find";
@@ -42,6 +42,13 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 	const engine = useMemo(createArtifactFindEngine, []);
 	const previousFocus = useRef<HTMLElement | null>(null), requestedScroll = useRef(false);
 	const composing = useRef(false), generation = useRef(0), priorIdentity = useRef(identity), priorQuery = useRef(query);
+	const pending = useRef<(() => void) | undefined>(undefined);
+	const cancel = useCallback(() => {
+		generation.current++;
+		pending.current?.(); pending.current = undefined;
+		result.current?.clear(); result.current = undefined;
+		engine.clear();
+	}, [engine]);
 	const current = useRef({ open, query, active, identity }); current.current = { open, query, active, identity };
 	const invalidate = useCallback(() => setRevision((value) => value + 1), []);
 	const register = useCallback<RegisterAdapter>((element, adapter) => {
@@ -49,14 +56,14 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 		return () => { adapters.current.delete(element); invalidate(); };
 	}, [invalidate]);
 	const close = useCallback(() => {
-		generation.current++; result.current?.clear(); result.current = undefined;
+		cancel();
 		activeRange.current = undefined; setActive(0);
 		setOpen(false); setState({ phase: "idle", total: 0 });
 		if (previousFocus.current?.isConnected && visible(previousFocus.current) && previousFocus.current.getClientRects().length > 0 && !previousFocus.current.closest("[inert]")) previousFocus.current.focus({ preventScroll: true });
 		else if (root.current) { root.current.tabIndex = -1; root.current.focus({ preventScroll: true }); }
-	}, [setOpen]);
+	}, [setOpen, cancel]);
 	const show = useCallback(() => {
-		if (!root.current || isSettingsPageOpen() || Array.from(root.current.querySelectorAll("[data-editing='true'], .cm-editor")).some((node) => visible(node) && !node.closest(".hidden"))) return;
+		if (!root.current || isSettingsPageOpen() || nativeArtifactFindFocused() || Array.from(root.current.querySelectorAll("[data-editing='true'], .cm-editor")).some((node) => visible(node) && !node.closest(".hidden"))) return;
 		if (!current.current.open && document.activeElement instanceof HTMLElement) previousFocus.current = document.activeElement;
 		claimArtifactFind(root.current);
 		// Suspend another reader's highlights without resetting its retained query.
@@ -66,9 +73,11 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 	}, [invalidate, setOpen]);
 	useAppShortcut("find-in-chat", show, enabled, () => Boolean(root.current && artifactFindOwner() === root.current && !isSettingsPageOpen()));
 	useLayoutEffect(() => {
+		cancel();
 		if (!enabled || !root.current) return;
-		return registerArtifactFindRoot(root.current);
-	}, [enabled]);
+		const unregister = registerArtifactFindRoot(root.current);
+		return () => { cancel(); unregister(); };
+	}, [enabled, identity, cancel]);
 	const ownsEscape = useCallback((event: KeyboardEvent) => enabled && open && event.key === "Escape" && !event.defaultPrevented && !event.isComposing && !composing.current && artifactFindOwner() === root.current &&
 		!Array.from(document.querySelectorAll("[role='menu'][data-state='open']")).some((menu) => visible(menu) && menu.getClientRects().length > 0), [enabled, open]);
 	useEffect(() => {
@@ -83,12 +92,12 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 	useEffect(() => {
 		if (!enabled) return;
 		const suspend = (event: Event) => {
-			if ((event as CustomEvent).detail !== root.current) { result.current?.clear(); setOpen(false); }
+			if ((event as CustomEvent).detail !== root.current) { cancel(); setOpen(false); }
 		};
 		document.addEventListener("artifact-find-open", suspend);
 		document.addEventListener("chat-find-open", suspend);
 		return () => { document.removeEventListener("artifact-find-open", suspend); document.removeEventListener("chat-find-open", suspend); };
-	}, [enabled, setOpen]);
+	}, [enabled, setOpen, cancel]);
 	// Configure local frames before Find is pressed, including frames mounted later.
 	useEffect(() => {
 		const element = root.current;
@@ -105,7 +114,7 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 			if (event.data.method === "ao/find-changed" && event.data.params?.generation === generation.current && current.current.open) invalidate();
 			if (event.data.method === "ao/find-close" && current.current.open) close();
 		};
-		const loaded = () => { configure(); invalidate(); };
+		const loaded = () => { cancel(); configure(); invalidate(); };
 		element.addEventListener("load", loaded, true);
 		window.addEventListener("message", message);
 		const observer = new MutationObserver(configure); observer.observe(element, { childList: true, subtree: true });
@@ -118,34 +127,16 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 				frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find", params: { generation: ++generation.current, query: "", active: 0, reveal: false } } satisfies ArtifactFindMessage, "*");
 			}
 		};
-	}, [enabled, open, show, close, invalidate]);
+	}, [enabled, open, show, close, invalidate, cancel]);
 	useEffect(() => {
 		const element = root.current;
 		if (!enabled || !open || !element) return;
-		let timer = 0;
-		const observers: MutationObserver[] = [];
-		const watched = new WeakSet<Node>();
-		const observe = (target: Node) => {
-			if (watched.has(target)) return;
-			watched.add(target);
-			const observer = new MutationObserver((changes) => {
-				if (changes.every((change) => (change.target instanceof Element ? change.target : change.target.parentElement)?.closest("[role='search'], style[data-artifact-find-style]"))) return;
-				if (!timer) timer = window.setTimeout(() => { timer = 0; watchShadows(); invalidate(); }, 100);
-			});
-			observer.observe(target, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["hidden", "aria-hidden", "class", "style", "data-editing", "data-artifact-find-unavailable"] });
-			observers.push(observer);
-		};
-		const watchShadows = () => {
-			observe(element);
-			for (const host of element.querySelectorAll("diffs-container")) if (host.shadowRoot) observe(host.shadowRoot);
-		};
-		watchShadows();
-		return () => { window.clearTimeout(timer); observers.forEach((observer) => observer.disconnect()); };
-	}, [enabled, open, invalidate]);
+		return engine.observe(element, () => { cancel(); invalidate(); });
+	}, [enabled, open, invalidate, cancel, engine]);
 	useEffect(() => {
 		const element = root.current;
 		if (!enabled || !open || !element || composing.current) return;
-		if (Array.from(element.querySelectorAll("[data-editing='true']")).some((node) => visible(node) && !node.closest(".hidden"))) { result.current?.clear(); setOpen(false); return; }
+		if (Array.from(element.querySelectorAll("[data-editing='true']")).some((node) => visible(node) && !node.closest(".hidden"))) { cancel(); setOpen(false); return; }
 		const token = ++generation.current, stop = new AbortController();
 		const changed = priorIdentity.current !== identity || priorQuery.current !== query;
 		priorIdentity.current = identity; priorQuery.current = query;
@@ -164,26 +155,34 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 					const send = (selected: number, reveal: boolean) => frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find", params: { generation: token, query, active: selected, reveal } } satisfies ArtifactFindMessage, "*");
 					const onResult = (event: MessageEvent) => {
 						if (event.source !== frame!.contentWindow) return;
+						if (event.data?.jsonrpc === "2.0" && event.data.params?.generation === token) {
+							if (event.data.method === "ao/find-started") { window.clearTimeout(timeout); return; }
+							if (event.data.method === "ao/find-error") { reject(new Error("frame")); return; }
+						}
 						const data = readArtifactFindResult(event.data, token);
 						if (!data) return;
 						window.clearTimeout(timeout);
-						resolve({ total: data.total, active: data.active, paint: send, clear: () => frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find", params: { generation: token, query: "", active: 0, reveal: false } }, "*") });
+						resolve({ total: data.total, active: data.active, paint: (selected, reveal) => { if (!stop.signal.aborted && token === generation.current) send(selected, reveal); }, clear: () => frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find-cancel", params: { generation: token } } satisfies ArtifactFindMessage, "*") });
 					};
 					const timeout = window.setTimeout(() => reject(new Error("frame")), 5000);
-					dispose = () => { window.clearTimeout(timeout); window.removeEventListener("message", onResult); reject(new DOMException("Cancelled", "AbortError")); };
+					dispose = () => { window.clearTimeout(timeout); window.removeEventListener("message", onResult); frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find-cancel", params: { generation: token } } satisfies ArtifactFindMessage, "*"); reject(new DOMException("Cancelled", "AbortError")); };
 					window.addEventListener("message", onResult); send(index, requestedScroll.current);
 				});
 			}
 			const contents = Array.from(element!.querySelectorAll<HTMLElement>("[data-artifact-find-content]")).filter((node) => visible(node) && !node.closest(".hidden") && !node.parentElement?.closest("[data-artifact-find-content]"));
 			const warning = contents.find((node) => node.dataset.artifactFindUnavailable)?.dataset.artifactFindUnavailable as "partial" | "unavailable" | undefined;
-			const ranges = contents.flatMap((node) => engine.ranges(node, query));
+			const ranges: Awaited<ReturnType<typeof engine.search>> = [];
+			for (const node of contents) ranges.push(...await engine.search(node, query, stop.signal));
 			const retained = changed ? -1 : engine.retained(ranges, activeRange.current);
 			return { total: ranges.length, active: retained >= 0 ? retained : undefined, warning: warning ?? (contents.length ? undefined : "unavailable"), paint: (selected, reveal) => {
+				if (stop.signal.aborted || token !== generation.current) return;
 				const range = ranges[selected];
 				activeRange.current = engine.anchor(range);
 				engine.paint(ranges, selected, document); if (reveal) engine.reveal(range);
 			}, clear: engine.clear };
 		}
+		const release = () => { stop.abort(); dispose(); };
+		pending.current = release;
 		void search().then((found) => {
 			if (stop.signal.aborted || token !== generation.current) return;
 			result.current = found;
@@ -193,9 +192,8 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 		}).catch((error: unknown) => {
 			if (!stop.signal.aborted && token === generation.current) setState({ phase: "error", total: 0, warning: error instanceof Error && error.name === "AbortError" ? undefined : "failed" });
 		});
-		return () => { stop.abort(); dispose(); };
-	}, [enabled, open, query, identity, revision, engine, setOpen]);
-	useEffect(() => () => { generation.current++; result.current?.clear(); engine.clear(); }, [engine]);
+		return () => { release(); if (pending.current === release) pending.current = undefined; };
+	}, [enabled, open, query, identity, revision, engine, setOpen, cancel]);
 	const move = (direction: number) => {
 		if (!result.current?.total || state.phase !== "ready") return;
 		const selected = (active + direction + state.total) % state.total;
@@ -203,10 +201,10 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 	};
 	useEffect(() => {
 		if (!enabled) {
-			generation.current++; result.current?.clear(); result.current = undefined;
+			cancel();
 			activeRange.current = undefined; composing.current = false; setActive(0); setState({ phase: "idle", total: 0 });
 		}
-	}, [enabled]);
+	}, [enabled, cancel]);
 	const warning = state.warning ? t(`artifacts.find.${state.warning}`) : undefined;
 	// Keep the document's parent stable when folding or handing Find to a dialog.
 	return <AdapterContext.Provider value={enabled ? register : undefined}>
@@ -216,8 +214,8 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 			}}>
 			{children}
 			{enabled && open ? <FindBar label={t("artifacts.find.label")} inputRef={input} aria-busy={state.phase === "searching"}
-				inputProps={{ value: query, onChange: (event) => { generation.current++; requestedScroll.current = true; setQuery(event.target.value); },
-					onCompositionStart: () => { composing.current = true; generation.current++; }, onCompositionEnd: () => { composing.current = false; invalidate(); },
+				inputProps={{ value: query, onChange: (event) => { cancel(); requestedScroll.current = true; setQuery(event.target.value); },
+					onCompositionStart: () => { composing.current = true; cancel(); }, onCompositionEnd: () => { composing.current = false; invalidate(); },
 					onKeyDown: (event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) { event.preventDefault(); event.stopPropagation(); move(event.shiftKey ? -1 : 1); } },
 				}} disabled={state.phase !== "ready" || !state.total} onPrevious={() => move(-1)} onNext={() => move(1)} onClose={close}
 				status={<span role="status" aria-live="polite" title={warning} className="inline-flex min-h-4 min-w-16 max-w-24 shrink-0 items-center justify-end overflow-hidden px-2 whitespace-nowrap text-muted-foreground tabular-nums">

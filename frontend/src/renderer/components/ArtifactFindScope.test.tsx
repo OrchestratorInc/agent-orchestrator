@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useLayoutEffect, useRef } from "react";
+import { flushSync } from "react-dom";
 import userEvent from "@testing-library/user-event";
 import { ArtifactFindScope, useArtifactFindRegistration } from "./ArtifactFindScope";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -32,6 +33,40 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("find within a local artifact", () => {
+	it.each(["chat-find-open", "artifact-find-open", "close", "disable", "unmount", "file", "query"])("invalidates pending work synchronously on %s", async (action) => {
+		let finish!: (result: ArtifactFindResult) => void;
+		let signal!: AbortSignal;
+		const paint = vi.fn();
+		const adapter: ArtifactFindAdapter = { search: vi.fn((_query: string, stop: AbortSignal) => { signal = stop; return new Promise<ArtifactFindResult>((resolve) => { finish = resolve; }); }) };
+		function Document() {
+			const register = useArtifactFindRegistration(), element = useRef<HTMLParagraphElement>(null);
+			useLayoutEffect(() => element.current ? register?.(element.current, adapter) : undefined, [register]);
+			return <p ref={element} data-testid="content">hello</p>;
+		}
+		const view = render(<ArtifactFindScope identity="a"><Document /></ArtifactFindScope>);
+		const input = await search(); await waitFor(() => expect(adapter.search).toHaveBeenCalled());
+		const resolveOld = finish, oldSignal = signal;
+		await act(async () => {
+			if (action.endsWith("-open")) document.dispatchEvent(new CustomEvent(action, { detail: document.body }));
+			if (action === "close") fireEvent.click(screen.getByRole("button", { name: "Close find" }));
+			if (action === "disable") flushSync(() => view.rerender(<ArtifactFindScope identity="a" enabled={false}><Document /></ArtifactFindScope>));
+			if (action === "unmount") view.unmount();
+			if (action === "file") flushSync(() => view.rerender(<ArtifactFindScope identity="b"><Document /></ArtifactFindScope>));
+			if (action === "query") fireEvent.change(input, { target: { value: "other" } });
+			resolveOld({ total: 1, paint, clear: vi.fn() });
+			await Promise.resolve(); await Promise.resolve();
+		});
+		expect(oldSignal.aborted).toBe(true); expect(paint).not.toHaveBeenCalled();
+	});
+	it("leaves Find to a deeply focused shadow editor", () => {
+		render(<ArtifactFindScope identity="editor"><div data-testid="editor-host" /></ArtifactFindScope>);
+		const host = screen.getByTestId("editor-host"), shadow = host.attachShadow({ mode: "open" });
+		shadow.innerHTML = '<input aria-label="Native editor">';
+		shadow.querySelector("input")!.focus();
+		const event = new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, composed: true, cancelable: true });
+		shadow.querySelector("input")!.dispatchEvent(event);
+		expect(event.defaultPrevented).toBe(false); expect(screen.queryByRole("searchbox")).toBeNull();
+	});
 	it("preserves the iframe and its document when search is disabled and re-enabled", () => {
 		const content = <iframe title="persistent document" />;
 		const view = render(<ArtifactFindScope identity="html">{content}</ArtifactFindScope>);
@@ -166,5 +201,30 @@ describe("find within a local artifact", () => {
 		expect(screen.queryByText("1/3")).toBeNull();
 		act(() => window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow!, data })));
 		await screen.findByText("1/3"); view.unmount();
+	});
+	it("limits the bridge timeout to acknowledgement and invalidates results on frame reload", async () => {
+		const originalTimeout = window.setTimeout.bind(window), clear = vi.spyOn(window, "clearTimeout");
+		const timers: number[] = [];
+		vi.spyOn(window, "setTimeout").mockImplementation(((callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+			const timer = originalTimeout(callback, delay, ...args);
+			if (delay === 5000) timers.push(timer);
+			return timer;
+		}) as typeof window.setTimeout);
+		render(<ArtifactFindScope identity="html"><iframe title="document" /></ArtifactFindScope>);
+		const frame = screen.getByTitle("document") as HTMLIFrameElement, post = vi.spyOn(frame.contentWindow!, "postMessage");
+		fireEvent.pointerDown(frame); fireEvent.keyDown(document.body, { key: "f", ctrlKey: true });
+		fireEvent.change(await screen.findByRole("searchbox"), { target: { value: "hello" } });
+		await waitFor(() => expect(timers.length).toBeGreaterThan(0));
+		const request = post.mock.calls.findLast(([message]) => message.method === "ao/find" && message.params.query === "hello")![0];
+		const started = { jsonrpc: "2.0", method: "ao/find-started", params: { generation: request.params.generation } };
+		clear.mockClear(); act(() => window.dispatchEvent(new MessageEvent("message", { source: window, data: started })));
+		expect(clear).not.toHaveBeenCalledWith(timers.at(-1));
+		act(() => window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow!, data: started })));
+		expect(clear).toHaveBeenCalledWith(timers.at(-1));
+		fireEvent.load(frame);
+		const obsolete = { jsonrpc: "2.0", method: "ao/find-result", params: { generation: request.params.generation, total: 7 } };
+		act(() => window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow!, data: obsolete })));
+		expect(screen.queryByText("1/7")).toBeNull();
+		expect(post.mock.calls.some(([message]) => message.method === "ao/find-cancel")).toBe(true);
 	});
 });

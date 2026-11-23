@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createArtifactFindEngine, readArtifactFindResult } from "./artifact-find";
 import { findTextOccurrences } from "./chat-find";
 
-afterEach(() => { document.body.replaceChildren(); vi.unstubAllGlobals(); });
+afterEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("artifact text search", () => {
 	it.each([
@@ -65,5 +65,68 @@ describe("artifact text search", () => {
 		expect(readArtifactFindResult(message, 4)).toEqual({ total: 2 });
 		expect(readArtifactFindResult(message, 3)).toBeUndefined();
 		for (const total of [-1, 0.5, Infinity, "2", null]) expect(readArtifactFindResult({ ...message, params: { generation: 4, total } }, 4)).toBeUndefined();
+	});
+	it("maps dense fragmented matches with linear node access and yields for cancellation", async () => {
+		const root = document.createElement("pre"); document.body.append(root);
+		let reads = 0;
+		for (let i = 0; i < 2000; i++) {
+			const text = document.createTextNode("needle ");
+			Object.defineProperty(text, "length", { get: () => { reads++; return 7; } });
+			root.append(text);
+		}
+		const engine = createArtifactFindEngine();
+		expect(await engine.search(root, "needle")).toHaveLength(2000);
+		expect(reads).toBeLessThan(16000);
+		const stop = new AbortController();
+		// Force a task boundary independently of the machine's speed.
+		let clock = 0; vi.spyOn(performance, "now").mockImplementation(() => clock += 2);
+		setTimeout(() => stop.abort(), 0);
+		await expect(engine.search(root, "needle", stop.signal)).rejects.toMatchObject({ name: "AbortError" });
+		vi.restoreAllMocks();
+	});
+	it("counts and highlights composed phrases once across assigned and fallback slots", async () => {
+		document.body.innerHTML = '<x-card>needle</x-card>';
+		const host = document.querySelector("x-card")!;
+		const shadow = host.attachShadow({ mode: "open" });
+		shadow.innerHTML = '<p>prefix <slot>fallback</slot> suffix</p>';
+		const engine = createArtifactFindEngine();
+		const matches = await engine.search(document.body, "prefix needle suffix");
+		expect(matches).toHaveLength(1);
+		expect(matches[0].map((part) => part.toString()).join("")).toBe("prefix needle suffix");
+		const registry = new Map(); vi.stubGlobal("CSS", { highlights: registry }); vi.stubGlobal("Highlight", class extends Set<Range> {});
+		engine.paint(matches, 0, document);
+		expect(registry.get("artifact-find-active").size).toBe(3);
+		expect(await engine.search(document.body, "fallback")).toHaveLength(0);
+		host.replaceChildren();
+		expect(await engine.search(document.body, "prefix fallback suffix")).toHaveLength(1);
+	});
+	it("follows slot order, nested slots, reassignment, and hidden exclusions", async () => {
+		document.body.innerHTML = '<x-card><span slot="a">first</span><span slot="b">second</span></x-card>';
+		const host = document.querySelector("x-card")!, shadow = host.attachShadow({ mode: "open" });
+		shadow.innerHTML = '<p><slot name="b"></slot> <slot name="a"></slot><span hidden>secret</span></p>';
+		const engine = createArtifactFindEngine();
+		const matches = await engine.search(document.body, "second first");
+		expect(matches).toHaveLength(1);
+		expect(matches[0].map((part) => part.toString()).join("")).toBe("second first");
+		expect(await engine.search(document.body, "secret")).toHaveLength(0);
+		host.querySelector("span")!.slot = "b";
+		expect(await engine.search(document.body, "second first")).toHaveLength(0);
+		const nested = document.createElement("x-nested"); nested.slot = "a"; nested.textContent = "nested";
+		nested.attachShadow({ mode: "open" }).innerHTML = "<slot></slot>"; host.append(nested);
+		expect(await engine.search(document.body, "nested")).toHaveLength(1);
+	});
+	it("observes nested and late shadow roots and stops all discovery on teardown", async () => {
+		vi.useFakeTimers();
+		document.body.innerHTML = '<x-card></x-card>';
+		const host = document.querySelector("x-card")!, changed = vi.fn(), engine = createArtifactFindEngine();
+		const dispose = engine.observe(document.body, changed);
+		const shadow = host.attachShadow({ mode: "open" }); shadow.innerHTML = '<p>needle</p><x-nested></x-nested>';
+		const nested = shadow.querySelector("x-nested")!.attachShadow({ mode: "open" }); nested.innerHTML = "<slot>fallback</slot>";
+		await vi.advanceTimersByTimeAsync(650); expect(changed).toHaveBeenCalled(); changed.mockClear();
+		nested.querySelector("slot")!.textContent = "updated";
+		await vi.advanceTimersByTimeAsync(150); expect(changed).toHaveBeenCalled();
+		dispose(); changed.mockClear(); shadow.querySelector("p")!.textContent = "later";
+		await vi.advanceTimersByTimeAsync(1000); expect(changed).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0); vi.useRealTimers();
 	});
 });

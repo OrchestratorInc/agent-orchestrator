@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { FindBar } from "../components/FindBar";
-import { artifactOwnsFind } from "../lib/artifact-find-focus";
+import { artifactOwnsFind, nativeArtifactFindFocused } from "../lib/artifact-find-focus";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Loader2 } from "lucide-react";
 import { useAppShortcut, isSettingsPageOpen } from "./useAppShortcut";
@@ -132,7 +132,7 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const canHandle = useCallback(() => {
 		const element = root.current;
 		if (!element || !element.getClientRects().length || isSettingsPageOpen()) return false;
-		if (isFindModalOpen() || artifactOwnsFind()) return false;
+		if (isFindModalOpen() || artifactOwnsFind() || nativeArtifactFindFocused()) return false;
 		const focused = document.activeElement;
 		if (focused instanceof Element && focused.closest(OTHER_SURFACE)) return false;
 		const focusedChat = focused instanceof Element ? focused.closest("[data-chat-find-scope], [data-chat-find-surface]") : null;
