@@ -4,6 +4,7 @@ package local
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,7 +32,9 @@ func fakeNPM(t *testing.T, fail bool) (path, calls string) {
 	if fail {
 		script += "echo 'npm ERR! network' >&2\nexit 1\n"
 	} else {
-		script += `prefix="$3"; spec="$7"; pkg="${spec%@*}"
+		// npm ci, run in the install dir: install the one dependency package.json names.
+		script += `prefix="$PWD"; [ -f "$prefix/package-lock.json" ] || { echo 'no lockfile' >&2; exit 1; }
+pkg=$(sed -n 's/.*"dependencies": *{ *"\([^"]*\)".*/\1/p;/"dependencies"/{n;s/^ *"\([^"]*\)".*/\1/p;}' "$prefix/package.json" | head -1)
 mkdir -p "$prefix/node_modules/$pkg/bin" "$prefix/node_modules/$pkg/dist/server"
 touch "$prefix/node_modules/$pkg/bin/agent-device.mjs" "$prefix/node_modules/$pkg/dist/server/cli.mjs"
 `
@@ -58,8 +61,12 @@ func TestEnsureToolInstallsOnceAndPublishesAtomically(t *testing.T) {
 	if n := strings.Count(string(raw), "\n"); n != 1 {
 		t.Fatalf("npm ran %d times, want once", n)
 	}
-	if !strings.Contains(string(raw), "agent-device@"+agentDeviceTool.version) {
-		t.Fatalf("npm args %q do not pin the version", raw)
+	if !strings.HasPrefix(string(raw), "ci ") || !strings.Contains(string(raw), "--ignore-scripts") {
+		t.Fatalf("npm args %q: want a locked install without scripts", raw)
+	}
+	manifest, _ := os.ReadFile(filepath.Join(agentDeviceTool.dir(root), "package.json"))
+	if !strings.Contains(string(manifest), `"agent-device": "`+agentDeviceTool.version+`"`) {
+		t.Fatalf("package.json does not pin the version:\n%s", manifest)
 	}
 	leftovers, _ := filepath.Glob(filepath.Join(root, agentDeviceTool.pkg, ".install-*"))
 	if len(leftovers) != 0 {
@@ -249,6 +256,7 @@ func TestBootResetsAnOffSimulatorsStreamHelper(t *testing.T) {
 	t.Cleanup(hub.Close)
 	p := New(Config{DataDir: t.TempDir()})
 	p.hub = &hubProcess{origin: hub.URL, token: "tok", done: make(chan struct{})}
+	p.run = func(context.Context, string, ...string) ([]byte, error) { return []byte(`{"devices":{}}`), nil }
 	boot := func(booted bool) []string {
 		mu.Lock()
 		paths = nil
@@ -520,6 +528,7 @@ func TestBootRollsBackASimulatorWhoseStreamDidNotStart(t *testing.T) {
 	t.Cleanup(hub.Close)
 	p := New(Config{DataDir: t.TempDir()})
 	p.hub = &hubProcess{origin: hub.URL, token: "tok", done: make(chan struct{})}
+	p.run = func(context.Context, string, ...string) ([]byte, error) { return []byte(`{"devices":{}}`), nil }
 	shutdowns := func(booted bool) int {
 		mu.Lock()
 		paths = nil
@@ -636,5 +645,107 @@ func TestCloseDoesNotWaitForASlowStart(t *testing.T) {
 	}
 	if err := p.EnsureReady(context.Background()); !errors.Is(err, errProviderClosed) {
 		t.Fatalf("EnsureReady after Close = %v, want errProviderClosed", err)
+	}
+}
+
+// The hub reports errors as {id, message, error} objects, and a success can
+// carry some too (a boot whose camera feed failed): ok decides, and a failure
+// says the hub's own reason.
+func TestHubResultsDecodeTheHubsErrorObjects(t *testing.T) {
+	var ok hubActionResult
+	if err := json.Unmarshal([]byte(`{"ok":true,"id":"emulator-5554","errors":[{"id":"camera","message":"Camera feed seed failed","error":"Error: ENOENT"}]}`), &ok); err != nil {
+		t.Fatalf("a success with errors did not decode: %v", err)
+	}
+	if err := ok.err("boot"); err != nil {
+		t.Fatalf("a success with errors failed: %v", err)
+	}
+	var failed hubActionResult
+	if err := json.Unmarshal([]byte(`{"ok":false,"error":"Failed to boot","errors":[{"id":"x","message":"Failed to allocate an emulator port for AO_QA","error":"Error: spawn avdmanager ENOENT\n    at ..."}]}`), &failed); err != nil {
+		t.Fatal(err)
+	}
+	if err := failed.err("boot"); err == nil || !strings.Contains(err.Error(), "Failed to allocate an emulator port for AO_QA") {
+		t.Fatalf("err = %v, want the hub's reason", err)
+	}
+	var legacy hubActionResult
+	if err := json.Unmarshal([]byte(`{"ok":false,"errors":["plain reason"]}`), &legacy); err != nil || !strings.Contains(legacy.err("boot").Error(), "plain reason") {
+		t.Fatalf("plain string errors: %v / %v", err, legacy.err("boot"))
+	}
+}
+
+// A simulator the list still shows as off but that is running now (booted by
+// another open, or from Xcode) is not reset: the reset would shut it down.
+func TestBootDoesNotResetASimulatorThatIsAlreadyRunning(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(hub.Close)
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{origin: hub.URL, token: "tok", done: make(chan struct{})}
+	p.run = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte(`{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[{"udid":"UDID-1","state":"Booted"}]}}`), nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := p.Boot(ctx, ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS}); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, path := range paths {
+		if path == "/vendor/serve-sim/grid/api/shutdown" {
+			t.Fatalf("a running simulator was reset: %v", paths)
+		}
+	}
+}
+
+// A hub that dies during startup is reported, not restarted forever.
+func TestHubThatDiesDuringStartupIsNotRevived(t *testing.T) {
+	dir := t.TempDir()
+	node := filepath.Join(dir, "node")
+	if err := os.WriteFile(node, []byte("#!/bin/sh\necho 'boom' >&2\nexit 1\n"), 0o755); err != nil { //nolint:gosec // test fixture must be executable
+		t.Fatal(err)
+	}
+	p := New(Config{DataDir: t.TempDir()})
+	if _, err := p.startHub(context.Background(), node, "hub.mjs"); err == nil {
+		t.Fatal("a hub that exited at once started")
+	}
+	time.Sleep(200 * time.Millisecond)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.reviving {
+		t.Fatal("a hub that never became ready is being restarted")
+	}
+	raw, _ := os.ReadFile(filepath.Join(p.stateRoot(), "hub.log"))
+	if !strings.Contains(string(raw), "boom") {
+		t.Fatalf("hub.log lost the failed start's output: %q", raw)
+	}
+}
+
+// Each pinned tool installs from a lockfile made for exactly its version: a
+// version bump without a fresh lockfile fails here, not on a user's machine.
+func TestToolLocksPinTheToolVersions(t *testing.T) {
+	for _, tool := range []tool{hubTool, agentDeviceTool} {
+		raw, err := toolLocks.ReadFile("locks/" + tool.pkg + ".package-lock.json")
+		if err != nil {
+			t.Fatalf("%s has no lockfile: %v", tool.pkg, err)
+		}
+		var lock struct {
+			Name     string `json:"name"`
+			Packages map[string]struct {
+				Version      string            `json:"version"`
+				Dependencies map[string]string `json:"dependencies"`
+			} `json:"packages"`
+		}
+		if err := json.Unmarshal(raw, &lock); err != nil {
+			t.Fatal(err)
+		}
+		if lock.Name != toolManifestName || lock.Packages[""].Dependencies[tool.pkg] != tool.version || lock.Packages["node_modules/"+tool.pkg].Version != tool.version {
+			t.Fatalf("%s lockfile does not pin %s (regenerate it with npm install --package-lock-only --save-exact)", tool.pkg, tool.version)
+		}
 	}
 }

@@ -15,9 +15,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// deviceOpenTimeout covers an emulator cold boot; the daemon bounds the boot
-// itself.
-const deviceOpenTimeout = 4 * time.Minute
+// deviceCallTimeout outlasts the daemon's own limits for a device call (a
+// cold boot, an install, a launch, a shutdown: up to 4 minutes), so the CLI
+// never gives up first and cancels one halfway.
+const deviceCallTimeout = 5 * time.Minute
 
 // The CLI mirrors the daemon's device DTOs instead of importing controllers.
 type devicePlatformDTO struct {
@@ -95,7 +96,14 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 			if err := ctx.getJSON(cmd.Context(), "devices", &status); err != nil {
 				return err
 			}
-			return writeDeviceStatus(cmd.OutOrStdout(), status, jsonOutput)
+			if err := writeDeviceStatus(cmd.OutOrStdout(), status, jsonOutput); err != nil {
+				return err
+			}
+			// Devices that could not be listed are not an empty machine.
+			if status.Error != "" {
+				return errors.New("device support reported an error")
+			}
+			return nil
 		},
 	})
 
@@ -119,7 +127,7 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 				body["deviceId"] = deviceID
 			}
 			var out sessionDeviceDTO
-			if err := ctx.sessionDeviceCall(cmd.Context(), "open", body, &out, deviceOpenTimeout); err != nil {
+			if err := ctx.sessionDeviceCall(cmd.Context(), "open", body, &out); err != nil {
 				return err
 			}
 			return writeDeviceLease(cmd.OutOrStdout(), out, jsonOutput, true)
@@ -139,7 +147,7 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 				return usageError{err}
 			}
 			var out sessionDeviceDTO
-			if err := ctx.sessionDeviceCall(cmd.Context(), "install", map[string]string{"path": path}, &out, commandTimeout); err != nil {
+			if err := ctx.sessionDeviceCall(cmd.Context(), "install", map[string]string{"path": path}, &out); err != nil {
 				return err
 			}
 			if jsonOutput {
@@ -156,7 +164,7 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var out sessionDeviceDTO
-			if err := ctx.sessionDeviceCall(cmd.Context(), "launch", map[string]string{"appId": args[0]}, &out, commandTimeout); err != nil {
+			if err := ctx.sessionDeviceCall(cmd.Context(), "launch", map[string]string{"appId": args[0]}, &out); err != nil {
 				return err
 			}
 			if jsonOutput {
@@ -179,7 +187,7 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 				return writeDeviceLease(cmd.OutOrStdout(), held, jsonOutput, false)
 			}
 			var out sessionDeviceDTO
-			if err := ctx.sessionDeviceCall(cmd.Context(), "close", map[string]bool{"shutdown": shutdown}, &out, commandTimeout); err != nil {
+			if err := ctx.sessionDeviceCall(cmd.Context(), "close", map[string]bool{"shutdown": shutdown}, &out); err != nil {
 				return err
 			}
 			if jsonOutput {
@@ -195,7 +203,7 @@ func newDeviceCommand(ctx *commandContext) *cobra.Command {
 }
 
 // sessionDeviceCall posts to this session's device route with its capability.
-func (c *commandContext) sessionDeviceCall(ctx context.Context, action string, body, out any, timeout time.Duration) error {
+func (c *commandContext) sessionDeviceCall(ctx context.Context, action string, body, out any) error {
 	sessionID := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
 	if sessionID == "" {
 		return usageError{errors.New("ao device must run inside an AO session (AO_SESSION_ID is not set)")}
@@ -205,7 +213,7 @@ func (c *commandContext) sessionDeviceCall(ctx context.Context, action string, b
 		headers[browserCapabilityHeader] = capability
 	}
 	path := "/api/v1/sessions/" + url.PathEscape(sessionID) + "/device/" + action
-	return c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, path, body, out, headers, timeout)
+	return c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, path, body, out, headers, deviceCallTimeout)
 }
 
 // sessionDeviceGet reads this session's lease (null when it holds no device).

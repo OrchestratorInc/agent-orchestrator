@@ -175,3 +175,18 @@ func TestDeviceClose_ReleasesAHeldDevice(t *testing.T) {
 		t.Fatalf("output = %q", out)
 	}
 }
+
+// Devices that could not be listed are an error, not an empty machine.
+func TestDeviceStatus_FailsWhenTheDevicesCannotBeListed(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, _ := deviceServer(t, http.StatusOK, `{"enabled":true,"state":"ready","error":"list devices: Failed to run avdmanager","platforms":[],"devices":[],"leases":[]}`)
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "device", "status")
+	if err == nil {
+		t.Fatalf("status exited 0 although listing failed:\n%s", out)
+	}
+	if !strings.Contains(out, "Failed to run avdmanager") {
+		t.Fatalf("output does not say why:\n%s", out)
+	}
+}
