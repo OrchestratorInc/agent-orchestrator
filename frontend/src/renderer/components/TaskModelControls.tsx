@@ -10,6 +10,7 @@ import { NativeModePicker } from "./NativeModePicker";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, formatEffortLabel, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
+import { Button } from "./ui/button";
 import { MENU_TRIGGER_CHROME } from "./ui/option-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { TriangleAlert } from "@/components/app-icons";
@@ -155,15 +156,19 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 	agentSwitch: AgentSwitchProps;
 	/** Why the agent's models could not be loaded or checked. */
 	warning?: string;
+	/** Reads Cloud's model list again, when that can clear the warning. */
+	onRetry?: () => Promise<void>;
 }) {
 	const { t } = useTranslation();
 	const { agentId, catalog, value, mode, effort, onEffortChange, onValidityChange } = props;
 	const models = catalog?.models;
 	const selectedModel = value || models?.find((item) => item.isDefault)?.id || "";
 	const { selected, invalidEffort } = useModelTuning({ models, model: selectedModel, effort, onEffortChange });
-	// An agent whose models could not be loaded, or a level its model no longer offers, cannot be saved.
 	const problem = props.warning ?? (invalidEffort ? t("settings.models.unsupportedTuning", { role: "" }) : undefined);
-	useEffect(() => onValidityChange(!problem), [onValidityChange, problem]);
+	// Only an agent with no models to pick, or a level its model no longer offers, cannot be saved;
+	// a warning beside a usable list (cached models, a partial listing) is information.
+	const blocking = invalidEffort || (Boolean(props.warning) && !models?.length);
+	useEffect(() => onValidityChange(!blocking), [onValidityChange, blocking]);
 	const options = selected?.efforts?.filter((level) => level && level.toLowerCase() !== "default") ?? [];
 	// An agent that picks its own model for each mode lists its modes as the models.
 	const modes = catalog?.selectionMode === "mode";
@@ -206,7 +211,7 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 				<TooltipProvider>
 					<Tooltip>
 						<TooltipTrigger asChild>
-							<span role="alert" tabIndex={0} aria-describedby={undefined} className="flex size-6 shrink-0 cursor-default items-center justify-center rounded-md text-destructive">
+							<span role="alert" tabIndex={0} aria-describedby={undefined} className={`flex size-6 shrink-0 cursor-default items-center justify-center rounded-md ${blocking ? "text-destructive" : "text-warning"}`}>
 								<TriangleAlert aria-hidden="true" className="size-3.5" />
 								<span className="sr-only">{problem}</span>
 							</span>
@@ -214,6 +219,11 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 						<TooltipContent side="top" className="max-w-80">{problem}</TooltipContent>
 					</Tooltip>
 				</TooltipProvider>
+			) : null}
+			{problem && props.onRetry ? (
+				<Button size="xs" variant="ghost" className="shrink-0" onClick={() => void props.onRetry?.().catch(() => undefined)}>
+					{t("newTask.modelNotice.retry")}
+				</Button>
 			) : null}
 		</div>
 	);
