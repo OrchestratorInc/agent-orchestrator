@@ -95,6 +95,7 @@ export interface ConversationSwitchDisplay {
 
 /** A send whose agent switch was refused or failed, so the message never left. */
 export class ProviderSwitchFailed extends Error {
+	readonly code: string = "PROVIDER_SWITCH_FAILED_ERROR";
 	constructor(readonly reason: unknown) {
 		super(apiErrorMessage(reason));
 	}

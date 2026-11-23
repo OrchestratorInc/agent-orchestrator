@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { afterEach, expect, it, vi } from "vitest";
 import { captureApiErrorToSentry, captureExceptionToSentry } from "./sentry";
 import { SAFE_APP_ASSET, safeSentryFunctionName } from "../../shared/sentry-config";
@@ -82,7 +83,17 @@ it("uses the browser location and error type when no error object or stack is av
 	});
 	captureExceptionToSentry(undefined, { category: "renderer_exception", code: "WINDOW_ERROR" }, event);
 	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
-		message: "Cannot read properties of undefined (reading 'id')",
+		message: event.message,
 		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/index-A1B2C3D4.js", lineno: 42, colno: 9 }] },
+	}));
+});
+
+it("forwards a cause code and drops overlong text at the IPC boundary", () => {
+	captureExceptionToSentry(new Error("x".repeat(4097), {
+		cause: new AoError("WORKSPACE_NO_READY_REPOS", "No resolved repositories"),
+	}), { category: "renderer_exception", code: "WINDOW_ERROR" });
+	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
+		message: "",
+		tags: expect.objectContaining({ error_code: "WORKSPACE_NO_READY_REPOS", code: "WINDOW_ERROR" }),
 	}));
 });

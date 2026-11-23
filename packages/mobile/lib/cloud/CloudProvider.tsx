@@ -75,6 +75,7 @@ const NO_CHAT_HARNESSES: readonly string[] = [];
 
 /** Sign-out stopped because Orchestrator Cloud would have kept pushing to this phone. */
 export class CloudPushRemovalError extends Error {
+	readonly code: string = "CLOUD_PUSH_REMOVAL_ERROR";
 	constructor() {
 		super("Orchestrator Cloud couldn't be told to stop sending this account's notifications to this phone.");
 		this.name = "CloudPushRemovalError";

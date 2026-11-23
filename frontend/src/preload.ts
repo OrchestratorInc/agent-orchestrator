@@ -980,7 +980,7 @@ const api = {
 	// back is password-free (see main/remotes-ipc.ts); a password only travels
 	// renderer -> main on add or credential edit. Account host tokens stay in main.
 	remotes: {
-		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
+		list: () => ipcRenderer.invoke("remotes:list", true) as Promise<RemoteHostView[] | { code: string; message: string; expected?: true }>,
 		// Saves the account's machines from AO Cloud and forgets the ones it no longer lists.
 		syncAccountHosts: (accountId: string) => ipcRenderer.invoke("remotes:syncAccountHosts", accountId) as Promise<void>,
 		// Lists a paired host under the signed-in account.

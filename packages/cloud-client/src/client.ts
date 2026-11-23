@@ -109,6 +109,7 @@ interface JSONRequestOptions extends RequestOptions {
 }
 
 export class CloudApiError extends Error {
+  readonly telemetryCode: string = "CLOUD_API_ERROR";
   readonly status: number;
   readonly code: string;
   readonly requestId: string;
