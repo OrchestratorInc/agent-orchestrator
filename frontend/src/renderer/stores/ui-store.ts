@@ -134,10 +134,12 @@ export type GlobalToast = {
 	dedupeKey?: string;
 	/** One button on the toast, such as Undo or Open; pressing it dismisses the toast. */
 	action?: { label: string; run: () => void };
+	/** One line until hovered or focused: the body opens on hover or keyboard focus, and the action is the ✕. */
+	compact?: boolean;
 	nonce: number;
 };
 
-export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action">;
+export type GlobalToastOptions = Pick<GlobalToast, "tone" | "placement" | "dismissible" | "durationMs" | "dedupeKey" | "action" | "compact">;
 
 export type WorkspaceFileOpenRequest = {
 	sessionId: string;
