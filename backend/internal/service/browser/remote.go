@@ -211,9 +211,17 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 	var verdict approval.Verdict
 	var approved approval.Target
 	var approvedIdentified bool
+	var approvedDocument float64
 	if gate.kind == remoteDescribe {
-		target, identified, partial := s.remoteTarget(discoverCtx, gate)
-		approved, approvedIdentified = target, identified
+		target, identified, partial, document := s.remoteTarget(discoverCtx, gate)
+		// The address is read again after the target: if the page moved on in
+		// between, the prompt would pair one page's address with another's
+		// control.
+		if afterURL, _ := s.remotePage(discoverCtx); afterURL != pageURL {
+			return remoteTargetChanged()
+		}
+		target.PageURL = pageURL
+		approved, approvedIdentified, approvedDocument = target, identified, document
 		target.PageURL, target.PageTitle = pageURL, pageTitle
 		if identified {
 			verdict = approval.Classify(target, mode)
@@ -256,21 +264,27 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 	// the user approved it: read the page again and refuse if it moved on.
 	recheckCtx, cancelRecheck := context.WithTimeout(ctx, limit)
 	defer cancelRecheck()
-	if nowURL, _ := s.remotePage(recheckCtx); nowURL != pageURL {
-		return remoteTargetChanged()
-	}
+	// The target is read first and the address after it, so a navigation
+	// between the two reads cannot pass both checks. What remains is the gap
+	// between this read and the service running the command, which only the
+	// service can close (it takes no expected-page guard today).
 	if gate.kind == remoteDescribe {
-		now, identified, _ := s.remoteTarget(recheckCtx, gate)
-		if identified != approvedIdentified || !sameRemoteTarget(now, approved) {
+		now, identified, _, document := s.remoteTarget(recheckCtx, gate)
+		now.PageURL, _ = s.remotePage(recheckCtx)
+		if identified != approvedIdentified || document != approvedDocument || !sameRemoteTarget(now, approved) {
 			return remoteTargetChanged()
 		}
+		return nil
+	}
+	if nowURL, _ := s.remotePage(recheckCtx); nowURL != pageURL {
+		return remoteTargetChanged()
 	}
 	return nil
 }
 
 // sameRemoteTarget compares what the user was shown and judged by.
 func sameRemoteTarget(a, b approval.Target) bool {
-	return a.Role == b.Role && a.Name == b.Name && a.IsSubmit == b.IsSubmit &&
+	return a.PageURL == b.PageURL && a.Role == b.Role && a.Name == b.Name && a.IsSubmit == b.IsSubmit &&
 		a.FormAction == b.FormAction && a.FormMethod == b.FormMethod && a.FormHasPayment == b.FormHasPayment &&
 		a.FormHasPassword == b.FormHasPassword && a.FormHasNewPassword == b.FormHasNewPassword && a.SubmitName == b.SubmitName
 }
@@ -352,7 +366,9 @@ func (s *Service) remotePage(ctx context.Context) (string, string) {
 // identified is false when nothing about the element could be read; partial
 // is true when the element was named (by a snapshot ref or a find locator)
 // but the page could not resolve it to one element, so its form is unknown.
-func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (target approval.Target, identified, partial bool) {
+// document identifies the page document the facts were read from (its
+// performance.timeOrigin, new on every navigation or reload); 0 when unread.
+func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (target approval.Target, identified, partial bool, document float64) {
 	target = approval.Target{Action: gate.action, Key: gate.key, Role: gate.role, Name: gate.name}
 	var request map[string]string
 	switch ref, isRef := snapshotRef(gate.selector); {
@@ -367,14 +383,14 @@ func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (target app
 		// what form it would submit.
 		data, ok := s.remoteData(ctx, "snapshot", "--interactive", "--json")
 		if !ok {
-			return target, false, false
+			return target, false, false, 0
 		}
 		refs, _ := data["refs"].(map[string]interface{})
 		entry, _ := refs[ref].(map[string]interface{})
 		target.Role, _ = entry["role"].(string)
 		target.Name, _ = entry["name"].(string)
 		if target.Role == "" && target.Name == "" {
-			return target, false, false
+			return target, false, false, 0
 		}
 		request = map[string]string{"mode": "named", "role": target.Role, "name": target.Name}
 	default:
@@ -387,13 +403,13 @@ func (s *Service) remoteTarget(ctx context.Context, gate remoteGate) (target app
 	described, ok := s.remoteDescribe(ctx, request)
 	if !ok || described.Partial {
 		// A named element without its form facts may still submit one.
-		return typedEnter(gate, target), named, named
+		return typedEnter(gate, target), named, named, described.DocumentOrigin
 	}
 	described.Action, described.Key = gate.action, gate.key
 	if named && described.Name == "" {
 		described.Role, described.Name = target.Role, target.Name
 	}
-	return typedEnter(gate, described.Target), described.Role != "" || described.Name != "" || described.IsSubmit, false
+	return typedEnter(gate, described.Target), described.Role != "" || described.Name != "" || described.IsSubmit, false, described.DocumentOrigin
 }
 
 // typedEnter classifies a typed line break as the Enter press it becomes.
@@ -406,7 +422,8 @@ func typedEnter(gate remoteGate, target approval.Target) approval.Target {
 
 type remoteFacts struct {
 	approval.Target
-	Partial bool `json:"partial"`
+	Partial        bool    `json:"partial"`
+	DocumentOrigin float64 `json:"documentOrigin"`
 }
 
 // remoteDescribe runs remoteDescribeScript for request.
@@ -491,7 +508,7 @@ if (req.mode === "named") {
   const want = clean(req.name).toLowerCase();
   const hits = [...document.querySelectorAll("a,button,input,select,textarea,summary,[role],[onclick],[tabindex]")]
     .filter((c) => (!req.role || roleOf(c) === req.role) && nameOf(c).toLowerCase() === want);
-  if (hits.length !== 1) return { partial: true };
+  if (hits.length !== 1) return { partial: true, documentOrigin: performance.timeOrigin };
   el = hits[0];
 } else {
   el = req.mode === "focused" ? document.activeElement : document.querySelector(req.selector);
@@ -502,7 +519,7 @@ const type = (el.type || "").toLowerCase();
 const role = roleOf(el);
 const name = nameOf(el);
 const form = el.form || el.closest("form");
-const out = { role, name, tag, inputType: type || undefined, isSubmit: false, formHasPayment: false, formHasPassword: false };
+const out = { documentOrigin: performance.timeOrigin, role, name, tag, inputType: type || undefined, isSubmit: false, formHasPayment: false, formHasPassword: false };
 if (form) {
   const pay = (f) => /cc-(number|csc|exp)/.test(f.getAttribute("autocomplete") || "") || /card.?num|cc.?num|\bcvc\b|\bcvv\b|security.?code/i.test((f.name || "") + " " + (f.id || "") + " " + (f.placeholder || ""));
   const submit = form.querySelector("button:not([type]),button[type=submit],input[type=submit],input[type=image]");
