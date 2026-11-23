@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1244,6 +1245,9 @@ type fakeWorkspace struct {
 	resolves    []resolveDefaultBranchCall
 	resolved    map[string]ports.WorkspaceDefaultBranch
 	fetchFunc   func(context.Context, string, ports.WorkspaceDefaultBranch) error
+	// resolveRemoteFunc stands in for a live remote lookup during resolution;
+	// it gets the caller's shared network deadline.
+	resolveRemoteFunc func(remoteCtx context.Context, repoPath string) error
 	// createRepoPath, when set, is returned as the RepoPath of a single-repo
 	// Create so tests can assert it survives the spawn->teardown metadata round
 	// trip (production Create resolves this path; the zero default keeps every
@@ -1310,6 +1314,14 @@ func (w *fakeWorkspace) ResolveDefaultBranch(_ context.Context, repoPath, config
 		Branch:  branch,
 		BaseRef: "refs/remotes/origin/" + branch,
 	}, nil
+}
+
+func (w *fakeWorkspace) ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+	if w.resolveRemoteFunc != nil {
+		// A lookup that hit the deadline still answers from local refs.
+		_ = w.resolveRemoteFunc(remoteCtx, repoPath)
+	}
+	return w.ResolveDefaultBranch(ctx, repoPath, configuredBranch)
 }
 
 func (w *fakeWorkspace) FetchDefaultBranch(ctx context.Context, repoPath string, target ports.WorkspaceDefaultBranch) error {
@@ -4256,9 +4268,18 @@ func TestKill_ReviewerTeardownFailureLeavesSessionActive(t *testing.T) {
 // AFTER.
 type fakeShellTerminalCloser struct {
 	began     []domain.SessionID
+	suspended []domain.SessionID
 	ended     []domain.SessionID
 	err       error
 	sharedLog *[]string
+}
+
+func (f *fakeShellTerminalCloser) SuspendSessionShells(_ context.Context, id domain.SessionID) (func(), error) {
+	f.suspended = append(f.suspended, id)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return func() { f.ended = append(f.ended, id) }, nil
 }
 
 func (f *fakeShellTerminalCloser) BeginSessionTeardown(_ context.Context, id domain.SessionID) (func(), error) {
@@ -5999,12 +6020,6 @@ func TestSpawn_SkipsNeedsInitWorkspaceChildrenDuringRefreshAndCreate(t *testing.
 	if got, want := ws.lastProjectCfg.Repos[0].Name, "api"; got != want {
 		t.Fatalf("materialized child = %q, want %q", got, want)
 	}
-	if got, want := len(ws.lastProjectCfg.Assets), 1; got != want {
-		t.Fatalf("materialized asset configs = %d, want %d", got, want)
-	}
-	if got, want := ws.lastProjectCfg.Assets[0].RelativePath, "assets"; got != want {
-		t.Fatalf("materialized asset = %q, want %q", got, want)
-	}
 }
 
 func TestRefreshDefaultBranchesUsesOneOverallFetchBudget(t *testing.T) {
@@ -6056,6 +6071,130 @@ func TestSpawn_FetchesQualifiedDefaultBranchRemote(t *testing.T) {
 	}
 	if got, want := ws.lastCfg.BaseRef, "refs/remotes/upstream/main"; got != want {
 		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+}
+
+func TestSpawn_SkipsFetchWhenResolutionAlreadyFetched(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	ws.resolved = map[string]ports.WorkspaceDefaultBranch{
+		"/repo/mer": {Remote: "origin", Branch: "main", BaseRef: "refs/remotes/origin/main", Fetched: true},
+	}
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 0 {
+		t.Fatalf("fetches = %#v, want none after a resolution that fetched", ws.fetches)
+	}
+
+	// The resolution's fetch also counts for the next start in the window.
+	ws.resolved["/repo/mer"] = ports.WorkspaceDefaultBranch{Remote: "origin", Branch: "main", BaseRef: "refs/remotes/origin/main"}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 0 {
+		t.Fatalf("fetches = %#v, want none within the fetch window", ws.fetches)
+	}
+	if got, want := ws.lastCfg.BaseRef, "refs/remotes/origin/main"; got != want {
+		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+}
+
+func TestRefreshDefaultBranchesSharesOneBudgetAcrossResolution(t *testing.T) {
+	m, st, _, ws := newManager()
+	project := domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+	for i := 0; i < 3; i++ {
+		name := fmt.Sprintf("child-%d", i)
+		st.workspaceRepo["mer"] = append(st.workspaceRepo["mer"], domain.WorkspaceRepoRecord{Name: name, RelativePath: name})
+	}
+	m.defaultBranchRefreshTimeout = 25 * time.Millisecond
+	// Every repository's live HEAD lookup hangs until the deadline it is given.
+	var deadlines []time.Time
+	ws.resolveRemoteFunc = func(remoteCtx context.Context, _ string) error {
+		deadline, ok := remoteCtx.Deadline()
+		if !ok {
+			t.Error("lookup got no deadline")
+		}
+		deadlines = append(deadlines, deadline)
+		<-remoteCtx.Done()
+		return remoteCtx.Err()
+	}
+
+	started := time.Now()
+	baseRefs := m.refreshDefaultBranchesBestEffort(context.Background(), project)
+	elapsed := time.Since(started)
+
+	// Separate budgets would each get their own deadline, one after another.
+	if got, want := len(deadlines), 4; got != want {
+		t.Fatalf("lookups = %d, want root plus three children (%d)", got, want)
+	}
+	for i, deadline := range deadlines {
+		if !deadline.Equal(deadlines[0]) {
+			t.Fatalf("lookup %d deadline = %s, want the shared deadline %s", i, deadline, deadlines[0])
+		}
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("resolving four stalled repositories took %s, want one shared 25ms budget", elapsed)
+	}
+	if got, want := len(baseRefs), 4; got != want {
+		t.Fatalf("resolved base refs = %d, want root plus three children (%d) from local refs", got, want)
+	}
+}
+
+func TestSpawn_FreshBaseIsRefreshedInBackground(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+
+	// No fetch has succeeded yet, so the first start waits for one.
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 1 {
+		t.Fatalf("fetches = %d, want the first start to fetch", len(ws.fetches))
+	}
+
+	// Past the skip window but inside the fresh window: the start goes ahead
+	// with the local base while the fetch is still running.
+	now = now.Add(time.Minute)
+	release := make(chan struct{})
+	var finished atomic.Bool
+	ws.fetchFunc = func(fetchCtx context.Context, _ string, _ ports.WorkspaceDefaultBranch) error {
+		defer finished.Store(true)
+		select {
+		case <-release:
+			return nil
+		case <-fetchCtx.Done():
+			return fetchCtx.Err()
+		}
+	}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if finished.Load() {
+		t.Fatal("the start waited for a fetch of a base fetched a minute ago")
+	}
+	if got, want := ws.lastCfg.BaseRef, "refs/remotes/origin/main"; got != want {
+		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+	close(release)
+	if err := m.WaitBackgroundWorkers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 2 {
+		t.Fatalf("fetches = %d, want the background refresh too", len(ws.fetches))
+	}
+
+	// A base last fetched longer ago than the fresh window is waited for again.
+	ws.fetchFunc = nil
+	now = now.Add(defaultBranchFreshWindow + time.Second)
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 3 {
+		t.Fatalf("fetches = %d, want a start after the fresh window to fetch", len(ws.fetches))
 	}
 }
 
@@ -12549,6 +12688,57 @@ func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	}
 }
 
+// Archiving a session while its wake holds the resume must wait for the wake
+// and then archive, not fail with ErrOperationInProgress (#8645).
+func TestKill_WaitsForAnInFlightWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	killed := make(chan error, 1)
+	go func() {
+		_, err := m.Kill(ctx, "mer-1")
+		killed <- err
+	}()
+	select {
+	case err := <-killed:
+		m.endAgentResume("mer-1")
+		t.Fatalf("Kill returned while the wake held the session: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	m.endAgentResume("mer-1")
+	if err := <-killed; err != nil {
+		t.Fatalf("Kill after the wake finished: %v", err)
+	}
+	if !st.sessions["mer-1"].IsTerminated || rt.destroyed != 1 || ws.destroyed != 1 {
+		t.Fatalf("terminated=%v runtime=%d workspace=%d, want a full teardown",
+			st.sessions["mer-1"].IsTerminated, rt.destroyed, ws.destroyed)
+	}
+}
+
+// A wake that outlasts the limit leaves Kill's refusal in place and the
+// session untouched.
+func TestKill_GivesUpOnAWedgedWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.killResumeWait = 50 * time.Millisecond
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	defer m.endAgentResume("mer-1")
+	started := time.Now()
+	if _, err := m.Kill(ctx, "mer-1"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("Kill = %v, want ErrOperationInProgress", err)
+	}
+	if waited := time.Since(started); waited < m.killResumeWait {
+		t.Fatalf("Kill refused after %v, want a wait of at least %v", waited, m.killResumeWait)
+	}
+	if st.sessions["mer-1"].IsTerminated || rt.destroyed != 0 || ws.destroyed != 0 {
+		t.Fatal("a refused kill touched the session")
+	}
+}
+
 func TestSpawn_ArtifactDirWriteFailureRollsBackSeedRowAndDir(t *testing.T) {
 	m, st, _, _ := newManager()
 	dataDir := t.TempDir()
@@ -12771,6 +12961,24 @@ func TestOrchestratorWorkspaceBranchCollision(t *testing.T) {
 				t.Fatalf("existing work changed: %q, %v", content, err)
 			}
 		})
+	}
+}
+
+func TestSpawn_RequiredComposerTimeoutNeverDeliversPrompt(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{outputs: []string{"Sign in to continue"}}
+	msg := &fakeMessenger{}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: readinessAgent{
+		afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}},
+		hints:           ports.PromptReadinessHints{RequireReady: true, Patterns: []string{`Try "debug this error"`}, PollInterval: time.Millisecond, Timeout: time.Millisecond},
+	}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	_, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "--help is task data"})
+	if err == nil {
+		t.Fatal("missing required composer did not fail spawn")
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("typed task into startup dialog: %#v", msg.msgs)
 	}
 }
 

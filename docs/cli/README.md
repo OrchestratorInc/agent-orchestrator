@@ -104,9 +104,10 @@ See the [command reference](../../backend/internal/skillassets/using-ao/commands
 | `ao session resume-agent <id>`      | `POST /api/v1/sessions/{id}/resume-agent`      |
 | `ao session rename <id> <name>`     | `PATCH /api/v1/sessions/{id}`                  |
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
-| `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}`                 |
+| `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}?keepArtifacts=true`; artifact files stay, view only, on the Artifacts page. `--delete-artifacts` drops `keepArtifacts` so they are deleted too. |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
 | `ao session fork <id> [--check]` | `POST /api/v1/sessions/{id}/fork`             |
+| `ao session switch <id> [agent]` / `--from <agent> [agent]` `[--model <m>] [--effort <e>] [--permission <p>] [--force] [-m <text>]` | `--from` lists via `GET /api/v1/sessions?active=true`; each switch is `POST /api/v1/sessions/{id}/provider-switch`, then `POST /api/v1/sessions/{id}/send` for `-m` |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
@@ -157,9 +158,12 @@ takeover, concurrent provider changes, and worktree preservation can be handled
 together.
 
 `ao report` persists a worker-originated coordination claim before reporting
-success. Checkpoints, free-form messages, and output-only reports batch until
+success. `--note` and free-form text are each limited to 1000 characters.
+Checkpoints, free-form messages, and output-only reports batch until
 another flush or the first report's one-hour fallback. The first `--done`
-report opens a fixed five-minute settlement window. `--needs-input` delivers
+report opens a five-minute settlement window. AO tries to deliver the batch about 15
+seconds after no other worker of the project is still working, and at the
+latest when the window closes. `--needs-input` delivers
 immediately without interrupting current orchestrator work. `--stuck` requests
 an interrupt at most once per worker every three minutes and coalesces equal
 repeats. Reports route to the active project orchestrator at each attempt and

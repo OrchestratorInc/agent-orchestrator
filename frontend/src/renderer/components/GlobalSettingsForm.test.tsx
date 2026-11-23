@@ -257,7 +257,7 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, chatSendKeyMode: "enter", navigationGestures: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, windowTranslucency: false, chatSendKeyMode: "enter", navigationGestures: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, loadError: false, saveError: false });
 	document.documentElement.lang = "en";
@@ -355,19 +355,15 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByTestId("default-cloud-sandbox-section")).toBeInTheDocument();
 	});
 
-	it("reveals the Side chats toggle only in Developer mode and persists it", async () => {
+	it("has no Side chats switch, in or out of Developer mode", async () => {
 		const user = userEvent.setup();
 		renderForm("general");
 		await screen.findByRole("switch", { name: "Developer mode" });
 		expect(screen.queryByRole("switch", { name: "Side chats" })).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
-		const toggle = await screen.findByRole("switch", { name: "Side chats" });
-		expect(toggle).toHaveAttribute("aria-checked", "false");
-
-		await user.click(toggle);
-		expect(window.localStorage.getItem("ao.sideChats")).toBe("true");
-		expect(useUiStore.getState().sideChats).toBe(true);
+		await screen.findByRole("switch", { name: "Split panes" });
+		expect(screen.queryByRole("switch", { name: "Side chats" })).not.toBeInTheDocument();
 	});
 
 	it("offers Chrome mode only in Developer mode, as a link to the Browser settings", async () => {

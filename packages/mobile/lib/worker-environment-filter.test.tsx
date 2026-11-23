@@ -71,3 +71,20 @@ it("chooses a machine, and the chosen one again goes back to every machine", () 
 	expect(same).not.toHaveBeenCalled();
 	expect(fixtures.select).not.toHaveBeenCalled();
 });
+
+// The machine's state lives on its chip, not in a banner over the whole board.
+it("puts a dot on a machine whose rows may not be current, and says so to VoiceOver", () => {
+	const onSelectEnvironment = vi.fn();
+	act(() => {
+		renderer = create(<WorkerEnvironmentFilter
+			environments={[{ id: "mac", name: "Mac", freshness: "unreachable" }, { id: "pc", name: "PC", freshness: "lagging" }, { id: "vm", name: "VM", freshness: "live" }]}
+			selectedEnvironmentId={ALL_WORKER_ENVIRONMENTS}
+			onSelectEnvironment={onSelectEnvironment}
+		/>);
+	});
+	expect(chips().map((chip) => chip.props.accessibilityLabel)).toEqual(["All machines", "Mac, can't reach", "PC, updates delayed", "VM"]);
+	const dot = (id: string) => renderer!.root.findAll((node) => node.props.testID === `worker-environment-freshness-${id}` && (node.type as unknown) === "View");
+	expect(dot("mac")[0].props.style).toContainEqual({ backgroundColor: "#red" });
+	expect(dot("pc")[0].props.style).toContainEqual({ backgroundColor: "#amber" });
+	expect(dot("vm")).toHaveLength(0);
+});

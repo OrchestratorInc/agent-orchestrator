@@ -2,6 +2,8 @@ import createClient from "openapi-fetch";
 import type { components, paths } from "../../api/schema";
 import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
+import { freshMachineSimActive, simulateFreshMachine } from "./fresh-machine-sim";
+import { IS_DEV } from "./is-dev";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
 import { markApiError, withApiErrorOwnership } from "./reported-errors";
@@ -161,6 +163,9 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/prs/{id}/comments",
 	"/api/v1/prs/{id}/attachment-access",
 	"/api/v1/sessions",
+	"/api/v1/sessions/background-tasks",
+	"/api/v1/sessions/{sessionId}/background-tasks",
+	"/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop",
 	"/api/v1/sessions/{sessionId}",
 	"/api/v1/sessions/{sessionId}/activity",
 	"/api/v1/sessions/{sessionId}/exit-agent",
@@ -372,14 +377,6 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	tagClientTimeZone(input);
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
 	const baseUrl = runtimeApiBaseUrl;
-	if (baseUrl === null) {
-		if (daemonStatus.state !== "starting") reportApiError(operation, "daemon_unavailable", 503);
-		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
-			status: 503,
-			headers: { "Content-Type": "application/json" },
-		});
-	}
-
 	const send = async (): Promise<Response> => {
 		if (!baseUrl) {
 			return fetch(input);
@@ -411,6 +408,23 @@ async function runtimeFetch(input: Request): Promise<Response> {
 			keepalive: input.keepalive,
 		});
 	};
+
+	// Dev builds with Developer mode on can simulate a new machine for walking
+	// first-run onboarding (fresh-machine-sim). Ahead of the daemon check, so
+	// the browser preview, which has no daemon, is answered too. IS_DEV folds
+	// to false in production, which strips this.
+	if (IS_DEV && freshMachineSimActive()) {
+		const simulated = await simulateFreshMachine(input, send);
+		if (simulated) return simulated;
+	}
+
+	if (baseUrl === null) {
+		if (daemonStatus.state !== "starting") reportApiError(operation, "daemon_unavailable", 503);
+		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
+			status: 503,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
 
 	let response: Response;
 	try {

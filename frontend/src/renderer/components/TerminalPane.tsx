@@ -61,6 +61,8 @@ export function preloadXtermTerminal(): void {
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { rememberPaneTerminalGrid } from "../lib/terminal-grid-hint";
 import { Button } from "./ui/button";
+import { EndedShellTerminal } from "./EndedShellTerminal";
+import type { HostId } from "../lib/hosts";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { captureRendererException } from "../lib/telemetry";
 
@@ -86,8 +88,12 @@ type TerminalPaneProps = {
 	switchingLabel?: string;
 	/** Focus the terminal when an in-flight controller asks for human input. */
 	focusRequested?: boolean;
+	/** Ignore standalone SGR dim in this login terminal across theme changes. */
+	suppressLoginDim?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
 	onTerminalStateChange?: (state: TerminalSessionState) => void;
+	/** Open a web link from a standalone terminal that has no session Browser owner. */
+	onLinkOpen?: (uri: string) => void;
 	/** Cloud agent screen has painted nonblank terminal content. */
 	onTerminalContentReadyChange?: (ready: boolean) => void;
 	/** One-shot input initiated by an explicit UI action. */
@@ -163,7 +169,9 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.booting === right.booting &&
 		left.switchingLabel === right.switchingLabel &&
 		left.focusRequested === right.focusRequested &&
+		left.suppressLoginDim === right.suppressLoginDim &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
+		left.onLinkOpen === right.onLinkOpen &&
 		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
 		left.inputRequest === right.inputRequest &&
 		left.onInputRequestResult === right.onInputRequestResult &&
@@ -682,6 +690,7 @@ export function TerminalCacheProvider({
 			const shell = shells.get(entry.handleId);
 			if (
 				!shell ||
+				shell.endedAt ||
 				shell.createdAt !== entry.generation ||
 				shell.sessionId !== entry.sessionId
 			) {
@@ -805,7 +814,9 @@ export function TerminalPane({
 	booting,
 	switchingLabel,
 	focusRequested,
+	suppressLoginDim,
 	onTerminalStateChange,
+	onLinkOpen,
 	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
@@ -819,6 +830,12 @@ export function TerminalPane({
 			: ({ kind: "worker" } satisfies TerminalTarget);
 	const isOptimisticShell =
 		terminalTarget.kind === "shell" && terminalTarget.handleId.startsWith("pending-shell:");
+	const shellHostId = session?.hostId as HostId | undefined;
+	const shellTerminalsQuery = useShellTerminals(shellHostId);
+	const endedShell =
+		terminalTarget.kind === "shell"
+			? shellTerminalsQuery.data?.find((shell) => shell.handleId === terminalTarget.handleId && shell.endedAt)
+			: undefined;
 	const cache = useContext(TerminalCacheContext);
 	// Subscribe to this session's terminal-reset nonce so a restore (which bumps
 	// it) re-renders the pane and recomputes the descriptor/mux key below, forcing
@@ -832,6 +849,9 @@ export function TerminalPane({
 			? terminalTarget.handleId
 			: `${session?.terminalHandleId ?? "empty"}:${session?.terminalGeneration ?? ""}`;
 
+	if (endedShell) {
+		return <EndedShellTerminal hostId={shellHostId} shell={endedShell} />;
+	}
 	if (!window.ao) {
 		// A standalone shell has no agent and no branch, so it previews as a plain
 		// prompt rather than borrowing the session's agent transcript.
@@ -909,7 +929,9 @@ export function TerminalPane({
 		booting,
 		switchingLabel,
 		focusRequested,
+		suppressLoginDim,
 		onTerminalStateChange,
+		onLinkOpen,
 		onTerminalContentReadyChange,
 		inputRequest,
 		onInputRequestResult,
@@ -943,7 +965,9 @@ export function TerminalPane({
 			onChangeFontSize={onChangeFontSize}
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
+			suppressLoginDim={suppressLoginDim}
 			onTerminalStateChange={onTerminalStateChange}
+			onLinkOpen={onLinkOpen}
 			onTerminalContentReadyChange={onTerminalContentReadyChange}
 			inputRequest={inputRequest}
 			onInputRequestResult={onInputRequestResult}
@@ -1109,7 +1133,9 @@ function AttachedTerminal({
 	booting,
 	switchingLabel,
 	focusRequested,
+	suppressLoginDim,
 	onTerminalStateChange,
+	onLinkOpen,
 	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
@@ -1468,11 +1494,12 @@ function AttachedTerminal({
 					droppedFileMaxBytes={saveCloudDrop && cloudAttachmentMaxBytes !== undefined ? Math.min(cloudAttachmentMaxBytes, MAX_CLOUD_CP_BINARY_BYTES) : undefined}
 					fontSize={fontSize}
 					focusRequested={focusRequested}
+					suppressLoginDim={suppressLoginDim}
 					isFullscreen={isFullscreen}
 					isVisible={isVisible}
 					onChangeFontSize={onChangeFontSize}
 					onError={handleInitError}
-					onLinkOpen={handleLinkOpen}
+					onLinkOpen={onLinkOpen ?? handleLinkOpen}
 					onSessionLinkOpen={handleSessionLinkOpen}
 					onReady={handleReady}
 					onVisibleContent={() => setHasVisibleContent(true)}

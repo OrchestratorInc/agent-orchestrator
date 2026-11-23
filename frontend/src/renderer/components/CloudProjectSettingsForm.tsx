@@ -16,9 +16,9 @@ import { defaultReviewerHarness } from "../lib/reviewer-harnesses";
 import { CLOUD_AGENT_PROVIDERS, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { agentLabel } from "../lib/agent-options";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
-import { CODER_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
+import { CODER_PROVIDER, ORCHESTRATOR_ON_CODER_FEATURE, projectSandboxProvider } from "../lib/cloud-offering";
 import { isCloudWorkspaceProject, isStandaloneCloudProject, projectAdditionalRepos, projectConfigText, projectRepositoryUrls, repoDirName } from "../lib/cloud-project-repos";
-import { CloudCpError, type CloudCpProject, type CloudCpProjectCoderConfig, type CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpOrchestratorSandboxProvider, type CloudCpProject, type CloudCpProjectCoderConfig, type CloudCpProjectSettingsRequest } from "../lib/cloud-cp";
 import { cloudProjectSettingsDraft, cloudProjectSettingsPatch, type CloudProjectRoleDraft, type CloudProjectSettingsDraft } from "../lib/cloud-project-settings";
 import { AgentAvatar } from "./AgentAvatar";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
@@ -159,6 +159,10 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 	const orgCoderConfig = orgCoder.data as { templateId?: string; defaultTemplateId?: string } | null | undefined;
 	const orgDefaultTemplateId = (orgCoderConfig?.templateId ?? orgCoderConfig?.defaultTemplateId ?? "").trim();
 	const templateRequired = templateId === "" && orgCoderConfig != null && orgDefaultTemplateId === "";
+	// Where the orchestrator runs is a choice only an org that may run Coder as
+	// its own gets, from a control plane that offers both (offering feature).
+	const offering = useCloudOffering();
+	const orchestratorChoice = offering.features.includes(ORCHESTRATOR_ON_CODER_FEATURE);
 	return <SettingsGroup title={t("settings.project.coderTitle")} grouped>
 		<ProjectSettingsRow label={t("settings.project.coderTemplate")}>
 			{templateId !== "" ? (
@@ -180,6 +184,7 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 			)}
 		</ProjectSettingsRow>
 		{coder?.size ? <ProjectSettingsValueRow label={t("settings.project.coderSize")} value={coder.size} /> : null}
+		{orchestratorChoice ? <OrchestratorSandboxProviderRow project={project} /> : null}
 		{/* Workspace naming is a bring-your-own-Coder control; an existing
 		    prefix stays visible so it can still be cleared. */}
 		{orgCoderConfig != null || (coder?.workspaceNamePrefix?.trim() ?? "") !== "" ? (
@@ -187,6 +192,51 @@ export function CloudProjectCoderSettings({ project }: { project: CloudCpProject
 		) : null}
 		{templateId !== "" ? <CoderTemplateParametersSettings project={project} templateId={templateId} /> : null}
 	</SettingsGroup>;
+}
+
+/** Where the project keeps its orchestrator: "coder", or the instant VM it gets by default. */
+function orchestratorSandboxProviderOf(project: CloudCpProject): CloudCpOrchestratorSandboxProvider {
+	return project.config?.orchestratorSandboxProvider === "coder" ? "coder" : "freestyle";
+}
+
+/**
+ * Where the project's orchestrator runs (config.orchestratorSandboxProvider): an
+ * instant VM, the default, or Coder, placed the way the project's workers are.
+ * The workers run on Coder either way. Saves on change through the settings
+ * patch; the next orchestrator started picks it up and one already running
+ * stays where it is. Shown in a Coder project's settings when the offering
+ * lists orchestrator-on-coder.
+ */
+function OrchestratorSandboxProviderRow({ project }: { project: CloudCpProject }) {
+	const { t } = useTranslation();
+	const { client, baseUrl } = useCloudCp();
+	const queryClient = useQueryClient();
+	const [saved, setSaved] = useState(() => orchestratorSandboxProviderOf(project));
+	const save = useMutation({
+		mutationFn: (orchestratorSandboxProvider: CloudCpOrchestratorSandboxProvider) =>
+			client.updateProjectSettings(project.orgId, project.id, { config: { orchestratorSandboxProvider } }),
+		onSuccess: (response) => {
+			setSaved(orchestratorSandboxProviderOf(response.project));
+			queryClient.setQueryData(cloudProjectSettingsQueryKey(baseUrl, project.orgId, project.id), response.project);
+			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+		},
+	});
+	// The choice being saved shows until the save settles; a failed one goes back.
+	const shown = save.isPending && save.variables ? save.variables : saved;
+	const label = t("settings.project.orchestratorSandbox.label");
+	const description = save.isError ? (
+		<span className="text-error" role="alert">
+			{save.error instanceof Error ? save.error.message : t("settings.project.saveFailed")}
+		</span>
+	) : t("settings.project.orchestratorSandbox.description");
+	return <SettingsRow label={label} description={description}>
+		<SettingsOptionMenu aria-label={label} value={shown} disabled={save.isPending}
+			options={[
+				{ value: "freestyle", label: t("settings.project.orchestratorSandbox.freestyle") },
+				{ value: "coder", label: t("settings.project.orchestratorSandbox.coder") },
+			]}
+			onChange={(provider) => { if (provider !== shown) save.mutate(provider); }} />
+	</SettingsRow>;
 }
 
 /**
