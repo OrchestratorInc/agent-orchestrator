@@ -712,6 +712,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}
 
 	return (
+		<>
+		{showingSavedPage ? <span role="status" className="sr-only">Loading conversation…</span> : null}
 		<div ref={surfaceRef} className="relative h-full min-h-0" inert={showingSavedPage ? true : undefined}>
 			{refreshError && !hostUnreachable ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
@@ -969,6 +971,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			/>
 			</ForkSessionContext.Provider>
 		</div>
+		</>
 	);
 });
 
