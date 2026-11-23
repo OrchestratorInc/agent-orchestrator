@@ -48,7 +48,7 @@ function anchor(path: string, excerpt = ""): ArtifactCommentAnchor {
 	return { path, tag: path.split(">").pop()!.split(":")[0], textHash: "9f2c00112233aabb", excerpt };
 }
 
-function comment(id: string, body: string, author: ArtifactCommentAuthor | null = sam, extra: Partial<ArtifactComment> = {}): ArtifactComment {
+function comment(id: string, body: string, author: ArtifactCommentAuthor = sam, extra: Partial<ArtifactComment> = {}): ArtifactComment {
 	return { id, threadId: "t", author, clientId: `c-${id}`, body, createdAt: "2026-11-23T10:00:00Z", editedAt: null, deleted: false, ...extra };
 }
 
@@ -59,6 +59,7 @@ function thread(id: string, path: string, createdAt: string, status: "open" | "r
 		status,
 		anchor: anchor(path),
 		createdAt,
+		updatedAt: createdAt,
 		resolvedBy: null,
 		resolvedAt: null,
 		sentToAgentAt: null,
@@ -74,8 +75,9 @@ describe("artifact comment types", () => {
 
 	it("labels authors without ever needing an email", () => {
 		expect(artifactCommentAuthorLabel(sam)).toBe("Sam");
+		expect(artifactCommentAuthorLabel({ id: null, name: "Former user" })).toBe("Former user");
 		expect(artifactCommentAuthorLabel({ id: sam.id, name: "  " })).toBe("Orchestrator user");
-		expect(artifactCommentAuthorLabel(null)).toBe("Former user");
+		expect(artifactCommentAuthorLabel({ id: null, name: "" })).toBe("Former user");
 	});
 
 	it("checks bodies the way the server does, counting code points", () => {
@@ -235,7 +237,7 @@ describe("formatArtifactCommentMessage", () => {
 			{
 				...designThread,
 				anchor: { ...designThread.anchor, tag: "img", excerpt: "" },
-				comments: [comment("1", "", sam, { deleted: true }), comment("2", "Still wrong", null), comment("3", "x", { id: sam.id, name: "" })],
+				comments: [comment("1", "", sam, { deleted: true }), comment("2", "Still wrong", { id: null, name: "Former user" }), comment("3", "x", { id: sam.id, name: "Orchestrator user" })],
 			},
 			{ path: "a.md", version: 1 },
 			"   ",

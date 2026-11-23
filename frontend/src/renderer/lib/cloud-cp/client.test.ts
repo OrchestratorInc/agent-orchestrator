@@ -657,6 +657,7 @@ describe("Cloud control-plane artifact share comments", () => {
 		status: "open",
 		anchor: { path: "body>main:1>h1:1", tag: "h1", textHash: "9f2c00112233aabb", excerpt: "Title" },
 		createdAt: "2026-11-23T10:00:00Z",
+		updatedAt: "2026-11-23T10:00:00Z",
 		resolvedBy: null,
 		resolvedAt: null,
 		sentToAgentAt: null,

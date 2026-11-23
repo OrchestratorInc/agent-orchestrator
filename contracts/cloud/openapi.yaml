@@ -727,9 +727,12 @@ paths:
         one), so a comment made in a tab still showing an older version
         lands on that version; otherwise 409 artifact_share_version_unknown.
         Retrying with the same clientId returns the thread already made
-        (200) instead of making a second one. 400 invalid_request for an
-        empty or too-long body or a bad anchor; 404 when the link is not
-        there or the caller cannot open it.
+        (201 for a new thread, 200 for that retry) instead of making a
+        second one; 409 conflict when the caller already used the clientId
+        for a different comment. 400 invalid_request for an empty or
+        too-long body or a bad anchor; 413 request_too_large for a request
+        body over 32 KiB; 404 when the link is not there or the caller
+        cannot open it.
       requestBody:
         required: true
         content:
@@ -754,7 +757,16 @@ paths:
         "404":
           $ref: "#/components/responses/ArtifactShareCommentsNotFound"
         "409":
-          $ref: "#/components/responses/ArtifactShareVersionUnknown"
+          description: >-
+            artifact_share_version_unknown when the link has never had this
+            version; conflict when the caller already used this clientId for
+            a different comment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "413":
+          $ref: "#/components/responses/ArtifactShareCommentTooLarge"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}:
@@ -786,6 +798,8 @@ paths:
           $ref: "#/components/responses/ArtifactShareCommentInvalid"
         "404":
           $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "413":
+          $ref: "#/components/responses/ArtifactShareCommentTooLarge"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}/replies:
@@ -798,8 +812,10 @@ paths:
       description: >-
         Adds a reply to a thread, for anyone who can comment on the link, on
         an open or resolved thread. Retrying with the same clientId returns
-        the comment already made (200). 400 invalid_request for an empty or
-        too-long body; 404 when the link, or the thread on it, is not there
+        the comment already made (201 for a new reply, 200 for that retry);
+        409 conflict when the caller already used the clientId for a
+        different comment. 400 invalid_request for an empty or too-long
+        body; 413 request_too_large for a request body over 32 KiB; 404 when the link, or the thread on it, is not there
         or the caller cannot open the link.
       requestBody:
         required: true
@@ -824,6 +840,10 @@ paths:
           $ref: "#/components/responses/ArtifactShareCommentInvalid"
         "404":
           $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "409":
+          $ref: "#/components/responses/ArtifactShareCommentClientIdConflict"
+        "413":
+          $ref: "#/components/responses/ArtifactShareCommentTooLarge"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}/sent:
@@ -892,6 +912,8 @@ paths:
           $ref: "#/components/responses/ArtifactShareCommentForbidden"
         "404":
           $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "413":
+          $ref: "#/components/responses/ArtifactShareCommentTooLarge"
         default:
           $ref: "#/components/responses/Error"
     delete:
@@ -5406,6 +5428,21 @@ components:
         forbidden: editing someone else's comment, deleting a comment that
         is neither the caller's nor on the caller's link, or a non-owner
         marking a thread sent to the agent.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentTooLarge:
+      description: >-
+        request_too_large: the request body is over 32 KiB.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentClientIdConflict:
+      description: >-
+        conflict: the caller already used this clientId for a different
+        comment (for example on another link). Make a new clientId.
       content:
         application/json:
           schema:
@@ -10085,11 +10122,15 @@ components:
       description: A commenter, by display name only; never their email.
       properties:
         id:
-          type: string
+          type: [string, "null"]
           format: uuid
+          description: Their user ID; null once their account is deleted.
         name:
           type: string
-          description: Their display name; empty when they set none.
+          description: >-
+            What to show: their display name, "Orchestrator user" when they
+            have none to show, or "Former user" once their account is
+            deleted.
     ArtifactShareComment:
       type: object
       additionalProperties: false
@@ -10102,12 +10143,7 @@ components:
           type: string
           format: uuid
         author:
-          description: >-
-            Who wrote it; null once their account is deleted (shown as a
-            former user).
-          oneOf:
-            - $ref: "#/components/schemas/ArtifactShareCommentAuthor"
-            - type: "null"
+          $ref: "#/components/schemas/ArtifactShareCommentAuthor"
         clientId:
           type: string
           description: >-
@@ -10140,6 +10176,7 @@ components:
         - status
         - anchor
         - createdAt
+        - updatedAt
         - resolvedBy
         - resolvedAt
         - sentToAgentAt
@@ -10160,10 +10197,15 @@ components:
         createdAt:
           type: string
           format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+          description: >-
+            When the thread itself last changed: created, resolved,
+            reopened or sent to the agent.
         resolvedBy:
           description: >-
-            Who resolved it, while it is resolved; null when it is open or
-            their account is deleted.
+            Who resolved it, while it is resolved; null when it is open.
           oneOf:
             - $ref: "#/components/schemas/ArtifactShareCommentAuthor"
             - type: "null"

@@ -27,16 +27,19 @@ export type ArtifactCommentAnchor = {
 	excerpt: string;
 };
 
-/** A commenter by display name only; `name` is empty when they set none. */
-export type ArtifactCommentAuthor = { id: string; name: string };
+/**
+ * A commenter by display name only, never email. The server fills `name`:
+ * their display name, "Orchestrator user" without one, "Former user" once
+ * their account is deleted (then `id` is null).
+ */
+export type ArtifactCommentAuthor = { id: string | null; name: string };
 
 export type ArtifactCommentThreadStatus = "open" | "resolved";
 
 export type ArtifactComment = {
 	id: string;
 	threadId: string;
-	/** null once the author's account is deleted. */
-	author: ArtifactCommentAuthor | null;
+	author: ArtifactCommentAuthor;
 	clientId: string;
 	/** Plain text; empty when deleted. */
 	body: string;
@@ -51,6 +54,9 @@ export type ArtifactCommentThread = {
 	status: ArtifactCommentThreadStatus;
 	anchor: ArtifactCommentAnchor;
 	createdAt: string;
+	/** When the thread itself last changed: created, resolved, reopened or sent. */
+	updatedAt: string;
+	/** null while open. */
 	resolvedBy: ArtifactCommentAuthor | null;
 	resolvedAt: string | null;
 	sentToAgentAt: string | null;
@@ -83,13 +89,21 @@ export const ARTIFACT_COMMENT_ERROR_CODES = {
 	invalidRequest: "invalid_request",
 	forbidden: "forbidden",
 	versionUnknown: "artifact_share_version_unknown",
+	/** 409: this clientId was already used for a different comment; make a new one. */
+	clientIdConflict: "conflict",
+	/** 413: the request body is over 32 KiB. */
+	requestTooLarge: "request_too_large",
 } as const;
 
-/** What a commenter is called: their display name, "Orchestrator user" without one, "Former user" once deleted. */
-export function artifactCommentAuthorLabel(author: ArtifactCommentAuthor | null): string {
-	if (author === null) return "Former user";
+/**
+ * What a commenter is called. The server already fills the name; this only
+ * covers a blank one: "Former user" for a deleted account (id null),
+ * otherwise "Orchestrator user".
+ */
+export function artifactCommentAuthorLabel(author: ArtifactCommentAuthor): string {
 	const name = author.name.trim();
-	return name === "" ? "Orchestrator user" : name;
+	if (name !== "") return name;
+	return author.id === null ? "Former user" : "Orchestrator user";
 }
 
 /** Length in Unicode code points, which is what the 5000 cap counts (Postgres char_length). */

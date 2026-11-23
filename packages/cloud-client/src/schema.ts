@@ -380,7 +380,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts a thread on an element of one version of a share link, with its first comment, for anyone who can list the link's comments. version must be one the link has had (no later than the current one), so a comment made in a tab still showing an older version lands on that version; otherwise 409 artifact_share_version_unknown. Retrying with the same clientId returns the thread already made (200) instead of making a second one. 400 invalid_request for an empty or too-long body or a bad anchor; 404 when the link is not there or the caller cannot open it. */
+        /** @description Starts a thread on an element of one version of a share link, with its first comment, for anyone who can list the link's comments. version must be one the link has had (no later than the current one), so a comment made in a tab still showing an older version lands on that version; otherwise 409 artifact_share_version_unknown. Retrying with the same clientId returns the thread already made (201 for a new thread, 200 for that retry) instead of making a second one; 409 conflict when the caller already used the clientId for a different comment. 400 invalid_request for an empty or too-long body or a bad anchor; 413 request_too_large for a request body over 32 KiB; 404 when the link is not there or the caller cannot open it. */
         post: operations["createArtifactShareThread"];
         delete?: never;
         options?: never;
@@ -424,7 +424,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Adds a reply to a thread, for anyone who can comment on the link, on an open or resolved thread. Retrying with the same clientId returns the comment already made (200). 400 invalid_request for an empty or too-long body; 404 when the link, or the thread on it, is not there or the caller cannot open the link. */
+        /** @description Adds a reply to a thread, for anyone who can comment on the link, on an open or resolved thread. Retrying with the same clientId returns the comment already made (201 for a new reply, 200 for that retry); 409 conflict when the caller already used the clientId for a different comment. 400 invalid_request for an empty or too-long body; 413 request_too_large for a request body over 32 KiB; 404 when the link, or the thread on it, is not there or the caller cannot open the link. */
         post: operations["replyArtifactShareThread"];
         delete?: never;
         options?: never;
@@ -5346,9 +5346,12 @@ export interface components {
         };
         /** @description A commenter, by display name only; never their email. */
         ArtifactShareCommentAuthor: {
-            /** Format: uuid */
-            id: string;
-            /** @description Their display name; empty when they set none. */
+            /**
+             * Format: uuid
+             * @description Their user ID; null once their account is deleted.
+             */
+            id: string | null;
+            /** @description What to show: their display name, "Orchestrator user" when they have none to show, or "Former user" once their account is deleted. */
             name: string;
         };
         ArtifactShareComment: {
@@ -5356,8 +5359,7 @@ export interface components {
             id: string;
             /** Format: uuid */
             threadId: string;
-            /** @description Who wrote it; null once their account is deleted (shown as a former user). */
-            author: components["schemas"]["ArtifactShareCommentAuthor"] | null;
+            author: components["schemas"]["ArtifactShareCommentAuthor"];
             /** @description The ID the author's client made for this comment, so it can match its optimistic copy to the saved one. */
             clientId: string;
             /** @description Plain text, never HTML or Markdown; empty when deleted. */
@@ -5380,7 +5382,12 @@ export interface components {
             anchor: components["schemas"]["ArtifactShareCommentAnchor"];
             /** Format: date-time */
             createdAt: string;
-            /** @description Who resolved it, while it is resolved; null when it is open or their account is deleted. */
+            /**
+             * Format: date-time
+             * @description When the thread itself last changed: created, resolved, reopened or sent to the agent.
+             */
+            updatedAt: string;
+            /** @description Who resolved it, while it is resolved; null when it is open. */
             resolvedBy: components["schemas"]["ArtifactShareCommentAuthor"] | null;
             /** Format: date-time */
             resolvedAt: string | null;
@@ -6464,6 +6471,24 @@ export interface components {
                 "application/json": components["schemas"]["ErrorEnvelope"];
             };
         };
+        /** @description request_too_large: the request body is over 32 KiB. */
+        ArtifactShareCommentTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
+        /** @description conflict: the caller already used this clientId for a different comment (for example on another link). Make a new clientId. */
+        ArtifactShareCommentClientIdConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorEnvelope"];
+            };
+        };
         /** @description artifact_share_version_unknown: the link has never had this version (it is later than the current one). */
         ArtifactShareVersionUnknown: {
             headers: {
@@ -7240,7 +7265,16 @@ export interface operations {
             };
             400: components["responses"]["ArtifactShareCommentInvalid"];
             404: components["responses"]["ArtifactShareCommentsNotFound"];
-            409: components["responses"]["ArtifactShareVersionUnknown"];
+            /** @description artifact_share_version_unknown when the link has never had this version; conflict when the caller already used this clientId for a different comment. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["ArtifactShareCommentTooLarge"];
             default: components["responses"]["Error"];
         };
     };
@@ -7273,6 +7307,7 @@ export interface operations {
             };
             400: components["responses"]["ArtifactShareCommentInvalid"];
             404: components["responses"]["ArtifactShareCommentsNotFound"];
+            413: components["responses"]["ArtifactShareCommentTooLarge"];
             default: components["responses"]["Error"];
         };
     };
@@ -7314,6 +7349,8 @@ export interface operations {
             };
             400: components["responses"]["ArtifactShareCommentInvalid"];
             404: components["responses"]["ArtifactShareCommentsNotFound"];
+            409: components["responses"]["ArtifactShareCommentClientIdConflict"];
+            413: components["responses"]["ArtifactShareCommentTooLarge"];
             default: components["responses"]["Error"];
         };
     };
@@ -7401,6 +7438,7 @@ export interface operations {
             400: components["responses"]["ArtifactShareCommentInvalid"];
             403: components["responses"]["ArtifactShareCommentForbidden"];
             404: components["responses"]["ArtifactShareCommentsNotFound"];
+            413: components["responses"]["ArtifactShareCommentTooLarge"];
             default: components["responses"]["Error"];
         };
     };
