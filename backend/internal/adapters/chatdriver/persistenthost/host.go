@@ -81,6 +81,10 @@ const (
 	// `/steer` command is. Its answer is never the turn's result: the turn
 	// ends with the answer of its last other prompt, success or failure.
 	ACPSteerKeepsTurnMetaKey = "ao.steerKeepsTurn"
+	// ACPChildSessionMetaKey marks a session/load of a subagent's own session,
+	// which AO opens beside the conversation's to follow the child's work. The
+	// host's session stays the conversation's, so a reattach resumes the parent.
+	ACPChildSessionMetaKey = "ao.childSession"
 	// ACPSteerTurnEndedDataKey is set in the error data of a steer prompt the
 	// host refused because the turn it was meant for had already ended. The
 	// agent never saw it, so the guidance can go as a new turn.

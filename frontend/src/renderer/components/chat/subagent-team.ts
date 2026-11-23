@@ -15,7 +15,12 @@
 import { fileChangeFiles, type ConversationActivity, type ConversationItem } from "../../types/conversation";
 
 /** Tool names a provider uses for "start a subagent". `Task` is Claude's older name. */
-const LAUNCH_TOOLS = new Set(["Agent", "Task"]);
+const LAUNCH_TOOLS = new Set([
+	"Agent",
+	"Task",
+	// Antigravity.
+	"invoke_subagent",
+]);
 
 /** The child's report back to its caller; its payload is the report, not a step. */
 const HANDBACK_TOOL = "SubagentHandback";

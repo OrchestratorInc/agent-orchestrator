@@ -47,11 +47,32 @@ func TestACPRelayRetainsAvailableCommandsForReconnect(t *testing.T) {
 		t.Fatalf("retained catalog = %s", got)
 	}
 
-	// A catalog for a session the host no longer owns must not be handed to the
-	// controller that reattaches to the live one.
+	// A catalog for a session the host does not own, such as a loaded subagent
+	// session, must not be handed to the controller that reattaches to the live
+	// one, nor replace the live one's.
 	update("other", "stale")
-	if got := relay.snapshot().AvailableCommands; len(got) != 0 {
-		t.Fatalf("foreign catalog leaked into snapshot: %s", got)
+	if got := string(relay.snapshot().AvailableCommands); got != `[{"name":"compact","description":"d"}]` {
+		t.Fatalf("foreign catalog replaced the live one: %s", got)
+	}
+}
+
+func TestACPRelayKeepsItsSessionAcrossAChildSessionLoad(t *testing.T) {
+	relay := newTestACPRelay(t)
+	provider := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}`+"\n"), 1)
+	relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, provider)+`,"result":{"sessionId":"live"}}`+"\n"), 1, true)
+	sessionResult := string(relay.snapshot().SessionResult)
+
+	load := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":2,"method":"session/load","params":{"sessionId":"child","cwd":"/tmp","mcpServers":[],"_meta":{"`+ACPChildSessionMetaKey+`":true}}}`+"\n"), 1)
+	relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, load)+`,"result":{"sessionId":"child"}}`+"\n"), 1, true)
+	if state := relay.snapshot(); state.SessionID != "live" || string(state.SessionResult) != sessionResult {
+		t.Fatalf("a child session load took the host's session: %+v", state)
+	}
+
+	// An unmarked load is the conversation's own, as before.
+	reload := relayClientFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":3,"method":"session/load","params":{"sessionId":"other","cwd":"/tmp","mcpServers":[]}}`+"\n"), 1)
+	relayProviderFrame(t, relay, []byte(`{"jsonrpc":"2.0","id":`+frameID(t, reload)+`,"result":{}}`+"\n"), 1, true)
+	if state := relay.snapshot(); state.SessionID != "other" {
+		t.Fatalf("session/load = %q, want other", state.SessionID)
 	}
 }
 

@@ -133,6 +133,13 @@ type conversation struct {
 	configOptions     []ports.ChatConfigOption
 	skills            []ports.ChatSkill
 	skillsKnown       bool
+	// childSessions follows subagents that run as sessions of their own, with
+	// the launch environment and workspace their sessions load with; children
+	// is what is known of them. See child_sessions.go.
+	childSessions *ChildSessions
+	childEnv      map[string]string
+	childCwd      string
+	children      *childSessionState
 	// compactAdvertised is whether the agent's own list, before HideCommand,
 	// named compact; start derives compaction from it, not from the shown skills.
 	compactAdvertised bool

@@ -135,6 +135,8 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 		// a stricter approval mode.
 		PermissionPolicy: permissionPolicy,
 		SteerPrompt:      &acpdriver.SteerPrompt{Supported: cliSteers},
+		// Subagents run as agy sessions of their own; see subagents.go.
+		ChildSessions: childSessions(agy.GeminiHome),
 		// run_command hands a command to the background once its
 		// WaitMsBeforeAsync passes, and the turn can end while it runs.
 		// Antigravity reports its exit later, then answers it in a cycle of its

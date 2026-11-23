@@ -328,3 +328,42 @@ describe("latestSubagentLine", () => {
 		expect(latestSubagentLine([edit])).toEqual({ kind: "edit", running: false, path: "page.tsx" });
 	});
 });
+
+// The shape the ACP driver records for Antigravity: agy's invoke_subagent tool call,
+// with the child's own session filed under it (backend agyacp/subagents.go).
+describe("Antigravity subagents", () => {
+	const agyLaunch: ConversationActivity = {
+		...launch("agy"),
+		activityKind: "mcp_tool",
+		summary: "Run invoke_subagent",
+		detail: {
+			providerToolName: "invoke_subagent",
+			background: true,
+			subagentType: "research",
+			input: { description: "Codebase Researcher", prompt: "Read a.txt and report its exact contents." },
+			output: "",
+		} as ConversationActivity["detail"],
+	};
+
+	it("groups the child's steps, messages and hand-back under the launch", () => {
+		const read = step("read", "tool-agy", { activityKind: "mcp_tool", summary: "File a.txt" });
+		const said = step("said", "tool-agy", {
+			activityKind: "mcp_tool",
+			summary: "Subagent response",
+			detail: { nestedAgent: true, text: "Reading it now." },
+		});
+		const report = handback("hb", "tool-agy", "alpha");
+		const { items, steps } = partitionSubagentSteps([agyLaunch, read, said, report]);
+
+		expect(isSubagentLaunch(agyLaunch)).toBe(true);
+		expect(items).toEqual([agyLaunch]);
+		expect(readSubagent(agyLaunch, steps.get("agy") ?? [], false)).toMatchObject({
+			title: "Codebase Researcher",
+			agentType: "research",
+			prompt: "Read a.txt and report its exact contents.",
+			state: "done",
+			report: "alpha",
+			steps: [read, said],
+		});
+	});
+});
