@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { textEdits, type TextEdit } from "./textDiff";
+import { describe, expect, it, vi } from "vitest";
+import { fallbackCharacters, textEdits, type TextEdit } from "./textDiff";
 
 // Plays edits into a field whose caret starts at the end, the way the page's
 // field sees them, and returns the text and whether the caret is back at the end.
@@ -68,5 +68,40 @@ describe("textEdits", () => {
 	it("replays autocorrect of the last word exactly", () => {
 		const edits = textEdits("i liek", "I like ");
 		expect(replay("i liek", edits)).toEqual({ text: "I like ", caretAtEnd: true });
+	});
+});
+
+// Engines without Intl.Segmenter (Hermes may lack it) split by this instead,
+// and must still count a joined emoji as the one character the page deletes.
+describe("fallbackCharacters", () => {
+	it("keeps each emoji sequence and accented letter whole", () => {
+		expect(fallbackCharacters("a👨‍👩‍👧‍👦b")).toEqual(["a", "👨‍👩‍👧‍👦", "b"]);
+		expect(fallbackCharacters("👍🏽!")).toEqual(["👍🏽", "!"]);
+		expect(fallbackCharacters("🇮🇳🇯🇵")).toEqual(["🇮🇳", "🇯🇵"]);
+		expect(fallbackCharacters("1️⃣x")).toEqual(["1️⃣", "x"]);
+		expect(fallbackCharacters("e\u0301t")).toEqual(["e\u0301", "t"]);
+		expect(fallbackCharacters("❤️")).toEqual(["❤️"]);
+	});
+
+	it("agrees with Intl.Segmenter on these", () => {
+		const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+		for (const text of ["a👨‍👩‍👧‍👦b", "👍🏽!", "🇮🇳🇯🇵", "1️⃣x", "e\u0301t", "plain text", "🏳️‍🌈"]) {
+			expect(fallbackCharacters(text)).toEqual(Array.from(segmenter.segment(text), (part) => part.segment));
+		}
+	});
+});
+
+describe("textEdits without Intl.Segmenter", () => {
+	it("deletes a joined emoji with one Backspace", async () => {
+		vi.resetModules();
+		vi.stubGlobal("Intl", { ...Intl, Segmenter: undefined });
+		try {
+			delete (globalThis.Intl as { Segmenter?: unknown }).Segmenter;
+			const { textEdits: fallbackEdits } = await import("./textDiff");
+			expect(fallbackEdits("hi 👨‍👩‍👧‍👦", "hi ")).toEqual([backspace]);
+		} finally {
+			vi.unstubAllGlobals();
+			vi.resetModules();
+		}
 	});
 });

@@ -6927,7 +6927,7 @@ describe("browser live typing", () => {
 			if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
 			if (method === "Page.createIsolatedWorld") return { executionContextId: ++page.worlds };
 			if (method === "Runtime.evaluate" && params?.contextId === page.worlds) return { result: { value: page.focus } };
-			if (method === "Runtime.evaluate") throw new Error("Cannot find context with specified id");
+			if (method === "Runtime.evaluate") throw new TypeError("Cannot find context with specified id");
 			return original(method, params);
 		});
 		return page;
@@ -7014,6 +7014,68 @@ describe("browser live typing", () => {
 		expect(returned.length).toBeGreaterThan(0);
 		for (const state of returned) expect(state.focusedEditable?.value).toBe("agent wrote");
 		await host.stopLiveStream("sess-1", 7);
+	});
+
+	// The desktop user may close the last tab while a phone watches.
+	it("keeps polling quietly with no tab open", async () => {
+		vi.useFakeTimers();
+		try {
+			const { debuggerSendCommand, host, invoke } = setupHost();
+			focusPage(debuggerSendCommand);
+			const { viewId } = await invoke("browser:ensure", "sess-1") as { viewId: string };
+			await host.startLiveStream("sess-1", 7, liveSink());
+			await invoke("browser:closeTab", { viewId, tabId: "t1" });
+			debuggerSendCommand.mockClear();
+			await vi.advanceTimersByTimeAsync(1500);
+			expect(debuggerSendCommand).not.toHaveBeenCalledWith("Runtime.evaluate", expect.anything());
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("lets profiles switch on a watched session with no tab open", async () => {
+		const profile: BrowserProfile = { id: "22222222-2222-4222-8222-222222222222", name: "Work", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+		const { host, invoke } = setupTabHost(fakeBrowserProfileStore(profile, { "worker-1": profile.id }));
+		const { viewId } = await invoke("browser:ensure", "worker-1") as { viewId: string };
+		await host.startLiveStream("worker-1", 7, liveSink());
+		await invoke("browser:closeTab", { viewId, tabId: "t1" });
+
+		await host.switchProfile(viewId, null).catch(() => undefined);
+		// A switch that never finished would refuse every later one.
+		await expect(host.switchProfile(viewId, profile.id)).resolves.toBeDefined();
+	});
+
+	it("drops an answer from a document that navigated away while it was asked", async () => {
+		const { debuggerSendCommand, host, webContentsListeners } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+
+		// The old document's answer is held until after the navigation.
+		let release!: () => void;
+		let asked = false;
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		const answer = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			const result = await answer(method, params);
+			if (method === "Runtime.evaluate") {
+				asked = true;
+				await held;
+			}
+			return result;
+		});
+		page.focus = JSON.stringify({ kind: "text", value: "old page", field: 1 });
+		const asking = host.handleRemoteInput("sess-1", { kind: "text", value: "y" });
+		await vi.waitFor(() => expect(asked).toBe(true));
+		const navigated = webContentsListeners.get("did-navigate") as unknown as (event: unknown, url: string) => void;
+		navigated({}, "https://example.com/next");
+		const afterNavigation = sink.state.mock.calls.length;
+		page.focus = "null";
+		release();
+		await asking;
+		await host.execute("sess-1", "tabs");
+		await vi.waitFor(() => expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human" })));
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: null }));
+		expect(JSON.stringify(sink.state.mock.calls.slice(afterNavigation))).not.toContain("old page");
 	});
 
 	it("notices focus the phone did not move while it watches", async () => {

@@ -87,7 +87,7 @@ describe("focus query", () => {
 	it("follows focus into shadow roots and same-origin frames, not other origins", () => {
 		expect(query({ tagName: "MY-FIELD", shadowRoot: { activeElement: { tagName: "INPUT", type: "email", value: "a@b" } } })).toEqual({ kind: "email", value: "a@b" });
 		expect(query({ tagName: "IFRAME", contentDocument: { activeElement: { tagName: "INPUT", type: "tel", value: "1" } } })).toEqual({ kind: "tel", value: "1" });
-		const crossOrigin = { tagName: "IFRAME", get contentDocument(): never { throw new Error("blocked"); } };
+		const crossOrigin = { tagName: "IFRAME", get contentDocument(): never { throw new DOMException("Blocked a frame with origin", "SecurityError"); } };
 		expect(query(crossOrigin)).toBeNull();
 	});
 });

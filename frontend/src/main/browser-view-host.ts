@@ -1106,11 +1106,12 @@ export function createBrowserViewHost(
     // back only once the page has said what its focused field now holds: the
     // agent may have typed into it, and the phone starts again from that value.
     if (session.live) {
-      if (session.agentBrowserCommands > 0) emitLiveState(session);
+      const shown = shownEntry(session);
+      if (session.agentBrowserCommands > 0 || !shown) emitShownLiveState(session);
       else {
         const live = session.live;
-        void queryFocus(activeEntry(session)).finally(() => {
-          if (session.live === live) emitLiveState(session);
+        void queryFocus(shown).finally(() => {
+          if (session.live === live) emitShownLiveState(session);
         });
       }
     }
@@ -3342,7 +3343,7 @@ export function createBrowserViewHost(
     }
 
     session.profileSwitching = true;
-    if (session.live) emitLiveState(session);
+    emitShownLiveState(session);
     session.profileSwitchTargetId = normalizedRequestedProfileId;
     const previousProfileId = session.profileId;
     const previousPartition = session.profilePartition;
@@ -3472,7 +3473,7 @@ export function createBrowserViewHost(
       throw error;
     } finally {
       session.profileSwitching = false;
-      if (session.live) emitLiveState(session);
+      emitShownLiveState(session);
       session.profileReplacing = false;
       session.profileSwitchTargetId = null;
     }
@@ -4220,6 +4221,12 @@ export function createBrowserViewHost(
 		};
 	}
 
+	// For updates outside a stream's own lifecycle, which may find every tab
+	// closed: there is then no page to describe until one opens.
+	function emitShownLiveState(session: BrowserSessionEntry): void {
+		if (session.live && shownEntry(session)) emitLiveState(session);
+	}
+
 	function emitLiveState(session: BrowserSessionEntry): BrowserLiveState {
 		const state = browserLiveState(session);
 		const key = JSON.stringify(state);
@@ -4303,10 +4310,13 @@ export function createBrowserViewHost(
 				clearInterval(timer);
 				return;
 			}
-			void queryFocus(activeEntry(session));
+			// No tab is open: ask again once one is.
+			const shown = shownEntry(session);
+			if (shown) void queryFocus(shown);
 		}, FOCUS_POLL_MS);
 		timer.unref?.();
-		void queryFocus(activeEntry(session));
+		const shown = shownEntry(session);
+		if (shown) void queryFocus(shown);
 	}
 
 	function detachLiveStream(session: BrowserSessionEntry): Promise<void> | undefined {
@@ -4364,7 +4374,8 @@ export function createBrowserViewHost(
 		assertRemoteWritable(session, scrollOnly);
 		await queueNativeOperation(session, () => dispatchRemoteInput(session, input, scrollOnly));
 		// A click or key may have moved focus, and typing changed the field.
-		if (!scrollOnly) await queryFocus(activeEntry(session));
+		const shown = shownEntry(session);
+		if (!scrollOnly && shown) await queryFocus(shown);
 	}
 
 	async function dispatchRemoteInput(session: BrowserSessionEntry, input: BrowserRemoteInput, scrollOnly: boolean): Promise<void> {
@@ -5311,6 +5322,11 @@ function emptyTabsState(viewId: string): BrowserTabsState {
 
 function emptyDevToolsState(viewId: string): BrowserDevToolsState {
   return { viewId, open: false, activeTabId: "", placement: "undocked" };
+}
+
+/** The active tab, or undefined once every tab has closed. */
+function shownEntry(session: BrowserSessionEntry): BrowserEntry | undefined {
+  return session.tabs.get(session.activeTabId);
 }
 
 function activeEntry(session: BrowserSessionEntry): BrowserEntry {
@@ -6366,6 +6382,7 @@ async function runFocusQuery(entry: BrowserEntry): Promise<void> {
         if (typeof world?.executionContextId !== "number") return;
         entry.focusWorld = { contextId: world.executionContextId, document: entry.documentGeneration };
       }
+      const queried = entry.documentGeneration;
       const reply = await debug.sendCommand("Runtime.evaluate", {
         expression: FOCUS_QUERY_SOURCE,
         contextId: entry.focusWorld!.contextId,
@@ -6378,6 +6395,8 @@ async function runFocusQuery(entry: BrowserEntry): Promise<void> {
       }
       const focused = parseFocusPayload(value);
       if (focused === undefined) return;
+      // An answer from a document that has since navigated away is stale.
+      if (entry.documentGeneration !== queried) return;
       // The page numbers fields per document; the tab and document make it unique.
       if (focused?.field) focused.field = `${entry.tabId}:${entry.documentGeneration}:${focused.field}`;
       if (JSON.stringify(focused) === JSON.stringify(entry.focusedEditable ?? null)) return;
