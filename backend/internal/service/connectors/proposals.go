@@ -117,7 +117,12 @@ func (s *Service) Propose(ctx context.Context, in ProposalInput) (Proposal, erro
 			continue
 		}
 		if old.SessionID == in.SessionID && old.Key == rec.Key {
-			return *old, nil
+			if old.Transport == rec.Transport && old.URL == rec.URL && old.Command == rec.Command && slices.Equal(old.Args, rec.Args) &&
+				old.Auth == rec.Auth && slices.Equal(old.EnvKeys, sortedKeys(rec.Env)) && slices.Equal(old.HeaderKeys, sortedKeys(rec.Headers)) {
+				return *old, nil
+			}
+			old.State = ProposalExpired
+			continue
 		}
 		pending++
 	}

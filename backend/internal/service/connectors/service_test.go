@@ -147,7 +147,10 @@ func TestAnEditKeepsTheHiddenQueryAndDropsAHeaderThatIsNoLongerTheSignIn(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	shown := withoutQuery(created.URL)
+	shown := MaskedURL(created.URL)
+	if shown != "https://docs.example.com/mcp?api_key=***" {
+		t.Fatalf("shown address = %q", shown)
+	}
 	if _, err := svc.Update(ctx, created.ID, Input{Name: "docs", Transport: TransportHTTP, URL: shown, Auth: AuthHeader, Headers: map[string]string{"Authorization": "", "X-Org": ""}, ProjectID: "p1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -167,5 +170,75 @@ func TestAnEditKeepsTheHiddenQueryAndDropsAHeaderThatIsNoLongerTheSignIn(t *test
 	}
 	if records, _ = readFile(svc.path); records[0].URL != "https://docs.example.com/mcp?other=1" {
 		t.Fatalf("a new address was not saved: %+v", records[0])
+	}
+}
+
+func TestAnEditOfTheAddressKeepsOrRemovesItsHiddenValuesByName(t *testing.T) {
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "docs", Transport: TransportHTTP, URL: "https://docs.example.com/mcp?api_key=secret&team=7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := func(address string) (string, error) {
+		_, err := svc.Update(ctx, created.ID, Input{Name: "docs", Transport: TransportHTTP, URL: address})
+		records, _ := readFile(svc.path)
+		return records[0].URL, err
+	}
+	if got, err := edit("https://docs.example.com/mcp/v2?api_key=***&team=***"); err != nil || got != "https://docs.example.com/mcp/v2?api_key=secret&team=7" {
+		t.Fatalf("a new path = %q, %v", got, err)
+	}
+	if got, err := edit("https://docs.example.com/mcp/v2?team=8&api_key=***"); err != nil || got != "https://docs.example.com/mcp/v2?team=8&api_key=secret" {
+		t.Fatalf("one new value = %q, %v", got, err)
+	}
+	for _, address := range []string{"https://other.example.com/mcp?api_key=***", "https://docs.example.com/mcp?token=***"} {
+		if got, err := edit(address); errCode(err) != "INVALID_CONNECTOR_URL" || !strings.Contains(got, "api_key=secret") {
+			t.Fatalf("a hidden value for %s = %q, %v", address, got, err)
+		}
+	}
+	if got, err := edit("https://docs.example.com/mcp/v2"); err != nil || got != "https://docs.example.com/mcp/v2" {
+		t.Fatalf("the query removed = %q, %v", got, err)
+	}
+	if _, err := svc.Create(ctx, Input{Name: "typed", Transport: TransportHTTP, URL: "https://docs.example.com/mcp?api_key=***"}); errCode(err) != "INVALID_CONNECTOR_URL" {
+		t.Fatalf("a new connector with a hidden value = %v", err)
+	}
+}
+
+func TestTheKeyOfAConnectorDoesNotChange(t *testing.T) {
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	created, err := svc.Create(ctx, httpInput("Linear"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed := httpInput("Linear Work")
+	if got, err := svc.Update(ctx, created.ID, renamed); err != nil || got.Key != "linear" || got.Name != "Linear Work" {
+		t.Fatalf("a new name = %+v, %v", got, err)
+	}
+	renamed.Key = "linear-work"
+	if _, err := svc.Update(ctx, created.ID, renamed); errCode(err) != "CONNECTOR_KEY_FIXED" {
+		t.Fatalf("a new key = %v", err)
+	}
+}
+
+func TestAResultIsNotSavedOnATargetThatWasNotProbed(t *testing.T) {
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	created, err := svc.Create(ctx, httpInput("docs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probed, _ := svc.snapshot(created.ID)
+	moved := httpInput("docs")
+	moved.URL = "https://new.example.com/mcp"
+	if _, err := svc.Update(ctx, created.ID, moved); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.setStatusOf(created.ID, &probed, StatusConnected, "", "", []string{"old-tool"}); err != nil || got.Status != StatusUnchecked || len(got.Tools) != 0 {
+		t.Fatalf("a result for the old address = %+v, %v", got, err)
+	}
+	current, _ := svc.snapshot(created.ID)
+	if got, err := svc.setStatusOf(created.ID, &current, StatusConnected, "", "", []string{"new-tool"}); err != nil || got.Status != StatusConnected {
+		t.Fatalf("a result for the current address = %+v, %v", got, err)
 	}
 }

@@ -29,12 +29,12 @@ const stateKeys = {
 	added: "chat.connectors.added",
 } as const;
 
-export function ChatConnectorsMenu({ sessionId, servers }: { sessionId: string; servers: readonly McpServer[] }) {
+export function ChatConnectorsMenu({ sessionId, hostId, servers }: { sessionId: string; hostId?: string; servers: readonly McpServer[] }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const query = useQuery({
-		queryKey: sessionConnectorsQueryKey(sessionId),
-		queryFn: () => connectorsApi.forSession(sessionId),
+		queryKey: sessionConnectorsQueryKey(sessionId, hostId),
+		queryFn: () => connectorsApi.forSession(sessionId, hostId),
 		refetchInterval: open ? 3000 : false,
 		staleTime: 30_000,
 	});

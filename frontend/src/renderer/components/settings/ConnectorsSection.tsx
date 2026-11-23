@@ -163,7 +163,7 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 			{editing ? (
 				<ConnectorDialog
 					connector={editing === "new" ? undefined : editing}
-					taken={connectors.map((connector) => connector.key)}
+					taken={connectors.flatMap((connector) => [connector.key, connector.presetId ?? ""])}
 					onClose={() => setEditing(null)}
 					onSaved={(saved) => {
 						setEditing(null);

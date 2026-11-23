@@ -141,7 +141,7 @@ export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 						{connector ? null : (
 							<>
 								<div role="group" aria-label={t("settings.connectors.dialog.catalog")} className="flex flex-wrap gap-1.5">
-									{connectorPresets.filter((preset) => !taken.includes(preset.id)).map((preset) => (
+									{connectorPresets.filter((preset) => !taken.includes(preset.id) && !taken.includes(connectorKeyFrom(preset.name))).map((preset) => (
 										<Button key={preset.id} type="button" variant="secondary" size="xs" shape="pill" aria-pressed={presetId === preset.id} onClick={() => applyPreset(preset)}>
 											{preset.name}
 										</Button>
@@ -227,7 +227,7 @@ export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 									</Field>
 								)}
 								<Field id={`${ids}-key`} label={t("settings.connectors.dialog.name")} hint={t("settings.connectors.dialog.nameHint")}>
-									<Input id={`${ids}-key`} className="font-mono text-xs" maxLength={32} value={shownKey} onChange={(event) => { setKey(event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32)); setKeyEdited(true); }} />
+									<Input id={`${ids}-key`} className="font-mono text-xs" maxLength={32} value={shownKey} disabled={Boolean(connector)} onChange={(event) => { setKey(event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32)); setKeyEdited(true); }} />
 								</Field>
 								{mode === "url" ? (
 									<>

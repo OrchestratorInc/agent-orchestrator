@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"maps"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -136,7 +135,7 @@ func (s *Service) ImportCandidates(ctx context.Context) ([]ImportCandidate, erro
 		seen[id] = true
 		out = append(out, ImportCandidate{
 			ID: id, Agent: server.agent, Source: server.path, Key: in.Key, Transport: in.Transport,
-			URL: withoutQuery(in.URL), Command: in.Command, Args: slices.Clone(in.Args),
+			URL: MaskedURL(in.URL), Command: in.Command, Args: slices.Clone(in.Args),
 			EnvKeys: slices.Sorted(maps.Keys(in.Env)), HeaderKeys: slices.Sorted(maps.Keys(in.Headers)),
 			NeedsValue: needs, ProjectID: server.projectID, Exists: s.index(in.Key) >= 0,
 		})
@@ -302,15 +301,6 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 	}
 	slices.Sort(needs)
 	return in, slices.Compact(needs), true
-}
-
-func withoutQuery(raw string) string {
-	target, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	target.RawQuery, target.Fragment, target.User = "", "", nil
-	return target.String()
 }
 
 func readSource(path string) []byte {

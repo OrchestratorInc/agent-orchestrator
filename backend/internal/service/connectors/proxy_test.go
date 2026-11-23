@@ -103,8 +103,17 @@ func TestASessionCallsAToolThroughTheProxy(t *testing.T) {
 	if text, ok := result.Content[0].(*mcp.TextContent); !ok || text.Text != "hello" {
 		t.Fatalf("content = %+v", result.Content[0])
 	}
+	if _, err := svc.setStatus("fake", StatusUnavailable, "reach", "502 Bad Gateway"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"text": "again"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := svc.Get(ctx, "fake"); got.Status != StatusConnected || len(got.Tools) == 0 {
+		t.Fatalf("after an answered call = %+v", got)
+	}
 	used, err := svc.SessionConnectors(ctx, "ao-12")
-	if err != nil || len(used) != 2 || used[0].Key != "fake" || used[0].Calls != 1 || used[0].LastTool != "echo" || used[0].Status != StatusConnected ||
+	if err != nil || len(used) != 2 || used[0].Key != "fake" || used[0].Calls != 2 || used[0].LastTool != "echo" || used[0].Status != StatusConnected ||
 		used[0].Transport != TransportHTTP || used[1].Transport != TransportStdio {
 		t.Fatalf("session connectors = %+v, %v", used, err)
 	}

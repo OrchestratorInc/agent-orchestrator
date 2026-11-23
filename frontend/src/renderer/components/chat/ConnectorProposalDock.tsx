@@ -16,15 +16,15 @@ const authKeys = {
 	none: "settings.connectors.dialog.authNone",
 } as const;
 
-export function ConnectorProposalDock({ sessionId, asked, waiting }: { sessionId: string; asked: boolean; waiting: boolean }) {
+export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { sessionId: string; hostId?: string; asked: boolean; waiting: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [values, setValues] = useState<Record<string, string>>({});
 	const [scope, setScope] = useState<string | undefined>(undefined);
 	const [signIn, setSignIn] = useState<Connector | null>(null);
 	const query = useQuery({
-		queryKey: sessionProposalsQueryKey(sessionId),
-		queryFn: () => connectorsApi.sessionProposals(sessionId),
+		queryKey: sessionProposalsQueryKey(sessionId, hostId),
+		queryFn: () => connectorsApi.sessionProposals(sessionId, hostId),
 		enabled: asked,
 		refetchInterval: (state) => (waiting || (state.state.data?.length ?? 0) > 0 ? 2500 : false),
 	});
@@ -32,21 +32,21 @@ export function ConnectorProposalDock({ sessionId, asked, waiting }: { sessionId
 	const settle = () => {
 		setValues({});
 		setScope(undefined);
-		void queryClient.invalidateQueries({ queryKey: sessionProposalsQueryKey(sessionId) });
+		void queryClient.invalidateQueries({ queryKey: sessionProposalsQueryKey(sessionId, hostId) });
 	};
 	const approve = useMutation({
 		mutationFn: (pending: ConnectorProposal) => connectorsApi.approveProposal(pending.id, {
 			projectId: scope ?? pending.projectId ?? ALL_PROJECTS,
 			values,
-		}),
+		}, hostId),
 		onSuccess: (connector) => {
 			settle();
 			void queryClient.invalidateQueries({ queryKey: connectorsQueryKey });
 			if (needsSignIn(connector)) setSignIn(connector);
 		},
 	});
-	const decline = useMutation({ mutationFn: (pending: ConnectorProposal) => connectorsApi.declineProposal(pending.id), onSuccess: settle });
-	const signInDialog = signIn ? <ConnectorSignInDialog connector={signIn} onClose={() => setSignIn(null)} /> : null;
+	const decline = useMutation({ mutationFn: (pending: ConnectorProposal) => connectorsApi.declineProposal(pending.id, hostId), onSuccess: settle });
+	const signInDialog = signIn ? <ConnectorSignInDialog connector={signIn} hostId={hostId} onClose={() => setSignIn(null)} /> : null;
 	if (!proposal) return signInDialog;
 
 	const needed = [...proposal.envKeys, ...proposal.headerKeys];

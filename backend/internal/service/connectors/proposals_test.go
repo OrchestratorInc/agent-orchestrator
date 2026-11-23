@@ -35,15 +35,25 @@ func TestAProposalAddsNothingUntilTheUserApproves(t *testing.T) {
 	if err != nil || again.ID != proposal.ID {
 		t.Fatalf("the same request made a second proposal: %+v, %v", again, err)
 	}
+	fixed, err := svc.Propose(ctx, ProposalInput{SessionID: "ao-12", Name: "Sentry", Transport: TransportHTTP, URL: "https://mcp.sentry.dev/v2/mcp"})
+	if err != nil || fixed.ID == proposal.ID || fixed.URL != "https://mcp.sentry.dev/v2/mcp" {
+		t.Fatalf("a corrected request = %+v, %v", fixed, err)
+	}
+	if got := svc.SessionProposals(ctx, "ao-12"); len(got) != 1 || got[0].ID != fixed.ID {
+		t.Fatalf("session proposals after a correction = %+v", got)
+	}
+	if _, _, err := svc.ApproveProposal(ctx, proposal.ID, nil, nil); errCode(err) != "CONNECTOR_PROPOSAL_ANSWERED" {
+		t.Fatalf("approval of the replaced request = %v", err)
+	}
 	if got := svc.SessionProposals(ctx, "ao-12"); len(got) != 1 || len(svc.SessionProposals(ctx, "ao-13")) != 0 {
 		t.Fatalf("session proposals = %+v", got)
 	}
 	all := ""
-	approved, created, err := svc.ApproveProposal(ctx, proposal.ID, &all, nil)
+	approved, created, err := svc.ApproveProposal(ctx, fixed.ID, &all, nil)
 	if err != nil || approved.State != ProposalApproved || approved.ConnectorKey != "sentry" || created.ProjectID != "" || created.Auth != AuthOAuth {
 		t.Fatalf("approve = %+v, %+v, %v", approved, created, err)
 	}
-	if _, _, err := svc.ApproveProposal(ctx, proposal.ID, nil, nil); err == nil {
+	if _, _, err := svc.ApproveProposal(ctx, fixed.ID, nil, nil); err == nil {
 		t.Fatal("an answered proposal was approved again")
 	}
 	if _, err := svc.Propose(ctx, ProposalInput{SessionID: "ao-12", Name: "Sentry", Transport: TransportHTTP, URL: "https://mcp.sentry.dev/mcp"}); err == nil {

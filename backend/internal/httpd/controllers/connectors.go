@@ -501,7 +501,7 @@ func connectorInput(req *ConnectorRequest) connectors.Input {
 func connectorResponse(c *connectors.Connector) ConnectorResponse {
 	out := ConnectorResponse{
 		ID: c.ID, Key: c.Key, Name: c.Name, PresetID: c.PresetID, Transport: string(c.Transport),
-		URL: withoutQuery(c.URL), Command: c.Command, Args: nonNil(c.Args), EnvKeys: nonNil(c.EnvKeys), HeaderKeys: nonNil(c.HeaderKeys),
+		URL: connectors.MaskedURL(c.URL), Command: c.Command, Args: nonNil(c.Args), EnvKeys: nonNil(c.EnvKeys), HeaderKeys: nonNil(c.HeaderKeys),
 		Auth: string(c.Auth), OAuthClientID: c.OwnClientID, SignedIn: c.SignedIn,
 		Enabled: c.Enabled, Status: string(c.Status), Tools: nonNil(c.Tools),
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
@@ -516,15 +516,6 @@ func connectorResponse(c *connectors.Connector) ConnectorResponse {
 		out.CheckedAt = &c.CheckedAt
 	}
 	return out
-}
-
-func withoutQuery(raw string) string {
-	target, err := url.Parse(raw)
-	if err != nil || raw == "" {
-		return raw
-	}
-	target.RawQuery = ""
-	return target.String()
 }
 
 func nonNil(values []string) []string {

@@ -85,7 +85,7 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 	if len(byKey) != 5 || byKey["old"].ID != "" || byKey["ao"].ID != "" {
 		t.Fatalf("candidates = %+v", candidates)
 	}
-	if got := byKey["linear"]; got.URL != "https://mcp.linear.app/mcp" || got.Transport != TransportHTTP || len(got.NeedsValue) != 0 {
+	if got := byKey["linear"]; got.URL != "https://mcp.linear.app/mcp?team=***" || got.Transport != TransportHTTP || len(got.NeedsValue) != 0 {
 		t.Errorf("linear = %+v", got)
 	}
 	if got := byKey["files"]; !slices.Equal(got.NeedsValue, []string{"TOKEN"}) || !slices.Equal(got.EnvKeys, []string{"ROOT", "TOKEN"}) {

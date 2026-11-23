@@ -436,3 +436,29 @@ func TestATokenIsNotSavedOnAnAddressTheSignInDidNotStartFor(t *testing.T) {
 		t.Fatalf("connector = %+v", got)
 	}
 }
+
+func TestARenewalOfAReplacedSignInIsNotSaved(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	created := signInFake(t, svc, fake, Input{Name: "fake"})
+	svc.mu.Lock()
+	svc.records[0].OAuth.Expiry = svc.now().Add(-time.Hour)
+	delete(svc.sources, created.ID)
+	svc.mu.Unlock()
+	old := svc.tokenSource(created.ID)
+	svc.mu.Lock()
+	next := *svc.records[0].OAuth
+	next.AccessToken, next.RefreshToken, next.Expiry = "access-new", "refresh-new", svc.now().Add(time.Hour)
+	svc.records[0].OAuth = &next
+	delete(svc.sources, created.ID)
+	svc.mu.Unlock()
+	if svc.tokenSource(created.ID) == old {
+		t.Fatal("the new sign-in did not get its own source")
+	}
+	if _, err := old.Token(); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.records[0].OAuth; got.AccessToken != "access-new" || got.RefreshToken != "refresh-new" {
+		t.Fatalf("the late renewal replaced the new sign-in: %+v", got)
+	}
+}

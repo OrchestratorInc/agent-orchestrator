@@ -3025,7 +3025,7 @@ type ConnectorRequest struct {
 	Name      string            `json:"name,omitempty" maxLength:"64" description:"Display name."`
 	PresetID  string            `json:"presetId,omitempty" description:"Catalog entry this connector came from."`
 	Transport string            `json:"transport,omitempty" enum:"http,stdio" description:"http for a server URL, stdio for a local command."`
-	URL       string            `json:"url,omitempty" maxLength:"2048" description:"Server URL. https, or http on this computer."`
+	URL       string            `json:"url,omitempty" maxLength:"2048" description:"Server URL. https, or http on this computer. A query value of *** keeps the stored value of that name."`
 	Command   string            `json:"command,omitempty" description:"Local command. Loopback callers only."`
 	Args      []string          `json:"args,omitempty" description:"Arguments of the local command."`
 	Env       map[string]string `json:"env,omitempty" description:"Environment values of the local command. An empty value keeps the stored one."`
@@ -3051,7 +3051,7 @@ type ConnectorResponse struct {
 	Name          string                 `json:"name"`
 	PresetID      string                 `json:"presetId,omitempty"`
 	Transport     string                 `json:"transport" enum:"http,stdio"`
-	URL           string                 `json:"url,omitempty" description:"Server URL without its query string."`
+	URL           string                 `json:"url,omitempty" description:"Server URL. Each value of its query string reads ***."`
 	Command       string                 `json:"command,omitempty"`
 	Args          []string               `json:"args"`
 	EnvKeys       []string               `json:"envKeys" description:"Names of the stored environment values."`
@@ -3109,7 +3109,7 @@ type ConnectorImportCandidateResponse struct {
 	Source     string   `json:"source" description:"File that holds the definition."`
 	Key        string   `json:"key"`
 	Transport  string   `json:"transport" enum:"http,stdio"`
-	URL        string   `json:"url,omitempty" description:"Server address without its query string."`
+	URL        string   `json:"url,omitempty" description:"Server address. Each value of its query string reads ***."`
 	Command    string   `json:"command,omitempty"`
 	Args       []string `json:"args,omitempty"`
 	EnvKeys    []string `json:"envKeys,omitempty"`

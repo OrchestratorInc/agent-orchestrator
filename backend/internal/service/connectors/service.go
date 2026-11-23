@@ -21,6 +21,7 @@ import (
 )
 
 const (
+	hiddenValue    = "***"
 	maxNameBytes   = 64
 	maxURLBytes    = 2048
 	maxValueBytes  = 8192
@@ -152,12 +153,13 @@ func (s *Service) update(ref string, in Input) (updated Connector, retargeted st
 		return Connector{}, "", errNotFound()
 	}
 	old := s.records[i]
+	if key := strings.TrimSpace(in.Key); key != "" && key != old.Key {
+		return Connector{}, "", invalid("CONNECTOR_KEY_FIXED", "The name that starts each tool cannot change. Remove the connector and add it again.")
+	}
+	in.Key = old.Key
 	rec, err := normalize(in, old)
 	if err != nil {
 		return Connector{}, "", err
-	}
-	if s.keyTaken(rec.Key, old.ID) {
-		return Connector{}, "", errKeyExists(rec.Key)
 	}
 	rec.ID, rec.CreatedAt, rec.UpdatedAt = old.ID, old.CreatedAt, s.now().UTC()
 	rec.Enabled = old.Enabled
@@ -237,7 +239,11 @@ func (s *Service) snapshot(ref string) (record, error) {
 	return s.records[i], nil
 }
 
-func (s *Service) setStatus(id string, status Status, step, detail string, tools []string) (Connector, error) {
+func (s *Service) setStatus(id string, status Status, step, detail string) (Connector, error) {
+	return s.setStatusOf(id, nil, status, step, detail, nil)
+}
+
+func (s *Service) setStatusOf(id string, probed *record, status Status, step, detail string, tools []string) (Connector, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.load(); err != nil {
@@ -246,6 +252,9 @@ func (s *Service) setStatus(id string, status Status, step, detail string, tools
 	i := s.index(id)
 	if i < 0 {
 		return Connector{}, errNotFound()
+	}
+	if probed != nil && !sameTarget(s.records[i], *probed) {
+		return s.records[i].public(), nil
 	}
 	if len(detail) > maxErrorBytes {
 		detail = strings.ToValidUTF8(detail[:maxErrorBytes], "")
@@ -337,9 +346,9 @@ func normalize(in Input, old record) (record, error) {
 }
 
 func normalizeHTTP(in Input, old, rec record) (record, error) {
-	raw := strings.TrimSpace(in.URL)
-	if old.URL != "" && raw == withoutQuery(old.URL) {
-		raw = old.URL
+	raw, err := restoreQuery(strings.TrimSpace(in.URL), old.URL)
+	if err != nil {
+		return record{}, err
 	}
 	target, err := url.Parse(raw)
 	if err != nil || len(raw) > maxURLBytes || target.Host == "" || target.User != nil ||
@@ -417,6 +426,51 @@ func mergeSecrets(old, in map[string]string, name *regexp.Regexp) (map[string]st
 		}
 	}
 	return out, nil
+}
+
+// MaskedURL returns raw with each value of its query hidden; the names stay.
+func MaskedURL(raw string) string {
+	target, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	target.Fragment, target.User = "", nil
+	if target.RawQuery != "" {
+		parts := strings.Split(target.RawQuery, "&")
+		for i, part := range parts {
+			name, _, _ := strings.Cut(part, "=")
+			parts[i] = name + "=" + hiddenValue
+		}
+		target.RawQuery = strings.Join(parts, "&")
+	}
+	return target.String()
+}
+
+func restoreQuery(raw, old string) (string, error) {
+	target, _ := url.Parse(raw)
+	if target == nil || !strings.Contains(target.RawQuery, "="+hiddenValue) {
+		return raw, nil
+	}
+	saved := map[string][]string{}
+	if prior, err := url.Parse(old); err == nil && old != "" && prior.Host == target.Host {
+		for _, part := range strings.Split(prior.RawQuery, "&") {
+			name, value, _ := strings.Cut(part, "=")
+			saved[name] = append(saved[name], value)
+		}
+	}
+	parts := strings.Split(target.RawQuery, "&")
+	for i, part := range parts {
+		name, value, _ := strings.Cut(part, "=")
+		if value != hiddenValue {
+			continue
+		}
+		if len(saved[name]) == 0 {
+			return "", invalid("INVALID_CONNECTOR_URL", "Type the value of "+name+" in the address again")
+		}
+		parts[i], saved[name] = name+"="+saved[name][0], saved[name][1:]
+	}
+	target.RawQuery = strings.Join(parts, "&")
+	return target.String(), nil
 }
 
 func safeError(err error, address string) string {

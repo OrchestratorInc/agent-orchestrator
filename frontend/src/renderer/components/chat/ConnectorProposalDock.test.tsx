@@ -3,9 +3,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
+import * as hostClients from "../../lib/host-clients";
 import { ConnectorProposalDock } from "./ConnectorProposalDock";
 
-function renderDock(props: { asked: boolean; waiting: boolean }) {
+function renderDock(props: { asked: boolean; waiting: boolean; hostId?: string }) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<QueryClientProvider client={client}>
@@ -38,6 +39,21 @@ describe("ConnectorProposalDock", () => {
 		const { container } = renderDock({ asked: false, waiting: false });
 		expect(get).not.toHaveBeenCalled();
 		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("asks and answers the machine that runs the chat", async () => {
+		const local = vi.spyOn(apiClient, "GET");
+		const remote = {
+			GET: vi.fn(async () => ({ data: { proposals: [sentry] } })),
+			POST: vi.fn(async () => ({ data: {} })),
+		};
+		const pick = vi.spyOn(hostClients, "clientForSessionHost").mockReturnValue(remote as never);
+		renderDock({ asked: true, waiting: true, hostId: "air" });
+		await screen.findByRole("group", { name: "Connector request" });
+		fireEvent.click(screen.getByRole("button", { name: "Decline" }));
+		await waitFor(() => expect(remote.POST).toHaveBeenCalledWith("/api/v1/connectors/proposals/{proposalId}/decline", { params: { path: { proposalId: "p1" } } }));
+		expect(pick).toHaveBeenCalledWith("air");
+		expect(local).not.toHaveBeenCalled();
 	});
 
 	it("shows what would be added, approves it for the chosen projects and starts the sign-in", async () => {

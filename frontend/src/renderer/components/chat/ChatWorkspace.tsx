@@ -1886,7 +1886,7 @@ function ChatWorkspaceContent({
 					afterPicker={(
 						<>
 							{quotaSign}
-							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} servers={stableMcpServers ?? NO_MCP_SERVERS} /> : null}
+							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} hostId={activeRemoteHostId} servers={stableMcpServers ?? NO_MCP_SERVERS} /> : null}
 						</>
 					)}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
@@ -2461,7 +2461,7 @@ function ChatWorkspaceContent({
 											{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 										</h1>
 									) : null}
-									{uiSessionId ? <ConnectorProposalDock sessionId={uiSessionId} asked={connectorAsk.asked} waiting={connectorAsk.waiting} /> : null}
+									{uiSessionId ? <ConnectorProposalDock sessionId={uiSessionId} hostId={activeRemoteHostId} asked={connectorAsk.asked} waiting={connectorAsk.waiting} /> : null}
 									<McpServerBanner
 										key={draftScopeKey}
 										sessionId={uiSessionId}

@@ -147,6 +147,10 @@ func (s *Service) SessionConnectors(_ context.Context, sessionID string) ([]Sess
 // ServeProxy passes one request of a session to a connector's server and adds the connector's sign-in.
 func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, key string) {
 	rec, problem := s.admit(r, sessionID, key, TransportHTTP)
+	if rec == nil {
+		http.Error(w, problem, http.StatusUnauthorized)
+		return
+	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxProxyBody+1))
 	if err != nil || len(body) > maxProxyBody {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -161,10 +165,6 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 	}
 	_ = json.Unmarshal(body, &call)
 	if problem != "" {
-		if rec == nil {
-			http.Error(w, problem, http.StatusUnauthorized)
-			return
-		}
 		writeRPCError(w, call.ID, problem)
 		return
 	}
@@ -215,8 +215,8 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 				resp.Body, resp.ContentLength = io.NopCloser(bytes.NewReader(answer)), int64(len(answer))
 			case resp.StatusCode >= http.StatusInternalServerError:
 				s.observe(rec.ID, StatusUnavailable, "reach", resp.Status)
-			case resp.StatusCode < http.StatusMultipleChoices && (call.Method == "initialize" || call.Method == "tools/list"):
-				s.observe(rec.ID, StatusConnected, "", "")
+			case resp.StatusCode < http.StatusMultipleChoices:
+				s.answered(rec.ID, call.Method == "initialize" || call.Method == "tools/list")
 			}
 			return nil
 		},
@@ -302,13 +302,23 @@ func (s *Service) count(sessionID, key, method, tool string) {
 	use.last[key] = tool
 }
 
+func (s *Service) answered(id string, listed bool) {
+	s.mu.Lock()
+	i := s.index(id)
+	stale := i >= 0 && (s.records[i].Status == StatusUnavailable || (listed && s.records[i].Status != StatusConnected))
+	s.mu.Unlock()
+	if stale {
+		_, _ = s.setStatus(id, StatusConnected, "", "")
+	}
+}
+
 func (s *Service) observe(id string, status Status, step, detail string) {
 	s.mu.Lock()
 	i := s.index(id)
 	same := i < 0 || s.records[i].Status == status
 	s.mu.Unlock()
 	if !same {
-		_, _ = s.setStatus(id, status, step, detail, nil)
+		_, _ = s.setStatus(id, status, step, detail)
 	}
 }
 

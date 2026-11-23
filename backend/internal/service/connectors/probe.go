@@ -29,11 +29,11 @@ func (s *Service) Test(ctx context.Context, ref string) (Connector, error) {
 	tools, step, err := s.probe(ctx, &rec)
 	switch {
 	case err == nil:
-		return s.setStatus(rec.ID, StatusConnected, "", "", tools)
+		return s.setStatusOf(rec.ID, &rec, StatusConnected, "", "", tools)
 	case step == "sign-in":
-		return s.setStatus(rec.ID, StatusNeedsSignIn, step, safeError(err, rec.URL), nil)
+		return s.setStatusOf(rec.ID, &rec, StatusNeedsSignIn, step, safeError(err, rec.URL), nil)
 	default:
-		return s.setStatus(rec.ID, StatusUnavailable, step, safeError(err, rec.URL), nil)
+		return s.setStatusOf(rec.ID, &rec, StatusUnavailable, step, safeError(err, rec.URL), nil)
 	}
 }
 

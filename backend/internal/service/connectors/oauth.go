@@ -72,11 +72,11 @@ func (s *Service) StartSignIn(ctx context.Context, ref string) (string, error) {
 	}
 	req, status, header, err := s.challenge(ctx, &rec)
 	if err != nil {
-		_, _ = s.setStatus(rec.ID, StatusUnavailable, "reach", safeError(err, rec.URL), nil)
+		_, _ = s.setStatus(rec.ID, StatusUnavailable, "reach", safeError(err, rec.URL))
 		return "", apierr.Unavailable("CONNECTOR_UNREACHABLE", "The server did not answer: "+safeError(err, rec.URL))
 	}
 	if status == http.StatusForbidden && !asksForSignIn(status, header) {
-		_, _ = s.setStatus(rec.ID, StatusUnavailable, "initialize", "the server refused the request and asked for no sign-in", nil)
+		_, _ = s.setStatus(rec.ID, StatusUnavailable, "initialize", "the server refused the request and asked for no sign-in")
 		return "", apierr.Unavailable("CONNECTOR_REFUSED", "The server refused the request and asked for no sign-in")
 	}
 	if !asksForSignIn(status, header) {
@@ -86,7 +86,7 @@ func (s *Service) StartSignIn(ctx context.Context, ref string) (string, error) {
 		}
 		return "", err
 	}
-	if _, err := s.setStatus(rec.ID, StatusNeedsSignIn, "", "", nil); err != nil {
+	if _, err := s.setStatus(rec.ID, StatusNeedsSignIn, "", ""); err != nil {
 		return "", err
 	}
 	refusal := &http.Response{StatusCode: status, Header: header, Body: http.NoBody, Request: req}
@@ -272,7 +272,7 @@ func (s *Service) endSignIn(pending *signIn, err error) {
 	s.mu.Unlock()
 	if err != nil {
 		pending.err = err
-		_, _ = s.setStatus(pending.connectorID, StatusNeedsSignIn, "sign-in", safeError(err, ""), nil)
+		_, _ = s.setStatus(pending.connectorID, StatusNeedsSignIn, "sign-in", safeError(err, ""))
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 		_, _ = s.Test(ctx, pending.connectorID)
@@ -363,7 +363,7 @@ func (t *savingSource) Token() (*oauth2.Token, error) {
 		return token, nil
 	}
 	i := t.service.index(t.id)
-	if i < 0 || t.service.records[i].OAuth == nil {
+	if i < 0 || t.service.records[i].OAuth == nil || t.service.sources[t.id] != oauth2.TokenSource(t) {
 		return token, nil
 	}
 	next := slices.Clone(t.service.records)

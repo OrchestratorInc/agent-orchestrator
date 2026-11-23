@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { apiErrorException } from "../lib/api-error-exception";
+import { clientForSessionHost } from "../lib/host-clients";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 
 export type Connector = components["schemas"]["ConnectorResponse"];
@@ -13,8 +14,8 @@ export type ConnectorProposal = components["schemas"]["ConnectorProposalResponse
 
 export const connectorsQueryKey = ["connectors"] as const;
 export const connectorImportQueryKey = ["connectors", "import"] as const;
-export const sessionConnectorsQueryKey = (sessionId: string) => ["connectors", "session", sessionId] as const;
-export const sessionProposalsQueryKey = (sessionId: string) => ["connectors", "proposals", sessionId] as const;
+export const sessionConnectorsQueryKey = (sessionId: string, hostId?: string) => ["connectors", "session", hostId ?? "local", sessionId] as const;
+export const sessionProposalsQueryKey = (sessionId: string, hostId?: string) => ["connectors", "proposals", hostId ?? "local", sessionId] as const;
 
 const previewStamp = new Date(0).toISOString();
 
@@ -37,25 +38,26 @@ export const connectorsApi = {
 		if (error || !data) throw apiErrorException(error);
 		return data.connectors;
 	},
-	get: (connectorId: string) => one(apiClient.GET("/api/v1/connectors/{connectorId}", { params: { path: { connectorId } } })),
+	get: (connectorId: string, hostId?: string) =>
+		one(clientForSessionHost(hostId).GET("/api/v1/connectors/{connectorId}", { params: { path: { connectorId } } })),
 	create: (body: ConnectorInput) => one(apiClient.POST("/api/v1/connectors", { body })),
 	update: (connectorId: string, body: ConnectorInput) =>
 		one(apiClient.PATCH("/api/v1/connectors/{connectorId}", { params: { path: { connectorId } }, body })),
 	test: (connectorId: string) => one(apiClient.POST("/api/v1/connectors/{connectorId}/test", { params: { path: { connectorId } } })),
 	signOut: (connectorId: string) =>
 		one(apiClient.POST("/api/v1/connectors/{connectorId}/disconnect", { params: { path: { connectorId } } })),
-	finishSignIn: (connectorId: string, callbackUrl: string) =>
-		one(apiClient.POST("/api/v1/connectors/{connectorId}/connect/finish", { params: { path: { connectorId } }, body: { callbackUrl } })),
+	finishSignIn: (connectorId: string, callbackUrl: string, hostId?: string) =>
+		one(clientForSessionHost(hostId).POST("/api/v1/connectors/{connectorId}/connect/finish", { params: { path: { connectorId } }, body: { callbackUrl } })),
 	async remove(connectorId: string): Promise<void> {
 		const { error } = await apiClient.DELETE("/api/v1/connectors/{connectorId}", { params: { path: { connectorId } } });
 		if (error) throw apiErrorException(error);
 	},
-	async startSignIn(connectorId: string): Promise<ConnectorSignIn> {
+	async startSignIn(connectorId: string, hostId?: string): Promise<ConnectorSignIn> {
 		if (usesPreviewWorkspaceData) {
 			const connector = previewConnectors.find((one) => one.id === connectorId) ?? (previewConnectors[0] as Connector);
 			return { authorizationUrl: "https://mcp.example.com/authorize", callbackUrl: "http://127.0.0.1:3011/oauth/mcp/callback", connector };
 		}
-		const { data, error } = await apiClient.POST("/api/v1/connectors/{connectorId}/connect", { params: { path: { connectorId } } });
+		const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/connectors/{connectorId}/connect", { params: { path: { connectorId } } });
 		if (error || !data) throw apiErrorException(error);
 		return data;
 	},
@@ -70,24 +72,24 @@ export const connectorsApi = {
 		if (error || !data) throw apiErrorException(error);
 		return data.connectors;
 	},
-	async sessionProposals(sessionId: string): Promise<ConnectorProposal[]> {
+	async sessionProposals(sessionId: string, hostId?: string): Promise<ConnectorProposal[]> {
 		if (usesPreviewWorkspaceData) return [];
-		const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/connectors/proposals", { params: { path: { sessionId } } });
+		const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/connectors/proposals", { params: { path: { sessionId } } });
 		if (error || !data) throw apiErrorException(error);
 		return data.proposals;
 	},
-	async approveProposal(proposalId: string, body: { projectId?: string; values?: Record<string, string> }): Promise<Connector> {
-		const { data, error } = await apiClient.POST("/api/v1/connectors/proposals/{proposalId}/approve", { params: { path: { proposalId } }, body });
+	async approveProposal(proposalId: string, body: { projectId?: string; values?: Record<string, string> }, hostId?: string): Promise<Connector> {
+		const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/connectors/proposals/{proposalId}/approve", { params: { path: { proposalId } }, body });
 		if (error || !data) throw apiErrorException(error);
 		return data.connector;
 	},
-	async declineProposal(proposalId: string): Promise<void> {
-		const { error } = await apiClient.POST("/api/v1/connectors/proposals/{proposalId}/decline", { params: { path: { proposalId } } });
+	async declineProposal(proposalId: string, hostId?: string): Promise<void> {
+		const { error } = await clientForSessionHost(hostId).POST("/api/v1/connectors/proposals/{proposalId}/decline", { params: { path: { proposalId } } });
 		if (error) throw apiErrorException(error);
 	},
-	async forSession(sessionId: string): Promise<SessionConnector[]> {
+	async forSession(sessionId: string, hostId?: string): Promise<SessionConnector[]> {
 		if (usesPreviewWorkspaceData) return [];
-		const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/connectors", { params: { path: { sessionId } } });
+		const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/connectors", { params: { path: { sessionId } } });
 		if (error || !data) throw apiErrorException(error);
 		return data.connectors;
 	},

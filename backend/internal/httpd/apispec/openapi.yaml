@@ -19702,7 +19702,7 @@ components:
           - stdio
           type: string
         url:
-          description: Server address without its query string.
+          description: Server address. Each value of its query string reads ***.
           type: string
       required:
       - id
@@ -19902,7 +19902,8 @@ components:
           - stdio
           type: string
         url:
-          description: Server URL. https, or http on this computer.
+          description: Server URL. https, or http on this computer. A query value
+            of *** keeps the stored value of that name.
           maxLength: 2048
           type: string
       type: object
@@ -19982,7 +19983,7 @@ components:
           format: date-time
           type: string
         url:
-          description: Server URL without its query string.
+          description: Server URL. Each value of its query string reads ***.
           type: string
       required:
       - id

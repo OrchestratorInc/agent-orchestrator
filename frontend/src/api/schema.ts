@@ -6688,7 +6688,7 @@ export interface components {
             source: string;
             /** @enum {string} */
             transport: "http" | "stdio";
-            /** @description Server address without its query string. */
+            /** @description Server address. Each value of its query string reads ***. */
             url?: string;
         };
         ConnectorProposalEnvelope: {
@@ -6774,7 +6774,7 @@ export interface components {
              * @enum {string}
              */
             transport?: "http" | "stdio";
-            /** @description Server URL. https, or http on this computer. */
+            /** @description Server URL. https, or http on this computer. A query value of *** keeps the stored value of that name. */
             url?: string;
         };
         ConnectorResponse: {
@@ -6810,7 +6810,7 @@ export interface components {
             transport: "http" | "stdio";
             /** Format: date-time */
             updatedAt: string;
-            /** @description Server URL without its query string. */
+            /** @description Server URL. Each value of its query string reads ***. */
             url?: string;
         };
         ConnectorSignInResponse: {

@@ -27,7 +27,7 @@ function openPage(url: string) {
 	void Promise.resolve().then(() => aoBridge.app.openExternal(url)).catch(() => undefined);
 }
 
-export function ConnectorSignInDialog({ connector, onClose }: { connector: Connector; onClose: () => void }) {
+export function ConnectorSignInDialog({ connector, hostId, onClose }: { connector: Connector; hostId?: string; onClose: () => void }) {
 	const { t } = useTranslation();
 	const [address, setAddress] = useState("");
 	const [copied, setCopied] = useState(false);
@@ -36,7 +36,7 @@ export function ConnectorSignInDialog({ connector, onClose }: { connector: Conne
 	const liveKey = [...connectorsQueryKey, connector.id];
 
 	const start = useMutation({
-		mutationFn: () => connectorsApi.startSignIn(connector.id),
+		mutationFn: () => connectorsApi.startSignIn(connector.id, hostId),
 		onMutate: () => {
 			void queryClient.resetQueries({ queryKey: liveKey });
 		},
@@ -44,7 +44,7 @@ export function ConnectorSignInDialog({ connector, onClose }: { connector: Conne
 			if (result.authorizationUrl) openPage(result.authorizationUrl);
 		},
 	});
-	const finish = useMutation({ mutationFn: () => connectorsApi.finishSignIn(connector.id, address.trim()) });
+	const finish = useMutation({ mutationFn: () => connectorsApi.finishSignIn(connector.id, address.trim(), hostId) });
 	const startSignIn = start.mutate;
 	useEffect(() => {
 		if (started.current) return;
@@ -55,7 +55,7 @@ export function ConnectorSignInDialog({ connector, onClose }: { connector: Conne
 	const page = start.data?.authorizationUrl;
 	const live = useQuery({
 		queryKey: liveKey,
-		queryFn: () => connectorsApi.get(connector.id),
+		queryFn: () => connectorsApi.get(connector.id, hostId),
 		enabled: Boolean(page) && !finish.isSuccess,
 		refetchInterval: (query) => (query.state.data?.signedIn || refusal(query.state.data) ? false : 2000),
 	});
