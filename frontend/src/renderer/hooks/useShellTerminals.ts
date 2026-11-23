@@ -12,6 +12,7 @@ import {
 	beginOptimisticRename,
 	hasOptimisticRenames,
 	isOptimisticRenameTracked,
+	queueRenameWrite,
 	renamedTitle,
 	renameReadStarted,
 	settleOptimisticRename,
@@ -677,10 +678,12 @@ export function useRenameShellTerminal(hostId?: HostId) {
 				));
 				return shell;
 			}
-			const { data, error } = await clientForSessionHost(hostId).PATCH("/api/v1/shell-terminals/{handleId}", {
-				params: { path: { handleId } },
-				body: { title },
-			});
+			// After any earlier rename of this tab, so the newest is the one stored.
+			const { data, error } = await queueRenameWrite(shellRenameKey(handleId, hostId), () =>
+				clientForSessionHost(hostId).PATCH("/api/v1/shell-terminals/{handleId}", {
+					params: { path: { handleId } },
+					body: { title },
+				}));
 			if (error) throw error;
 			if (!data) throw new Error("Daemon returned no shell terminal");
 			return toShellTerminal(data.shellTerminal, hostId);
@@ -700,8 +703,11 @@ export function useRenameShellTerminal(hostId?: HostId) {
 			const settled = settleOptimisticRename(key, token, false);
 			if (!settled?.latest) return;
 			const before = shellsBeforeRename.get(key);
-			// Nothing else in flight or stored: the tab goes back to exactly what it showed.
-			if (!isOptimisticRenameTracked(key) && before) writeShell(queryClient, queryKey, handleId, (shell) => ({ ...shell, title: before.title, terminalTitle: before.terminalTitle }));
+			// Nothing else in flight or stored: the tab goes back to exactly what it
+			// showed, and the snapshot has served its purpose.
+			const restore = !isOptimisticRenameTracked(key);
+			if (restore) shellsBeforeRename.delete(key);
+			if (restore && before) writeShell(queryClient, queryKey, handleId, (shell) => ({ ...shell, title: before.title, terminalTitle: before.terminalTitle }));
 			else writeShell(queryClient, queryKey, handleId, (shell) => withShellTitle(shell, settled.title));
 			void queryClient.invalidateQueries({ queryKey });
 			useUiStore.getState().showGlobalToast(

@@ -454,7 +454,7 @@ describe("useRenameShellTerminal", () => {
 		await waitFor(() => expect(first()?.title).toBe("server"));
 	});
 
-	it("never lets an older rename's answer replace a newer name", async () => {
+	it("sends a newer name after the older request answers, which never replaces it", async () => {
 		const older = deferred<ReturnType<typeof answerWith>>();
 		const newer = deferred<ReturnType<typeof answerWith>>();
 		patchMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
@@ -465,8 +465,15 @@ describe("useRenameShellTerminal", () => {
 		act(() => renderedRename("logs"));
 		// Hold the reads after each answer, so only the answers decide what shows.
 		getMock.mockReturnValue(new Promise(() => {}));
-		await act(async () => newer.resolve(answerWith("logs")));
+		// The daemon stores renames in arrival order, so the newer one waits.
+		await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
+		await act(async () => undefined);
+		expect(patchMock).toHaveBeenCalledTimes(1);
 		await act(async () => older.resolve(answerWith("server")));
+		await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(2));
+		expect(patchMock).toHaveBeenLastCalledWith("/api/v1/shell-terminals/{handleId}", expect.objectContaining({ body: { title: "logs" } }));
+		expect(first()?.title).toBe("logs");
+		await act(async () => newer.resolve(answerWith("logs")));
 		await act(async () => undefined);
 		expect(first()?.title).toBe("logs");
 	});

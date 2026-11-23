@@ -1,7 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { appI18n } from "../i18n";
-import { beginOptimisticRename, settleOptimisticRename } from "../hooks/optimistic-renames";
+import { beginOptimisticRename, queueRenameWrite, settleOptimisticRename } from "../hooks/optimistic-renames";
 import { sessionRenameKey } from "../hooks/optimistic-session-titles";
 import {
 	cloudSessionsQueryKey,
@@ -73,8 +73,8 @@ export type CommitSessionRenameOptions = {
  * Renames a session optimistically: the new title shows in every list and tab
  * from the commit that calls this (synchronously, before any await), stays
  * through slow answers and reads begun earlier, and a newer rename always wins
- * over an older one's answer. A failure rolls back only its own title and says
- * so in a toast. Resolves true once this rename is stored.
+ * over an older one's answer (the requests go out in order). A failure rolls
+ * back only its own title and says so in a toast. Resolves true once this rename is stored.
  */
 export async function commitSessionRename(
 	queryClient: QueryClient | null,
@@ -88,12 +88,16 @@ export async function commitSessionRename(
 	const token = beginOptimisticRename(key, displayName, session.title);
 	if (queryClient) writeSessionTitle(queryClient, session, displayName);
 	try {
-		let stored = displayName;
-		if (session.cloud) {
-			if (!queryClient) throw new Error("Renaming a Cloud session needs the app's query cache.");
-			stored = await renameCloudSession(queryClient, { id: session.id, cloud: session.cloud }, displayName);
-		} else if (session.hostId) await renameSession(session.id, displayName, session.hostId);
-		else await renameSession(session.id, displayName);
+		// After any earlier rename of this session, so the newest is the one stored.
+		const stored = await queueRenameWrite(key, async () => {
+			if (session.cloud) {
+				if (!queryClient) throw new Error("Renaming a Cloud session needs the app's query cache.");
+				return renameCloudSession(queryClient, { id: session.id, cloud: session.cloud }, displayName);
+			}
+			if (session.hostId) await renameSession(session.id, displayName, session.hostId);
+			else await renameSession(session.id, displayName);
+			return displayName;
+		});
 		const settled = settleOptimisticRename(key, token, true);
 		if (settled?.latest && queryClient) {
 			if (stored !== displayName) writeSessionTitle(queryClient, session, stored);

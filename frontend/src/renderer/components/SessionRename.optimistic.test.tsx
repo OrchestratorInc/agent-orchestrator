@@ -216,7 +216,7 @@ describe("optimistic session rename", () => {
 		await waitFor(() => expect(shown()).toEqual({ tab: "renamed elsewhere", mirror: "renamed elsewhere" }));
 	});
 
-	it("keeps the newest of repeated renames whatever order the answers land in", async () => {
+	it("sends repeated renames in order and keeps the newest", async () => {
 		const first = deferred<void>();
 		const second = deferred<void>();
 		nextRename(first);
@@ -227,13 +227,20 @@ describe("optimistic session rename", () => {
 		expect(shown().tab).toBe("first try");
 		renameTo("second try");
 		expect(shown()).toEqual({ tab: "second try", mirror: "second try" });
+		// The newer name waits for the older request, so the daemon stores them in order.
+		expect(h.renameSessionMock).toHaveBeenCalledTimes(1);
 
-		// The second answer lands first, then the older one: neither brings back "first try".
-		await act(async () => second.resolve());
+		// The older answer lands first and must not bring back "first try".
 		await act(async () => first.resolve());
+		await waitFor(() => expect(h.renameSessionMock).toHaveBeenCalledTimes(2));
+		expect(h.renameSessionMock).toHaveBeenLastCalledWith("sess-1", "second try");
+		expect(shown()).toEqual({ tab: "second try", mirror: "second try" });
+
+		await act(async () => second.resolve());
 		await act(async () => undefined);
 		expect(shown()).toEqual({ tab: "second try", mirror: "second try" });
 		expect(queryClient.getQueryData<{ sessions: { title: string }[] }[]>(workspaceQueryKey)?.[0]?.sessions[0]?.title).toBe("second try");
+		expect(storedName).toBe("second try");
 	});
 
 	it("rolls back only the failed rename and says so", async () => {
@@ -245,15 +252,14 @@ describe("optimistic session rename", () => {
 
 		renameTo("first try");
 		renameTo("second try");
+		await act(async () => first.resolve());
+		await waitFor(() => expect(h.renameSessionMock).toHaveBeenCalledTimes(2));
 		await act(async () => second.reject(new Error("Display name taken")));
-		// The failed rename goes; the one still in flight shows.
+		// The failed rename goes; the one stored before it shows.
 		await waitFor(() => expect(shown()).toEqual({ tab: "first try", mirror: "first try" }));
 		expect(useUiStore.getState().globalToasts).toEqual([
 			expect.objectContaining({ title: "Couldn't rename to second try", body: "Display name taken", tone: "error" }),
 		]);
-
-		await act(async () => first.resolve());
-		expect(shown()).toEqual({ tab: "first try", mirror: "first try" });
 	});
 
 	it("rolls a lone failed rename back to the old title", async () => {

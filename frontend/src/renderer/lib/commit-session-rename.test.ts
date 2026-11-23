@@ -61,7 +61,7 @@ describe("renaming a session on a remote host", () => {
 		expect(shown.view?.terminalTitle).toBeUndefined();
 	});
 
-	it("keeps a newer name when an older request answers last", async () => {
+	it("sends a newer name only after the older request answers, and keeps it", async () => {
 		const older = deferred<void>();
 		const newer = deferred<void>();
 		h.renameSession.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
@@ -70,12 +70,33 @@ describe("renaming a session on a remote host", () => {
 
 		const first = commitSessionRename(queryClient, target, "First");
 		const second = commitSessionRename(queryClient, { ...target, title: "First" }, "Second");
-		newer.resolve();
-		await second;
+		// The host stores renames in arrival order, so the newer one waits.
+		expect(h.renameSession).toHaveBeenCalledTimes(1);
 		older.resolve();
 		await first;
+		await vi.waitFor(() => expect(h.renameSession).toHaveBeenCalledTimes(2));
+		expect(h.renameSession).toHaveBeenLastCalledWith("s-1", "Second", "box");
+		// The older answer does not bring its name back.
+		expect(shownIn(queryClient).list).toBe("Second");
+		newer.resolve();
+		await second;
 
 		expect(shownIn(queryClient).list).toBe("Second");
+	});
+
+	it("still sends a newer name after an older request fails", async () => {
+		h.renameSession.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
+		const queryClient = remoteClient();
+		vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+
+		const first = commitSessionRename(queryClient, target, "First");
+		const second = commitSessionRename(queryClient, { ...target, title: "First" }, "Second");
+
+		await expect(first).resolves.toBe(false);
+		await expect(second).resolves.toBe(true);
+		expect(shownIn(queryClient).list).toBe("Second");
+		// The failure was superseded before it landed, so nothing is said.
+		expect(useUiStore.getState().globalToasts).toHaveLength(0);
 	});
 
 	it("shows its rename over a host read that began before the answer", async () => {

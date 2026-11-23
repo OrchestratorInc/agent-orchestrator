@@ -13,6 +13,8 @@ import { useSyncExternalStore } from "react";
  *   server's answer and wins.
  * - A failed request drops only its own title: the newest one still in flight
  *   shows, else the last acknowledged one, else the title from before.
+ * - Requests for one key go out one after another (see {@link queueRenameWrite}),
+ *   so the server stores the renames in the order they were confirmed.
  */
 
 type Attempt = { token: number; title: string };
@@ -35,6 +37,8 @@ let clock = 0;
 let version = 0;
 const entries = new Map<string, Entry>();
 const listeners = new Set<() => void>();
+/** Per key, the last queued write, settled either way. */
+const writes = new Map<string, Promise<void>>();
 
 function notify() {
 	version += 1;
@@ -104,8 +108,12 @@ export function beginOptimisticRename(key: string, title: string, currentTitle: 
 	clock += 1;
 	const token = clock;
 	const entry = entries.get(key);
-	if (entry) entry.attempts.push({ token, title });
-	else entries.set(key, { base: currentTitle, attempts: [{ token, title }], ackedAt: 0, settledAtMs: 0 });
+	if (entry) {
+		// Nothing in flight: what shows now is the server's latest word, which may
+		// be a name given elsewhere since the last acknowledgement.
+		if (entry.attempts.length === 0) entry.base = currentTitle;
+		entry.attempts.push({ token, title });
+	} else entries.set(key, { base: currentTitle, attempts: [{ token, title }], ackedAt: 0, settledAtMs: 0 });
 	notify();
 	return token;
 }
@@ -140,8 +148,26 @@ export function settleOptimisticRename(key: string, token: number, ok: boolean):
 	return { title: entry.attempts.at(-1)?.title ?? entry.base, latest };
 }
 
+/**
+ * Runs `write` once every earlier write for `key` has settled, so two renames
+ * in quick succession reach the server in the order they were confirmed and
+ * the newer one is the name it keeps. With nothing queued it runs at once,
+ * synchronously up to its first await.
+ */
+export function queueRenameWrite<T>(key: string, write: () => Promise<T>): Promise<T> {
+	const previous = writes.get(key);
+	const run = previous ? previous.then(() => write()) : write();
+	const settled = run.then(() => undefined, () => undefined);
+	writes.set(key, settled);
+	void settled.then(() => {
+		if (writes.get(key) === settled) writes.delete(key);
+	});
+	return run;
+}
+
 export function resetOptimisticRenamesForTest(): void {
 	entries.clear();
+	writes.clear();
 	clock = 0;
 	notify();
 }

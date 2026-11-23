@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	beginOptimisticRename,
 	isOptimisticRenameTracked,
 	optimisticRenamesVersion,
+	queueRenameWrite,
 	renamedTitle,
 	renameReadStarted,
 	resetOptimisticRenamesForTest,
@@ -102,8 +103,44 @@ describe("optimistic renames", () => {
 		expect(renamedTitle(KEY, laterRead)).toBeUndefined();
 	});
 
+	it("rolls a failure back to a name given elsewhere since the last acknowledgement", () => {
+		settleOptimisticRename(KEY, beginOptimisticRename(KEY, "First", "Old"), true);
+		// Renamed to "Elsewhere" from the CLI; a read showed it, then the user renames again.
+		const token = beginOptimisticRename(KEY, "Third", "Elsewhere");
+
+		expect(settleOptimisticRename(KEY, token, false)).toEqual({ title: "Elsewhere", latest: true });
+	});
+
 	it("keeps keys apart", () => {
 		beginOptimisticRename(KEY, "New", "Old");
 		expect(renamedTitle("session:local:s-2")).toBeUndefined();
+	});
+});
+
+describe("rename writes", () => {
+	it("sends one key's writes in order, each after the last has settled either way", async () => {
+		const sent: string[] = [];
+		let failFirst!: (error: Error) => void;
+		const first = queueRenameWrite(KEY, () => {
+			sent.push("first");
+			return new Promise<void>((_resolve, reject) => { failFirst = reject; });
+		});
+		const second = queueRenameWrite(KEY, async () => { sent.push("second"); });
+		const other = queueRenameWrite("session:local:s-2", async () => { sent.push("other"); });
+
+		// The first runs at once and synchronously; another key does not wait.
+		expect(sent).toEqual(["first", "other"]);
+		await other;
+		expect(sent).toEqual(["first", "other"]);
+
+		failFirst(new Error("boom"));
+		await expect(first).rejects.toThrow("boom");
+		await second;
+		expect(sent).toEqual(["first", "other", "second"]);
+
+		// A failed or finished queue never holds a later write back.
+		const write = vi.fn(async () => undefined);
+		void queueRenameWrite(KEY, write);
+		await vi.waitFor(() => expect(write).toHaveBeenCalled());
 	});
 });

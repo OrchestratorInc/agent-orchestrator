@@ -429,8 +429,11 @@ function toRemoteWorkspaces(
 }
 
 async function fetchRemoteWorkspaces(hostId: string): Promise<WorkspaceSummary[]> {
+	// Checked once both reads are in: a rename that starts and lands while the
+	// project list is still loading must not lose to the session list read first.
+	const readStartedAt = renameReadStarted();
 	const [projects, sessions] = await Promise.all([fetchRemoteProjects(hostId), fetchRemoteSessions(hostId)]);
-	return toRemoteWorkspaces(hostId, projects, sessions);
+	return applyOptimisticSessionTitles(toRemoteWorkspaces(hostId, projects, sessions), readStartedAt);
 }
 
 // Shared so route loaders can prefetch via queryClient.ensureQueryData (paired

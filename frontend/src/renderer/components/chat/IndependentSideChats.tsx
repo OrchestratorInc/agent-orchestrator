@@ -33,7 +33,8 @@ import { handleTabListKeyDown } from "../../lib/terminal-tabs";
 import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
-import { beginOptimisticRename, renamedTitle, renameReadStarted, settleOptimisticRename } from "../../hooks/optimistic-renames";
+import { beginOptimisticRename, queueRenameWrite, renamedTitle, renameReadStarted, settleOptimisticRename } from "../../hooks/optimistic-renames";
+import { appI18n } from "../../i18n";
 import { useUiStore } from "../../stores/ui-store";
 import { INLINE_ATTACHMENT_BYTES, readBlobAsBase64, type OutgoingAttachment } from "../../lib/attachment-uploads";
 
@@ -1830,16 +1831,23 @@ export function useIndependentSideChats(
 		clearSideError(id, "rename");
 		let failure: string | undefined;
 		try {
-			const { error: renameError } = await apiClient.PATCH(
+			// After any earlier rename of this tab, so the newest is the one stored.
+			const { error: renameError } = await queueRenameWrite(key, () => apiClient.PATCH(
 				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label",
 				{ params: { path: { sessionId, sideId: id } }, body: { label } },
-			);
+			));
 			if (renameError) failure = apiErrorMessage(renameError);
 		} catch (cause) {
 			failure = apiErrorMessage(cause);
 		}
 		const settled = settleOptimisticRename(key, token, failure === undefined);
-		if (!settled?.latest || !available()) return;
+		if (!settled?.latest) return;
+		if (!available()) {
+			// This tab bar is gone (the session closed or opened again). The next list
+			// poll shows the stored label; the failure still needs saying.
+			if (failure !== undefined) useUiStore.getState().showGlobalToast(appI18n.t("shell.renameFailed", { name: label }), failure, "error");
+			return;
+		}
 		if (failure !== undefined) {
 			setSides((current) => current.map((side) => (side.id === id ? { ...side, label: settled.title } : side)));
 			setSideError({ id, message: failure, kind: "rename" });
