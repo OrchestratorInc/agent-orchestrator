@@ -22,6 +22,7 @@ import {
 	SIDEBAR_MIN_WIDTH,
 	resolveNextNavigationAfterSessionKill,
 } from "./Sidebar";
+import { SettingsProvider } from "./SettingsDialog";
 import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -347,6 +348,7 @@ function renderSidebar({
 	topbarOffset = "toolbar",
 	expandedProjectIds,
 	seed,
+	withSettingsProvider = false,
 }: {
 	onCloneProject?: CloneProjectHandler;
 	onCreateProject?: CreateProjectHandler;
@@ -363,6 +365,7 @@ function renderSidebar({
 	topbarOffset?: "toolbar" | "titlebar" | "trafficLights" | "session";
 	expandedProjectIds?: string[];
 	seed?: (client: QueryClient) => void;
+	withSettingsProvider?: boolean;
 } = {}) {
 	// Most legacy sidebar tests exercise session rows and assume their fixture
 	// project was previously open. Tests for the empty-store behavior opt out.
@@ -379,24 +382,27 @@ function renderSidebar({
 		});
 	}
 	seed?.(queryClient);
+	const sidebar = (
+		<SidebarProvider defaultOpen={initialOpen}>
+			<Sidebar
+				topbarOffset={topbarOffset}
+				onCloneProject={onCloneProject}
+				onCreateProject={onCreateProject}
+				onInitializeProject={onInitializeProject}
+				onRemoveProject={onRemoveProject}
+				workspaces={workspaces}
+				remoteHosts={remoteHosts}
+				remoteWorkspaces={remoteWorkspaces}
+				onCreateRemoteProject={onCreateRemoteProject}
+				onInitializeRemoteProject={onInitializeRemoteProject}
+				onRemoveRemoteProject={onRemoveRemoteProject}
+			/>
+		</SidebarProvider>
+	);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<SidebarProvider defaultOpen={initialOpen}>
-					<Sidebar
-						topbarOffset={topbarOffset}
-						onCloneProject={onCloneProject}
-						onCreateProject={onCreateProject}
-						onInitializeProject={onInitializeProject}
-						onRemoveProject={onRemoveProject}
-						workspaces={workspaces}
-						remoteHosts={remoteHosts}
-						remoteWorkspaces={remoteWorkspaces}
-						onCreateRemoteProject={onCreateRemoteProject}
-						onInitializeRemoteProject={onInitializeRemoteProject}
-						onRemoveRemoteProject={onRemoveRemoteProject}
-					/>
-				</SidebarProvider>
+				{withSettingsProvider ? <SettingsProvider>{sidebar}</SettingsProvider> : sidebar}
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -2760,6 +2766,29 @@ describe("Sidebar", () => {
 		await user.click(screen.getAllByRole("button", { name: "Settings" })[0]);
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global" });
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("mounts a fresh collapsed footer rail instead of reusing the Settings Back row when closing Settings", async () => {
+		// Regression: both branches of SidebarFooter previously returned unkeyed
+		// two-div fragments, so leaving Settings reused the opaque Back row div
+		// as the opacity-0 collapsed rail div, triggering transition-opacity 1->0
+		// and flashing the centered Settings icon in the middle of the footer.
+		const user = userEvent.setup();
+		renderSidebar({ withSettingsProvider: true });
+
+		await user.click(screen.getAllByRole("button", { name: "Settings" })[0]);
+		const backButton = await screen.findByRole("button", { name: "Back" });
+		const settingsBackRow = backButton.parentElement;
+		expect(settingsBackRow).not.toBeNull();
+
+		await user.click(backButton);
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
+
+		const settingsButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('button[aria-label="Settings"]'));
+		const collapsedRailSettings = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
+		const collapsedRailContainer = collapsedRailSettings?.closest('[aria-hidden="true"]');
+		expect(collapsedRailContainer).toBeInTheDocument();
+		expect(collapsedRailContainer).not.toBe(settingsBackRow);
 	});
 
 	it("opens the Mobile settings page from the footer and starts pairing", async () => {

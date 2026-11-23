@@ -133,6 +133,11 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 		// a stricter approval mode.
 		PermissionPolicy: permissionPolicy,
 		SteerPrompt:      &acpdriver.SteerPrompt{Supported: cliSteers},
+		// run_command hands a command to the background once its
+		// WaitMsBeforeAsync passes, and the turn can end while it runs.
+		// Antigravity reports its exit later, then answers it in a cycle of its
+		// own, so the command is a background task, not a failed tool.
+		ToolsOutliveTurn: true,
 	}
 }
 

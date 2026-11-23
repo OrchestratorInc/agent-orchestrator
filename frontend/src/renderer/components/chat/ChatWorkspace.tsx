@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
 import { excerptSizeError } from "../../../shared/chat-excerpt";
 import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excerpt-snapshot";
@@ -155,6 +156,7 @@ import {
 	TurnResults,
 	TurnOutcome,
 	LoginStatusNote,
+	useFreshFailureReport,
 	LiveResponseStatus,
 	LiveStepChoices,
 	RevealedChatActivity,
@@ -2380,8 +2382,12 @@ function ChatWorkspaceContent({
 									startup={sessionRole === "orchestrator" ? undefined : startup}
 									openingStartedAt={openingStartedAt}
 									// A Freestyle Chat session started from this device: the row under its
-									// brief says the sandbox is still coming up until its worker connects.
-									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.sandbox") : undefined}
+									// brief says the session is still starting until its worker connects.
+									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.startingSession") : undefined}
+									// A Cloud turn no agent has taken yet: the session is starting until its
+									// worker connects, then setting up the project (checkout, Setup, the
+									// agent's start) until the agent opens the turn.
+									pendingTurnLabel={session?.cloud ? t(session.runtimeConnected ? "chat.startup.settingUpProject" : "chat.startup.startingSession") : undefined}
 									arriving={arrivingInChat}
 								/>
 							</ChatTokenSkills.Provider>
@@ -3408,6 +3414,7 @@ export function Timeline({
 	workerUpdates = false,
 	openingStartedAt,
 	openingStartupLabel,
+	pendingTurnLabel,
 	loginLines,
 	retryableTurns: chatRetryableTurns,
 	controllerStopped = false,
@@ -3474,6 +3481,8 @@ export function Timeline({
 	openingStartedAt?: string;
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
+	/** Names a running turn no agent has taken yet (ConversationTurn.agentPending) in place of Thinking. */
+	pendingTurnLabel?: string;
 	/** The line under each message the agent refused for its login. */
 	loginLines?: ReadonlyMap<string, TurnOutcomeLogin>;
 	/** The failed turns a retry can pick up, as the chat already worked them out for this snapshot's turns. */
@@ -3482,6 +3491,7 @@ export function Timeline({
 	findRequest?: ChatFindRequest;
 	onFindRequestHandled?: ChatWorkspaceProps["onFindRequestHandled"];
 }) {
+	useTelemetrySurface("chat");
 	const findSurface = useRef<HTMLDivElement>(null);
 	const scroller = useRef<HTMLDivElement>(null);
 	const pauseFindFollow = useRef<() => void>(() => {});
@@ -4516,10 +4526,14 @@ export function Timeline({
 		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
 		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
+		const pendingTurns = new Set(snapshot.turns.filter((turn) => turn.agentPending).map((turn) => turn.id));
 		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt, liveStartupLabel: openingStartupLabel }
+				: group)
+			.map((group) => group.live && !group.liveStartupLabel && pendingTurnLabel && group.turnId && pendingTurns.has(group.turnId)
+				? { ...group, liveStartupLabel: pendingTurnLabel }
 				: group);
 		if (!workerUpdates) return groups;
 		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
@@ -4528,7 +4542,7 @@ export function Timeline({
 		return placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
+	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -5750,6 +5764,7 @@ export function Timeline({
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"
+				data-telemetry-surface="chat"
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
 				{/* Before the settle snapshot: its restore reads how far this one moved the view. */}
@@ -5882,7 +5897,7 @@ export function Timeline({
 							{rowStartup.steps.length > 0 || rowStartup.failed ? <SessionStartup {...rowStartup} /> : null}
 						</LiveResponseStatus>
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
-						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} task="Thinking" />
+						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} startupLabel={turn.agentPending ? pendingTurnLabel : undefined} task="Thinking" />
 					) : openingPending && !groups.some((group) => group.live) ? (
 						// Before the brief has a turn of its own (still being created).
 						<LiveResponseStatus startedAt={openingStartedAt} startupLabel={openingStartupLabel} />
@@ -6294,6 +6309,8 @@ const TurnGroup = memo(function TurnGroup({
 	const loginNoteMessageId = login?.align === "end"
 		? group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human")?.id
 		: undefined;
+	// Counted here, not in the outcome, so a failure shown as a login note counts too.
+	useFreshFailureReport(endsWithOutcome ? group.outcome?.state : undefined, group.outcome?.completedAt, group.turnId, group.outcome?.failureCode);
 	const copyableMessage = endsWithOutcome && copyableMessageId
 		? group.items.find(
 				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
@@ -7074,6 +7091,8 @@ type TimelineGroup = {
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
 		failureCode?: ConversationTurn["failureCode"];
+		/** When the turn ended, for telling a failure that just happened from one in history. */
+		completedAt?: string;
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
@@ -7672,6 +7691,7 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 				)?.summary
 				: undefined),
 			failureCode: turn.failureCode,
+			completedAt: turn.completedAt,
 		};
 	}
 

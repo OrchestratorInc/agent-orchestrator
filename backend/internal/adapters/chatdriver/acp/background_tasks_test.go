@@ -30,7 +30,7 @@ func TestBackgroundTasksSharedACPTracking(t *testing.T) {
 		ToolCallId: "launch", Kind: &kind, Status: &status, RawInput: input,
 	}))
 	tasks := read(1)
-	if tasks[0].Kind != "shell" || tasks[0].Description != "sleep 1800" {
+	if tasks[0].Kind != "shell" || tasks[0].Description != "sleep 1800" || tasks[0].Command != "sleep 1800" {
 		t.Fatal(tasks)
 	}
 	status = acpsdk.ToolCallStatusCompleted
@@ -305,5 +305,25 @@ func TestBackgroundTasksAgentSessionReferencesDoNotBecomeIdentity(t *testing.T) 
 		if task.State != "running" {
 			t.Fatal("ambiguous session reference settled a job", tasks)
 		}
+	}
+}
+
+func TestBackgroundTaskOutputNeedsAProviderSource(t *testing.T) {
+	c := &conversation{tools: make(map[string]*toolState)}
+	if _, err := c.BackgroundTaskOutput(context.Background(), "launch"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("event-tracked task err=%v", err)
+	}
+	c.backgroundTaskOutput = func(_ context.Context, _ *acpsdk.ClientSideConnection, id acpsdk.SessionId, task string) (ports.ChatBackgroundTaskOutput, error) {
+		return ports.ChatBackgroundTaskOutput{Text: string(id) + ":" + task}, nil
+	}
+	c.sessionID = "native"
+	if got, err := c.BackgroundTaskOutput(context.Background(), "launch"); err != nil || got.Text != "native:launch" {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+	// Agents and other work have no command line.
+	c.observeBackgroundTool(&toolState{id: "agent", status: acpsdk.ToolCallStatusInProgress, rawInput: map[string]any{"prompt": "review", "command": "x", "run_in_background": true, "subagent_type": "reviewer"}})
+	tasks, _ := c.BackgroundTasks(context.Background())
+	if len(tasks) != 1 || tasks[0].Kind != "agent" || tasks[0].Command != "" {
+		t.Fatal(tasks)
 	}
 }

@@ -5,10 +5,10 @@ AO account sign-in is required for desktop remote hosts; Cloud sandbox execution
 
 ## Set up a VM
 
-You need a fresh Ubuntu 24.04 machine, x64 or arm64 (for example an AWS
-Graviton instance), with outbound internet and a
-non-root user with `sudo`. No inbound ports: devices reach the VM through a
-Cloudflare tunnel.
+You need a fresh Ubuntu 24.04 or Amazon Linux 2023 machine, x64 or arm64 (for
+example an AWS Graviton instance), with outbound internet and a non-root user
+with `sudo`. Other Linux works too with glibc 2.34 or newer and `apt-get` or
+`dnf`. No inbound ports: devices reach the VM through a Cloudflare tunnel.
 
 1. SSH in:
 
@@ -25,7 +25,8 @@ Cloudflare tunnel.
    This installs the prerequisites, the latest stable AO, a user service that
    keeps running after you log out, and the tunnel. For the newest nightly
    instead, end the command with `bash -s -- --nightly`. On an image without
-   curl, run `sudo apt-get install -y curl` first.
+   curl, install it first (`sudo apt-get install -y curl` or
+   `sudo dnf install -y curl`).
 
    On arm64, if the installer stops with `No verified release asset:
    ao-host-linux-arm64.tar.gz`, that release predates arm64 support. Build
@@ -110,7 +111,18 @@ by hand; never expose the port publicly. The VM must stay powered on.
 An agent that runs commands over SSH has no terminal, so the installer skips
 the sign-in step and prints pairing details instead. The sign-in link needs
 the user, and `ao remote-host link` waits up to 5 minutes for them, so run it
-in the background and read its output:
+in the background and read its output.
+
+Check the machine first:
+
+```bash
+ssh USER@HOST 'uname -m; getconf GNU_LIBC_VERSION; command -v apt-get dnf; sudo -n true && echo sudo ok'
+```
+
+It needs `x86_64` or `aarch64`, glibc 2.34 or newer, `apt-get` or `dnf`, and
+`sudo ok`. Without `sudo ok`, `sudo` needs a password the agent cannot type, so
+the user runs the step 1 command (without `ssh USER@HOST`) in their own SSH
+session.
 
 1. Install:
 
@@ -142,6 +154,13 @@ in the background and read its output:
    step 2.
 
 5. Remove the log: `ssh USER@HOST 'rm -f ~/.ao/link.log'`.
+
+Then make the VM ready for work, as in [Use the VM](#use-the-vm). Over SSH,
+`~/.local/bin/ao agent ls --refresh` must show the user's coding agent installed
+and signed in (they do that in **Settings → Harness** with the VM selected), and
+`gh auth status` must show GitHub signed in (they run `gh auth login` and
+`gh auth setup-git` themselves). Then clone the project on the VM and add it
+with `~/.local/bin/ao project add`.
 
 To check the host later, run `~/.local/bin/ao remote-host status`. It does
 not print the password unless you add `--show-password`.

@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -337,6 +338,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		</>
 	);
 
+	useTelemetrySurface("board", !(projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)));
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
 			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
@@ -347,7 +349,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	}
 
 	return (
-		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" ref={boardRef} data-host-id={hostId} data-project-id={projectId}>
+		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-telemetry-surface="board" ref={boardRef} data-host-id={hostId} data-project-id={projectId}>
 			<PageTopbar
 				lead={showWelcome ? undefined : (
 					<PageTopbarTitle

@@ -1,3 +1,4 @@
+import { listRemoteHosts } from "../../lib/remote-host-list";
 import { LoaderCircle, Pencil, Server, Trash2 } from "@/components/app-icons";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
@@ -57,7 +58,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		setLoading(true);
 		setLoadError("");
 		try {
-			setSaved(await aoBridge.remotes.list());
+			setSaved(await listRemoteHosts());
 		} catch (cause) {
 			setLoadError(cause instanceof Error ? cause.message : t("remote.loadHostsFailed"));
 		} finally {
@@ -116,7 +117,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			if (health === "incompatible") throw new Error(t("remote.hostIncompatible"));
 			if (editing?.hostId) await disconnectHost(editing.hostId);
 			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
-			const current = (await aoBridge.remotes.list()).find((item) => item.url === nextUrl);
+			const current = (await listRemoteHosts()).find((item) => item.url === nextUrl);
 			if (current?.hostId && cloudBaseUrl) await aoBridge.remotes.linkAccountHost(current.url);
 			await load();
 			resetForm();

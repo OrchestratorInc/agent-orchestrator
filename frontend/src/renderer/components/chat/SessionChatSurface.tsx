@@ -199,6 +199,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const hostUnreachable = Boolean(hostId) && !daemonReady;
 	const {
 		snapshot: queriedSnapshot,
+		savedSnapshot: queriedSavedSnapshot,
 		isLoading,
 		unavailable,
 		error,
@@ -211,6 +212,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
+	const savedSnapshot = queriedSavedSnapshot?.sessionId === session.id ? queriedSavedSnapshot : undefined;
 	useTranscriptTiming(session.id, Boolean(snapshot), hostId);
 	const currentTurn = snapshot ? activeTurn(snapshot) : undefined;
 	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(currentTurn), currentTurn?.id);
@@ -593,6 +595,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(optimisticArrival
 			? { ...startingConversationSnapshot(session.id, session.provider), controller: { state: "stopped" as const } }
 			: snapshot) ??
+		(renderShellFallback ? undefined : savedSnapshot) ??
 		(optimisticChat ? startingConversationSnapshot(session.id, session.provider) : undefined) ??
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
@@ -603,6 +606,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// closes when the real conversation replaces it, and the scroll would look
 	// for the message in an empty transcript.
 	const conversationShown = Boolean(snapshot) && renderSnapshot === snapshot;
+	const showingSavedPage = Boolean(savedSnapshot) && renderSnapshot === savedSnapshot;
+	const savedCopy = hostUnreachable || showingSavedPage;
 	const appliedReveal = useRef<SessionSearchReveal | undefined>(undefined);
 	useEffect(() => {
 		if (!heldReveal || !conversationShown) return;
@@ -664,7 +669,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const surfaceRef = useRef<HTMLDivElement>(null);
 	useQuietReveal(surfaceRef);
 
-	if (isLoading && !renderShellFallback && !optimisticChat) {
+	if (isLoading && !renderShellFallback && !optimisticChat && !savedSnapshot) {
 		return (
 			<Centered>
 				<Loader2 aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />
@@ -707,7 +712,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}
 
 	return (
-		<div ref={surfaceRef} className="relative h-full min-h-0">
+		<>
+		{showingSavedPage ? <span role="status" className="sr-only">Loading conversation…</span> : null}
+		<div ref={surfaceRef} className="relative h-full min-h-0" inert={showingSavedPage ? true : undefined}>
 			{refreshError && !hostUnreachable ? <p role="alert" className="px-4 py-2 text-xs text-destructive">{refreshError}</p> : null}
 			{sideChatContainer ? createPortal(sideChats.panel, sideChatContainer) : null}
 			{accountSwitch.dialog}
@@ -727,10 +734,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
-				newWorkDisabled={newWorkDisabled || hostUnreachable}
-				composerLockedPlaceholder={hostUnreachable && newWorkDisabled ? t("remote.offlineCopy") : undefined}
+				newWorkDisabled={newWorkDisabled || savedCopy}
+				composerLockedPlaceholder={hostUnreachable && newWorkDisabled ? t("remote.offlineCopy") : showingSavedPage ? "Loading conversation…" : undefined}
 				sendBlockedReason={hostUnreachable && !newWorkDisabled ? t("remote.sendWhenConnected") : undefined}
-				savedCopy={hostUnreachable}
+				savedCopy={savedCopy}
 				importBlock={importBlock}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
@@ -964,6 +971,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			/>
 			</ForkSessionContext.Provider>
 		</div>
+		</>
 	);
 });
 

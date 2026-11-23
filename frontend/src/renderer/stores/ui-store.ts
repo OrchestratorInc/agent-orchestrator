@@ -1,3 +1,4 @@
+import { uiUsage } from "../lib/ui-usage-telemetry";
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
@@ -1065,7 +1066,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			}
 			return { orchestratorStartupErrors };
 		}),
-	showGlobalToast: (title, body, style) =>
+	showGlobalToast: (title, body, style) => {
 		set((state) => {
 			const nonce = state.globalToastSequence + 1;
 			const options = typeof style === "object" ? style : undefined;
@@ -1076,7 +1077,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)
 				: state.globalToasts;
 			return { globalToast: toast, globalToasts: [...globalToasts, toast], globalToastSequence: nonce };
-		}),
+		});
+		// Every error toast in the app passes through here, so this one line counts them all.
+		if (get().globalToast?.tone === "error") uiUsage.errorShown("toast", "toast");
+	},
 	dismissGlobalToast: (nonce) =>
 		set((state) => ({
 			globalToasts: state.globalToasts.filter((toast) => toast.nonce !== nonce),
