@@ -640,6 +640,8 @@ type BrowserEntry = {
   // The isolated world the focus query runs in, for one document (queryFocus).
   focusWorld?: { contextId: number; document: number };
   focusQuery?: Promise<void>;
+  // The query whose answer may still be stored; one given up on is not.
+  focusQueryToken?: object;
   // The page's focused text field as the focus query last found it.
   focusedEditable?: BrowserFocusedEditable | null;
   // Tells a phone watching this tab that its focused field changed.
@@ -6343,6 +6345,9 @@ function hostOf(url: string): string {
   }
 }
 
+/** The longest one focus read may take before it is given up on. */
+const FOCUS_QUERY_MAX_MS = 1_000;
+
 /** The longest a handback waits for the page to say what its field holds. */
 const CONTROL_HANDOFF_MAX_MS = 2_000;
 
@@ -6388,8 +6393,23 @@ function remoteKeyEvent(
 function queryFocus(entry: BrowserEntry): Promise<void> {
   // An agent tab shows AO's viewer page, whose fields are not the agent's page.
   if (entry.agentTab !== undefined) return Promise.resolve();
-  entry.focusQuery ??= runFocusQuery(entry).finally(() => { entry.focusQuery = undefined; });
+  entry.focusQuery ??= boundedFocusQuery(entry).finally(() => { entry.focusQuery = undefined; });
   return entry.focusQuery;
+}
+
+// A page that stops answering must hold up neither the phone's next command
+// nor later reads: the query is given up on, and its late answer dropped.
+async function boundedFocusQuery(entry: BrowserEntry): Promise<void> {
+  const token = {};
+  entry.focusQueryToken = token;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const giveUp = new Promise<void>((resolve) => { timer = setTimeout(resolve, FOCUS_QUERY_MAX_MS); });
+  try {
+    await Promise.race([runFocusQuery(entry, token), giveUp]);
+  } finally {
+    clearTimeout(timer);
+    if (entry.focusQueryToken === token) entry.focusQueryToken = undefined;
+  }
 }
 
 // A query started from now: one already in flight may have read the page
@@ -6399,7 +6419,7 @@ async function queryFreshFocus(entry: BrowserEntry): Promise<void> {
   await queryFocus(entry);
 }
 
-async function runFocusQuery(entry: BrowserEntry): Promise<void> {
+async function runFocusQuery(entry: BrowserEntry, token: object): Promise<void> {
   const debug = entry.view.webContents.debugger;
   if (!debug?.isAttached()) return;
   // A second try for a world that went away with its document.
@@ -6431,6 +6451,7 @@ async function runFocusQuery(entry: BrowserEntry): Promise<void> {
       // The page numbers fields per document; the tab and document make it unique.
       if (focused?.field) focused.field = `${entry.tabId}:${entry.documentGeneration}:${focused.field}`;
       if (JSON.stringify(focused) === JSON.stringify(entry.focusedEditable ?? null)) return;
+      if (entry.focusQueryToken !== token) return;
       entry.focusedEditable = focused;
       entry.onFocusChange?.();
       return;

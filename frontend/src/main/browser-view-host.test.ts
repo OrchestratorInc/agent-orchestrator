@@ -7161,6 +7161,35 @@ describe("browser live typing", () => {
 		for (const state of human) expect(state.focusedEditable?.value).toBe("agent wrote");
 	});
 
+	// A page that stops answering must not hold up the phone's next command,
+	// nor stop later focus reads.
+	it("gives up on a focus read the page never answers", async () => {
+		vi.useFakeTimers();
+		try {
+			const { debuggerSendCommand, host } = setupHost();
+			const page = focusPage(debuggerSendCommand);
+			const sink = liveSink();
+			await host.startLiveStream("sess-1", 7, sink);
+			const answer = debuggerSendCommand.getMockImplementation()!;
+			let hang = true;
+			debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+				if (method === "Runtime.evaluate" && hang) return new Promise(() => undefined);
+				return answer(method, params);
+			});
+			const input = host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+			let settled = false;
+			void input.then(() => { settled = true; });
+			await vi.advanceTimersByTimeAsync(1_100);
+			expect(settled).toBe(true);
+
+			// The page answers again: the next read is not stuck behind the lost one.
+			hang = false;
+			page.focus = JSON.stringify({ kind: "search", value: "q", field: 1 });
+			await host.handleRemoteInput("sess-1", { kind: "text", value: "y" });
+			expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: expect.objectContaining({ kind: "search", value: "q" }) }));
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("notices focus the phone did not move while it watches", async () => {
 		vi.useFakeTimers();
 		try {
