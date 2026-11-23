@@ -128,6 +128,18 @@ func (g *accessGate) middleware(next http.Handler) http.Handler {
 				Message: fmt.Sprintf("the action catalog has no entry for %s %s; a caller with a grant can run only catalog actions", r.Method, pattern)})
 			return
 		}
+		if action.ID == "session.spawn" {
+			kind, err := bodyField(r, "kind")
+			if err != nil {
+				envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "GRANT_TARGET_UNREADABLE", err.Error(), nil)
+				return
+			}
+			if kind == string(domain.KindOrchestrator) {
+				writeGrantRefused(w, r, &access.Refusal{Action: action.ID, Reason: access.ReasonCatalog,
+					Message: "a caller with a grant cannot start a project's orchestrator: it is shared with the user"})
+				return
+			}
+		}
 		project, known, err := g.targetProject(r, rctx, action, who.Grant)
 		if err != nil {
 			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "GRANT_TARGET_UNREADABLE", err.Error(), nil)
@@ -246,7 +258,7 @@ func bodyField(r *http.Request, key string) (string, error) {
 		return "", fmt.Errorf("read the request body: %w", err)
 	}
 	if len(raw) > maxGatedBodyBytes {
-		return "", fmt.Errorf("the request body is over %d MiB, the limit for a grant that is limited to projects", maxGatedBodyBytes>>20)
+		return "", fmt.Errorf("the request body is over %d MiB, the limit for a caller with a grant", maxGatedBodyBytes>>20)
 	}
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 	var fields map[string]json.RawMessage

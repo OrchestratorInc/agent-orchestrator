@@ -145,6 +145,11 @@ func cleanName(name string) string {
 	return name
 }
 
+// Unreadable returns why the token file could not be read at start, or nil.
+func (r *Registry) Unreadable() error {
+	return r.writeErr
+}
+
 // Create registers a token and returns it with its secret, which is shown once.
 func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, string, error) {
 	name = cleanName(name)

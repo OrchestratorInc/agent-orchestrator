@@ -114,6 +114,8 @@ func TestGrantCheck(t *testing.T) {
 	operateAPI := mustGrant(t, PresetOperate, nil, []string{"api"}, time.Time{})
 	expired := mustGrant(t, PresetManage, nil, nil, testNow.Add(-time.Minute))
 	custom := mustGrant(t, "", []Group{ChatRespond}, nil, time.Time{})
+	manageAPI := mustGrant(t, PresetManage, nil, []string{"api"}, time.Time{})
+	manage := mustGrant(t, PresetManage, nil, nil, time.Time{})
 
 	for name, tc := range map[string]struct {
 		grant   Grant
@@ -129,6 +131,10 @@ func TestGrantCheck(t *testing.T) {
 		"limited grant must name a project": {grant: operateAPI, action: "session.list", want: ReasonProject},
 		"limited grant on every project":    {grant: operateAPI, action: "project.list", want: ReasonProject},
 		"limited grant on machine data":     {grant: operateAPI, action: "settings.get"},
+		"limited grant may refresh agents":  {grant: operateAPI, action: "agent.refresh"},
+		"limited grant on machine settings": {grant: manageAPI, action: "settings.session-retention", want: ReasonProject},
+		"limited grant on default account":  {grant: manageAPI, action: "account.set-default", want: ReasonProject},
+		"unlimited manage on settings":      {grant: manage, action: "settings.session-retention"},
 		"operate may not remove a project":  {grant: operateAPI, action: "project.remove", project: "api", known: true, want: ReasonGroup},
 		"expired":                           {grant: expired, action: "session.list", want: ReasonEnded},
 		"custom group only":                 {grant: custom, action: "chat.input.resolve", project: "api", known: true},
@@ -382,6 +388,9 @@ func TestLoadRegistryKeepsAFileItCannotRead(t *testing.T) {
 	if _, statErr := os.Stat(path + ".bad"); statErr == nil {
 		t.Error("a file that could not be read was moved aside")
 	}
+	if registry.Unreadable() == nil {
+		t.Error("the registry must say that its token file could not be read, so a list is not shown as empty")
+	}
 	if _, _, err := registry.Create("ci", mustGrant(t, PresetRead, nil, nil, time.Time{}), testNow); err == nil {
 		t.Error("the registry must refuse writes over a file it could not read")
 	}
@@ -395,6 +404,9 @@ func TestCatalogLeavesOutAutomationWrites(t *testing.T) {
 		if action, ok := ActionForRoute(route[0], route[1]); ok {
 			t.Errorf("%s is in the catalog, but the sessions an automation starts carry no grant", action.ID)
 		}
+	}
+	if action, ok := ActionForRoute(http.MethodPost, "/api/v1/orchestrators"); ok {
+		t.Errorf("%s is in the catalog, but a project's orchestrator is shared with the user and must not carry a token's grant", action.ID)
 	}
 }
 

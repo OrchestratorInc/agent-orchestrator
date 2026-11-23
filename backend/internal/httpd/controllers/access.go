@@ -17,7 +17,6 @@ import (
 // AccessController serves who the caller is, the action catalog, and the agent
 // tokens of this machine. Token routes answer only on the loopback listener.
 type AccessController struct {
-	// Registry is nil when the token file could not be used; token routes then answer 501.
 	Registry *access.Registry
 }
 
@@ -126,6 +125,10 @@ func (c *AccessController) tokensUnavailable(w http.ResponseWriter, r *http.Requ
 
 func (c *AccessController) listTokens(w http.ResponseWriter, r *http.Request) {
 	if c.tokensUnavailable(w, r, http.MethodGet, "/api/v1/access/tokens") {
+		return
+	}
+	if err := c.Registry.Unreadable(); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal_error", "AGENT_TOKENS_UNREADABLE", err.Error(), nil)
 		return
 	}
 	now := time.Now()

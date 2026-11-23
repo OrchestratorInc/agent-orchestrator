@@ -98,6 +98,11 @@ ao token revoke <id-or-name>
   `ao report` reaches the orchestrator, so it is refused once the grant has ended.
 - A caller with a grant cannot create or change automations: the sessions an
   automation starts would carry no grant. It can list and delete them.
+- A caller with a grant cannot start a project's orchestrator
+  (`ao spawn --kind orchestrator`): it is shared with the user. It can start
+  workers and message the orchestrator that exists.
+- A token limited to projects cannot change machine-wide settings or the
+  default account. It can read them.
 - With remote access on (`ao remote-host`), the token also works from another
   machine as `Authorization: Bearer aoa_...`, held to the same grant.
 

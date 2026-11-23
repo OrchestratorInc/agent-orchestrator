@@ -72,7 +72,6 @@ var catalog = []Action{
 	{ID: "report.list", Group: SessionsRead, Method: http.MethodGet, Path: "/api/v1/reports", Project: ProjectQuery, Key: "projectId"},
 
 	{ID: "session.spawn", Group: SessionsOperate, Method: http.MethodPost, Path: "/api/v1/sessions", Project: ProjectBody, Key: "projectId"},
-	{ID: "orchestrator.spawn", Group: SessionsOperate, Method: http.MethodPost, Path: "/api/v1/orchestrators", Project: ProjectBody, Key: "projectId"},
 	onSession("session.send", SessionsOperate, http.MethodPost, "/send"),
 	onSession("session.steer", SessionsOperate, http.MethodPost, "/conversation/steer-or-send"),
 	onSession("session.interrupt", SessionsOperate, http.MethodPost, "/stop-turn"),
@@ -119,16 +118,16 @@ var catalog = []Action{
 	machine("account.list", AccountsRead, http.MethodGet, "/api/v1/agents/accounts"),
 	machine("account.usage", AccountsRead, http.MethodGet, "/api/v1/agents/accounts/usage"),
 	{ID: "account.session", Group: AccountsRead, Method: http.MethodGet, Path: "/api/v1/agents/accounts/sessions/{sessionId}", Project: ProjectSession, Key: "sessionId"},
-	machine("account.set-default", AccountsManage, http.MethodPost, "/api/v1/agents/accounts/{accountId}/default"),
+	everyProject("account.set-default", AccountsManage, http.MethodPost, "/api/v1/agents/accounts/{accountId}/default"),
 	{ID: "account.move-session", Group: AccountsManage, Method: http.MethodPut, Path: "/api/v1/agents/accounts/sessions/{sessionId}", Project: ProjectSession, Key: "sessionId"},
 
 	machine("settings.get", SettingsRead, http.MethodGet, "/api/v1/settings"),
-	machine("settings.harness-default", SettingsManage, http.MethodPatch, "/api/v1/settings/harness-defaults/{agent}"),
-	machine("settings.session-interface", SettingsManage, http.MethodPatch, "/api/v1/settings/session-interface"),
-	machine("settings.chat-hibernation", SettingsManage, http.MethodPatch, "/api/v1/settings/chat-hibernation"),
-	machine("settings.session-retention", SettingsManage, http.MethodPatch, "/api/v1/settings/session-retention"),
-	machine("settings.account-handoff", SettingsManage, http.MethodPatch, "/api/v1/settings/account-handoff"),
-	machine("settings.version-refresh", SettingsManage, http.MethodPatch, "/api/v1/settings/version-refresh"),
+	everyProject("settings.harness-default", SettingsManage, http.MethodPatch, "/api/v1/settings/harness-defaults/{agent}"),
+	everyProject("settings.session-interface", SettingsManage, http.MethodPatch, "/api/v1/settings/session-interface"),
+	everyProject("settings.chat-hibernation", SettingsManage, http.MethodPatch, "/api/v1/settings/chat-hibernation"),
+	everyProject("settings.session-retention", SettingsManage, http.MethodPatch, "/api/v1/settings/session-retention"),
+	everyProject("settings.account-handoff", SettingsManage, http.MethodPatch, "/api/v1/settings/account-handoff"),
+	everyProject("settings.version-refresh", SettingsManage, http.MethodPatch, "/api/v1/settings/version-refresh"),
 }
 
 // Catalog returns every action a grant can reach, in catalog order.

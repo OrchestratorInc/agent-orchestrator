@@ -303,6 +303,7 @@ AO_TOKEN=aoa_... ao call chat.input.resolve --input '{"sessionId":"api-12","requ
 - The loopback listener stays open: a caller that presents no token has no limit, as before.
 - Inside a session the caller is always the session: the CLI does not send `AO_TOKEN` there, so a token exported in a shell profile cannot limit or break the sessions the app starts. Outside a session, an `AO_TOKEN` that does not start with `aoa_` is refused with exit 4, never treated as no token.
 - A caller with a grant cannot create or change automations, because the sessions an automation starts would carry no grant. It can list and delete them.
+- A caller with a grant cannot start a project's orchestrator, which is shared with the user, and a token limited to projects cannot change machine-wide settings or the default account.
 - A grant limits calls to the daemon. It does not confine a process that runs as the same OS user, and it does not limit what a session it starts or messages does in its shell. The provider's permission mode is separate.
 - Exit codes an agent can branch on: `2` wrong usage, `3` unknown catalog action, `4` refused by the grant or the token, `5` a session waits for an answer, `124` a wait timed out.
 

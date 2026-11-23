@@ -262,6 +262,11 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 	if status, _, _ := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"}`, session: "api-9"}); status != 200 {
 		t.Errorf("the session may start a session in its project: status %d", status)
 	}
+	for _, body := range []string{`{"projectId":"api","kind":"orchestrator"}`, `{"projectId":"api","Kind":"orchestrator"}`} {
+		if status, _, _ := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: body, token: operateAPI}); status != 403 && status != 400 {
+			t.Errorf("a token must not start a project's orchestrator with %s: status %d", body, status)
+		}
+	}
 
 	if _, found, err := f.registry.Revoke("api-bot"); err != nil || !found {
 		t.Fatalf("revoke: %v %v", found, err)
