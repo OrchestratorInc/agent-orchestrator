@@ -117,7 +117,7 @@ func New(version, dataDir string, app AppControl) *Updater {
 		return u
 	}
 	switch {
-	case runtime.GOOS == "linux" && runtime.GOARCH == "amd64" && exists(filepath.Join(home, ".config", "systemd", "user", serviceUnit)) && onPath("systemd-run"):
+	case runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") && exists(filepath.Join(home, ".config", "systemd", "user", serviceUnit)) && onPath("systemd-run"):
 		u.kind = kindSystemd
 	case runtime.GOOS == "darwin" && exists(filepath.Join(home, "Library", "LaunchAgents", launchAgent+".plist")) && onPath("launchctl"):
 		u.kind = kindLaunchd
