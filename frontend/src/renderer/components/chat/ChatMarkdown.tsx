@@ -84,6 +84,7 @@ import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
 import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
+import { ChatFileIcon } from "./ChatFileIcon";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
 
@@ -822,6 +823,8 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
 	}
 	const openFile = () => file.open(workspaceFileReferenceLine(text ?? ""));
+	// A file this chat can open gets its Files-tree icon on a faint brand wash,
+	// so it reads apart from code names, which keep the plain chip.
 	return (
 		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
 			<Pressable
@@ -831,7 +834,10 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 				aria-label={`Open ${file.filePath} in Files`}
 				className="inline rounded transition-colors hover:bg-interactive-hover"
 			>
-				{code}
+				<code {...positions} data-excerpt-kind="inline-code" className="rounded bg-chat-file py-[2px] pr-[5px] pl-1 font-mono text-xs text-chat-file-foreground">
+					<ChatFileIcon path={file.filePath} className="mr-[5px] align-[-2px]" />
+					{children}
+				</code>
 			</Pressable>
 		</ChatPathMenu>
 	);
