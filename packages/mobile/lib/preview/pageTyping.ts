@@ -84,9 +84,11 @@ export class PageTyping {
 			(focused?.kind ?? null) !== (this.focused?.kind ?? null) ||
 			// Another field of the same kind: a confirm-password field, another tab's.
 			(focused?.field ?? null) !== (this.focused?.field ?? null) ||
-			(this.tapPending && reported !== this.reported) ||
+			// Only an older desktop, which names no field, needs a tap to tell
+			// that focus moved; with a field, a same-field echo is never a reset.
+			(this.tapPending && focused?.field === undefined && reported !== this.reported) ||
 			(control === "human" && this.control !== "human");
-		if (reset && reported !== this.reported) this.tapPending = false;
+		if ((reset && reported !== this.reported) || focused?.field !== undefined) this.tapPending = false;
 		this.connection = connection;
 		this.connected = true;
 		this.control = control;

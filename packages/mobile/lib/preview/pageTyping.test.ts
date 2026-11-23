@@ -160,4 +160,18 @@ describe("PageTyping", () => {
 		page.change("ab");
 		expect(page.observe({ kind: "text", value: "a", field: "t1:1:1" }, 1, "human")).toBeNull();
 	});
+
+	// A tap on the field that already has focus reopens the keyboard and
+	// changes nothing on the page, so no state answers it.
+	it("never rolls back typing after a tap on the field that already has focus", () => {
+		const { page, typed } = typing();
+		page.observe({ kind: "text", value: "", field: "t1:1:1" }, 1, "human");
+		page.tapped();
+		page.change("a");
+		page.change("ab");
+		// The echo of "a" arrives after "b" was typed.
+		expect(page.observe({ kind: "text", value: "a", field: "t1:1:1" }, 1, "human")).toBeNull();
+		page.change("abc");
+		expect(typed()).toBe("abc");
+	});
 });
