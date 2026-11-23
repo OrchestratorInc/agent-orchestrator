@@ -224,6 +224,27 @@ func TestLimitHistoryShowsALoginAsAnAccountThatStillHoldsIt(t *testing.T) {
 	if a := history.Logins[0]; a.AccountID != "acct-a" || a.Windows[0].Readings != 2 {
 		t.Fatalf("org A login = %+v, want both its readings shown as acct-a", a)
 	}
+
+	// A holder that has not read the login yet still stands for it.
+	reader = NewLimitHistoryReader(fakeLimitStore{
+		fakeLimitReadings: fakeLimitReadings{
+			read("device-claude", "org-a", aReset, now.Add(-2*time.Hour)),
+			read("device-claude", "org-b", bReset, now.Add(-time.Hour)),
+		},
+		saved: []domain.AgentAccount{{ID: "acct-a", Provider: domain.AgentAccountProviderClaude}},
+	}, fakeConfirmedLogins{
+		"acct-a":        {SignedIn: true, Email: "same@example.com", OrgID: "org-a"},
+		"device-claude": {SignedIn: true, Email: "same@example.com", OrgID: "org-b"},
+	})
+	reader.now = func() time.Time { return now }
+	history, err = reader.History(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(history.Logins) != 2 || history.Logins[0].AccountID != "acct-a" || !history.Logins[0].Windows[0].ResetsAt.Equal(aReset) ||
+		history.Logins[1].AccountID != "device-claude" || !history.Logins[1].Windows[0].ResetsAt.Equal(bReset) {
+		t.Fatalf("logins = %+v, want org A as acct-a and org B as the device", history.Logins)
+	}
 }
 
 func TestLimitHistoryWindows(t *testing.T) {

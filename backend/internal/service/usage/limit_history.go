@@ -214,16 +214,25 @@ func limitLogins(readings []domain.AgentLimitReading, held heldBy, now time.Time
 		sort.SliceStable(group, func(i, j int) bool { return group[i].ReadAt.Before(group[j].ReadAt) })
 		// The login is shown as the account that read it last among those that
 		// hold it now: an account that read it and has since moved to another
-		// organization no longer stands for it.
+		// organization no longer stands for it. When no holder has read it, the
+		// first holder by account ID stands for it.
 		latest := group[len(group)-1]
 		holders := held.holders(key)
+		account := ""
 		for i := len(group) - 1; i >= 0; i-- {
 			if holders[group[i].AccountID] {
-				latest = group[i]
+				latest, account = group[i], group[i].AccountID
 				break
 			}
 		}
-		login := domain.UsageLimitLogin{Provider: latest.Provider, Email: latest.Email, AccountID: latest.AccountID, Windows: []domain.UsageLimitSpan{}}
+		if account == "" {
+			for id := range holders {
+				if account == "" || id < account {
+					account = id
+				}
+			}
+		}
+		login := domain.UsageLimitLogin{Provider: latest.Provider, Email: latest.Email, AccountID: account, Windows: []domain.UsageLimitSpan{}}
 		for i := len(group) - 1; i >= 0 && login.Plan == ""; i-- {
 			login.Plan = group[i].Plan
 		}
