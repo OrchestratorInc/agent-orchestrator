@@ -183,7 +183,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 					opts.model = project.Config.Reviewers[0].AgentConfig.Model
 				}
 			}
-			if opts.review && reviewerHarnessMatches && opts.effort == "" {
+			if opts.review && opts.kind == "worker" && reviewerHarnessMatches && opts.effort == "" && harnessSupportsEffort(opts.harness) {
 				if len(project.Config.Reviewers) > 0 && project.Config.Reviewers[0].AgentConfig != nil {
 					opts.effort = project.Config.Reviewers[0].AgentConfig.Effort
 				}
@@ -484,6 +484,22 @@ func pathContains(root, child string) bool {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func harnessSupportsEffort(harness string) bool {
+	switch harness {
+	case string(domain.HarnessCodex),
+		string(domain.HarnessClaudeCode),
+		string(domain.HarnessCommandCode),
+		string(domain.HarnessHermes),
+		string(domain.HarnessPi),
+		string(domain.HarnessPrimeAgent),
+		string(domain.HarnessOpenInterpreter),
+		string(domain.HarnessGrok):
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveSpawnHarness(explicit, kind string, project projectDetails) (string, error) {
