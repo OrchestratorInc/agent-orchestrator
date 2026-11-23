@@ -4,6 +4,7 @@ import {
 	CONTROL_FEATURES,
 	CONTROL_STAT_KEYS,
 	HOVER_CONTROLS,
+	isErrorCode,
 	isUiControl,
 	RETRY_CONTROLS,
 	SURFACE_FEATURES,
@@ -262,6 +263,7 @@ export class UiUsageRuntime {
 	private readonly visible = new Map<UiSurface, number>();
 	private readonly lastHiddenAt = new Map<UiSurface, number>();
 	private readonly lastErrorSentAt = new Map<string, number>();
+	private readonly errorsInFlight = new Set<string>();
 	private readonly viewTimers = new Map<UiSurface, ReturnType<typeof setTimeout>>();
 	private readonly reportedViews = new Set<string>();
 	private featureMarkers: Set<string> | null = null;
@@ -443,7 +445,9 @@ export class UiUsageRuntime {
 	private sendDailyView(surface: UiSurface, openedBy: SurfaceOpenedBy): void {
 		const slotKey = `${utcDay(this.now())}|${surface}`;
 		if (this.reportedViews.has(slotKey) || this.optedOut() || isDeniedEvent("ao.surfaces.viewed")) return;
-		if (!reserveDailySlot(this.storage, SURFACE_VIEW_KEY, surface, this.now())) {
+		// The slot is released against the day it was taken, even after midnight.
+		const reservedAt = this.now();
+		if (!reserveDailySlot(this.storage, SURFACE_VIEW_KEY, surface, reservedAt)) {
 			this.reportedViews.add(slotKey);
 			return;
 		}
@@ -451,7 +455,7 @@ export class UiUsageRuntime {
 		void this.capture("ao.surfaces.viewed", { surface, opened_by: openedBy }).then((sent) => {
 			if (sent) return;
 			this.reportedViews.delete(slotKey);
-			releaseDailySlot(this.storage, SURFACE_VIEW_KEY, surface, this.now());
+			releaseDailySlot(this.storage, SURFACE_VIEW_KEY, surface, reservedAt);
 		});
 	}
 
@@ -539,7 +543,7 @@ export class UiUsageRuntime {
 			}
 			const feature = CONTROL_FEATURES[control];
 			if (feature) this.featureUsed(feature);
-			if (this.hover && this.hover.control === control && !this.hover.clicked && now - this.hover.start >= HOVER_DWELL_MS) {
+			if (this.hover && this.hover.element === controlElement && !this.hover.clicked && now - this.hover.start >= HOVER_DWELL_MS) {
 				this.hover.clicked = true;
 				this.bumpControl(control, "hover_click_count");
 				this.bumpCounter("hover_click_count");
@@ -588,11 +592,15 @@ export class UiUsageRuntime {
 		this.bumpSurface(surface, "rage_click_count");
 		if (isDeniedEvent("ao.ui.rage_clicked") || !reserveDailySlot(this.storage, RAGE_KEY, surface, now)) return;
 		void this.capture("ao.ui.rage_clicked", { surface }).then((sent) => {
-			if (!sent) releaseDailySlot(this.storage, RAGE_KEY, surface, this.now());
+			if (!sent) releaseDailySlot(this.storage, RAGE_KEY, surface, now);
 		});
 	}
 
 	pointerOver(target: EventTarget | null): void {
+		if (this.optedOut()) {
+			this.hover = undefined;
+			return;
+		}
 		if (this.hover?.element.contains(target as Node | null)) return;
 		const now = this.now();
 		this.endHover(now);
@@ -686,15 +694,21 @@ export class UiUsageRuntime {
 		if (presentation === "toast") this.bumpCounter("error_toast_count");
 		if (attributed) this.bumpSurface(attributed, "error_count");
 		// A toast or banner that keeps coming back is counted every time but sent once per few minutes.
-		const key = `${kind}|${presentation}|${attributed ?? ""}|${errorCode ?? ""}`;
+		// Keyed on the code that would actually be sent, so unknown codes share one key.
+		const code = isErrorCode(errorCode) ? errorCode : undefined;
+		const key = `${kind}|${presentation}|${attributed ?? ""}|${code ?? ""}`;
 		const lastSent = this.lastErrorSentAt.get(key);
-		if (lastSent !== undefined && now - lastSent < ERROR_REPEAT_MS) return;
-		this.lastErrorSentAt.set(key, now);
+		if (this.errorsInFlight.has(key) || (lastSent !== undefined && now - lastSent < ERROR_REPEAT_MS)) return;
+		// The quiet period starts only once an event actually went out.
+		this.errorsInFlight.add(key);
 		void this.capture("ao.ui.error_shown", {
 			presentation,
 			error_kind: kind,
 			...(attributed ? { surface: attributed } : {}),
-			...(errorCode ? { error_code: errorCode } : {}),
+			...(code ? { error_code: code } : {}),
+		}).then((sent) => {
+			this.errorsInFlight.delete(key);
+			if (sent) this.lastErrorSentAt.set(key, this.now());
 		});
 	}
 
@@ -715,6 +729,7 @@ export class UiUsageRuntime {
 		this.state = freshState(now);
 		this.dirty = false;
 		this.pendingDeadClicks = [];
+		this.hover = undefined;
 		// Time up to now is never counted, and none while analytics is off: a
 		// segment starts again only once collection resumes.
 		this.segmentStart = this.canTime(now) ? now : null;
@@ -994,6 +1009,11 @@ export function startUiUsageTelemetry(): () => void {
 	let flushTimer = 0;
 	const scheduleFlush = () => {
 		flushTimer = window.setTimeout(() => {
+			// The deadline may have moved, e.g. after a discard; wait it out again.
+			if (current.flushDelayMs() > 0) {
+				scheduleFlush();
+				return;
+			}
 			void current.flush().finally(scheduleFlush);
 		}, current.flushDelayMs());
 	};

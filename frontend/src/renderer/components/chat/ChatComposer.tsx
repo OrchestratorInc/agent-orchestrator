@@ -1801,8 +1801,10 @@ export const ChatComposer = memo(function ChatComposer({
 				editorClears.current !== editorClearsAtSubmit.current &&
 				textRef.current.trim()
 			) {
+				// A repeat Enter re-holds the same draft; count it only once.
+				const alreadyHeld = heldDuringSubmit.current?.text === textRef.current;
 				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false, unsentId: parkedUnsentId() };
-				countSend();
+				if (!alreadyHeld) countSend();
 			}
 			return submitInFlight.current;
 		}

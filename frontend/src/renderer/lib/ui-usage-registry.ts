@@ -174,6 +174,12 @@ export const ERROR_CODES = [
 	"AUTH_REQUIRED",
 	"PROVIDER_KEY_MISSING",
 ] as const;
+export type ErrorCode = (typeof ERROR_CODES)[number];
+
+/** Whether a value is one of the error codes `ao.ui.error_shown` may send. */
+export function isErrorCode(value: unknown): value is ErrorCode {
+	return typeof value === "string" && (ERROR_CODES as readonly string[]).includes(value);
+}
 
 /** Where an attachment came from. */
 export const ATTACHMENT_SOURCES = ["paste", "drop", "picker"] as const;
@@ -342,7 +348,7 @@ export function sanitizeUiUsageProperties(event: string, properties?: Properties
 			set("presentation", oneOf(properties?.presentation, ERROR_PRESENTATIONS));
 			set("error_kind", oneOf(properties?.error_kind, ERROR_KINDS));
 			// A known daemon or provider code, never a message.
-			set("error_code", oneOf(properties?.error_code, ERROR_CODES));
+			set("error_code", isErrorCode(properties?.error_code) ? properties.error_code : undefined);
 			break;
 		}
 		case "ao.ui.usage_summary": {

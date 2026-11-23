@@ -214,6 +214,25 @@ describe("UiUsageRuntime", () => {
 		expect(controlRow(properties, "tab.select")).toMatchObject({ hover_only_count: 1 });
 	});
 
+	it("counts a hover-then-click only on the element that was hovered", async () => {
+		const other = document.createElement("a");
+		other.setAttribute("data-telemetry-id", "sidebar.session_row");
+		document.getElementById("sidebar")!.append(other);
+		runtime.pointerOver(document.getElementById("row"));
+		now += 600;
+		click(other);
+		expect((await summary()).hover_click_count).toBeUndefined();
+	});
+
+	it("does not track hovers while analytics is off", async () => {
+		optedOut = true;
+		runtime.pointerOver(document.getElementById("row"));
+		optedOut = false;
+		now += 600;
+		click(document.getElementById("row")!);
+		expect((await summary()).hover_click_count).toBeUndefined();
+	});
+
 	it("attributes session switches to the input that started them", async () => {
 		runtime.sessionViewed("host|a");
 		click(document.getElementById("row")!);
@@ -288,14 +307,37 @@ describe("UiUsageRuntime", () => {
 	it("counts every repeat of an error but sends it once per five minutes", async () => {
 		for (let i = 0; i < 3; i += 1) {
 			runtime.errorShown("daemon_unavailable", "banner", undefined, "EXITED");
+			await settle();
 			now += 10_000;
 		}
 		runtime.errorShown("daemon_unavailable", "banner", undefined, "NOT_READY");
+		await settle();
 		now += 5 * 60_000;
 		runtime.errorShown("daemon_unavailable", "banner", undefined, "EXITED");
 		const sent = capture.mock.calls.filter(([event]) => event === "ao.ui.error_shown").map(([, properties]) => properties.error_code);
 		expect(sent).toEqual(["EXITED", "NOT_READY", "EXITED"]);
 		expect((await summary()).error_shown_count).toBe(5);
+	});
+
+	it("sends an error again when the first send did not go out", async () => {
+		capture.mockResolvedValueOnce(false);
+		runtime.errorShown("daemon_unavailable", "banner", undefined, "EXITED");
+		// Still in flight: a repeat waits for it instead of sending twice.
+		runtime.errorShown("daemon_unavailable", "banner", undefined, "EXITED");
+		await settle();
+		now += 10_000;
+		runtime.errorShown("daemon_unavailable", "banner", undefined, "EXITED");
+		await settle();
+		expect(capture.mock.calls.filter(([event]) => event === "ao.ui.error_shown")).toHaveLength(2);
+	});
+
+	it("keys error repeats on the code actually sent, so unknown codes share one", async () => {
+		runtime.errorShown("daemon_unavailable", "banner", undefined, "CUSTOMER_ONE");
+		await settle();
+		runtime.errorShown("daemon_unavailable", "banner", undefined, "CUSTOMER_TWO");
+		await settle();
+		const sent = capture.mock.calls.filter(([event]) => event === "ao.ui.error_shown");
+		expect(sent).toEqual([["ao.ui.error_shown", { presentation: "banner", error_kind: "daemon_unavailable" }]]);
 	});
 
 	it("sends a surface view once per day, after it stayed on screen for a second", async () => {
