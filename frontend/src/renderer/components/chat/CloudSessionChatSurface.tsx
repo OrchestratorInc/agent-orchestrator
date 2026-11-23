@@ -1103,8 +1103,13 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			// A new attempt (a retry, a new worker) waits for its own agent.
 			agentTurns.delete(turnID);
 			const epoch = eventPayload(event).workerEpoch;
-			if (typeof epoch === "number") turnEpochs.set(turnID, epoch);
-			else turnEpochs.delete(turnID);
+			if (typeof epoch === "number") {
+				turnEpochs.set(turnID, epoch);
+				// The worker that took a turn is connected, unless a newer one
+				// connected since: a page that begins after the connection still
+				// knows the current worker.
+				if (currentEpoch === undefined || epoch > currentEpoch) currentEpoch = epoch;
+			} else turnEpochs.delete(turnID);
 		}
 		if (turnID && event.type === "chat.turn_capabilities") {
 			agentTurns.add(turnID);
@@ -1427,18 +1432,25 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// A running turn no agent has taken yet (sent while the session starts, or
 	// taken by a worker still checking out) reads as getting ready. A worker
 	// that never reports capabilities finished a turn without them; its turns
-	// read as running from their start, as before.
-	const reportsAgentStart = !orderedTurns.some((turn) => turn.state === "completed" && startedTurns.has(turn.id) && !capabilityTurns.has(turn.id));
-	if (reportsAgentStart) {
-		for (const turn of orderedTurns) {
-			if (turn.state !== "running" || agentTurns.has(turn.id)) continue;
-			// A turn a worker took goes by that worker; one no worker has taken
-			// yet, by the connected worker, if any (a paused session's worker is
-			// gone, so its turn waits for the next one).
-			const epoch = turnEpochs.get(turn.id) ?? (session.runtimeConnected ? currentEpoch : undefined);
-			if (epoch !== undefined && agentEpochs.has(epoch)) continue;
-			turn.agentPending = true;
-		}
+	// read as running from their start, as before. That goes by worker: a newer
+	// one that reports them still shows its own start. A turn whose worker is
+	// not known (one too old to say) goes by every such turn.
+	const silentEpochs = new Set<number>();
+	let silentUnknownWorker = false;
+	for (const turn of orderedTurns) {
+		if (turn.state !== "completed" || !startedTurns.has(turn.id) || capabilityTurns.has(turn.id)) continue;
+		const epoch = turnEpochs.get(turn.id);
+		if (epoch === undefined) silentUnknownWorker = true;
+		else silentEpochs.add(epoch);
+	}
+	for (const turn of orderedTurns) {
+		if (turn.state !== "running" || agentTurns.has(turn.id)) continue;
+		// A turn a worker took goes by that worker; one no worker has taken
+		// yet, by the connected worker, if any (a paused session's worker is
+		// gone, so its turn waits for the next one).
+		const epoch = turnEpochs.get(turn.id) ?? (session.runtimeConnected ? currentEpoch : undefined);
+		if (epoch === undefined ? silentUnknownWorker : silentEpochs.has(epoch) || agentEpochs.has(epoch)) continue;
+		turn.agentPending = true;
 	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");

@@ -3623,4 +3623,40 @@ describe("toSnapshot turns waiting for their agent", () => {
 		];
 		expect(pending(toSnapshot(session, older))).toEqual([]);
 	});
+
+	// An older worker that never reported capabilities says nothing about the
+	// newer worker that replaced it: that one's first turn still waits for its
+	// agent, while a turn the older worker took still reads as running.
+	it("goes by worker when an older one never reported capabilities", () => {
+		const olderWorker = [
+			event(1, "chat.user_message", { text: "First", turnId: "turn-0" }),
+			event(2, "chat.turn_started", { turnId: "turn-0", attempt: 1, workerEpoch: 3 }),
+			event(3, "chat.turn_completed", { turnId: "turn-0", attempt: 1 }),
+		];
+		const sameWorker = [...olderWorker,
+			event(4, "chat.user_message", { text: "Second", turnId: "turn-1" }),
+			event(5, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 })];
+		expect(pending(toSnapshot(session, sameWorker))).toEqual([]);
+		const newerWorker = [...olderWorker,
+			event(4, "worker.connected", { workerId: "w2", epoch: 4 }),
+			event(5, "chat.user_message", { text: "Second", turnId: "turn-1" }),
+			event(6, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 4 })];
+		expect(pending(toSnapshot(session, newerWorker))).toEqual(["turn-1"]);
+	});
+
+	// A page that begins after the worker connected still knows the current
+	// worker from the turns it took: its next turn goes straight to the agent.
+	it("knows the current worker from its turns when its connection is above the page", () => {
+		const page = [
+			event(10, "chat.turn_started", { turnId: "turn-1", attempt: 1, workerEpoch: 3 }),
+			event(11, "chat.turn_capabilities", { turnId: "turn-1", attempt: 1, steering: false }),
+			event(12, "chat.turn_completed", { turnId: "turn-1", attempt: 1 }),
+			event(13, "chat.user_message", { text: "Next", turnId: "turn-2" }),
+		];
+		expect(pending(toSnapshot({ ...session, runtimeConnected: true }, page, undefined, { partial: true }))).toEqual([]);
+		// A newer worker that connected since keeps its own epoch.
+		const rewoken = [...page.slice(0, 3), event(13, "worker.connected", { workerId: "w2", epoch: 4 }),
+			event(14, "chat.user_message", { text: "Next", turnId: "turn-2" })];
+		expect(pending(toSnapshot({ ...session, runtimeConnected: true }, rewoken, undefined, { partial: true }))).toEqual(["turn-2"]);
+	});
 });
