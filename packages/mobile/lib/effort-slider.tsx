@@ -3,18 +3,20 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Platform, StyleSheet, Text, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import { AppSymbol } from "./AppSymbol";
 import { haptics } from "./haptics";
 import { magneticOffset, nearestStop } from "./modelEffort";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { duration, radius, space, type } from "./tokens";
+import { duration, iconSize, space, type } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 import { markTouchInside } from "./touchOutside";
 import { useEffortSlider, type EffortSliderProps } from "./useEffortSlider";
 
 /*
- * The effort slider, the same on both platforms: a fat track with a dot per
- * level the model takes, lit in the theme's accent up to a white blob that
+ * The effort slider, the same on both platforms: "Effort › Medium" centred
+ * on its own over a card holding a fat track with a dot per level the model
+ * takes, lit in the theme's accent up to a white blob that
  * rides inside it. The blob follows the finger but is pulled toward the
  * nearest level, ticks as it lands on each, and glides onto its level when let
  * go. It stays up until a tap lands outside it (see useEffortSliderOpen).
@@ -26,6 +28,10 @@ const BLOB = TRACK - INSET * 2;
 // The blob's centre at either end of the track.
 const END = TRACK / 2;
 const DOT = 3;
+// The track's length: this far between neighbouring levels, so it is only as
+// long as the levels need, and never shorter than MIN_TRACK to drag along.
+const LEVEL_GAP = 68;
+const MIN_TRACK = 240;
 // The blob is white in both themes, as a system switch's thumb is.
 const BLOB_FILL = "#ffffff";
 const BLOB_SHADOW = "#000000";
@@ -52,8 +58,10 @@ export function EffortSliderOverlay({ bottom, ...props }: EffortSliderProps & { 
 		navigation.setOptions({ gestureEnabled: false });
 		return () => navigation.setOptions({ gestureEnabled: true });
 	}, [navigation]);
+	// box-none: the overlay spans the composer's width to centre the slider,
+	// and a touch beside the card must still count as one outside it.
 	return (
-		<Animated.View entering={FadeIn.duration(duration.base)} exiting={FadeOut.duration(duration.fast)} onTouchStart={markTouchInside} style={[styles.overlay, { bottom }]}>
+		<Animated.View entering={FadeIn.duration(duration.base)} exiting={FadeOut.duration(duration.fast)} pointerEvents="box-none" onTouchStart={markTouchInside} style={[styles.overlay, { bottom }]}>
 			<EffortSlider {...props} />
 		</Animated.View>
 	);
@@ -66,6 +74,7 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 	const [width, setWidth] = useState(0);
 	const { index, label, pick } = useEffortSlider(choices, onChoose, haptics.detent);
 	const count = choices.length;
+	const trackWidth = Math.max(MIN_TRACK, END * 2 + Math.max(count - 1, 0) * LEVEL_GAP);
 	const stepFor = (trackWidth: number) => count > 1 ? (trackWidth - END * 2) / (count - 1) : 0;
 	const step = stepFor(width);
 	const stopX = (i: number) => END + Math.max(i, 0) * step;
@@ -119,35 +128,44 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 		.onFinalize(release);
 
 	return (
-		<View style={styles.row}>
-			<Text style={styles.label} numberOfLines={1}>{label}</Text>
-			<GestureDetector gesture={drag}>
-				<View
-					style={styles.track}
-					onLayout={(event: LayoutChangeEvent) => {
-						const next = event.nativeEvent.layout.width;
-						// The blob and fill mount with this width, already on the
-						// level: set in an effect after they mount, while the card
-						// fades in, the move never reached the fill on Android,
-						// and at the top level the track showed no fill at all.
-						if (!dragging.current) blobX.value = END + Math.max(index, 0) * stepFor(next);
-						setWidth(next);
-					}}
-					accessible
-					accessibilityRole="adjustable"
-					accessibilityLabel="Effort"
-					accessibilityValue={{ text: label }}
-					accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
-					onAccessibilityAction={(event) => pick(Math.max(index, 0) + (event.nativeEvent.actionName === "increment" ? 1 : -1))}
-					testID="effort-slider"
-				>
-					{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.fill, fillStyle]} /> : null}
-					{width ? choices.map((choice, i) => (
-						<View key={choice.value} pointerEvents="none" style={[styles.dot, { left: stopX(i) - DOT, backgroundColor: i <= index ? t.textSecondary : t.textFaint }]} />
-					)) : null}
-					{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.blob, blobStyle]} /> : null}
-				</View>
-			</GestureDetector>
+		<View style={styles.stack}>
+			{/* What the track sets, then the level it is on, centred above the
+			    card rather than inside it. Hidden from screen readers: the track
+			    itself is "Effort", adjustable, valued the level. */}
+			<View style={styles.heading} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+				<Text style={styles.title} numberOfLines={1}>Effort</Text>
+				<AppSymbol name="chevronForward" size={iconSize.xs} color={t.textTertiary} weight="semibold" />
+				<Text style={styles.value} numberOfLines={1} testID="effort-slider-value">{label}</Text>
+			</View>
+			<View style={styles.card}>
+				<GestureDetector gesture={drag}>
+					<View
+						style={[styles.track, { width: trackWidth }]}
+						onLayout={(event: LayoutChangeEvent) => {
+							const next = event.nativeEvent.layout.width;
+							// The blob and fill mount with this width, already on the
+							// level: set in an effect after they mount, while the card
+							// fades in, the move never reached the fill on Android,
+							// and at the top level the track showed no fill at all.
+							if (!dragging.current) blobX.value = END + Math.max(index, 0) * stepFor(next);
+							setWidth(next);
+						}}
+						accessible
+						accessibilityRole="adjustable"
+						accessibilityLabel="Effort"
+						accessibilityValue={{ text: label }}
+						accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
+						onAccessibilityAction={(event) => pick(Math.max(index, 0) + (event.nativeEvent.actionName === "increment" ? 1 : -1))}
+						testID="effort-slider"
+					>
+						{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.fill, fillStyle]} /> : null}
+						{width ? choices.map((choice, i) => (
+							<View key={choice.value} pointerEvents="none" style={[styles.dot, { left: stopX(i) - DOT, backgroundColor: i <= index ? t.textSecondary : t.textFaint }]} />
+						)) : null}
+						{width && index >= 0 ? <Animated.View pointerEvents="none" style={[styles.blob, blobStyle]} /> : null}
+					</View>
+				</GestureDetector>
+			</View>
 		</View>
 	);
 }
@@ -162,9 +180,14 @@ const makeStyles = (t: Theme) =>
 			// The gap above the composer. A margin does not move an absolutely
 			// placed view off its `bottom`, and the card sat on the composer's edge.
 			transform: [{ translateY: -space.sm }],
+			alignItems: "center",
+		},
+		stack: { gap: space.xs, alignItems: "center" },
+		heading: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xxs },
+		card: {
 			padding: space.xs,
-			paddingLeft: space.md,
-			borderRadius: radius.pill,
+			// Concentric with the track's ends, an even pad in from the card's.
+			borderRadius: TRACK / 2 + space.xs,
 			borderCurve: "continuous",
 			backgroundColor: t.bgElevated,
 			borderWidth: StyleSheet.hairlineWidth,
@@ -175,9 +198,9 @@ const makeStyles = (t: Theme) =>
 			shadowOffset: { width: 0, height: 4 },
 			elevation: 8,
 		},
-		row: { flexDirection: "row", alignItems: "center", gap: space.md },
-		label: { ...type.subheadline, fontFamily: type.headline.fontFamily, color: t.textPrimary, minWidth: 56 },
-		track: { flex: 1, height: TRACK, borderRadius: TRACK / 2, borderCurve: "continuous", backgroundColor: t.bgElevatedHover, overflow: "hidden", justifyContent: "center" },
+		title: { ...type.footnote, color: t.textSecondary },
+		value: { ...type.footnote, fontFamily: type.headline.fontFamily, color: t.textPrimary, flexShrink: 1 },
+		track: { height: TRACK, borderRadius: TRACK / 2, borderCurve: "continuous", backgroundColor: t.bgElevatedHover, overflow: "hidden", justifyContent: "center" },
 		fill: { position: "absolute", left: 0, top: 0, bottom: 0, borderRadius: TRACK / 2, backgroundColor: t.accentBorder },
 		dot: { position: "absolute", width: DOT * 2, height: DOT * 2, borderRadius: DOT },
 		blob: {

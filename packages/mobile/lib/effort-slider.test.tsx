@@ -17,6 +17,7 @@ vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixtures.set
 
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
 vi.mock("./haptics", () => ({ haptics: { detent: fixtures.detent } }));
+vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => fixtures.reduceMotion }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
@@ -100,7 +101,7 @@ async function render(selected?: string) {
 		track,
 		pan,
 		drag,
-		label: () => root.findAll((node) => hostType(node) === "Text")[0].props.children,
+		label: () => root.findAll((node) => hostType(node) === "Text" && node.props.testID === "effort-slider-value")[0].props.children,
 		blobCentre,
 		onChoose,
 		onRelease,
@@ -160,7 +161,10 @@ describe("effort slider", () => {
 
 	it("keeps its own touches from counting as a tap outside it", async () => {
 		await act(async () => { renderer = create(<EffortSliderOverlay choices={levels("high")} onChoose={() => {}} bottom="100%" />); });
-		expect(renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0].props.onTouchStart).toBe(markTouchInside);
+		const overlay = renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0];
+		expect(overlay.props.onTouchStart).toBe(markTouchInside);
+		// A touch on the chat beside the card is outside it.
+		expect(overlay.props.pointerEvents).toBe("box-none");
 	});
 
 	it("holds the screen's back swipe while it is up, so a drag to the right stays on the slider", async () => {
@@ -179,6 +183,14 @@ describe("effort slider", () => {
 		await act(async () => renderer!.unmount());
 		renderer = undefined;
 		expect(fixtures.setOptions).not.toHaveBeenCalled();
+	});
+
+	it("heads the track with what it sets, then the level it is on, kept from screen readers", async () => {
+		await render("medium");
+		const texts = renderer!.root.findAll((node) => hostType(node) === "Text").map((node) => node.props.children);
+		expect(texts).toEqual(["Effort", "Medium"]);
+		const heading = renderer!.root.findAll((node) => hostType(node) === "View" && node.props.importantForAccessibility === "no-hide-descendants")[0];
+		expect(heading.findAll((node) => hostType(node) === "AppSymbol")[0].props.name).toBe("chevronForward");
 	});
 
 	it("steps a level at a time for a screen reader, and stops at the ends", async () => {
