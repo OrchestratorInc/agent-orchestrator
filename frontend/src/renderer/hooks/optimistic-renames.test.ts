@@ -4,6 +4,7 @@ import {
 	isOptimisticRenameTracked,
 	optimisticRenamesVersion,
 	queueRenameWrite,
+	RENAME_WRITE_WAIT_MS,
 	renamedTitle,
 	renameReadStarted,
 	resetOptimisticRenamesForTest,
@@ -153,5 +154,26 @@ describe("rename writes", () => {
 		const write = vi.fn(async () => undefined);
 		void queueRenameWrite(KEY, write);
 		await vi.waitFor(() => expect(write).toHaveBeenCalled());
+	});
+
+	it("stops waiting for a write that has stalled, so a later rename still goes out", async () => {
+		vi.useFakeTimers();
+		try {
+			const sent: string[] = [];
+			// The first request never answers (a dropped tunnel, say).
+			void queueRenameWrite(KEY, () => {
+				sent.push("stalled");
+				return new Promise<void>(() => {});
+			});
+			const retry = queueRenameWrite(KEY, async () => { sent.push("retry"); });
+
+			await vi.advanceTimersByTimeAsync(RENAME_WRITE_WAIT_MS - 1);
+			expect(sent).toEqual(["stalled"]);
+			await vi.advanceTimersByTimeAsync(1);
+			await retry;
+			expect(sent).toEqual(["stalled", "retry"]);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

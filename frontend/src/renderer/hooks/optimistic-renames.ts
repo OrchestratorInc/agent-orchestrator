@@ -14,7 +14,8 @@ import { useSyncExternalStore } from "react";
  * - A failed request drops only its own title: the newest one still in flight
  *   shows, else the last acknowledged one, else the title from before.
  * - Requests for one key go out one after another (see {@link queueRenameWrite}),
- *   so the server stores the renames in the order they were confirmed.
+ *   so the server stores the renames in the order they were confirmed; a
+ *   request stalled for seconds stops holding the next one back.
  */
 
 type Attempt = { token: number; title: string };
@@ -154,14 +155,33 @@ export function settleOptimisticRename(key: string, token: number, ok: boolean, 
 }
 
 /**
+ * How long a write waits for the one before it. The request clients have no
+ * timeout, so a stalled request (a dropped tunnel) must not hold back every
+ * later rename of the same item.
+ */
+export const RENAME_WRITE_WAIT_MS = 10_000;
+
+/** Resolves when `previous` settles, or after {@link RENAME_WRITE_WAIT_MS}, whichever comes first. */
+function settledOrStalled(previous: Promise<void>): Promise<void> {
+	return new Promise((resolve) => {
+		const timer = setTimeout(resolve, RENAME_WRITE_WAIT_MS);
+		void previous.then(() => {
+			clearTimeout(timer);
+			resolve();
+		});
+	});
+}
+
+/**
  * Runs `write` once every earlier write for `key` has settled, so two renames
  * in quick succession reach the server in the order they were confirmed and
- * the newer one is the name it keeps. With nothing queued it runs at once,
- * synchronously up to its first await.
+ * the newer one is the name it keeps. A write stuck past
+ * {@link RENAME_WRITE_WAIT_MS} stops holding the next one back. With nothing
+ * queued it runs at once, synchronously up to its first await.
  */
 export function queueRenameWrite<T>(key: string, write: () => Promise<T>): Promise<T> {
 	const previous = writes.get(key);
-	const run = previous ? previous.then(() => write()) : write();
+	const run = previous ? settledOrStalled(previous).then(() => write()) : write();
 	const settled = run.then(() => undefined, () => undefined);
 	writes.set(key, settled);
 	void settled.then(() => {
