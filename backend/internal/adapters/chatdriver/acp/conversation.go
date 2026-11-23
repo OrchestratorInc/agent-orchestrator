@@ -51,6 +51,9 @@ type preparedTurn struct {
 	id              string
 	clientMessageID string
 	prompt          []acpsdk.ContentBlock
+	// endedCycle is the agent's own cycle this turn ended, settled when the
+	// turn runs (see settleEndedCycle).
+	endedCycle *providerCycle
 }
 
 type interruptAttempt struct {
@@ -1064,7 +1067,7 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	}
 	// A cycle the agent was still running on its own ends here: what it wrote
 	// so far stays its own, and the turn's output starts fresh items.
-	cycle := c.detachProviderCycleLocked()
+	turn.endedCycle = c.detachProviderCycleLocked()
 	c.activeTurn = turn.id
 	c.turnModelID = turn.id
 	c.turnModel = c.configOptionCurrentLocked("model")
@@ -1085,12 +1088,14 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	c.providerFailure = nil
 	c.mu.Unlock()
 
-	c.emitSettledCycle(cycle)
+	// The ended cycle settles in runTurn: its settle can wait on an update
+	// still being emitted, and this caller may be the one that drains events.
 	go c.runTurn(turnCtx, sessionID, turn)
 	return nil
 }
 
 func (c *conversation) runTurn(ctx context.Context, sessionID string, turn preparedTurn) {
+	c.settleEndedCycle(turn.endedCycle)
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: turn.id})
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
 	// ACP message ids are opaque idempotency/correlation keys. Preserve AO's
@@ -1389,7 +1394,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.providerFailure = nil
 	c.mu.Unlock()
 
-	c.emitSettledCycle(cycle)
+	c.settleEndedCycle(cycle)
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
 

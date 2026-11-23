@@ -38,11 +38,12 @@ type providerCycle struct {
 	timerGen int
 	timer    *time.Timer
 	lastSeen time.Time
-	// settled is what the cycle had when it was detached; nil while it is open.
+	// settled is what the cycle left open when it was detached, with any text
+	// that arrived after; nil while it is open. Guarded by mu.
 	settled *settledCycle
 }
 
-// settledCycle is what a cycle left open, copied while holding mu.
+// settledCycle is the text of a cycle's items, to complete them with.
 type settledCycle struct {
 	messages map[string]string
 	thoughts map[string]string
@@ -97,10 +98,10 @@ const (
 // appendItemText adds a delta to a streamed item and reports whether the item
 // already had text. A cycle's item is tracked in the same hold of mu, so the
 // cycle's detach sees the item with all of its text or not at all. If a turn
-// detached the cycle after this update entered it, the cycle has already
-// settled what it had: the delta goes on that settled copy, never in the
-// turn's maps, and late returns the item to be settled again after the delta
-// is emitted.
+// detached the cycle after this update entered it, the delta goes on the
+// cycle's settled text, never in the turn's maps, and late returns the item to
+// complete again after the delta is emitted: the turn's settle may already
+// have completed it without the delta.
 func (c *conversation) appendItemText(cycle *providerCycle, kind itemKind, id, parentID, delta string) (existed bool, late *settledCycle) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -194,24 +195,51 @@ func (c *conversation) endQuietProviderCycle(cycle *providerCycle, gen int) {
 		c.mu.Unlock()
 		return
 	}
-	settled := c.detachProviderCycleLocked()
+	c.detachProviderCycleLocked()
 	c.mu.Unlock()
-	c.emitSettledCycle(settled)
+	c.emitEndedCycle(cycle)
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}})
 }
 
 // endProviderCycle settles an open cycle now: the agent said it is idle.
 func (c *conversation) endProviderCycle() {
+	c.cycleStateMu.Lock()
+	defer c.cycleStateMu.Unlock()
 	c.mu.Lock()
-	settled := c.detachProviderCycleLocked()
+	cycle := c.detachProviderCycleLocked()
+	c.mu.Unlock()
+	c.emitEndedCycle(cycle)
+}
+
+// settleEndedCycle completes the items of a cycle a turn ended.
+func (c *conversation) settleEndedCycle(cycle *providerCycle) {
+	if cycle == nil {
+		return
+	}
+	c.cycleStateMu.Lock()
+	defer c.cycleStateMu.Unlock()
+	c.emitEndedCycle(cycle)
+}
+
+// emitEndedCycle completes a detached cycle's items with their text as it is
+// now. The caller holds cycleStateMu, which an update holds from changing a
+// cycle item through emitting its events, so the items' events reach the
+// consumer in the order the items changed and this completion comes after
+// every delta already applied to them.
+func (c *conversation) emitEndedCycle(cycle *providerCycle) {
+	if cycle == nil {
+		return
+	}
+	c.mu.Lock()
+	settled := &settledCycle{messages: maps.Clone(cycle.settled.messages),
+		thoughts: maps.Clone(cycle.settled.thoughts), nested: maps.Clone(cycle.settled.nested)}
 	c.mu.Unlock()
 	c.emitSettledCycle(settled)
 }
 
-// detachProviderCycleLocked closes the open cycle and copies what it left
-// open, removing those items so a later settle does not repeat them. The
-// caller emits the copy once mu is released.
-func (c *conversation) detachProviderCycleLocked() *settledCycle {
+// detachProviderCycleLocked closes the open cycle and moves what it left open
+// onto it, out of the maps a turn settles, and returns it for emitEndedCycle.
+func (c *conversation) detachProviderCycleLocked() *providerCycle {
 	cycle := c.cycle
 	if cycle == nil {
 		return nil
@@ -237,11 +265,8 @@ func (c *conversation) detachProviderCycleLocked() *settledCycle {
 			delete(c.nestedMessages, id)
 		}
 	}
-	// The cycle keeps its own copy for a late delta (appendItemText); the
-	// caller emits this one after releasing mu.
-	cycle.settled = &settledCycle{messages: maps.Clone(settled.messages),
-		thoughts: maps.Clone(settled.thoughts), nested: maps.Clone(settled.nested)}
-	return settled
+	cycle.settled = settled
+	return cycle
 }
 
 // emitSettledCycle completes a cycle's items, turn-less like their deltas.

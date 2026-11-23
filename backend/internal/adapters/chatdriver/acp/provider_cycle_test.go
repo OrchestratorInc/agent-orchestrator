@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -317,11 +318,11 @@ func TestACPProviderCycleTextAfterDetachSettlesWithTheCycle(t *testing.T) {
 	}
 
 	c.mu.Lock()
-	settled := c.detachProviderCycleLocked()
+	ended := c.detachProviderCycleLocked()
 	c.messages = map[string]string{} // the turn's fresh maps
 	c.thoughts = map[string]string{}
 	c.mu.Unlock()
-	if got := settled.messages["assistant-cycle-1"]; got != "All checks" {
+	if got := ended.settled.messages["assistant-cycle-1"]; got != "All checks" {
 		t.Fatalf("settled at detach = %q", got)
 	}
 
@@ -336,4 +337,73 @@ func TestACPProviderCycleTextAfterDetachSettlesWithTheCycle(t *testing.T) {
 	if len(c.messages) != 0 || len(c.thoughts) != 0 {
 		t.Fatalf("cycle text landed in the turn's maps: %v %v", c.messages, c.thoughts)
 	}
+}
+
+// A cycle item's events reach the consumer in the order the item changed, even
+// when a turn detaches the cycle while an update for it is still emitting. The
+// turn's settle waits for that update and completes the item with its text as
+// it is then, so the last event is a completion with the whole text: never a
+// stale completion after a newer one, nor a delta after the completion.
+func TestACPProviderCycleEventsKeepTheOrderItsItemsChanged(t *testing.T) {
+	newConv := func() (*conversation, *providerCycle) {
+		c := &conversation{events: make(chan ports.ChatEvent, 16), messages: map[string]string{},
+			thoughts: map[string]string{}, nestedMessages: map[string]nestedMessageState{}}
+		cycle := &providerCycle{id: "cycle-1", items: map[string]bool{}, tools: map[string]bool{}}
+		c.cycle = cycle
+		return c, cycle
+	}
+	// startTurn detaches the cycle as StartDeferredTurn does and settles it as
+	// runTurn does, in a goroutine of its own.
+	startTurn := func(c *conversation) chan struct{} {
+		c.mu.Lock()
+		ended := c.detachProviderCycleLocked()
+		c.messages = map[string]string{}
+		c.mu.Unlock()
+		done := make(chan struct{})
+		go func() { c.settleEndedCycle(ended); close(done) }()
+		return done
+	}
+	delta := func(text string) ports.ChatEvent {
+		return ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "m", Delta: text}
+	}
+	received := func(c *conversation, done chan struct{}) []string {
+		<-done
+		close(c.events)
+		var out []string
+		for event := range c.events {
+			out = append(out, string(event.Kind)+":"+event.Delta+event.Text)
+		}
+		return out
+	}
+
+	t.Run("text after the detach", func(t *testing.T) {
+		c, cycle := newConv()
+		c.appendItemText(cycle, itemMessage, "m", "", "A")
+		c.cycleStateMu.Lock() // an update that entered the cycle before the turn
+		done := startTurn(c)
+		_, late := c.appendItemText(cycle, itemMessage, "m", "", "B")
+		c.emit(delta("B"))
+		c.emitSettledCycle(late)
+		c.cycleStateMu.Unlock()
+		got := received(c, done)
+		want := []string{"message.delta:B", "message.completed:AB", "message.completed:AB"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("events = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("text before the detach, emitted after it", func(t *testing.T) {
+		c, cycle := newConv()
+		c.appendItemText(cycle, itemMessage, "m", "", "A")
+		c.cycleStateMu.Lock()
+		c.appendItemText(cycle, itemMessage, "m", "", "B")
+		done := startTurn(c)
+		c.emit(delta("B"))
+		c.cycleStateMu.Unlock()
+		got := received(c, done)
+		want := []string{"message.delta:B", "message.completed:AB"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("events = %q, want %q", got, want)
+		}
+	})
 }

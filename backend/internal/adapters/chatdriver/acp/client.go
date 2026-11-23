@@ -705,10 +705,13 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	// Outside a turn, the update belongs to the agent's own cycle. The turn is
 	// read and the cycle entered under one hold of mu, so a turn starting in
 	// between cannot find a cycle open, or this update's items in its maps.
+	// cycleStateMu is held through a cycle update's events (see
+	// emitEndedCycle), and otherwise only until the cycle check is done.
 	replaying := c.historyReplayActive()
 	if !replaying {
 		c.cycleStateMu.Lock()
 	}
+	holdingCycleState := !replaying
 	c.mu.Lock()
 	sessionID := c.sessionID
 	turnID := c.activeTurn
@@ -722,8 +725,13 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	if opened {
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}})
 	}
-	if !replaying {
-		c.cycleStateMu.Unlock()
+	if holdingCycleState {
+		if cycle != nil {
+			// Deferred first, so it runs last: after the late settles below.
+			defer c.cycleStateMu.Unlock()
+		} else {
+			c.cycleStateMu.Unlock()
+		}
 	}
 	if !sessionMatches {
 		return fmt.Errorf("ACP update for unexpected session %q", params.SessionId)
