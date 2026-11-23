@@ -9,6 +9,7 @@ import type {
 	CloudCpWorkspaceReviewSearchQuery,
 } from "../lib/cloud-cp";
 import { CloudCpError, workspaceRepositoryOf } from "../lib/cloud-cp";
+import { cloudWorkerRequest, cloudWorkerStartingDelay, cloudWorkerStartingRemaining, isCloudWorkerStarting, recordCloudWorkspaceStartupEvent } from "../lib/cloud-worker-starting";
 import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 
 export const cloudWorkspaceReviewQueryKey = (baseUrl: string, orgId: string, sessionId: string) =>
@@ -36,12 +37,24 @@ export function cloudWorkspaceReviewSummaryQueryOptions(args: {
 	const { client, baseUrl, orgId, sessionId } = args;
 	return {
 		queryKey: [...repositoryKey(client, baseUrl, orgId, sessionId), "summary"] as const,
-		queryFn: () => client.getWorkspaceReview(orgId, sessionId),
+		// The summary is the session's first workspace read, so its answer tells
+		// every other read whether the worker is still preparing the workspace.
+		queryFn: () => cloudWorkerRequest(orgId, sessionId, () => client.getWorkspaceReview(orgId, sessionId)),
 		enabled: args.enabled ?? true,
 		refetchInterval: args.visible === false ? false as const : 5_000,
-		retry: cloudWorkspaceReviewRetry,
+		// A worker still preparing its workspace is asked again after a growing
+		// wait (or its Retry-After) while the panel keeps loading, not every poll.
+		retry: (failureCount: number, error: Error) =>
+			isCloudWorkerStarting(error) ? failureCount < STARTING_RETRIES : cloudWorkspaceReviewRetry(failureCount, error),
+		retryDelay: (failureCount: number, error: Error) =>
+			isCloudWorkerStarting(error)
+				? cloudWorkerStartingRemaining(orgId, sessionId) || cloudWorkerStartingDelay(failureCount + 1, error)
+				: Math.min(1_000 * 2 ** failureCount, 30_000),
 	};
 }
+
+/** How many "still starting" answers a summary waits through (about half an hour at the longest wait) before it shows the error. */
+const STARTING_RETRIES = 30;
 
 export function cloudWorkspaceReviewTreeQueryOptions(args: {
 	client: CloudCpClient;
@@ -164,6 +177,7 @@ export function useCloudWorkspaceReviewEvents(args: {
 		enabled: args.enabled,
 		onEvent: (event) => {
 			if (!args.orgId) return;
+			recordCloudWorkspaceStartupEvent(args.orgId, args.sessionId, event);
 			void invalidateCloudWorkspaceReviewEvent(queryClient, cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId), event);
 		},
 	});

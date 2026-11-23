@@ -5,9 +5,10 @@ import { useTranslation } from "react-i18next";
 import type { MessageKey } from "../i18n";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
+import { useCloudSessionStartRequestInFlight } from "../hooks/useCloudWorkspaceReady";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
 import { CloudCpError, type CloudCpClient } from "../lib/cloud-cp";
-import { isWorkspaceStartupError, type CloudStartupProblem } from "../lib/cloud-lifecycle";
+import { isWorkspaceStartupError, requestCloudWorkspaceCheckout, type CloudStartupProblem } from "../lib/cloud-lifecycle";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { cn } from "../lib/utils";
 import { CoderWorkspaceLinkButton } from "./CoderWorkspaceLinkButton";
@@ -43,7 +44,7 @@ export async function requestWorkspaceRetry(
 	const deadline = Date.now() + WAKE_RETRY_LIMIT_MS;
 	for (;;) {
 		try {
-			await client.requestWorkspaceCheckout(orgId, sessionId);
+			await requestCloudWorkspaceCheckout(client, orgId, sessionId);
 			return;
 		} catch (error) {
 			if (!(error instanceof CloudCpError) || error.code !== "WORKER_UNAVAILABLE" || signal.aborted || Date.now() >= deadline) throw error;
@@ -151,6 +152,9 @@ export function CloudSessionStartupError({
 			]);
 		},
 	});
+	// A resume or workspace retry of this session already in flight (from this
+	// card or another view of the session): Retry waits for it.
+	const startRequestInFlight = useCloudSessionStartRequestInFlight(orgId, sessionId);
 	const failed = problem.phase === "failed";
 	const failureDetail = problem.phase === "failed" ? problem.detail : undefined;
 	const projectSetupFailed = problem.phase === "failed" && problem.code === "project_setup_failed";
@@ -209,7 +213,7 @@ export function CloudSessionStartupError({
 							type="button"
 							variant="secondary"
 							className="mt-1"
-							disabled={retry.isPending || rerunning}
+							disabled={retry.isPending || rerunning || startRequestInFlight}
 							onClick={() => retry.mutate()}
 						>
 							{retry.isPending || rerunning

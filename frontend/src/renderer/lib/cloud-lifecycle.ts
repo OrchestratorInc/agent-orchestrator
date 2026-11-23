@@ -136,18 +136,80 @@ export function cloudStartupProblem(session?: WorkspaceSession): CloudStartupPro
 	return undefined;
 }
 
-const resumesInFlight = new Map<string, Promise<unknown>>();
+/**
+ * Whether the session's worker can answer workspace reads: it is connected and
+ * its sandbox runs. A worker that has just connected can still be preparing
+ * its workspace; cloud-worker-starting holds its reads back until it answers.
+ */
+export function cloudWorkerAnswering(session?: WorkspaceSession): boolean {
+	if (!session?.cloud || session.runtimeConnected !== true) return false;
+	const stage = cloudLifecycleStage(session);
+	return stage === "connected" || stage === undefined;
+}
+
+/**
+ * The requests that (re)start a cloud session's startup: waking it, asking its
+ * worker to prepare the workspace again, and restoring it. One of each is in
+ * flight per session; every caller shares it.
+ */
+export type CloudSessionStartRequest = "resume" | "checkout" | "restore";
+
+const startRequestsInFlight = new Map<string, Promise<unknown>>();
+const startRequestListeners = new Set<() => void>();
+
+function notifyStartRequests() {
+	for (const listener of startRequestListeners) listener();
+}
+
+function shareStartRequest<T>(kind: CloudSessionStartRequest, orgId: string, sessionId: string, send: () => Promise<T>): Promise<T> {
+	const key = `${kind}:${orgId}/${sessionId}`;
+	const pending = startRequestsInFlight.get(key);
+	if (pending) return pending as Promise<T>;
+	let sent: Promise<T>;
+	try {
+		sent = Promise.resolve(send());
+	} catch (error) {
+		sent = Promise.reject(error);
+	}
+	const request = sent.finally(() => {
+		startRequestsInFlight.delete(key);
+		notifyStartRequests();
+	});
+	startRequestsInFlight.set(key, request);
+	notifyStartRequests();
+	return request;
+}
+
+/** Whether a resume, workspace checkout or restore of the session is in flight. */
+export function cloudSessionStartRequestInFlight(orgId: string, sessionId: string): boolean {
+	const suffix = `:${orgId}/${sessionId}`;
+	for (const key of startRequestsInFlight.keys()) if (key.endsWith(suffix)) return true;
+	return false;
+}
+
+export function subscribeCloudSessionStartRequests(listener: () => void): () => void {
+	startRequestListeners.add(listener);
+	return () => { startRequestListeners.delete(listener); };
+}
 
 /**
  * Asks the control plane to resume a cloud session, sharing a request already
  * in flight for it: opening a session asks from both its view and its Chat,
- * and one request wakes it.
+ * and one request wakes it. Other sessions resume in parallel.
  */
 export function resumeCloudSession(client: Pick<CloudCpClient, "resumeSession">, orgId: string, sessionId: string): Promise<unknown> {
-	const key = `${orgId}/${sessionId}`;
-	const pending = resumesInFlight.get(key);
-	if (pending) return pending;
-	const request = client.resumeSession(orgId, sessionId).finally(() => resumesInFlight.delete(key));
-	resumesInFlight.set(key, request);
-	return request;
+	return shareStartRequest("resume", orgId, sessionId, () => client.resumeSession(orgId, sessionId));
+}
+
+/**
+ * Asks the session's worker to prepare its workspace again (which retries a
+ * failed checkout or Setup), sharing a request already in flight for it.
+ */
+export function requestCloudWorkspaceCheckout(client: Pick<CloudCpClient, "requestWorkspaceCheckout">, orgId: string, sessionId: string): Promise<unknown> {
+	return shareStartRequest("checkout", orgId, sessionId, () => client.requestWorkspaceCheckout(orgId, sessionId));
+}
+
+/** Restores a deleted cloud session, sharing a request already in flight for it. */
+export function restoreCloudSession(client: Pick<CloudCpClient, "restoreSession">, orgId: string, sessionId: string): Promise<unknown> {
+	return shareStartRequest("restore", orgId, sessionId, () => client.restoreSession(orgId, sessionId));
 }

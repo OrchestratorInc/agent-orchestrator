@@ -2833,6 +2833,8 @@ describe("SessionView", () => {
 			// The topbar stays usable above the error state.
 			expect(screen.getByTestId("session-topbar-host").contains(errorState)).toBe(false);
 
+			// Retry waits while the resume that opening the session sent is in flight.
+			await waitFor(() => expect(within(errorState).getByRole("button", { name: "Retry" })).toBeEnabled());
 			fireEvent.click(within(errorState).getByRole("button", { name: "Retry" }));
 			await waitFor(() => expect(cloudRetryStartupMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
 			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-sessions"] }));

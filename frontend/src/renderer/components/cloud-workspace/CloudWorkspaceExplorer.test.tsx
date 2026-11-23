@@ -2,12 +2,14 @@
 
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cloudWorkspaceReviewQueryKey } from "../../hooks/useCloudWorkspaceReview";
 import type { CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse } from "../../lib/cloud-cp";
+import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { noteCloudWorkerStarting, resetCloudWorkerStartingForTests, WORKER_STARTING_CODE } from "../../lib/cloud-worker-starting";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
@@ -33,6 +35,8 @@ const session: WorkspaceSession = {
 	provider: "codex", status: "working", title: "Cloud", updatedAt: "2026-09-20T00:00:00Z",
 	workspaceId: "workspace-1", workspaceName: "Cloud workspace", runtimeConnected: true,
 };
+
+const startingAnswer = () => new CloudCpError("The session's workspace is still starting.", { status: 503, code: WORKER_STARTING_CODE, retryAfterMs: 1_000 });
 
 const changed = (path: string, status: CloudCpWorkspaceReviewFileSummary["status"] = "modified"): CloudCpWorkspaceReviewFileSummary => ({
 	path, status, additions: 1, deletions: 0, size: 10, binary: false, editable: true, fileFingerprint: `fp:${path}`,
@@ -120,6 +124,48 @@ describe("CloudWorkspaceExplorer", () => {
 		);
 		expect(screen.getByText("src/App.tsx")).toBeInTheDocument();
 		expect(getWorkspaceReview).toHaveBeenCalledTimes(calls);
+	});
+
+	it("does not ask a worker still preparing its workspace for its files, and asks once it is ready", async () => {
+		resetCloudWorkerStartingForTests();
+		getWorkspaceReview.mockReset().mockResolvedValue(mixedReview());
+		noteCloudWorkerStarting("org-1", session.id, startingAnswer());
+		renderExplorer();
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(getWorkspaceReview).not.toHaveBeenCalled();
+		expect(await screen.findByText("src/App.tsx", undefined, { timeout: 3_000 })).toBeInTheDocument();
+		expect(getWorkspaceReview).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps loading while the worker answers that it is still starting, and asks again only after its Retry-After", async () => {
+		resetCloudWorkerStartingForTests();
+		getWorkspaceReview.mockReset().mockRejectedValueOnce(startingAnswer()).mockResolvedValue(mixedReview());
+		renderExplorer();
+		await waitFor(() => expect(getWorkspaceReview).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		// Still starting is not an error, and the 5 second poll does not ask again meanwhile.
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+		expect(getWorkspaceReview).toHaveBeenCalledTimes(1);
+		expect(await screen.findByText("src/App.tsx", undefined, { timeout: 3_000 })).toBeInTheDocument();
+		expect(getWorkspaceReview).toHaveBeenCalledTimes(2);
+	});
+
+	it("sends one resume for a double Retry while it is in flight", async () => {
+		let answer: (value: unknown) => void = () => undefined;
+		resumeSession.mockReset().mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+		const gaveUp: WorkspaceSession = {
+			...session, runtimeConnected: false,
+			cloud: { orgId: "org-1", sandboxProvider: "nodeops", runtimeState: "terminated", startupError: { code: "sandbox_start_failed", message: "The sandbox could not start.", at: "2026-10-31T00:00:00Z" } },
+		};
+		renderExplorer(gaveUp);
+		const retry = screen.getByRole("button", { name: "Retry" });
+		await userEvent.click(retry);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled());
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(resumeSession).toHaveBeenCalledTimes(1);
+		await act(async () => answer({}));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled());
 	});
 
 	it("says a session whose worker will not come back has no files, instead of loading forever", async () => {

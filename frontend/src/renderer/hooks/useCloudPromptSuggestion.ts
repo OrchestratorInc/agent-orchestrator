@@ -1,6 +1,8 @@
 import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useCloudCp } from "./useCloudCp";
-import { promptSuggestionBusy, usePromptSuggestion } from "./useConversationPromptSuggestion";
+import { promptSuggestionBusy, promptSuggestionStale, usePromptSuggestion } from "./useConversationPromptSuggestion";
+import { useCloudWorkspaceReady } from "./useCloudWorkspaceReady";
+import { cloudWorkerRequest, isCloudWorkerStarting } from "../lib/cloud-worker-starting";
 import type { ConversationSnapshot } from "../types/conversation";
 import type { WorkspaceSession } from "../types/workspace";
 
@@ -31,18 +33,25 @@ export function useCloudPromptSuggestion(
 ): { id: string; text: string; onDismiss: () => void } | undefined {
 	const { client, ready, baseUrl } = useCloudCp();
 	const orgId = session.cloud?.orgId;
+	// The session's agent answers only once its workspace is ready; a worker
+	// still preparing it is not asked (useCloudWorkspaceReady).
+	const workspaceReady = useCloudWorkspaceReady(session);
 	return usePromptSuggestion(
 		snapshot,
-		enabled && ready && Boolean(orgId) && session.runtimeConnected === true && session.isTerminated !== true,
+		enabled && ready && Boolean(orgId) && workspaceReady && session.isTerminated !== true,
 		`cloud:${baseUrl}:${orgId ?? ""}`,
 		async ({ sessionId, turnId, snapshot: current, signal }) => {
 			try {
-				const answer = await client.suggestChatPrompt(orgId!, sessionId, { turnId, messages: promptSuggestionMessages(current) }, { signal });
+				const answer = await cloudWorkerRequest(orgId!, sessionId, () =>
+					client.suggestChatPrompt(orgId!, sessionId, { turnId, messages: promptSuggestionMessages(current) }, { signal }));
 				return answer.turnId === turnId ? answer.prompt : "";
 			} catch (error) {
 				// A worker busy with a turn or another suggestion is asked again
 				// shortly, as the local daemon's busy answer is.
 				if (error instanceof CloudCpError && error.code === "CHAT_PROMPT_SUGGESTION_BUSY") throw promptSuggestionBusy;
+				// A worker still starting is asked again once its backoff ends,
+				// rather than caching no suggestion for the turn.
+				if (isCloudWorkerStarting(error)) throw promptSuggestionStale;
 				throw error;
 			}
 		},

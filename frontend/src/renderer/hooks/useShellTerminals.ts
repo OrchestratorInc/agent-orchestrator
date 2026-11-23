@@ -4,6 +4,7 @@
 // must not invalidate session state when they come and go.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { resumeCloudSession } from "../lib/cloud-lifecycle";
 import { queueCloudShellInput } from "../lib/cloud-shell-input";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import { paneTerminalGridHint } from "../lib/terminal-grid-hint";
@@ -318,7 +319,8 @@ export function useOpenShellTerminal(hostId?: HostId) {
 			if (!sessionId) throw new Error("A cloud shell terminal must belong to a session");
 			// Explicitly resume the cloud session before opening its shell, so a
 			// paused sandbox is woken rather than the shell attaching to nothing.
-			await cloudCpClient.resumeSession(cloud.orgId, sessionId);
+			// Shared with any resume of the session already in flight.
+			await resumeCloudSession(cloudCpClient, cloud.orgId, sessionId);
 			const current = queryClient.getQueryData<ShellTerminal[]>(queryKey) ?? [];
 			const shell: ShellTerminal = {
 				handleId: `cloud-shell-${crypto.randomUUID()}`,

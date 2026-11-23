@@ -9,6 +9,8 @@ import { useCloudOffering } from "../../hooks/useCloudOffering";
 import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useRestoreSession } from "../../hooks/useRestoreSession";
+import { useCloudSessionStartRequestInFlight, useCloudWorkspaceReady } from "../../hooks/useCloudWorkspaceReady";
+import { WORKER_STARTING_CODE, cloudWorkerRequest, cloudWorkerStartingDelay, cloudWorkerStartingRemaining, recordCloudWorkspaceStartupEvent } from "../../lib/cloud-worker-starting";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
 import { sessionUiKey } from "../../lib/hosts";
@@ -1493,6 +1495,11 @@ function isWorkerUnavailable(error: unknown): boolean {
 	return error instanceof CloudCpError && error.code === "WORKER_UNAVAILABLE";
 }
 
+// The control plane's answer for a worker still preparing its workspace.
+function isWorkerStarting(error: unknown): boolean {
+	return error instanceof CloudCpError && error.code === WORKER_STARTING_CODE;
+}
+
 // The control plane reports a worker that did not answer in time as
 // TRANSPORT_TIMEOUT (the queued request expired) or WORKER_TIMEOUT (its own
 // wait for the answer ran out): both are a slow worker, not a failure.
@@ -1628,6 +1635,8 @@ export function CloudSessionChatSurface({
 	// Ends a retry still waiting for an idle-paused workspace's worker when Chat goes away.
 	const retryAbort = useRef<AbortController | undefined>(undefined);
 	useEffect(() => () => retryAbort.current?.abort(), []);
+	// A resume or workspace retry of this session already in flight, from any view: Retry waits for it.
+	const startRequestInFlight = useCloudSessionStartRequestInFlight(cloud?.orgId, session.id);
 	const retryStart = useMutation({
 		mutationFn: () => {
 			retryAbort.current?.abort();
@@ -1695,6 +1704,10 @@ export function CloudSessionChatSurface({
 	// list reports the worker connected, however long that takes. The catalog is
 	// always stale, so a reconnect the session list sees refreshes it too.
 	const workerConnected = session.runtimeConnected === true;
+	// A worker that has just connected can still be preparing the workspace (a
+	// slow checkout takes minutes) and answers nothing until it is ready, so the
+	// catalog waits for that too (useCloudWorkspaceReady).
+	const workspaceReady = useCloudWorkspaceReady(session);
 	const liveRef = useRef({ connected: workerConnected, terminated: session.isTerminated === true });
 	liveRef.current = { connected: workerConnected, terminated: session.isTerminated === true };
 	// The owner opening a shared session whose settings were never set makes
@@ -1715,7 +1728,7 @@ export function CloudSessionChatSurface({
 		// instead of keeping an answer from a worker that is gone. An agent
 		// switch keeps the worker generation, so the agent keys it too.
 		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.provider, session.terminalGeneration ?? ""],
-		enabled: Boolean(cloud && ready && workerConnected && session.isTerminated !== true &&
+		enabled: Boolean(cloud && ready && workspaceReady && session.isTerminated !== true &&
 			(session.provider === "codex" || session.provider === "claude-code")),
 		// The TUI may change its native model while Chat is unmounted.
 		staleTime: 0,
@@ -1726,14 +1739,19 @@ export function CloudSessionChatSurface({
 		// query waits for the next connection instead. A worker's first catalog
 		// read can outlast one request (it prepares the agent's tools first), so
 		// a timed-out request is asked again a few times before it shows.
+		// A worker still preparing its workspace (WORKER_STARTING, or a timeout
+		// from a control plane that predates it) is asked again after the
+		// session's shared backoff, as long as it stays connected.
 		retry: (failures, error) => liveRef.current.connected && !liveRef.current.terminated &&
-			(isWorkerUnavailable(error) || (isTransportTimeout(error) && failures < 3) ||
+			(isWorkerUnavailable(error) || isWorkerStarting(error) || (isTransportTimeout(error) && failures < 3) ||
 				(isWorkerOperationFailed(error) && failures < MODELS_FAILED_RETRIES) ||
 				(isAgentSettingUp(error) && failures < AGENT_SETUP_RETRIES)),
-		retryDelay: modelsRetryDelay,
+		retryDelay: (failures, error) => isWorkerStarting(error)
+			? cloudWorkerStartingRemaining(cloud?.orgId ?? "", session.id) || cloudWorkerStartingDelay(failures + 1, error)
+			: modelsRetryDelay(failures, error),
 		queryFn: async ({ signal }) => {
 			const selectionVersionAtFetch = catalogSyncRef.current.version;
-			const catalog = await client.listChatModels(cloud!.orgId, session.id, { signal });
+			const catalog = await cloudWorkerRequest(cloud!.orgId, session.id, () => client.listChatModels(cloud!.orgId, session.id, { signal }));
 			// The worker listed the account's own models, which the control plane
 			// keeps as the account's Cloud list: every New Task and settings picker
 			// for this agent reads it again now rather than on its next refresh.
@@ -1899,11 +1917,16 @@ export function CloudSessionChatSurface({
 		if (!events?.length) return;
 		const seen = seenEventRef.current?.sessionId === session.id ? seenEventRef.current.sequence : undefined;
 		seenEventRef.current = { sessionId: session.id, sequence: events.at(-1)!.sequence };
+		// New events say when a worker connects (its workspace is being
+		// prepared) and when the workspace is ready, ahead of any request.
+		if (cloud) {
+			for (const event of events) if (seen === undefined || event.sequence > seen) recordCloudWorkspaceStartupEvent(cloud.orgId, session.id, event);
+		}
 		if (seen === undefined || session.runtimeConnected === true) return;
 		if (events.some((event) => event.sequence > seen && (event.type === "worker.connected" || event.type === "worker.ready"))) {
 			void refreshCloudSessionLifecycle(queryClient);
 		}
-	}, [eventsQuery.data, queryClient, session.id, session.runtimeConnected]);
+	}, [cloud?.orgId, eventsQuery.data, queryClient, session.id, session.runtimeConnected]);
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id] });
 	const myRole = live?.viewers.find((viewer) => viewer.userId === me)?.role;
@@ -2650,8 +2673,8 @@ export function CloudSessionChatSurface({
 			}}
 			session={chatSession}
 			settingsReady={!startStopped}
-			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
-			resumingAgent={retryStart.isPending || restoringId === session.id}
+			onResumeAgent={workspaceFailure ? () => { if (!retryStart.isPending && !startRequestInFlight) retryStart.mutate(); } : undefined}
+			resumingAgent={retryStart.isPending || startRequestInFlight || restoringId === session.id}
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
