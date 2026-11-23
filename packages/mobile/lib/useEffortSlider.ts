@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { BackHandler, Keyboard } from "react-native";
 import { onTouchOutside } from "./touchOutside";
 import type { EffortChoice } from "./modelEffort";
@@ -7,19 +7,60 @@ import type { EffortChoice } from "./modelEffort";
 export const EFFORT_SLIDER_TIMEOUT_MS = 12_000;
 
 /**
+ * Whether a composer's effort slider is open, and how far above the bottom of
+ * its container it floats, held outside React state. The gauge and the slider
+ * each subscribe on their own, so opening the slider re-renders those two and
+ * not the composer around them: re-rendering a whole chat composer (its native
+ * menus included) on each open held the slider back by a good half second.
+ */
+export type EffortSliderSwitch = {
+	isOpen(): boolean;
+	setOpen(open: boolean): void;
+	bottom(): number;
+	setBottom(bottom: number): void;
+	subscribe(listener: () => void): () => void;
+};
+
+export function createEffortSliderSwitch(): EffortSliderSwitch {
+	let open = false;
+	let bottom = 0;
+	const listeners = new Set<() => void>();
+	const emit = () => { for (const listener of [...listeners]) listener(); };
+	return {
+		isOpen: () => open,
+		setOpen: (next) => { if (next !== open) { open = next; emit(); } },
+		bottom: () => bottom,
+		setBottom: (next) => { if (next !== bottom) { bottom = next; emit(); } },
+		subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+	};
+}
+
+/** A switch that lives as long as the component that makes it. */
+export function useEffortSliderSwitch(): EffortSliderSwitch {
+	return useState(createEffortSliderSwitch)[0];
+}
+
+/** Whether the switch is on, re-rendering the caller only when that changes. */
+export function useEffortSliderSwitchOpen(slider: EffortSliderSwitch): boolean {
+	return useSyncExternalStore(slider.subscribe, slider.isOpen);
+}
+
+/**
  * Whether the effort slider is open. It stays up while the level is adjusted
  * and closes on a tap anywhere outside it (the field included), when the
  * keyboard comes up, on Android's back, and after a hard twelve seconds; it
  * also closes when the task starts sending or the model takes no effort.
  * `onClose` hears every close, however it came about.
  */
-export function useEffortSliderOpen(choices: readonly EffortChoice[], busy: boolean, onClose?: () => void) {
-	const [open, setOpen] = useState(false);
+export function useEffortSliderOpen(choices: readonly EffortChoice[], busy: boolean, onClose?: () => void, slider?: EffortSliderSwitch) {
+	const own = useEffortSliderSwitch();
+	const store = slider ?? own;
+	const open = useEffortSliderSwitchOpen(store);
 	const shown = open && !busy && choices.length > 0;
 	const closeRef = useRef(onClose);
 	closeRef.current = onClose;
 	const wasShown = useRef(false);
-	const close = useCallback(() => setOpen(false), []);
+	const close = useCallback(() => store.setOpen(false), [store]);
 	useEffect(() => {
 		if (wasShown.current && !shown) closeRef.current?.();
 		wasShown.current = shown;
@@ -30,7 +71,7 @@ export function useEffortSliderOpen(choices: readonly EffortChoice[], busy: bool
 		const timer = setTimeout(close, EFFORT_SLIDER_TIMEOUT_MS);
 		return () => { back.remove(); keyboard.remove(); outside(); clearTimeout(timer); };
 	}, [shown, close]);
-	return { open: shown, toggle: () => setOpen(!shown), close };
+	return { open: shown, toggle: () => store.setOpen(!shown), close };
 }
 
 export type EffortSliderProps = {

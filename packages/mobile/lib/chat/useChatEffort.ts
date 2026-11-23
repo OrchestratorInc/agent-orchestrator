@@ -1,6 +1,6 @@
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { withFallbackEffort, type EffortChoice } from "../modelEffort";
-import { useEffortSliderOpen } from "../useEffortSlider";
+import { useEffortSliderSwitch } from "../useEffortSlider";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { followsAgentLabel, turnSettingsRows, turnSettingTopic, turnSettingWrite } from "./turnSettingsModel";
 
@@ -22,20 +22,21 @@ export function useChatEffort({ snapshot, models, options, disabled, onSettings,
 		.filter((choice) => !followsAgentLabel(choice.label))
 		.map((choice) => ({ value: choice.value, label: choice.label, selected: choice.selected })) ?? []), [row]);
 	const picked = useRef<string | undefined>(undefined);
-	const commit = () => {
+	const latest = useRef<() => void>(() => {});
+	latest.current = () => {
 		const value = picked.current;
 		picked.current = undefined;
 		if (!row || value === undefined || row.choices.find((choice) => choice.selected)?.value === value) return;
 		const write = turnSettingWrite(snapshot.settings, row, value);
 		void (write.kind === "option" ? onOption(write.id, write.value) : onSettings(write.settings)).catch(() => {});
 	};
-	const slider = useEffortSliderOpen(choices, Boolean(disabled), commit);
-	return {
-		choices,
-		open: slider.open,
-		toggle: slider.toggle,
-		close: slider.close,
-		choose: (value: string) => { picked.current = value; },
-		release: commit,
-	};
+	// Stable, so the slider's memoised host is left alone while the composer
+	// re-renders under a streaming reply.
+	const commit = useCallback(() => latest.current(), []);
+	const choose = useCallback((value: string) => { picked.current = value; }, []);
+	// Whether the slider is open lives in the switch, not in the composer's
+	// state: the gauge and the slider host subscribe to it themselves.
+	const slider = useEffortSliderSwitch();
+	const close = useCallback(() => slider.setOpen(false), [slider]);
+	return { choices, slider, busy: Boolean(disabled), close, choose, commit };
 }
