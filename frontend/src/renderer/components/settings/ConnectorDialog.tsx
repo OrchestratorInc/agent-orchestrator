@@ -2,7 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
-import { connectorImportQueryKey, connectorKeyFrom, connectorsApi, splitCommandLine, type Connector, type ConnectorInput } from "../../hooks/useConnectors";
+import { connectorImportQueryKey, connectorKeyFrom, connectorsApi, joinCommandLine, splitCommandLine, type Connector, type ConnectorInput } from "../../hooks/useConnectors";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -71,7 +71,7 @@ export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 	const [auth, setAuth] = useState<Auth>(connector?.auth ?? "oauth");
 	const [headerName, setHeaderName] = useState(connector?.headerKeys[0] ?? "Authorization");
 	const [headerValue, setHeaderValue] = useState("");
-	const [command, setCommand] = useState(connector ? connectorTarget({ ...connector, transport: "stdio", args: connector.args.map((arg) => (/[\s"']/.test(arg) ? JSON.stringify(arg) : arg)) }) : "");
+	const [command, setCommand] = useState(connector?.transport === "stdio" ? joinCommandLine([connector.command ?? "", ...connector.args]) : "");
 	const [env, setEnv] = useState((connector?.envKeys ?? []).map((envKey) => `${envKey}=`).join("\n"));
 	const [projectId, setProjectId] = useState(connector?.projectId ?? ALL_PROJECTS);
 	const [ownApp, setOwnApp] = useState(Boolean(connector?.oauthClientId));
@@ -92,7 +92,12 @@ export function ConnectorDialog({ connector, taken, onClose, onSaved }: {
 			if (presetId) input.presetId = presetId;
 			if (mode === "url") {
 				Object.assign(input, { transport: "http", url: url.trim(), auth });
-				if (auth === "header") input.headers = { [headerName.trim()]: headerValue };
+				if (auth === "header") {
+					// An empty value keeps the saved one, so the headers this form does not show stay as they are.
+					const first = connector?.headerKeys[0];
+					const kept = (connector?.headerKeys ?? []).filter((name) => name !== first || name === headerName.trim());
+					input.headers = { ...Object.fromEntries(kept.map((name) => [name, ""])), [headerName.trim()]: headerValue };
+				}
 				if (auth === "oauth" && ownApp && clientId.trim()) Object.assign(input, { oauthClientId: clientId.trim(), oauthClientSecret: clientSecret });
 			} else {
 				Object.assign(input, { transport: "stdio", command: argv[0] ?? "", args: argv.slice(1), env: envValues ?? {} });

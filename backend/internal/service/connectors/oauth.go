@@ -46,6 +46,14 @@ func (s *Service) StartSignIn(ctx context.Context, ref string) (string, error) {
 		return "", invalid("CONNECTOR_SIGNIN_NOT_SUPPORTED", "Only a server URL with automatic sign-in can sign in")
 	}
 	s.cancelSignIns(rec.ID)
+	if rec.OAuth != nil {
+		if checked, testErr := s.Test(ctx, rec.ID); testErr == nil && checked.Status != StatusNeedsSignIn {
+			return "", nil
+		}
+		if _, err := s.SignOut(ctx, rec.ID); err != nil {
+			return "", err
+		}
+	}
 	req, status, header, err := s.challenge(ctx, &rec)
 	if err != nil {
 		_, _ = s.setStatus(rec.ID, StatusUnavailable, "reach", err.Error(), nil)

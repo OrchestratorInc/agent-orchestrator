@@ -98,7 +98,11 @@ export function useConnectors() {
 	return useQuery({ queryKey: connectorsQueryKey, queryFn: connectorsApi.list, refetchInterval: 3000 });
 }
 
-/** Splits a command line into its program and arguments. Quotes group words; a backslash keeps the next character. */
+/**
+ * Splits a command line into its program and arguments. Quotes group words.
+ * A backslash keeps the next character outside quotes, and keeps a quote or a
+ * backslash inside double quotes. Single quotes keep everything as it is.
+ */
 export function splitCommandLine(line: string): string[] {
 	const out: string[] = [];
 	let word = "";
@@ -106,14 +110,18 @@ export function splitCommandLine(line: string): string[] {
 	let open = false;
 	for (let i = 0; i < line.length; i += 1) {
 		const ch = line[i] as string;
+		const next = line[i + 1];
 		if (quote) {
 			if (ch === quote) quote = "";
-			else word += ch;
+			else if (quote === '"' && ch === "\\" && (next === '"' || next === "\\")) {
+				word += next;
+				i += 1;
+			} else word += ch;
 		} else if (ch === '"' || ch === "'") {
 			quote = ch;
 			open = true;
-		} else if (ch === "\\" && i + 1 < line.length) {
-			word += line[i + 1];
+		} else if (ch === "\\" && next !== undefined) {
+			word += next;
 			open = true;
 			i += 1;
 		} else if (/\s/.test(ch)) {
@@ -126,6 +134,13 @@ export function splitCommandLine(line: string): string[] {
 	}
 	if (open || word) out.push(word);
 	return out;
+}
+
+/** Writes a program and its arguments as one line that splitCommandLine reads back unchanged. */
+export function joinCommandLine(words: readonly string[]): string {
+	return words
+		.map((word) => (word !== "" && !/[\s"'\\]/.test(word) ? word : `"${word.replace(/[\\"]/g, "\\$&")}"`))
+		.join(" ");
 }
 
 /** The key a connector gets from a name: lowercase letters, digits, hyphens and underscores, 32 at most. */

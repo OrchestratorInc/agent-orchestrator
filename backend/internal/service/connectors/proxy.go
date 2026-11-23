@@ -171,7 +171,7 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 	}
 	if err != nil {
 		s.observe(rec.ID, StatusNeedsSignIn, "sign-in", err.Error())
-		writeRPCError(w, call.ID, needsSignIn(rec.Name))
+		writeRPCError(w, call.ID, signInAdvice(rec))
 		return
 	}
 	s.count(sessionID, rec.Key, call.Method, call.Params.Name)
@@ -194,7 +194,7 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 			switch {
 			case refused:
 				s.observe(rec.ID, StatusNeedsSignIn, "sign-in", "the server refused the sign-in")
-				answer := rpcError(call.ID, needsSignIn(rec.Name))
+				answer := rpcError(call.ID, signInAdvice(rec))
 				_ = resp.Body.Close()
 				resp.StatusCode, resp.Status = http.StatusOK, "200 OK"
 				resp.Header = http.Header{"Content-Type": {"application/json"}}
@@ -298,8 +298,11 @@ func (s *Service) sessionToken(sessionID string) (string, error) {
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
-func needsSignIn(name string) string {
-	return name + " needs sign-in. Ask the user to open Settings, Connectors, and press Sign in."
+func signInAdvice(rec *record) string {
+	if rec.Auth != AuthOAuth {
+		return rec.Name + " refused the saved sign-in value. Ask the user to open Settings, Connectors, and edit " + rec.Name + "."
+	}
+	return rec.Name + " needs sign-in. Ask the user to open Settings, Connectors, and press Sign in."
 }
 
 func rpcError(id json.RawMessage, message string) []byte {

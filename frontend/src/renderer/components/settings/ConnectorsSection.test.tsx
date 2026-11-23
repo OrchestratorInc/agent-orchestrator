@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { connectorKeyFrom, splitCommandLine, type Connector } from "../../hooks/useConnectors";
+import { connectorKeyFrom, joinCommandLine, splitCommandLine, type Connector } from "../../hooks/useConnectors";
 import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { parseEnvLines } from "./ConnectorDialog";
@@ -117,6 +117,39 @@ describe("ConnectorsSection", () => {
 		expect(await screen.findByRole("heading", { name: "Sign in to Linear" })).toBeInTheDocument();
 	});
 
+	it("keeps what an edit does not show: the other headers, the command's exact words", async () => {
+		const twoHeaders: Connector = { ...base, id: "c7", key: "docs", name: "Docs", auth: "header", signedIn: false, headerKeys: ["Authorization", "X-Org"], status: "needs_signin", tools: [] };
+		const command: Connector = { ...list[2], id: "c8", key: "win", name: "win", command: "/Applications/My App/bin/server", args: ["--dir", "C:\\Users\\me\\notes", ""], status: "connected", statusDetail: undefined };
+		mockList([twoHeaders, command]);
+		const patch = vi.spyOn(apiClient, "PATCH").mockResolvedValue({ data: { connector: twoHeaders } } as never);
+		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: { connector: twoHeaders } } as never);
+		const user = userEvent.setup();
+		renderSection();
+		// A refused header shows what happened, and no Sign in that could not work.
+		await screen.findByText("Docs");
+		const row = document.querySelector('[data-connector="docs"]') as HTMLElement;
+		expect(row).toHaveTextContent("The server refused the sign-in");
+		expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Actions for Docs" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
+		let dialog = await screen.findByRole("dialog");
+		fireEvent.click(dialog.querySelector('button[type="submit"]') as HTMLButtonElement);
+		await waitFor(() => expect(patch).toHaveBeenCalledWith("/api/v1/connectors/{connectorId}", expect.objectContaining({
+			body: expect.objectContaining({ headers: { Authorization: "", "X-Org": "" }, url: "https://mcp.linear.app/mcp" }),
+		})));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+		await user.click(screen.getByRole("button", { name: "Actions for win" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
+		dialog = await screen.findByRole("dialog");
+		fireEvent.click(dialog.querySelector('button[type="submit"]') as HTMLButtonElement);
+		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/connectors/{connectorId}", expect.objectContaining({
+			params: { path: { connectorId: "c8" } },
+			body: expect.objectContaining({ command: "/Applications/My App/bin/server", args: ["--dir", "C:\\Users\\me\\notes", ""] }),
+		})));
+	});
+
 	it("adds a local command with its environment values", async () => {
 		mockList([]);
 		const created = { ...list[2], status: "unchecked" as const, statusDetail: undefined };
@@ -144,6 +177,13 @@ describe("connector helpers", () => {
 	it("splits a command line with quotes", () => {
 		expect(splitCommandLine(`npx -y "my server" --dir '/a b' c\\ d ""`)).toEqual(["npx", "-y", "my server", "--dir", "/a b", "c d", ""]);
 		expect(splitCommandLine("   ")).toEqual([]);
+		for (const words of [
+			["npx", "-y", "server"],
+			["/Applications/My App/bin/server", "--dir", "C:\\Users\\me\\notes", ""],
+			["node", "-e", 'console.log("a b")', `{"a":1}`, "it's", 'say "hi"\\'],
+		]) {
+			expect(splitCommandLine(joinCommandLine(words))).toEqual(words);
+		}
 	});
 
 	it("derives a key and reads environment lines", () => {
@@ -158,6 +198,8 @@ describe("connector helpers", () => {
 		expect(needsSignIn(base)).toBe(false);
 		expect(needsSignIn({ ...base, signedIn: false, status: "unchecked" })).toBe(true);
 		expect(needsSignIn({ ...base, auth: "none", signedIn: false, status: "connected" })).toBe(false);
-		expect(needsSignIn({ ...base, auth: "header", signedIn: false, status: "needs_signin" })).toBe(true);
+		// A header the server refused cannot be fixed by Sign in.
+		expect(needsSignIn({ ...base, auth: "header", signedIn: false, status: "needs_signin" })).toBe(false);
+		expect(needsSignIn({ ...base, signedIn: true, status: "needs_signin" })).toBe(true);
 	});
 });

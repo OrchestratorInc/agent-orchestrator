@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -155,4 +156,52 @@ func TestImportUsesTheTokenOfABearerVariableWhenTheDaemonHasIt(t *testing.T) {
 		return
 	}
 	t.Fatal("no sentry candidate")
+}
+
+func TestImportAsksForAVariableInAnAddressOrACommandAndAddsAllOrNothing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeSource(t, filepath.Join(home, ".claude.json"), `{"mcpServers": {
+		"tokened": {"command": "npx", "args": ["server", "--token", "${API_TOKEN}", "--region", "${REGION:-eu}"]},
+		"hosted": {"type": "http", "url": "https://${TENANT}.example.com/mcp"},
+		"plain": {"command": "plain-server"},
+		"`+strings.Repeat("n", 70)+`": {"command": "long-name-server"}
+	}}`)
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	candidates, err := svc.ImportCandidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byKey := map[string]ImportCandidate{}
+	for _, candidate := range candidates {
+		byKey[candidate.Key] = candidate
+	}
+	if got := byKey["tokened"]; !slices.Equal(got.NeedsValue, []string{"API_TOKEN"}) {
+		t.Fatalf("tokened = %+v", got)
+	}
+	if got := byKey["hosted"]; !slices.Equal(got.NeedsValue, []string{"TENANT"}) {
+		t.Fatalf("hosted = %+v", got)
+	}
+	long := byKey[strings.Repeat("n", 32)]
+	if long.ID == "" {
+		t.Fatalf("no candidate for the long name: %+v", candidates)
+	}
+	if _, err := svc.Import(ctx, []string{byKey["plain"].ID, long.ID}, nil); err == nil {
+		t.Fatal("an import with a server that cannot be added succeeded")
+	}
+	if all, _ := svc.List(ctx); len(all) != 0 {
+		t.Fatalf("a failed import added %+v", all)
+	}
+	added, err := svc.Import(ctx, []string{byKey["tokened"].ID, byKey["hosted"].ID}, map[string]map[string]string{
+		byKey["tokened"].ID: {"API_TOKEN": "typed-token"},
+		byKey["hosted"].ID:  {"TENANT": "acme"},
+	})
+	if err != nil || len(added) != 2 {
+		t.Fatalf("import = %+v, %v", added, err)
+	}
+	if !slices.Equal(added[0].Args, []string{"server", "--token", "typed-token", "--region", "eu"}) || added[1].URL != "https://acme.example.com/mcp" {
+		t.Fatalf("added = %+v", added)
+	}
 }

@@ -294,3 +294,20 @@ func TestACallIsCountedForASessionTheDaemonHasNotSeenStart(t *testing.T) {
 		t.Fatalf("after a call = %+v, %v", used, err)
 	}
 }
+
+func TestARefusedHeaderTellsTheAgentToHaveItEditedNotSignedIn(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc, _ := newProxiedService(t)
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, Input{Name: "docs", Transport: TransportHTTP, URL: fake.URL + "/mcp", Auth: AuthHeader, Headers: map[string]string{"Authorization": "Bearer wrong"}}); err != nil {
+		t.Fatal(err)
+	}
+	entry := svc.ForSession(ctx, SessionInput{SessionID: "ao-12"})[0]
+	status, body := proxyPost(t, entry.URL, entry.Headers["Authorization"], `{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
+	if status != http.StatusOK || !strings.Contains(body, "docs refused the saved sign-in value") || !strings.Contains(body, "edit docs") || strings.Contains(body, "press Sign in") {
+		t.Fatalf("refused header = %d %s", status, body)
+	}
+	if _, err := svc.StartSignIn(ctx, "docs"); err == nil {
+		t.Fatal("a header connector started a sign-in")
+	}
+}

@@ -135,22 +135,30 @@ func (s *Service) Create(_ context.Context, in Input) (Connector, error) {
 
 // Update replaces the definition of a connector and keeps secret values that the input leaves empty.
 func (s *Service) Update(_ context.Context, ref string, in Input) (Connector, error) {
+	updated, retargeted, err := s.update(ref, in)
+	if retargeted != "" {
+		s.cancelSignIns(retargeted)
+	}
+	return updated, err
+}
+
+func (s *Service) update(ref string, in Input) (updated Connector, retargeted string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.load(); err != nil {
-		return Connector{}, err
+		return Connector{}, "", err
 	}
 	i := s.index(ref)
 	if i < 0 {
-		return Connector{}, errNotFound()
+		return Connector{}, "", errNotFound()
 	}
 	old := s.records[i]
 	rec, err := normalize(in, old)
 	if err != nil {
-		return Connector{}, err
+		return Connector{}, "", err
 	}
 	if s.keyTaken(rec.Key, old.ID) {
-		return Connector{}, errKeyExists(rec.Key)
+		return Connector{}, "", errKeyExists(rec.Key)
 	}
 	rec.ID, rec.CreatedAt, rec.UpdatedAt = old.ID, old.CreatedAt, s.now().UTC()
 	rec.Enabled = old.Enabled
@@ -163,13 +171,14 @@ func (s *Service) Update(_ context.Context, ref string, in Input) (Connector, er
 	} else {
 		rec.Status = StatusUnchecked
 		delete(s.sources, old.ID)
+		retargeted = old.ID
 	}
 	next := slices.Clone(s.records)
 	next[i] = rec
 	if err := s.save(next); err != nil {
-		return Connector{}, err
+		return Connector{}, "", err
 	}
-	return rec.public(), nil
+	return rec.public(), retargeted, nil
 }
 
 // SetEnabled turns a connector on or off for new sessions.
@@ -330,6 +339,9 @@ func normalize(in Input, old record) (record, error) {
 
 func normalizeHTTP(in Input, old, rec record) (record, error) {
 	raw := strings.TrimSpace(in.URL)
+	if old.URL != "" && raw == withoutQuery(old.URL) {
+		raw = old.URL
+	}
 	target, err := url.Parse(raw)
 	if err != nil || len(raw) > maxURLBytes || target.Host == "" || target.User != nil ||
 		(target.Scheme != "https" && (target.Scheme != "http" || !loopbackHost(target.Hostname()))) {
@@ -349,6 +361,9 @@ func normalizeHTTP(in Input, old, rec record) (record, error) {
 	rec.Headers, err = mergeSecrets(old.Headers, in.Headers, headerPattern)
 	if err != nil {
 		return record{}, err
+	}
+	if in.Headers == nil && old.Auth == AuthHeader && rec.Auth != AuthHeader {
+		rec.Headers = nil
 	}
 	if rec.Auth == AuthHeader && len(rec.Headers) == 0 {
 		return record{}, invalid("INVALID_CONNECTOR_HEADERS", "Header sign-in needs at least one header with a value")

@@ -136,3 +136,36 @@ func TestEnableDeleteAndUnknown(t *testing.T) {
 		t.Fatalf("list = %v, %v", list, err)
 	}
 }
+
+func TestAnEditKeepsTheHiddenQueryAndDropsAHeaderThatIsNoLongerTheSignIn(t *testing.T) {
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{
+		Name: "docs", Transport: TransportHTTP, URL: "https://docs.example.com/mcp?api_key=secret", Auth: AuthHeader,
+		Headers: map[string]string{"Authorization": "Bearer a", "X-Org": "acme"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := withoutQuery(created.URL)
+	if _, err := svc.Update(ctx, created.ID, Input{Name: "docs", Transport: TransportHTTP, URL: shown, Auth: AuthHeader, Headers: map[string]string{"Authorization": "", "X-Org": ""}, ProjectID: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+	records, _ := readFile(svc.path)
+	if records[0].URL != "https://docs.example.com/mcp?api_key=secret" || records[0].Headers["Authorization"] != "Bearer a" || records[0].Headers["X-Org"] != "acme" || records[0].ProjectID != "p1" {
+		t.Fatalf("after an edit of the project only = %+v", records[0])
+	}
+	if _, err := svc.Update(ctx, created.ID, Input{Name: "docs", Transport: TransportHTTP, URL: shown, Auth: AuthNone}); err != nil {
+		t.Fatal(err)
+	}
+	records, _ = readFile(svc.path)
+	if len(records[0].Headers) != 0 || records[0].Auth != AuthNone {
+		t.Fatalf("after a change to no sign-in = %+v", records[0])
+	}
+	if _, err := svc.Update(ctx, created.ID, Input{Name: "docs", Transport: TransportHTTP, URL: "https://docs.example.com/mcp?other=1", Auth: AuthNone}); err != nil {
+		t.Fatal(err)
+	}
+	if records, _ = readFile(svc.path); records[0].URL != "https://docs.example.com/mcp?other=1" {
+		t.Fatalf("a new address was not saved: %+v", records[0])
+	}
+}

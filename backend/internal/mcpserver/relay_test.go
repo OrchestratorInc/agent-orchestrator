@@ -134,3 +134,64 @@ func TestLaunchSaysWhyTheDaemonRefused(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestRelayStartsANewSessionWhenTheServerDropsTheOldOne(t *testing.T) {
+	var mu sync.Mutex
+	valid, issued, starts := "", 0, 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(string(body), `"method":"initialize"`):
+			issued++
+			starts++
+			valid = "session-" + string(rune('0'+issued))
+			w.Header().Set("Mcp-Session-Id", valid)
+			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"up","version":"1"}}}`)
+		case r.Header.Get("Mcp-Session-Id") != valid:
+			http.Error(w, "session not found", http.StatusNotFound)
+		case strings.Contains(string(body), `"method":"notifications/initialized"`):
+			w.WriteHeader(http.StatusAccepted)
+		default:
+			_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}}`)
+		}
+	}))
+	defer upstream.Close()
+	relayIn, agentOut := io.Pipe()
+	agentIn, relayOut := io.Pipe()
+	done := make(chan error, 1)
+	go func() { done <- Relay(context.Background(), relayIn, relayOut, upstream.URL, "") }()
+	replies := bufio.NewReader(agentIn)
+	ask := func(line string) string {
+		t.Helper()
+		go func() { _, _ = io.WriteString(agentOut, line+"\n") }()
+		reply, err := replies.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reply
+	}
+	if reply := ask(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"a","version":"1"}}}`); !strings.Contains(reply, `"protocolVersion"`) {
+		t.Fatalf("initialize = %s", reply)
+	}
+	if reply := ask(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`); !strings.Contains(reply, `"echo"`) {
+		t.Fatalf("first list = %s", reply)
+	}
+	mu.Lock()
+	valid = "gone"
+	mu.Unlock()
+	if reply := ask(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`); !strings.Contains(reply, `"echo"`) || strings.Contains(reply, `"error"`) {
+		t.Fatalf("list after the server dropped the session = %s", reply)
+	}
+	_ = agentOut.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if starts != 2 {
+		t.Fatalf("the relay started %d sessions", starts)
+	}
+}

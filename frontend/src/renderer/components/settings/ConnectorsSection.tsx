@@ -26,9 +26,9 @@ export function connectorTarget(connector: Pick<Connector, "transport" | "url" |
 	return [connector.command, ...connector.args].filter(Boolean).join(" ");
 }
 
-/** Whether the row offers Sign in: an automatic sign-in that is not done, or a server that refused the last call. */
+/** Whether the row offers Sign in: an automatic sign-in that is not done, or one the server refused. Only that kind can sign in. */
 export function needsSignIn(connector: Pick<Connector, "auth" | "signedIn" | "status" | "transport">): boolean {
-	return connector.transport === "http" && (connector.status === "needs_signin" || (connector.auth === "oauth" && !connector.signedIn && connector.status !== "connected"));
+	return connector.transport === "http" && connector.auth === "oauth" && (connector.status === "needs_signin" || (!connector.signedIn && connector.status !== "connected"));
 }
 
 /** Settings › Connectors: the MCP servers every new session gets, with their state and sign-in. */
@@ -59,6 +59,8 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 	const statusLine = (connector: Connector) => {
 		if (!connector.enabled) return t("settings.connectors.status.off");
 		if (needsSignIn(connector)) return t("settings.connectors.status.needsSignIn");
+		// A header or a server without sign-in that the server refused: Edit fixes it, not Sign in.
+		if (connector.status === "needs_signin") return t("settings.connectors.status.signIn");
 		if (connector.status === "connected") {
 			return `${t("settings.connectors.status.connected")} · ${t("settings.connectors.status.tools", { count: connector.tools.length })}`;
 		}
@@ -95,7 +97,7 @@ export function ConnectorsSection({ titleHidden }: { titleHidden?: boolean }) {
 					<div role="list" className="divide-y divide-border">
 						{connectors.map((connector) => {
 							const failed = connector.enabled && connector.status === "unavailable";
-							const tone = failed ? "text-error" : connector.enabled && needsSignIn(connector) ? "text-warning" : undefined;
+							const tone = failed ? "text-error" : connector.enabled && (needsSignIn(connector) || connector.status === "needs_signin") ? "text-warning" : undefined;
 							return (
 								<SettingsRow
 									key={connector.id}

@@ -26,6 +26,7 @@ type echoInput struct {
 type fakeServer struct {
 	*httptest.Server
 	needToken   bool
+	minToken    atomic.Int32
 	tokenCalls  atomic.Int32
 	registered  atomic.Int32
 	lastRefresh atomic.Value
@@ -47,7 +48,8 @@ func newFakeServer(t *testing.T, needToken bool) *fakeServer {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
-		if fake.needToken && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer access-") {
+		number, _ := strconv.Atoi(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer access-"))
+		if fake.needToken && (!strings.HasPrefix(r.Header.Get("Authorization"), "Bearer access-") || int32(number) < fake.minToken.Load()) {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+fake.URL+`/.well-known/oauth-protected-resource"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -256,4 +258,65 @@ func mustParse(t *testing.T, raw string) *url.URL {
 		t.Fatal(err)
 	}
 	return parsed
+}
+
+func TestSignInAgainOnlyWhenTheServerRefusesTheSavedToken(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "fake", Transport: TransportHTTP, URL: fake.URL + "/mcp", Auth: AuthOAuth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.StartSignIn(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CompleteSignIn(ctx, signInState(t, page), "code-1", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if page, err := svc.StartSignIn(ctx, created.ID); err != nil || page != "" {
+		t.Fatalf("a start with a working sign-in = %q, %v", page, err)
+	}
+	if got, _ := svc.Get(ctx, created.ID); !got.SignedIn || got.Status != StatusConnected || fake.registered.Load() != 1 {
+		t.Fatalf("after a start with a working sign-in = %+v, registrations %d", got, fake.registered.Load())
+	}
+
+	fake.minToken.Store(5)
+	page, err = svc.StartSignIn(ctx, created.ID)
+	if err != nil || page == "" {
+		t.Fatalf("a start after the server refused the token = %q, %v", page, err)
+	}
+	if got, _ := svc.Get(ctx, created.ID); got.SignedIn || got.Status != StatusNeedsSignIn {
+		t.Fatalf("while the new sign-in is open = %+v", got)
+	}
+	fake.minToken.Store(0)
+	done, err := svc.CompleteSignIn(ctx, signInState(t, page), "code-2", "", "")
+	if err != nil || !done.SignedIn || done.Status != StatusConnected {
+		t.Fatalf("after the new sign-in = %+v, %v", done, err)
+	}
+}
+
+func TestAnEditOfTheAddressCancelsAnOpenSignIn(t *testing.T) {
+	first, second := newFakeServer(t, true), newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "fake", Transport: TransportHTTP, URL: first.URL + "/mcp", Auth: AuthOAuth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.StartSignIn(ctx, created.ID)
+	if err != nil || page == "" {
+		t.Fatalf("start = %q, %v", page, err)
+	}
+	if _, err := svc.Update(ctx, created.ID, Input{Name: "fake", Transport: TransportHTTP, URL: second.URL + "/mcp", Auth: AuthOAuth}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CompleteSignIn(ctx, signInState(t, page), "code-1", "", ""); err == nil {
+		t.Fatal("a sign-in for the old address completed on the new one")
+	}
+	records, err := readFile(svc.path)
+	if err != nil || len(records) != 1 || records[0].OAuth != nil || records[0].URL != second.URL+"/mcp" {
+		t.Fatalf("records = %+v, %v", records, err)
+	}
 }

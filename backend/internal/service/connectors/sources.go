@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -47,6 +48,8 @@ type ImportCandidate struct {
 	ProjectID  string
 	Exists     bool
 }
+
+var sourceVariable = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
 
 type sourceDef struct {
 	Type      string            `json:"type" toml:"type"`
@@ -149,19 +152,35 @@ func (s *Service) Import(ctx context.Context, ids []string, values map[string]ma
 			found[server.id()] = server
 		}
 	}
-	out := make([]Connector, 0, len(ids))
+	inputs := make([]Input, 0, len(ids))
+	keys := map[string]bool{}
 	for _, id := range ids {
 		server, ok := found[id]
 		if !ok {
-			return out, apierr.NotFound("CONNECTOR_IMPORT_NOT_FOUND", "That server is not in the configuration now")
+			return nil, apierr.NotFound("CONNECTOR_IMPORT_NOT_FOUND", "That server is not in the configuration now")
 		}
 		in, needs, ok := server.input(values[id])
 		if !ok {
-			return out, invalid("CONNECTOR_IMPORT_UNSUPPORTED", server.name+" uses a transport that connectors do not support")
+			return nil, invalid("CONNECTOR_IMPORT_UNSUPPORTED", server.name+" uses a transport that connectors do not support")
 		}
 		if len(needs) > 0 {
-			return out, invalid("CONNECTOR_IMPORT_VALUE", server.name+" needs a value for "+strings.Join(needs, ", "))
+			return nil, invalid("CONNECTOR_IMPORT_VALUE", server.name+" needs a value for "+strings.Join(needs, ", "))
 		}
+		rec, err := normalize(in, record{})
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		taken := s.load() == nil && s.keyTaken(rec.Key, "")
+		s.mu.Unlock()
+		if taken || keys[rec.Key] {
+			return nil, errKeyExists(rec.Key)
+		}
+		keys[rec.Key] = true
+		inputs = append(inputs, in)
+	}
+	out := make([]Connector, 0, len(inputs))
+	for _, in := range inputs {
 		created, err := s.Create(ctx, in)
 		if err != nil {
 			return out, err
@@ -235,10 +254,23 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 		}
 		return out
 	}
+	expand := func(text string) string {
+		return sourceVariable.ReplaceAllStringFunc(text, func(match string) string {
+			parts := sourceVariable.FindStringSubmatch(match)
+			if typed[parts[1]] != "" {
+				return typed[parts[1]]
+			}
+			if strings.Contains(match, ":-") {
+				return parts[2]
+			}
+			needs = append(needs, parts[1])
+			return match
+		})
+	}
 	kind := strings.ToLower(strings.TrimSpace(f.def.Type))
 	switch {
 	case f.def.URL != "" && (kind == "" || kind == "http" || kind == "streamable-http" || kind == "streamable_http"):
-		in.Transport, in.URL, in.Auth = TransportHTTP, f.def.URL, AuthOAuth
+		in.Transport, in.URL, in.Auth = TransportHTTP, expand(f.def.URL), AuthOAuth
 		headers := maps.Clone(f.def.Headers)
 		if f.def.BearerEnv != "" {
 			if headers == nil {
@@ -253,12 +285,15 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 			in.Auth = AuthHeader
 		}
 	case f.def.Command != "" && (kind == "" || kind == "stdio"):
-		in.Transport, in.Command, in.Args, in.Env = TransportStdio, f.def.Command, slices.Clone(f.def.Args), fill(f.def.Env)
+		in.Transport, in.Command, in.Env = TransportStdio, expand(f.def.Command), fill(f.def.Env)
+		for _, arg := range f.def.Args {
+			in.Args = append(in.Args, expand(arg))
+		}
 	default:
 		return Input{}, nil, false
 	}
 	slices.Sort(needs)
-	return in, needs, true
+	return in, slices.Compact(needs), true
 }
 
 func withoutQuery(raw string) string {
