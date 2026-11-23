@@ -316,3 +316,29 @@ test("a cancelled link attempt does not record completion on error", async () =>
 	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledTimes(2));
 });
 
+test("signing out and signing back in to the same account restarts linking after an attempt finished", async () => {
+	vi.useFakeTimers();
+	fake.signedIn = true;
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("Forbidden", 403));
+	const { rerender } = renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await vi.advanceTimersByTimeAsync(0);
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
+
+	// Advance time to verify the permanent error stopped retries.
+	await vi.advanceTimersByTimeAsync(60_000);
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
+
+	// User signs out; completion marker must be reset.
+	fake.signedIn = false;
+	rerender();
+
+	// User signs back in to the same account on the same mounted hook.
+	fake.signedIn = true;
+	rerender();
+	await vi.advanceTimersByTimeAsync(0);
+
+	// A new attempt runs on the fresh sign-in.
+	expect(linkThisComputer).toHaveBeenCalledTimes(2);
+});
+
+

@@ -84,7 +84,11 @@ export function useLinkThisComputerOnSignIn(): void {
 	const done = useRef("");
 	useEffect(() => {
 		const key = cloudBaseUrl && accountId ? `${cloudBaseUrl}#${accountId}` : "";
-		if (!key || done.current === key) return;
+		if (!key) {
+			done.current = "";
+			return;
+		}
+		if (done.current === key) return;
 		if (isDevelopmentBuild()) {
 			done.current = key;
 			return;
@@ -97,6 +101,7 @@ export function useLinkThisComputerOnSignIn(): void {
 		// makes accountLinked true before the directory entry exists.
 		let linkBegun = false;
 		const finish = () => {
+			if (cancelled) return;
 			done.current = key;
 		};
 		const retry = () => {
