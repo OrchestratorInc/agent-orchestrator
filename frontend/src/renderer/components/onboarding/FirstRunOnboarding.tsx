@@ -78,7 +78,6 @@ import { startFirstTaskFunnel } from "./FirstTaskFunnel";
 import { agentRowState, closeLoginWorkflow, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useLoginLifetime, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
-import { useWelcomeCopy, useWelcomeVariant, WelcomeVariantPicker } from "./WelcomeVariants";
 
 // Three pages: what Orchestrator is (with its three-part story playing in the
 // preview), the optional account, and the tools a worker needs (GitHub CLI and
@@ -111,12 +110,22 @@ const FADE = { duration: 0.15, ease: [0.23, 1, 0.32, 1] } as const;
 /** The copy column's width beside the stage. */
 const COPY_WIDTH = 520;
 
-/** How long each part of the welcome's story holds before the next plays: the
- * request, the workers at it, then CI and code review (WelcomeVariants). */
-const POINT_HOLD_MS = [4200, 3800, 10200] as const;
-const STORY_POINTS = POINT_HOLD_MS.length;
+/** "How Orchestrator works": the three steps the welcome preview plays, in
+ * order: the request, the workers at it, then CI and code review. */
+const ORCH_POINTS = [
+	{ title: "firstRun.orchPoint1Title", body: "firstRun.orchPoint1Body" },
+	{ title: "firstRun.orchPoint2Title", body: "firstRun.orchPoint2Body" },
+	{ title: "firstRun.orchPointCiTitle", body: "firstRun.orchPointCiBody" },
+] as const;
+const STORY_POINTS = ORCH_POINTS.length;
 /** The part where pull requests go through CI and code review on GitHub. */
 const CI_POINT = 2;
+/** How far the welcome's other steps recede while one plays. */
+const INACTIVE_POINT_OPACITY = 0.35;
+/** The welcome's steps come up and recede on this curve. */
+const CAPTION_EASE = [0.23, 1, 0.32, 1] as const;
+/** How long each part of the story holds before the next plays. */
+const POINT_HOLD_MS = [4200, 3800, 10200] as const;
 /** The order the example work settles (task indexes), a beat apart, in the CI
  * part: first the three with pull requests, each beat long enough for its
  * round trip to GitHub (OnboardingSchematic), then the one waiting on you, the
@@ -833,15 +842,44 @@ function ExamplePhone() {
 
 function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 	const { t } = useTranslation();
-	// Dev builds can switch between the copy directions under discussion.
-	const [variant, setVariant] = useWelcomeVariant();
-	const copy = useWelcomeCopy(variant, point);
+	const reduceMotion = useReducedMotion();
 	return (
-		<StepSplit title={copy.title} body={copy.body}>
-			{/* Narrates the preview: the whole story at once, the part playing
-			    brought up and the rest dimmed. */}
-			{copy.story}
-			<WelcomeVariantPicker value={variant} onChange={setVariant} />
+		<StepSplit title={t("firstRun.welcomeTitle")} body={t("firstRun.welcomeIntro")}>
+			{/* Narrates the preview as numbered steps on a thin rail: the whole
+			    story at once, the step playing brought up with its number filled
+			    and the rest dimmed. */}
+			<ol className="flex flex-col pt-6 pb-8">
+				{ORCH_POINTS.map(({ title, body }, i) => {
+					const active = i === point;
+					const last = i === ORCH_POINTS.length - 1;
+					return (
+						<motion.li
+							key={title}
+							className={cn("relative grid grid-cols-[1.5rem_1fr] gap-x-3.5", !last && "pb-5")}
+							aria-current={active ? "step" : undefined}
+							initial={false}
+							animate={{ opacity: active ? 1 : INACTIVE_POINT_OPACITY }}
+							transition={reduceMotion ? { duration: 0 } : { duration: 0.4, ease: CAPTION_EASE }}
+						>
+							{/* The rail from this step's number down to the next one's. */}
+							{!last ? <span aria-hidden="true" className="absolute bottom-1 left-3 top-8 w-px -translate-x-1/2 bg-border" /> : null}
+							<span
+								aria-hidden="true"
+								className={cn(
+									"grid size-6 place-items-center rounded-full border text-caption font-medium tabular-nums transition-colors duration-normal motion-reduce:transition-none",
+									active ? "border-transparent bg-foreground text-background" : "border-border text-muted-foreground",
+								)}
+							>
+								{i + 1}
+							</span>
+							<span className="flex flex-col gap-1 pt-0.5">
+								<span className="text-sm font-medium text-foreground">{t(title)}</span>
+								<span className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">{t(body)}</span>
+							</span>
+						</motion.li>
+					);
+				})}
+			</ol>
 			<StepAction>
 				<NextButton onClick={onNext} autoFocus>{t("firstRun.getStarted")}</NextButton>
 			</StepAction>
