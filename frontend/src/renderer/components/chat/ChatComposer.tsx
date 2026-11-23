@@ -1767,10 +1767,13 @@ export const ChatComposer = memo(function ChatComposer({
 	function submit(event?: FormEvent, forceSteer?: boolean, input?: SendInput): Promise<void> {
 		event?.preventDefault();
 		if (sendBlockedReason) return Promise.resolve();
-		// Only a person's Enter or click is counted, never a held draft sent later.
-		if (input && !typingLocked && (textRef.current.trim() || fileAttachments.attachments.length > 0)) {
-			uiUsage.messageSent(input, forceSteer && canSteerDraft ? "steer" : queuesDraft ? "queue" : "send", fileAttachments.attachments.length > 0);
-		}
+		// Only a person's Enter or click on a new message is counted: never a held
+		// draft sent later, a repeat Enter on the message already sending, or /model.
+		const countSend = () => {
+			if (input && !typingLocked && (textRef.current.trim() || fileAttachments.attachments.length > 0)) {
+				uiUsage.messageSent(input, forceSteer && canSteerDraft ? "steer" : queuesDraft ? "queue" : "send", fileAttachments.attachments.length > 0);
+			}
+		};
 		if (submitInFlight.current) {
 			// React cannot publish the next busy prop until after this event returns. A
 			// repeat Enter on the message being sent joins that submission instead of
@@ -1783,6 +1786,7 @@ export const ChatComposer = memo(function ChatComposer({
 				textRef.current.trim()
 			) {
 				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false, unsentId: parkedUnsentId() };
+				countSend();
 			}
 			return submitInFlight.current;
 		}
@@ -1800,6 +1804,7 @@ export const ChatComposer = memo(function ChatComposer({
 			openModelMenu();
 			return Promise.resolve();
 		}
+		countSend();
 		setHeldSubmit(null);
 		heldDuringSubmit.current = null;
 		submitAccepted.current = false;
