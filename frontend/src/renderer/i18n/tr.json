@@ -3479,7 +3479,6 @@
 	"chat.background.tally.stopped_other": "{{count}} ajan durduruldu",
 	"chat.background.tally.reset_one": "bağlam sıfırlandı",
 	"chat.background.tally.reset_other": "{{count}} bağlam sıfırlama",
-	"chat.reply.details": "Ayrıntılar",
 	"chat.reports.count_one": "{{count}} aracı raporu",
 	"chat.reports.count_other": "{{count}} aracı raporu",
 	"chat.reports.needsYou_one": "{{count}} tanesi sizi bekliyor",

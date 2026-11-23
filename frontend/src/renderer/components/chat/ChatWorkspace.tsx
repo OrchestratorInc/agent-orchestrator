@@ -164,7 +164,6 @@ import {
 	liveTaskLabel,
 	reconnectCopy,
 	stepInProgress,
-	type ReplyDetails,
 	type TurnOutcomeLogin,
 	type TurnOutcomeRetryControl,
 	ChatHostId,
@@ -4527,7 +4526,6 @@ export function Timeline({
 	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	const runKeys = useRef<ReadonlyMap<string, string>>(new Map());
-	const watchedLive = useRef(new Set<string>());
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
@@ -4715,7 +4713,7 @@ export function Timeline({
 		const index = groups.findIndex((group) => group.items.some((item) => item.id === findTarget.messageId));
 		if (index < 0) return;
 		const mounted = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-find-message-id]") ?? [])
-			.some((element) => element.dataset.findMessageId === findTarget.messageId && element.dataset.chatMessageCollapsed === undefined);
+			.some((element) => element.dataset.findMessageId === findTarget.messageId);
 		// The active highlight persists; mounting completes this one reveal request.
 		if (mounted) { setFindTarget(undefined); return; }
 		const keys = revealKeys(groups[index], (item) => item.id === findTarget.messageId);
@@ -4825,7 +4823,7 @@ export function Timeline({
 		}
 		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
 			.find((element) => element.dataset.chatMessageId === annotationTarget.messageId);
-		if (!source || source.dataset.chatMessageCollapsed !== undefined) {
+		if (!source) {
 			const keys = revealKeys(groups[index], (item) => item.id === annotationTarget.messageId);
 			if (keys.some((key) => !activityDisclosureOverrides[key])) {
 				setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
@@ -5832,7 +5830,6 @@ export function Timeline({
 										? loginLines?.get(turn.turnId)
 										: undefined}
 									workerUpdates={workerUpdates}
-									watchedLive={watchedLive.current}
 									startup={turn.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
@@ -6252,7 +6249,6 @@ const TurnGroup = memo(function TurnGroup({
 	startup,
 	onSelectAnnotation,
 	workerUpdates = false,
-	watchedLive,
 }: {
 	group: TimelineGroup;
 	harness: string;
@@ -6301,7 +6297,6 @@ const TurnGroup = memo(function TurnGroup({
 	startup?: ComponentProps<typeof SessionStartup> & { label?: string };
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
-	watchedLive: Set<string>;
 }) {
 	const hostId = useContext(ChatHostId);
 	const batched = useContext(BatchedReportsContext);
@@ -6317,9 +6312,6 @@ const TurnGroup = memo(function TurnGroup({
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
-	useEffect(() => {
-		if (group.live && !pageHidden()) watchedLive.add(group.key);
-	});
 	// A running turn offers copy only while its newest item is the reply itself, so the
 	// action does not flash under prose the agent is about to follow with more work.
 	const copyableMessageId = group.outcome
@@ -6468,10 +6460,6 @@ const TurnGroup = memo(function TurnGroup({
 			}
 			rollbackDisabled={rollbackDisabled}
 			onSelectAnnotation={onSelectAnnotation}
-			details={workerUpdates && group.outcome && !watchedLive.has(group.key) && run.items[0]?.id === lastAssistantId ? {
-				open: Boolean(activityDisclosureOverrides[`${group.key}:reply`]),
-				onOpenChange: (open) => onActivityDisclosureChange(`${group.key}:reply`, open),
-			} : undefined}
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
 				: undefined}
@@ -6722,7 +6710,6 @@ function TimelineItem({
 	rollbackDisabled,
 	onSelectAnnotation,
 	status,
-	details,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -6764,14 +6751,12 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
-	details?: ReplyDetails;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
 			return (
 				<AssistantMessage
 					message={item}
-					details={details}
 					showCopy={showCopy}
 					live={live}
 					onRollback={onRollback}
@@ -7033,9 +7018,7 @@ const turnsIn = (group: TimelineGroup): TimelineGroup[] => group.folded?.members
 function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boolean): string[] {
 	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
 	const turn = member ?? group;
-	const hit = turn.items.find(holds);
-	const reply = turn.items.findLast((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "");
-	const inside = [hit && hit === reply ? `${turn.key}:reply` : `${turn.key}:worked`];
+	const inside = [`${turn.key}:worked`];
 	if (!member) return inside;
 	const { kind } = group.folded!;
 	if (member === bannerOf(group) && (kind === "failed" || !holds(member.items[0]!))) return inside;

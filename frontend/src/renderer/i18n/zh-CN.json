@@ -3449,7 +3449,6 @@
 	"chat.background.tally.stopped_other": "停止了 {{count}} 个智能体",
 	"chat.background.tally.reset_one": "上下文重置 {{count}} 次",
 	"chat.background.tally.reset_other": "上下文重置 {{count}} 次",
-	"chat.reply.details": "详情",
 	"chat.reports.count_one": "{{count}} 份智能体报告",
 	"chat.reports.count_other": "{{count}} 份智能体报告",
 	"chat.reports.needsYou_one": "{{count}} 项需要你处理",

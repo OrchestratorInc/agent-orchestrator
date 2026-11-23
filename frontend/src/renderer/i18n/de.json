@@ -3467,7 +3467,6 @@
 	"chat.background.tally.stopped_other": "{{count}} Agents beendet",
 	"chat.background.tally.reset_one": "Kontext zurückgesetzt",
 	"chat.background.tally.reset_other": "{{count}}× Kontext zurückgesetzt",
-	"chat.reply.details": "Details",
 	"chat.reports.count_one": "{{count}} Agent-Bericht",
 	"chat.reports.count_other": "{{count}} Agent-Berichte",
 	"chat.reports.needsYou_one": "{{count}} braucht dich",

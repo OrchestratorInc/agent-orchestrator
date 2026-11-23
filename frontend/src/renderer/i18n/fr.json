@@ -3546,7 +3546,6 @@
 	"chat.background.tally.reset_one": "contexte réinitialisé",
 	"chat.background.tally.reset_many": "{{count}} réinitialisations du contexte",
 	"chat.background.tally.reset_other": "{{count}} réinitialisations du contexte",
-	"chat.reply.details": "Détails",
 	"chat.reports.count_one": "{{count}} rapport d'agent",
 	"chat.reports.count_other": "{{count}} rapports d'agents",
 	"chat.reports.count_many": "{{count}} rapports d'agents",

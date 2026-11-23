@@ -3467,7 +3467,6 @@
 	"chat.background.tally.stopped_other": "에이전트 중지 {{count}}개",
 	"chat.background.tally.reset_one": "컨텍스트 초기화 {{count}}회",
 	"chat.background.tally.reset_other": "컨텍스트 초기화 {{count}}회",
-	"chat.reply.details": "세부 정보",
 	"chat.reports.count_one": "에이전트 보고서 {{count}}개",
 	"chat.reports.count_other": "에이전트 보고서 {{count}}개",
 	"chat.reports.needsYou_one": "{{count}}개 확인 필요",

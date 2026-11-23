@@ -1437,36 +1437,15 @@ function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onCl
 	);
 }
 
-export type ReplyDetails = { open: boolean; onOpenChange: (open: boolean) => void };
-
-const REPLY_LEAD_AT = 2000;
-
-function replyLead(text: string): string | undefined {
-	if (text.length <= REPLY_LEAD_AT) return undefined;
-	const prose = text.replace(/```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*`/g, "");
-	if (/[?？][*_)\]"'”’`」』）】》〉»›]*(?:\s|$)/.test(prose) || /^ {0,3}\[[^\]\n]+\]:/m.test(text)) return undefined;
-	const start = text.search(/\S/);
-	const end = text.slice(start).search(/\n[ \t]*\n/);
-	if (end < 0) return undefined;
-	const lead = text.slice(0, start + end);
-	const first = lead.trim();
-	if (/^(?:[ \t]*\n)*(?: {4}|\t)/.test(lead) || /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/m.test(first)) return undefined;
-	return first.length * 2 < text.length
-		&& /(?:[^.]\.|[!。！])[*_)\]"'”’`」』）】》〉»›]*$/.test(first)
-		&& !/^(?:#{1,6}(?:\s|$)|\||>|[-*+]\s|\d+[.)]\s)|```|~~~/.test(first) ? lead : undefined;
-}
-
 /** The agent's prose. Streaming is represented by text arriving in place. */
 export function AssistantMessage({
 	message,
-	details,
 	showCopy = false,
 	live = false,
 	onRollback,
 	rollbackDisabled = false,
 }: {
 	message: ConversationMessage;
-	details?: ReplyDetails;
 	/** The final answer owns the copy action; it stays available while that answer streams. */
 	showCopy?: boolean;
 	/** The enclosing turn is still active, even if its last text chunk has landed. */
@@ -1479,7 +1458,6 @@ export function AssistantMessage({
 	/** Keep the rollback action mounted while another response is streaming. */
 	rollbackDisabled?: boolean;
 }) {
-	const { t } = useTranslation();
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
 	// Copy copies the stored markdown, so it need not wait for the typewriter to catch
@@ -1489,31 +1467,16 @@ export function AssistantMessage({
 	const copyReady = showCopy && !message.streaming && !live;
 	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
 	const showActions = copyReady || rollbackReady;
-	const replyText = message.text;
-	const collapsible = Boolean(details) && !live && !renderingStreaming;
-	const lead = useMemo(() => collapsible ? replyLead(replyText) : undefined, [collapsible, replyText]);
-	const collapsed = Boolean(lead && !details?.open);
 	return (
 		<div
 			className="group/message relative"
 			data-chat-streaming-output={renderingStreaming ? "" : undefined}
 			data-find-message-id={message.origin !== "automation" && message.origin !== "daemon" ? message.id : undefined}
 			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
-			data-chat-message-collapsed={collapsed ? "" : undefined}
 			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
 			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
 		>
-			<div data-chat-message-body=""><ChatMarkdown text={collapsed ? lead! : visibleText} streaming={renderingStreaming} /></div>
-			{lead && details ? (
-				<Pressable
-					aria-expanded={details.open}
-					onClick={() => details.onOpenChange(!details.open)}
-					className="-mx-1.5 mt-1 inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
-				>
-					{t("chat.reply.details")}
-					<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform motion-reduce:transition-none", details.open && "rotate-90")} />
-				</Pressable>
-			) : null}
+			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
 			{showActions ? (
 				// One action row for the completed answer, not one after every prose
 				// fragment the provider emitted while working. Copy and rollback stay

@@ -3645,7 +3645,6 @@
 	"chat.background.tally.reset_few": "{{count}} сброса контекста",
 	"chat.background.tally.reset_many": "{{count}} сбросов контекста",
 	"chat.background.tally.reset_other": "{{count}} сброса контекста",
-	"chat.reply.details": "Подробности",
 	"chat.reports.count_one": "{{count}} отчёт агента",
 	"chat.reports.count_few": "{{count}} отчёта агентов",
 	"chat.reports.count_many": "{{count}} отчётов агентов",

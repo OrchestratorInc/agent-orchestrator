@@ -3467,7 +3467,6 @@
 	"chat.background.tally.stopped_other": "エージェント停止 {{count}} 件",
 	"chat.background.tally.reset_one": "コンテキストのリセット {{count}} 件",
 	"chat.background.tally.reset_other": "コンテキストのリセット {{count}} 件",
-	"chat.reply.details": "詳細",
 	"chat.reports.count_one": "エージェントレポート {{count}} 件",
 	"chat.reports.count_other": "エージェントレポート {{count}} 件",
 	"chat.reports.needsYou_one": "{{count}} 件が対応待ち",
