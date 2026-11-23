@@ -3563,6 +3563,7 @@
 	"chat.render.remoteHost": "페이지를 보려면 이 세션을 호스트에서 여세요.",
 	"chat.artifact.openInPanel": "아티팩트 탭에서 열기",
 	"chat.artifact.label": "Artifact",
+	"chat.artifact.unavailable": "이 페이지는 더 이상 세션 아티팩트에 없습니다.",
 	"chat.image.numbered": "이미지 {{index}}",
 	"chat.edit.cancel": "편집 취소",
 	"chat.edit.cancelAction": "취소",

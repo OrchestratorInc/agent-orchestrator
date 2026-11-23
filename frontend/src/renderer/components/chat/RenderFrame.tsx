@@ -28,7 +28,7 @@ import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatImageDialog } from "./ChatImage";
-import { useChatArtifactLinks, useChatRemoteHost, useChatRemoteSession } from "./chat-image-source";
+import { useChatArtifactFiles, useChatArtifactLinks, useChatRemoteHost, useChatRemoteSession } from "./chat-image-source";
 import { useChatBrowserOpen } from "./ChatMarkdown";
 
 type RenderImage = { src: string; alt: string };
@@ -211,6 +211,11 @@ function RenderAction({ label, children, ...props }: ButtonProps & { label: stri
 	);
 }
 
+/** The daemon route of one session artifact file, as a chat artifact card records it. */
+function artifactFileRoute(sessionId: string, path: string): string {
+	return `/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 /** Where the render is served: its remote host's render origin, or this computer's daemon. */
 function renderUrl(page: FramePage): string {
 	return page.remoteUrl ?? `${getApiBaseUrl()}${page.path}`;
@@ -351,15 +356,20 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 		if (foldKey !== undefined) rememberFold(foldKey, next);
 	};
 	const remoteHost = useChatRemoteHost();
+	const cloud = Boolean(useChatArtifactFiles()?.cloud);
 	const render = "render" in props ? props.render : undefined;
 	const links = useChatArtifactLinks("artifact" in props ? props.artifact.path : undefined);
 	const remoteUrl = useRemoteRenderUrl(render?.path);
+	// A page renamed since its card was recorded is read from where it is now.
+	const artifactPath = "artifact" in props
+		? links && links.path !== props.artifact.path ? artifactFileRoute(links.sessionId, links.path) : props.artifact.url
+		: undefined;
 	const page: FramePage =
 		"render" in props
 			? { title: props.render.title, path: props.render.path, height: props.render.height, heights: props.render.heights, fileName: renderFileName(props.render.title), remoteUrl: remoteUrl ?? undefined }
 			: {
 					title: props.artifact.name,
-					path: props.artifact.url,
+					path: artifactPath ?? props.artifact.url,
 					height: ARTIFACT_FRAME_HEIGHT,
 					fileName: props.artifact.name,
 					scrollable: true,
@@ -386,6 +396,11 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 		);
 	}
 	if (remoteHost && !remoteUrl) return <div aria-busy="true" style={{ height: clampRenderHeight(page.height) }} />;
+	// A local chat frames an artifact only from its inline origin: the daemon
+	// refuses frames on the artifact-files route the card records
+	// (ORIGIN_FORBIDDEN). A card whose page the session no longer lists, deleted
+	// since it was shown, says so rather than framing that refusal.
+	const unavailable = "artifact" in props && !cloud && !page.frameUrl;
 	const save = () => {
 		setSaving(true);
 		saveRender(page)
@@ -467,7 +482,7 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 						/>
 					</Pressable>
 					{links && "artifact" in props ? (
-						<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => undefined} />
+						<OpenInPanelAction sessionId={links.sessionId} path={links.path} onOpen={() => undefined} />
 					) : null}
 				</div>
 			) : null}
@@ -480,12 +495,16 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 					inert={folded}
 					className="overflow-hidden"
 				>
-					{frameMounted ? <RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} /> : null}
+					{!frameMounted ? null : unavailable ? (
+						<p className="py-2 text-xs text-muted-foreground">{t("chat.artifact.unavailable")}</p>
+					) : (
+						<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
+					)}
 				</motion.div>
 			) : (
 				<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
 			)}
-			{folded ? null : (
+			{folded || unavailable ? null : (
 				<div
 					className={cn(
 						"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
@@ -542,7 +561,7 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 							</RenderAction>
 						) : null}
 						{links && "artifact" in props ? (
-							<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => setExpanded(false)} />
+							<OpenInPanelAction sessionId={links.sessionId} path={links.path} onOpen={() => setExpanded(false)} />
 						) : null}
 						{browserPanelAction}
 						{opensStandalone ? (
