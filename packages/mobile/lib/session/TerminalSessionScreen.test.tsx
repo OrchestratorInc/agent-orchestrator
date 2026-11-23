@@ -50,6 +50,7 @@ vi.mock("react-native", async () => {
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
 		Alert: { alert: fixtures.alert },
+		AppState: { currentState: "active", addEventListener: () => ({ remove: () => {} }) },
 		Keyboard: { addListener: () => ({ remove: () => {} }), dismiss: vi.fn() },
 		LayoutAnimation: { configureNext: vi.fn(), Types: { keyboard: "keyboard" } },
 		Platform: { get OS() { return fixtures.os; }, Version: "26.0" },

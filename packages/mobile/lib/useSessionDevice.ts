@@ -1,18 +1,29 @@
 import { useEffect, useState } from "react";
-import { getSessionDevice, type SessionDeviceLease } from "./api";
+import { getDeviceStatus, getSessionDevice, type SessionDeviceLease } from "./api";
 import type { ServerConfig } from "./config";
+import { startSessionDevicePoll } from "./sessionDevicePoll";
+import { useForeground } from "./useForeground";
 
-/** Whether a session holds a device, polled so an agent's `ao device open` shows up. */
-export function useSessionDevice(config: ServerConfig | null | undefined, sessionId: string, intervalMs = 3_000): SessionDeviceLease | null {
+/**
+ * Whether a session holds a device, polled so an agent's `ao device open`
+ * shows up: only while device support is on and the app is in front (see
+ * startSessionDevicePoll).
+ */
+export function useSessionDevice(config: ServerConfig | null | undefined, sessionId: string): SessionDeviceLease | null {
 	const [lease, setLease] = useState<SessionDeviceLease | null>(null);
+	const foreground = useForeground();
 	useEffect(() => {
 		setLease(null);
-		if (!config || !sessionId) return;
+		if (!config || !sessionId || !foreground) return;
 		const controller = new AbortController();
-		const load = () => getSessionDevice(config, sessionId, { signal: controller.signal }).then(setLease).catch(() => {});
-		void load();
-		const poll = setInterval(() => void load(), intervalMs);
-		return () => { controller.abort(); clearInterval(poll); };
-	}, [config, intervalMs, sessionId]);
+		const stop = startSessionDevicePoll(
+			{
+				supportOn: () => getDeviceStatus(config, { signal: controller.signal }).then((status) => status.enabled && status.state !== "off"),
+				lease: () => getSessionDevice(config, sessionId, { signal: controller.signal }),
+			},
+			setLease,
+		);
+		return () => { controller.abort(); stop(); };
+	}, [config, foreground, sessionId]);
 	return lease;
 }

@@ -13,12 +13,14 @@ import { DeviceStreamView } from "../../modules/device-stream";
 import { useDeviceQuality } from "../../lib/deviceQuality";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
+import { startSerialPoll } from "../../lib/session/serialPoll";
 import { SettingsButtonRow, SettingsForm, SettingsSection } from "../../lib/SettingsForm";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemeState, useThemedStyles } from "../../lib/ThemeProvider";
 import { iconSize, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
+import { useForeground } from "../../lib/useForeground";
 
 // Screenshots stand in for the desktop's live stream: React Native's Image
 // cannot render MJPEG, and a still every few hundred milliseconds is enough to
@@ -28,6 +30,11 @@ const AVCC_START_MS = 10_000;
 const FRAME_INTERVAL_MS = 350;
 const LEASE_POLL_MS = 2_000;
 const DEVICES_POLL_MS = 5_000;
+/** The touch socket's first retry; each failed one waits twice as long, up to the cap. */
+const SOCKET_RETRY_MS = 1_500;
+const SOCKET_RETRY_MAX_MS = 30_000;
+/** Lost stream connections in a row, without a frame, before the screen says so. */
+const STREAM_FAILURES_SHOWN = 3;
 
 /** The session's simulator or emulator: watch it and tap it from the phone. */
 export default function SessionDeviceScreen() {
@@ -46,17 +53,17 @@ function SessionDeviceContent() {
 	const styles = useThemedStyles(makeStyles);
 	const [lease, setLease] = useState<SessionDeviceLease | null | undefined>(undefined);
 	const [error, setError] = useState<string>();
+	const foreground = useForeground();
 
+	// One read at a time (a slow relay never stacks them), and none in the background.
 	useEffect(() => {
-		if (!hostMatches || !config || !sessionID) return;
+		if (!hostMatches || !config || !sessionID || !foreground) return;
 		const controller = new AbortController();
-		const load = () => getSessionDevice(config, sessionID, { signal: controller.signal })
+		const stop = startSerialPoll(() => getSessionDevice(config, sessionID, { signal: controller.signal })
 			.then((next) => { setLease(next); setError(undefined); })
-			.catch((cause) => { if (!controller.signal.aborted) setError(userFacingError(cause)); });
-		void load();
-		const poll = setInterval(() => void load(), LEASE_POLL_MS);
-		return () => { controller.abort(); clearInterval(poll); };
-	}, [config, hostMatches, sessionID]);
+			.catch((cause) => { if (!controller.signal.aborted) setError(userFacingError(cause)); }), LEASE_POLL_MS);
+		return () => { controller.abort(); stop(); };
+	}, [config, foreground, hostMatches, sessionID]);
 
 	useLayoutEffect(() => {
 		navigation.setOptions({ title: lease?.device.name ?? "Device" });
@@ -70,7 +77,7 @@ function SessionDeviceContent() {
 		</View>;
 	}
 	if (!lease) return <DevicePicker config={config} sessionID={sessionID} onOpened={setLease} />;
-	return <DeviceLive config={config} lease={lease} onReleased={() => setLease(null)} sessionID={sessionID} />;
+	return <DeviceLive config={config} foreground={foreground} lease={lease} leaseError={error} onReleased={() => setLease(null)} sessionID={sessionID} />;
 }
 
 /**
@@ -89,16 +96,16 @@ function DevicePicker({ config, sessionID, onOpened }: {
 	const [loadError, setLoadError] = useState<string>();
 	const [openError, setOpenError] = useState<string>();
 	const [opening, setOpening] = useState<string>();
+	const foreground = useForeground();
 
 	useEffect(() => {
+		if (!foreground) return;
 		const controller = new AbortController();
-		const load = () => getDeviceStatus(config, { signal: controller.signal })
+		const stop = startSerialPoll(() => getDeviceStatus(config, { signal: controller.signal })
 			.then((next) => { setStatus(next); setLoadError(undefined); })
-			.catch((cause) => { if (!controller.signal.aborted) setLoadError(userFacingError(cause)); });
-		void load();
-		const poll = setInterval(() => void load(), DEVICES_POLL_MS);
-		return () => { controller.abort(); clearInterval(poll); };
-	}, [config]);
+			.catch((cause) => { if (!controller.signal.aborted) setLoadError(userFacingError(cause)); }), DEVICES_POLL_MS);
+		return () => { controller.abort(); stop(); };
+	}, [config, foreground]);
 
 	const open = (device: DeviceSummary) => {
 		haptics.tap();
@@ -148,9 +155,13 @@ function DevicePicker({ config, sessionID, onOpened }: {
 	);
 }
 
-function DeviceLive({ config, lease, onReleased, sessionID }: {
+function DeviceLive({ config, foreground, lease, leaseError, onReleased, sessionID }: {
 	config: NonNullable<ReturnType<typeof useApp>["config"]>;
+	/** In the background the stream and touch socket close, and reopen on return. */
+	foreground: boolean;
 	lease: SessionDeviceLease;
+	/** Why the latest lease read failed, if it did. */
+	leaseError?: string;
 	onReleased: () => void;
 	sessionID: string;
 }) {
@@ -168,6 +179,10 @@ function DeviceLive({ config, lease, onReleased, sessionID }: {
 	// a build without the native view polls screenshots.
 	const NativeStream = DeviceStreamView;
 	const [streaming, setStreaming] = useState(false);
+	// Stream connections lost in a row without a frame: the native view keeps
+	// retrying (more slowly each time), and after a few the screen says so.
+	const [streamFailures, setStreamFailures] = useState(0);
+	const [actionError, setActionError] = useState<string>();
 	// A simulator streams as H.264 (~5 Mbit/s scrolling, against ~112 for
 	// MJPEG). A daemon without that route never starts it: MJPEG after 10 s.
 	const [avccFailed, setAvccFailed] = useState(false);
@@ -210,21 +225,24 @@ function DeviceLive({ config, lease, onReleased, sessionID }: {
 	const off = !device.booted;
 	// The touch socket is held only while the device is on: one opened while it
 	// is off goes nowhere once it boots, so turning it on opens a fresh one.
+	// Closed in the background too, and retried more slowly while it keeps failing.
 	useEffect(() => {
-		if (off) {
+		if (off || !foreground) {
 			setLive(false);
 			return;
 		}
 		let stopped = false;
 		let retry: ReturnType<typeof setTimeout> | undefined;
+		let failures = 0;
 		const connect = () => {
 			const ws = openDeviceInput(config, deviceInputURL(config, sessionID, device.platform, device.id));
 			socket.current = ws;
-			ws.onopen = () => setLive(true);
+			ws.onopen = () => { failures = 0; setLive(true); };
 			ws.onclose = () => {
 				if (stopped || socket.current !== ws) return;
 				setLive(false);
-				retry = setTimeout(connect, 1_500);
+				retry = setTimeout(connect, Math.min(SOCKET_RETRY_MS * 2 ** Math.min(failures, 5), SOCKET_RETRY_MAX_MS));
+				failures += 1;
 			};
 			ws.onerror = () => ws.close();
 		};
@@ -236,7 +254,7 @@ function DeviceLive({ config, lease, onReleased, sessionID }: {
 			socket.current = null;
 			ws?.close();
 		};
-	}, [config, device.id, device.platform, off, sessionID]);
+	}, [config, device.id, device.platform, foreground, off, sessionID]);
 
 	const send = useCallback((payload: ArrayBuffer | string | null) => {
 		const ws = socket.current;
@@ -268,7 +286,10 @@ function DeviceLive({ config, lease, onReleased, sessionID }: {
 	];
 
 	const leave = () => { haptics.tap(); if (router.canGoBack()) router.back(); else router.navigate("/"); };
-	const release = (shutdown: boolean) => void closeSessionDevice(config, sessionID, { shutdown }).then(onReleased).catch(() => {});
+	const release = (shutdown: boolean) => {
+		setActionError(undefined);
+		void closeSessionDevice(config, sessionID, { shutdown }).then(onReleased).catch((cause) => setActionError(userFacingError(cause)));
+	};
 	// What the screen does not show by itself lives in one menu, named in words:
 	// giving the device back, and powering it off.
 	const menuActions: MenuAction[] = [
@@ -291,9 +312,14 @@ function DeviceLive({ config, lease, onReleased, sessionID }: {
 	const [starting, setStarting] = useState(false);
 	const start = () => {
 		setStarting(true);
-		void openSessionDevice(config, sessionID, { deviceId: device.id, platform: device.platform }).catch(() => {}).finally(() => setStarting(false));
+		setActionError(undefined);
+		void openSessionDevice(config, sessionID, { deviceId: device.id, platform: device.platform })
+			.catch((cause) => setActionError(userFacingError(cause)))
+			.finally(() => setStarting(false));
 	};
 	const subtitle = [device.version, off ? "Off" : live ? null : "Connecting…"].filter(Boolean).join(" · ");
+	// Said, not left at "Connecting…" forever: a refused token or a daemon without the stream route.
+	const notice = actionError ?? leaseError ?? (!off && streamFailures >= STREAM_FAILURES_SHOWN ? "Can't load the device's screen. Retrying…" : undefined);
 
 	return <View style={styles.screen}>
 		<StatusBar hidden animated />
@@ -317,13 +343,19 @@ function DeviceLive({ config, lease, onReleased, sessionID }: {
 					headers={device.platform === "android" ? deviceSocketHeaders(config) : authHeaders(config)}
 					mode={streamMode}
 					onSize={(event) => { const { width, height } = event.nativeEvent; if (width && height) setAspect(width / height); }}
-					onState={(event) => setStreaming(event.nativeEvent.state === "streaming")}
+					onState={(event) => {
+						const state = event.nativeEvent.state;
+						setStreaming(state === "streaming");
+						if (state === "streaming") setStreamFailures(0);
+						else if (state === "closed") setStreamFailures((count) => count + 1);
+					}}
 					onStats={(event) => reportStream(event.nativeEvent)}
 					pointerEvents="none"
 					style={StyleSheet.absoluteFill}
-					url={off ? "" : streamMode === "h264" ? deviceVideoURL(config, sessionID, device.id) : streamMode === "avcc" ? deviceAvccURL(config, sessionID, device.id) : deviceMjpegURL(config, sessionID, device.id)}
+					url={off || !foreground ? "" : streamMode === "h264" ? deviceVideoURL(config, sessionID, device.id) : streamMode === "avcc" ? deviceAvccURL(config, sessionID, device.id) : deviceMjpegURL(config, sessionID, device.id)}
 				/> : null}
-				{NativeStream ? (streaming ? null : <ActivityIndicator color={t.accent} />) : layers.uris[0] === null && layers.uris[1] === null ? <ActivityIndicator color={t.accent} /> : null}
+				{/* No touch target: a touch starting on it would be measured from its own corner. */}
+				{(NativeStream ? !streaming : layers.uris[0] === null && layers.uris[1] === null) ? <ActivityIndicator color={t.accent} pointerEvents="none" /> : null}
 				<DeviceTouchRipple point={ripple} />
 				{([0, 1] as const).map((layer) => {
 					const uri = layers.uris[layer];
@@ -357,6 +389,7 @@ function DeviceLive({ config, lease, onReleased, sessionID }: {
 				)}
 			</MenuView>
 		</View>
+		{notice ? <Text accessibilityRole="alert" numberOfLines={2} style={[styles.notice, { bottom: Math.max(insets.bottom, space.md) + CAPSULE_HEIGHT + space.sm }]}>{notice}</Text> : null}
 		<View style={[styles.capsule, { bottom: Math.max(insets.bottom, space.md) }]}>
 			{buttons.map(({ button, icon, label }, index) => <Pressable key={button} accessibilityRole="button" accessibilityLabel={label} disabled={!live} onPress={() => press(button)} style={({ pressed }) => [styles.capsuleButton, index > 0 && styles.capsuleDivider, (!live || pressed) && styles.dimmed]}>
 				<Feather name={icon} size={iconSize.sm} color={t.textPrimary} />
@@ -389,6 +422,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	capsuleButton: { height: CAPSULE_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.lg },
 	capsuleDivider: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: t.borderDefault },
 	capsuleLabel: { ...type.caption1, color: t.textPrimary },
+	notice: { ...type.footnote, position: "absolute", left: space.xl, right: space.xl, textAlign: "center", color: t.red },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

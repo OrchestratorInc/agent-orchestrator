@@ -1,49 +1,22 @@
+import { encodeButton as encodeButtonFrame, encodeTouch as encodeTouchFrame, type DeviceButton, type DevicePlatform, type TouchPhase } from "../../shared/devices/device-input";
 import { authHeaders, httpBase, type ServerConfig } from "./config";
 
-// Input frames for the device hub's stream sockets, the same protocol the
-// desktop Device tab speaks: iOS (serve-sim) takes a one-byte tag followed by
-// JSON, Android (serve-emu) plain JSON. Points are 0..1 of the screen.
+// Input frames for the device hub's stream sockets: the same encoder as the
+// desktop Device tab (packages/shared), handed to React Native's WebSocket as
+// an ArrayBuffer.
 
-export type DevicePlatform = "ios" | "android";
-export type TouchPhase = "begin" | "move" | "end";
-export type DeviceButton = "home" | "back" | "recents";
+export { clampPoint, type DeviceButton, type DevicePlatform, type TouchPhase } from "../../shared/devices/device-input";
 
-const IOS_TOUCH = 0x03;
-const IOS_BUTTON = 0x04;
+const asBuffer = <T>(frame: Uint8Array<ArrayBuffer> | T): ArrayBuffer | T => (frame instanceof Uint8Array ? frame.buffer : frame);
 
-function tagged(tag: number, payload: unknown): ArrayBuffer {
-	const json = new TextEncoder().encode(JSON.stringify(payload));
-	const out = new Uint8Array(json.length + 1);
-	out[0] = tag;
-	out.set(json, 1);
-	return out.buffer;
-}
-
-/**
- * `t` is when the finger moved (the touch's own timestamp, ms): the daemon
- * replays touches at that spacing when the phone's Wi-Fi hands them over in a
- * burst, and leaves it out of what the hub gets.
- */
+/** See the shared encodeTouch; `t` is the touch's own timestamp (ms). */
 export function encodeTouch(platform: DevicePlatform, phase: TouchPhase, x: number, y: number, t?: number): ArrayBuffer | string {
-	const time = t !== undefined && t > 0 ? { t } : {};
-	if (platform === "ios") return tagged(IOS_TOUCH, { type: phase, x, y, ...time });
-	const action = phase === "begin" ? "down" : phase === "move" ? "move" : "up";
-	return JSON.stringify({ type: "touch", action, x, y, ...time });
+	return asBuffer(encodeTouchFrame(platform, phase, x, y, t));
 }
 
 /** Encodes a hardware button, or null when the platform has none. */
 export function encodeButton(platform: DevicePlatform, button: DeviceButton): ArrayBuffer | string | null {
-	if (platform === "ios") {
-		if (button === "back") return null;
-		return tagged(IOS_BUTTON, { button: button === "recents" ? "app_switcher" : "home" });
-	}
-	return JSON.stringify({ type: button });
-}
-
-export function clampPoint(x: number, y: number, width: number, height: number): { x: number; y: number } {
-	const clamp = (value: number) => Math.min(1, Math.max(0, value));
-	if (width <= 0 || height <= 0) return { x: 0, y: 0 };
-	return { x: clamp(x / width), y: clamp(y / height) };
+	return asBuffer(encodeButtonFrame(platform, button));
 }
 
 /** The daemon's screenshot route for the session's device, and the headers it needs. */
