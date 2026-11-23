@@ -82,6 +82,11 @@ type ProjectConfig struct {
 	// after spawn.
 	AutoReview bool `json:"autoReview,omitempty"`
 
+	// TerminateOnPRMerge controls whether new worker sessions spawned for this project
+	// have PR-merge auto-termination enabled by default. Nil falls back to the
+	// user/global default. Users can still override the per-session toggle after spawn.
+	TerminateOnPRMerge *bool `json:"terminateOnPrMerge,omitempty"`
+
 	// WorkersRequestReview changes what worker sessions are told about AO's
 	// native reviewer. When set, a worker requests an AO review of its own PR
 	// (`ao review trigger`) once the PR is pushed and verified, and again after

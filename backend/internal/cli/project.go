@@ -77,10 +77,11 @@ type workspaceRepoDetails struct {
 
 // agentConfig mirrors the daemon's typed domain.AgentConfig for the CLI client.
 type agentConfig struct {
-	Model       string `json:"model,omitempty"`
-	Effort      string `json:"effort,omitempty"`
-	Mode        string `json:"mode,omitempty"`
-	Permissions string `json:"permissions,omitempty"`
+	Model              string `json:"model,omitempty"`
+	Effort             string `json:"effort,omitempty"`
+	Mode               string `json:"mode,omitempty"`
+	Permissions        string `json:"permissions,omitempty"`
+	TerminateOnPRMerge *bool  `json:"terminateOnPrMerge,omitempty"`
 }
 
 // roleOverride mirrors domain.RoleOverride.
@@ -129,6 +130,7 @@ type projectConfig struct {
 	Orchestrator          roleOverride         `json:"orchestrator,omitempty"`
 	TrackerIntake         trackerIntakeConfig  `json:"trackerIntake,omitempty"`
 	AutoReview            bool                 `json:"autoReview,omitempty"`
+	TerminateOnPRMerge    *bool                `json:"terminateOnPrMerge,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
 	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
@@ -305,8 +307,8 @@ func newProjectAddCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.path, "path", "", "Absolute path to the local git repo (required)")
 	f.StringVar(&opts.id, "id", "", "Project id (default: derived by the daemon from the path)")
 	f.StringVar(&opts.name, "name", "", "Display name")
-	f.StringVar(&opts.workerAgent, "worker-agent", "", "Default worker session agent")
-	f.StringVar(&opts.orchestratorAgent, "orchestrator-agent", "", "Default orchestrator session agent")
+	f.StringVar(&opts.workerAgent, "worker-agent", "", "Default worker session agent (default: the most preferred installed agent)")
+	f.StringVar(&opts.orchestratorAgent, "orchestrator-agent", "", "Default orchestrator session agent (default: the most preferred installed agent)")
 	f.StringVar(&opts.defaultBranch, "default-branch", "", "Base branch for new worktrees; needed when the repository has no remote")
 	f.BoolVar(&opts.asWorkspace, "as-workspace", false, "Register a parent folder as a workspace project (root-as-repo plus direct child repos)")
 	return cmd
