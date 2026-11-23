@@ -204,6 +204,9 @@ export type ChatModelsResponse = Schemas["ChatModelsResponse"];
 export type CloudHarnessVersions = Schemas["CloudHarnessVersions"];
 export type CloudHarnessVersion = Schemas["CloudHarnessVersion"];
 export type CloudHarnessInstallInput = Schemas["CloudHarnessInstallInput"];
+export type DataRetention = Schemas["DataRetention"];
+export type DataRetentionChange = Schemas["DataRetentionChange"];
+export type PutDataRetentionInput = Schemas["PutDataRetentionInput"];
 export type WorkerWorkspaceListPayload =
   Schemas["WorkerWorkspaceListPayload"];
 export type WorkerWorkspaceReadPayload =
