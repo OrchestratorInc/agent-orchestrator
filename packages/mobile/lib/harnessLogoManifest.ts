@@ -33,6 +33,7 @@ export const HARNESS_LOGO_MANIFEST: Readonly<Record<string, { light: HarnessLogo
 	kimchi: { light: { asset: "kimchi", source: "kimchi.svg", hash: "cab08c981011b29a" } },
 	kimi: { light: { asset: "kimi-light", source: "kimi-light.svg", hash: "804a4eefb8624ddd" }, dark: { asset: "kimi-dark", source: "kimi-dark.svg", hash: "5a17bc2f689253cb" } },
 	kiro: { light: { asset: "kiro", source: "kiro.svg", hash: "1d7c1fb23f0353b9" } },
+	"mastra-code": { light: { asset: "mastra-code", source: "mastra-code.svg", hash: "4e67bcc73497a883" } },
 	memcode: { light: { asset: "memcode", source: "memcode.png", hash: "dee9ebe94438fd6b" } },
 	"mimo-code": { light: { asset: "mimo-code", source: "mimo-code.svg", hash: "d0a2bd0be510f741" } },
 	"minimax-code": { light: { asset: "minimax-code", source: "minimax-code.svg", hash: "ca1c6b1d3671723b" } },

@@ -11,7 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -60,15 +63,68 @@ var _ ports.AgentAccountProviderCLI = (*Claude)(nil)
 // Provider names Claude.
 func (*Claude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
 
+// claudeTokenFile holds a setup token account's `claude setup-token` token in
+// its own folder, readable by the user only. It never leaves the folder except
+// as the launch environment of that account's CLI.
+const claudeTokenFile = ".ao-oauth-token" //nolint:gosec // a file name, not a credential
+
+// claudeSetupToken matches a token from `claude setup-token`.
+var claudeSetupToken = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
+
 // LaunchEnv points Claude Code at home. Claude keys the folder's Keychain login
-// on the exact path text, so both variables carry the same string.
+// on the exact path text, so both variables carry the same string. A setup
+// token account's CLI signs in with its saved token.
 func (*Claude) LaunchEnv(home string) map[string]string {
 	if home == "" {
 		return nil
 	}
 	env := map[string]string{"CLAUDE_CONFIG_DIR": home, "CLAUDE_SECURESTORAGE_CONFIG_DIR": home}
 	neutralize(env, claudeCredentialEnv...)
+	if token, err := readSetupToken(home); err == nil {
+		env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+	}
 	return env
+}
+
+// SaveSetupToken saves a `claude setup-token` token as home's sign-in.
+func (*Claude) SaveSetupToken(home, token string) error {
+	token = strings.TrimSpace(token)
+	if strings.TrimSpace(home) == "" || !claudeSetupToken.MatchString(token) {
+		return ports.ErrAgentAccountKeyRejected
+	}
+	// CreateTemp makes the file readable by the user only (0600).
+	tmp, err := os.CreateTemp(home, claudeTokenFile+".*")
+	if err != nil {
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	// Gone after the rename; removed here only when saving failed.
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(token); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), filepath.Join(home, claudeTokenFile)); err != nil {
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	return nil
+}
+
+// SetupTokenOf is the setup token home signs in with, if it has one.
+func (*Claude) SetupTokenOf(home string) (string, error) { return readSetupToken(home) }
+
+func readSetupToken(home string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(home, claudeTokenFile))
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(data))
+	if !claudeSetupToken.MatchString(token) {
+		return "", errors.New("the saved setup token is invalid")
+	}
+	return token, nil
 }
 
 // LoginArgv is Claude Code's own sign-in.
@@ -429,10 +485,17 @@ func dropLoginKeys(settings map[string]json.RawMessage) bool {
 	return dropped
 }
 
+// claudeConfigMu serializes AO's read-modify-write of an account's .claude.json,
+// so a launch sharing the user's config never writes back a copy read before a
+// key approval and drops it.
+var claudeConfigMu sync.Mutex
+
 // shareGlobalConfig shares the user's MCP servers, one by one, and theme into
 // home's .claude.json, the file that also holds the account's own sign-in, so
 // no other key is touched.
 func (c *Claude) shareGlobalConfig(home string, l *ledger) error {
+	claudeConfigMu.Lock()
+	defer claudeConfigMu.Unlock()
 	path := filepath.Join(home, ".claude.json")
 	account, err := readObject(path)
 	if err != nil {
@@ -457,6 +520,49 @@ func (c *Claude) shareGlobalConfig(home string, l *ledger) error {
 	if !changed {
 		return nil
 	}
+	return writeObject(path, account)
+}
+
+// claudeApprovedKeyChars is how much of a key Claude Code keeps to remember
+// that the user accepted it: the last 20 characters.
+const claudeApprovedKeyChars = 20
+
+// ApproveAPIKey records in home's .claude.json that the user accepted key, the
+// way Claude Code does when asked about a key in its environment, so a session
+// of an API key account starts without stopping at that question. Only the
+// key's last characters are written, as Claude Code itself writes them.
+func (c *Claude) ApproveAPIKey(home, key string) error {
+	if strings.TrimSpace(home) == "" || key == "" {
+		return errors.New("approve api key: no account folder or key")
+	}
+	suffix := key
+	if len(suffix) > claudeApprovedKeyChars {
+		suffix = suffix[len(suffix)-claudeApprovedKeyChars:]
+	}
+	path := filepath.Join(home, ".claude.json")
+	claudeConfigMu.Lock()
+	defer claudeConfigMu.Unlock()
+	account, err := readObject(path)
+	if err != nil {
+		return err // Claude's to repair; never overwrite it
+	}
+	var responses struct {
+		Approved []string `json:"approved"`
+		Rejected []string `json:"rejected"`
+	}
+	_ = json.Unmarshal(account["customApiKeyResponses"], &responses)
+	responses.Rejected = slices.DeleteFunc(responses.Rejected, func(s string) bool { return s == suffix })
+	if !slices.Contains(responses.Approved, suffix) {
+		responses.Approved = append(responses.Approved, suffix)
+	}
+	if responses.Rejected == nil {
+		responses.Rejected = []string{}
+	}
+	raw, err := json.Marshal(responses)
+	if err != nil {
+		return err
+	}
+	account["customApiKeyResponses"] = raw
 	return writeObject(path, account)
 }
 

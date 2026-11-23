@@ -15,6 +15,7 @@ import {
 	type HostShareLink,
 	artifactShareUrl,
 	isPrivateShare,
+	isUnplayableShareVideo,
 	sameShareFingerprint,
 } from "../../shared/cloud-share";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
@@ -75,8 +76,6 @@ type Phase =
 	| { kind: "unpublished" }
 	| { kind: "error"; message: string };
 
-/** Videos are not shared yet: there is no partial-file serving for them. */
-export const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
 const COPIED_MS = 2_000;
 
 /**
@@ -546,7 +545,9 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	const recheck = useCallback(() => setChecks((count) => count + 1), []);
 	const available = useShareAvailable();
 	const { baseUrl, signedIn, scope } = useShareAccess();
-	const video = VIDEO_FILE.test(file.path);
+	// A video browsers cannot play is never published. Any other video is
+	// offered: a control plane that does not serve videos yet refuses it.
+	const video = isUnplayableShareVideo(file.path);
 	const publishing = usePublishing(pendingKey(baseUrl, file));
 	const { share, outdated, checked } = usePublishedShare(available && signedIn && !video ? { ...file, baseUrl } : null, scope, `${revision}:${checks}:${publishing}`);
 	// What the panel does on opening is fixed when it opens, so a check that
@@ -591,7 +592,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 						</Button>
 					</span>
 				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("artifacts.share.videoSoon")}</TooltipContent>
+				<TooltipContent side="bottom">{t("artifacts.share.videoFormat")}</TooltipContent>
 			</Tooltip>
 		);
 	}
@@ -1121,7 +1122,7 @@ function SharePanel({
 				</>
 			);
 		case "unsupported":
-			return <>{titled(t("artifacts.share.title.publish"))}{status(t("artifacts.share.videoSoon"))}</>;
+			return <>{titled(t("artifacts.share.title.publish"))}{status(t(isUnplayableShareVideo(name) ? "artifacts.share.videoFormat" : "artifacts.share.videoSoon"))}</>;
 		case "notOwner":
 			return <>{titled(t("artifacts.share.title.publish"))}{status(t("artifacts.share.notOwner"))}</>;
 		case "limit":

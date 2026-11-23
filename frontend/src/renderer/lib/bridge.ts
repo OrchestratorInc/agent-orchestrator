@@ -5,11 +5,19 @@ import { SIDE_CLOSE_PROTOCOL_VERSION } from "../../shared/side-close";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 
+async function desktopIssueArtifactRequired(): Promise<never> {
+	throw new Error("Open the desktop app to add an issue artifact.");
+}
+
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
 		triage: {
 			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
+		},
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
 		},
 		dictation: {
 			start: async () => undefined,
@@ -34,6 +42,8 @@ export const aoBridge: AoBridge =
 			checkAncestorRepo: async () => undefined,
 		getRepositoryBranch: async () => undefined,
 		getGitHubLogin: async (_repoPath?: string) => "",
+		findArtifactIssues: desktopIssueArtifactRequired,
+		publishIssueArtifact: desktopIssueArtifactRequired,
 		listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 		refreshGitHubOwners: async () => [],

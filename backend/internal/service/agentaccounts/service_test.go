@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ type memStore struct {
 	accounts []domain.AgentAccount
 	defaults map[domain.AgentAccountProvider]string
 	bindings map[domain.SessionID]string
+	hintErr  error // fails UpdateAgentAccountKeyHint
 }
 
 func (m *memStore) ListAgentAccounts(context.Context) ([]domain.AgentAccount, error) {
@@ -28,6 +31,18 @@ func (m *memStore) ListAgentAccounts(context.Context) ([]domain.AgentAccount, er
 func (m *memStore) CreateAgentAccount(_ context.Context, a domain.AgentAccount) error {
 	m.accounts = append(m.accounts, a)
 	return nil
+}
+func (m *memStore) UpdateAgentAccountKeyHint(_ context.Context, id, hint string) error {
+	if m.hintErr != nil {
+		return m.hintErr
+	}
+	for i := range m.accounts {
+		if m.accounts[i].ID == id && (m.accounts[i].APIKey() || m.accounts[i].SetupToken()) {
+			m.accounts[i].KeyHint = hint
+			return nil
+		}
+	}
+	return ports.ErrAgentAccountUnknown
 }
 func (m *memStore) DeleteAgentAccount(context.Context, string) error { return nil }
 func (m *memStore) GetAgentAccountDefault(_ context.Context, p domain.AgentAccountProvider) (string, bool, error) {
@@ -64,10 +79,56 @@ type fakeClaude struct {
 	limitsErr  error
 	orgOf      map[string]string
 	orgNameOf  map[string]string
+	// mu guards approved and checked, which concurrent reads of List touch.
+	mu         sync.Mutex
+	approved   map[string]string // the key each folder was told to accept
+	approveErr error             // fails ApproveAPIKey
+	checked    []string          // every folder whose identity was read
+	tokens     map[string]string // each folder's saved setup token
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
+func (f *fakeClaude) ApproveAPIKey(home, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.approveErr != nil {
+		return f.approveErr
+	}
+	if f.approved == nil {
+		f.approved = map[string]string{}
+	}
+	f.approved[home] = key
+	return nil
+}
+func (f *fakeClaude) SaveSetupToken(home, token string) error {
+	if !strings.HasPrefix(token, "sk-ant-oat") {
+		return ports.ErrAgentAccountKeyRejected
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tokens == nil {
+		f.tokens = map[string]string{}
+	}
+	f.tokens[home] = token
+	return nil
+}
+func (f *fakeClaude) SetupTokenOf(home string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if token, ok := f.tokens[home]; ok {
+		return token, nil
+	}
+	return "", os.ErrNotExist
+}
+func (f *fakeClaude) wasChecked(home string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.checked, home)
+}
 func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
+	f.mu.Lock()
+	f.checked = append(f.checked, home)
+	f.mu.Unlock()
 	if hook := f.onIdentity; hook != nil {
 		f.onIdentity = nil
 		hook(home)
@@ -78,9 +139,15 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	if f.pending[home] {
 		return domain.AgentAccountIdentityCheck{}, fmt.Errorf("%w; Claude Code renews it the next time it runs", ports.ErrAgentAccountRenewalPending)
 	}
+	f.mu.Lock()
+	token := f.tokens[home]
+	f.mu.Unlock()
+	if strings.HasPrefix(token, "sk-ant-oat01-good") {
+		return domain.AgentAccountIdentityCheck{SignedIn: true, LoggedIn: true}, nil
+	}
 	email, ok := f.signedInAs[home]
 	if f.apiKey[home] {
-		return domain.AgentAccountIdentityCheck{LoggedIn: true}, nil
+		return domain.AgentAccountIdentityCheck{LoggedIn: true, Email: email, OrgID: f.orgOf[home]}, nil
 	}
 	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email, OrgID: f.orgOf[home], OrgName: f.orgNameOf[home]}, nil
 }
@@ -129,7 +196,7 @@ func TestAccountsRefuseTheWrongLogin(t *testing.T) {
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 
 	// Signing in to the device's own login again is refused, not saved twice.
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +213,7 @@ func TestAccountsRefuseTheWrongLogin(t *testing.T) {
 	}
 
 	// A new login is saved, and new sessions use the default until one is picked.
-	start, _ = svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ = svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if status, view, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete || view == nil || view.Account.Email != "b@example.com" {
@@ -189,7 +256,7 @@ func TestAccountsRefuseAFolderThatCannotLink(t *testing.T) {
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +270,7 @@ func TestAccountsRefuseAFolderThatCannotLink(t *testing.T) {
 	}
 
 	claude.unshared = true
-	if _, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude); !errors.Is(err, ports.ErrAgentAccountUnshared) {
+	if _, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{}); !errors.Is(err, ports.ErrAgentAccountUnshared) {
 		t.Fatalf("sign-in into a folder that cannot link: %v", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(root, "claude")); len(entries) != 1 {
@@ -229,7 +296,7 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,11 +311,11 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := svc.StartSignInAgain(ctx, "device-claude"); !errors.Is(err, ports.ErrAgentAccountDeviceFixed) {
+	if _, err := svc.StartSignInAgain(ctx, "device-claude", LoginRequest{}); !errors.Is(err, ports.ErrAgentAccountDeviceFixed) {
 		t.Fatalf("sign in again to this computer: %v", err)
 	}
 	// Cancelled: the saved folder stays.
-	again, err := svc.StartSignInAgain(ctx, accountID)
+	again, err := svc.StartSignInAgain(ctx, accountID, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +326,7 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 		t.Fatalf("cancel removed the saved folder: %v", err)
 	}
 	// Another login in the folder is refused and signed out again.
-	again, _ = svc.StartSignInAgain(ctx, accountID)
+	again, _ = svc.StartSignInAgain(ctx, accountID, LoginRequest{})
 	claude.signedInAs[b] = "c@example.com"
 	if status, _, err := svc.VerifyLogin(ctx, again.OperationID); err != nil || status != LoginMismatch {
 		t.Fatalf("other login = %q, %v", status, err)
@@ -268,7 +335,7 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 		t.Fatal("the other login stayed in the account's folder")
 	}
 	// The same login comes back on the same account.
-	again, _ = svc.StartSignInAgain(ctx, accountID)
+	again, _ = svc.StartSignInAgain(ctx, accountID, LoginRequest{})
 	claude.signedInAs[b] = "B@example.com"
 	status, view, err := svc.VerifyLogin(ctx, again.OperationID)
 	if err != nil || status != LoginComplete || view == nil || view.Account.ID != accountID || !view.SignedIn {
@@ -290,7 +357,7 @@ func TestRemoveStopsTheAccountsAgentsFirst(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
@@ -332,7 +399,7 @@ func TestCancelDuringVerifyDoesNotSaveTheAccount(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +429,7 @@ func TestRemovingAnAccountKeepsNewLaunchesOffIt(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
@@ -413,7 +480,7 @@ func TestNewTaskOnAKnownBadDefaultStartsOnAnotherAccount(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if status, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil || status != LoginComplete {
@@ -479,7 +546,7 @@ func TestAnOldSignedOutDefaultIsReadAgainBeforeMovingOn(t *testing.T) {
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 	now := time.Now()
 	svc.now = func() time.Time { return now }
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -507,7 +574,7 @@ func TestRecheckSessionAccountSeesALoginThatDied(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -544,7 +611,7 @@ func TestRunsOnComputerLoginFollowsTheDefaultAndThePick(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
 		t.Fatal(err)
@@ -603,7 +670,7 @@ func TestDefaultSignInAnswersOnlyForASavedDefault(t *testing.T) {
 	if _, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); handled {
 		t.Fatal("answered for the computer's own login")
 	}
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -646,7 +713,7 @@ func TestDefaultSignInFollowsTheAccountNewSessionsStartOn(t *testing.T) {
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 	add := func(email string) string {
 		t.Helper()
-		start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+		start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 		claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = email
 		if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
 			t.Fatal(err)
@@ -702,7 +769,7 @@ func TestAFailedCheckDoesNotReadAsSignedOut(t *testing.T) {
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}, failing: map[string]bool{}}
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
@@ -769,7 +836,7 @@ func TestLimitsWithNoWindowsAreReadAgainSoon(t *testing.T) {
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 	now := time.Now()
 	svc.now = func() time.Time { return now }
-	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{})
 	claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = "b@example.com"
 	// The read right after sign-in answers before the limits are known.
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {

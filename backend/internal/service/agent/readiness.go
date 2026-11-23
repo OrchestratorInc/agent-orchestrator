@@ -203,20 +203,35 @@ func (s *Service) RefreshFresh(ctx context.Context) (Inventory, error) {
 	return s.Refresh(ctx)
 }
 
+// Presence says how a startup search for an installed agent CLI ended.
+type Presence uint8
+
+const (
+	// PresenceFound means a supported agent CLI is installed.
+	PresenceFound Presence = iota + 1
+	// PresenceMissing means every installation check finished and none found an
+	// agent CLI. Only this result proves that the machine has no agent.
+	PresenceMissing
+	// PresenceUnconfirmed means no agent was confirmed, but at least one check
+	// timed out, failed, or was still running when the wait ended, so the
+	// absence of an agent is not proven.
+	PresenceUnconfirmed
+)
+
 // FindInstalledBinary returns one installed agent CLI without running any
 // agent process or authentication probe. It is used by the desktop's startup
 // prerequisite gate.
-func (s *Service) FindInstalledBinary(ctx context.Context) (Info, bool) {
+func (s *Service) FindInstalledBinary(ctx context.Context) (Info, Presence) {
 	if ctx.Err() != nil {
-		return Info{}, false
+		return Info{}, PresenceUnconfirmed
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, startupBinaryProbeTimeout)
 	defer cancel()
-	snapshot, ok := s.readiness.FindInstalled(waitCtx, domain.AgentReadinessPurposeLaunch)
-	if !ok {
-		return Info{}, false
+	snapshot, search := s.readiness.FindInstalled(waitCtx, domain.AgentReadinessPurposeLaunch)
+	if search != PresenceFound {
+		return Info{}, search
 	}
-	return readinessInfo(snapshot), true
+	return readinessInfo(snapshot), PresenceFound
 }
 
 type sessionUsage struct {

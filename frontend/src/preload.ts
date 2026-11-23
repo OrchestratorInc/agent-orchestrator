@@ -1,3 +1,4 @@
+import type { GitHubIssueArtifact, GitHubIssueArtifactResult, GitHubIssueChoice } from "./shared/github-issue-artifact";
 import type { TriageResult } from "./main/triage-launch";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
@@ -302,6 +303,8 @@ const api = {
 		getRepositoryBranch: (path: string) =>
 			ipcRenderer.invoke("app:getRepositoryBranch", path) as Promise<string | undefined>,
 		getGitHubLogin: (repoPath?: string) => ipcRenderer.invoke("app:getGitHubLogin", repoPath) as Promise<string>,
+		findArtifactIssues: (repo: string, query: string) => ipcRenderer.invoke("app:findArtifactIssues", repo, query) as Promise<GitHubIssueChoice[]>,
+		publishIssueArtifact: (input: GitHubIssueArtifact) => ipcRenderer.invoke("app:publishIssueArtifact", input) as Promise<GitHubIssueArtifactResult>,
 		listGitHubRepos: (query: string) =>
 			ipcRenderer.invoke("app:listGitHubRepos", query) as Promise<Array<{ fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string }>>,
 		getCachedGitHubOwners: () => ipcRenderer.invoke("app:getCachedGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
@@ -953,6 +956,19 @@ const api = {
 		set: (overrides: KeybindingOverrides) =>
 			ipcRenderer.invoke("keybindings:set", overrides) as Promise<KeybindingOverrides>,
 		setRecording: (active: boolean) => ipcRenderer.invoke("keybindings:setRecording", active) as Promise<void>,
+	},
+	awake: {
+		// Main pushes Stay Awake changes on this bridge; stubs set false and keep polling.
+		pushes: true,
+		// Main reads the daemon's Stay Awake state every 5 s for the menu bar and
+		// forwards each change here, so the sidebar need not poll the same endpoint.
+		onState: (listener: (state: unknown) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: unknown) => listener(state);
+			ipcRenderer.on("awake:state", wrapped);
+			return () => {
+				ipcRenderer.off("awake:state", wrapped);
+			};
+		},
 	},
 	updates: {
 		getStatus: () => ipcRenderer.invoke("updates:getStatus") as Promise<UpdateStatus>,

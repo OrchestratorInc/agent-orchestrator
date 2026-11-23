@@ -1,6 +1,6 @@
 // Syntax coloring for diff lines, layered on top of the structural diff
-// (diff-parser.ts) and the chat surface's Shiki engine (code-highlight.ts).
-// Pure, no React, no DOM — the sync/async orchestration lives in
+// (diff-parser.ts) and the shared highlighter (code-highlight.ts).
+// Pure, no React, no DOM — the React side lives in
 // hooks/useDiffHighlight.ts.
 
 import type { Root, RootContent } from "hast";
@@ -66,7 +66,7 @@ export function splitHastByLine(root: Root, lineCount: number): LineToken[][] {
 
 type TextRun = { text: string; className?: string };
 
-// Merges two independent partitions of the same string — Shiki's token
+// Merges two independent partitions of the same string — the highlighter's token
 // boundaries and the existing LCS word-diff's segment boundaries — into their
 // finest joint partition, via a two-pointer walk that splits whichever run ends
 // first. Both inputs are guaranteed (by construction, see composeLineRuns) to
@@ -104,7 +104,7 @@ function pushMerged(result: DiffRun[], text: string, className: string | undefin
 	else result.push({ text, className, changed });
 }
 
-// Composes Shiki's per-line tokens with the existing intra-line word-diff
+// Composes the highlighter's per-line tokens with the existing intra-line word-diff
 // segments into what a diff row actually renders. Degenerates exactly to today's
 // output when an input is missing: no tokens -> segments-only (color-free, same as
 // the old DiffLineSegments); no segments -> colored, unhighlighted line; neither ->

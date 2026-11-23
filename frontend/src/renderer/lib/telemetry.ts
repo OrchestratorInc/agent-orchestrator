@@ -793,16 +793,6 @@ export function startDailyActiveHeartbeat({
 	};
 }
 
-function normalizeException(reason: unknown): Error {
-	if (reason instanceof Error) return reason;
-	if (typeof reason === "string") return new Error(reason);
-	try {
-		return new Error(JSON.stringify(reason));
-	} catch {
-		return new Error("Unknown renderer exception");
-	}
-}
-
 function routeSurface(pathname: string): string {
 	if (pathname === "/") return "home";
 	if (/^\/settings(?:\/|$)/.test(pathname)) return "global_settings";
@@ -1422,7 +1412,7 @@ export async function sanitizeRendererExceptionProperties(
 export function bindRendererErrorHandlers() {
 	if (errorHandlersBound) return;
 	errorHandlersBound = true;
-	installRendererErrorHandlers((error, source) => { void captureRendererException(error, { source, unhandled: true }); });
+	installRendererErrorHandlers((error, source, event) => { void captureRendererException(error, { source, unhandled: true }, event); });
 }
 
 type PostHogClient = typeof posthogModule;
@@ -1573,8 +1563,11 @@ export async function initTelemetry(): Promise<boolean> {
 		// crash during that wait never costs ao.app.loaded. A reload has no start,
 		// and an opt-out during the wait discards the measurement.
 		const launchGeneration = optOutGeneration;
+		const sendLaunchOnClose = (launch: Record<string, unknown>) => {
+			if (launchGeneration === optOutGeneration) captureRendererEventOnUnload("ao.launches.timed", launch);
+		};
 		void takeLaunchStart()
-			.then((start) => (start ? launchProperties(start, bootstrap.appVersion) : undefined))
+			.then((start) => (start ? launchProperties(start, bootstrap.appVersion, sendLaunchOnClose) : undefined))
 			.then((launch) => (launch && launchGeneration === optOutGeneration ? captureRendererEvent("ao.launches.timed", launch) : undefined))
 			.catch(() => undefined);
 		return true;
@@ -1604,14 +1597,15 @@ export function clearRendererTelemetryQueues(): void {}
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
 
 /**
- * Sends an onboarding event from a `pagehide` listener. PostHog flushes its
+ * Sends an onboarding or performance event from a `pagehide` listener. PostHog flushes its
  * queue from its own pagehide handler, registered at init and so before any
  * of ours; an event queued after it dies with the page. This path sanitizes
  * synchronously and sends at once with sendBeacon, which outlives the page.
  */
 export function captureRendererEventOnUnload(event: string, properties?: Record<string, unknown>): boolean {
-	if (analyticsOptedOut || !posthogReady || !ONBOARDING_EVENTS.has(event) || isDeniedEvent(event)) return false;
-	const sanitizedProperties = sanitizeOnboardingProperties(event, properties);
+	const isPerformanceEvent = PERFORMANCE_EVENTS.has(event);
+	if (analyticsOptedOut || !posthogReady || !(ONBOARDING_EVENTS.has(event) || isPerformanceEvent) || isDeniedEvent(event)) return false;
+	const sanitizedProperties = isPerformanceEvent ? sanitizePerformanceProperties(event, properties) : sanitizeOnboardingProperties(event, properties);
 	if (!reserveCapture(onboardingRateLimitKey(event, sanitizedProperties) ?? event)) return false;
 	try {
 		return Boolean(posthog.capture(postHogEventName(event), withTelemetryContext(sanitizedProperties), { send_instantly: true, transport: "sendBeacon" }));
@@ -1685,7 +1679,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	}
 }
 
-export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {
+export async function captureRendererException(error: unknown, properties?: Record<string, unknown>, event?: ErrorEvent): Promise<void> {
 	if (!reserveException(error)) return;
 	try {
 		await initTelemetry();
@@ -1697,11 +1691,16 @@ export async function captureRendererException(error: unknown, properties?: Reco
 	// Electron main samples and budgets it per install on the final scrubbed
 	// fingerprint. Renderer exceptions no longer enter the PostHog path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
-	captureExceptionToSentry(normalizeException(error), {
-		category: source === "react-error-boundary" ? "render_crash" : undefined,
+	captureExceptionToSentry(error, {
+		category: source === "react-error-boundary" || source === "route-error" ? "render_crash"
+			: source === "window-error" || source === "script-load" ? "renderer_exception"
+			: source === "unhandledrejection" ? "renderer_rejection" : undefined,
+		code: source === "window-error" ? "WINDOW_ERROR"
+			: source === "script-load" ? "RENDERER_SCRIPT_LOAD_FAILED"
+			: source === "unhandledrejection" ? "UNHANDLED_REJECTION" : undefined,
 		operation: typeof properties?.operation === "string" ? properties.operation : undefined,
 		unhandled: properties?.unhandled === true,
-	});
+	}, event);
 }
 
 export async function addRendererExceptionStep(message: string, properties?: Record<string, unknown>): Promise<void> {

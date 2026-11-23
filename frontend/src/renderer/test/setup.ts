@@ -142,6 +142,10 @@ if (typeof window !== "undefined") {
 
 	window.ao = {
 		triage: { launch: async () => ({ ok: true }) },
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
+		},
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -163,6 +167,8 @@ if (typeof window !== "undefined") {
 			checkAncestorRepo: async () => undefined,
 			getRepositoryBranch: async () => undefined,
 			getGitHubLogin: async (_repoPath?: string) => "",
+			findArtifactIssues: async () => [],
+			publishIssueArtifact: async () => { throw new Error("GitHub is unavailable in this test."); },
 			listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 			refreshGitHubOwners: async () => [],

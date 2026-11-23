@@ -7,7 +7,7 @@ import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, useState } from "react";
-import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
+import { drawnComposerPlaceholder, placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { activityRevealScrollDelta, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, currentScrollMarker, forgetReadingPositions, promptSpacerHeight, promptTopInset, type ChatFindRequest } from "./ChatWorkspace";
 import { onComposerSent } from "../../lib/guided-tour-signals";
@@ -24,8 +24,10 @@ import {
 } from "../../lib/chat-fixture";
 import { appI18n } from "../../i18n";
 import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
+import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { useUiStore } from "../../stores/ui-store";
+import { handOffComposerDraft } from "../../lib/chat-context-bus";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import {
 	getChatComposerMutation,
@@ -1011,6 +1013,87 @@ describe("ChatWorkspace timeline", () => {
 		const durableNode = screen.getAllByText("Swapped without a remount");
 		expect(durableNode).toHaveLength(1);
 		expect(durableNode[0]).toBe(echoNode);
+	});
+
+	describe("queue hint while a sent message waits for its turn", () => {
+		const QUEUED = "Next message you send will be queued";
+		const composerField = () => screen.getByRole("combobox", { name: "Message the agent" });
+
+		function withSentTurn(snapshot: ConversationSnapshot, state: "queued" | "running" | "completed", clientMessageId: string, turnId: string): ConversationSnapshot {
+			const next = structuredClone(snapshot);
+			const sequence = next.latestSequence + 1;
+			next.latestSequence = sequence;
+			next.turns.push({ id: turnId, state, requestedAt: "2026-09-09T00:00:00Z", ...(state === "queued" ? {} : { startedAt: "2026-09-09T00:00:01Z" }), ...(state === "completed" ? { completedAt: "2026-09-09T00:00:02Z" } : {}) });
+			next.items.push({
+				kind: "message", id: `durable-${clientMessageId}`, turnId, sequence, revision: 0,
+				role: "user", origin: "human", text: "Ship it", clientMessageId, streaming: false,
+				createdAt: "2026-09-09T00:00:00Z",
+			});
+			return next;
+		}
+
+		it("keeps the queue hint through the echo, the durable row and the echo's removal, then follows the turn", () => {
+			const settled = { ...chatFixtureSettled, sessionId: "queue-hint-echo-handoff" };
+			const before = { id: "before", text: "Explain the fix." };
+			const echo = { clientMessageId: "handoff-send", text: "Ship it", createdAt: "2026-09-09T00:00:00Z" };
+			const accepted = { ...echo, turnId: "turn-handoff" };
+			const view = render(<ChatWorkspace snapshot={settled} promptSuggestion={before} />);
+			const field = composerField();
+			expect(drawnComposerPlaceholder(field)).toBe("suggestion: Explain the fix.");
+
+			const drawn: (string | null)[] = [];
+			const frame = (snapshot: ConversationSnapshot, localEchos?: ConversationLocalEcho[]) => {
+				// The suggestion is still handed down: the composer must not draw it.
+				view.rerender(<ChatWorkspace snapshot={snapshot} promptSuggestion={before} localEchos={localEchos} />);
+				drawn.push(drawnComposerPlaceholder(field));
+				expect(field).toHaveAttribute("aria-placeholder", QUEUED);
+			};
+			// Sending, then accepted with the snapshot a read behind.
+			frame(settled, [echo]);
+			frame(settled, [accepted]);
+			// The durable row lands with its queued turn (one daemon transaction), echo not yet acknowledged.
+			frame(withSentTurn(settled, "queued", echo.clientMessageId, accepted.turnId), [accepted]);
+			// The echo is acknowledged and removed.
+			frame(withSentTurn(settled, "queued", echo.clientMessageId, accepted.turnId));
+			frame(withSentTurn(settled, "running", echo.clientMessageId, accepted.turnId));
+			expect(drawn).toEqual([QUEUED, QUEUED, QUEUED, QUEUED, QUEUED]);
+
+			// The turn finished: idle, offering the suggestion for this turn.
+			view.rerender(<ChatWorkspace snapshot={withSentTurn(settled, "completed", echo.clientMessageId, accepted.turnId)} promptSuggestion={{ id: "after", text: "Open a PR" }} />);
+			expect(drawnComposerPlaceholder(field)).toBe("suggestion: Open a PR");
+		});
+
+		it("is idle at once when the accepted turn already finished before the snapshot showed it running", async () => {
+			const settled = { ...chatFixtureSettled, sessionId: "queue-hint-fast-finish" };
+			const accepted = { clientMessageId: "fast-send", text: "Ship it", createdAt: "2026-09-09T00:00:00Z", turnId: "turn-fast" };
+			const view = render(<ChatWorkspace snapshot={settled} localEchos={[accepted]} />);
+			expect(composerField()).toHaveAttribute("aria-placeholder", QUEUED);
+			// The echo is still held (its acknowledgement runs after this render).
+			view.rerender(<ChatWorkspace snapshot={withSentTurn(settled, "completed", accepted.clientMessageId, accepted.turnId)} localEchos={[accepted]} />);
+			expect(composerField()).toHaveAttribute("aria-placeholder", "Message the agent");
+			// The hint fades from the queue words to the idle ones, as at any turn's end.
+			await waitFor(() => expect(drawnComposerPlaceholder(composerField())).toBe("Message the agent"));
+		});
+
+		it("does not treat a failed, uncertain or opening echo as a send waiting for its turn", () => {
+			const settled = { ...chatFixtureSettled, sessionId: "queue-hint-not-waiting" };
+			const echo = { clientMessageId: "kept-echo", text: "Ship it", createdAt: "2026-09-09T00:00:00Z" };
+			const view = render(<ChatWorkspace snapshot={settled} localEchos={[{ ...echo, delivery: "failed" as const }]} />);
+			expect(drawnComposerPlaceholder(composerField())).toBe("Message the agent");
+			view.rerender(<ChatWorkspace snapshot={settled} localEchos={[{ ...echo, delivery: "uncertain" as const }]} />);
+			expect(drawnComposerPlaceholder(composerField())).toBe("Message the agent");
+			view.rerender(<ChatWorkspace snapshot={settled} localEchos={[{ ...echo, opening: true }]} />);
+			expect(composerField()).toHaveAttribute("aria-placeholder", "Message the agent");
+		});
+
+		it("holds the queue hint while a surface without echoes reports an accepted send it has not read back", () => {
+			const settled = { ...chatFixtureSettled, sessionId: "queue-hint-cloud-ack" };
+			const before = { id: "before", text: "Explain the fix." };
+			const view = render(<ChatWorkspace snapshot={settled} promptSuggestion={before} sendAwaitingTurn />);
+			expect(drawnComposerPlaceholder(composerField())).toBe(QUEUED);
+			view.rerender(<ChatWorkspace snapshot={settled} promptSuggestion={before} />);
+			expect(drawnComposerPlaceholder(composerField())).toBe("suggestion: Explain the fix.");
+		});
 	});
 
 	it("shows a send made behind a running turn in the queue dock, not as a chat bubble", () => {
@@ -3241,6 +3324,89 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent stopped before this turn finished")).not.toBeInTheDocument();
 	});
 
+	describe("a turn that settles while its chat is kept alive hidden", () => {
+		// Hours ago, like a chat left in the background and opened again.
+		const startedAt = Date.now() - 4 * 3_600_000;
+		const at = (seconds: number) => new Date(startedAt + seconds * 1000).toISOString();
+		// The reader left mid-turn, between steps, so the row said "Thinking". The
+		// reply came later, and the provider never closed its thinking rows.
+		const turnSnapshot = (state: "running" | "completed"): ConversationSnapshot => {
+			const base = structuredClone(chatFixtureSettled);
+			const message = (id: string, sequence: number, role: "user" | "assistant", text: string, second: number): ConversationMessage => ({
+				kind: "message", id, turnId: "turn-late", sequence, revision: 0, role, origin: role === "user" ? "human" : "provider",
+				text, content: [], streaming: false, createdAt: at(second), ...(role === "user" ? { delivery: "accepted" as const } : {}),
+			});
+			const step = (id: string, sequence: number, activityKind: "reasoning" | "file_change", status: "running" | "completed", second: number): ConversationActivity => ({
+				kind: "activity", id, turnId: "turn-late", sequence, revision: 0, activityKind, status,
+				summary: activityKind === "reasoning" ? "Reasoning" : "Created report.py",
+				...(activityKind === "file_change" ? { detail: { files: [{ path: "report.py", status: "added" as const, additions: 12, deletions: 0 }] } } : {}),
+				createdAt: at(second),
+			});
+			const next = base.latestSequence;
+			return {
+				...base,
+				controller: { state: state === "running" ? "busy" : "ready" },
+				latestSequence: state === "running" ? next + 4 : next + 5,
+				turns: [...base.turns, {
+					id: "turn-late", state, providerTurnId: "provider-late", requestedAt: at(0), startedAt: at(0),
+					...(state === "completed" ? { completedAt: at(130), diff: { files: [{ path: "report.py", additions: 12, deletions: 0, status: "added" as const }] } } : {}),
+				}],
+				items: [
+					...base.items,
+					message("late-ask", next + 1, "user", "Write the report script", 0),
+					step("late-think-1", next + 2, "reasoning", "running", 20),
+					step("late-file", next + 3, "file_change", "completed", 40),
+					step("late-think-2", next + 4, "reasoning", "running", 60),
+					...(state === "completed" ? [message("late-answer", next + 5, "assistant", "The report script is ready.", 128)] : []),
+				],
+			};
+		};
+		const shown = (mode: "visible" | "hidden", snapshot: ConversationSnapshot) => (
+			<Activity mode={mode}>
+				<ChatWorkspace snapshot={snapshot} onRollback={vi.fn()} onOpenFiles={vi.fn()} />
+			</Activity>
+		);
+
+		it.each([
+			["settled while hidden", true],
+			["settled in the render that shows it", false],
+		] as const)("drops the live row once shown again: %s", async (_case, settleWhileHidden) => {
+			const running = turnSnapshot("running");
+			const settled = turnSnapshot("completed");
+			const view = render(shown("visible", running));
+			expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Thinking·4h/);
+
+			view.rerender(shown("hidden", running));
+			if (settleWhileHidden) view.rerender(shown("hidden", settled));
+			view.rerender(shown("visible", settled));
+
+			expect(await screen.findByText("1 File Changed")).toBeInTheDocument();
+			await waitFor(() => expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument());
+			expect(document.querySelector("[data-turn-live-row]")).toBeNull();
+		});
+
+		it("keeps the live row while the turn is still running when shown again", async () => {
+			const running = turnSnapshot("running");
+			const view = render(shown("visible", running));
+			view.rerender(shown("hidden", running));
+			view.rerender(shown("visible", running));
+			await act(async () => {
+				await new Promise((resolve) => setTimeout(resolve, 300));
+			});
+			expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Thinking·4h/);
+			expect(screen.queryByText("1 File Changed")).not.toBeInTheDocument();
+		});
+
+		it("fades the live row out and removes it when the turn settles in view", async () => {
+			const view = render(shown("visible", turnSnapshot("running")));
+			view.rerender(shown("visible", turnSnapshot("completed")));
+			// Still in the DOM for its fade, then gone.
+			expect(document.querySelector("[data-turn-live-row]")).not.toBeNull();
+			await waitFor(() => expect(document.querySelector("[data-turn-live-row]")).toBeNull());
+			expect(screen.getByText("1 File Changed")).toBeInTheDocument();
+		});
+	});
+
 	it.each([
 		["codex", false],
 		["opencode", true],
@@ -3262,46 +3428,117 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-placeholder", "The controller is not connected");
 	});
 
-	it("offers Restore, not Resume, on a terminated session", async () => {
-		const user = userEvent.setup();
+	it("opens an archived chat as an ordinary one, without restoring it", async () => {
 		const restore = vi.fn();
+		const send = vi.fn();
 		render(
 			<ChatWorkspace
-				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
-				session={{ ...chatSession, isTerminated: true }}
+				snapshot={{ ...chatFixtureSettled, sessionId: "archived-open", controller: { state: "stopped" } }}
+				session={{ ...chatSession, id: "archived-open", isTerminated: true }}
 				onResumeAgent={restore}
+				onSend={send}
 				onOpenShell={vi.fn()}
 			/>,
 		);
 
-		// Archiving is a normal end, not a failure.
+		// No archived banner, no Restore or Resume, no shell in a worktree that may be gone.
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(screen.getByText("Session terminated")).toBeInTheDocument();
-		expect(screen.getByText("History is kept. Restore the session to continue.")).toBeInTheDocument();
-		expect(screen.getByText("Restore the session to continue")).toBeInTheDocument();
+		expect(screen.queryByText("Session terminated")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
-		// A shell here would open in the project root once the worktree is gone.
 		expect(screen.queryByRole("button", { name: "Open shell" })).not.toBeInTheDocument();
+		const composer = screen.getByRole("combobox", { name: "Message the agent" });
+		expect(composer).toHaveAttribute("contenteditable", "true");
+		expect(composer).toHaveAttribute("aria-placeholder", "Send a message to restore this session");
 
-		await user.click(screen.getByRole("button", { name: "Restore session" }));
-		expect(restore).toHaveBeenCalledOnce();
+		// Typing is not sending: nothing restores yet.
+		await typeInLexicalEditor(composer, "pick this back up");
+		expect(restore).not.toHaveBeenCalled();
+		expect(send).not.toHaveBeenCalled();
 	});
 
-	it("keeps the composer locked while a terminated session restores", () => {
+	it("sends from an archived chat once, and shows the restore in the composer while it runs", async () => {
+		const user = userEvent.setup();
+		const restore = vi.fn();
+		const send = vi.fn().mockResolvedValue(undefined);
+		const view = (resumingAgent: boolean, isTerminated = true, controller: "stopped" | "ready" = "stopped") => (
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, sessionId: "archived-send", controller: { state: controller } }}
+				session={{ ...chatSession, id: "archived-send", isTerminated }}
+				onResumeAgent={restore}
+				onSend={send}
+				resumingAgent={resumingAgent}
+			/>
+		);
+		const { rerender } = render(view(false));
+		const composer = screen.getByRole("combobox", { name: "Message the agent" });
+		await typeInLexicalEditor(composer, "continue from here");
+		await user.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(send).toHaveBeenCalledOnce());
+		expect(send.mock.calls[0]?.[0]).toBe("continue from here");
+		// The surface's send restores; the chat itself never asks for one.
+		expect(restore).not.toHaveBeenCalled();
+
+		// While the send's restore runs the composer says so and shimmers, and typing goes on.
+		rerender(view(true));
+		expect(composer).toHaveAttribute("aria-placeholder", "Restoring session");
+		expect(document.querySelector(".cursor-chat-composer")).toHaveAttribute("data-starting");
+		expect(composer).toHaveAttribute("contenteditable", "true");
+		// The session turns live before its agent is back: still one restore.
+		rerender(view(true, false));
+		expect(composer).toHaveAttribute("aria-placeholder", "Restoring session");
+		// No agent banner flashes above the chat meanwhile.
+		expect(screen.queryByText("Waking agent…")).not.toBeInTheDocument();
+		expect(screen.queryByText("Resuming…")).not.toBeInTheDocument();
+		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		// The restore ends once the agent is back.
+		rerender(view(false, false, "ready"));
+		expect(composer).toHaveAttribute("aria-placeholder", "Message the agent");
+		expect(document.querySelector(".cursor-chat-composer")).not.toHaveAttribute("data-starting");
+		expect(send).toHaveBeenCalledOnce();
+	});
+
+	it("does not carry an archived chat's restore over to the next session shown in the same workspace", () => {
+		const view = (id: string, isTerminated: boolean, resumingAgent: boolean) => (
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, sessionId: id, controller: { state: "stopped" } }}
+				session={{ ...chatSession, id, isTerminated }}
+				onResumeAgent={vi.fn()}
+				onSend={vi.fn()}
+				resumingAgent={resumingAgent}
+			/>
+		);
+		const { rerender } = render(view("archived-first", true, false));
+		// Another, live session whose agent is resuming: an ordinary resume, not a restore.
+		rerender(view("live-next", false, true));
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).not.toHaveAttribute("aria-placeholder", "Restoring session");
+	});
+
+	it("gives the draft back with the reason when the archived chat cannot be restored", async () => {
+		const user = userEvent.setup();
+		const send = vi.fn()
+			.mockRejectedValueOnce(Object.assign(new Error("Workspace restore failed"), { code: "SESSION_RESTORE_FAILED" }))
+			.mockResolvedValue(undefined);
 		render(
 			<ChatWorkspace
-				snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
-				session={{ ...chatSession, isTerminated: true }}
+				snapshot={{ ...chatFixtureSettled, sessionId: "archived-refused", controller: { state: "stopped" } }}
+				session={{ ...chatSession, id: "archived-refused", isTerminated: true }}
 				onResumeAgent={vi.fn()}
-				resumingAgent
+				onSend={send}
 			/>,
 		);
+		const composer = screen.getByRole("combobox", { name: "Message the agent" });
+		await typeInLexicalEditor(composer, "try again later");
+		await user.click(screen.getByRole("button", { name: "Send message" }));
 
-		// The banner title and the composer placeholder both say so.
-		expect(screen.getAllByText("Restoring session")).toHaveLength(2);
-		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
-		// A message sent now would reach a session the daemon still calls terminated.
-		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+		await screen.findByText("Workspace restore failed");
+		await waitFor(() => expect(composer).toHaveTextContent("try again later"));
+		expect(composer).toHaveAttribute("contenteditable", "true");
+
+		// Sending again retries the restore with the same text.
+		await user.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+		expect(send.mock.calls[1]?.[0]).toBe("try again later");
 	});
 
 	it("does not wait for a reconnect on a terminated session", () => {
@@ -3314,7 +3551,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 
 		expect(screen.queryByText("Reconnecting to the agent…")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Restore session" })).toBeInTheDocument();
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true");
 	});
 
 	it("shows a reconnect in progress while the daemon is still checking the session", () => {
@@ -3436,6 +3673,21 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
+	});
+
+	// The new chat page, between the send and the session existing: its box says a
+	// follow-up can be queued, so it must take typing.
+	it("takes a follow-up while a new chat's session is created, where the surface hands it on", () => {
+		const createdAt = new Date().toISOString();
+		const echo: ConversationLocalEcho[] = [{ clientMessageId: "brief", text: "Fix the build", createdAt }];
+		const snapshot = { ...chatFixtureEmpty, harness: "codex", controller: { state: "ready" as const } };
+		const view = render(<ChatWorkspace sessionRole="worker" snapshot={snapshot} localEchos={echo} openingStartedAt={createdAt} busy />);
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "false");
+
+		view.rerender(<ChatWorkspace sessionRole="worker" snapshot={snapshot} localEchos={echo} openingStartedAt={createdAt} busy followUpWhileOpening />);
+
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "true");
+		expect(screen.getByText("Queue a follow-up while Codex gets ready")).toBeInTheDocument();
 	});
 
 	// A worker started by `ao spawn` has no local echo or opening time in this
@@ -5491,6 +5743,39 @@ describe("ChatWorkspace message actions", () => {
 		}
 	});
 
+	it("shows a new chat's follow-up in the in-memory composer when draft storage cannot activate", async () => {
+		const snapshot: ConversationSnapshot = { ...idleSnapshot(), capabilities: [], hasMoreBefore: false };
+		const onSend = vi.fn();
+		const session = {
+			...chatSession,
+			createdAt: "2026-08-26T09:40:00.000Z",
+		};
+		const backing = window.localStorage;
+		const storage = {
+			getItem: backing.getItem.bind(backing),
+			removeItem: backing.removeItem.bind(backing),
+			setItem: (_key: string, _value: string): void => {
+				throw new DOMException("blocked", "SecurityError");
+			},
+		} as Storage;
+		const localStorage = vi.spyOn(window, "localStorage", "get").mockReturnValue(storage);
+		handOffComposerDraft(snapshot.sessionId, { text: "Also add tests", send: true });
+
+		try {
+			render(<ChatWorkspace snapshot={snapshot} session={session} onSend={onSend} />);
+			expect(await screen.findByText(/Drafts can’t be saved right now/)).toBeInTheDocument();
+			const composer = await screen.findByLabelText("Message the agent");
+			await waitFor(() => expect(composer).toHaveTextContent("Also add tests"));
+			// It could not be saved, so the person sends it.
+			expect(onSend).not.toHaveBeenCalled();
+
+			fireEvent.keyDown(composer, { key: "Enter" });
+			await waitFor(() => expect(onSend.mock.calls[0]?.[0]).toBe("Also add tests"));
+		} finally {
+			localStorage.mockRestore();
+		}
+	});
+
 	it("saves drafts again once storage recovers and the window regains focus", async () => {
 		const snapshot = idleSnapshot();
 		const session = {
@@ -6689,7 +6974,7 @@ describe("ChatWorkspace reviewer tabs", () => {
 		expect(screen.queryByRole("tab", { name: "Reviewer" })).not.toBeInTheDocument();
 	});
 
-	it("gives the reviewer terminal working zoom and fullscreen controls", async () => {
+	it("applies the reviewer terminal font size and fullscreen requests", async () => {
 		window.localStorage.setItem("ao.terminal.fontSize", "14");
 		render(
 			<ChatWorkspace
@@ -6710,13 +6995,6 @@ describe("ChatWorkspace reviewer tabs", () => {
 		act(() => terminalPaneState.props?.onChangeFontSize?.(2));
 		expect(window.localStorage.getItem("ao.terminal.fontSize")).toBe("16");
 		expect(terminalPaneState.props?.fontSize).toBe(16);
-
-		fireEvent.wheel(screen.getByTestId("chat-reviewer-panel"), {
-			ctrlKey: true,
-			deltaY: -80,
-		});
-		expect(window.localStorage.getItem("ao.terminal.fontSize")).toBe("17");
-		expect(terminalPaneState.props?.fontSize).toBe(17);
 
 		const surface = screen.getByLabelText("Chat");
 		const requestFullscreen = vi.fn(async () => undefined);
