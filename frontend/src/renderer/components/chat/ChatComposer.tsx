@@ -1782,8 +1782,10 @@ export const ChatComposer = memo(function ChatComposer({
 		event?.preventDefault();
 		if (sendBlockedReason) return Promise.resolve();
 		// Only a person's Enter or click on a new message is counted: never a held
-		// draft sent later, a repeat Enter on the message already sending, /model or /compact.
+		// draft sent later, a repeat Enter on the message already sending, /model, /compact
+		// or saving an edit to a queued message, which sends nothing new.
 		const countSend = () => {
+			if (savingQueuedEdit) return;
 			const draft = textRef.current.trim();
 			if (draft === "/compact" && onCompact) return;
 			if (input && !typingLocked && (draft || fileAttachments.attachments.length > 0 || contextReferences.length > 0)) {
