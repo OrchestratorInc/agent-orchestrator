@@ -45,6 +45,10 @@ Send to a session that is idle. If it is in the middle of a turn, a plain
 message is queued behind that turn and `--wait` returns when the turn in
 progress ends, before the queued message is answered.
 
+Exit 2 means nothing was sent. If the wait itself fails after delivery, the
+error starts with "the message was sent": do not send it again; check the
+session with `ao session wait` or `ao session get`.
+
 ## Steering and recovery
 
 `--steer` uses one atomic daemon operation. If the session has an active Chat

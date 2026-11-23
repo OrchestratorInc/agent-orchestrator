@@ -231,13 +231,17 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 		at    time.Time
 	}
 	afterSend := []observed{{"idle", idleSince}, {"idle", idleSince}, {"active", picksUp}, {"idle", finishes}}
-	sent, polls := false, 0
+	sent, polls, daemonFails := false, 0, false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/sessions/api-1/send":
 			sent = true
 			w.WriteHeader(http.StatusNoContent)
 		case "GET /api/v1/sessions/api-1":
+			if sent && daemonFails {
+				http.Error(w, `{"message":"storage is busy","code":"STORAGE_BUSY"}`, http.StatusInternalServerError)
+				return
+			}
 			now := observed{"idle", idleSince}
 			if sent {
 				now = afterSend[min(polls, len(afterSend)-1)]
@@ -263,12 +267,22 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 	if out, _, err := executeCLI(t, deps, "session", "wait", "api-1"); err != nil || !strings.Contains(out, "api-1: idle after 0s") {
 		t.Fatalf("a plain wait settles on the current state: %q %v", out, err)
 	}
+	for _, timeout := range []string{"0s", "-5s"} {
+		if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait", "--timeout", timeout); ExitCode(err) != 2 || sent {
+			t.Fatalf("--wait --timeout %s must be refused before the message is sent: exit %d, sent %v", timeout, ExitCode(err), sent)
+		}
+	}
 	out, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait")
 	if err != nil || !sent || !strings.Contains(out, "api-1: idle after 6s") {
 		t.Errorf("send --wait must wait for the turn the message starts: sent %v, out %q, err %v", sent, out, err)
 	}
 	if polls != len(afterSend) {
 		t.Errorf("polls after the send = %d, want %d: the idle state from before the message must not count", polls, len(afterSend))
+	}
+	sent, daemonFails = false, true
+	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait"); ExitCode(err) != 1 || !sent ||
+		!strings.Contains(err.Error(), "the message was sent") || !strings.Contains(err.Error(), "STORAGE_BUSY") {
+		t.Errorf("a failure after delivery must say the message was sent: sent %v, exit %d, err %v", sent, ExitCode(err), err)
 	}
 	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--steer", "--recover-only", "--client-message-id", "m-1", "--wait"); ExitCode(err) != 2 {
 		t.Errorf("--wait with --recover-only: exit %d, want 2", ExitCode(err))

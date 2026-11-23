@@ -84,6 +84,9 @@ func (c *commandContext) sendAndWait(cmd *cobra.Command, opts sendOptions) error
 	if opts.recoverOnly {
 		return usageError{errors.New("usage: --wait cannot be combined with --recover-only")}
 	}
+	if opts.timeout <= 0 {
+		return usageError{errors.New("usage: --timeout must be above zero")}
+	}
 	session := strings.TrimSpace(opts.session)
 	if session == "" {
 		return usageError{errors.New("usage: --session is required")}
@@ -95,10 +98,15 @@ func (c *commandContext) sendAndWait(cmd *cobra.Command, opts sendOptions) error
 	if err := c.sendMessage(cmd.Context(), opts); err != nil {
 		return err
 	}
-	return c.waitForSessions(cmd, []string{session}, sessionWaitOptions{
+	err := c.waitForSessions(cmd, []string{session}, sessionWaitOptions{
 		timeout: opts.timeout, interval: 2 * time.Second,
 		after: map[string]time.Time{session: before.Session.Activity.LastActivityAt},
 	})
+	var outcome exitError
+	if err == nil || errors.As(err, &outcome) {
+		return err
+	}
+	return fmt.Errorf("the message was sent, but waiting for the session failed; do not send it again: %w", err)
 }
 
 func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) error {
