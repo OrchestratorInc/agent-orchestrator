@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -320,7 +321,7 @@ func (c *ConnectorsController) update(w http.ResponseWriter, r *http.Request) {
 	ref := connectorRef(r)
 	var updated connectors.Connector
 	var err error
-	if req.Transport == "" && req.Enabled != nil {
+	if req.Enabled != nil && reflect.DeepEqual(req, ConnectorRequest{Enabled: req.Enabled}) {
 		updated, err = c.Svc.SetEnabled(r.Context(), ref, *req.Enabled)
 	} else {
 		current, getErr := c.Svc.Get(r.Context(), ref)
@@ -332,6 +333,20 @@ func (c *ConnectorsController) update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		in := connectorInput(&req)
+		if in.Transport == "" {
+			in.Transport = current.Transport
+		}
+		if in.Transport == current.Transport {
+			if in.URL == "" {
+				in.URL = current.URL
+			}
+			if in.Command == "" && in.Args == nil {
+				in.Command, in.Args = current.Command, current.Args
+			}
+			if in.Auth == "" {
+				in.Auth = current.Auth
+			}
+		}
 		if req.ProjectID == nil {
 			in.ProjectID = current.ProjectID
 		}

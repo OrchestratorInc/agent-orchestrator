@@ -76,11 +76,15 @@ export function ChatConnectorsMenu({ sessionId, hostId, servers }: { sessionId: 
 						</div>
 					))}
 				</div>
-				<DropdownMenuSeparator />
-				<DropdownMenuItem onSelect={() => useUiStore.getState().openGlobalSettings("connectors", { preserveProject: true })}>
-					<Settings2 aria-hidden="true" />
-					{t("chat.connectors.manage")}
-				</DropdownMenuItem>
+				{hostId ? null : (
+					<>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem onSelect={() => useUiStore.getState().openGlobalSettings("connectors", { preserveProject: true })}>
+							<Settings2 aria-hidden="true" />
+							{t("chat.connectors.manage")}
+						</DropdownMenuItem>
+					</>
+				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

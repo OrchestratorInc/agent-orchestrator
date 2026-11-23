@@ -425,6 +425,9 @@ func (s *Service) renew(id, refused string) bool {
 	if saved.RefreshToken == "" {
 		return false
 	}
+	if !saved.Expiry.IsZero() && !saved.Expiry.After(s.now()) {
+		return true
+	}
 	next := slices.Clone(s.records)
 	expired := *saved
 	expired.Expiry = s.now().Add(-time.Minute)

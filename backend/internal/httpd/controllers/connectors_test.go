@@ -74,6 +74,10 @@ func TestConnectorRoutesHideStoredValues(t *testing.T) {
 	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/scoped", `{"transport":"http","url":"https://scoped.example.com/v2/mcp","projectId":""}`); status != http.StatusOK || strings.Contains(body, `"projectId":"p1"`) {
 		t.Fatalf("an edit to all projects = %d %s", status, body)
 	}
+	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/scoped", `{"enabled":false,"name":"Scoped v2"}`); status != http.StatusOK ||
+		!strings.Contains(body, `"enabled":false`) || !strings.Contains(body, `"name":"Scoped v2"`) || !strings.Contains(body, `/v2/mcp`) {
+		t.Fatalf("an edit of the name with a toggle = %d %s", status, body)
+	}
 	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", `{"name":"Docs","transport":"http","url":"https://other.example.com/mcp"}`); status != http.StatusConflict {
 		t.Fatalf("duplicate = %d %s", status, body)
 	}

@@ -327,6 +327,7 @@ func (a *API) Register(root chi.Router) {
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				stackMerge := middleware.Timeout(max(timeout, 3*time.Minute))(next)
+				connectorTest := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
@@ -340,6 +341,12 @@ func (a *API) Register(root chi.Router) {
 					// followed by its own read: either outlasts the REST budget.
 					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/computer-use/call" {
 						computerUse.ServeHTTP(w, req)
+						return
+					}
+					// A test of a command connector waits up to 90 s for the
+					// command's first download.
+					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/connectors/{connectorId}/test" {
+						connectorTest.ServeHTTP(w, req)
 						return
 					}
 					// A stack merge waits up to two minutes for the provider to land

@@ -259,19 +259,6 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 		return Input{}, nil, false
 	}
 	in = Input{Key: key, Name: f.name, ProjectID: f.projectID}
-	fill := func(source map[string]string) map[string]string {
-		out := make(map[string]string, len(source))
-		for name, value := range source {
-			if strings.Contains(value, "${") || value == "" {
-				value = typed[name]
-			}
-			if value == "" {
-				needs = append(needs, name)
-			}
-			out[name] = value
-		}
-		return out
-	}
 	expand := func(text string) string {
 		return sourceVariable.ReplaceAllStringFunc(text, func(match string) string {
 			parts := sourceVariable.FindStringSubmatch(match)
@@ -284,6 +271,20 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 			needs = append(needs, parts[1])
 			return match
 		})
+	}
+	fill := func(source map[string]string) map[string]string {
+		out := make(map[string]string, len(source))
+		for name, value := range source {
+			if value == "" {
+				if value = typed[name]; value == "" {
+					needs = append(needs, name)
+				}
+			} else {
+				value = expand(value)
+			}
+			out[name] = value
+		}
+		return out
 	}
 	kind := strings.ToLower(strings.TrimSpace(f.def.Type))
 	switch {

@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
+import * as hostClients from "../../lib/host-clients";
 import { useUiStore } from "../../stores/ui-store";
 import { ChatConnectorsMenu, connectorRowState } from "./ChatConnectorsMenu";
 
@@ -24,6 +25,21 @@ const three = {
 		],
 	},
 };
+
+it("does not offer this computer's connector settings in a chat on another machine", async () => {
+	const remote = { GET: vi.fn(async () => ({ data: { connectors: [{ key: "linear", name: "Linear", transport: "http", status: "needs_signin", enabled: true, calls: 0 }] } })) };
+	vi.spyOn(hostClients, "clientForSessionHost").mockReturnValue(remote as never);
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	render(
+		<QueryClientProvider client={client}>
+			<ChatConnectorsMenu sessionId="mer-1" hostId="air" servers={[]} />
+		</QueryClientProvider>,
+	);
+	await userEvent.setup().click(await screen.findByRole("button"));
+	expect(await screen.findByText("Linear")).toBeInTheDocument();
+	expect(screen.queryByRole("menuitem", { name: "Manage connectors" })).not.toBeInTheDocument();
+	vi.restoreAllMocks();
+});
 
 describe("ChatConnectorsMenu", () => {
 	afterEach(() => {

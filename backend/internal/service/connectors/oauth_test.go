@@ -523,3 +523,22 @@ func TestOnlyAnAutomaticSignInCanBeSignedOut(t *testing.T) {
 		t.Fatalf("status = %s", got.Status)
 	}
 }
+
+func TestTwoCallsThatAreRefusedTogetherRenewTheTokenOnce(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	created := signInFake(t, svc, fake, Input{Name: "fake"})
+	if !svc.renew(created.ID, "Bearer access-1") {
+		t.Fatal("the first refused call did not start a renewal")
+	}
+	renewing := svc.tokenSource(created.ID)
+	if !svc.renew(created.ID, "Bearer access-1") || svc.tokenSource(created.ID) != renewing {
+		t.Fatal("the second refused call replaced the renewal of the first")
+	}
+	if _, err := renewing.Token(); err != nil || svc.records[0].OAuth.AccessToken != "access-2" || fake.tokenCalls.Load() != 2 {
+		t.Fatalf("after the renewal = %+v, %v, token calls %d", svc.records[0].OAuth, err, fake.tokenCalls.Load())
+	}
+	if !svc.renew(created.ID, "Bearer access-1") || svc.records[0].OAuth.AccessToken != "access-2" || svc.tokenSource(created.ID) != renewing {
+		t.Fatal("a late refused call with the old token started another renewal")
+	}
+}

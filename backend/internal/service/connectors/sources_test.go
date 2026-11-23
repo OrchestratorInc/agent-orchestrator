@@ -30,7 +30,7 @@ func sourceHome(t *testing.T) (home, project string) {
 		"mcpServers": {
 			"Linear": {"type": "http", "url": "https://mcp.linear.app/mcp?team=1"},
 			"old": {"type": "sse", "url": "https://sse.example.com/sse"},
-			"files": {"command": "npx", "args": ["-y", "files"], "env": {"ROOT": "/tmp", "TOKEN": "${FILES_TOKEN}"}}
+			"files": {"command": "npx", "args": ["-y", "files"], "env": {"ROOT": "/tmp", "TOKEN": "tok-${FILES_TOKEN}"}}
 		},
 		"projects": {"`+filepath.ToSlash(project)+`": {"mcpServers": {"scoped": {"command": "scoped-server"}}}}
 	}`)
@@ -90,7 +90,7 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 	if got := byKey["linear"]; got.URL != "https://mcp.linear.app/mcp?team=***" || got.Transport != TransportHTTP || len(got.NeedsValue) != 0 {
 		t.Errorf("linear = %+v", got)
 	}
-	if got := byKey["files"]; !slices.Equal(got.NeedsValue, []string{"TOKEN"}) || !slices.Equal(got.EnvKeys, []string{"ROOT", "TOKEN"}) {
+	if got := byKey["files"]; !slices.Equal(got.NeedsValue, []string{"FILES_TOKEN"}) || !slices.Equal(got.EnvKeys, []string{"ROOT", "TOKEN"}) {
 		t.Errorf("files = %+v", got)
 	}
 	if got := byKey["sentry"]; !slices.Equal(got.NeedsValue, []string{"Authorization"}) {
@@ -104,7 +104,7 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 		t.Fatal("import without the value it needs succeeded")
 	}
 	added, err := svc.Import(ctx, []string{byKey["files"].ID, byKey["linear"].ID, byKey["sentry"].ID}, map[string]map[string]string{
-		byKey["files"].ID:  {"TOKEN": "typed"},
+		byKey["files"].ID:  {"FILES_TOKEN": "typed"},
 		byKey["sentry"].ID: {"Authorization": "typed-token"},
 	})
 	if err != nil || len(added) != 3 {
@@ -123,7 +123,7 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 		}
 	}
 	for _, rec := range records {
-		if rec.Key == "files" && (rec.Env["TOKEN"] != "typed" || rec.Env["ROOT"] != "/tmp") {
+		if rec.Key == "files" && (rec.Env["TOKEN"] != "tok-typed" || rec.Env["ROOT"] != "/tmp") {
 			t.Errorf("files env = %v", rec.Env)
 		}
 	}

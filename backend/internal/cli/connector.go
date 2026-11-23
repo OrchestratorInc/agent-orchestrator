@@ -328,7 +328,7 @@ func newConnectorTestCommand(ctx *commandContext) *cobra.Command {
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var response connectorEnvelopeDTO
-			if err := ctx.postJSON(cmd.Context(), "connectors/"+url.PathEscape(args[0])+"/test", nil, &response); err != nil {
+			if err := ctx.doJSONPathWithHeadersAndTimeout(cmd.Context(), http.MethodPost, "/api/v1/connectors/"+url.PathEscape(args[0])+"/test", nil, &response, nil, 2*time.Minute); err != nil {
 				return err
 			}
 			if err := printConnectorStatus(cmd.OutOrStdout(), &response.Connector); err != nil {

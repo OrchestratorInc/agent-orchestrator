@@ -11,8 +11,10 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -20,6 +22,7 @@ import (
 )
 
 const (
+	relayDrain = 5 * time.Second
 	// EnvRelayURL makes Run pass its messages to this HTTP tool server.
 	EnvRelayURL = "AO_MCP_RELAY_URL"
 	// EnvRelayAuthorization is the Authorization header Run sends to that server.
@@ -88,7 +91,10 @@ func Launch(ctx context.Context, in io.Reader, out, errOut io.Writer, target, au
 	if err := json.Unmarshal(body, &spec); err != nil || spec.Command == "" {
 		return errors.New("the connector did not start: the daemon gave no command")
 	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	cmd := process.CommandContext(ctx, spec.Command, spec.Args...)
+	process.ConfigureTreeCancellation(cmd)
 	for _, pair := range os.Environ() {
 		name, _, _ := strings.Cut(pair, "=")
 		if name != EnvLaunchURL && name != EnvRelayURL && name != EnvRelayAuthorization && name != EnvConnectorToken {
@@ -108,9 +114,20 @@ func Relay(ctx context.Context, in io.Reader, out io.Writer, target, authorizati
 	reader := bufio.NewReader(in)
 	var calls sync.WaitGroup
 	ctx, stop := context.WithCancel(ctx)
-	defer stop()
-	defer r.end()
-	defer calls.Wait()
+	defer func() {
+		drained := make(chan struct{})
+		go func() {
+			calls.Wait()
+			close(drained)
+		}()
+		select {
+		case <-drained:
+		case <-time.After(relayDrain):
+		}
+		stop()
+		<-drained
+		r.end()
+	}()
 	for {
 		line, err := reader.ReadBytes('\n')
 		if line = bytes.TrimSpace(line); len(line) > 0 {
