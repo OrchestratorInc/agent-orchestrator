@@ -297,10 +297,10 @@ AO_TOKEN=aoa_... ao session wait api-12 --timeout 20m     # exit 0 done, 5 needs
 AO_TOKEN=aoa_... ao call chat.input.resolve --input '{"sessionId":"api-12","requestId":"...","action":"accept","content":{}}'
 ```
 
-- A session that a token starts carries the token's grant for its own `ao` calls, and so does a session that session starts. Revoking the token refuses them too. The grant limits what such a session reaches beyond itself: routes about the session itself (status hooks, artifacts, renders, preview, panes) and the browser and computer-use tools every session has stay open.
+- A session that a token starts carries the token's grant for its own `ao` calls, and so does a session that session starts. Revoking the token refuses them too: each bound session keeps its own record, and a session bound to a token that is gone (revoked, or lost with a damaged token file) is refused, never unlimited. A fork of a bound session is refused, because it would start with no grant. The grant limits what such a session reaches beyond itself: routes about the session itself (status hooks, artifacts, renders, preview, panes) and the browser and computer-use tools every session has stay open.
 - With remote access on, the same token is accepted by the authenticated listener as a bearer token, held to the same catalog and grant. Token management answers only on the loopback listener.
 - The loopback listener stays open: a caller that presents no token has no limit, as before.
-- A grant limits calls to the daemon. It does not confine a process that runs as the same OS user, and it does not limit what a session it starts does in its shell. The provider's permission mode is separate.
+- A grant limits calls to the daemon. It does not confine a process that runs as the same OS user, and it does not limit what a session it starts or messages does in its shell. The provider's permission mode is separate.
 - Exit codes an agent can branch on: `2` wrong usage, `3` unknown catalog action, `4` refused by the grant or the token, `5` a session waits for an answer, `124` a wait timed out.
 
 Add an action to the catalog (`backend/internal/access/catalog.go`) only with the group that guards it and the place its project comes from. `TestRealRouterGatesTokensAndServesWhoami` fails for an action whose route is not in the API spec.

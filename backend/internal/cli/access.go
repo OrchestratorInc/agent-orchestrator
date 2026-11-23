@@ -109,6 +109,10 @@ token started carries the same grant.`,
 				_, err := fmt.Fprintln(out, "  grant: none, no limit")
 				return err
 			}
+			if who.Grant.Ended && len(who.Grant.Groups) == 0 {
+				_, err := fmt.Fprintln(out, "  grant: ended; the token that started this session is gone")
+				return err
+			}
 			if who.Kind == "session" && who.Name != "" {
 				if _, err := fmt.Fprintf(out, "  started by token: %s\n", who.Name); err != nil {
 					return err

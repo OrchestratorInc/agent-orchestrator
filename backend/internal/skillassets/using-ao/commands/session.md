@@ -190,6 +190,7 @@ ao session wait <id>... [--timeout 10m] [--interval 2s] [--json]
 | 0 | The agent finished its turn (`idle`), exited or was terminated | Read the result with `ao session get <id> --transcript N` |
 | 5 | The session waits for an answer or an approval (`needs_input`) | Read the question in the transcript, then answer it or ask the user |
 | 124 | No session settled before `--timeout` | Wait again, or report that it is still working |
+| 1 | The session failed to start (`failed`), or the daemon call failed | Read the error; do not wait again |
 | 4 | Your grant does not allow reading that session | Tell the user; do not retry |
 
 `--json` prints `{"sessionId","state","status","waitedSeconds"}`.

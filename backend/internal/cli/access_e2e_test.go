@@ -156,7 +156,7 @@ func TestActionRequestSplitsInput(t *testing.T) {
 func TestSessionWaitExitCodes(t *testing.T) {
 	cfg := setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "")
-	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "fresh": {"idle"}}
+	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "fresh": {"idle"}, "broken": {"idle"}}
 	polls := map[string]int{}
 	created := time.Date(2026, 11, 23, 11, 59, 50, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +176,11 @@ func TestSessionWaitExitCodes(t *testing.T) {
 		}
 		state := sequence[min(polls[id], len(sequence)-1)]
 		polls[id]++
-		_ = json.NewEncoder(w).Encode(map[string]any{"session": map[string]any{"id": id, "status": "working", "createdAt": created, "activity": map[string]any{"state": state}}})
+		session := map[string]any{"id": id, "status": "working", "createdAt": created, "activity": map[string]any{"state": state}}
+		if id == "broken" {
+			session["provisionState"] = "failed"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"session": session})
 	}))
 	t.Cleanup(server.Close)
 	writeRunFileFor(t, cfg, server)
@@ -203,6 +207,14 @@ func TestSessionWaitExitCodes(t *testing.T) {
 	clock = created.Add(10 * time.Second)
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "fresh", "--json"); err != nil || json.Unmarshal([]byte(out), &result) != nil || result.State != "idle" || result.WaitedSeconds != 50 {
 		t.Errorf("a session that never started must be given the startup window: %s %v", out, err)
+	}
+	clock = created.Add(time.Hour)
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "api-3", "--timeout", "3s", "--interval", "1h", "--json"); ExitCode(err) != exitTimedOut ||
+		json.Unmarshal([]byte(out), &result) != nil || !result.TimedOut || result.WaitedSeconds != 3 {
+		t.Errorf("an interval above the timeout must not outlast it: exit %d, out %s", ExitCode(err), out)
+	}
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "broken"); ExitCode(err) != 1 || !strings.Contains(out, "broken: failed") {
+		t.Errorf("a session that failed to start: exit %d, out %q, want exit 1", ExitCode(err), out)
 	}
 	if _, _, err = executeCLI(t, deps(), "session", "wait"); ExitCode(err) != 2 {
 		t.Errorf("no session id: exit %d, want 2", ExitCode(err))

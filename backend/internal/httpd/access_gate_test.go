@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -21,26 +23,36 @@ import (
 )
 
 type gateFixture struct {
-	t        *testing.T
-	registry *access.Registry
-	router   chi.Router
-	served   []string
-	bodies   []string
+	t           *testing.T
+	dataDir     string
+	registry    *access.Registry
+	router      chi.Router
+	served      []string
+	bodies      []string
+	spawnID     string
+	duringSpawn func()
+	rolledBack  []string
 }
 
 func newGateFixture(t *testing.T) *gateFixture {
 	t.Helper()
-	registry, err := access.LoadRegistry(access.TokensPath(t.TempDir()))
+	f := &gateFixture{t: t, dataDir: t.TempDir(), spawnID: "api-9"}
+	registry, err := access.LoadRegistry(access.TokensPath(f.dataDir))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &gateFixture{t: t, registry: registry}
+	f.registry = registry
+	existedBefore := time.Now().Add(-time.Hour)
 	r := chi.NewRouter()
 	gate := &accessGate{
 		registry: registry, routes: r, now: time.Now,
-		sessionProject: func(_ context.Context, sessionID string) (string, bool) {
+		session: func(_ context.Context, sessionID string) (string, time.Time, bool) {
 			project, ok := map[string]string{"api-1": "api", "web-1": "web"}[sessionID]
-			return project, ok
+			return project, existedBefore, ok
+		},
+		rollback: func(_ context.Context, sessionID string) error {
+			f.rolledBack = append(f.rolledBack, sessionID)
+			return nil
 		},
 	}
 	r.Use(caller.Middleware)
@@ -55,8 +67,14 @@ func newGateFixture(t *testing.T) *gateFixture {
 	r.Get("/api/v1/sessions", ok)
 	r.Post("/api/v1/sessions", func(w http.ResponseWriter, req *http.Request) {
 		ok(w, req)
-		_, _ = io.WriteString(w, `{"session":{"id":"api-9"}}`)
+		if f.duringSpawn != nil {
+			f.duringSpawn()
+		}
+		_, _ = io.WriteString(w, `{"session":{"id":"`+f.spawnID+`"}}`)
 	})
+	r.Post("/api/v1/sessions/{sessionId}/fork", ok)
+	r.Get("/api/v1/projects/{id}", ok)
+	r.Get("/api/v1/projects/{projectId}/cues", ok)
 	r.Get("/api/v1/sessions/{sessionId}", ok)
 	r.Post("/api/v1/sessions/{sessionId}/send", ok)
 	r.Get("/api/v1/projects", ok)
@@ -153,6 +171,11 @@ func TestGateHoldsATokenToItsGrant(t *testing.T) {
 		"limited: spawn elsewhere":        {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("web"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
 		"limited: spawn with no project":  {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"prompt":"hi"}`, token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
 		"manage removes a project":        {gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", token: manage}, 200, "", ""},
+		"limited: second spelling of key": {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api","ProjectId":"web"}`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
+		"limited: other spelling of key":  {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"PROJECTID":"api"}`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
+		"limited: two values in the body": {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("api") + spawn("web"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: cues of its project":    {gateCall{method: http.MethodGet, path: "/api/v1/projects/api/cues", token: operateAPI}, 200, "", ""},
+		"limited: escaped slash in an id": {gateCall{method: http.MethodGet, path: "/api/v1/projects/api%2Fcues", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
 	} {
 		status, code, reason := f.do(tc.call)
 		if status != tc.status || (tc.code != "" && code != tc.code) || reason != tc.reason {
@@ -173,6 +196,14 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 	if _, bound := f.registry.ForSession("api-9"); !bound {
 		t.Fatal("the started session is not bound to the token")
 	}
+	f.spawnID = "api-1"
+	if status, _, _ := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"}`, token: operateAPI}); status != 200 {
+		t.Fatalf("a spawn that returns an existing session: status %d", status)
+	}
+	if _, bound := f.registry.ForSession("api-1"); bound {
+		t.Error("a session that existed before the call must not be bound to the caller's token")
+	}
+	f.spawnID = "api-9"
 	asSession := func(method, path string) (int, string, string) {
 		return f.do(gateCall{method: method, path: path, session: "api-9"})
 	}
@@ -196,6 +227,9 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 	if status, _, reason := asSession(http.MethodPost, "/api/v1/sessions/api-1/activity"); status != 403 || reason != access.ReasonCatalog {
 		t.Errorf("another session's own route: %d %q", status, reason)
 	}
+	if status, _, reason := asSession(http.MethodPost, "/api/v1/sessions/api-9/fork"); status != 403 || reason != access.ReasonCatalog {
+		t.Errorf("a fork would be a new session with no grant: %d %q", status, reason)
+	}
 	if status, _, reason := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-9/activity", token: operateAPI}); status != 403 || reason != access.ReasonCatalog {
 		t.Errorf("a token has no own session: %d %q", status, reason)
 	}
@@ -203,7 +237,7 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 		t.Errorf("the session may start a session in its project: status %d", status)
 	}
 
-	if _, found, err := f.registry.Revoke("api-bot", time.Now()); err != nil || !found {
+	if _, found, err := f.registry.Revoke("api-bot"); err != nil || !found {
 		t.Fatalf("revoke: %v %v", found, err)
 	}
 	if status, code, _ := f.do(gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: operateAPI}); status != 401 || code != "AGENT_TOKEN_INVALID" {
@@ -213,6 +247,47 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 		t.Errorf("a session of a revoked token: %d %q", status, reason)
 	}
 	ownTooling("after the grant ended")
+}
+
+func TestSpawnNeverLeavesASessionWithoutItsGrant(t *testing.T) {
+	f := newGateFixture(t)
+	operateAPI := f.token("api-bot", access.PresetOperate, "api")
+	spawn := gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"}`, token: operateAPI}
+
+	f.spawnID = "api-7"
+	f.duringSpawn = func() {
+		if _, found, err := f.registry.Revoke("api-bot"); err != nil || !found {
+			t.Fatalf("revoke during the spawn: %v %v", found, err)
+		}
+	}
+	if status, _, _ := f.do(spawn); status != 200 {
+		t.Fatalf("spawn: status %d", status)
+	}
+	if status, _, reason := f.do(gateCall{method: http.MethodGet, path: "/api/v1/sessions?project=api", session: "api-7"}); status != 403 || reason != access.ReasonEnded {
+		t.Errorf("a session whose token was revoked during its spawn: %d %q, want 403 %q", status, reason, access.ReasonEnded)
+	}
+
+	f.duringSpawn = nil
+	f.spawnID = "api-8"
+	operateAgain := f.token("api-bot-2", access.PresetOperate, "api")
+	spawn.token = operateAgain
+	bindings := filepath.Join(f.dataDir, "access", "sessions")
+	if err := os.RemoveAll(bindings); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bindings, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, code, _ := f.do(spawn)
+	if status != 500 || code != "GRANT_NOT_RECORDED" {
+		t.Errorf("a spawn whose binding cannot be written: %d %q, want 500 GRANT_NOT_RECORDED", status, code)
+	}
+	if !slices.Contains(f.rolledBack, "api-8") {
+		t.Errorf("the session must be rolled back, got %v", f.rolledBack)
+	}
+	if status, _, reason := f.do(gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", session: "api-8"}); status != 403 || reason != access.ReasonGroup {
+		t.Errorf("the session must stay limited for this run: %d %q", status, reason)
+	}
 }
 
 func TestRealRouterGatesTokensAndServesWhoami(t *testing.T) {
@@ -332,7 +407,7 @@ func TestRemoteListenerAcceptsAnAgentTokenAndKeepsItGated(t *testing.T) {
 	if w := call(http.MethodPost, "/api/v1/access/tokens", "secret12"); w.Code != 404 {
 		t.Errorf("token management over the remote listener: status %d, want 404", w.Code)
 	}
-	if _, _, err := registry.Revoke("remote-bot", time.Now()); err != nil {
+	if _, _, err := registry.Revoke("remote-bot"); err != nil {
 		t.Fatal(err)
 	}
 	for range 6 {

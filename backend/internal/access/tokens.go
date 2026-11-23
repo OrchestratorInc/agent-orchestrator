@@ -38,18 +38,15 @@ type Token struct {
 	Grant
 	CreatedAt  time.Time `json:"createdAt"`
 	LastUsedAt time.Time `json:"lastUsedAt,omitzero"`
-	RevokedAt  time.Time `json:"revokedAt,omitzero"`
 }
 
 // Active reports whether the token still authenticates a caller.
 func (t Token) Active(now time.Time) bool {
-	return t.RevokedAt.IsZero() && (t.ExpiresAt.IsZero() || now.Before(t.ExpiresAt))
+	return t.ExpiresAt.IsZero() || now.Before(t.ExpiresAt)
 }
 
 type tokensFile struct {
 	Tokens []Token `json:"tokens"`
-	// Sessions maps a session to the token whose grant it started under.
-	Sessions map[string]string `json:"sessions,omitempty"`
 }
 
 // TokensPath returns the registry's path in dataDir.
@@ -58,23 +55,27 @@ func TokensPath(dataDir string) string {
 }
 
 // Registry holds the agent tokens this machine accepts and the sessions that
-// carry a token's grant.
+// started under one. Each bound session has its own file, so losing the token
+// file never lifts a session's limit: a session bound to a token that is gone
+// is refused.
 type Registry struct {
-	mu       sync.RWMutex
-	path     string
-	writeErr error
-	tokens   map[string]Token
-	byHash   map[string]string
-	sessions map[string]string
+	mu           sync.RWMutex
+	path         string
+	writeErr     error
+	tokens       map[string]Token
+	byHash       map[string]string
+	sessions     map[string]string
+	sessionsLost bool
 }
 
-// LoadRegistry reads the registry. A damaged file is moved aside and reported,
-// and the registry then refuses writes only if the move failed.
+// LoadRegistry reads the registry. A damaged token file is moved aside and
+// reported, and the registry then refuses writes only if the move failed.
 func LoadRegistry(path string) (*Registry, error) {
 	r := &Registry{path: path, tokens: map[string]Token{}, byHash: map[string]string{}, sessions: map[string]string{}}
+	bindingsErr := r.loadBindings()
 	raw, err := os.ReadFile(path) // #nosec G304 -- path is the daemon's own data dir.
 	if errors.Is(err, fs.ErrNotExist) {
-		return r, nil
+		return r, bindingsErr
 	}
 	var file tokensFile
 	if err == nil {
@@ -84,25 +85,43 @@ func LoadRegistry(path string) (*Registry, error) {
 		cause := fmt.Errorf("read agent tokens: %w", err)
 		if moveErr := os.Rename(path, path+".bad"); moveErr != nil {
 			r.writeErr = fmt.Errorf("%w; moving it aside failed: %w", cause, moveErr)
-			return r, r.writeErr
+			cause = r.writeErr
 		}
-		return r, cause
+		return r, errors.Join(cause, bindingsErr)
 	}
 	for _, token := range file.Tokens {
-		if token.ID == "" {
+		if token.ID == "" || token.TokenHash == "" {
 			continue
 		}
 		r.tokens[token.ID] = token
-		if token.TokenHash != "" {
-			r.byHash[token.TokenHash] = token.ID
-		}
+		r.byHash[token.TokenHash] = token.ID
 	}
-	for session, tokenID := range file.Sessions {
-		if _, ok := r.tokens[tokenID]; ok {
-			r.sessions[session] = tokenID
-		}
+	return r, bindingsErr
+}
+
+func (r *Registry) bindingsDir() string {
+	return filepath.Join(filepath.Dir(r.path), "sessions")
+}
+
+func (r *Registry) loadBindings() error {
+	dir := r.bindingsDir()
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
 	}
-	return r, nil
+	if err != nil {
+		r.sessionsLost = true
+		return fmt.Errorf("read session grants: %w", err)
+	}
+	for _, entry := range entries {
+		sessionID, err := hex.DecodeString(entry.Name())
+		if err != nil || entry.IsDir() {
+			continue
+		}
+		tokenID, _ := os.ReadFile(filepath.Join(dir, entry.Name())) // #nosec G304 -- inside the daemon's own data dir.
+		r.sessions[string(sessionID)] = strings.TrimSpace(string(tokenID))
+	}
+	return nil
 }
 
 func hashSecret(secret string) string {
@@ -141,18 +160,13 @@ func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, strin
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	live := 0
+	if len(r.tokens) >= maxTokens {
+		return Token{}, "", ErrTooManyTokens
+	}
 	for _, existing := range r.tokens {
-		if !existing.RevokedAt.IsZero() {
-			continue
-		}
-		live++
 		if strings.EqualFold(existing.Name, name) {
 			return Token{}, "", fmt.Errorf("a token named %q already exists; revoke it first", existing.Name)
 		}
-	}
-	if live >= maxTokens {
-		return Token{}, "", ErrTooManyTokens
 	}
 	r.tokens[token.ID] = token
 	r.byHash[token.TokenHash] = token.ID
@@ -176,7 +190,7 @@ func (r *Registry) Match(secret string, now time.Time) (Token, bool) {
 	return token, ok && token.Active(now)
 }
 
-// Get returns a token by ID, active or not.
+// Get returns a token by ID, expired or not.
 func (r *Registry) Get(id string) (Token, bool) {
 	if r == nil {
 		return Token{}, false
@@ -205,47 +219,28 @@ func (r *Registry) Touch(id string, now time.Time) {
 	_ = r.persistLocked()
 }
 
-// Revoke ends a token, found by ID or name. Sessions it started stay bound to
-// it, so they are refused from then on.
-func (r *Registry) Revoke(idOrName string, now time.Time) (Token, bool, error) {
+// Revoke removes a token, found by ID or name. Sessions bound to it keep their
+// binding, so they are refused from then on.
+func (r *Registry) Revoke(idOrName string) (Token, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var token Token
-	found := false
-	for _, candidate := range r.tokens {
-		if candidate.RevokedAt.IsZero() && (candidate.ID == idOrName || strings.EqualFold(candidate.Name, idOrName)) {
-			token, found = candidate, true
-			break
+	for _, token := range r.tokens {
+		if token.ID != idOrName && !strings.EqualFold(token.Name, idOrName) {
+			continue
 		}
-	}
-	if !found {
-		return Token{}, false, nil
-	}
-	previous := token
-	token.RevokedAt = now.UTC()
-	bound := false
-	for _, tokenID := range r.sessions {
-		if tokenID == token.ID {
-			bound = true
-			break
-		}
-	}
-	delete(r.byHash, previous.TokenHash)
-	if bound {
-		token.TokenHash = ""
-		r.tokens[token.ID] = token
-	} else {
 		delete(r.tokens, token.ID)
+		delete(r.byHash, token.TokenHash)
+		if err := r.persistLocked(); err != nil {
+			r.tokens[token.ID] = token
+			r.byHash[token.TokenHash] = token.ID
+			return Token{}, true, err
+		}
+		return token, true, nil
 	}
-	if err := r.persistLocked(); err != nil {
-		r.tokens[previous.ID] = previous
-		r.byHash[previous.TokenHash] = previous.ID
-		return Token{}, true, err
-	}
-	return token, true, nil
+	return Token{}, false, nil
 }
 
-// List returns the tokens, oldest first, including ended ones that sessions still carry.
+// List returns the tokens, oldest first.
 func (r *Registry) List() []Token {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -262,47 +257,40 @@ func (r *Registry) List() []Token {
 	return out
 }
 
-// Bind records that a session started under a token's grant.
+// Bind records that a session started under a token. The token need not exist
+// any more: the session is then refused. The session counts as bound for this
+// run even when the write fails.
+//
+// ponytail: one small file is kept for every session a token ever started.
+// Remove it when its session is deleted if the directory grows large.
 func (r *Registry) Bind(sessionID, tokenID string) error {
-	if sessionID == "" {
-		return nil
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.tokens[tokenID]; !ok || r.sessions[sessionID] == tokenID {
-		return nil
-	}
-	previous, had := r.sessions[sessionID]
 	r.sessions[sessionID] = tokenID
-	if err := r.persistLocked(); err != nil {
-		if had {
-			r.sessions[sessionID] = previous
-		} else {
-			delete(r.sessions, sessionID)
-		}
+	dir := r.bindingsDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return nil
+	return os.WriteFile(filepath.Join(dir, hex.EncodeToString([]byte(sessionID))), []byte(tokenID), 0o600)
 }
 
-// ForSession returns the token whose grant a session carries.
-func (r *Registry) ForSession(sessionID string) (Token, bool) {
+// ForSession returns the ID of the token a session started under. The token may
+// be gone. bound is true for every session when the bindings could not be read.
+func (r *Registry) ForSession(sessionID string) (tokenID string, bound bool) {
 	if r == nil || sessionID == "" {
-		return Token{}, false
+		return "", false
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	token, ok := r.tokens[r.sessions[sessionID]]
-	return token, ok
+	tokenID, bound = r.sessions[sessionID]
+	return tokenID, bound || r.sessionsLost
 }
 
-// ponytail: bindings are kept for every session a token ever started, about 60
-// bytes each. Prune by live session IDs if the file grows past a few thousand rows.
 func (r *Registry) persistLocked() error {
 	if r.writeErr != nil {
 		return r.writeErr
 	}
-	file := tokensFile{Tokens: make([]Token, 0, len(r.tokens)), Sessions: r.sessions}
+	file := tokensFile{Tokens: make([]Token, 0, len(r.tokens))}
 	for _, token := range r.tokens {
 		file.Tokens = append(file.Tokens, token)
 	}

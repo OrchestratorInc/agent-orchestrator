@@ -233,7 +233,10 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		return apiResponseError{StatusCode: resp.StatusCode, ErrorBody: e}
 	}
 	if raw, ok := out.(*rawResponse); ok {
-		raw.body, err = io.ReadAll(io.LimitReader(resp.Body, maxRawResponseBytes))
+		raw.body, err = io.ReadAll(io.LimitReader(resp.Body, maxRawResponseBytes+1))
+		if err == nil && len(raw.body) > maxRawResponseBytes {
+			return fmt.Errorf("the response is over %d MiB; narrow the request", maxRawResponseBytes>>20)
+		}
 		return err
 	}
 	if out == nil {

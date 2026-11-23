@@ -32,13 +32,13 @@ func (c *AccessController) Register(r chi.Router) {
 }
 
 func grantResponse(grant access.Grant, now time.Time) AccessGrantResponse {
-	out := AccessGrantResponse{Preset: grant.Preset, Groups: make([]string, 0, len(grant.Groups)), Projects: grant.Projects}
+	out := AccessGrantResponse{Preset: grant.Preset, Groups: make([]string, 0, len(grant.Groups)), Projects: grant.Projects, Ended: grant.Ended}
 	for _, group := range grant.Groups {
 		out.Groups = append(out.Groups, string(group))
 	}
 	if !grant.ExpiresAt.IsZero() {
 		expiresAt := grant.ExpiresAt
-		out.ExpiresAt, out.Ended = &expiresAt, !now.Before(expiresAt)
+		out.ExpiresAt, out.Ended = &expiresAt, grant.Ended || !now.Before(expiresAt)
 	}
 	return out
 }
@@ -103,11 +103,7 @@ func (c *AccessController) getAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func tokenResponse(token access.Token, now time.Time) AccessTokenResponse {
-	grant := token.Grant
-	if !token.RevokedAt.IsZero() {
-		grant.ExpiresAt = token.RevokedAt
-	}
-	out := AccessTokenResponse{ID: token.ID, Name: token.Name, Grant: grantResponse(grant, now), CreatedAt: token.CreatedAt}
+	out := AccessTokenResponse{ID: token.ID, Name: token.Name, Grant: grantResponse(token.Grant, now), CreatedAt: token.CreatedAt}
 	if !token.LastUsedAt.IsZero() {
 		lastUsedAt := token.LastUsedAt
 		out.LastUsedAt = &lastUsedAt
@@ -178,7 +174,7 @@ func (c *AccessController) revokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := url.PathUnescape(chi.URLParam(r, "tokenId"))
-	_, found, err := c.Registry.Revoke(id, time.Now())
+	_, found, err := c.Registry.Revoke(id)
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal_error", "AGENT_TOKEN_NOT_REVOKED", "The agent token could not be revoked", nil)
 		return

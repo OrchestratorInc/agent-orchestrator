@@ -70,6 +70,8 @@ type Grant struct {
 	Groups    []Group   `json:"groups"`
 	Projects  []string  `json:"projects,omitempty"`
 	ExpiresAt time.Time `json:"expiresAt,omitzero"`
+	// Ended marks the grant of a session whose token is gone.
+	Ended bool `json:"-"`
 }
 
 // NewGrant builds a grant from a preset or from named groups, not both.
@@ -125,7 +127,7 @@ const (
 // Check reports whether the grant allows action on project. known is false
 // when the caller named no project.
 func (g Grant) Check(action Action, project string, known bool, now time.Time) *Refusal {
-	if !g.ExpiresAt.IsZero() && !now.Before(g.ExpiresAt) {
+	if g.Ended || (!g.ExpiresAt.IsZero() && !now.Before(g.ExpiresAt)) {
 		return &Refusal{Action: action.ID, Reason: ReasonEnded, Message: "this grant has ended"}
 	}
 	if !slices.Contains(g.Groups, action.Group) {

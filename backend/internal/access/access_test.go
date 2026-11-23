@@ -185,31 +185,38 @@ func TestRegistryLifecycle(t *testing.T) {
 	if err := reloaded.Bind("s-1", token.ID); err != nil {
 		t.Fatal(err)
 	}
-	revoked, found, err := reloaded.Revoke("grok-bot", testNow)
-	if err != nil || !found || revoked.RevokedAt.IsZero() {
+	if _, bound := reloaded.ForSession("s-2"); bound {
+		t.Error("a session that no token started must not be bound")
+	}
+	revoked, found, err := reloaded.Revoke("grok-bot")
+	if err != nil || !found || revoked.ID != token.ID {
 		t.Fatalf("Revoke = %+v, %v, %v", revoked, found, err)
 	}
 	if _, ok := reloaded.Match(secret, testNow); ok {
 		t.Error("a revoked token matched")
 	}
-	bound, ok := reloaded.ForSession("s-1")
-	if !ok || bound.Active(testNow) {
-		t.Errorf("the session must stay bound to the ended token, got %+v, %v", bound, ok)
+	if len(reloaded.List()) != 0 {
+		t.Errorf("want no tokens left, got %+v", reloaded.List())
+	}
+	if _, found, _ := reloaded.Revoke(token.ID); found {
+		t.Error("revoking twice must report not found")
+	}
+	if _, _, err := reloaded.Create("grok-bot", grant, testNow); err != nil {
+		t.Errorf("the name of a revoked token must be free again: %v", err)
 	}
 	again, err := LoadRegistry(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bound, ok := again.ForSession("s-1"); !ok || bound.Active(testNow) {
-		t.Error("the binding to an ended token did not survive a reload")
-	}
-	if _, _, err := again.Create("grok-bot", grant, testNow); err != nil {
-		t.Errorf("the name of a revoked token must be free again: %v", err)
+	tokenID, bound := again.ForSession("s-1")
+	if _, known := again.Get(tokenID); !bound || tokenID != token.ID || known {
+		t.Errorf("the session must stay bound to the revoked token after a reload: %q %v %v", tokenID, bound, known)
 	}
 }
 
-func TestRevokeDropsTokenWithNoSessions(t *testing.T) {
-	registry, err := LoadRegistry(TokensPath(t.TempDir()))
+func TestBindingsOutliveTheTokenFile(t *testing.T) {
+	path := TokensPath(t.TempDir())
+	registry, err := LoadRegistry(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,14 +224,45 @@ func TestRevokeDropsTokenWithNoSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := registry.Revoke(token.ID, testNow); err != nil || !found {
-		t.Fatalf("Revoke = %v, %v", found, err)
+	if err := registry.Bind("api-1", token.ID); err != nil {
+		t.Fatal(err)
 	}
-	if len(registry.List()) != 0 {
-		t.Errorf("want no tokens left, got %+v", registry.List())
+	if err := registry.Bind("gone/../1", "tok_gone"); err != nil {
+		t.Fatalf("a binding must not need its token, or a plain session id: %v", err)
 	}
-	if _, found, _ := registry.Revoke(token.ID, testNow); found {
-		t.Error("revoking twice must report not found")
+
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	damaged, err := LoadRegistry(path)
+	if err == nil {
+		t.Fatal("want an error for a damaged token file")
+	}
+	for session, want := range map[string]string{"api-1": token.ID, "gone/../1": "tok_gone"} {
+		if tokenID, bound := damaged.ForSession(session); !bound || tokenID != want {
+			t.Errorf("%s after the token file was damaged: %q %v, want it bound to %s", session, tokenID, bound, want)
+		}
+	}
+	if _, known := damaged.Get(token.ID); known {
+		t.Error("the damaged file must not yield tokens")
+	}
+
+	sessions := filepath.Join(filepath.Dir(path), "sessions")
+	if err := os.RemoveAll(sessions); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessions, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lost, err := LoadRegistry(path)
+	if err == nil {
+		t.Fatal("want an error when the bindings cannot be read")
+	}
+	if _, bound := lost.ForSession("never-bound"); !bound {
+		t.Error("with unreadable bindings every session must count as bound")
+	}
+	if err := lost.Bind("api-2", token.ID); err == nil {
+		t.Error("Bind must report a write that failed")
 	}
 }
 

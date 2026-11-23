@@ -83,4 +83,5 @@ ao token revoke <id-or-name>
   machine as `Authorization: Bearer aoa_...`, held to the same grant.
 
 A grant limits calls to the daemon. It does not confine a process that runs as
-the same OS user, and it does not limit what a session does in its shell.
+the same OS user, and it does not limit what a session it starts or messages
+does in its shell.
