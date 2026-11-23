@@ -317,6 +317,26 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getByText("iOS pages")).toBeInTheDocument();
 	});
 
+	it("draws a report the user's steer carried while that worker still needs them", () => {
+		const prompt: ConversationMessage = {
+			kind: "message", id: "run-human", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human",
+			streaming: false, createdAt: at(1), text: "How are the workers doing?",
+		};
+		const steer: ConversationActivity = {
+			kind: "activity", id: "steer-1", turnId: "run", sequence: 12, revision: 0, activityKind: "system", status: "completed",
+			summary: "Also check the docs.", createdAt: at(1), detail: { event: "steer", text: "Also check the docs." },
+		};
+		const carried = report("t-report", 1, "[needs_input] [iOS pages](ao://sessions/proj/proj-286)\nTunnel or loopback?");
+		const items: ConversationItem[] = [prompt, { ...command("run", 1, "ao status"), sequence: 11 }, steer, { ...carried, sequence: 13 }, reply("run", 2, "Both moved.")];
+		renderSnapshot({
+			...chatFixtureEmpty, latestSequence: 22, items,
+			turns: [{ id: "run", state: "completed", providerTurnId: "provider-run", requestedAt: at(1), completedAt: at(2) }],
+			batchedDeliveries: [{ turnId: "t-report", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+		});
+
+		expect(screen.getByTestId("worker-reports")).toHaveTextContent("1 needs you");
+	});
+
 	it("draws one logo per sender on the reports line", () => {
 		const entries = [1, 2, 3, 4].map((n) => `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${n}.`).join("\n\n");
 		renderOrchestrator([report("t1", 1, entries), reply("t1", 2, "Which one first?")]);
@@ -344,6 +364,18 @@ function human(turnId: string, minute: number, text: string): ConversationMessag
 		kind: "message", id: `${turnId}-human`, turnId, sequence: minute * 10, revision: 0, role: "user", origin: "human",
 		streaming: false, createdAt: at(minute), text,
 	};
+}
+
+function orchestratorView() {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryData(workspaceQueryKey, []);
+	return (value: ConversationSnapshot, request?: { id: string; text: string; messageId: string }) => (
+		<QueryClientProvider client={queryClient}>
+			<TooltipProvider>
+				<ChatWorkspace snapshot={value} sessionRole="orchestrator" annotationNavigationRequest={request} />
+			</TooltipProvider>
+		</QueryClientProvider>
+	);
 }
 
 function renderSnapshot(value: ConversationSnapshot) {
@@ -522,6 +554,68 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.queryByText(/Session 12:/)).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Details" }));
 		expect(screen.getByText(/Session 12:/)).toBeInTheDocument();
+	});
+
+	it("shows a long reply in full when it ends in a question or opens with a lead-in", () => {
+		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
+		renderOrchestrator([
+			human("t1", 1, "How is the browser work going?"),
+			reply("t1", 2, `Menus and iOS pages are merged.\n\n${detail}\n\nShould I close the remote host PR?`),
+			human("t2", 3, "And the docs?"),
+			reply("t2", 4, `Here's where everything stands:\n\n${detail}`),
+		]);
+
+		expect(screen.getByText("Should I close the remote host PR?")).toBeInTheDocument();
+		expect(screen.getAllByText(/Session 12:/)).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
+	});
+
+	it("keeps a long reply the user watched arrive in full once its turn settles", () => {
+		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
+		const items = [human("t1", 1, "How is the browser work going?"), reply("t1", 2, `Menus and iOS pages are merged.\n\n${detail}`)];
+		const view = orchestratorView();
+		const { rerender } = render(view(snapshot(items, "running")));
+		rerender(view(snapshot(items)));
+
+		expect(screen.getByText(/Session 12:/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
+	});
+
+	it("opens a long reply's Details to bring a quote from its rest into view", async () => {
+		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
+		const items = [human("t1", 1, "How is the browser work going?"), reply("t1", 2, `Menus and iOS pages are merged.\n\n${detail}`)];
+		const view = orchestratorView();
+		const { rerender } = render(view(snapshot(items)));
+		expect(screen.queryByText(/Session 12:/)).not.toBeInTheDocument();
+
+		rerender(view(snapshot(items), { id: "quote:1", text: "Session 12", messageId: "t1-reply" }));
+		await waitFor(() => expect(screen.getByText(/Session 12:/)).toBeInTheDocument());
+		expect(screen.getByRole("button", { name: "Details" })).toHaveAttribute("aria-expanded", "true");
+	});
+
+	it("counts every worker a batch of reports came from on the line", () => {
+		renderOrchestrator([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render.\n\n[done] [Docs](ao://sessions/proj/proj-287)\nDocs build."),
+			reply("t1", 2, "Noted."),
+		]);
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^1 background update · 2 done · /);
+	});
+
+	it("leaves a failed stop between background turns in view", () => {
+		const failed: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.terminated:proj-9", sequence: 25, revision: 0, activityKind: "ao_action",
+			status: "failed", summary: "Terminated an agent", createdAt: at(2),
+			detail: { action: "session.terminated", operationId: "proj-9", targetSessionId: "proj-9" },
+		};
+		renderOrchestrator([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "Noted."),
+			failed,
+			report("t3", 3, "[done] [iOS pages](ao://sessions/proj/proj-286)\nPages ship."),
+			reply("t3", 4, "Noted."),
+		]);
+		expect(screen.getAllByTestId("background-updates")).toHaveLength(2);
+		expect(screen.queryByText(/agent stopped/)).not.toBeInTheDocument();
 	});
 
 	it("merges repeated failures with the same error into one line above the latest", async () => {

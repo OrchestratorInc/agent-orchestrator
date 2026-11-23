@@ -174,7 +174,6 @@ import {
 	BackgroundTurnRow,
 	BackgroundUpdates,
 	BackgroundWorkerRow,
-	leadUpdate,
 	needsYouNow,
 	piggybackedUpdates,
 	senderOf,
@@ -4825,7 +4824,7 @@ export function Timeline({
 		}
 		const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
 			.find((element) => element.dataset.chatMessageId === annotationTarget.messageId);
-		if (!source) {
+		if (!source || source.dataset.chatMessageCollapsed !== undefined) {
 			const keys = revealKeys(groups[index], (item) => item.id === annotationTarget.messageId);
 			if (keys.some((key) => !activityDisclosureOverrides[key])) {
 				setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
@@ -6305,6 +6304,8 @@ const TurnGroup = memo(function TurnGroup({
 	const updateIndex = useContext(WorkerUpdateIndexContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
+	const sawLive = useRef(false);
+	if (group.live) sawLive.current = true;
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
 		() => runsOf(turnFlowItems(group)),
@@ -6462,7 +6463,7 @@ const TurnGroup = memo(function TurnGroup({
 			}
 			rollbackDisabled={rollbackDisabled}
 			onSelectAnnotation={onSelectAnnotation}
-			details={workerUpdates && group.outcome && run.items[0]?.id === lastAssistantId ? {
+			details={workerUpdates && group.outcome && !sawLive.current && run.items[0]?.id === lastAssistantId ? {
 				open: Boolean(activityDisclosureOverrides[`${group.key}:reply`]),
 				onOpenChange: (open) => onActivityDisclosureChange(`${group.key}:reply`, open),
 			} : undefined}
@@ -6503,8 +6504,8 @@ const TurnGroup = memo(function TurnGroup({
 		if (updates.length > 0) return reportsLine(run.key, updates);
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
-		// Reports delivered with a human message draw only where a worker still needs the user.
-		const waiting = item.kind === "message" && item.role === "user"
+		// Reports delivered with a human message or steer draw only where a worker still needs the user.
+		const waiting = (item.kind === "message" ? item.role === "user" : isSteer(item))
 			? [...piggybackedUpdates(item), ...(batched?.under.get(item.id) ?? [])].filter((update) => needsYouNow(updateIndex, update))
 			: [];
 		if (waiting.length === 0) return renderRun(run);
@@ -7042,14 +7043,13 @@ const isAccountFailure = (group: TimelineGroup) =>
 const LOOSE_ACTIONS: Readonly<Record<string, "started" | "stopped">> = { "session.spawned": "started", "session.terminated": "stopped" };
 
 function looseNotice(item: ConversationItem): "started" | "stopped" | "reset" | undefined {
-	if (item.kind !== "activity") return undefined;
+	if (item.kind !== "activity" || outlived.has(item)) return undefined;
 	if (item.activityKind === "system" && item.detail?.event === "context.reset") return "reset";
-	return item.activityKind === "ao_action" ? LOOSE_ACTIONS[aoActionName(item)] : undefined;
+	return item.activityKind === "ao_action" && item.status === "completed" ? LOOSE_ACTIONS[aoActionName(item)] : undefined;
 }
 
 const isLooseNotices = (group: TimelineGroup) => !group.turnId && group.items.length > 0 && group.items.every((item) => looseNotice(item) !== undefined);
 
-/** The member a folded line draws in full under itself: the last of identical failures, or an account failure that ends a background run. */
 function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
 	const { kind, members } = group.folded!;
 	if (kind === "failed") return members.at(-1);
@@ -7114,26 +7114,24 @@ function withoutLead(member: TimelineGroup): TimelineGroup {
 	return body;
 }
 
-/** A background run's rows: one per worker, in the order they last reported, and each other turn or notice on its own. */
 function backgroundRows(members: readonly TimelineGroup[]) {
 	const rows: { key: string; members: TimelineGroup[]; sender?: string; latest?: WorkerUpdate; count: number }[] = [];
+	const latest = new Map<string, WorkerUpdate>();
 	for (const member of members) {
-		const lead = isLooseNotices(member) ? undefined : leadUpdate(member.items);
-		const sender = lead && senderOf(lead);
+		const updates = isLooseNotices(member) ? [] : workerUpdatesOf(member.items[0]!);
+		for (const update of updates) latest.set(senderOf(update), update);
+		const senders = new Set(updates.map(senderOf));
+		const sender = senders.size === 1 ? [...senders][0] : undefined;
 		const at = sender === undefined ? -1 : rows.findIndex((row) => row.sender === sender);
 		const row = at >= 0 ? rows.splice(at, 1)[0]! : { key: member.key, members: [], sender, count: 0 };
 		row.members.push(member);
-		for (const update of workerUpdatesOf(member.items[0]!)) {
-			if (senderOf(update) !== sender) continue;
-			row.latest = update;
-			row.count += 1;
-		}
+		row.count += sender === undefined ? 0 : updates.length;
 		rows.push(row);
 	}
+	for (const row of rows) if (row.sender !== undefined) row.latest = latest.get(row.sender);
 	const tally: BackgroundTally = {};
 	const add = (name: keyof BackgroundTally) => { tally[name] = (tally[name] ?? 0) + 1; };
-	for (const row of rows) {
-		const state = row.latest?.state;
+	for (const { state } of latest.values()) {
 		if (state === "done") add("done");
 		else if (state === "needs_input") add("neededYou");
 		else if (state === "stuck") add("stuck");
@@ -8071,6 +8069,7 @@ function turnShowsApproval(group: TimelineGroup): boolean {
 }
 
 const detachedActions = new WeakMap<ConversationItem, ConversationItem>();
+const outlived = new WeakSet<ConversationItem>();
 
 /** An AO action filed under a turn the timeline drops, as a turn-less row; anything else unchanged. */
 function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): ConversationItem {
@@ -8079,6 +8078,7 @@ function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): 
 	if (!detached) {
 		detached = { ...item, turnId: undefined };
 		detachedActions.set(item, detached);
+		outlived.add(detached);
 	}
 	return detached;
 }

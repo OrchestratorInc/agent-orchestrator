@@ -432,9 +432,9 @@ export function WorkerUpdateRows({ updates, initiallyOpen }: { updates: readonly
 
 /**
  * Reports AO delivered together, as one line that opens to their rows: a batch
- * that reached the orchestrator on its own, or one a worker's steer carried.
- * Reports sent with a human message are not drawn. It leads with the first
- * senders' agents, in black and white. A
+ * that reached the orchestrator on its own, one a worker's steer carried, or
+ * those a human message carried that still need the user. It leads with the
+ * first senders' agents, in black and white. A
  * report whose worker still waits on the user (stuck counts too) keeps its count
  * on the closed line; a newer update from that worker clears it.
  */
@@ -473,8 +473,7 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 	);
 }
 
-/** The report that names a worker turn: the one that needed the user, else the first. */
-export function leadUpdate(items: readonly ConversationItem[]): WorkerUpdate | undefined {
+function leadUpdate(items: readonly ConversationItem[]): WorkerUpdate | undefined {
 	const updates = items[0] ? workerUpdatesOf(items[0]) : [];
 	return updates.find((update) => update.state && STATES[update.state]?.attention) ?? updates[0];
 }
@@ -533,7 +532,6 @@ export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenCh
 	);
 }
 
-/** One worker's turns in a background line: its name, where it got to, and how many updates it sent. */
 export function BackgroundWorkerRow({ update, count, at, open, onOpenChange, children }: {
 	update: WorkerUpdate;
 	count: number;

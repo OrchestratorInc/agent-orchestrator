@@ -1441,11 +1441,16 @@ export type ReplyDetails = { open: boolean; onOpenChange: (open: boolean) => voi
 
 const REPLY_LEAD_AT = 2000;
 
-/** A long reply's opening paragraph, when it is prose that can stand for the rest. */
+export const asksQuestion = (text: string) => /[?？][*_)\]"'”’`」』）】》〉»›]*$/.test(text.trimEnd());
+
 function replyLead(text: string): string | undefined {
-	if (text.length <= REPLY_LEAD_AT) return undefined;
-	const lead = text.trim().split(/\n[ \t]*\n/, 1)[0]!.trim();
-	return lead.length * 2 < text.length && !/^(?:#|\||```|~~~|>|[-*+]\s|\d+[.)]\s)/.test(lead) ? lead : undefined;
+	if (text.length <= REPLY_LEAD_AT || asksQuestion(text)) return undefined;
+	const start = text.search(/\S/);
+	const end = text.slice(start).search(/\n[ \t]*\n/);
+	if (end < 0) return undefined;
+	const lead = text.slice(0, start + end);
+	const first = lead.trim();
+	return first.length * 2 < text.length && !/^(?:#|\||>|[-*+]\s|\d+[.)]\s)|```|~~~|[:：]$|^(\*\*|__)[^\n]*\1$/.test(first) ? lead : undefined;
 }
 
 /** The agent's prose. Streaming is represented by text arriving in place. */
@@ -1458,7 +1463,6 @@ export function AssistantMessage({
 	rollbackDisabled = false,
 }: {
 	message: ConversationMessage;
-	/** Show a long settled reply as its opening paragraph, with the rest behind Details. */
 	details?: ReplyDetails;
 	/** The final answer owns the copy action; it stays available while that answer streams. */
 	showCopy?: boolean;
@@ -1490,6 +1494,7 @@ export function AssistantMessage({
 			data-chat-streaming-output={renderingStreaming ? "" : undefined}
 			data-find-message-id={!collapsed && message.origin !== "automation" && message.origin !== "daemon" ? message.id : undefined}
 			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
+			data-chat-message-collapsed={collapsed ? "" : undefined}
 			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
 			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
 		>

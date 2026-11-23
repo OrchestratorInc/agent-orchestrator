@@ -1,5 +1,6 @@
 import { isSteer, isUserQueuePrompt, type ConversationItem } from "../../types/conversation";
 import { automationOf } from "./AutomationMessage";
+import { asksQuestion } from "./ChatTimelineItems";
 import { finalReply, isTaskTitleUpdate, isWorkerLead, needsYouNow, relayedVia, renamedTitle, workerUpdatesOf, type WorkerUpdate, type WorkerUpdateIndex } from "./WorkerUpdates";
 
 export type TurnStanding = "yours" | "replaced" | "failed" | "up" | "background";
@@ -18,5 +19,5 @@ export function turnStanding(items: readonly ConversationItem[], state: string, 
 	if (items.some((item) => [...workerUpdatesOf(item), ...(carried.get(item.id) ?? [])].some((update) => needsYouNow(index, update)))) return "up";
 	if (state === "failed") return "failed";
 	if (!settled) return "up";
-	return /[?？][*_)\]"'”’`」』）】》〉»›]*$/.test(finalReply(items)) ? "up" : "background";
+	return asksQuestion(finalReply(items)) ? "up" : "background";
 }
