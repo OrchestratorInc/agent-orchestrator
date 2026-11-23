@@ -876,8 +876,12 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			// Cloudflare can obfuscate email addresses in HTML before the remote
 			// Browser receives it. Its decoder URL would resolve on the preview
 			// origin, where the agent's app does not serve Cloudflare assets.
-			if mediaType, _, err := mime.ParseMediaType(res.Header.Get("Content-Type")); err == nil &&
-				(mediaType == "text/html" || mediaType == "application/xhtml+xml") {
+			// A response without a Content-Type is typed after this hook: the
+			// server sniffs its body, which can make it text/html. Reading the
+			// body here would hold back a streamed response, so it is protected
+			// without knowing its type; no-transform is harmless on other types.
+			contentType := res.Header.Values("Content-Type")
+			if len(contentType) == 0 || strings.TrimSpace(contentType[0]) == "" || isHTMLMediaType(contentType[0]) {
 				if !hasCacheDirective(res.Header.Values("Cache-Control"), "no-transform") {
 					res.Header.Add("Cache-Control", "no-transform")
 				}
@@ -902,6 +906,39 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// isHTMLMediaType reports whether contentType names an HTML or XHTML document.
+// A malformed parameter still names the type: mime.ParseMediaType returns it
+// with ErrInvalidMediaParameter, and clients and Cloudflare treat it as HTML.
+func isHTMLMediaType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil && !errors.Is(err, mime.ErrInvalidMediaParameter) {
+		return false
+	}
+	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
+}
+
+// previewServedContentType is the Content-Type http.ServeContent sends for
+// content: a type already set on the response, else the type of name's
+// extension, else a sniff of the first 512 bytes. A sniff rewinds content, as
+// ServeContent does before serving it.
+func previewServedContentType(h http.Header, name string, content io.ReadSeeker) (string, error) {
+	if values, set := h["Content-Type"]; set {
+		if len(values) == 0 {
+			return "", nil
+		}
+		return values[0], nil
+	}
+	if contentType := mime.TypeByExtension(filepath.Ext(name)); contentType != "" {
+		return contentType, nil
+	}
+	var head [512]byte
+	n, _ := io.ReadFull(content, head[:])
+	if _, err := content.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	return http.DetectContentType(head[:n]), nil
 }
 
 func hasCacheDirective(values []string, directive string) bool {
@@ -1122,10 +1159,19 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 		// Last-Modified alone cannot distinguish replacements within one second.
 		w.Header().Set("ETag", fmt.Sprintf(`"%d-%d"`, info.Size(), info.ModTime().UnixNano()))
 		w.Header().Set("Access-Control-Expose-Headers", "ETag")
+		// Decide on the type ServeContent sends, sniffed HTML included, and hand
+		// it that type so the policy and the response cannot disagree.
+		contentType, err := previewServedContentType(w.Header(), info.Name(), file)
+		if err != nil {
+			envelope.WriteError(w, r, fmt.Errorf("read preview file: %w", err))
+			return
+		}
 		cacheControl := "private, no-cache"
-		if mediaType, _, err := mime.ParseMediaType(mime.TypeByExtension(strings.ToLower(filepath.Ext(clean)))); err == nil &&
-			(mediaType == "text/html" || mediaType == "application/xhtml+xml") {
+		if isHTMLMediaType(contentType) {
 			cacheControl += ", no-transform"
+		}
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
 		}
 		w.Header().Set("Cache-Control", cacheControl)
 		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
