@@ -1,6 +1,6 @@
 import { useNavigation } from "expo-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { StyleSheet, Text, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
+import { Platform, StyleSheet, Text, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { haptics } from "./haptics";
@@ -38,7 +38,9 @@ const BLOB_SHADOW = "#000000";
  * While it is up the screen's back swipe is off: on iOS a left-to-right swipe
  * anywhere on the page is the back gesture, and it took a drag toward the
  * higher levels from the slider and pulled the page back instead. The header's
- * back button still leaves, and a tap outside closes the slider.
+ * back button still leaves, and a tap outside closes the slider. The option
+ * is iOS's alone, and setting it re-renders the screen, so Android, which has
+ * no such swipe, skips it rather than hold up the slider's first frame.
  */
 export function EffortSliderOverlay({ bottom, ...props }: EffortSliderProps & { bottom: DimensionValue }) {
 	const styles = useThemedStyles(makeStyles);
@@ -46,6 +48,7 @@ export function EffortSliderOverlay({ bottom, ...props }: EffortSliderProps & { 
 	// A layout effect, so its hand-back runs before any the screen makes in
 	// the same commit (the chat's request card turns the swipe off as well).
 	useLayoutEffect(() => {
+		if (Platform.OS !== "ios") return;
 		navigation.setOptions({ gestureEnabled: false });
 		return () => navigation.setOptions({ gestureEnabled: true });
 	}, [navigation]);

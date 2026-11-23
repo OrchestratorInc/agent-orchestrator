@@ -10,6 +10,7 @@ const fixtures = vi.hoisted(() => ({
 	midGlide: false,
 	glides: [] as number[],
 	setOptions: vi.fn(),
+	os: "ios",
 }));
 
 vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixtures.setOptions }) }));
@@ -20,7 +21,7 @@ vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => fixtures.reduceMo
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { BackHandler: { addEventListener: () => ({ remove: () => {} }) }, StyleSheet: { create: (styles: object) => styles }, Text: host("Text"), View: host("View") };
+	return { BackHandler: { addEventListener: () => ({ remove: () => {} }) }, Platform: { get OS() { return fixtures.os; } }, StyleSheet: { create: (styles: object) => styles }, Text: host("Text"), View: host("View") };
 });
 // The pan's builder keeps its callbacks, so a test can play a drag through them.
 vi.mock("react-native-gesture-handler", async () => {
@@ -70,7 +71,7 @@ import { markTouchInside } from "./touchOutside";
 const levels = (selected?: string) => ["low", "medium", "high", "xhigh", "max"].map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1), selected: value === selected }));
 
 let renderer: ReactTestRenderer | undefined;
-beforeEach(() => { fixtures.detent.mockClear(); fixtures.setOptions.mockClear(); fixtures.midGlide = false; fixtures.glides = []; });
+beforeEach(() => { fixtures.detent.mockClear(); fixtures.setOptions.mockClear(); fixtures.midGlide = false; fixtures.glides = []; fixtures.os = "ios"; });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; });
 
 const hostType = (node: ReactTestInstance): string => (typeof node.type === "string" ? node.type : "");
@@ -168,6 +169,16 @@ describe("effort slider", () => {
 		await act(async () => renderer!.unmount());
 		renderer = undefined;
 		expect(fixtures.setOptions.mock.calls.at(-1)).toEqual([{ gestureEnabled: true }]);
+	});
+
+	// The option is iOS's alone, and setting it re-renders the whole screen
+	// under the slider as it opens.
+	it("leaves the screen's options alone on Android, which has no back swipe to hold", async () => {
+		fixtures.os = "android";
+		await act(async () => { renderer = create(<EffortSliderOverlay choices={levels("low")} onChoose={() => {}} bottom="100%" />); });
+		await act(async () => renderer!.unmount());
+		renderer = undefined;
+		expect(fixtures.setOptions).not.toHaveBeenCalled();
 	});
 
 	it("steps a level at a time for a screen reader, and stops at the ends", async () => {
