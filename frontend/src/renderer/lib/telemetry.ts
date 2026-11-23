@@ -1236,7 +1236,7 @@ export async function sanitizeRendererProperties(
 			break;
 		}
 		case "ao.notifications.opened":
-			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
+			if (properties?.target === "pr" || properties?.target === "session" || properties?.target === "threads") safe.target = properties.target;
 			break;
 		case "ao.renderer.topbar_action_clicked":
 			if (typeof properties?.action === "string" && TOPBAR_ACTION_SET.has(properties.action)) safe.action = properties.action;

@@ -3,9 +3,10 @@ import { act, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpNotification, CloudCpNotificationEvent } from "../lib/cloud-cp/types";
 import { clearMentionFocus, peekMentionFocus } from "../lib/cloud-mention-open";
-import { peekOpenAside, resetOpenAsides } from "../lib/cloud-asides";
+import { closeThreadInView, peekOpenAside, peekThreadInView, resetOpenAsides } from "../lib/cloud-asides";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import { publishLiveCloudNotificationEvent } from "../lib/cloud-notifications";
-import { CloudMentionRuntime } from "./CloudMentionRuntime";
+import { CloudMentionRuntime, useOpenThreadInSession } from "./CloudMentionRuntime";
 
 const mocks = vi.hoisted(() => ({
 	show: vi.fn(),
@@ -14,6 +15,8 @@ const mocks = vi.hoisted(() => ({
 	params: { sessionId: undefined as string | undefined, hostId: undefined as string | undefined },
 	preferences: undefined as { mentions: boolean; teamMentions: boolean; asideReplies?: boolean } | undefined,
 	prefetch: vi.fn(async () => undefined),
+	// The threads view: absent (404) unless a test says the control plane has it.
+	client: { countMyUnreadCommentThreads: vi.fn() },
 }));
 
 vi.mock("../lib/bridge", () => ({
@@ -28,7 +31,7 @@ vi.mock("../lib/bridge", () => ({
 	},
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate, useParams: () => mocks.params }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: true, client: {}, baseUrl: "https://cp.test", userId: "u-priya" }) }));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ ready: true, client: mocks.client, baseUrl: "https://cp.test", userId: "u-priya" }) }));
 vi.mock("../hooks/useNotificationPreferences", () => ({ useNotificationPreferences: () => ({ preferences: mocks.preferences }) }));
 vi.mock("../lib/cloud-mention-open", async (original) => ({
 	...await original<typeof import("../lib/cloud-mention-open")>(),
@@ -72,6 +75,8 @@ beforeEach(() => {
 	const pending = peekMentionFocus();
 	if (pending) clearMentionFocus(pending.sessionId, pending.nonce);
 	resetOpenAsides();
+	closeThreadInView();
+	mocks.client.countMyUnreadCommentThreads.mockReset().mockRejectedValue(new CloudCpError("not found", { status: 404 }));
 	vi.spyOn(document, "hasFocus").mockReturnValue(false);
 });
 
@@ -197,5 +202,36 @@ describe("CloudMentionRuntime", () => {
 		act(() => { for (const listener of mocks.clickListeners) listener("cloud-mention:n-1"); });
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "project-1", sessionId: "session-1" } });
 		expect(peekMentionFocus()).toMatchObject({ sessionId: "session-1", sequence: 42 });
+	});
+});
+
+describe("threads", () => {
+	it("open a thread's notification in the Threads view when the control plane has it", async () => {
+		mocks.client.countMyUnreadCommentThreads.mockResolvedValue({ count: 1 });
+		const view = renderRuntime();
+		// The runtime learns the view exists from the badge's count.
+		await vi.waitFor(() => expect(mocks.client.countMyUnreadCommentThreads).toHaveBeenCalled());
+		await act(async () => { await Promise.resolve(); });
+		view.refresh();
+		act(() => publishLiveCloudNotificationEvent(event(replyRow())));
+		act(() => { for (const listener of mocks.clickListeners) listener("cloud-mention:n-5"); });
+		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/threads" });
+		expect(peekThreadInView()).toMatchObject({ orgId: "org-1", sessionId: "session-1", asideId: "a-1", projectId: "project-1", focusKey: expect.any(Number) });
+		// Not the session: nothing opens beside a conversation.
+		expect(peekOpenAside("session-1")).toBeUndefined();
+	});
+
+	it("open in their session at a message, with the thread beside it", () => {
+		let open: ReturnType<typeof useOpenThreadInSession> | undefined;
+		function Probe() {
+			open = useOpenThreadInSession();
+			return null;
+		}
+		render(<QueryClientProvider client={new QueryClient()}><Probe /></QueryClientProvider>);
+		act(() => open!({ orgId: "org-1", projectId: "project-1", sessionId: "session-1", asideId: "c-1", sequence: 41 }));
+		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "project-1", sessionId: "session-1" } });
+		// The pane opens without taking the caret: the person came to read.
+		expect(peekOpenAside("session-1")).toEqual({ asideId: "c-1" });
+		expect(peekMentionFocus()).toMatchObject({ sessionId: "session-1", sequence: 41, asideId: "c-1", body: "" });
 	});
 });

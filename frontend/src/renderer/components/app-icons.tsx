@@ -159,6 +159,7 @@ import {
 } from "@mynaui/icons-react";
 import {
 	ArrowDownUp as LucideArrowDownUp,
+	BellOff as LucideBellOff,
 	Bot as LucideBot,
 	Brain as LucideBrain,
 	CalendarClock as LucideCalendarClock,
@@ -292,6 +293,7 @@ export const BadgeCheck = fromMyna(MynaCheckWaves, "badge-check", "full");
 export const Ban = fromMyna(MynaBan, "ban");
 export const Bell = fromMyna(MynaBell, "bell");
 export const BellRing = fromMyna(MynaBellOn, "bell-ring");
+export const BellOff = fromLucide(LucideBellOff, "bell-off");
 export const Bold = fromMyna(MynaTypeBold, "bold", "full");
 export const BookOpen = fromMyna(MynaBookOpen, "book-open");
 export const Bot = fromLucide(LucideBot, "bot");

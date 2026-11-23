@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
+import { useUnreadCommentThreads } from "../hooks/useCommentThreads";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useNotificationPreferences } from "../hooks/useNotificationPreferences";
 import { aoBridge } from "../lib/bridge";
@@ -12,7 +13,7 @@ import {
 	subscribeLiveCloudNotificationEvents,
 } from "../lib/cloud-notifications";
 import { mentionOpenTarget, prefetchMentionedSession, requestMentionFocus, type MentionOpenTarget } from "../lib/cloud-mention-open";
-import { openAside } from "../lib/cloud-asides";
+import { invalidateCommentThreads, openAside, openThreadInView } from "../lib/cloud-asides";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -34,8 +35,18 @@ function remember<T>(map: Map<string, T>, key: string, value: T): void {
  */
 export function useOpenMention(): (target: MentionOpenTarget, projectId?: string) => boolean {
 	const navigateToSession = useNavigateToSession();
+	const navigate = useNavigate();
+	// A control plane with the threads view opens a thread's notification there.
+	const threads = useUnreadCommentThreads().supported;
 	return useCallback((target: MentionOpenTarget, projectId?: string) => {
 		const project = projectId ?? target.projectId;
+		if (target.asideId && threads) {
+			// Opened before the page is drawn, so the thread is there in its first frame.
+			openThreadInView({ orgId: target.orgId, sessionId: target.sessionId, asideId: target.asideId, ...(project ? { projectId: project } : {}) }, { focusReply: true });
+			void captureRendererEvent("ao.notifications.opened", { target: "threads" });
+			void navigate({ to: "/threads" });
+			return true;
+		}
 		if (!project) return false;
 		// Opened before the session is drawn, so the pane is there in its first frame.
 		if (target.asideId) openAside(target.sessionId, target.asideId);
@@ -44,6 +55,42 @@ export function useOpenMention(): (target: MentionOpenTarget, projectId?: string
 		void captureRendererEvent("ao.notifications.opened", { target: "session" });
 		navigateToSession(project, target.sessionId);
 		return true;
+	}, [navigate, navigateToSession, threads]);
+}
+
+/** Where "Open in session" lands: the thread's session, at a message, with the thread open beside it. */
+export interface ThreadSessionTarget {
+	orgId: string;
+	projectId: string;
+	sessionId: string;
+	asideId: string;
+	/** The message to scroll to: the thread's anchor, or the message a send became. */
+	sequence: number;
+}
+
+/**
+ * "Open in session" from the threads view: the session opens scrolled to the
+ * message, with the thread open beside the conversation (its reply box not
+ * focused: the person came to read).
+ */
+export function useOpenThreadInSession(): (target: ThreadSessionTarget) => void {
+	const navigateToSession = useNavigateToSession();
+	return useCallback((target: ThreadSessionTarget) => {
+		openAside(target.sessionId, target.asideId, { focusReply: false });
+		requestMentionFocus({
+			notificationId: `thread:${target.asideId}:${target.sequence}`,
+			// A thread's own open: no notification text stands in for the message.
+			kind: "aside_reply",
+			orgId: target.orgId,
+			projectId: target.projectId,
+			sessionId: target.sessionId,
+			sequence: target.sequence,
+			body: "",
+			asideId: target.asideId,
+			createdAt: new Date().toISOString(),
+		});
+		recordManualWorkerOpen(target.sessionId);
+		navigateToSession(target.projectId, target.sessionId);
 	}, [navigateToSession]);
 }
 
@@ -58,7 +105,7 @@ export function useOpenMention(): (target: MentionOpenTarget, projectId?: string
  */
 export function CloudMentionRuntime() {
 	const queryClient = useQueryClient();
-	const { client, ready, baseUrl } = useCloudCp();
+	const { client, ready, baseUrl, userId } = useCloudCp();
 	const { preferences } = useNotificationPreferences(ready);
 	const openMention = useOpenMention();
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
@@ -72,6 +119,8 @@ export function CloudMentionRuntime() {
 	useEffect(() => subscribeLiveCloudNotificationEvents((event) => {
 		const target = mentionOpenTarget(event.notification);
 		if (!target) return;
+		// A mention or reply in a thread: the threads view and its badge change.
+		if (target.asideId) invalidateCommentThreads(queryClient, baseUrl, userId);
 		if (event.kind === "notification_created") void prefetchMentionedSession(queryClient, client, baseUrl, target);
 		if (!shouldAlertCloudNotification(event, preferencesRef.current ?? DEFAULT_NOTIFICATION_PREFERENCES)) return;
 		const row = event.notification;
@@ -93,7 +142,7 @@ export function CloudMentionRuntime() {
 			// One toast per aside (each has its own row), else per session.
 			tag: target.asideId ? `cloud-aside:${target.asideId}` : `cloud-session:${row.sessionId}`,
 		});
-	}), [baseUrl, client, queryClient]);
+	}), [baseUrl, client, queryClient, userId]);
 
 	useEffect(() => aoBridge.notifications.onClick((id) => {
 		if (!id.startsWith(CLOUD_MENTION_ALERT_PREFIX)) return;
