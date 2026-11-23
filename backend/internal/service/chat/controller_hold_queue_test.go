@@ -145,7 +145,9 @@ func TestStalledPrimaryTurnReleasesQueuedWork(t *testing.T) {
 				return
 			}
 			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-				return turnStateByText(t, s)["automation"] != domain.TurnStateQueued
+				// The drain moves the turn out of queued before it calls the provider.
+				return turnStateByText(t, s)["automation"] != domain.TurnStateQueued &&
+					len(h.conv.sentTexts()) >= 2
 			})
 			if got := h.conv.sentTexts(); len(got) != 2 || got[1] != "automation" {
 				t.Fatalf("provider received %v, want the root prompt then the queued one", got)
