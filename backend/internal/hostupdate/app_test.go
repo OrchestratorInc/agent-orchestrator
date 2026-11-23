@@ -19,6 +19,7 @@ type fakeApp struct {
 	calls   []map[string]interface{}
 	prepare func() (browserruntime.Result, error)
 	install func() (browserruntime.Result, error)
+	check   func() (browserruntime.Result, error)
 }
 
 func (f *fakeApp) Execute(_ context.Context, session domain.SessionID, action string, args map[string]interface{}) (browserruntime.Result, error) {
@@ -28,8 +29,11 @@ func (f *fakeApp) Execute(_ context.Context, session domain.SessionID, action st
 	if session == "" || action != appAction {
 		return browserruntime.Result{}, errors.New("bad command")
 	}
-	if args["step"] == "install" {
+	switch args["step"] {
+	case "install":
 		return f.install()
+	case "check":
+		return f.check()
 	}
 	return f.prepare()
 }
@@ -76,11 +80,11 @@ func TestAppUpdateInstallsAndWaitsForRestart(t *testing.T) {
 	if got := u.Status(context.Background()); !got.Supported || got.Method != MethodApp || got.State != StateIdle {
 		t.Fatalf("status = %+v", got)
 	}
-	if err := u.Start(context.Background()); err != nil {
+	if err := u.Start(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	<-installed
-	if err := u.Start(context.Background()); !errors.Is(err, ErrInProgress) {
+	if err := u.Start(context.Background(), ""); !errors.Is(err, ErrInProgress) {
 		t.Fatalf("second start = %v", err)
 	}
 	if got := u.Status(context.Background()); got.State != StateUpdating {
@@ -103,7 +107,7 @@ func TestAppUpdateReportsTheAppsRefusal(t *testing.T) {
 	for want, refusal := range cases {
 		app := &fakeApp{prepare: func() (browserruntime.Result, error) { return browserruntime.Result{}, refusal }}
 		u := appUpdater(t, app, time.Hour)
-		if err := u.Start(context.Background()); err != nil {
+		if err := u.Start(context.Background(), ""); err != nil {
 			t.Fatal(err)
 		}
 		if got := eventually(t, u, StateFailed); got.Error != want {
@@ -120,7 +124,7 @@ func TestAppUpdateInstallNotSentClearsResult(t *testing.T) {
 	for want, refusal := range cases {
 		app := &fakeApp{prepare: ready("0.16.0"), install: func() (browserruntime.Result, error) { return browserruntime.Result{}, refusal }}
 		u := appUpdater(t, app, time.Hour)
-		if err := u.Start(context.Background()); err != nil {
+		if err := u.Start(context.Background(), ""); err != nil {
 			t.Fatal(err)
 		}
 		if got := eventually(t, u, StateFailed); got.Error != want {
@@ -139,7 +143,7 @@ func TestAppUpdateKeepsResultWhenTheAppQuitsMidInstall(t *testing.T) {
 		return browserruntime.Result{}, browserruntime.CommandError{Code: "BROWSER_COMMAND_CANCELED", Message: "Browser runtime link closed"}
 	}}
 	u := appUpdater(t, app, time.Hour)
-	if err := u.Start(context.Background()); err != nil {
+	if err := u.Start(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	<-installed
@@ -152,10 +156,72 @@ func TestAppUpdateKeepsResultWhenTheAppQuitsMidInstall(t *testing.T) {
 	}
 }
 
+func TestAppCheckNamesTheVersionTheAppInstalls(t *testing.T) {
+	app := &fakeApp{check: ready("0.16.0")}
+	u := appUpdater(t, app, time.Hour)
+	if got, err := u.Check(context.Background()); err != nil || got != "0.16.0" {
+		t.Fatalf("check = %q, %v", got, err)
+	}
+	if steps := app.steps(); len(steps) != 1 || steps[0]["step"] != "check" {
+		t.Fatalf("steps = %v", steps)
+	}
+	cases := map[string]func() (browserruntime.Result, error){
+		"No newer version is available for that computer.": func() (browserruntime.Result, error) {
+			return browserruntime.Result{}, browserruntime.CommandError{Message: "No newer version is available for that computer."}
+		},
+		"Orchestrator's window is closed on that computer. Open it there, then try again.": func() (browserruntime.Result, error) {
+			return browserruntime.Result{}, browserruntime.ErrUnavailable
+		},
+		"Orchestrator on that computer didn't say which version it installs. Try again.": func() (browserruntime.Result, error) {
+			return browserruntime.Result{}, context.DeadlineExceeded
+		},
+	}
+	for want, check := range cases {
+		app.check = check
+		if _, err := u.Check(context.Background()); err == nil || err.Error() != want {
+			t.Errorf("check error = %v, want %q", err, want)
+		}
+	}
+	if _, err := (&Updater{kind: kindSystemd}).Check(context.Background()); !errors.Is(err, ErrNoCheck) {
+		t.Fatalf("service host check = %v", err)
+	}
+}
+
+func TestAppUpdateInstallsOnlyTheConfirmedVersion(t *testing.T) {
+	installed := make(chan struct{})
+	app := &fakeApp{prepare: ready("0.16.0"), install: func() (browserruntime.Result, error) {
+		close(installed)
+		return browserruntime.Result{}, browserruntime.ErrUnavailable
+	}}
+	u := appUpdater(t, app, time.Hour)
+	if err := u.Start(context.Background(), "v0.16.0"); err != nil {
+		t.Fatal(err)
+	}
+	<-installed
+	if _, err := u.Check(context.Background()); !errors.Is(err, ErrInProgress) {
+		t.Fatalf("check during an update = %v", err)
+	}
+
+	other := &fakeApp{prepare: ready("0.16.1"), install: ready("0.16.1")}
+	u = appUpdater(t, other, time.Hour)
+	if err := u.Start(context.Background(), "0.16.0"); err != nil {
+		t.Fatal(err)
+	}
+	if got := eventually(t, u, StateFailed); got.Error != "Orchestrator on that computer now installs 0.16.1, not 0.16.0. Try again." {
+		t.Fatalf("error = %q", got.Error)
+	}
+	if steps := other.steps(); len(steps) != 1 {
+		t.Fatalf("steps = %v", steps)
+	}
+	if _, err := os.Stat(u.resultPath); !os.IsNotExist(err) {
+		t.Fatalf("result written: %v", err)
+	}
+}
+
 func TestAppUpdateFailsWhenTheAppDoesNotRestart(t *testing.T) {
 	app := &fakeApp{prepare: ready("0.16.0"), install: ready("0.16.0")}
 	u := appUpdater(t, app, 0)
-	if err := u.Start(context.Background()); err != nil {
+	if err := u.Start(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := eventually(t, u, StateFailed); got.Error != "Orchestrator on that computer didn't restart to install 0.16.0." {
@@ -176,7 +242,7 @@ func TestAppUpdateResultAfterRestart(t *testing.T) {
 		return browserruntime.Result{}, browserruntime.CommandError{Message: "The update to 0.16.0 didn't apply on that computer. Update Orchestrator there."}
 	}}
 	stuck.app = app
-	if err := stuck.Start(context.Background()); err != nil {
+	if err := stuck.Start(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, stuck, StateFailed)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
@@ -17,6 +18,7 @@ const (
 	appAction      = "__app-update"
 	appSession     = domain.SessionID("__app-update")
 	appUpdateLimit = 25 * time.Minute
+	appCheckLimit  = 45 * time.Second
 	linkClosed     = "BROWSER_COMMAND_CANCELED"
 )
 
@@ -45,18 +47,44 @@ func (u *Updater) loadAppResult() {
 	u.appErr = fmt.Sprintf("The update to %s didn't apply on that computer. Update Orchestrator there.", result.To)
 }
 
-func (u *Updater) startApp() error {
+// Check asks the desktop app which version it installs next.
+func (u *Updater) Check(ctx context.Context) (string, error) {
+	if u.kind != kindApp {
+		return "", ErrNoCheck
+	}
+	u.mu.Lock()
+	running := u.appRunning
+	u.mu.Unlock()
+	if running {
+		return "", ErrInProgress
+	}
+	ctx, cancel := context.WithTimeout(ctx, appCheckLimit)
+	defer cancel()
+	result, err := u.app.Execute(ctx, appSession, appAction, map[string]interface{}{"step": "check"})
+	reply, _ := result.Value.(map[string]interface{})
+	version, _ := reply["version"].(string)
+	if err != nil || version == "" {
+		message := appError(err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			message = "Orchestrator on that computer didn't say which version it installs. Try again."
+		}
+		return "", errors.New(message)
+	}
+	return version, nil
+}
+
+func (u *Updater) startApp(want string) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.appRunning {
 		return ErrInProgress
 	}
 	u.appRunning, u.appErr = true, ""
-	go u.runApp(u.notApplied)
+	go u.runApp(u.notApplied, want)
 	return nil
 }
 
-func (u *Updater) runApp(notApplied string) {
+func (u *Updater) runApp(notApplied, want string) {
 	ctx, cancel := context.WithTimeout(context.Background(), appUpdateLimit)
 	defer cancel()
 	result, err := u.app.Execute(ctx, appSession, appAction, map[string]interface{}{"step": "prepare", "notApplied": notApplied})
@@ -64,6 +92,10 @@ func (u *Updater) runApp(notApplied string) {
 	version, _ := reply["version"].(string)
 	if err != nil || version == "" {
 		u.finishApp(appError(err))
+		return
+	}
+	if want != "" && strings.TrimPrefix(version, "v") != strings.TrimPrefix(want, "v") {
+		u.finishApp(fmt.Sprintf("Orchestrator on that computer now installs %s, not %s. Try again.", version, want))
 		return
 	}
 	data, _ := json.Marshal(appResult{From: u.version, To: version})

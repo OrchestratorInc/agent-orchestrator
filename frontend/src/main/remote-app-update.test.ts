@@ -76,6 +76,21 @@ describe("runRemoteAppUpdate", () => {
 		await expect(runRemoteAppUpdate(deps({ statuses }), { step: "prepare" })).rejects.toThrow(message);
 	});
 
+	it("names the version it installs next without downloading or installing", async () => {
+		const d = deps({ statuses: [{ state: "available", version: "0.16.0" }] });
+		await expect(runRemoteAppUpdate(d, { step: "check" })).resolves.toEqual({ version: "0.16.0" });
+		expect(d.download).not.toHaveBeenCalled();
+		expect(d.install).not.toHaveBeenCalled();
+		await expect(runRemoteAppUpdate(deps({ statuses: [{ state: "downloading", version: "0.16.1" }] }), { step: "check" })).resolves.toEqual({ version: "0.16.1" });
+		await expect(runRemoteAppUpdate(deps({ statuses: [{ state: "not-available", staged: { version: "0.16.0", stagedAt: 1, escalated: false } }] }), { step: "check" })).resolves.toEqual({ version: "0.16.0" });
+	});
+
+	it("refuses the version question when it could not update", async () => {
+		await expect(runRemoteAppUpdate(deps({ statuses: [{ state: "not-available" }] }), { step: "check" })).rejects.toThrow("No newer version is available for that computer.");
+		await expect(runRemoteAppUpdate(deps({ statuses: [{ state: "error", message: "Couldn't reach the update server." }] }), { step: "check" })).rejects.toThrow("Couldn't reach the update server.");
+		await expect(runRemoteAppUpdate(deps({ hasUnsavedDrafts: () => true }), { step: "check" })).rejects.toThrow("isn't saved yet");
+	});
+
 	it("won't reinstall a version that already failed to apply", async () => {
 		await expect(runRemoteAppUpdate(deps(), { step: "prepare", notApplied: "0.16.0" })).rejects.toThrow(
 			"The update to 0.16.0 didn't apply on that computer. Update Orchestrator there.",

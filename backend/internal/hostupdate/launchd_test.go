@@ -67,7 +67,7 @@ func TestLaunchdStatus(t *testing.T) {
 
 func TestLaunchdStart(t *testing.T) {
 	ctx := context.Background()
-	if err := launchdUpdater(t, &fakeLaunchctl{print: "\tstate = running\n"}, "0.15.0").Start(ctx); !errors.Is(err, ErrInProgress) {
+	if err := launchdUpdater(t, &fakeLaunchctl{print: "\tstate = running\n"}, "0.15.0").Start(ctx, ""); !errors.Is(err, ErrInProgress) {
 		t.Fatalf("running start = %v", err)
 	}
 
@@ -79,7 +79,7 @@ func TestLaunchdStart(t *testing.T) {
 	if err := os.WriteFile(u.logPath(), []byte("old failure\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := u.Start(ctx); err != nil {
+	if err := u.Start(ctx, ""); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(u.logPath()); len(data) != 0 {

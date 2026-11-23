@@ -4045,6 +4045,7 @@
 	"remote.autoUpdateHostsDescription": "Kayıtlı makineler, bu bilgisayardan daha eski bir sürüm çalıştırdığında kendilerini günceller.",
 	"remote.updateUnconfirmed": "Güncellemenin başladığı doğrulanamadı. Tekrar deneyin.",
 	"remote.updateAppTitle": "{{label}} üzerindeki Orchestrator v{{version}} sürümüne güncellensin mi?",
+	"remote.thisComputerVersion": "bu bilgisayar v{{version}}",
 	"remote.updateAppDescription": "Uygulama o bilgisayarda kapanıp yeniden açılır. Ajanları çalışmaya devam eder.",
 	"remote.autoUpdateHosts": "Uzak makineleri otomatik güncelle",
 	"remote.hostUnauthorized": "Makine bu cihazı reddetti. Makineden yeni bir eşleştirme kodu alıp yeniden eşleştirin.",

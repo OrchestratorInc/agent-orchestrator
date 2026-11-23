@@ -4157,6 +4157,7 @@
 	"remote.autoUpdateHostsDescription": "Os hosts salvos se atualizam sozinhos quando usam uma versão mais antiga que este computador.",
 	"remote.updateUnconfirmed": "Não foi possível confirmar que a atualização começou. Tente novamente.",
 	"remote.updateAppTitle": "Atualizar o Orchestrator em {{label}} para v{{version}}?",
+	"remote.thisComputerVersion": "este computador v{{version}}",
 	"remote.updateAppDescription": "O app fecha e reabre nesse computador. Os agentes dele continuam em execução.",
 	"remote.hostUnauthorized": "O host rejeitou este dispositivo. Pareie novamente com um novo código de pareamento do host.",
 	"remote.hostNotDaemon": "Este endereço não pertence a uma máquina Orchestrator. Confira o endereço e a senha.",

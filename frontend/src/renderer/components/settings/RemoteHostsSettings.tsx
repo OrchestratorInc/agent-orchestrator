@@ -43,7 +43,8 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	const [busy, setBusy] = useState(false);
 	const [formError, setFormError] = useState("");
 	const [confirmingRemoval, setConfirmingRemoval] = useState<SavedHost | null>(null);
-	const [confirmingUpdate, setConfirmingUpdate] = useState<SavedHost | null>(null);
+	const [confirmingUpdate, setConfirmingUpdate] = useState<(SavedHost & { version: string }) | null>(null);
+	const [askingUpdate, setAskingUpdate] = useState("");
 	const [removeBusy, setRemoveBusy] = useState(false);
 	const [removeError, setRemoveError] = useState("");
 	const formRef = useRef<HTMLFormElement>(null);
@@ -70,6 +71,18 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		// The bridge is fixed for the lifetime of this Settings page.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [status]);
+
+	const askAppHost = async (host: SavedHost) => {
+		setAskingUpdate(host.url);
+		useHostUpdateStore.getState().patch(host.url, { error: undefined, unconfirmed: undefined });
+		try {
+			setConfirmingUpdate({ ...host, version: (await aoBridge.remotes.checkHostUpdate(host.url)).replace(/^v/i, "") });
+		} catch (cause) {
+			useHostUpdateStore.getState().patch(host.url, { error: cause instanceof Error ? cause.message : String(cause) });
+		} finally {
+			setAskingUpdate("");
+		}
+	};
 
 	const resetForm = () => {
 		setEditing(null);
@@ -162,6 +175,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			{saved.map((host) => {
 				const version = hostUpdates[host.url]?.view?.version;
 				const update = hostUpdateAction(hostUpdates[host.url], localVersion);
+				const appHost = hostUpdates[host.url]?.view?.method === "app";
 				const target = version && localVersion && (compareVersions(version, localVersion) ?? 0) < 0 ? newest : undefined;
 				return (
 				<SettingsRow
@@ -171,7 +185,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 					description={host.hostId ? (
 						<>
 							{host.url}
-							{version ? <span className="tabular-nums">{` · v${version.replace(/^v/i, "")}`}{target ? <>{" → "}<span className="text-foreground">{`v${target}`}</span></> : null}</span> : null}
+							{version ? <span className="tabular-nums">{` · v${version.replace(/^v/i, "")}`}{target && appHost ? ` · ${t("remote.thisComputerVersion", { version: target })}` : null}{target && !appHost ? <>{" → "}<span className="text-foreground">{`v${target}`}</span></> : null}</span> : null}
 							{update?.kind === "manual" ? <span className="mt-0.5 block text-warning">{t("shell.updateOnThatComputer")}</span> : null}
 							{update?.kind === "failed" ? <span className="mt-0.5 block text-error" role="alert">{update.error || (update.unconfirmed ? t("remote.updateUnconfirmed") : t("shell.updateFailed"))}</span> : null}
 						</>
@@ -184,8 +198,9 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 				>
 					<div className="flex items-center gap-1">
 						{update?.kind === "updating" ? <span className="flex items-center gap-1.5 px-2 text-xs text-settings-muted" role="status"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{t("shell.updating")}</span> : null}
-						{update?.kind === "update" || update?.kind === "failed" ? (
-							<Button aria-label={t("shell.updateMachine", { name: host.label })} onClick={() => { if (hostUpdates[host.url]?.view?.method === "app") setConfirmingUpdate(host); else void startHostUpdate(host.url); }} size="sm" type="button" variant="quiet">
+						{askingUpdate === host.url ? <span className="flex items-center gap-1.5 px-2 text-xs text-settings-muted" role="status"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{t("session.statusChecking")}</span> : null}
+						{askingUpdate !== host.url && (update?.kind === "update" || update?.kind === "failed") ? (
+							<Button aria-label={t("shell.updateMachine", { name: host.label })} onClick={() => { if (appHost) void askAppHost(host); else void startHostUpdate(host.url); }} size="sm" type="button" variant="quiet">
 								{update.kind === "failed" ? t("notify.retry") : t("shell.update")}
 							</Button>
 						) : null}
@@ -232,12 +247,12 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			confirmLabel={t("shell.update")}
 			description={t("remote.updateAppDescription")}
 			onConfirm={() => {
-				if (confirmingUpdate) void startHostUpdate(confirmingUpdate.url);
+				if (confirmingUpdate) void startHostUpdate(confirmingUpdate.url, confirmingUpdate.version);
 				setConfirmingUpdate(null);
 			}}
 			onOpenChange={(open) => { if (!open) setConfirmingUpdate(null); }}
 			open={confirmingUpdate !== null}
-			title={t("remote.updateAppTitle", { label: confirmingUpdate?.label, version: newest })}
+			title={t("remote.updateAppTitle", { label: confirmingUpdate?.label, version: confirmingUpdate?.version })}
 		/>
 		<ConfirmDialog
 			busy={removeBusy}

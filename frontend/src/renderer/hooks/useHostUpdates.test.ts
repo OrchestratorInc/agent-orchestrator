@@ -66,6 +66,14 @@ describe("host update flow", () => {
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed" });
 	});
 
+	it("sends the confirmed version only when there is one", async () => {
+		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));
+		await startHostUpdate(URL, "0.15.0");
+		expect(start).toHaveBeenLastCalledWith(URL, "0.15.0");
+		await startHostUpdate(URL);
+		expect(start).toHaveBeenLastCalledWith(URL);
+	});
+
 	it("keeps the host's reason when its update fails", async () => {
 		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue({ ...view("0.14.10", "failed"), error: "Release SHA-256 mismatch." });
 		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));

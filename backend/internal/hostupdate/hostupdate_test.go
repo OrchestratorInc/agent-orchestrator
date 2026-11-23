@@ -73,16 +73,16 @@ func TestStatus(t *testing.T) {
 
 func TestStart(t *testing.T) {
 	ctx := context.Background()
-	if err := (&Updater{}).Start(ctx); !errors.Is(err, ErrUnsupported) {
+	if err := (&Updater{}).Start(ctx, ""); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("unsupported start = %v", err)
 	}
-	if err := updater(&fakeSystemd{state: "active"}, "0.15.0", nil).Start(ctx); !errors.Is(err, ErrInProgress) {
+	if err := updater(&fakeSystemd{state: "active"}, "0.15.0", nil).Start(ctx, ""); !errors.Is(err, ErrInProgress) {
 		t.Fatalf("running start = %v", err)
 	}
 
 	f := &fakeSystemd{state: "failed"}
 	env := map[string]string{"HOME": "/home/u", "PATH": "/usr/bin", "AO_PORT": "3011"}
-	if err := updater(f, "0.15.1-nightly.202611140625", env).Start(ctx); err != nil {
+	if err := updater(f, "0.15.1-nightly.202611140625", env).Start(ctx, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(f.calls, func(call []string) bool {
@@ -104,7 +104,7 @@ func TestStart(t *testing.T) {
 	}
 
 	stable := &fakeSystemd{}
-	if err := (&Updater{version: "0.15.0", kind: kindSystemd, root: "/opt/ao", run: stable.run, getenv: func(name string) string { return env[name] }}).Start(ctx); err != nil {
+	if err := (&Updater{version: "0.15.0", kind: kindSystemd, root: "/opt/ao", run: stable.run, getenv: func(name string) string { return env[name] }}).Start(ctx, ""); err != nil {
 		t.Fatal(err)
 	}
 	run = stable.calls[len(stable.calls)-1]
@@ -149,7 +149,7 @@ func TestStartOutlivesTheRequest(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	if err := u.Start(ctx); err != nil {
+	if err := u.Start(ctx, ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(cancelled) > 0 {

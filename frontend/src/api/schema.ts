@@ -2577,6 +2577,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/remote-host/update/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask a host that runs the desktop app which version it installs next */
+        post: operations["checkRemoteHostUpdate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reports": {
         parameters: {
             query?: never;
@@ -6649,6 +6666,12 @@ export interface components {
             hostId: string;
             hostKey: string;
             token: string;
+        };
+        ControllersRemoteHostUpdateCheckResponse: {
+            version: string;
+        };
+        ControllersRemoteHostUpdateRequest: {
+            version?: string;
         };
         ControllersReplaceAgentAccountAPIKeyRequest: {
             apiKey: string;
@@ -18734,7 +18757,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersRemoteHostUpdateRequest"];
+            };
+        };
         responses: {
             /** @description Accepted */
             202: {
@@ -18743,6 +18770,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RemoteHostUpdateResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Conflict */
@@ -18756,6 +18792,44 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    checkRemoteHostUpdate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersRemoteHostUpdateCheckResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -144,23 +144,31 @@ describe("registerRemotesIpc", () => {
 	it("reads and starts a host update with the saved credential, even across API versions", async () => {
 		const file = await tempFile();
 		const read = vi.fn(async () => ({ version: "0.14.10", supported: true, state: "idle" as const }));
-		const start = vi.fn(async () => ({ version: "0.14.10", supported: true, state: "updating" as const }));
+		const start = vi.fn(async (_entry: unknown, _version?: string) => ({ version: "0.14.10", supported: true, state: "updating" as const }));
+		const check = vi.fn(async () => "0.15.0");
 		let identity: (entry: unknown) => Promise<string> = async () => "h_workbox";
 		const ipc = fakeIpc();
-		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, identity: (entry) => identity(entry), hostUpdate: { read, start } });
+		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(async () => { throw new Error("unused"); }), requireAccount: signedIn, identity: (entry) => identity(entry), hostUpdate: { read, start, check } });
 		await expect(ipc.invoke("remotes:hostUpdate", "http://192.0.2.1:1")).resolves.toMatchObject({ version: "0.14.10" });
 		expect(read).toHaveBeenCalledWith(expect.objectContaining({ hostId: "h_workbox", password: "old" }));
 
 		identity = async () => { throw new IncompatibleRemoteVersionError("h_workbox"); };
 		await expect(ipc.invoke("remotes:startHostUpdate", "http://192.0.2.1:1")).resolves.toMatchObject({ state: "updating" });
 		expect(start).toHaveBeenCalledOnce();
+		expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ hostId: "h_workbox" }), undefined);
+		await expect(ipc.invoke("remotes:checkHostUpdate", "http://192.0.2.1:1")).resolves.toBe("0.15.0");
+		expect(check).toHaveBeenCalledWith(expect.objectContaining({ hostId: "h_workbox", password: "old" }));
+		await ipc.invoke("remotes:startHostUpdate", "http://192.0.2.1:1", "0.15.0");
+		expect(start).toHaveBeenLastCalledWith(expect.objectContaining({ hostId: "h_workbox" }), "0.15.0");
 
 		identity = async () => { throw new IncompatibleRemoteVersionError("h_imposter"); };
 		await expect(ipc.invoke("remotes:startHostUpdate", "http://192.0.2.1:1")).rejects.toThrow(/identity changed/);
 		identity = async () => { throw new Error("offline"); };
 		await expect(ipc.invoke("remotes:hostUpdate", "http://192.0.2.1:1")).resolves.toBeNull();
 		await expect(ipc.invoke("remotes:hostUpdate", "http://192.0.2.9:1")).rejects.toThrow(/does not belong/);
-		expect(start).toHaveBeenCalledOnce();
+		await expect(ipc.invoke("remotes:checkHostUpdate", "http://192.0.2.1:1")).rejects.toThrow(/offline/);
+		expect(start).toHaveBeenCalledTimes(2);
+		expect(check).toHaveBeenCalledOnce();
 	});
 
 	it("refuses an address that resolves to self under another saved host ID before authentication", async () => {

@@ -997,10 +997,21 @@ func hostUpdateOperations() []operation {
 		{
 			method: http.MethodPost, path: "/api/v1/remote-host/update", id: "startRemoteHostUpdate", tag: "identity",
 			summary: "Install the newest release of this self-hosted host's channel and restart it",
+			reqBody: controllers.RemoteHostUpdateRequest{}, optionalReqBody: true,
 			resps: []respUnit{
 				{http.StatusAccepted, controllers.RemoteHostUpdateResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/remote-host/update/check", id: "checkRemoteHostUpdate", tag: "identity",
+			summary: "Ask a host that runs the desktop app which version it installs next",
+			resps: []respUnit{
+				{http.StatusOK, controllers.RemoteHostUpdateCheckResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

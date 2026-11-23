@@ -15,7 +15,8 @@ const remotes = vi.hoisted(() => ({
 	connect: vi.fn(async (url: string) => ({ hostId: "box-a", label: "Box A", url, base: "http://127.0.0.1:4000" })),
 	disconnect: vi.fn(async () => undefined),
 	remove: vi.fn(async () => undefined),
-	startHostUpdate: vi.fn(async () => ({ version: "0.14.10", supported: true, method: "app" as const, state: "updating" as const })),
+	checkHostUpdate: vi.fn(async (_url: string) => "0.15.3"),
+	startHostUpdate: vi.fn(async (_url: string, _version?: string) => ({ version: "0.14.10", supported: true, method: "app" as const, state: "updating" as const })),
 	update: vi.fn(async (_oldUrl: string, changes: { label?: string; url?: string }) => {
 		saved.entries = saved.entries.map((host) => ({ ...host, label: changes.label ?? host.label, url: changes.url ?? host.url }));
 		return "online" as const;
@@ -41,6 +42,8 @@ afterEach(() => {
 	remotes.add.mockClear();
 	remotes.update.mockClear();
 	remotes.remove.mockClear();
+	remotes.checkHostUpdate.mockClear();
+	remotes.startHostUpdate.mockClear();
 });
 
 it("does not expose saved hosts or pairing controls before account sign-in", () => {
@@ -159,27 +162,46 @@ it("shows each saved host's version with its update button and the auto-update s
 	useHostUpdateStore.setState({ byUrl: {} });
 });
 
-it("asks before updating a computer running the desktop app", async () => {
+it("asks a computer running the desktop app which version it installs, then confirms that version", async () => {
 	saved.entries = [{ hostId: "studio", label: "Studio Mac", url: "http://studio:3011" }];
-	useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { "http://studio:3011": { view: { version: "0.14.10", supported: true, method: "app", state: "idle" } } } });
+	useHostUpdateStore.setState({ localVersion: "0.15.4", byUrl: { "http://studio:3011": { view: { version: "0.14.10", supported: true, method: "app", state: "idle" } } } });
 	renderSettings();
-	fireEvent.click(await screen.findByRole("button", { name: "Update Studio Mac" }));
+	expect(await screen.findByText("· v0.14.10 · this computer v0.15.4", { exact: false })).toBeVisible();
+	expect(screen.queryByText("v0.15.4")).toBeNull();
+	fireEvent.click(screen.getByRole("button", { name: "Update Studio Mac" }));
+	expect(remotes.checkHostUpdate).toHaveBeenCalledWith("http://studio:3011");
+	expect(await screen.findByText("Update Orchestrator on Studio Mac to v0.15.3?")).toBeVisible();
 	expect(remotes.startHostUpdate).not.toHaveBeenCalled();
-	expect(screen.getByText("Update Orchestrator on Studio Mac to v0.15.0?")).toBeVisible();
 	expect(screen.getByText("The app closes and relaunches on that computer. Its agents keep running.")).toBeVisible();
 	fireEvent.click(screen.getByRole("button", { name: "Update" }));
-	await waitFor(() => expect(remotes.startHostUpdate).toHaveBeenCalledWith("http://studio:3011"));
+	await waitFor(() => expect(remotes.startHostUpdate).toHaveBeenCalledWith("http://studio:3011", "0.15.3"));
 	useHostUpdateStore.setState({ byUrl: {} });
 });
 
-it("names the newer release this computer has downloaded as the target", async () => {
+it("shows why a computer running the desktop app named no version, and asks again on Retry", async () => {
 	saved.entries = [{ hostId: "studio", label: "Studio Mac", url: "http://studio:3011" }];
-	useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { "http://studio:3011": { view: { version: "0.14.10", supported: true, method: "app", state: "idle" } } } });
+	useHostUpdateStore.setState({ localVersion: "0.15.4", byUrl: { "http://studio:3011": { view: { version: "0.14.10", supported: true, method: "app", state: "idle" } } } });
+	remotes.checkHostUpdate.mockRejectedValueOnce(new Error("No newer version is available for that computer."));
+	renderSettings();
+	fireEvent.click(await screen.findByRole("button", { name: "Update Studio Mac" }));
+	expect(await screen.findByRole("alert")).toHaveTextContent("No newer version is available for that computer.");
+	expect(screen.queryByText(/Update Orchestrator on Studio Mac to/)).toBeNull();
+	expect(remotes.startHostUpdate).not.toHaveBeenCalled();
+	fireEvent.click(screen.getByRole("button", { name: "Update Studio Mac" }));
+	expect(await screen.findByText("Update Orchestrator on Studio Mac to v0.15.3?")).toBeVisible();
+	expect(remotes.checkHostUpdate).toHaveBeenCalledTimes(2);
+	useHostUpdateStore.setState({ byUrl: {} });
+});
+
+it("names the newer release this computer has downloaded as a self-hosted host's target", async () => {
+	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
+	useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { "http://box-a:3001": { view: { version: "0.14.10", supported: true, method: "service", state: "idle" } } } });
 	localUpdate.status = { state: "downloaded", version: "0.15.1" };
 	renderSettings();
 	expect(await screen.findByText("v0.15.1")).toBeVisible();
-	fireEvent.click(screen.getByRole("button", { name: "Update Studio Mac" }));
-	expect(screen.getByText("Update Orchestrator on Studio Mac to v0.15.1?")).toBeVisible();
+	fireEvent.click(screen.getByRole("button", { name: "Update Box A" }));
+	await waitFor(() => expect(remotes.startHostUpdate).toHaveBeenCalledWith("http://box-a:3001"));
+	expect(remotes.checkHostUpdate).not.toHaveBeenCalled();
 	localUpdate.status = { state: "idle" };
 	useHostUpdateStore.setState({ byUrl: {} });
 });

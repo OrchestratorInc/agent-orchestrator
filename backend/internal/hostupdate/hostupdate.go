@@ -41,6 +41,7 @@ var installerURL = "https://raw.githubusercontent.com/OrchestratorInc/agent-orch
 var (
 	ErrUnsupported = errors.New("this host was not installed as a self-hosted service; update Orchestrator on that computer")
 	ErrInProgress  = errors.New("an update is already running on this host")
+	ErrNoCheck     = errors.New("this host installs the newest release of its channel and names no version first")
 )
 
 // State is the last update's progress.
@@ -246,13 +247,14 @@ func lastLogLine(path string) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
-// Start begins the update and returns once it is running.
-func (u *Updater) Start(ctx context.Context) error {
+// Start begins the update and returns once it is running. A desktop app host
+// installs only version when one is given; a service host ignores it.
+func (u *Updater) Start(ctx context.Context, version string) error {
 	switch u.kind {
 	case "":
 		return ErrUnsupported
 	case kindApp:
-		return u.startApp()
+		return u.startApp(version)
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()

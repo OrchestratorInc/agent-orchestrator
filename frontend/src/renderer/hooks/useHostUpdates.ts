@@ -97,13 +97,13 @@ export async function refreshHostUpdate(url: string): Promise<void> {
 	settle(url, view);
 }
 
-export async function startHostUpdate(url: string): Promise<void> {
+export async function startHostUpdate(url: string, version?: string): Promise<void> {
 	const { byUrl, patch } = useHostUpdateStore.getState();
 	const updating = { from: byUrl[url]?.view?.version ?? "", since: Date.now() };
 	patch(url, { updating, error: undefined, unconfirmed: undefined });
 	starting.add(url);
 	try {
-		const view = await aoBridge.remotes.startHostUpdate(url);
+		const view = await (version ? aoBridge.remotes.startHostUpdate(url, version) : aoBridge.remotes.startHostUpdate(url));
 		patch(url, { ...(view ? { view } : {}), updating: view ? updating : { ...updating, unconfirmed: true }, error: undefined });
 	} catch (cause) {
 		const view = await aoBridge.remotes.hostUpdate(url).catch(() => null);

@@ -476,6 +476,7 @@ export const aoBridge: AoBridge =
 			connect: async () => { throw new Error("remote hosts need the desktop app"); },
 			disconnect: async () => undefined,
 			hostUpdate: async () => null,
+			checkHostUpdate: async () => { throw new Error("remote hosts need the desktop app"); },
 			startHostUpdate: async () => { throw new Error("remote hosts need the desktop app"); },
 			computerName: async () => { throw new Error("remote hosts need the desktop app"); },
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,

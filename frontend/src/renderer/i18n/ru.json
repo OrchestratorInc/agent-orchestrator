@@ -4244,6 +4244,7 @@
 	"remote.autoUpdateHostsDescription": "Сохранённые хосты обновляются сами, если работают на более старой версии, чем этот компьютер.",
 	"remote.updateUnconfirmed": "Не удалось подтвердить запуск обновления. Попробуйте ещё раз.",
 	"remote.updateAppTitle": "Обновить Orchestrator на {{label}} до v{{version}}?",
+	"remote.thisComputerVersion": "этот компьютер v{{version}}",
 	"remote.updateAppDescription": "Приложение закроется и перезапустится на этом компьютере. Его агенты продолжат работу.",
 	"remote.hostUnauthorized": "Хост отклонил это устройство. Выполните сопряжение заново с новым кодом сопряжения от хоста.",
 	"remote.hostNotDaemon": "По этому адресу нет хоста Orchestrator. Проверьте его адрес и пароль.",

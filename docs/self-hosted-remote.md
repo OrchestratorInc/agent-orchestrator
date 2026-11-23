@@ -76,8 +76,9 @@ read its output with
 installed with the setup script it runs as the
 `dev.aoagents.self-hosted-update` launchd job and logs to
 `~/.ao/host/logs/update.log`. A remote Mac running the Orchestrator desktop
-app updates after you confirm: the app there downloads the update, closes and
-relaunches. Its window has to be open, and it refuses while a draft there isn't
+app updates after you confirm: your desktop first asks that Mac which version
+its own update channel installs and names it in the confirm, then the app there
+downloads the update, closes and relaunches. Its window has to be open, and it refuses while a draft there isn't
 saved yet; auto update leaves these computers alone. A host on a
 release from before desktop updates has to be updated by hand once. A release
 without `ao remote-host link` prints an address and password instead of the

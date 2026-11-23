@@ -4062,6 +4062,7 @@
 	"remote.autoUpdateHostsDescription": "保存済みホストがこのコンピューターより古いバージョンの場合、自動で更新されます。",
 	"remote.updateUnconfirmed": "アップデートの開始を確認できませんでした。もう一度お試しください。",
 	"remote.updateAppTitle": "{{label}} の Orchestrator を v{{version}} にアップデートしますか？",
+	"remote.thisComputerVersion": "このコンピューター v{{version}}",
 	"remote.updateAppDescription": "そのコンピュータでアプリが終了し、再起動します。エージェントは実行を続けます。",
 	"remote.hostUnauthorized": "ホストがこのデバイスを拒否しました。ホストで新しいペアリングコードを取得して、もう一度ペアリングしてください。",
 	"remote.hostNotDaemon": "このアドレスは Orchestrator ホストではありません。アドレスとパスワードを確認してください。",

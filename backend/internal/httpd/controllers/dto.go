@@ -3313,6 +3313,19 @@ type RemoteHostUpdateResponse struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// RemoteHostUpdateRequest is the optional body of POST /api/v1/remote-host/update.
+// Version is the release the caller confirmed. A host that runs the desktop
+// app installs only that version; a self-hosted host ignores it.
+type RemoteHostUpdateRequest struct {
+	Version string `json:"version,omitempty"`
+}
+
+// RemoteHostUpdateCheckResponse is the body of POST /api/v1/remote-host/update/check:
+// the version a host that runs the desktop app installs next.
+type RemoteHostUpdateCheckResponse struct {
+	Version string `json:"version"`
+}
+
 // TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
 // phone paired to this desktop identifies only a signed-in AO Cloud user ID.
 // Without one, DistinctID is the desktop install ID and stays anonymous. The

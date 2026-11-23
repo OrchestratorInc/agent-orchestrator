@@ -190,11 +190,24 @@ export async function readHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = 
 	}
 }
 
-export async function startHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 15_000): Promise<HostUpdateView | null> {
-	const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/update").href, {
+export async function checkHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl = fetch, timeoutMs = 50_000): Promise<string> {
+	const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/update/check").href, {
 		method: "POST",
 		redirect: "error",
 		headers: { Authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}) },
+		signal: AbortSignal.timeout(timeoutMs),
+	}).catch(() => null);
+	const body = (await response?.json().catch(() => null)) as { message?: unknown; version?: unknown } | null | undefined;
+	if (response?.ok && typeof body?.version === "string" && body.version) return body.version;
+	throw new Error(typeof body?.message === "string" && body.message ? body.message : "That computer didn't say which version it installs. Try again.");
+}
+
+export async function startHostUpdate(entry: RemoteEntry, version?: string, fetchImpl: FetchImpl = fetch, timeoutMs = 15_000): Promise<HostUpdateView | null> {
+	const response = await fetchImpl(remoteUrl(entry, "/api/v1/remote-host/update").href, {
+		method: "POST",
+		redirect: "error",
+		headers: { Authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "X-AO-Expected-Host-ID": entry.hostId } : {}), ...(version ? { "Content-Type": "application/json" } : {}) },
+		...(version ? { body: JSON.stringify({ version }) } : {}),
 		signal: AbortSignal.timeout(timeoutMs),
 	}).catch(() => null);
 	if (!response || response.status >= 502) return null;

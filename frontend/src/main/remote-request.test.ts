@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createLocalHostIdentity, IncompatibleRemoteVersionError, pairDevice, probeRemote, readAuthErrorCode, readHostUpdate, readRemoteIdentity, startHostUpdate } from "./remote-request";
+import { checkHostUpdate, createLocalHostIdentity, IncompatibleRemoteVersionError, pairDevice, probeRemote, readAuthErrorCode, readHostUpdate, readRemoteIdentity, startHostUpdate } from "./remote-request";
 
 const entry = { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" };
 
@@ -82,11 +82,33 @@ describe("host update", () => {
 		await expect(readHostUpdate(entry, fakeFetch(200, { version: "0.16.0", supported: true, method: "ssh", state: "idle" }))).resolves.toEqual({ version: "0.16.0", supported: true, state: "idle" });
 	});
 	it("starts an update and surfaces the host's refusal", async () => {
-		await expect(startHostUpdate(entry, fakeFetch(202, { version: "0.14.10", supported: true, state: "updating" }))).resolves.toMatchObject({ state: "updating" });
-		await expect(startHostUpdate(entry, fakeFetch(409, { code: "HOST_UPDATE_UNSUPPORTED", message: "update Orchestrator on that computer" }))).rejects.toThrow("update Orchestrator on that computer");
-		await expect(startHostUpdate(entry, fakeFetch(500, { message: "could not start the update: no user bus" }))).rejects.toThrow("no user bus");
-		await expect(startHostUpdate(entry, fakeFetch(530))).resolves.toBeNull();
-		await expect(startHostUpdate(entry, vi.fn<typeof fetch>(async () => { throw new TypeError("fetch failed"); }))).resolves.toBeNull();
+		await expect(startHostUpdate(entry, undefined, fakeFetch(202, { version: "0.14.10", supported: true, state: "updating" }))).resolves.toMatchObject({ state: "updating" });
+		await expect(startHostUpdate(entry, undefined, fakeFetch(409, { code: "HOST_UPDATE_UNSUPPORTED", message: "update Orchestrator on that computer" }))).rejects.toThrow("update Orchestrator on that computer");
+		await expect(startHostUpdate(entry, undefined, fakeFetch(500, { message: "could not start the update: no user bus" }))).rejects.toThrow("no user bus");
+		await expect(startHostUpdate(entry, undefined, fakeFetch(530))).resolves.toBeNull();
+		await expect(startHostUpdate(entry, undefined, vi.fn<typeof fetch>(async () => { throw new TypeError("fetch failed"); }))).resolves.toBeNull();
+	});
+	it("sends the confirmed version only when there is one", async () => {
+		const doFetch = fakeFetch(202, { version: "0.15.0", supported: true, method: "app", state: "updating" });
+		await startHostUpdate(entry, "0.16.0", doFetch);
+		await startHostUpdate(entry, undefined, doFetch);
+		const [, confirmed] = doFetch.mock.calls[0] as unknown as [string, RequestInit];
+		const [, plain] = doFetch.mock.calls[1] as unknown as [string, RequestInit];
+		expect(confirmed.body).toBe(JSON.stringify({ version: "0.16.0" }));
+		expect(new Headers(confirmed.headers).get("Content-Type")).toBe("application/json");
+		expect(plain.body).toBeUndefined();
+	});
+	it("asks the host which version it installs next", async () => {
+		const doFetch = fakeFetch(200, { version: "0.16.0" });
+		await expect(checkHostUpdate({ ...entry, hostId: "h_workbox" }, doFetch)).resolves.toBe("0.16.0");
+		const [url, init] = doFetch.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toBe("http://192.0.2.1:3011/api/v1/remote-host/update/check");
+		expect(init.method).toBe("POST");
+		expect(init.redirect).toBe("error");
+		expect(new Headers(init.headers).get("X-AO-Expected-Host-ID")).toBe("h_workbox");
+		await expect(checkHostUpdate(entry, fakeFetch(409, { code: "HOST_UPDATE_CHECK_FAILED", message: "No newer version is available for that computer." }))).rejects.toThrow("No newer version is available for that computer.");
+		await expect(checkHostUpdate(entry, fakeFetch(404, { code: "NOT_FOUND" }))).rejects.toThrow("didn't say which version");
+		await expect(checkHostUpdate(entry, vi.fn<typeof fetch>(async () => { throw new TypeError("fetch failed"); }))).rejects.toThrow("didn't say which version");
 	});
 });
 
