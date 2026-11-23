@@ -647,3 +647,20 @@ func TestAccountHandoffAbortedMoveKeepsTheQueueHeld(t *testing.T) {
 		t.Fatalf("provider received %v, want nothing more on the limited account", got)
 	}
 }
+
+func TestManualMoveBeforeTheHandoffMovesReleasesTheHeldQueue(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx := context.Background()
+	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	held := true
+	var err error
+	hh.accounts.onTarget = func() {
+		if err = hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession); err == nil {
+			held, err = hh.st.ConversationQueueHeld(ctx, source.ConversationID)
+		}
+	}
+	hh.tick(t)
+	if err != nil || held {
+		t.Fatalf("queue held = %v, %v after a move the handoff did not start", held, err)
+	}
+}

@@ -56,6 +56,7 @@ type accountHandoff struct {
 
 	busy    bool
 	done    bool
+	moving  bool
 	retryAt time.Time
 	moved   atomic.Bool
 
@@ -255,6 +256,9 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	if !deps.enabled(ctx) {
 		return true, nil
 	}
+	s.handoffMu.Lock()
+	h.moving = true
+	s.handoffMu.Unlock()
 	transition, err := deps.mover.StartAccountTransition(ctx, h.sessionID, target, domain.SessionInterfaceTransitionDrain)
 	if err != nil {
 		return s.stayOnAccount(ctx, h, source, "could not start the move: "+err.Error())
@@ -363,7 +367,7 @@ func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHand
 func (s *Service) ReleaseQueueAfterAccountMove(ctx context.Context, id domain.SessionID) error {
 	s.handoffMu.Lock()
 	for _, h := range s.handoffs {
-		if h.sessionID == id && !h.done {
+		if h.sessionID == id && h.moving && !h.done {
 			s.handoffMu.Unlock()
 			return nil
 		}

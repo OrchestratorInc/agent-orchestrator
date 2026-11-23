@@ -2731,8 +2731,7 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 	}, nil
 }
 
-// ConversationQueueHeld reports whether the conversation's queued turns wait
-// behind a prompt that failed on a usage limit.
+// ConversationQueueHeld reports whether the conversation's queue is held.
 func (s *Store) ConversationQueueHeld(ctx context.Context, conversationID string) (bool, error) {
 	heldAt, err := s.conversationReader(ctx).SelectConversationQueueHeldAt(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3226,23 +3225,25 @@ func (s *Store) SettleTurnByID(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	turn, err := s.qw.SelectConversationTurnByID(ctx, turnID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("select turn %s: %w", turnID, err)
-	}
-	if err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
-		State:        state,
-		ErrorMessage: errMessage,
-		FailureCode:  "",
-		CompletedAt:  sql.NullTime{Time: now, Valid: true},
-		ID:           turnID,
-	}); err != nil {
-		return fmt.Errorf("settle turn %s: %w", turnID, err)
-	}
-	if turn.ID == "" {
-		return nil
-	}
-	return holdQueueBehindUsageLimit(ctx, s.qw, turn, state, errMessage, now)
+	return s.inTx(ctx, "settle turn "+turnID, func(q *gen.Queries) error {
+		turn, err := q.SelectConversationTurnByID(ctx, turnID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("select turn %s: %w", turnID, err)
+		}
+		if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+			State:        state,
+			ErrorMessage: errMessage,
+			FailureCode:  "",
+			CompletedAt:  sql.NullTime{Time: now, Valid: true},
+			ID:           turnID,
+		}); err != nil {
+			return fmt.Errorf("settle turn %s: %w", turnID, err)
+		}
+		if turn.ID == "" {
+			return nil
+		}
+		return holdQueueBehindUsageLimit(ctx, q, turn, state, errMessage, now)
+	})
 }
 
 func holdQueueBehindUsageLimit(ctx context.Context, q *gen.Queries, turn gen.ConversationTurn, state domain.TurnState, errMessage string, now time.Time) error {
