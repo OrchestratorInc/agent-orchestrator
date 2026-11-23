@@ -558,10 +558,12 @@ func TestAccountHandoffKeepsTheHeldQueueWhenTheAgentStopsDuringPreflight(t *test
 	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
 	hh.tick(t)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	if err := hh.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
 		t.Fatal(err)
 	}
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCancelled)
 	if err := hh.svc.Stop(ctx, testSession); err != nil {
 		t.Fatal(err)
 	}
