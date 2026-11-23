@@ -101,23 +101,27 @@ describe("orchestrator worker updates", () => {
 		expect(row.compareDocumentPosition(screen.getByRole("button", { name: "Copy message as markdown" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /Spawned \d agents?/ })).not.toBeInTheDocument();
-		// The ring where the turn branched in place of the fork icon, and the worker's agent logo.
-		expect(screen.getByTestId("spawned-agents").querySelector("svg.chat-spawn-node")).not.toBeNull();
+		// A reply arrow in place of the fork icon, and the worker's agent logo.
+		expect(row.querySelector("svg.icon-corner-down-right")).not.toBeNull();
 		expect(row.querySelector("svg.icon-split")).toBeNull();
 		expect(within(row).getByRole("img", { name: "codex" })).toBeInTheDocument();
-		// The whole row is the session's link, with the open arrow in its reserved slot.
+		// Logo, name and state are the session's link; the arrow stays outside it.
 		const link = within(row).getByRole("link", { name: /Audit usage/ });
 		expect(link).toHaveAttribute("href", "ao://sessions/proj/proj-288");
-		expect(link.querySelector("svg.icon-arrow-up-right")).not.toBeNull();
+		expect(link.querySelector("svg.icon-corner-down-right")).toBeNull();
 		const idle = within(row).getByText("Idle");
 		expect(idle.parentElement?.querySelector('[data-testid="lattice-loader"]')).toBeNull();
 		await userEvent.click(link);
 		expect(openSession).toHaveBeenCalledWith("ao://sessions/proj/proj-288");
 	});
 
-	it("offers no open arrow where the chat cannot open a session", () => {
+	it("marks a hovered row by underlining its name, with no fill behind it", () => {
 		renderOrchestrator([automation("t1", 1, "Check current usage."), spawnRecord(), startedReply], vi.fn(), worker());
-		expect(screen.getByTestId("spawned-agent").querySelector("svg.icon-arrow-up-right")).toBeNull();
+		const row = screen.getByTestId("spawned-agent");
+		const link = within(row).getByRole("link", { name: /Audit usage/ });
+		expect(within(link).getByText("Audit usage")).toHaveClass("group-hover:underline");
+		expect(`${row.className} ${link.className}`).not.toMatch(/\bhover:bg-|\bbg-/);
+		expect(row.querySelector("svg.icon-arrow-up-right")).toBeNull();
 	});
 
 	it("draws a recorded spawn outside any turn as the worker's row", () => {
@@ -233,12 +237,13 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getByText("Terminated 2 agents")).toBeInTheDocument();
 	});
 
-	it("shows how long a working worker has run, and the stage the daemon names on its hover card", async () => {
+	it("keeps a working worker's row to its state, with the stage the daemon names on its hover card", async () => {
 		const workspaces = worker({ status: "working", activity: { state: "active" }, displayStatus: "Fixing CI failures", createdAt: new Date(Date.now() - 90_000).toISOString() });
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord(), startedReply], vi.fn(), workspaces);
 		const row = screen.getByTestId("spawned-agent");
-		expect(row).toHaveTextContent("Working· 1m");
-		// One line per worker: the stage waits on the card.
+		expect(row).toHaveTextContent("Working");
+		expect(row).not.toHaveTextContent("1m");
+		// One short line per worker: the stage waits on the card.
 		expect(row).not.toHaveTextContent("Fixing CI failures");
 		await userEvent.hover(within(row).getByRole("link", { name: /Audit usage/ }));
 		expect(await screen.findByRole("status", { name: "Audit usage, Fixing CI failures" })).toBeInTheDocument();
