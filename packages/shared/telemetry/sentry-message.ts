@@ -52,7 +52,9 @@ export function sentryMessageIdentity(value: unknown, errorCode?: unknown) {
 }
 
 export function sentryIdentityTitle(identity: ReturnType<typeof sentryMessageIdentity>, fallback: string): string {
-	return identity.label || fallback;
+	if (!identity.label) return fallback;
+	if (!fallback) return identity.label;
+	return fallback.endsWith(" (" + identity.label + ")") ? fallback : fallback + " (" + identity.label + ")";
 }
 
 export function sentryExceptionValue(message: string, title: string, location: string, label: string): string {

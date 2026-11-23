@@ -169,7 +169,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(sdk.captureEvent).toHaveBeenCalledOnce();
 		const beforeSend = sdk.init.mock.calls[0][0].beforeSend!;
 		const event = await beforeSend(sdk.captureEvent.mock.calls[0][0], {});
-		expect(event).toMatchObject({ message: "WORKSPACE_GIT_READ_FAILED", tags: { surface: "renderer", category: "http_5xx", code: "WORKSPACE_GIT_READ_FAILED" } });
+		expect(event).toMatchObject({ message: "Renderer Error in unknown (WORKSPACE_GIT_READ_FAILED)", tags: { surface: "renderer", category: "http_5xx", code: "WORKSPACE_GIT_READ_FAILED" } });
 		expect(JSON.stringify(event)).not.toContain("ai-sports-coach-113");
 		transport.capture({ ...request, kind: "breadcrumb" });
 		transport.capture({ ...request, tags: { category: "daemon_unavailable" } });
@@ -332,7 +332,7 @@ describe("Electron main Sentry configuration", () => {
 			tags: { "ao.origin": "renderer", "ao.kind": "exception", "ao.category": "http_5xx", "ao.code": "WORKSPACE_GIT_READ_FAILED", branch: "private" },
 			exception: { values: [{ type: "Error", value: "get project ai-sports-coach-113", stacktrace: { frames: [{ function: "ChatWorkspace", filename: "/Users/alice/private-repo/file.ts", context_line: "private" }] } }] },
 		});
-		expect(result).toMatchObject({ message: "WORKSPACE_GIT_READ_FAILED", user: { id: "ins_sampled_5" }, fingerprint: ["electron", "code", "WORKSPACE_GIT_READ_FAILED"] });
+		expect(result).toMatchObject({ message: "Renderer Error in ChatWorkspace (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_sampled_5" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "ChatWorkspace", "renderer", "code", "WORKSPACE_GIT_READ_FAILED"] });
 		const encoded = JSON.stringify(result);
 		for (const secret of ["ai-sports-coach-113", "private-repo", "private branch", "private@example.test", "private-host", "file:///"]) expect(encoded).not.toContain(secret);
 		expect(result.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({ function: "ChatWorkspace", in_app: true });
@@ -394,7 +394,7 @@ describe("Electron main Sentry configuration", () => {
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "private session", tags: { category: "http_5xx", code: "NEW_API_FAILURE", operation: "new_api_operation" } });
 		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
-		expect(event.message).toBe("NEW_API_FAILURE");
+		expect(event.message).toBe("Renderer API error in new_api_operation (NEW_API_FAILURE)");
 		expect(event.tags).toMatchObject({ code: "NEW_API_FAILURE", category: "http_5xx", operation: "new_api_operation" });
 		expect(JSON.stringify(event)).not.toContain("private session");
 	});
@@ -723,7 +723,7 @@ it("uses the IPC channel and cause code, or the normalized IPC message without o
 		return beforeSend(sdk.captureEvent.mock.calls.at(-1)![0], {});
 	};
 	const first = await send("remotes:list", "Internal server error", "REMOTES_READ_FAILED");
-	expect(first).toMatchObject({ message: "REMOTES_READ_FAILED", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], "code", "REMOTES_READ_FAILED"] });
+	expect(first).toMatchObject({ message: "Renderer Error in unknown (unknown) (REMOTES_READ_FAILED)", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], "code", "REMOTES_READ_FAILED"] });
 	expect((await send("remotes:list", "Erreur interne", "REMOTES_READ_FAILED"))?.fingerprint).toEqual(first?.fingerprint);
 	expect((await send("remotes:sync", "Internal server error", "REMOTES_READ_FAILED"))?.fingerprint).not.toEqual(first?.fingerprint);
 	const uncoded = await send("remotes:list", "Cannot read /home/alice/private");
@@ -734,7 +734,7 @@ it("uses the IPC channel and cause code, or the normalized IPC message without o
 
 	const cause = new AoError("WORKSPACE_NO_READY_REPOS", "Workspace project must contain at least one fully resolved git repository");
 	const sdkError = await beforeSend({ type: undefined, message: "Wrapped" }, { originalException: new Error("Wrapped", { cause }) });
-	expect(sdkError).toMatchObject({ message: "WORKSPACE_NO_READY_REPOS", fingerprint: ["electron", "code", "WORKSPACE_NO_READY_REPOS"] });
+	expect(sdkError).toMatchObject({ message: "Electron main Error in unknown (WORKSPACE_NO_READY_REPOS)", fingerprint: ["electron", "main_error", "unknown", "Error", "unknown", "electron-main", "code", "WORKSPACE_NO_READY_REPOS"] });
 });
 
 it.each(["private ".repeat(26).trim(), "x".repeat(301)])("hashes unsafe text and uses the computed title", async (message) => {
@@ -775,4 +775,22 @@ it.each([
 	expect(event?.message).toBe("Renderer Error in unknown (unknown)");
 	expect(event?.fingerprint?.slice(-2)).toEqual(hashParts(normalized));
 	expect(JSON.stringify(event)).not.toMatch(privateText);
+});
+
+it("keeps application codes scoped by source and preserves renderer source tags", async () => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	const beforeSend = sdk.init.mock.calls[0][0].beforeSend!;
+	const error = new AoError("READ_FAILED", "Private detail");
+	transport.captureMain?.({ category: "update", reason: "download", error });
+	const handled = await beforeSend(sdk.captureEvent.mock.calls.at(-1)![0], {});
+	transport.capture({
+		consentGeneration: "g", kind: "exception", message: error.message,
+		tags: { category: "renderer_rejection", code: "UNHANDLED_REJECTION", error_code: error.code },
+		exception: { type: "Error", frames: [] },
+	});
+	const renderer = await beforeSend(sdk.captureEvent.mock.calls.at(-1)![0], {});
+	expect(renderer?.tags).toMatchObject({ code: "UNHANDLED_REJECTION", error_code: "READ_FAILED" });
+	expect(renderer?.message).toContain("READ_FAILED");
+	expect(handled?.tags).toMatchObject({ error_code: "READ_FAILED" });
+	expect(renderer?.fingerprint).not.toEqual(handled?.fingerprint);
 });

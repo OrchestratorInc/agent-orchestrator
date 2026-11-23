@@ -144,3 +144,17 @@ it("preserves a remotes:list code across the preload bridge without changing its
 	});
 	expect(mocks.invoke).toHaveBeenCalledWith("remotes:list", true);
 });
+
+it("still captures an early rejection whose code getter throws", async () => {
+	const { controller, resolvePolicy } = await setup(true);
+	resolvePolicy(controller.snapshot());
+	const error = Object.defineProperty(new Error("An early failure"), "code", {
+		get() { throw new Error("getter failed"); },
+	});
+	const event = new Event("unhandledrejection");
+	Object.defineProperty(event, "reason", { value: error });
+	window.dispatchEvent(event);
+	await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("telemetry:capture", expect.objectContaining({
+		message: "An early failure", tags: expect.objectContaining({ code: "UNHANDLED_REJECTION" }),
+	})));
+});

@@ -85,8 +85,8 @@ export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { orig
 			...(severity ? { "ao.severity": severity } : {}),
 			...(daemonVersion && /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/.test(daemonVersion) ? { "ao.daemon_version": daemonVersion } : {}),
 		},
-		fingerprint: ["mobile",
-			...(identity.code ? ["code", identity.code] : [title, category, ...(primary ? [primary.type] : []), ...messageFingerprint])],
+		fingerprint: ["mobile", title, category, ...(primary ? [primary.type] : []),
+			...(identity.code ? ["code", identity.code] : messageFingerprint)],
 		user: pairedInstallId ? { id: pairedInstallId } : undefined,
 	};
 	if (clean.event_id) allowedEventIds.add(clean.event_id);

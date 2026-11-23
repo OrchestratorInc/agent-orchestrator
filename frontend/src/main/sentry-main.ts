@@ -7,7 +7,7 @@ import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
 import { DEFAULT_ELECTRON_SENTRY_DSN, isPublishedSentryBuild, SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName, sentryEnvironment } from "../shared/sentry-config";
-import { safeSentryCode, sentryErrorCode } from "../../../packages/shared/telemetry/ao-error";
+import { AoError, safeSentryCode, sentryErrorCode } from "../../../packages/shared/telemetry/ao-error";
 import { sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue } from "../../../packages/shared/telemetry/sentry-message";
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
@@ -163,7 +163,7 @@ async function waitForInFlightSends(inFlight: Set<Promise<unknown>>): Promise<vo
 	try {
 		const settled = Promise.allSettled([...inFlight]).then(() => true);
 		const timedOut = new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), DRAIN_TIMEOUT_MS); });
-		if (!(await Promise.race([settled, timedOut]))) throw new Error("Electron Sentry retry drain timed out");
+		if (!(await Promise.race([settled, timedOut]))) throw new AoError("SENTRY_RETRY_DRAIN_TIMEOUT", "Electron Sentry retry drain timed out");
 	} finally {
 		if (timeout) clearTimeout(timeout);
 	}
@@ -176,7 +176,7 @@ function isExpectedNoise(event: Sentry.ErrorEvent): boolean {
 
 function errorFingerprint(identity: ReturnType<typeof sentryMessageIdentity>, fallback: string[]): string[] {
 	const prefix = identity.channel ? ["electron", "ipc", createHash("sha256").update(identity.channel).digest("hex").slice(0, 10)] : undefined;
-	if (identity.code) return [...(prefix ?? ["electron"]), "code", identity.code];
+	if (identity.code) return [...(prefix ?? fallback), "code", identity.code];
 	const message = identity.hashInput === undefined ? []
 		: ["sha256", createHash("sha256").update(identity.hashInput).digest("hex").slice(0, 10)];
 	return [...(prefix ?? fallback), ...message];
@@ -249,7 +249,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const rendererLabel = safeCode !== "unknown" ? safeCode : safeCategory;
 	const debugImages = frames?.length ? safeDebugImages(event, renderer) : [];
 	const title = renderer
-		? kind === "message" ? `Renderer API error (${rendererLabel})` : `Renderer ${exceptionType} in ${topFunction} (${rendererLabel})`
+		? kind === "message" ? `Renderer API error${safeOperation ? " in " + safeOperation : ""} (${rendererLabel})` : `Renderer ${exceptionType} in ${topFunction} (${rendererLabel})`
 		: processReason ? "Electron process failure" : `Electron main ${exceptionType} in ${topFunction}`;
 	return {
 		type: undefined,
@@ -260,8 +260,8 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
 		message: sentryIdentityTitle(identity, title),
-		fingerprint: errorFingerprint(identity, ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main"]),
-		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}), ...(safeFlow ? { flow: safeFlow } : {}) } : {}), ...(processReason ? { reason: processReason } : {}), ...(identity.code ? { code: identity.code } : {}) },
+		fingerprint: errorFingerprint(identity, ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main", ...(safeOperation ? [safeOperation] : [])]),
+		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}), ...(safeFlow ? { flow: safeFlow } : {}) } : {}), ...(processReason ? { reason: processReason } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,
@@ -289,7 +289,7 @@ function scrubMainHandledEvent(event: Sentry.ErrorEvent, installId: string, vers
 		level: event.level === "fatal" || event.level === "warning" ? event.level : "error",
 		message: sentryIdentityTitle(identity, title),
 		fingerprint: errorFingerprint(identity, ["electron", "handled", category, reason, "electron-main"]),
-		tags: { surface: "electron-main", kind: "handled", category, reason, ...(isSafeMainErrorDetail(detail) ? { detail } : {}), ...(identity.code ? { code: identity.code } : {}) },
+		tags: { surface: "electron-main", kind: "handled", category, reason, ...(isSafeMainErrorDetail(detail) ? { detail } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,

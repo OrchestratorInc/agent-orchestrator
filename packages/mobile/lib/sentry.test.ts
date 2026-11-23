@@ -173,9 +173,9 @@ it("groups translated mobile exceptions by the cause code", async () => {
 	const sentry = await import("./sentry");
 	sentry.setMobileSentryConsent(true);
 	await sentry.initMobileSentry();
-	const capture = async (value: string) => {
+	const capture = async (value: string, category = "render_crash") => {
 		const error = new Error(value, { cause: new AoError("RENDER_DATA_FAILED", "Data unavailable") });
-		sentry.captureMobileException(error, { category: "render_crash" });
+		sentry.captureMobileException(error, { category });
 		return sentry.sanitizeMobileSentryEvent({
 			type: undefined,
 			tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags,
@@ -183,8 +183,9 @@ it("groups translated mobile exceptions by the cause code", async () => {
 		});
 	};
 	const first = await capture("Data unavailable");
-	expect(first?.message).toBe("RENDER_DATA_FAILED");
+	expect(first?.message).toBe("Mobile error (RENDER_DATA_FAILED)");
 	expect((await capture("Données indisponibles"))?.fingerprint).toEqual(first?.fingerprint);
+	expect((await capture("Data unavailable", "native_crash"))?.fingerprint).not.toEqual(first?.fingerprint);
 });
 
 it("drops a hash in progress when consent changes", async () => {
