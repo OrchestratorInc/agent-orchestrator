@@ -196,7 +196,7 @@ func (s *Store) AdvanceSessionInterfaceTransition(
 	defer s.writeMu.Unlock()
 	var completed sql.NullTime
 	if next.Terminal() {
-		completed = timeToNullTime(now)
+		completed = sql.NullTime{Time: normalizeTime(now), Valid: true}
 	}
 	rows, err := s.qw.AdvanceSessionInterfaceTransition(ctx, gen.AdvanceSessionInterfaceTransitionParams{
 		Phase:                next,
@@ -242,7 +242,7 @@ func (s *Store) CompleteSessionInterfaceTransition(
 			Phase:                domain.SessionInterfaceTransitionCompleted,
 			NativeConversationID: current.NativeConversationID,
 			UpdatedAt:            normalizeTime(now),
-			CompletedAt:          timeToNullTime(now),
+			CompletedAt:          sql.NullTime{Time: normalizeTime(now), Valid: true},
 			ID:                   id,
 			Phase_2:              expected,
 		})
@@ -275,7 +275,7 @@ func (s *Store) AcknowledgeSessionInterfaceTransitionNotice(
 	row, err := s.qw.AcknowledgeSessionInterfaceTransitionNotice(
 		ctx,
 		gen.AcknowledgeSessionInterfaceTransitionNoticeParams{
-			NoticeAcknowledgedAt: timeToNullTime(now),
+			NoticeAcknowledgedAt: sql.NullTime{Time: normalizeTime(now), Valid: true},
 			ID:                   transitionID,
 			SessionID:            sessionID,
 		},
@@ -514,7 +514,7 @@ func (s *Store) MarkSessionInterfaceTransitionMessageDelivered(
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	_, err := s.qw.MarkSessionInterfaceTransitionMessageDelivered(ctx, gen.MarkSessionInterfaceTransitionMessageDeliveredParams{
-		DeliveredAt: timeToNullTime(now),
+		DeliveredAt: sql.NullTime{Time: normalizeTime(now), Valid: true},
 		ID:          id,
 	})
 	if err != nil {

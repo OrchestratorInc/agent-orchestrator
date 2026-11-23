@@ -411,7 +411,7 @@ func (s *Store) MarkHarnessSessionsStale(ctx context.Context, harness domain.Age
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.MarkHarnessSessionsStale(ctx, gen.MarkHarnessSessionsStaleParams{
-		Since: timeToNullTime(at), Version: version, Harness: harness,
+		Since: sql.NullTime{Time: normalizeTime(at), Valid: true}, Version: version, Harness: harness,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("mark %s sessions stale: %w", harness, err)
@@ -425,7 +425,7 @@ func (s *Store) SetSessionVersionSwitchFailed(ctx context.Context, id domain.Ses
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if _, err := s.qw.SetSessionVersionSwitchFailed(ctx, gen.SetSessionVersionSwitchFailedParams{
-		FailedAt: timeToNullTime(at), Version: version, ID: id,
+		FailedAt: sql.NullTime{Time: normalizeTime(at), Valid: true}, Version: version, ID: id,
 	}); err != nil {
 		return fmt.Errorf("record version switch failure for %s: %w", id, err)
 	}

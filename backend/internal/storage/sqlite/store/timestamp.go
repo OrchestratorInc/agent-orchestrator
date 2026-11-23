@@ -13,16 +13,12 @@ func normalizeTime(t time.Time) time.Time {
 	return t.UTC()
 }
 
-// normalizeTimePtr returns a pointer to t converted to UTC, preserving nil or zero values.
+// normalizeTimePtr returns a pointer to t converted to UTC, preserving nil.
 func normalizeTimePtr(t *time.Time) *time.Time {
 	if t == nil {
 		return nil
 	}
-	if t.IsZero() {
-		zero := time.Time{}
-		return &zero
-	}
-	utc := t.UTC()
+	utc := normalizeTime(*t)
 	return &utc
 }
 
@@ -43,12 +39,13 @@ func timeToNullTime(t time.Time) sql.NullTime {
 	return sql.NullTime{Time: t.UTC(), Valid: true}
 }
 
-// timePtrToNullTime converts a *time.Time to sql.NullTime in UTC, preserving nil and zero values as invalid (null).
+// timePtrToNullTime converts a *time.Time to sql.NullTime in UTC, preserving nil as invalid (null).
+// A non-nil pointer (even if zero-valued) produces a valid sql.NullTime marker.
 func timePtrToNullTime(t *time.Time) sql.NullTime {
-	if t == nil || t.IsZero() {
+	if t == nil {
 		return sql.NullTime{}
 	}
-	return sql.NullTime{Time: t.UTC(), Valid: true}
+	return sql.NullTime{Time: normalizeTime(*t), Valid: true}
 }
 
 // nullTime is an alias for timeToNullTime, used across store packages.
@@ -65,10 +62,11 @@ func nullTimeToTime(t sql.NullTime) time.Time {
 }
 
 // nullTimeToTimePtr bridges a nullable database timestamp to a *time.Time in UTC.
+// A valid database timestamp (even if zero-valued) produces a non-nil pointer.
 func nullTimeToTimePtr(t sql.NullTime) *time.Time {
-	if !t.Valid || t.Time.IsZero() {
+	if !t.Valid {
 		return nil
 	}
-	utc := t.Time.UTC()
+	utc := normalizeTime(t.Time)
 	return &utc
 }

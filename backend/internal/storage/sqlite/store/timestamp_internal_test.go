@@ -98,8 +98,8 @@ func TestTimestampNormalizationHelpers(t *testing.T) {
 			t.Errorf("expected invalid NullTime for nil pointer")
 		}
 		zero := time.Time{}
-		if res := timePtrToNullTime(&zero); res.Valid {
-			t.Errorf("expected invalid NullTime for zero-time pointer")
+		if res := timePtrToNullTime(&zero); !res.Valid {
+			t.Errorf("expected valid NullTime for zero-time pointer marker")
 		}
 
 		// Non-UTC non-zero -> valid UTC NullTime
@@ -124,12 +124,12 @@ func TestTimestampNormalizationHelpers(t *testing.T) {
 			t.Errorf("expected nil pointer for invalid NullTime")
 		}
 
-		// Valid zero -> zero time / nil pointer
+		// Valid zero -> zero time / non-nil pointer to zero time (presence preserved)
 		if res := nullTimeToTime(sql.NullTime{Valid: true, Time: time.Time{}}); !res.IsZero() {
 			t.Errorf("expected zero time for valid zero NullTime")
 		}
-		if res := nullTimeToTimePtr(sql.NullTime{Valid: true, Time: time.Time{}}); res != nil {
-			t.Errorf("expected nil pointer for valid zero NullTime")
+		if res := nullTimeToTimePtr(sql.NullTime{Valid: true, Time: time.Time{}}); res == nil || !res.IsZero() {
+			t.Errorf("expected non-nil pointer for valid zero NullTime, got %v", res)
 		}
 
 		// Valid non-UTC -> UTC

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ func (s *Store) RecordTerminalTurnResponse(ctx context.Context, id domain.Sessio
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if err := s.qw.CloseTerminalTurn(ctx, gen.CloseTerminalTurnParams{
-		AgentResponse: strings.TrimSpace(response), RespondedAt: timeToNullTime(at), SessionID: string(id),
+		AgentResponse: strings.TrimSpace(response), RespondedAt: sql.NullTime{Time: normalizeTime(at), Valid: true}, SessionID: string(id),
 	}); err != nil {
 		return fmt.Errorf("record terminal turn response: %w", err)
 	}
