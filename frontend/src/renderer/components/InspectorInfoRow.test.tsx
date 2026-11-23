@@ -22,7 +22,7 @@ describe("inspector row labels", () => {
 	});
 
 	it("positions the button row label so its sr-only suffix is clipped with it", () => {
-		render(<InfoRowLabelButton icon={GitPullRequest} label={label} onPress={() => {}} />);
+		render(<InfoRowLabelButton icon={GitPullRequest} label={label} onClick={() => {}} />);
 		const suffix = screen.getByText(", open");
 		expect(suffix.parentElement).toHaveClass("truncate", "relative");
 	});
