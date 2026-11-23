@@ -13,6 +13,10 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const (
@@ -20,6 +24,10 @@ const (
 	EnvRelayURL = "AO_MCP_RELAY_URL"
 	// EnvRelayAuthorization is the Authorization header Run sends to that server.
 	EnvRelayAuthorization = "AO_MCP_RELAY_AUTHORIZATION"
+	// EnvLaunchURL makes Run ask the daemon at this address for a command and run it.
+	EnvLaunchURL = "AO_MCP_LAUNCH_URL"
+	// EnvConnectorToken is the session's connector token, used when no Authorization header is given.
+	EnvConnectorToken = config.EnvConnectorToken
 
 	maxRelayMessage = 32 << 20
 	relayErrorCode  = -32000
@@ -36,10 +44,60 @@ type relay struct {
 
 // Run serves Orchestrator's tools, or relays to the HTTP tool server the environment names.
 func Run(ctx context.Context, in io.Reader, out io.Writer, version string) error {
+	authorization := os.Getenv(EnvRelayAuthorization)
+	if token := os.Getenv(EnvConnectorToken); authorization == "" && token != "" {
+		authorization = "Bearer " + token
+	}
+	if target := os.Getenv(EnvLaunchURL); target != "" {
+		return Launch(ctx, in, out, os.Stderr, target, authorization)
+	}
 	if target := os.Getenv(EnvRelayURL); target != "" {
-		return Relay(ctx, in, out, target, os.Getenv(EnvRelayAuthorization))
+		return Relay(ctx, in, out, target, authorization)
 	}
 	return Serve(ctx, in, out, NewDaemonClient(), version)
+}
+
+// Launch asks the daemon at target for the command of a connector and runs it on the given streams.
+func Launch(ctx context.Context, in io.Reader, out, errOut io.Writer, target, authorization string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, http.NoBody)
+	if err != nil {
+		return err
+	}
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("the connector did not start: %s", strings.TrimSpace(string(body)))
+	}
+	var spec struct {
+		Command string            `json:"command"`
+		Args    []string          `json:"args"`
+		Env     map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(body, &spec); err != nil || spec.Command == "" {
+		return errors.New("the connector did not start: the daemon gave no command")
+	}
+	cmd := process.CommandContext(ctx, spec.Command, spec.Args...)
+	for _, pair := range os.Environ() {
+		name, _, _ := strings.Cut(pair, "=")
+		if name != EnvLaunchURL && name != EnvRelayURL && name != EnvRelayAuthorization && name != EnvConnectorToken {
+			cmd.Env = append(cmd.Env, pair)
+		}
+	}
+	for name, value := range spec.Env {
+		cmd.Env = append(cmd.Env, name+"="+value)
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errOut
+	return cmd.Run()
 }
 
 // Relay passes MCP messages from in to the HTTP tool server at target and writes its answers on out, until in ends.

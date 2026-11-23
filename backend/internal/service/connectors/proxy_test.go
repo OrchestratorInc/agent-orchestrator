@@ -16,11 +16,16 @@ func newProxiedService(t *testing.T) (*Service, *httptest.Server) {
 	var svc *Service
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, proxyPrefix), "/")
-		if !strings.HasPrefix(r.URL.Path, proxyPrefix) || len(parts) != 3 || parts[1] != "connectors" {
+		switch {
+		case !strings.HasPrefix(r.URL.Path, proxyPrefix) || len(parts) < 3 || parts[1] != "connectors":
 			http.NotFound(w, r)
-			return
+		case len(parts) == 4 && parts[3] == "launch" && r.Method == http.MethodGet:
+			svc.ServeLaunch(w, r, parts[0], parts[2])
+		case len(parts) == 3:
+			svc.ServeProxy(w, r, parts[0], parts[2])
+		default:
+			http.NotFound(w, r)
 		}
-		svc.ServeProxy(w, r, parts[0], parts[2])
 	}))
 	t.Cleanup(daemon.Close)
 	svc = New(t.TempDir(), daemon.URL)
@@ -72,7 +77,8 @@ func TestASessionCallsAToolThroughTheProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	servers := svc.ForSession(ctx, SessionInput{SessionID: "ao-12", ProjectID: "demo", Native: map[string]bool{"context7": true}})
-	if len(servers) != 2 || servers[0].Name != "fake" || servers[0].Type != "http" || servers[1].Name != "local" || servers[1].Command != "npx" || servers[1].Env["K"] != "v" {
+	if len(servers) != 2 || servers[0].Name != "fake" || servers[0].Type != "http" || servers[1].Name != "local" || servers[1].Type != "stdio" ||
+		servers[1].Command != "" || len(servers[1].Env) != 0 || !strings.HasSuffix(servers[1].URL, "/mcp/s/ao-12/connectors/local/launch") {
 		t.Fatalf("servers = %+v", servers)
 	}
 	if strings.Contains(servers[0].Headers["Authorization"], "access-") || strings.Contains(servers[0].URL, fake.URL) {
@@ -177,3 +183,74 @@ func TestTheProxyRefusesWhatTheSessionMayNotReach(t *testing.T) {
 		t.Fatalf("status after a refused call = %s", got.Status)
 	}
 }
+
+func launchGet(t *testing.T, url, token string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw)
+}
+
+func TestOnlyTheSessionGetsTheCommandAndValuesOfACommandConnector(t *testing.T) {
+	svc, daemon := newProxiedService(t)
+	ctx := context.Background()
+	for _, in := range []Input{
+		{Name: "local", Transport: TransportStdio, Command: "npx", Args: []string{"-y", "local-mcp"}, Env: map[string]string{"K": "stored-value"}},
+		{Name: "remote", Transport: TransportHTTP, URL: "https://x.example/mcp"},
+	} {
+		if _, err := svc.Create(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open := true
+	svc.SetSessionLookup(func(context.Context, string) (string, bool) { return "demo", open })
+	servers := svc.ForSession(ctx, SessionInput{SessionID: "ao-12", ProjectID: "demo"})
+	if len(servers) != 2 || servers[0].Name != "local" {
+		t.Fatalf("servers = %+v", servers)
+	}
+	launch, token := servers[0].URL, servers[0].Headers["Authorization"]
+	status, body := launchGet(t, launch, token)
+	if status != http.StatusOK || !strings.Contains(body, `"command":"npx"`) || !strings.Contains(body, `"args":["-y","local-mcp"]`) || !strings.Contains(body, `"K":"stored-value"`) {
+		t.Fatalf("launch = %d %s", status, body)
+	}
+	otherToken, _ := svc.sessionToken("ao-13")
+	for name, got := range map[string]int{
+		"no token":                 first(launchGet(t, launch, "")),
+		"token of another session": first(launchGet(t, launch, "Bearer "+otherToken)),
+		"a server URL connector":   first(launchGet(t, daemon.URL+proxyPrefix+"ao-12/connectors/remote/launch", token)),
+		"an unknown connector":     first(launchGet(t, daemon.URL+proxyPrefix+"ao-12/connectors/none/launch", token)),
+	} {
+		if got == http.StatusOK {
+			t.Errorf("%s got the launch details", name)
+		}
+	}
+	if status, body := proxyPost(t, strings.TrimSuffix(launch, "/launch"), token, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`); strings.Contains(body, "stored-value") || !strings.Contains(body, "has no connector named local") {
+		t.Fatalf("proxy call to a command connector = %d %s", status, body)
+	}
+	if _, err := svc.SetEnabled(ctx, "local", false); err != nil {
+		t.Fatal(err)
+	}
+	if status, body := launchGet(t, launch, token); status != http.StatusForbidden || strings.Contains(body, "stored-value") {
+		t.Fatalf("turned off = %d %s", status, body)
+	}
+	if _, err := svc.SetEnabled(ctx, "local", true); err != nil {
+		t.Fatal(err)
+	}
+	open = false
+	if status, body := launchGet(t, launch, token); status != http.StatusUnauthorized || strings.Contains(body, "stored-value") {
+		t.Fatalf("closed session = %d %s", status, body)
+	}
+}
+
+func first(status int, _ string) int { return status }

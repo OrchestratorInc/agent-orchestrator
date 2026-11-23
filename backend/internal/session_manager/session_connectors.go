@@ -2,7 +2,10 @@ package sessionmanager
 
 import (
 	"context"
+	"maps"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mcpserver"
@@ -40,23 +43,64 @@ func (m *Manager) sessionMCPServers(ctx context.Context, harness domain.AgentHar
 	if harness == domain.HarnessUnreal {
 		return nil
 	}
-	servers := m.aoMCPServers(ctx, harness, env)
+	return append(m.aoMCPServers(ctx, harness, env), m.connectorServers(ctx, harness, projectID, workspace, env)...)
+}
+
+func (m *Manager) connectorServers(ctx context.Context, harness domain.AgentHarness, projectID domain.ProjectID, workspace string, env map[string]string) []ports.ChatMCPServerConfig {
 	connectors := m.sessionConnectors(ctx, SessionConnectorsInput{
 		SessionID: env[EnvSessionID], ProjectID: projectID, Harness: harness, Workspace: workspace, Env: env,
 	})
 	executable, err := m.executable()
-	for i := range connectors {
-		if connectors[i].Type != "http" || err != nil || !filepath.IsAbs(executable) {
+	helper := err == nil && filepath.IsAbs(executable)
+	servers := make([]ports.ChatMCPServerConfig, 0, len(connectors))
+	for _, connector := range connectors {
+		if !helper && connector.Type == "stdio" {
+			m.logger.Warn("session gets no command connector: the ao executable is not available", "connector", connector.Name)
 			continue
 		}
-		command, args := mcpServerCommand(executable)
-		connectors[i].Relay = &ports.ChatMCPServerConfig{
-			Name: connectors[i].Name, Type: "stdio", Command: command, Args: args,
-			Env: map[string]string{
-				mcpserver.EnvRelayURL:           connectors[i].URL,
-				mcpserver.EnvRelayAuthorization: connectors[i].Headers["Authorization"],
-			},
+		if helper {
+			command, args := mcpServerCommand(executable)
+			via := ports.ChatMCPServerConfig{Name: connector.Name, Type: "stdio", Command: command, Args: args, Env: map[string]string{
+				mcpserver.EnvRelayURL: connector.URL, mcpserver.EnvRelayAuthorization: connector.Headers["Authorization"],
+			}}
+			if connector.Type == "stdio" {
+				via.Env = map[string]string{mcpserver.EnvLaunchURL: connector.URL, mcpserver.EnvRelayAuthorization: connector.Headers["Authorization"]}
+				connector = via
+			} else {
+				connector.Relay = &via
+			}
+		}
+		servers = append(servers, connector)
+	}
+	return servers
+}
+
+// terminalConnectors adds the session's connectors to the command of a
+// Terminal agent whose CLI takes tool servers as arguments. It adds to env what
+// those arguments refer to. argv must still start with the agent's own binary.
+func (m *Manager) terminalConnectors(ctx context.Context, agent ports.Agent, harness domain.AgentHarness, id domain.SessionID, projectID domain.ProjectID, workspace string, argv []string, env map[string]string) []string {
+	adapter, ok := agent.(ports.AgentConnectorArgs)
+	dir := m.systemPromptDir(id)
+	if !ok || len(argv) == 0 || dir == "" {
+		return argv
+	}
+	servers := m.connectorServers(ctx, harness, projectID, workspace, env)
+	if len(servers) == 0 {
+		return argv
+	}
+	token := ""
+	for _, server := range servers {
+		for _, value := range []string{server.Headers["Authorization"], server.Env[mcpserver.EnvRelayAuthorization]} {
+			if bearer, found := strings.CutPrefix(value, "Bearer "); found {
+				token = bearer
+			}
 		}
 	}
-	return append(servers, connectors...)
+	args, extra, err := adapter.ConnectorArgs(servers, token, filepath.Join(dir, "connectors.json"))
+	if err != nil {
+		m.logger.Warn("terminal session gets no connectors", "session", id, "error", err)
+		return argv
+	}
+	maps.Copy(env, extra)
+	return slices.Concat(argv[:1], args, argv[1:])
 }

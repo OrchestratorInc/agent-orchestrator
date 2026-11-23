@@ -939,6 +939,16 @@ type LaunchConfig struct {
 	Env map[string]string
 }
 
+// AgentConnectorArgs is implemented by adapters whose CLI takes extra tool
+// servers on its command line, so a Terminal session gets its connectors.
+type AgentConnectorArgs interface {
+	// ConnectorArgs returns the arguments that give the CLI these tool servers,
+	// and the environment values those arguments refer to. token is the
+	// session's connector token; it must not appear in the arguments. file is a
+	// path the adapter can write a private file to.
+	ConnectorArgs(servers []ChatMCPServerConfig, token, file string) (args []string, env map[string]string, err error)
+}
+
 // WorkspaceHookConfig carries inputs needed to install workspace-local agent hooks.
 type WorkspaceHookConfig struct {
 	Config           AgentConfig

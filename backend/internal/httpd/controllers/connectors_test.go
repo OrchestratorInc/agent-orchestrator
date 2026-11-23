@@ -152,8 +152,13 @@ func TestConnectorProxyRouteIsMountedAndLoopbackOnly(t *testing.T) {
 	if status, body := connectorCall(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/connectors", ""); status != http.StatusOK || !strings.Contains(body, `"connectors":[]`) {
 		t.Fatalf("session connectors = %d %s", status, body)
 	}
-	if !httpd.IsLANControlBlockedPathForTest("/mcp/s/ao-1/connectors/linear") {
-		t.Fatal("the agent proxy must not answer on the remote listener")
+	if status, body := connectorCall(t, srv, http.MethodGet, "/mcp/s/ao-1/connectors/paper/launch", ""); status != http.StatusUnauthorized {
+		t.Fatalf("launch details without a session token = %d %s", status, body)
+	}
+	for _, path := range []string{"/mcp/s/ao-1/connectors/linear", "/mcp/s/ao-1/connectors/paper/launch"} {
+		if !httpd.IsLANControlBlockedPathForTest(path) {
+			t.Fatalf("%s must not answer on the remote listener", path)
+		}
 	}
 }
 

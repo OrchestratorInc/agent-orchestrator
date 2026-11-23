@@ -37,6 +37,7 @@ type ConnectorService interface {
 	ImportCandidates(ctx context.Context) ([]connectors.ImportCandidate, error)
 	Import(ctx context.Context, ids []string, values map[string]map[string]string) ([]connectors.Connector, error)
 	ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, key string)
+	ServeLaunch(w http.ResponseWriter, r *http.Request, sessionID, key string)
 }
 
 // ConnectorsController owns the connector routes.
@@ -69,6 +70,13 @@ func (c *ConnectorsController) RegisterRoot(root chi.Router) {
 			return
 		}
 		c.Svc.ServeProxy(w, r, chi.URLParam(r, "sessionId"), chi.URLParam(r, "key"))
+	})
+	root.Get("/mcp/s/{sessionId}/connectors/{key}/launch", func(w http.ResponseWriter, r *http.Request) {
+		if c.Svc == nil {
+			http.NotFound(w, r)
+			return
+		}
+		c.Svc.ServeLaunch(w, r, chi.URLParam(r, "sessionId"), chi.URLParam(r, "key"))
 	})
 }
 

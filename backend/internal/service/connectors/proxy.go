@@ -11,13 +11,11 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"maps"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -25,6 +23,7 @@ import (
 
 const (
 	proxyPrefix    = "/mcp/s/"
+	launchSuffix   = "/launch"
 	keyFileName    = "mcp-connectors.key"
 	maxProxyBody   = 32 << 20
 	rpcServerError = -32001
@@ -84,17 +83,33 @@ func (s *Service) ForSession(_ context.Context, in SessionInput) []ports.ChatMCP
 			continue
 		}
 		use.keys = append(use.keys, rec.Key)
-		if rec.Transport == TransportStdio {
-			out = append(out, ports.ChatMCPServerConfig{Name: rec.Key, Type: "stdio", Command: rec.Command, Args: slices.Clone(rec.Args), Env: maps.Clone(rec.Env)})
-			continue
-		}
-		out = append(out, ports.ChatMCPServerConfig{
+		entry := ports.ChatMCPServerConfig{
 			Name: rec.Key, Type: "http",
 			URL:     s.baseURL + proxyPrefix + url.PathEscape(in.SessionID) + "/connectors/" + url.PathEscape(rec.Key),
 			Headers: map[string]string{"Authorization": "Bearer " + token},
-		})
+		}
+		if rec.Transport == TransportStdio {
+			entry.Type, entry.URL = "stdio", entry.URL+launchSuffix
+		}
+		out = append(out, entry)
 	}
 	return out
+}
+
+// ServeLaunch gives a session the command and the environment values of one of its command connectors.
+func (s *Service) ServeLaunch(w http.ResponseWriter, r *http.Request, sessionID, key string) {
+	rec, problem := s.admit(r, sessionID, key, TransportStdio)
+	if problem != "" {
+		status := http.StatusForbidden
+		if rec == nil {
+			status = http.StatusUnauthorized
+		}
+		http.Error(w, problem, status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{"command": rec.Command, "args": rec.Args, "env": rec.Env})
 }
 
 // SessionConnectors returns the connectors a session got and how it used them.
@@ -121,7 +136,7 @@ func (s *Service) SessionConnectors(_ context.Context, sessionID string) ([]Sess
 
 // ServeProxy passes one request of a session to a connector's server and adds the connector's sign-in.
 func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, key string) {
-	rec, problem := s.admit(r, sessionID, key)
+	rec, problem := s.admit(r, sessionID, key, TransportHTTP)
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxProxyBody+1))
 	if err != nil || len(body) > maxProxyBody {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -198,7 +213,7 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 	}).ServeHTTP(w, r)
 }
 
-func (s *Service) admit(r *http.Request, sessionID, key string) (*record, string) {
+func (s *Service) admit(r *http.Request, sessionID, key string, transport Transport) (*record, string) {
 	s.mu.Lock()
 	lookup := s.sessionLookup
 	want, tokenErr := s.sessionToken(sessionID)
@@ -221,7 +236,7 @@ func (s *Service) admit(r *http.Request, sessionID, key string) (*record, string
 		}
 	}
 	switch {
-	case rec == nil || rec.Transport != TransportHTTP || (lookup != nil && rec.ProjectID != "" && rec.ProjectID != projectID):
+	case rec == nil || rec.Transport != transport || (lookup != nil && rec.ProjectID != "" && rec.ProjectID != projectID):
 		return &record{}, "This session has no connector named " + key + "."
 	case !rec.Enabled:
 		return rec, rec.Name + " is turned off. Ask the user to open Settings, Connectors, and turn it on."

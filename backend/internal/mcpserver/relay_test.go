@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -98,5 +99,38 @@ func TestRelayAnswersACallWithAnErrorWhenTheServerRefuses(t *testing.T) {
 	got := strings.TrimSpace(line)
 	if strings.Count(got, "\n") != 0 || !strings.Contains(got, `"id":7`) || !strings.Contains(got, "401 Unauthorized: unknown session") {
 		t.Fatalf("out = %q", got)
+	}
+}
+
+func TestLaunchRunsTheCommandTheDaemonGivesWithoutTheSessionToken(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell")
+	}
+	t.Setenv(EnvConnectorToken, "session-token")
+	t.Setenv(EnvLaunchURL, "http://127.0.0.1:1/launch")
+	var authorization string
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, `{"command":"/bin/sh","args":["-c","cat; echo \"token=[$AO_CONNECTOR_TOKEN] url=[$AO_MCP_LAUNCH_URL] k=[$K]\" >&2"],"env":{"K":"stored-value"}}`)
+	}))
+	defer daemon.Close()
+	var out, errOut strings.Builder
+	err := Launch(context.Background(), strings.NewReader("hello from the agent\n"), &out, &errOut, daemon.URL, "Bearer session-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "hello from the agent\n" || strings.TrimSpace(errOut.String()) != "token=[] url=[] k=[stored-value]" || authorization != "Bearer session-token" {
+		t.Fatalf("out=%q err=%q authorization=%q", out.String(), errOut.String(), authorization)
+	}
+}
+
+func TestLaunchSaysWhyTheDaemonRefused(t *testing.T) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "paper is turned off. Ask the user to open Settings, Connectors, and turn it on.", http.StatusForbidden)
+	}))
+	defer daemon.Close()
+	err := Launch(context.Background(), strings.NewReader(""), io.Discard, io.Discard, daemon.URL, "")
+	if err == nil || !strings.Contains(err.Error(), "paper is turned off") {
+		t.Fatalf("err = %v", err)
 	}
 }
