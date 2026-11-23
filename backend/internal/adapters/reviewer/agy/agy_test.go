@@ -117,6 +117,22 @@ func TestSeedOnboardingCompletePreservesExistingState(t *testing.T) {
 		t.Fatalf("seedOnboardingComplete(corrupt): %v", err)
 	}
 	assertOnboardingComplete(t, path)
+
+	// Unreadable (write-only) state is replaced with a private, readable file.
+	if err := os.Chmod(path, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedOnboardingComplete(root); err != nil {
+		t.Fatalf("seedOnboardingComplete(unreadable): %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Fatalf("onboarding state mode = %o, want 600", mode)
+	}
+	assertOnboardingComplete(t, path)
 }
 
 func assertOnboardingComplete(t *testing.T, path string) map[string]json.RawMessage {

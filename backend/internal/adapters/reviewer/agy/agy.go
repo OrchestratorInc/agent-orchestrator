@@ -158,13 +158,13 @@ func seedOnboardingComplete(configRoot string) error {
 		return err
 	}
 	path := filepath.Join(dir, "onboarding.json")
+	// Readable state is preserved; missing, unreadable, or corrupt state is
+	// replaced so it can never block the reviewer launch.
 	state := map[string]json.RawMessage{}
 	if raw, err := os.ReadFile(path); err == nil {
 		if json.Unmarshal(raw, &state) != nil || state == nil {
 			state = map[string]json.RawMessage{}
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
 	}
 	for _, key := range onboardingFlags {
 		state[key] = json.RawMessage("true")
@@ -173,7 +173,25 @@ func seedOnboardingComplete(configRoot string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, raw, 0o600)
+	// Write through a private temp file and rename it into place, so an
+	// existing file with an unusable mode is replaced rather than reused.
+	// Directory and storage failures still surface as errors.
+	tmp, err := os.CreateTemp(dir, ".onboarding-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func interactiveArgv(binary, workspacePath, promptRoot, model, prompt string) []string {
