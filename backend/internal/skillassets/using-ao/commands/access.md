@@ -13,7 +13,11 @@ ao whoami [--json]
 |---|---|---|
 | `user` | No token, on this machine | None |
 | `session` | `AO_SESSION_ID`, set in every session | None, unless a token started the session: then that token's grant |
-| `token` | `AO_TOKEN=aoa_...` | The token's grant |
+| `token` | `AO_TOKEN=aoa_...`, outside a session | The token's grant |
+
+Inside a session the caller is always the session. `AO_TOKEN` is not sent
+there, so a token exported in a shell profile does not change what sessions may
+do, and `ao whoami` says so.
 
 A grant is a preset (`read`, `operate`, `manage`) or named groups, optionally
 limited to project ids, with an optional expiry.
@@ -78,7 +82,10 @@ ao token revoke <id-or-name>
   that leaves the machine.
 - A session that a token starts carries the token's grant, and revoking the
   token refuses that session's calls too. Commands about the session itself
-  (`ao report`, `ao artifact`, `ao render`, `ao preview`, `ao browser`) keep working.
+  (`ao artifact`, `ao render`, `ao preview`, `ao browser`) keep working.
+  `ao report` reaches the orchestrator, so it is refused once the grant has ended.
+- A caller with a grant cannot create or change automations: the sessions an
+  automation starts would carry no grant. It can list and delete them.
 - With remote access on (`ao remote-host`), the token also works from another
   machine as `Authorization: Bearer aoa_...`, held to the same grant.
 

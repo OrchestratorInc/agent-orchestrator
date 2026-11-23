@@ -203,13 +203,14 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if token := strings.TrimSpace(os.Getenv(agentTokenEnv)); token != "" {
+	callerID := callerSession()
+	if token := strings.TrimSpace(os.Getenv(agentTokenEnv)); token != "" && callerID == "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	for name, value := range headers {
 		req.Header.Set(name, value)
 	}
-	if callerID := callerSession(); callerID != "" {
+	if callerID != "" {
 		req.Header.Set(caller.Header, callerID)
 	}
 	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {

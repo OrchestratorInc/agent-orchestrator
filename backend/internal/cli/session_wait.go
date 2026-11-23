@@ -24,9 +24,6 @@ type sessionWaitOptions struct {
 	after             map[string]time.Time
 }
 
-// ponytail: a new session reads as idle until its agent starts. Within
-// startupGrace of creation, idle counts only once a turn has completed. A
-// session spawned with no prompt therefore settles when the window ends.
 const startupGrace = time.Minute
 
 func settledState(session sessionDTO) string {
@@ -38,6 +35,8 @@ func settledState(session sessionDTO) string {
 			return "failed"
 		}
 		return ""
+	case session.StatusReadiness == "unavailable":
+		return "unverified"
 	case session.StatusReadiness != "" && session.StatusReadiness != "ready":
 		return ""
 	case session.Activity.State == "active":
@@ -64,8 +63,8 @@ idle state from before the message.
 
 Exit codes: 0 the agent finished its turn, exited or was terminated; 5 the
 session waits for an answer or an approval; 124 no session settled before
---timeout; 4 refused by the grant; 1 the session failed to start, or any other
-failure.`,
+--timeout; 4 refused by the grant; 1 the session failed to start, the daemon
+could not verify it after a restart, or any other failure.`,
 		Args: usageArgs(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return ctx.waitForSessions(cmd, args, opts)
@@ -130,7 +129,7 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 					state = ""
 				}
 			}
-			if before, sent := opts.after[id]; sent && (state == "idle" || state == "needs_input") && !res.Session.Activity.LastActivityAt.After(before) {
+			if before, sent := opts.after[id]; sent && (state == "idle" || state == "needs_input" || state == "unverified") && !res.Session.Activity.LastActivityAt.After(before) {
 				state = ""
 			}
 			if state == "" {
@@ -144,6 +143,8 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 				return exitError{code: exitNeedsInput, err: fmt.Errorf("%s waits for an answer", id)}
 			case "failed":
 				return fmt.Errorf("%s failed to start", id)
+			case "unverified":
+				return fmt.Errorf("the daemon could not verify %s after it restarted, so its recorded state may be stale", id)
 			}
 			return nil
 		}

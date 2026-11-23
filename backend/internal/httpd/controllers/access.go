@@ -3,7 +3,6 @@ package controllers
 import (
 	"net/http"
 	"net/url"
-	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -54,9 +53,10 @@ func (c *AccessController) whoami(w http.ResponseWriter, r *http.Request) {
 }
 
 func actionResponse(action access.Action, who access.Caller) AccessActionResponse {
-	out := AccessActionResponse{
-		ID: action.ID, Group: string(action.Group), Method: action.Method, Path: action.Path,
-		Allowed: who.Grant == nil || slices.Contains(who.Grant.Groups, action.Group),
+	out := AccessActionResponse{ID: action.ID, Group: string(action.Group), Method: action.Method, Path: action.Path, Allowed: true}
+	if who.Grant != nil {
+		refusal := who.Grant.Check(action, "", false, time.Now())
+		out.Allowed = refusal == nil || refusal.Reason == access.ReasonProject && action.Project != access.ProjectAll
 	}
 	if operation := apispec.Default().Operation(action.Method, action.Path); operation != nil {
 		out.Summary, _ = operation["summary"].(string)

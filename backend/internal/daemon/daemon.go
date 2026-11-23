@@ -955,7 +955,7 @@ func Run(buildVersion string) (retErr error) {
 	}
 	agentTokens, agentTokensErr := access.LoadRegistry(access.TokensPath(cfg.DataDir))
 	if agentTokensErr != nil {
-		log.Warn("load agent token registry failed; agent tokens must be created again", "err", agentTokensErr)
+		log.Warn("load agent token registry failed", "err", agentTokensErr)
 	}
 	if wired, ok := sessMgr.(interface {
 		SetSessionGrants(sessionmanager.SessionGrants)

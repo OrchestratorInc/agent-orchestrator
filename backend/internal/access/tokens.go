@@ -69,8 +69,9 @@ type Registry struct {
 	sessionsLost bool
 }
 
-// LoadRegistry reads the registry. A damaged token file is moved aside and
-// reported, and the registry then refuses writes only if the move failed.
+// LoadRegistry reads the registry. A token file that cannot be parsed is moved
+// aside and reported. One that cannot be read stays where it is, and the
+// registry refuses writes for this run.
 func LoadRegistry(path string) (*Registry, error) {
 	r := &Registry{path: path, tokens: map[string]Token{}, byHash: map[string]string{}, sessions: map[string]string{}}
 	bindingsErr := r.loadBindings()
@@ -78,11 +79,12 @@ func LoadRegistry(path string) (*Registry, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return r, bindingsErr
 	}
-	var file tokensFile
-	if err == nil {
-		err = json.Unmarshal(raw, &file)
-	}
 	if err != nil {
+		r.writeErr = fmt.Errorf("read agent tokens: %w", err)
+		return r, errors.Join(r.writeErr, bindingsErr)
+	}
+	var file tokensFile
+	if err := json.Unmarshal(raw, &file); err != nil {
 		cause := fmt.Errorf("read agent tokens: %w", err)
 		if moveErr := os.Rename(path, path+".bad"); moveErr != nil {
 			r.writeErr = fmt.Errorf("%w; moving it aside failed: %w", cause, moveErr)
@@ -289,9 +291,6 @@ func (r *Registry) SessionCreated(ctx context.Context, sessionID string) error {
 // Bind records that a session started under a token. The token need not exist
 // any more: the session is then refused. The session counts as bound for this
 // run even when the write fails.
-//
-// ponytail: the file of a deleted session stays, about 20 bytes each. Remove
-// it on delete if the directory grows large.
 func (r *Registry) Bind(sessionID, tokenID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

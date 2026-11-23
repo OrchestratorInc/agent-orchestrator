@@ -222,7 +222,7 @@ ao whoami
 | `ao session wait <id>...` | Block until a session stops working or asks for an answer. `--timeout` defaults to 10 minutes. |
 | `ao send --session <id> --message "..." --wait` | Send a message and block until the session answers it. |
 
-A session that a token starts keeps the token's limit for its own `ao` calls. A call above the limit is refused and never asks for approval.
+A session that a token starts keeps the token's limit for its own `ao` calls. A call above the limit is refused and never asks for approval. Inside a session, `AO_TOKEN` is not used: the session is the caller, so a token exported in your shell profile does not change the sessions the app starts.
 
 Exit codes a script can branch on: `3` unknown action, `4` refused by the limit or the token, `5` a session waits for an answer, `124` a wait timed out.
 

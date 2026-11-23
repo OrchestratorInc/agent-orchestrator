@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/access"
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 )
@@ -70,8 +71,10 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 	if _, err = runAccess(t, "token", "create", "bad", "--preset", "read", "--group", "sessions.read"); ExitCode(err) != 2 {
 		t.Errorf("--preset with --group: exit %d, want 2", ExitCode(err))
 	}
-	if _, err = runAccess(t, "token", "create", "bad", "--expires", "soon"); ExitCode(err) != 2 {
-		t.Errorf("a bad --expires: exit %d, want 2", ExitCode(err))
+	for _, span := range []string{"soon", "0d", "-1h", "300000d"} {
+		if _, err = runAccess(t, "token", "create", "bad", "--expires", span); ExitCode(err) != 2 {
+			t.Errorf("--expires %s: exit %d, want 2", span, ExitCode(err))
+		}
 	}
 
 	t.Setenv(agentTokenEnv, created.Secret)
@@ -156,7 +159,7 @@ func TestActionRequestSplitsInput(t *testing.T) {
 func TestSessionWaitExitCodes(t *testing.T) {
 	cfg := setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "")
-	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}}
+	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}, "stuck": {"idle"}}
 	polls := map[string]int{}
 	created := time.Date(2026, 11, 23, 11, 59, 50, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -186,6 +189,8 @@ func TestSessionWaitExitCodes(t *testing.T) {
 			session["statusReadiness"] = "ready"
 		case id == "gone":
 			session["statusReadiness"], session["isTerminated"] = "unavailable", true
+		case id == "stuck":
+			session["statusReadiness"] = "unavailable"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"session": session})
 	}))
@@ -229,6 +234,9 @@ func TestSessionWaitExitCodes(t *testing.T) {
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "gone"); err != nil || !strings.Contains(out, "gone: terminated after 0s") {
 		t.Errorf("a terminated session settles whatever its readiness: %q %v", out, err)
 	}
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "stuck"); ExitCode(err) != 1 || !strings.Contains(out, "stuck: unverified after 0s") {
+		t.Errorf("a session the daemon could not verify must fail at once: exit %d, out %q", ExitCode(err), out)
+	}
 	if _, _, err = executeCLI(t, deps(), "session", "wait"); ExitCode(err) != 2 {
 		t.Errorf("no session id: exit %d, want 2", ExitCode(err))
 	}
@@ -244,7 +252,7 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 		at    time.Time
 	}
 	afterSend := []observed{{"idle", idleSince}, {"idle", idleSince}, {"active", picksUp}, {"idle", finishes}}
-	sent, polls, daemonFails := false, 0, false
+	sent, polls, daemonFails, unverified := false, 0, false, false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/sessions/api-1/send":
@@ -260,8 +268,12 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 				now = afterSend[min(polls, len(afterSend)-1)]
 				polls++
 			}
+			readiness := "ready"
+			if unverified && now.at.Equal(idleSince) {
+				readiness = "unavailable"
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"session": map[string]any{
-				"id": "api-1", "status": "idle", "createdAt": created,
+				"id": "api-1", "status": "idle", "createdAt": created, "statusReadiness": readiness,
 				"activity": map[string]any{"state": now.state, "lastActivityAt": now.at},
 			}})
 		default:
@@ -292,12 +304,48 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 	if polls != len(afterSend) {
 		t.Errorf("polls after the send = %d, want %d: the idle state from before the message must not count", polls, len(afterSend))
 	}
-	sent, daemonFails = false, true
+	sent, polls, unverified = false, 0, true
+	clock = created.Add(3 * time.Hour)
+	if out, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait"); err != nil || !strings.Contains(out, "api-1: idle after 6s") {
+		t.Errorf("send --wait to a session the daemon could not verify must wait for the new turn: %q %v", out, err)
+	}
+	sent, unverified, daemonFails = false, false, true
 	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait"); ExitCode(err) != 1 || !sent ||
 		!strings.Contains(err.Error(), "the message was sent") || !strings.Contains(err.Error(), "STORAGE_BUSY") {
 		t.Errorf("a failure after delivery must say the message was sent: sent %v, exit %d, err %v", sent, ExitCode(err), err)
 	}
 	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--steer", "--recover-only", "--client-message-id", "m-1", "--wait"); ExitCode(err) != 2 {
 		t.Errorf("--wait with --recover-only: exit %d, want 2", ExitCode(err))
+	}
+}
+
+func TestTokenIsNotPresentedFromInsideASession(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var authorization, session string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization, session = r.Header.Get("Authorization"), r.Header.Get(caller.Header)
+		_ = json.NewEncoder(w).Encode(map[string]any{"kind": "session", "id": session})
+	}))
+	t.Cleanup(server.Close)
+	writeRunFileFor(t, cfg, server)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+	t.Setenv(agentTokenEnv, "aoa_secret")
+	t.Setenv(caller.ShellTerminalEnv, "")
+
+	t.Setenv("AO_SESSION_ID", "")
+	if _, note, err := executeCLI(t, deps, "whoami"); err != nil || authorization != "Bearer aoa_secret" || note != "" {
+		t.Fatalf("outside a session the token is the caller: authorization %q, note %q, err %v", authorization, note, err)
+	}
+	t.Setenv("AO_SESSION_ID", "api-1")
+	_, note, err := executeCLI(t, deps, "whoami")
+	if err != nil || authorization != "" || session != "api-1" {
+		t.Errorf("inside a session the session is the caller: authorization %q, session %q, err %v", authorization, session, err)
+	}
+	if !strings.Contains(note, agentTokenEnv+" is set but not used") {
+		t.Errorf("whoami must say that the token is not used: %q", note)
+	}
+	t.Setenv(caller.ShellTerminalEnv, "1")
+	if _, _, err := executeCLI(t, deps, "whoami"); err != nil || authorization != "Bearer aoa_secret" {
+		t.Errorf("the user's own terminal in a session presents the token: authorization %q, err %v", authorization, err)
 	}
 }

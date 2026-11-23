@@ -21,8 +21,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 )
 
-// ponytail: a project-limited grant cannot send a larger body (a spawn with big
-// inline attachments). Read only the named field from a stream if that matters.
 const maxGatedBodyBytes = 16 << 20
 
 var grantOpenRoutes = map[string]bool{

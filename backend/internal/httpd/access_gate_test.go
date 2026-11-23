@@ -364,12 +364,34 @@ func TestRealRouterGatesTokensAndServesWhoami(t *testing.T) {
 	if w := call(http.MethodGet, "/api/v1/access/actions", secret); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &actions) != nil || len(actions.Actions) != len(access.Catalog()) {
 		t.Fatalf("actions: %d %s", w.Code, w.Body)
 	}
-	for _, action := range actions.Actions {
+	for i, action := range actions.Actions {
 		if action.Summary == "" {
 			t.Errorf("%s has no summary: its route is not in the API spec", action.ID)
 		}
-		if want := strings.HasSuffix(action.ID, ".list") || strings.HasSuffix(action.ID, ".get"); action.ID == "session.spawn" && action.Allowed || want && !action.Allowed {
-			t.Errorf("%s: allowed = %v for a read grant", action.ID, action.Allowed)
+		entry := access.Catalog()[i]
+		if want := slices.Contains(grant.Groups, entry.Group) && entry.Project != access.ProjectAll; action.Allowed != want {
+			t.Errorf("%s: allowed = %v for a read grant limited to one project, want %v", action.ID, action.Allowed, want)
+		}
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	short, _ := access.NewGrant(access.PresetRead, nil, nil, past.Add(time.Hour))
+	expired, _, err := registry.Create("expired", short, past)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Bind("api-1", expired.ID); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/actions", http.NoBody)
+	req.Header.Set(caller.Header, "api-1")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &actions) != nil {
+		t.Fatalf("actions for a session: %d %s", w.Code, w.Body)
+	}
+	for _, action := range actions.Actions {
+		if action.Allowed {
+			t.Errorf("%s reads as allowed for a session whose token has expired", action.ID)
 		}
 	}
 	var detail struct {

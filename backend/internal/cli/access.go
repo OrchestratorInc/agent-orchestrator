@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,12 +86,18 @@ func newWhoamiCommand(ctx *commandContext) *cobra.Command {
 
 A caller with no agent token on this machine is the user and has no limit. A
 caller that sets AO_TOKEN is that token, held to its grant. A session that a
-token started carries the same grant.`,
+token started carries the same grant. Inside a session the caller is always
+the session, and AO_TOKEN is not used.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var who whoamiDTO
 			if err := ctx.getJSON(cmd.Context(), "access/whoami", &who); err != nil {
 				return err
+			}
+			if os.Getenv(agentTokenEnv) != "" && callerSession() != "" {
+				if _, err := fmt.Fprintln(cmd.ErrOrStderr(), agentTokenEnv+" is set but not used: inside a session, the session is the caller"); err != nil {
+					return err
+				}
 			}
 			if asJSON {
 				return writeJSON(cmd.OutOrStdout(), who)
@@ -143,6 +150,8 @@ that runs as your OS user, or what a session it starts does in its shell.`,
 	return cmd
 }
 
+const maxTokenExpiryDays = 36500
+
 func parseTokenExpiry(value string, now time.Time) (*time.Time, error) {
 	value = strings.TrimSpace(value)
 	if value == "" || value == "never" {
@@ -152,6 +161,9 @@ func parseTokenExpiry(value string, now time.Time) (*time.Time, error) {
 	if days, ok := strings.CutSuffix(value, "d"); ok {
 		var n int
 		n, err = strconv.Atoi(days)
+		if n > maxTokenExpiryDays {
+			err = errors.New("too far ahead")
+		}
 		span = time.Duration(n) * 24 * time.Hour
 	}
 	if err != nil || span <= 0 {

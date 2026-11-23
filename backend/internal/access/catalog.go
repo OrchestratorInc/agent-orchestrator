@@ -113,8 +113,6 @@ var catalog = []Action{
 	everyProject("automation.list", AutomationsRead, http.MethodGet, "/api/v1/automations"),
 	everyProject("automation.get", AutomationsRead, http.MethodGet, "/api/v1/automations/{automationId}"),
 	everyProject("automation.runs", AutomationsRead, http.MethodGet, "/api/v1/automations/{automationId}/runs"),
-	everyProject("automation.create", AutomationsManage, http.MethodPost, "/api/v1/automations"),
-	everyProject("automation.update", AutomationsManage, http.MethodPatch, "/api/v1/automations/{automationId}"),
 	everyProject("automation.delete", AutomationsManage, http.MethodDelete, "/api/v1/automations/{automationId}"),
 
 	machine("agent.list", AccountsRead, http.MethodGet, "/api/v1/agents"),

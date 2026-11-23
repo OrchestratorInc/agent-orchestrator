@@ -2,6 +2,7 @@ package access
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -357,5 +358,33 @@ func TestLoadRegistryMovesDamagedFileAside(t *testing.T) {
 	}
 	if _, _, err := registry.Create("ci", mustGrant(t, PresetRead, nil, nil, time.Time{}), testNow); err != nil {
 		t.Errorf("the registry must work after a damaged file is moved aside: %v", err)
+	}
+}
+
+func TestLoadRegistryKeepsAFileItCannotRead(t *testing.T) {
+	path := TokensPath(t.TempDir())
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := LoadRegistry(path)
+	if err == nil {
+		t.Fatal("want an error for a file that cannot be read")
+	}
+	if _, statErr := os.Stat(path + ".bad"); statErr == nil {
+		t.Error("a file that could not be read was moved aside")
+	}
+	if _, _, err := registry.Create("ci", mustGrant(t, PresetRead, nil, nil, time.Time{}), testNow); err == nil {
+		t.Error("the registry must refuse writes over a file it could not read")
+	}
+}
+
+func TestCatalogLeavesOutAutomationWrites(t *testing.T) {
+	for _, route := range [][2]string{
+		{http.MethodPost, "/api/v1/automations"},
+		{http.MethodPatch, "/api/v1/automations/{automationId}"},
+	} {
+		if action, ok := ActionForRoute(route[0], route[1]); ok {
+			t.Errorf("%s is in the catalog, but the sessions an automation starts carry no grant", action.ID)
+		}
 	}
 }
