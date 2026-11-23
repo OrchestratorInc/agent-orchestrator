@@ -41,7 +41,7 @@ function withPending(snapshot: ArtifactCommentsSnapshot, pending: readonly Pendi
 			const threadId = PENDING_ID_PREFIX + write.clientId;
 			const comment: ArtifactComment = { id: threadId, threadId, author: you, clientId: write.clientId, body: write.body, createdAt: write.at, editedAt: null, deleted: false };
 			threads = [...threads, {
-				id: threadId, version: snapshot.version, status: "open", anchor: write.anchor, createdAt: write.at,
+				id: threadId, version: snapshot.version, status: "open", anchor: write.anchor, createdAt: write.at, updatedAt: write.at,
 				resolvedBy: null, resolvedAt: null, sentToAgentAt: null, sentToAgentCount: 0, comments: [comment],
 			}];
 		} else if (write.kind === "reply") {

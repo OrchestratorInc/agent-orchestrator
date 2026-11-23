@@ -38,6 +38,7 @@ function thread(over: Partial<ArtifactCommentThread> = {}): ArtifactCommentThrea
 		status: "open",
 		anchor: { path: "body>main:1>h1:1", tag: "h1", textHash: "9f2c00000000abcd", excerpt: "Cloudflare staging setup for shared video streaming" },
 		createdAt: "2026-11-23T08:00:00Z",
+		updatedAt: "2026-11-23T09:00:00Z",
 		resolvedBy: null,
 		resolvedAt: null,
 		sentToAgentAt: null,
@@ -203,7 +204,7 @@ describe("ArtifactCommentsWorkspace", () => {
 			status: "resolved",
 			resolvedBy: null,
 			resolvedAt: "2026-11-23T10:00:00Z",
-			comments: [{ ...base.comments[0], author: null }, { ...base.comments[1], author: { id: "u-9", name: "" } }],
+			comments: [{ ...base.comments[0], author: { id: null, name: "" } }, { ...base.comments[1], author: { id: "u-9", name: "" } }],
 		})] })));
 		await userEvent.click(await screen.findByRole("button", { name: /Resolved \(1\)/ }));
 		expect(screen.getByText("Resolved by Former user")).toBeInTheDocument();
