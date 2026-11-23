@@ -264,6 +264,12 @@ func classifySubmit(submitName string, target Target) Verdict {
 	if target.FormHasPayment {
 		return paymentFormVerdict()
 	}
+	post := strings.EqualFold(target.FormMethod, "post")
+	// Setting a password changes the account whatever the button says: a
+	// "Sign in" label must not exempt it.
+	if post && target.FormHasNewPassword {
+		return Verdict{NeedsApproval: true, Category: CategoryAccount, Reason: "It submits a form that sets a new password."}
+	}
 	if containsAny(submitName, []string{"search", "filter", "sign in", "log in", "login"}) {
 		return Verdict{}
 	}
@@ -279,16 +285,11 @@ func classifySubmit(submitName string, target Target) Verdict {
 			}
 		}
 	}
-	post := strings.EqualFold(target.FormMethod, "post")
 	// A password field alone is a sign-in, not an account change: only a form
-	// that sets a new password, or whose button says it saves account
+	// that sets a new password (above), or whose button says it saves account
 	// details, changes the account.
-	if post && (target.FormHasNewPassword || containsAny(submitName, accountPhrases)) {
-		reason := "It submits a form that changes account details."
-		if target.FormHasNewPassword {
-			reason = "It submits a form that sets a new password."
-		}
-		return Verdict{NeedsApproval: true, Category: CategoryAccount, Reason: reason}
+	if post && containsAny(submitName, accountPhrases) {
+		return Verdict{NeedsApproval: true, Category: CategoryAccount, Reason: "It submits a form that changes account details."}
 	}
 	return Verdict{}
 }

@@ -265,3 +265,23 @@ func TestSiteIsTheOrigin(t *testing.T) {
 		t.Fatalf("summary = %q", got.Summary)
 	}
 }
+
+func TestNewPasswordFormAsksEvenBehindASignInLabel(t *testing.T) {
+	setsPassword := Target{Role: "button", Name: "Sign in", IsSubmit: true, FormMethod: "post",
+		FormHasPassword: true, FormHasNewPassword: true, SubmitName: "Sign in", PageURL: "https://app.example/"}
+	click := setsPassword
+	click.Action = "click"
+	enter := setsPassword
+	enter.Action, enter.Key, enter.Role, enter.Name = "press", "Enter", "textbox", "Password"
+	for _, target := range []Target{click, enter} {
+		if got := Classify(target, ModeRisky); !got.NeedsApproval || got.Category != CategoryAccount {
+			t.Errorf("%s: verdict = %+v", target.Action, got)
+		}
+	}
+	// An ordinary sign-in form (a password, no new one) stays quiet.
+	signIn := click
+	signIn.FormHasNewPassword = false
+	if got := Classify(signIn, ModeRisky); got.NeedsApproval {
+		t.Fatalf("plain sign-in asked: %+v", got)
+	}
+}
