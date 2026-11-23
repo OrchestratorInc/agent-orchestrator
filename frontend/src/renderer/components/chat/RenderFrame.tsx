@@ -1,9 +1,11 @@
 import { apiErrorException } from "../../lib/api-error-exception";
 import { ChevronRight, Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "@/components/app-icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { subscribeArtifactFileChanges } from "../../lib/artifact-file-events";
 import { aoBridge } from "../../lib/bridge";
 import {
 	clampRenderHeight,
@@ -318,6 +320,18 @@ function RenderSource({ url }: { url: string }) {
 	);
 }
 
+/**
+ * Follows a local session's artifact directory while a card's page is missing
+ * from the session's list. A chat event brings the card, not the list, so a page
+ * the agent has just reported can be missing from a list read moments earlier;
+ * the stream rereads the list as it connects and on each change.
+ */
+function FollowArtifactList({ sessionId }: { sessionId: string }) {
+	const queryClient = useQueryClient();
+	useEffect(() => subscribeArtifactFileChanges(sessionId, queryClient), [sessionId, queryClient]);
+	return null;
+}
+
 /** Opens the artifact in the session's contextual Artifacts tab. */
 function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; path: string; onOpen: () => void }) {
 	const { t } = useTranslation();
@@ -356,7 +370,8 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 		if (foldKey !== undefined) rememberFold(foldKey, next);
 	};
 	const remoteHost = useChatRemoteHost();
-	const cloud = Boolean(useChatArtifactFiles()?.cloud);
+	const chatArtifacts = useChatArtifactFiles();
+	const cloud = Boolean(chatArtifacts?.cloud);
 	const render = "render" in props ? props.render : undefined;
 	const links = useChatArtifactLinks("artifact" in props ? props.artifact.path : undefined);
 	const remoteUrl = useRemoteRenderUrl(render?.path);
@@ -399,7 +414,9 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 	// A local chat frames an artifact only from its inline origin: the daemon
 	// refuses frames on the artifact-files route the card records
 	// (ORIGIN_FORBIDDEN). A card whose page the session no longer lists, deleted
-	// since it was shown, says so rather than framing that refusal.
+	// since it was shown, says so rather than framing that refusal; one listed
+	// without an inline page (renamed to another kind of file) points to the
+	// Artifacts tab.
 	const unavailable = "artifact" in props && !cloud && !page.frameUrl;
 	const save = () => {
 		setSaving(true);
@@ -496,7 +513,10 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 					className="overflow-hidden"
 				>
 					{!frameMounted ? null : unavailable ? (
-						<p className="py-2 text-xs text-muted-foreground">{t("chat.artifact.unavailable")}</p>
+						<>
+							<p className="py-2 text-xs text-muted-foreground">{t(links ? "chat.artifact.notInline" : "chat.artifact.unavailable")}</p>
+							{!links && chatArtifacts ? <FollowArtifactList sessionId={chatArtifacts.sessionId} /> : null}
+						</>
 					) : (
 						<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
 					)}

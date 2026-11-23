@@ -3560,6 +3560,7 @@
 	"chat.artifact.openInPanel": "아티팩트 탭에서 열기",
 	"chat.artifact.label": "Artifact",
 	"chat.artifact.unavailable": "이 페이지는 더 이상 세션 아티팩트에 없습니다.",
+	"chat.artifact.notInline": "이 파일은 여기에 표시할 수 없습니다. 아티팩트 탭에서 여세요.",
 	"chat.image.numbered": "이미지 {{index}}",
 	"chat.edit.cancel": "편집 취소",
 	"chat.edit.cancelAction": "취소",

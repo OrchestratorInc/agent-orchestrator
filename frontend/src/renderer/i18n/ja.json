@@ -3560,6 +3560,7 @@
 	"chat.artifact.openInPanel": "アーティファクトタブで開く",
 	"chat.artifact.label": "Artifact",
 	"chat.artifact.unavailable": "このページはセッションのアーティファクトにもうありません。",
+	"chat.artifact.notInline": "このファイルはここに表示できません。アーティファクトタブで開いてください。",
 	"chat.image.numbered": "画像 {{index}}",
 	"chat.edit.cancel": "編集をキャンセル",
 	"chat.edit.cancelAction": "キャンセル",

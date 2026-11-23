@@ -3750,6 +3750,7 @@
 	"chat.artifact.openInPanel": "Открыть во вкладке «Артефакты»",
 	"chat.artifact.label": "Артефакт",
 	"chat.artifact.unavailable": "Этой страницы больше нет среди артефактов сеанса.",
+	"chat.artifact.notInline": "Этот файл нельзя показать здесь. Откройте его на вкладке «Артефакты».",
 	"chat.image.numbered": "Изображение {{index}}",
 	"chat.edit.cancel": "Отменить редактирование",
 	"chat.edit.cancelAction": "Отменить",

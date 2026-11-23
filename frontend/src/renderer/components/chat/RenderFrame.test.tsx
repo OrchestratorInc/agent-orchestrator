@@ -557,6 +557,51 @@ describe("artifact activity", () => {
 		}
 	});
 
+	it("points to the Artifacts tab for a listed file with no inline page", () => {
+		// A page renamed to another kind of file is still listed, but has no inline URL.
+		const renamed: SessionArtifact = { ...sessionArtifact("q3/notes.md"), kind: "markdown", inlineUrl: undefined, previousPaths: ["q3/Q3 (final).html"] };
+		renderArtifact([renamed]);
+		expect(document.querySelector("iframe")).toBeNull();
+		expect(screen.getByText("This file can't be shown here. Open it in the Artifacts tab.")).toBeInTheDocument();
+		expect(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Open in Artifacts tab" })).toBeInTheDocument();
+	});
+
+	it("rereads the session's artifacts while a card's page is missing, and frames it once listed", () => {
+		// The card arrives on the chat stream; the list can lag behind a page just reported.
+		const opened: string[] = [];
+		const closed: string[] = [];
+		class EventSourceStub {
+			constructor(readonly url: string) {
+				opened.push(url);
+			}
+			addEventListener() {}
+			close() {
+				closed.push(this.url);
+			}
+		}
+		vi.stubGlobal("EventSource", EventSourceStub);
+		try {
+			const client = new QueryClient();
+			const view = (artifacts: SessionArtifact[]) => (
+				<TooltipProvider>
+					<QueryClientProvider client={client}>
+						<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
+							<ActivityRow activity={artifactActivity} />
+						</ChatImageSourceProvider>
+					</QueryClientProvider>
+				</TooltipProvider>
+			);
+			const { rerender } = rtlRender(view([]));
+			expect(opened).toEqual(["http://127.0.0.1:3001/api/v1/sessions/proj-1/artifact-events"]);
+			rerender(view(listed));
+			expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/Q3%20\(final\)\.html#ao-theme=/);
+			// Listed, the card stops following the directory.
+			expect(closed).toEqual(opened);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	beforeEach(() => setApiBaseUrl("http://127.0.0.1:3001"));
 	afterEach(() => {
 		setApiBaseUrl(null);
@@ -644,9 +689,11 @@ describe("artifact activity", () => {
 		// The card's artifact-files route refuses frames (ORIGIN_FORBIDDEN), so an old
 		// card whose page was deleted must not frame it and show that error's JSON.
 		const unlisted = () => render(
-			<ChatImageSourceProvider sessionId="proj-1">
-				<ActivityRow activity={artifactActivity} />
-			</ChatImageSourceProvider>,
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatImageSourceProvider sessionId="proj-1">
+					<ActivityRow activity={artifactActivity} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
 		);
 		for (const show of [() => renderArtifact([]), () => renderArtifact([sessionArtifact("other.html")]), unlisted]) {
 			const { unmount } = show();
