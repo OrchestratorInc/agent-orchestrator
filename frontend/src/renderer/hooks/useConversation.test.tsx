@@ -691,6 +691,45 @@ describe("session-scoped conversation commands", () => {
 });
 
 describe("provider catalog controller epochs", () => {
+	it("normalizes omitted choices from older daemon reads and writes", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const option = { id: "model", name: "Model", type: "select" as const };
+		getMock.mockResolvedValueOnce({ data: { options: [option] }, error: undefined });
+		patchMock.mockResolvedValueOnce({ data: { options: [option] }, error: undefined });
+		const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.options).toEqual([{ ...option, choices: [] }]));
+		await act(async () => { await result.current.setOption("model", { value: "opus" }); });
+		expect(result.current.options).toEqual([{ ...option, choices: [] }]);
+	});
+
+	it("reports a queued selection when the preceding response omits choices", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const option = { id: "model", name: "Model", type: "select" as const, choices: [{ value: "a", name: "A" }, { value: "b", name: "B" }] };
+		getMock.mockResolvedValueOnce({ data: { options: [option] }, error: undefined });
+		const firstPatch = deferred<unknown>();
+		patchMock.mockReturnValueOnce(firstPatch.promise);
+		const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+		let firstWrite!: Promise<unknown>;
+		let secondOutcome!: Promise<string>;
+		act(() => {
+			firstWrite = result.current.setOption("model", { value: "b" });
+			secondOutcome = result.current.setOption("model", { value: "a" }).then(() => "resolved", (error: Error) => error.message);
+		});
+		await waitFor(() => expect(patchMock).toHaveBeenCalledOnce());
+		apiErrorMessageMock.mockImplementation((error: Error) => error.message);
+		await act(async () => {
+			firstPatch.resolve({ data: { options: [{ id: "model", name: "Model", type: "select" }] }, error: undefined });
+			await firstWrite;
+		});
+		const expectedError = "No choices are available for this option. Your selection was not sent.";
+		expect(await secondOutcome).toBe(expectedError);
+		expect(patchMock).toHaveBeenCalledOnce();
+		await waitFor(() => expect(result.current.error).toBe(expectedError));
+	});
+
 	it("discards a config mutation response from before switch admission", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
