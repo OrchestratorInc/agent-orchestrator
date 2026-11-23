@@ -594,7 +594,8 @@ var claudeModelProbeTimeout = agentcreds.DefaultTimeout
 //
 // The CLI report and the credential lookup each bound themselves, so a slow
 // `claude auth status` cannot leave the lookup an expired deadline and drop
-// the credential from the fingerprint.
+// the credential from the fingerprint. With no caller deadline, a hung CLI
+// can take its timeout plus the keychain read's timeout (up to about 6s).
 func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, env map[string]string) string {
 	resolved := (&Plugin{}).resolveProviderContext(ctx, binary, workingDir, env, claudeModelAuthReport)
 	reported := ""

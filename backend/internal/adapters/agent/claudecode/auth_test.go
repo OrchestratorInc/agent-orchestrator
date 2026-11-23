@@ -765,8 +765,14 @@ func TestProviderModelsSlowCLIReportDoesNotStarveTheProviderRequest(t *testing.T
 	claudeModelProbeTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { claudeModelProbeTimeout = previousTimeout })
 	previous := claudeModelAuthReport
-	claudeModelAuthReport = func(context.Context, string, string, map[string]string) (claudeAuthReport, bool) {
+	claudeModelAuthReport = func(ctx context.Context, _ string, _ string, _ map[string]string) (claudeAuthReport, bool) {
+		if _, hasDeadline := ctx.Deadline(); hasDeadline {
+			t.Error("CLI report inherited a shared discovery deadline that could expire before credential lookup")
+		}
 		time.Sleep(2 * claudeModelProbeTimeout)
+		if err := ctx.Err(); err != nil {
+			t.Errorf("credential lookup would receive an expired context after the CLI report: %v", err)
+		}
 		return claudeAuthReport{}, false
 	}
 	t.Cleanup(func() { claudeModelAuthReport = previous })
