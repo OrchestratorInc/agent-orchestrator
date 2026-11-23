@@ -652,6 +652,267 @@ paths:
                 $ref: "#/components/schemas/PublicArtifactShare"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+    get:
+      operationId: listArtifactShareComments
+      tags: [Artifacts]
+      description: >-
+        Returns every comment thread on one version of a share link, with
+        its comments oldest first, for a signed-in person who can open the
+        link: its owner, anyone for a public link, or, for a private link,
+        someone it is shared with by verified email, team or workspace. Any
+        other link, private or not there at all, returns 404, the same as
+        viewArtifactShare, and access is checked before anything else, so
+        someone who loses access gets 404 on their next poll. version
+        defaults to the link's current version; an older version is
+        readable, and a version the link never had returns 409
+        artifact_share_version_unknown. The response carries an ETag of
+        "r<revision>-v<version>": revision goes up on every comment write on
+        the link (new thread, reply, edit, delete, resolve, reopen, sent to
+        agent) and version when the owner republishes different bytes. Send
+        it back in If-None-Match and an unchanged list answers 304 with no
+        body. Clients poll this at most every 30 seconds while the comments
+        panel is open. Authors are named by display name only, never email.
+      parameters:
+        - name: version
+          in: query
+          required: false
+          description: The link version to read; defaults to the current one.
+          schema:
+            type: integer
+            minimum: 1
+        - name: If-None-Match
+          in: header
+          required: false
+          description: The ETag of the copy the client already has.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Every thread on the version, with its comments.
+          headers:
+            ETag:
+              description: '"r<revision>-v<version>", quoted.'
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentsSnapshot"
+        "304":
+          description: Nothing changed since the If-None-Match ETag.
+          headers:
+            ETag:
+              description: The same ETag the client sent.
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "409":
+          $ref: "#/components/responses/ArtifactShareVersionUnknown"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/threads:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+    post:
+      operationId: createArtifactShareThread
+      tags: [Artifacts]
+      description: >-
+        Starts a thread on an element of one version of a share link, with
+        its first comment, for anyone who can list the link's comments.
+        version must be one the link has had (no later than the current
+        one), so a comment made in a tab still showing an older version
+        lands on that version; otherwise 409 artifact_share_version_unknown.
+        Retrying with the same clientId returns the thread already made
+        (200) instead of making a second one. 400 invalid_request for an
+        empty or too-long body or a bad anchor; 404 when the link is not
+        there or the caller cannot open it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareThreadCreateInput"
+      responses:
+        "200":
+          description: A retry; the thread this clientId already made.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentThread"
+        "201":
+          description: The new thread, with its first comment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentThread"
+        "400":
+          $ref: "#/components/responses/ArtifactShareCommentInvalid"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        "409":
+          $ref: "#/components/responses/ArtifactShareVersionUnknown"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+      - $ref: "#/components/parameters/ArtifactShareThreadId"
+    patch:
+      operationId: setArtifactShareThreadStatus
+      tags: [Artifacts]
+      description: >-
+        Resolves or reopens a thread. Anyone who can comment on the link may.
+        Setting the status it already has changes nothing and returns the
+        thread. 404 when the link, or the thread on it, is not there or the
+        caller cannot open the link.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareThreadStatusInput"
+      responses:
+        "200":
+          description: The thread with its new status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentThread"
+        "400":
+          $ref: "#/components/responses/ArtifactShareCommentInvalid"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}/replies:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+      - $ref: "#/components/parameters/ArtifactShareThreadId"
+    post:
+      operationId: replyArtifactShareThread
+      tags: [Artifacts]
+      description: >-
+        Adds a reply to a thread, for anyone who can comment on the link, on
+        an open or resolved thread. Retrying with the same clientId returns
+        the comment already made (200). 400 invalid_request for an empty or
+        too-long body; 404 when the link, or the thread on it, is not there
+        or the caller cannot open the link.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareReplyInput"
+      responses:
+        "200":
+          description: A retry; the comment this clientId already made.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareComment"
+        "201":
+          description: The new reply.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareComment"
+        "400":
+          $ref: "#/components/responses/ArtifactShareCommentInvalid"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/threads/{threadId}/sent:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+      - $ref: "#/components/parameters/ArtifactShareThreadId"
+    post:
+      operationId: markArtifactShareThreadSent
+      tags: [Artifacts]
+      description: >-
+        Records that the link's owner sent the thread to an agent from the
+        desktop app: sets sentToAgentAt to now and adds one to
+        sentToAgentCount, so everyone sees "Sent to agent". The control
+        plane does not contact the agent; the app sends the message itself
+        and calls this only after that succeeded. Only the link's owner may
+        (403 forbidden for anyone else who can open it); 404 when the link,
+        or the thread on it, is not there or the caller cannot open the
+        link.
+      responses:
+        "200":
+          description: The thread with its sent-to-agent mark.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareCommentThread"
+        "403":
+          $ref: "#/components/responses/ArtifactShareCommentForbidden"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-shares/{linkId}/comments/{commentId}:
+    parameters:
+      - $ref: "#/components/parameters/ArtifactShareLinkId"
+      - name: commentId
+        in: path
+        required: true
+        description: The comment's ID.
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: editArtifactShareComment
+      tags: [Artifacts]
+      description: >-
+        Replaces the text of the caller's own comment and sets its editedAt.
+        403 forbidden for someone else's comment; 400 invalid_request for an
+        empty or too-long body or a deleted comment; 404 when the link, or
+        the comment on it, is not there or the caller cannot open the link.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareCommentEditInput"
+      responses:
+        "200":
+          description: The edited comment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareComment"
+        "400":
+          $ref: "#/components/responses/ArtifactShareCommentInvalid"
+        "403":
+          $ref: "#/components/responses/ArtifactShareCommentForbidden"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteArtifactShareComment
+      tags: [Artifacts]
+      description: >-
+        Deletes a comment, for its author or the link's owner (403 forbidden
+        for anyone else). When no other comment in its thread is left
+        undeleted the whole thread goes; otherwise the comment stays as a
+        deleted placeholder (deleted true, empty body) so its replies keep
+        their place. 404 when the link, or the comment on it, is not there
+        or the caller cannot open the link.
+      responses:
+        "204":
+          description: The comment, or its thread, is deleted.
+        "403":
+          $ref: "#/components/responses/ArtifactShareCommentForbidden"
+        "404":
+          $ref: "#/components/responses/ArtifactShareCommentsNotFound"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/shared-artifacts:
     get:
       operationId: listSharedArtifacts
@@ -4923,6 +5184,21 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    ArtifactShareLinkId:
+      name: linkId
+      in: path
+      required: true
+      description: The link's public ID, the slug of an ArtifactShare.
+      schema:
+        type: string
+    ArtifactShareThreadId:
+      name: threadId
+      in: path
+      required: true
+      description: The comment thread's ID.
+      schema:
+        type: string
+        format: uuid
     AgentAccountId:
       name: accountId
       in: path
@@ -5103,6 +5379,41 @@ components:
   responses:
     Error:
       description: Standard Cloud API error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentsNotFound:
+      description: >-
+        not_found: the link is not there, is unpublished, or the caller
+        cannot open it; or the thread or comment is not on this link. The
+        same answer in every case, so it never says that a private link
+        exists.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentInvalid:
+      description: >-
+        invalid_request: an empty or too-long body, a bad anchor, clientId
+        or status.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareCommentForbidden:
+      description: >-
+        forbidden: editing someone else's comment, deleting a comment that
+        is neither the caller's nor on the caller's link, or a non-owner
+        marking a thread sent to the agent.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    ArtifactShareVersionUnknown:
+      description: >-
+        artifact_share_version_unknown: the link has never had this version
+        (it is later than the current one).
       content:
         application/json:
           schema:
@@ -9730,6 +10041,234 @@ components:
             grantCount:
               type: integer
               minimum: 0
+    ArtifactShareCommentAnchor:
+      type: object
+      additionalProperties: false
+      required: [path, tag, textHash, excerpt]
+      description: >-
+        The element a thread is on, as the comment bridge on the share host
+        reports it. A version's bytes never change, so a path recorded on a
+        version always points at the same element of that version.
+      properties:
+        path:
+          type: string
+          minLength: 4
+          maxLength: 2048
+          pattern: "^body(>[A-Za-z][A-Za-z0-9-]*:[1-9][0-9]*)*$"
+          description: >-
+            A structural path from <body>: each step is the element's tag and
+            its 1-based position among element siblings with the same tag,
+            for example body>main:1>h1:1.
+        tag:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[A-Za-z][A-Za-z0-9-]*$"
+          description: The element's tag name, lowercase for HTML elements.
+        textHash:
+          type: string
+          pattern: "^[0-9a-f]{16}$"
+          description: >-
+            The first 16 hex characters of the SHA-256 of the first 200
+            characters of the element's normalised text, to check the path
+            still finds the same element.
+        excerpt:
+          type: string
+          maxLength: 120
+          description: >-
+            Up to 120 characters of the element's text, kept for the agent
+            message and diagnostics. Never shown in the comments UI.
+    ArtifactShareCommentAuthor:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      description: A commenter, by display name only; never their email.
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Their display name; empty when they set none.
+    ArtifactShareComment:
+      type: object
+      additionalProperties: false
+      required: [id, threadId, author, clientId, body, createdAt, editedAt, deleted]
+      properties:
+        id:
+          type: string
+          format: uuid
+        threadId:
+          type: string
+          format: uuid
+        author:
+          description: >-
+            Who wrote it; null once their account is deleted (shown as a
+            former user).
+          oneOf:
+            - $ref: "#/components/schemas/ArtifactShareCommentAuthor"
+            - type: "null"
+        clientId:
+          type: string
+          description: >-
+            The ID the author's client made for this comment, so it can
+            match its optimistic copy to the saved one.
+        body:
+          type: string
+          maxLength: 5000
+          description: Plain text, never HTML or Markdown; empty when deleted.
+        createdAt:
+          type: string
+          format: date-time
+        editedAt:
+          type: [string, "null"]
+          format: date-time
+        deleted:
+          type: boolean
+          description: >-
+            A deleted comment kept as a placeholder because its thread has
+            other comments.
+    ArtifactShareCommentThreadStatus:
+      type: string
+      enum: [open, resolved]
+    ArtifactShareCommentThread:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - status
+        - anchor
+        - createdAt
+        - resolvedBy
+        - resolvedAt
+        - sentToAgentAt
+        - sentToAgentCount
+        - comments
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+          description: The link version the thread was made on.
+        status:
+          $ref: "#/components/schemas/ArtifactShareCommentThreadStatus"
+        anchor:
+          $ref: "#/components/schemas/ArtifactShareCommentAnchor"
+        createdAt:
+          type: string
+          format: date-time
+        resolvedBy:
+          description: >-
+            Who resolved it, while it is resolved; null when it is open or
+            their account is deleted.
+          oneOf:
+            - $ref: "#/components/schemas/ArtifactShareCommentAuthor"
+            - type: "null"
+        resolvedAt:
+          type: [string, "null"]
+          format: date-time
+        sentToAgentAt:
+          type: [string, "null"]
+          format: date-time
+          description: When the owner last sent it to an agent from the app.
+        sentToAgentCount:
+          type: integer
+          minimum: 0
+        comments:
+          type: array
+          minItems: 1
+          description: Oldest first; the first is the thread's own comment.
+          items:
+            $ref: "#/components/schemas/ArtifactShareComment"
+    ArtifactShareCommentsSnapshot:
+      type: object
+      additionalProperties: false
+      required: [version, currentVersion, revision, you, threads]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: The version these threads are on.
+        currentVersion:
+          type: integer
+          minimum: 1
+          description: The link's current version.
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The link's comment revision, the r part of the ETag.
+        you:
+          type: object
+          additionalProperties: false
+          required: [userId, isOwner]
+          properties:
+            userId:
+              type: string
+              format: uuid
+            isOwner:
+              type: boolean
+              description: Whether the caller owns the link.
+        threads:
+          type: array
+          description: >-
+            Every thread on the version, open and resolved, oldest first.
+            Clients group and order them by element.
+          items:
+            $ref: "#/components/schemas/ArtifactShareCommentThread"
+    ArtifactShareCommentBody:
+      type: string
+      minLength: 1
+      maxLength: 5000
+      description: >-
+        Plain text of 1 to 5000 characters (Unicode code points), not only
+        whitespace.
+    ArtifactShareCommentClientId:
+      type: string
+      format: uuid
+      description: >-
+        A random ID the client makes for this one comment and reuses on
+        retries, which makes creating it idempotent per author.
+    ArtifactShareThreadCreateInput:
+      type: object
+      additionalProperties: false
+      required: [version, anchor, body, clientId]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        anchor:
+          $ref: "#/components/schemas/ArtifactShareCommentAnchor"
+        body:
+          $ref: "#/components/schemas/ArtifactShareCommentBody"
+        clientId:
+          $ref: "#/components/schemas/ArtifactShareCommentClientId"
+    ArtifactShareReplyInput:
+      type: object
+      additionalProperties: false
+      required: [body, clientId]
+      properties:
+        body:
+          $ref: "#/components/schemas/ArtifactShareCommentBody"
+        clientId:
+          $ref: "#/components/schemas/ArtifactShareCommentClientId"
+    ArtifactShareThreadStatusInput:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: "#/components/schemas/ArtifactShareCommentThreadStatus"
+    ArtifactShareCommentEditInput:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body:
+          $ref: "#/components/schemas/ArtifactShareCommentBody"
     WorkerArtifactFile:
       type: object
       additionalProperties: false
