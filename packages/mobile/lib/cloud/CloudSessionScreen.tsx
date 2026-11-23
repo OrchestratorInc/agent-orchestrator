@@ -39,7 +39,7 @@ import {
 	mobileInterfaceTransitionRecoveryMessage,
 	useInterfaceTransitionWith,
 } from "../session/useInterfaceTransition";
-import { Spinner } from "../Spinner";
+import { ConversationLoading } from "../OrchestratorLoader";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
@@ -623,7 +623,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 				{startup ? (
 					<View style={styles.startupLoading}><SessionStartupStatus startup={startup} onRetry={retryStart} retrying={busyAction === "retry"} /></View>
 				) : (
-					<View style={styles.center}><Spinner accessibilityLabel="Loading conversation" /></View>
+					<View style={styles.center}><ConversationLoading title="Orchestrating…" message={session?.kind === "orchestrator" ? undefined : title} /></View>
 				)}
 				{switchCard}
 			</View>

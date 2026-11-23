@@ -76,6 +76,7 @@ vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView:
 vi.mock("../api", () => ({ ApiError: class ApiError extends Error {}, apiRequest: vi.fn(() => new Promise(() => {})), mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
+vi.mock("../OrchestratorLoader", () => ({ ConversationLoading: () => null }));
 vi.mock("../InlineBanner", async () => ({ InlineBanner: await host("InlineBanner") }));
 vi.mock("../store", () => ({
 	useApp: () => ({

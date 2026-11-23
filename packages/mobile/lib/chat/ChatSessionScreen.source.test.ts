@@ -102,7 +102,7 @@ describe("active turn controls", () => {
 
 describe("whole-screen states", () => {
 	it("shows loading, and failures as an alert with Retry", () => {
-		expect(screenSource).toContain('<EmptyState busy title="Loading conversation…" />');
+		expect(screenSource).toContain('<ConversationLoading title="Orchestrating…" message={isOrchestrator ? undefined : title} />');
 		expect(screenSource).toContain('onPress={() => void resume()} />}');
 		expect(screenSource).toContain('<View accessibilityRole="alert" style={[styles.center, { paddingTop: headerOverlap }]}>{children}</View>');
 	});
