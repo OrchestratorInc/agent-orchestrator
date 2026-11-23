@@ -1,4 +1,5 @@
 import { hashKey, type InfiniteData, type QueryClient, type QueryKey } from "@tanstack/react-query";
+import { hasOptimisticProjectRemovals } from "../hooks/optimistic-project-removals";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import type { ConversationSnapshot } from "../types/conversation";
 import type { WorkspaceSummary } from "../types/workspace";
@@ -73,7 +74,7 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 		if (event.type !== "updated") return;
 		if (event.query.queryHash === workspacesHash) {
 			const workspaces = event.query.state.data as WorkspaceSummary[] | undefined;
-			if (event.action.type !== "success" || event.action.manual || !workspaces) return;
+			if (event.action.type !== "success" || event.action.manual || !workspaces || hasOptimisticProjectRemovals()) return;
 			const sessionIds = workspaces.flatMap((workspace) => workspace.sessions.map((session) => session.id));
 			const key = sessionIds.join("\0");
 			if (key === listed) return;
