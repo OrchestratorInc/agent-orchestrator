@@ -1,3 +1,4 @@
+import { AoError } from "../../../shared/telemetry/ao-error";
 import { ApprovalOverlay } from "../approvals/ApprovalOverlay";
 import { decideCloudApproval, listCloudApprovals } from "../approvals/cloudApprovals";
 import { APPROVAL_POLL_MS } from "../approvals/localApprovals";
@@ -507,7 +508,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		return () => { stopped = true; clearInterval(timer); };
 	}, [client, focused, approvalOrgId, sessionId]);
 	const decideBrowserApproval = useCallback((id: string, decision: ApprovalDecision) =>
-		approvalOrgId ? decideCloudApproval(client, approvalOrgId, sessionId, id, decision) : Promise.reject(new Error("No organization")), [client, approvalOrgId, sessionId]);
+		approvalOrgId ? decideCloudApproval(client, approvalOrgId, sessionId, id, decision) : Promise.reject(new AoError("BROWSER_APPROVAL_NO_ORG", "No organization")), [client, approvalOrgId, sessionId]);
 	const nameOfSession = useCallback((id: string) => {
 		const named = sessions.find((item) => item.id === id);
 		return named?.displayName?.trim() || (named ? cloudAgentLabel(named.harness) : undefined);

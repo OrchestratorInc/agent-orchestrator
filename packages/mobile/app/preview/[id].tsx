@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewNavigation } from "react-native-webview";
 import { getPreview } from "../../lib/api";
 import { AppSymbol } from "../../lib/AppSymbol";
+import { AoError } from "../../../shared/telemetry/ao-error";
 import { ApprovalOverlay } from "../../lib/approvals/ApprovalOverlay";
 import { decideApproval, subscribeApprovals } from "../../lib/approvals/localApprovals";
 import type { ApprovalCard, ApprovalDecision } from "../../lib/approvals/types";
@@ -165,7 +166,7 @@ function SessionPreviewContent() {
 	const subscribeSessionApprovals = useCallback((onChange: (cards: ApprovalCard[]) => void) =>
 		config && hostMatches ? subscribeApprovals(config, sessionID, onChange) : () => {}, [config, hostMatches, sessionID]);
 	const decideSessionApproval = useCallback((id: string, decision: ApprovalDecision) => {
-		if (!currentConfig.current) return Promise.reject(new Error("Not connected"));
+		if (!currentConfig.current) return Promise.reject(new AoError("BROWSER_APPROVAL_OFFLINE", "Not connected to this machine"));
 		return decideApproval(currentConfig.current, id, decision);
 	}, []);
 
