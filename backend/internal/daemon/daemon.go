@@ -845,9 +845,9 @@ func Run(buildVersion string) (retErr error) {
 		sessionSvc.SetGitHubRepositoryResolver(githubRepos)
 	}
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), PreferredAgent: preferredProjectAgent(agentSvc), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
-	// An existing project's empty role gets only a ranked agent, never the
-	// default-agent fallback a new project gets: saving an agent that can't
-	// launch would outlive the user installing one that can.
+	// Neither project creation nor session start saves an uninstalled fallback:
+	// when no launchable agent is found, empty roles stay empty so the next
+	// start fills them once an agent is installed.
 	sessionSvc.SetPreferredProjectAgent(preferredProjectAgent(agentSvc))
 	go projectSvc.WarmCanonicalRepos(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
@@ -1872,8 +1872,10 @@ func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarnes
 
 // preferredProjectAgent ranks this machine's installed agents from the cached readiness snapshot,
 // running display checks first when the agent AO prefers most is not confirmed
-// yet or no agent has been found installed. It returns "" when the checks have
-// found no launchable agent installed, so a guess is never saved.
+// yet or no agent has been found installed. When nothing launchable is installed,
+// cached not_installed and unauthorized entries are invalidated first so an agent
+// installed or signed in within the display TTL is seen immediately. It returns ""
+// when the checks have found no launchable agent installed, so a guess is never saved.
 func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domain.AgentHarness {
 	return func(ctx context.Context) domain.AgentHarness {
 		if agents == nil {
@@ -1884,7 +1886,18 @@ func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domai
 			return ""
 		}
 		snapshot := readiness.Agents
-		if domain.PreferredProjectAgentNeedsChecks(snapshot) || domain.PreferredInstalledProjectAgent(snapshot) == "" {
+		noInstalled := domain.PreferredInstalledProjectAgent(snapshot) == ""
+		if domain.PreferredProjectAgentNeedsChecks(snapshot) || noInstalled {
+			if noInstalled {
+				for _, item := range snapshot {
+					if item.Installation.State == domain.AgentInstallationNotInstalled {
+						agents.InvalidateAgentInstallation(item.ID)
+					} else if item.Installation.State == domain.AgentInstallationInstalled &&
+						item.Authentication.State == domain.AgentAuthenticationUnauthorized {
+						agents.InvalidateAgentAuthentication(item.ID)
+					}
+				}
+			}
 			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			checked, err := agents.EnsureReadiness(checkCtx, nil, domain.AgentReadinessPurposeDisplay)
 			cancel()

@@ -841,6 +841,52 @@ func TestManager_AddFillsMissingRoleAgentsFromPreferredAgent(t *testing.T) {
 	}
 }
 
+func TestManager_AddLeavesRolesEmptyWhenPreferredAgentFindsNone(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var rankCalls int
+	m := project.NewWithDeps(project.Deps{
+		Store:          store,
+		DefaultHarness: domain.HarnessClaudeCode,
+		PreferredAgent: func(context.Context) domain.AgentHarness {
+			rankCalls++
+			return ""
+		},
+	})
+
+	// Cheap repository validation fails before calling PreferredAgent.
+	if _, err := m.Add(ctx, project.AddInput{Path: t.TempDir(), ProjectID: ptr("not-a-repo")}); err == nil {
+		t.Fatal("expected NOT_A_GIT_REPO error")
+	}
+	if rankCalls != 0 {
+		t.Fatalf("PreferredAgent called %d times on invalid repo, want 0", rankCalls)
+	}
+
+	// Partial add keeps the explicit worker and leaves the orchestrator empty
+	// instead of persisting an uninstalled default fallback.
+	cfg := domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessAider}}
+	proj, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("partial"), Config: &cfg})
+	if err != nil {
+		t.Fatalf("Add partial: %v", err)
+	}
+	if proj.Config == nil || proj.Config.Worker.Harness != domain.HarnessAider || proj.Config.Orchestrator.Harness != "" {
+		t.Fatalf("partial config = %#v, want worker=aider orchestrator=\"\"", proj.Config)
+	}
+
+	// Bare add leaves both roles empty when no launchable agent is installed.
+	proj, err = m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("bare")})
+	if err != nil {
+		t.Fatalf("Add bare: %v", err)
+	}
+	if proj.Config != nil && (proj.Config.Worker.Harness != "" || proj.Config.Orchestrator.Harness != "") {
+		t.Fatalf("bare config = %#v, want empty role harnesses", proj.Config)
+	}
+}
+
 func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)

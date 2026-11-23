@@ -81,11 +81,29 @@ async function readProjectAgentSnapshot(queryClient: QueryClient, hostId?: strin
 	} catch {
 		return null;
 	}
-	if (preferredAgentNeedsChecks(agents) || !hasInstalledAgent(agents)) {
+	const noInstalled = !hasInstalledAgent(agents);
+	if (preferredAgentNeedsChecks(agents) || noInstalled) {
 		try {
-			const checked = await ensureAgentReadiness([], "display", hostId);
-			cacheAgentReadiness(queryClient, checked, hostId);
-			agents = mergeAgentReadiness({ agents }, checked).agents;
+			// When the daemon already checked agents and cached them as not_installed or
+			// unauthorized, display ensure returns that cache for 5 min. Force a refresh
+			// so an agent installed or signed in moments ago is picked up immediately.
+			const hasCachedFailure = noInstalled && agents.some(
+				(agent) =>
+					agent.installation.state === "not_installed" ||
+					(agent.installation.state === "installed" && agent.authentication.state === "unauthorized"),
+			);
+			if (hasCachedFailure) {
+				const { error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/agents/refresh");
+				if (!error) {
+					const refreshed = await fetchAgentReadiness(hostId);
+					cacheAgentReadiness(queryClient, refreshed, hostId);
+					agents = refreshed.agents;
+				}
+			} else {
+				const checked = await ensureAgentReadiness([], "display", hostId);
+				cacheAgentReadiness(queryClient, checked, hostId);
+				agents = mergeAgentReadiness({ agents }, checked).agents;
+			}
 		} catch {
 			// Rank what we have.
 		}

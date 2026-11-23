@@ -120,19 +120,23 @@ describe("agent readiness query", () => {
 });
 
 describe("project agent defaults", () => {
-	it("rechecks readiness before falling back when no agent can launch", async () => {
+	it("forces a daemon refresh before falling back when cached agents are not installed", async () => {
 		const none = { data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined };
 		getMock.mockResolvedValue(none);
-		postMock.mockResolvedValue(none);
+		postMock.mockResolvedValue({ data: {}, error: undefined });
 
 		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
-		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: [], purpose: "display" } });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/refresh");
 	});
 
-	it("rechecks a cached snapshot with no launchable agent and ranks what the daemon finds", async () => {
-		getMock.mockResolvedValue({ data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined });
+	it("forces a daemon refresh on a cached not_installed snapshot and ranks a newly installed agent", async () => {
+		getMock
+			.mockResolvedValueOnce({ data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined })
+			.mockResolvedValueOnce({ data: { agents: [agentReadiness("codex", "Codex")] }, error: undefined });
+		postMock.mockResolvedValueOnce({ data: {}, error: undefined });
 
 		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/refresh");
 	});
 
 	it("ranks the daemon's latest snapshot when the checks outlast the limit", async () => {

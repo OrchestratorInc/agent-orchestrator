@@ -47,8 +47,11 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 		setBusy(true);
 		setError(undefined);
 		try {
-			// With no configured agent, an older daemon or one without a ranked
-			// default can reject the start. Reuse any live orchestrator in that case.
+			// Deliberately keep clean=false when no orchestrator agent is configured:
+			// clean=true retires any live orchestrator before spawn(), which would
+			// leave the project with none if the daemon rejects with AGENT_REQUIRED
+			// (an older host or a machine with no launchable agent installed). When
+			// no live orchestrator exists, clean=false still starts a new one.
 			const id = hostId
 				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, hasOrchestratorAgent, "restore_dialog")
 				: await spawnOrchestrator(session.workspaceId, "restore_dialog", hasOrchestratorAgent);
