@@ -2970,6 +2970,73 @@ func TestACPStopResolvesQuestionAfterItIsRequested(t *testing.T) {
 	}
 }
 
+// An answer that could not be recorded puts its question back only while the
+// question's turn is still running; otherwise nothing would ever close it.
+func TestACPUnrecordedAnswerRestoresOnlyALiveTurnsQuestion(t *testing.T) {
+	interrupted := make(chan struct{})
+	close(interrupted)
+	for _, tc := range []struct {
+		name       string
+		activeTurn string
+		interrupt  *interruptAttempt
+		restored   bool
+	}{
+		{name: "turn still running", activeTurn: "turn-1", restored: true},
+		{name: "turn stopped", activeTurn: "turn-1",
+			interrupt: &interruptAttempt{turnID: "turn-1", done: interrupted}},
+		{name: "turn ended", activeTurn: ""},
+		{name: "next turn running", activeTurn: "turn-2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The host cannot be written to, so recording the answer fails, but the
+			// connection stays open and events still flow.
+			hostIn, toHost := io.Pipe()
+			_ = hostIn.CloseWithError(errors.New("host gone"))
+			fromHost, hostOut := io.Pipe()
+			t.Cleanup(func() { _ = hostOut.Close() })
+			conn := acpsdk.NewClientSideConnection(nil, toHost, fromHost)
+			parked := &parkedInput{
+				request: ports.ChatInputRequest{Mode: ports.ChatInputModeURL},
+				turnID:  "turn-1", result: make(chan ports.ChatInputResponse, 1), ready: make(chan struct{}),
+			}
+			close(parked.ready)
+			c := &conversation{
+				conn: conn, proc: &process{terminate: func() error { return nil }},
+				log:           slog.New(slog.DiscardHandler),
+				pendingInputs: map[string]*parkedInput{"q1": parked},
+				events:        make(chan ports.ChatEvent, 16),
+				activeTurn:    tc.activeTurn, interrupt: tc.interrupt,
+			}
+			if err := c.ResolveInput(context.Background(), "q1",
+				ports.ChatInputResponse{Action: ports.ChatInputActionAccept}); err == nil {
+				t.Fatal("ResolveInput succeeded without recording the answer")
+			}
+			if tc.restored {
+				if c.pendingInputs["q1"] != parked {
+					t.Fatal("question of a running turn was not put back")
+				}
+				select {
+				case event := <-c.Events():
+					t.Fatalf("unexpected event %s for a question still open", event.Kind)
+				case response := <-parked.result:
+					t.Fatalf("question still open was answered: %#v", response)
+				default:
+				}
+				return
+			}
+			if _, pending := c.pendingInputs["q1"]; pending {
+				t.Fatal("question of a stopped or ended turn was put back")
+			}
+			if event := nextEvent(t, c.Events()); event.Kind != ports.ChatEventInputResolved || event.RequestID != "q1" {
+				t.Fatalf("event = %#v, want q1 resolved", event)
+			}
+			if response := <-parked.result; response.Action != ports.ChatInputActionCancel {
+				t.Fatalf("response = %#v, want cancel", response)
+			}
+		})
+	}
+}
+
 // A question has no deadline: answers given after the approval deadline still
 // reach the agent, instead of an empty form that reads as "no answers".
 func TestACPQuestionWaitsPastTheApprovalDeadline(t *testing.T) {

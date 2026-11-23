@@ -350,14 +350,17 @@ func (c *conversation) ResolveInput(
 	eventID, err := c.recordPersistentInteraction(ctx, command)
 	if err != nil {
 		c.mu.Lock()
-		stopped := !c.closed && c.turnInterruptedLocked(request.turnID)
+		// A question whose turn was stopped or has since ended is not put back:
+		// nothing would close it, since questions have no deadline.
+		stopped := !c.closed && (c.turnInterruptedLocked(request.turnID) ||
+			(request.turnID != "" && request.turnID != c.activeTurn))
 		if !c.closed && !stopped {
 			c.pendingInputs[requestID] = request
 		}
 		c.mu.Unlock()
 		if stopped {
-			// Stop's scan ran while the answer was being recorded and could not
-			// see this question, so close it the way Stop would have.
+			// Stop's scan, or the turn's end, came while the answer was being
+			// recorded and could not see this question, so close it as Stop would.
 			c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
 			select {
 			case request.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
