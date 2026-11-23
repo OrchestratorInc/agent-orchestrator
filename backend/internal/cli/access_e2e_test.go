@@ -93,6 +93,14 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 	if _, err = runAccess(t, "call", "project.get"); ExitCode(err) != 2 {
 		t.Errorf("call with a missing path field: exit %d (%v), want 2", ExitCode(err), err)
 	}
+	for _, tc := range [][2]string{
+		{"automation.list", `null`}, {"project.get", `[]`}, {"project.get", `{"id":"api"`},
+		{"project.get", `{"id":"api"} {"id":"web"}`}, {"project.get", `{"id":"api"} }`},
+	} {
+		if _, err = runAccess(t, "call", tc[0], "--input", tc[1]); ExitCode(err) != 2 {
+			t.Errorf("call %s --input %s: exit %d (%v), want 2", tc[0], tc[1], ExitCode(err), err)
+		}
+	}
 	var apiErr apiResponseError
 	if _, err = runAccess(t, "call", "project.get", "--input", `{"id":"api"}`); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotImplemented {
 		t.Errorf("an allowed call must reach its handler (501 with no project service), got %v", err)

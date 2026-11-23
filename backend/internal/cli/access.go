@@ -443,6 +443,9 @@ the token, 1 any other failure.`,
 				if err := decoder.Decode(&fields); err != nil {
 					return usageError{fmt.Errorf("--input must be one JSON object: %w", err)}
 				}
+				if _, err := decoder.Token(); fields == nil || !errors.Is(err, io.EOF) {
+					return usageError{errors.New("--input must be one JSON object, with nothing after it")}
+				}
 			}
 			action, err := ctx.catalogAction(cmd.Context(), args[0])
 			if err != nil {
