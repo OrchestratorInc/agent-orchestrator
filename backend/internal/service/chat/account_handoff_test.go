@@ -566,6 +566,12 @@ func TestAccountHandoffKeepsTheHeldQueueWhenTheAgentStopsDuringPreflight(t *test
 		t.Fatal(err)
 	}
 	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if held, err := hh.st.ConversationQueueHeld(ctx, hh.ctrl.ConversationID()); err != nil || !held {
+		t.Fatalf("queue held = %v, %v after the agent stopped during the move", held, err)
+	}
+	if got := hh.conv.sentTexts(); len(got) != 1 {
+		t.Fatalf("provider received %v, want only the limited prompt", got)
+	}
 }
 
 func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {

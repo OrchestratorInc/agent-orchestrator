@@ -2460,18 +2460,31 @@ func (c *Controller) ArmHandoff(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	moving, err := c.accountMoveActive(ctx)
-	if err != nil {
-		return fmt.Errorf("check account move before handoff: %w", err)
-	}
 
 	c.mu.Lock()
+	if c.handoff == want {
+		c.mu.Unlock()
+		return nil
+	}
+	if c.handoff != controllerHandoffNone {
+		c.mu.Unlock()
+		return ErrControllerHandoff
+	}
+	c.mu.Unlock()
+	moving := false
+	if policy == domain.SessionInterfaceTransitionDrain {
+		var err error
+		if moving, err = c.accountMoveActive(ctx); err != nil {
+			return fmt.Errorf("check account move before handoff: %w", err)
+		}
+	}
+	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.handoff != want && c.handoff != controllerHandoffNone {
+	if c.handoff != controllerHandoffNone {
 		return ErrControllerHandoff
 	}
 	c.handoff = want
-	c.keepHeld = moving && policy == domain.SessionInterfaceTransitionDrain
+	c.keepHeld = moving
 	return nil
 }
 
