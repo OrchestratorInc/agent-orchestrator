@@ -433,8 +433,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	const browserUnavailable = sessionBrowserUnavailable(session);
-	// Approval mode belongs to this machine's daemon; Cloud sessions keep theirs.
-	const approvalSessionId = session.cloud ? undefined : session.id;
+	// Approval mode belongs to this machine's daemon; Cloud sessions keep theirs,
+	// and a panel without a session (the Settings login browser) has none.
+	const approvalSessionId = session && !session.cloud ? session.id : undefined;
 	const {
 		viewId,
 		navState,
@@ -1612,7 +1613,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 						</DropdownMenuItem>
 							</>
 						) : controlsView === "approvals" && approvalSessionId ? (
-							<ApprovalModeMenuItems sessionId={approvalSessionId} hostId={session.hostId} onBack={() => setControlsView("root")} />
+							<ApprovalModeMenuItems sessionId={approvalSessionId} hostId={session?.hostId} onBack={() => setControlsView("root")} />
 						) : controlsView === "profiles" ? (
 							<>
 								<DropdownMenuItem
@@ -1684,7 +1685,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
 								</DropdownMenuItem>
 								{approvalSessionId ? (
-									<ApprovalModeMenuRow sessionId={approvalSessionId} hostId={session.hostId} onOpen={() => setControlsView("approvals")} />
+									<ApprovalModeMenuRow sessionId={approvalSessionId} hostId={session?.hostId} onOpen={() => setControlsView("approvals")} />
 								) : null}
 								<DropdownMenuItem
 									className="gap-2"
