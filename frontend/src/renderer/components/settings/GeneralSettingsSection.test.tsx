@@ -25,6 +25,9 @@ vi.mock("../../hooks/useEditorHandoff", () => ({
 // The real rows read the cloud gate and the CLI link; this file covers retention.
 vi.mock("./DefaultCloudSandboxRow", () => ({ DefaultCloudSandboxSection: () => null }));
 vi.mock("./CliLinkSettingsRow", () => ({ CliLinkSettings: () => null }));
+// Custom themes come from the daemon; ThemeFileRow.test.tsx covers them.
+vi.mock("../../hooks/useCustomTheme", () => ({ useCustomThemes: () => ({ data: undefined }) }));
+vi.mock("./ThemeFileRow", () => ({ ThemeFileRow: () => null }));
 
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { TooltipProvider } from "../ui/tooltip";
