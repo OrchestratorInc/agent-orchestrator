@@ -41,6 +41,21 @@ describe("PR pills", () => {
 		expect(prStatusDot(pr(6, { state: "merged" })).labelKey).toBe("pr.state.merged");
 	});
 
+	it("shows each pill's number only, leaving the title to the tooltip and screen readers", () => {
+		const undo = pr(48, { title: "feat: add taskr undo" });
+		const clearDone = pr(46, { title: "Add taskr clear-done command" });
+		render(<PRPills focused={undo} onFocus={() => {}} prs={[undo, clearDone]} />);
+		const pills = within(screen.getByTestId("pr-pills"));
+		const pressed = pills.getByRole("button", { pressed: true });
+		// Visible text is the number; the card below the pills shows the full title.
+		expect(within(pressed).getByText("#48")).toBeVisible();
+		expect(within(pressed).queryByText("feat: add taskr undo")).toBeNull();
+		expect(pressed.getAttribute("title")).toContain("feat: add taskr undo");
+		// Screen readers still hear which PR each pill is.
+		expect(pressed).toHaveAccessibleName(expect.stringContaining("feat: add taskr undo"));
+		expect(pills.getByRole("button", { pressed: false })).toHaveAccessibleName(expect.stringContaining("Add taskr clear-done command"));
+	});
+
 	it("names a PR in another repository by its short name, which gives way before it can cover the earlier menu", () => {
 		const site = pr(12, { state: "merged", repo: "acme-platform/landing-site", url: "https://github.com/acme-platform/landing-site/pull/12", title: "docs: tidy the landing page" });
 		const others = [3, 4, 5].map((number) => pr(number, { state: "merged", repo: "acme-platform/control-plane", url: `https://github.com/acme-platform/control-plane/pull/${number}` }));
