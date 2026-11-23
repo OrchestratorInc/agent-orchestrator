@@ -57,6 +57,7 @@ type accountHandoff struct {
 	busy     bool
 	done     bool
 	starting bool
+	skipped  bool
 	retryAt  time.Time
 	moved    atomic.Bool
 
@@ -262,11 +263,16 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	transition, err := deps.mover.StartAccountTransition(ctx, h.sessionID, target, domain.SessionInterfaceTransitionDrain)
 	s.handoffMu.Lock()
 	h.starting = false
+	skipped := h.skipped
+	h.skipped = false
 	if err == nil {
 		h.targetAccount, h.transitionID, h.stepAt = transition.TargetAccountID, transition.ID, s.now()
 	}
 	s.handoffMu.Unlock()
 	if err != nil {
+		if skipped {
+			s.releaseAccountHandoffQueue(ctx, h)
+		}
 		return s.stayOnAccount(ctx, h, source, "could not start the move: "+err.Error())
 	}
 	return s.settleAccountHandoffMove(ctx, store, deps, h)
@@ -368,11 +374,17 @@ func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHand
 	}
 }
 
-// ReleaseQueueAfterAccountMove releases the session's held queue after a completed move the automatic handoff did not start.
+// ReleaseQueueAfterAccountMove releases the session's held queue after a completed move, unless the automatic handoff started or is starting it.
 func (s *Service) ReleaseQueueAfterAccountMove(ctx context.Context, id domain.SessionID, transitionID string) error {
 	s.handoffMu.Lock()
 	for _, h := range s.handoffs {
-		if h.sessionID == id && !h.done && (h.starting || h.transitionID == transitionID) {
+		if h.sessionID != id || h.done {
+			continue
+		}
+		if h.starting {
+			h.skipped = true
+		}
+		if h.starting || h.transitionID == transitionID {
 			s.handoffMu.Unlock()
 			return nil
 		}
