@@ -74,6 +74,23 @@ describe("effort slider host", () => {
 		expect(counts.composer).toBe(before);
 	});
 
+	// Built once the screen is idle, so the tap only reveals it.
+	it("builds the slider hidden once the screen is idle, and keeps it between opens", () => {
+		const idle: (() => void)[] = [];
+		vi.stubGlobal("requestIdleCallback", (fn: () => void) => idle.push(fn));
+		vi.stubGlobal("cancelIdleCallback", () => {});
+		const slider = createEffortSliderSwitch();
+		slider.setBottom(120);
+		const { gauge, overlay } = render(slider);
+		expect(overlay()).toBeUndefined();
+		act(() => idle.forEach((fn) => fn()));
+		expect(overlay().props.visible).toBe(false);
+		act(() => gauge().props.onPress());
+		expect(overlay().props.visible).toBe(true);
+		act(() => gauge().props.onPress());
+		expect(overlay().props.visible).toBe(false);
+	});
+
 	it("hides the slider and shows the gauge off while busy", () => {
 		const slider = createEffortSliderSwitch();
 		slider.setBottom(120);

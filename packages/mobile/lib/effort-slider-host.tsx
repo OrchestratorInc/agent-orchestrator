@@ -1,4 +1,4 @@
-import { memo, useSyncExternalStore } from "react";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import type { EffortChoice } from "./modelEffort";
 import { EffortGaugeButton } from "./effort-gauge";
 import { EffortSliderOverlay } from "./effort-slider";
@@ -35,8 +35,10 @@ type HostProps = {
 
 /**
  * The slider over the composer. Always mounted, so its closing rules (a tap
- * outside, the keyboard, back, the timeout) run while it is up; drawn only
- * while it is open and there is a height to float above. Memoised, so a
+ * outside, the keyboard, back, the timeout) run while it is up. The slider
+ * itself is built once the screen is idle after the composer appears, and
+ * then kept, hidden, between opens: opening only reveals it, where building
+ * its card, track and veil on the tap held the slider back. Memoised, so a
  * composer re-rendering under a streaming reply leaves it alone.
  */
 export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices, busy, onChoose, onRelease, onClose }: HostProps) {
@@ -44,5 +46,21 @@ export const EffortSliderHost = memo(function EffortSliderHost({ slider, choices
 	// The composer reports its height to the switch as it lays out, so a
 	// change re-renders this and not the composer.
 	const bottom = useSyncExternalStore(slider.subscribe, slider.bottom);
-	return open && bottom ? <EffortSliderOverlay choices={choices} onChoose={onChoose} onRelease={onRelease} bottom={bottom} /> : null;
+	const warm = useWarmAfterIdle();
+	return (open || warm) && bottom ? <EffortSliderOverlay visible={open} choices={choices} onChoose={onChoose} onRelease={onRelease} bottom={bottom} /> : null;
 });
+
+/**
+ * True once the screen has gone idle after mounting: building the slider
+ * then keeps it off both the tap that opens it and the screen's own first
+ * frames. Where there is no idle callback it waits for the first open.
+ */
+function useWarmAfterIdle(): boolean {
+	const [warm, setWarm] = useState(false);
+	useEffect(() => {
+		if (typeof requestIdleCallback !== "function") return;
+		const handle = requestIdleCallback(() => setWarm(true));
+		return () => cancelIdleCallback(handle);
+	}, []);
+	return warm;
+}

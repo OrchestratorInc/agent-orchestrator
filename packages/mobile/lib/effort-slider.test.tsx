@@ -195,6 +195,22 @@ describe("effort slider", () => {
 		expect(heading.findAll((node) => hostType(node) === "AppSymbol")[0].props.name).toBe("chevronForward");
 	});
 
+	// Kept mounted between opens: hidden, it takes no touch, reads to no
+	// screen reader, and leaves the screen's back swipe alone.
+	it("takes no touches and holds nothing while hidden", async () => {
+		await act(async () => { renderer = create(<EffortSliderOverlay visible={false} choices={levels("low")} onChoose={() => {}} bottom="100%" />); });
+		const overlay = () => renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0];
+		expect(overlay().props.pointerEvents).toBe("none");
+		expect(overlay().props.onTouchStart).toBeUndefined();
+		expect(overlay().props.importantForAccessibility).toBe("no-hide-descendants");
+		expect(fixtures.setOptions).not.toHaveBeenCalled();
+		await act(async () => renderer!.update(<EffortSliderOverlay visible choices={levels("low")} onChoose={() => {}} bottom="100%" />));
+		expect(overlay().props.pointerEvents).toBe("box-none");
+		expect(fixtures.setOptions.mock.calls).toEqual([[{ gestureEnabled: false }]]);
+		await act(async () => renderer!.update(<EffortSliderOverlay visible={false} choices={levels("low")} onChoose={() => {}} bottom="100%" />));
+		expect(fixtures.setOptions.mock.calls.at(-1)).toEqual([{ gestureEnabled: true }]);
+	});
+
 	it("steps a level at a time for a screen reader, and stops at the ends", async () => {
 		const { track, onChoose } = await render("xhigh");
 		expect(track().props.accessibilityRole).toBe("adjustable");

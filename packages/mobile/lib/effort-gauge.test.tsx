@@ -40,4 +40,19 @@ describe("effort gauge", () => {
 		expect(onPress).toHaveBeenCalledOnce();
 		expect(fixtures.tap).toHaveBeenCalledOnce();
 	});
+
+	// Waiting for the finger to lift read as lag on the slider opening.
+	it("toggles as a finger lands, once per touch, and still on a screen reader's activation", async () => {
+		const onPress = vi.fn();
+		await act(async () => { renderer = create(<EffortGaugeButton choices={levels("high")} open={false} onPress={onPress} disabled={false} testID="gauge" />); });
+		const button = () => hosts(renderer!.root, "Pressable")[0];
+		await act(async () => button().props.onPressIn());
+		expect(onPress).toHaveBeenCalledOnce();
+		// The same touch's press, as the finger lifts, does nothing more.
+		await act(async () => button().props.onPress());
+		expect(onPress).toHaveBeenCalledOnce();
+		// An activation with no touch before it (TalkBack, VoiceOver) toggles.
+		await act(async () => button().props.onPress());
+		expect(onPress).toHaveBeenCalledTimes(2);
+	});
 });

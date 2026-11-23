@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { Pressable, StyleSheet } from "react-native";
 import Svg, { Circle, Line, Path } from "react-native-svg";
 import { haptics } from "./haptics";
@@ -45,11 +46,21 @@ export function EffortGauge({ choices, size = iconSize.lg, color }: { choices: r
 export function EffortGaugeButton({ choices, open, onPress, disabled, testID }: { choices: readonly EffortChoice[]; open: boolean; onPress: () => void; disabled: boolean; testID: string }) {
 	const t = useTheme();
 	const selected = choices.find((choice) => choice.selected);
+	// A finger toggles the slider as it lands, not as it lifts: a tap is held
+	// for a tenth of a second or so, and waiting for the lift read as lag.
+	// onPress still runs after a touch; it is skipped then, and left to the
+	// activations that send no touch (a screen reader, a keyboard).
+	const touched = useRef(false);
 	return (
 		<Pressable
 			// Its own tap opens or closes the slider; it is no tap outside it.
 			onTouchStart={markTouchInside}
-			onPress={() => { haptics.tap(); onPress(); }}
+			onPressIn={() => { touched.current = true; haptics.tap(); onPress(); }}
+			onPress={() => {
+				if (touched.current) { touched.current = false; return; }
+				haptics.tap();
+				onPress();
+			}}
 			disabled={disabled}
 			accessibilityRole="button"
 			accessibilityLabel={`Effort, ${selected?.label ?? "default"}`}

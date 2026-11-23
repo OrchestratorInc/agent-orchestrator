@@ -2,7 +2,7 @@ import { useNavigation } from "expo-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Platform, StyleSheet, Text, View, type DimensionValue, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { AppSymbol } from "./AppSymbol";
 import { EffortSliderVeil } from "./effort-slider-veil";
 import { haptics } from "./haptics";
@@ -33,6 +33,8 @@ const DOT = 3;
 // long as the levels need, and never shorter than MIN_TRACK to drag along.
 const LEVEL_GAP = 68;
 const MIN_TRACK = 240;
+// How far below its place the slider starts as it is revealed.
+const REVEAL_LIFT = 6;
 // The blob is white in both themes, as a system switch's thumb is.
 const BLOB_FILL = "#ffffff";
 const BLOB_SHADOW = "#000000";
@@ -49,20 +51,40 @@ const BLOB_SHADOW = "#000000";
  * is iOS's alone, and setting it re-renders the screen, so Android, which has
  * no such swipe, skips it rather than hold up the slider's first frame.
  */
-export function EffortSliderOverlay({ bottom, ...props }: EffortSliderProps & { bottom: DimensionValue }) {
+export function EffortSliderOverlay({ bottom, visible = true, ...props }: EffortSliderProps & { bottom: DimensionValue; visible?: boolean }) {
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
+	const reduceMotion = useReducedMotion();
 	// A layout effect, so its hand-back runs before any the screen makes in
 	// the same commit (the chat's request card turns the swipe off as well).
 	useLayoutEffect(() => {
-		if (Platform.OS !== "ios") return;
+		if (!visible || Platform.OS !== "ios") return;
 		navigation.setOptions({ gestureEnabled: false });
 		return () => navigation.setOptions({ gestureEnabled: true });
-	}, [navigation]);
+	}, [navigation, visible]);
+	// Kept mounted while hidden (see EffortSliderHost), so opening is a reveal
+	// on the UI thread rather than building the card, track and veil: a quick
+	// fade with a small lift, in place at once with Reduce Motion.
+	const shown = useSharedValue(visible ? 1 : 0);
+	useEffect(() => {
+		const target = visible ? 1 : 0;
+		shown.value = reduceMotion ? target : withTiming(target, { duration: duration.fast, easing: Easing.out(Easing.cubic) });
+	}, [visible, reduceMotion, shown]);
+	const reveal = useAnimatedStyle(() => ({
+		opacity: shown.value,
+		transform: [{ translateY: -space.sm + (1 - shown.value) * REVEAL_LIFT }],
+	}));
 	// box-none: the overlay spans the composer's width to centre the slider,
-	// and a touch beside the card must still count as one outside it.
+	// and a touch beside the card must still count as one outside it. Hidden,
+	// it takes no touches and screen readers skip it.
 	return (
-		<Animated.View entering={FadeIn.duration(duration.base)} exiting={FadeOut.duration(duration.fast)} pointerEvents="box-none" onTouchStart={markTouchInside} style={[styles.overlay, { bottom }]}>
+		<Animated.View
+			pointerEvents={visible ? "box-none" : "none"}
+			onTouchStart={visible ? markTouchInside : undefined}
+			accessibilityElementsHidden={!visible}
+			importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
+			style={[styles.overlay, { bottom }, reveal]}
+		>
 			<EffortSliderVeil />
 			<EffortSlider {...props} />
 		</Animated.View>
@@ -180,9 +202,9 @@ const makeStyles = (t: Theme) =>
 			left: 0,
 			right: 0,
 			zIndex: 1,
-			// The gap above the composer. A margin does not move an absolutely
-			// placed view off its `bottom`, and the card sat on the composer's edge.
-			transform: [{ translateY: -space.sm }],
+			// The gap above the composer comes from the reveal's translateY: a
+			// margin does not move an absolutely placed view off its `bottom`,
+			// and the card sat on the composer's edge.
 			alignItems: "center",
 		},
 		stack: { gap: space.xs, alignItems: "center" },
