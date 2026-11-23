@@ -53,8 +53,8 @@ describe("worker row working indicator", () => {
 	// a turning Lucide loader, which only imitated the system's indicator. A
 	// starting row does not breathe, and was left with that loader standing still.
 	it("shows the desktop's lattice in a working or starting row's lead", () => {
-		expect(row).toMatch(/const working = statusShown && \(visual\.breathing \|\| glyph === "loader"\);/);
-		expect(row).toMatch(/working \? <LatticeLoader color=\{mark\} \/>/);
+		expect(row).toContain("const indicator = workerRowIndicator(session);");
+		expect(row).toContain('{indicator === "working" ? <LatticeLoader color={t.orange} />');
 		expect(spinner).toContain("<ActivityIndicator");
 	});
 

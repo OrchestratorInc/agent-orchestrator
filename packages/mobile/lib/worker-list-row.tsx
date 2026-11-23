@@ -11,8 +11,9 @@ import { Feather } from "./icons";
 import { AppSymbol } from "./AppSymbol";
 import type { AppSymbolName, PlatformSymbol } from "./symbols";
 import { statusVisual, type Theme } from "./theme";
-import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
-import { statusMarkColor } from "./statusMark";
+import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { workerRowIndicator, type WorkerRowIndicator, type WorkerRowMarker } from "./workerRowMarker";
+import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
 import { textSelectionColors } from "./textSelection";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
@@ -95,6 +96,7 @@ export const WorkerListRow = memo(
 	const row = workerRowPresentation(t, session, projectName);
 	const visual = statusVisual(t, session.status);
 	const glyph = workerStatusGlyph(session.status);
+	const indicator = workerRowIndicator(session);
 	// The subtitle is project and machine alone (no branch: a long worktree path
 	// the session's header still shows). The pull request goes in a pill on the
 	// row's end: its number, in the status's colour and glyph.
@@ -232,6 +234,7 @@ export const WorkerListRow = memo(
 					row={row}
 					visual={visual}
 					glyph={glyph}
+					indicator={indicator}
 					prLabel={prLabel}
 					updated={updated}
 					harness={session.harness}
@@ -251,6 +254,7 @@ export const WorkerListRow = memo(
 					row={row}
 					visual={visual}
 					glyph={glyph}
+					indicator={indicator}
 					prLabel={prLabel}
 					updated={updated}
 					harness={session.harness}
@@ -286,6 +290,7 @@ function WorkerRowContents({
 	row,
 	visual,
 	glyph,
+	indicator,
 	prLabel,
 	updated,
 	harness,
@@ -303,6 +308,7 @@ function WorkerRowContents({
 	row: ReturnType<typeof workerRowPresentation>;
 	visual: ReturnType<typeof statusVisual>;
 	glyph: ReturnType<typeof workerStatusGlyph>;
+	indicator: WorkerRowIndicator;
 	prLabel: string | null;
 	updated: string;
 	harness: DashboardSession["harness"];
@@ -320,21 +326,18 @@ function WorkerRowContents({
 	// One quiet line under the title: project, then the pull request, then the
 	// machine. The state is the lead mark's alone; the row's accessibility label
 	// still says it in words.
-	const statusShown = row.trailingKind === "status";
-	// The mark is a filled shape, so it takes the bright fill, not the text hue.
-	const mark = statusMarkColor(t, visual.color, useThemeState().scheme);
-	const working = statusShown && (visual.breathing || glyph === "loader");
 	return (
 		// The mark leads the title's line; the subtitle runs out to the row's edge
 		// under it rather than indented under the title, so the line has room.
 		<View style={[styles.stack, unreachable && styles.lastKnown]}>
 			<View style={styles.line}>
-				{/* The row's state at a glance: the desktop's lattice while the agent
-				    works (a still mark reads as stuck), otherwise a rounded square in the
-				    status's colour. */}
+				{/* The row's state at a glance, as the desktop sidebar draws it: the
+				    lattice while the agent works, an icon only for what asks something
+				    of the user, and a quiet ring for everything else. */}
 				<View style={styles.lead}>
-					{working ? <LatticeLoader color={mark} />
-					: <View testID="worker-status-dot" style={[styles.dot, { backgroundColor: statusShown ? mark : t.textFaint }]} />}
+					{indicator === "working" ? <LatticeLoader color={t.orange} />
+					: indicator ? <WorkerMarkerIcon marker={indicator} t={t} />
+					: <View testID="worker-status-ring" style={styles.ring} />}
 				</View>
 				<View style={styles.body}>
 					{isRenaming ? (
@@ -375,17 +378,53 @@ function WorkerRowContents({
 				<Text style={styles.meta} numberOfLines={1}>{row.project}</Text>
 				{/* The pull request right after its project: number, glyph and colour. */}
 				{prLabel ? <PullRequestPill label={prLabel} color={visual.color} glyph={pillGlyph(glyph)} t={t} styles={styles} /> : null}
-				{/* The machine as a faint chip, its glyph leading: set apart from the
-				    project and pull request without a separator. */}
+				{/* The machine, its glyph leading, after a quiet dot that sets it apart
+				    from the project and pull request. */}
+				{machine ? <Text style={styles.separator} accessibilityElementsHidden importantForAccessibility="no">·</Text> : null}
 				{machine ? (
 					<View testID="worker-machine-identity" accessibilityLabel={`Machine ${machine.name}`} style={styles.machineChip}>
-						<View style={[StyleSheet.absoluteFill, styles.machineChipWash]} />
 						<MachineAvatar testID="machine-identity-symbol" appearance={machine.appearance} size={14} color={t.textTertiary} />
 						<Text testID="machine-identity-name" style={[styles.meta, styles.shrink]} numberOfLines={1}>{machine.name}</Text>
 					</View>
 				) : null}
 			</View>
 		</View>
+	);
+}
+
+/**
+ * The desktop sidebar's marker icons. Each state has its own glyph, so colour is
+ * never the only difference: a red alert needs you now, an orange alert is a
+ * person's review next, a green pull request is ready to merge, and a merged
+ * one sits a step below, dimmed.
+ */
+const MARKER_ICONS: Record<WorkerRowMarker, { name: "alert-circle" | "git-pull-request" | "git-merge"; tone: (t: Theme) => string; opacity: number }> = {
+	attention: { name: "alert-circle", tone: (t) => t.red, opacity: 1 },
+	review: { name: "alert-circle", tone: (t) => t.orange, opacity: 1 },
+	ready: { name: "git-pull-request", tone: (t) => t.green, opacity: 1 },
+	merged: { name: "git-merge", tone: (t) => t.purple, opacity: 0.7 },
+};
+
+/**
+ * A marker that appears while the row is on screen pops in once, as on the
+ * desktop; one already there when the row mounts does not.
+ */
+function WorkerMarkerIcon({ marker, t }: { marker: WorkerRowMarker; t: Theme }) {
+	const { name, tone, opacity } = MARKER_ICONS[marker];
+	const reduceMotion = useReducedMotion();
+	const scale = useSharedValue(1);
+	const previous = useRef(marker);
+	useEffect(() => {
+		if (previous.current === marker) return;
+		previous.current = marker;
+		if (reduceMotion) return;
+		scale.value = withSequence(withTiming(0.6, { duration: 0 }), withSpring(1, { damping: 9, stiffness: 260, mass: 0.6 }));
+	}, [marker, reduceMotion, scale]);
+	const popStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+	return (
+		<Animated.View testID="worker-status-marker" style={[{ opacity }, popStyle]}>
+			<Feather name={name} size={15} color={tone(t)} strokeWidth={2.25} />
+		</Animated.View>
 	);
 }
 
@@ -471,9 +510,9 @@ const makeStyles = (t: Theme) =>
 		line: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
 		// As tall as the title's line, so the dot or spinner sits level with it.
 		lead: { alignSelf: "flex-start", width: 16, height: 22, alignItems: "center", justifyContent: "center" },
-		// A rounded square, about the lattice's size, so a row's mark keeps its shape
-		// when the agent stops working: amber when it needs you, green when done.
-		dot: { width: 11, height: 11, borderRadius: 3, borderCurve: "continuous" },
+		// The desktop's quiet dot for a row with nothing to flag, so every title
+		// still starts on the same column.
+		ring: { width: 9, height: 9, borderRadius: 4.5, borderWidth: 1.5, borderColor: t.textFaint },
 		body: { flex: 1, minWidth: 0 },
 		titleEditor: { minHeight: 22, flexDirection: "row", alignItems: "center", gap: space.xs },
 		renameInput: { fontFamily: "DMSans_500Medium", flex: 1, minWidth: 0, minHeight: 22, paddingHorizontal: space.none, paddingVertical: space.none, borderWidth: 0, backgroundColor: "transparent", color: t.textPrimary, fontSize: 16, lineHeight: 22, fontWeight: "500", letterSpacing: -0.15, includeFontPadding: false, textAlignVertical: "center" },
@@ -484,9 +523,7 @@ const makeStyles = (t: Theme) =>
 		meta: { fontFamily: "DMSans_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontVariant: ["tabular-nums"] },
 		separator: { fontFamily: "DMSans_400Regular", color: t.textFaint, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 		// Gives way before the project and pull request when the line runs short.
-		machineChip: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1, minWidth: 0, height: 20, paddingHorizontal: 7, borderRadius: 10, overflow: "hidden" },
-		// The text colour at a whisper, so the chip reads on any theme.
-		machineChipWash: { backgroundColor: t.textPrimary, opacity: 0.06 },
+		machineChip: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1, minWidth: 0 },
 		shrink: { flexShrink: 1 },
 		pill: { flexDirection: "row", alignItems: "center", gap: 3, flexShrink: 0, height: 20, paddingHorizontal: 7, borderRadius: 10 },
 		pillText: { fontFamily: "DMSans_500Medium", fontSize: 12, lineHeight: 15, fontWeight: "500", fontVariant: ["tabular-nums"] },
