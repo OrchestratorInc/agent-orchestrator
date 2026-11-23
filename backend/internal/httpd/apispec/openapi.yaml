@@ -3913,6 +3913,92 @@ paths:
       summary: Connect to the server, list its tools and save the result as the status
       tags:
       - connectors
+  /api/v1/connectors/import:
+    get:
+      operationId: listConnectorImportCandidates
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListConnectorImportCandidatesResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the tool servers found in the configuration of Claude Code, Codex
+        and Cursor, without their values
+      tags:
+      - connectors
+    post:
+      operationId: importConnectors
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportConnectorsRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListConnectorsResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Add the chosen found servers as connectors
+      tags:
+      - connectors
   /api/v1/conversations/{conversationId}/find:
     get:
       operationId: findConversation
@@ -19317,6 +19403,60 @@ components:
       required:
       - connector
       type: object
+    ConnectorImportCandidateResponse:
+      properties:
+        agent:
+          description: Claude Code, Codex or Cursor.
+          type: string
+        args:
+          items:
+            type: string
+          type: array
+        command:
+          type: string
+        envKeys:
+          items:
+            type: string
+          type: array
+        exists:
+          description: A connector with this key exists.
+          type: boolean
+        headerKeys:
+          items:
+            type: string
+          type: array
+        id:
+          type: string
+        key:
+          type: string
+        needsValue:
+          description: Names whose value the user must type, because the file holds
+            a variable or no value.
+          items:
+            type: string
+          type: array
+        projectId:
+          description: Project whose folder or settings hold the definition.
+          type: string
+        source:
+          description: File that holds the definition.
+          type: string
+        transport:
+          enum:
+          - http
+          - stdio
+          type: string
+        url:
+          description: Server address without its query string.
+          type: string
+      required:
+      - id
+      - agent
+      - source
+      - key
+      - transport
+      - exists
+      type: object
     ConnectorRequest:
       properties:
         args:
@@ -22197,6 +22337,24 @@ components:
       - hostId
       - apiVersion
       type: object
+    ImportConnectorsRequest:
+      properties:
+        ids:
+          description: Candidate IDs to add as connectors.
+          items:
+            type: string
+          maxItems: 64
+          type: array
+        values:
+          additionalProperties:
+            additionalProperties:
+              type: string
+            type: object
+          description: Values the user typed, by candidate ID and then by name.
+          type: object
+      required:
+      - ids
+      type: object
     ImportReport:
       properties:
         dryRun:
@@ -22672,6 +22830,15 @@ components:
           type: array
       required:
       - sessions
+      type: object
+    ListConnectorImportCandidatesResponse:
+      properties:
+        candidates:
+          items:
+            $ref: '#/components/schemas/ConnectorImportCandidateResponse'
+          type: array
+      required:
+      - candidates
       type: object
     ListConnectorsResponse:
       properties:

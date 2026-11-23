@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"slices"
 
 	"github.com/go-chi/chi/v5"
 
@@ -33,6 +34,8 @@ type ConnectorService interface {
 	SignOut(ctx context.Context, ref string) (connectors.Connector, error)
 	CallbackURL() string
 	SessionConnectors(ctx context.Context, sessionID string) ([]connectors.SessionConnector, error)
+	ImportCandidates(ctx context.Context) ([]connectors.ImportCandidate, error)
+	Import(ctx context.Context, ids []string, values map[string]map[string]string) ([]connectors.Connector, error)
 	ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, key string)
 }
 
@@ -45,6 +48,8 @@ type ConnectorsController struct {
 func (c *ConnectorsController) Register(r chi.Router) {
 	r.Get("/connectors", c.list)
 	r.Post("/connectors", c.create)
+	r.Get("/connectors/import", c.importCandidates)
+	r.Post("/connectors/import", c.importChosen)
 	r.Get("/connectors/{connectorId}", c.get)
 	r.Patch("/connectors/{connectorId}", c.update)
 	r.Delete("/connectors/{connectorId}", c.delete)
@@ -107,6 +112,61 @@ func (c *ConnectorsController) list(w http.ResponseWriter, r *http.Request) {
 		out = append(out, connectorResponse(&all[i]))
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListConnectorsResponse{Connectors: out})
+}
+
+func (c *ConnectorsController) importCandidates(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodGet, "/api/v1/connectors/import") {
+		return
+	}
+	found, err := c.Svc.ImportCandidates(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := make([]ConnectorImportCandidateResponse, 0, len(found))
+	for i := range found {
+		one := &found[i]
+		out = append(out, ConnectorImportCandidateResponse{
+			ID: one.ID, Agent: one.Agent, Source: one.Source, Key: one.Key, Transport: string(one.Transport),
+			URL: one.URL, Command: one.Command, Args: one.Args, EnvKeys: one.EnvKeys, HeaderKeys: one.HeaderKeys,
+			NeedsValue: one.NeedsValue, ProjectID: one.ProjectID, Exists: one.Exists,
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListConnectorImportCandidatesResponse{Candidates: out})
+}
+
+func (c *ConnectorsController) importChosen(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodPost, "/api/v1/connectors/import") {
+		return
+	}
+	var req ImportConnectorsRequest
+	if !decodeConnectorBody(w, r, &req) {
+		return
+	}
+	found, err := c.Svc.ImportCandidates(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	var transports []string
+	for i := range found {
+		if slices.Contains(req.IDs, found[i].ID) {
+			transports = append(transports, string(found[i].Transport))
+		}
+	}
+	if rejectLANCommandConnector(w, r, transports...) {
+		return
+	}
+	added, err := c.Svc.Import(r.Context(), req.IDs, req.Values)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := make([]ConnectorResponse, 0, len(added))
+	for i := range added {
+		out = append(out, connectorResponse(&added[i]))
+	}
+	envelope.WriteJSON(w, http.StatusCreated, ListConnectorsResponse{Connectors: out})
 }
 
 func (c *ConnectorsController) get(w http.ResponseWriter, r *http.Request) {

@@ -1478,6 +1478,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/connectors/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the tool servers found in the configuration of Claude Code, Codex and Cursor, without their values */
+        get: operations["listConnectorImportCandidates"];
+        put?: never;
+        /** Add the chosen found servers as connectors */
+        post: operations["importConnectors"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/{conversationId}/find": {
         parameters: {
             query?: never;
@@ -6554,6 +6572,28 @@ export interface components {
         ConnectorEnvelope: {
             connector: components["schemas"]["ConnectorResponse"];
         };
+        ConnectorImportCandidateResponse: {
+            /** @description Claude Code, Codex or Cursor. */
+            agent: string;
+            args?: string[];
+            command?: string;
+            envKeys?: string[];
+            /** @description A connector with this key exists. */
+            exists: boolean;
+            headerKeys?: string[];
+            id: string;
+            key: string;
+            /** @description Names whose value the user must type, because the file holds a variable or no value. */
+            needsValue?: string[];
+            /** @description Project whose folder or settings hold the definition. */
+            projectId?: string;
+            /** @description File that holds the definition. */
+            source: string;
+            /** @enum {string} */
+            transport: "http" | "stdio";
+            /** @description Server address without its query string. */
+            url?: string;
+        };
         ConnectorRequest: {
             /** @description Arguments of the local command. */
             args?: string[];
@@ -7670,6 +7710,16 @@ export interface components {
             apiVersion: number;
             hostId: string;
         };
+        ImportConnectorsRequest: {
+            /** @description Candidate IDs to add as connectors. */
+            ids: string[];
+            /** @description Values the user typed, by candidate ID and then by name. */
+            values?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
+        };
         ImportReport: {
             dryRun: boolean;
             notes?: string[];
@@ -7846,6 +7896,9 @@ export interface components {
         };
         ListCompactSessionUsageResponse: {
             sessions: components["schemas"]["CompactSessionUsageResponse"][];
+        };
+        ListConnectorImportCandidatesResponse: {
+            candidates: components["schemas"]["ConnectorImportCandidateResponse"][];
         };
         ListConnectorsResponse: {
             connectors: components["schemas"]["ConnectorResponse"][];
@@ -15370,6 +15423,131 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listConnectorImportCandidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListConnectorImportCandidatesResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importConnectors: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportConnectorsRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListConnectorsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Request Entity Too Large */
+            413: {
                 headers: {
                     [name: string]: unknown;
                 };

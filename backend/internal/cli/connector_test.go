@@ -172,3 +172,37 @@ func TestConnectorConnectTestAndDisconnect(t *testing.T) {
 		t.Fatalf("disconnect: %v %q", err, out)
 	}
 }
+
+func TestConnectorImportListsAndAddsFoundServers(t *testing.T) {
+	var posted connectorImportRequestDTO
+	connectorDaemon(t, func(w http.ResponseWriter, r *http.Request) bool {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/connectors/import":
+			_, _ = io.WriteString(w, `{"candidates":[{"id":"a1","agent":"Claude Code","source":"/h/.claude.json","key":"linear","transport":"http","url":"https://mcp.linear.app/mcp","exists":false},{"id":"b2","agent":"Codex","source":"/h/.codex/config.toml","key":"files","transport":"stdio","command":"npx","args":["-y","files"],"needsValue":["TOKEN"],"exists":false}]}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/connectors/import":
+			if err := json.NewDecoder(r.Body).Decode(&posted); err != nil {
+				t.Error(err)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"connectors":[{"id":"c1","key":"files","transport":"stdio","command":"npx","args":["-y","files"],"envKeys":[],"headerKeys":[],"tools":[]}]}`)
+		default:
+			return false
+		}
+		return true
+	})
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+	out, _, err := executeCLI(t, deps, "connector", "import")
+	if err != nil || !strings.Contains(out, "a1  Claude Code  linear  https://mcp.linear.app/mcp") || !strings.Contains(out, "needs --value for TOKEN") {
+		t.Fatalf("list: %v\n%s", err, out)
+	}
+	out, _, err = executeCLI(t, deps, "connector", "import", "b2", "--value", "TOKEN=t")
+	if err != nil || !strings.Contains(out, "added connector files (npx -y files)") {
+		t.Fatalf("add: %v %q", err, out)
+	}
+	if len(posted.IDs) != 1 || posted.IDs[0] != "b2" || posted.Values["b2"]["TOKEN"] != "t" {
+		t.Fatalf("posted = %+v", posted)
+	}
+	if _, _, err := executeCLI(t, deps, "connector", "import", "a1", "b2", "--value", "TOKEN=t"); err == nil || ExitCode(err) != 2 {
+		t.Fatalf("two IDs with --value: %v", err)
+	}
+}

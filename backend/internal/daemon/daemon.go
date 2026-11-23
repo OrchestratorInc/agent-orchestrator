@@ -929,6 +929,8 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetVersionTelemetry(telemetrySink)
 	// "Let agents use this computer" gives new chat sessions the computer-use tools.
 	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
+	connectorSvc := connectors.New(cfg.DataDir, fmt.Sprintf("http://%s:%d", config.LoopbackHost, cfg.Port))
+	wireConnectors(connectorSvc, store, sessMgr)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})
@@ -1330,7 +1332,7 @@ func Run(buildVersion string) (retErr error) {
 		ShellTerminals:     shellTermSvc,
 		PaneTerminals:      shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
-		Connectors:         connectors.New(cfg.DataDir, fmt.Sprintf("http://%s:%d", config.LoopbackHost, cfg.Port)),
+		Connectors:         connectorSvc,
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      sessionConversationService{Service: chatSvc, sessions: sessMgr},

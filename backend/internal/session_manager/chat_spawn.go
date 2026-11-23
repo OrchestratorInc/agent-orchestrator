@@ -302,7 +302,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		ForkHandoffNote:         forkHandoffNote,
 		ForkFirstStart:          in.cfg.Fork != nil && in.cfg.Fork.PrepareChat != nil,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
-		MCPServers:              m.aoMCPServers(ctx, in.cfg.Harness, env),
+		MCPServers:              m.sessionMCPServers(ctx, in.cfg.Harness, in.cfg.ProjectID, in.workspace.Path, env),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -646,7 +646,7 @@ func (m *Manager) resumeChatController(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
-		MCPServers:              m.aoMCPServers(ctx, rec.Harness, env),
+		MCPServers:              m.sessionMCPServers(ctx, rec.Harness, rec.ProjectID, launchPath, env),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			if preparedImportEnv {

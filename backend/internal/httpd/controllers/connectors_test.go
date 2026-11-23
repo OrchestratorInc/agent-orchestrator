@@ -2,10 +2,13 @@ package controllers_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -151,5 +154,46 @@ func TestConnectorProxyRouteIsMountedAndLoopbackOnly(t *testing.T) {
 	}
 	if !httpd.IsLANControlBlockedPathForTest("/mcp/s/ao-1/connectors/linear") {
 		t.Fatal("the agent proxy must not answer on the remote listener")
+	}
+}
+
+func TestConnectorImportRoutesHideValuesAndKeepCommandsOnLoopback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{
+		"docs":{"type":"http","url":"https://docs.example.com/mcp?key=in-the-query","headers":{"Authorization":"Bearer hidden-value"}},
+		"files":{"command":"npx","args":["-y","files"],"env":{"TOKEN":"hidden-env"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ids := func(srv *httptest.Server) map[string]string {
+		status, body := connectorCall(t, srv, http.MethodGet, "/api/v1/connectors/import", "")
+		if status != http.StatusOK || strings.Contains(body, "hidden-") || strings.Contains(body, "in-the-query") {
+			t.Fatalf("candidates = %d %s", status, body)
+		}
+		var out struct {
+			Candidates []struct{ ID, Key string }
+		}
+		if err := json.Unmarshal([]byte(body), &out); err != nil || len(out.Candidates) != 2 {
+			t.Fatalf("candidates = %s (%v)", body, err)
+		}
+		return map[string]string{out.Candidates[0].Key: out.Candidates[0].ID, out.Candidates[1].Key: out.Candidates[1].ID}
+	}
+	lan := newConnectorTestServer(t, true)
+	found := ids(lan)
+	if status, body := connectorCall(t, lan, http.MethodPost, "/api/v1/connectors/import", `{"ids":["`+found["files"]+`"]}`); status != http.StatusForbidden ||
+		!strings.Contains(body, "CONNECTOR_COMMAND_LOOPBACK_REQUIRED") {
+		t.Fatalf("command import over LAN = %d %s", status, body)
+	}
+	local := newConnectorTestServer(t, false)
+	status, body := connectorCall(t, local, http.MethodPost, "/api/v1/connectors/import", `{"ids":["`+found["files"]+`","`+found["docs"]+`"]}`)
+	if status != http.StatusCreated || !strings.Contains(body, `"key":"files"`) || !strings.Contains(body, `"key":"docs"`) || strings.Contains(body, "hidden-") {
+		t.Fatalf("import = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, local, http.MethodPost, "/api/v1/connectors/import", `{"ids":["missing"]}`); status != http.StatusNotFound {
+		t.Fatalf("unknown candidate = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, local, http.MethodPost, "/api/v1/connectors", `{"name":"import","transport":"http","url":"https://x.example/mcp"}`); status != http.StatusBadRequest {
+		t.Fatalf("reserved key = %d %s", status, body)
 	}
 }

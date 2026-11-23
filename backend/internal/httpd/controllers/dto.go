@@ -3101,6 +3101,34 @@ type ListSessionConnectorsResponse struct {
 	Connectors []SessionConnectorResponse `json:"connectors"`
 }
 
+// ConnectorImportCandidateResponse is a tool server found in the configuration of another agent. Stored values never appear.
+type ConnectorImportCandidateResponse struct {
+	ID         string   `json:"id"`
+	Agent      string   `json:"agent" description:"Claude Code, Codex or Cursor."`
+	Source     string   `json:"source" description:"File that holds the definition."`
+	Key        string   `json:"key"`
+	Transport  string   `json:"transport" enum:"http,stdio"`
+	URL        string   `json:"url,omitempty" description:"Server address without its query string."`
+	Command    string   `json:"command,omitempty"`
+	Args       []string `json:"args,omitempty"`
+	EnvKeys    []string `json:"envKeys,omitempty"`
+	HeaderKeys []string `json:"headerKeys,omitempty"`
+	NeedsValue []string `json:"needsValue,omitempty" description:"Names whose value the user must type, because the file holds a variable or no value."`
+	ProjectID  string   `json:"projectId,omitempty" description:"Project whose folder or settings hold the definition."`
+	Exists     bool     `json:"exists" description:"A connector with this key exists."`
+}
+
+// ListConnectorImportCandidatesResponse is the body of GET /api/v1/connectors/import.
+type ListConnectorImportCandidatesResponse struct {
+	Candidates []ConnectorImportCandidateResponse `json:"candidates"`
+}
+
+// ImportConnectorsRequest is the body of POST /api/v1/connectors/import.
+type ImportConnectorsRequest struct {
+	IDs    []string                     `json:"ids" maxItems:"64" description:"Candidate IDs to add as connectors."`
+	Values map[string]map[string]string `json:"values,omitempty" description:"Values the user typed, by candidate ID and then by name."`
+}
+
 // FinishConnectorSignInRequest is the body of POST /api/v1/connectors/{connectorId}/connect/finish.
 type FinishConnectorSignInRequest struct {
 	CallbackURL string `json:"callbackUrl" maxLength:"16384" description:"Address the user's browser opened after approval, pasted as it is."`

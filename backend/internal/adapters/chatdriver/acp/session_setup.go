@@ -95,6 +95,13 @@ func normalizeMCPServers(configs []ports.ChatMCPServerConfig, caps acpsdk.McpCap
 				Env: environmentVariables(config.Env),
 			}})
 		case "http":
+			if !caps.Http && config.Relay != nil && strings.TrimSpace(config.Relay.Command) != "" {
+				servers = append(servers, acpsdk.McpServer{Stdio: &acpsdk.McpServerStdio{
+					Name: name, Command: config.Relay.Command, Args: append([]string{}, config.Relay.Args...),
+					Env: environmentVariables(config.Relay.Env),
+				}})
+				continue
+			}
 			if !caps.Http {
 				return nil, fmt.Errorf("ACP agent does not support HTTP MCP server %q", name)
 			}

@@ -55,6 +55,29 @@ type connectorSignInDTO struct {
 	Connector        connectorDTO `json:"connector"`
 }
 
+type connectorImportCandidateDTO struct {
+	ID         string   `json:"id"`
+	Agent      string   `json:"agent"`
+	Source     string   `json:"source"`
+	Key        string   `json:"key"`
+	Transport  string   `json:"transport"`
+	URL        string   `json:"url,omitempty"`
+	Command    string   `json:"command,omitempty"`
+	Args       []string `json:"args,omitempty"`
+	NeedsValue []string `json:"needsValue,omitempty"`
+	ProjectID  string   `json:"projectId,omitempty"`
+	Exists     bool     `json:"exists"`
+}
+
+type connectorImportListDTO struct {
+	Candidates []connectorImportCandidateDTO `json:"candidates"`
+}
+
+type connectorImportRequestDTO struct {
+	IDs    []string                     `json:"ids"`
+	Values map[string]map[string]string `json:"values,omitempty"`
+}
+
 type connectorRequestDTO struct {
 	Key       string            `json:"key,omitempty"`
 	Name      string            `json:"name,omitempty"`
@@ -86,6 +109,7 @@ func newConnectorCommand(ctx *commandContext) *cobra.Command {
 		newConnectorConnectCommand(ctx),
 		newConnectorDisconnectCommand(ctx),
 		newConnectorTestCommand(ctx),
+		newConnectorImportCommand(ctx),
 	)
 	return cmd
 }
@@ -330,6 +354,74 @@ func printConnectorStatus(out io.Writer, c *connectorDTO) error {
 		_, err := fmt.Fprintf(out, "%s: %s\n", c.Key, c.Status)
 		return err
 	}
+}
+
+func newConnectorImportCommand(ctx *commandContext) *cobra.Command {
+	var jsonOutput bool
+	var values []string
+	cmd := &cobra.Command{
+		Use:   "import [id...]",
+		Short: "List the MCP servers of Claude Code, Codex and Cursor, or add the ones you name",
+		Long: "Without an ID, lists the MCP servers found in the configuration of Claude Code, Codex and Cursor.\n" +
+			"With IDs from that list, adds those servers as connectors. The files of the agents do not change.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			typed, err := keyValues("--value", values)
+			if err != nil {
+				return err
+			}
+			if len(args) == 0 {
+				if typed != nil {
+					return usageError{fmt.Errorf("--value needs the ID of one server")}
+				}
+				var response connectorImportListDTO
+				if err := ctx.getJSON(cmd.Context(), "connectors/import", &response); err != nil {
+					return err
+				}
+				if jsonOutput {
+					return writeJSON(cmd.OutOrStdout(), response)
+				}
+				writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+				_, _ = fmt.Fprintln(writer, "ID\tAGENT\tKEY\tTARGET\tNOTE")
+				for i := range response.Candidates {
+					c := &response.Candidates[i]
+					note := ""
+					switch {
+					case c.Exists:
+						note = "a connector has this key"
+					case len(c.NeedsValue) > 0:
+						note = "needs --value for " + strings.Join(c.NeedsValue, ", ")
+					}
+					target := connectorTarget(&connectorDTO{Transport: c.Transport, URL: c.URL, Command: c.Command, Args: c.Args})
+					_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", c.ID, c.Agent, c.Key, target, note)
+				}
+				return writer.Flush()
+			}
+			body := connectorImportRequestDTO{IDs: args}
+			if typed != nil {
+				if len(args) != 1 {
+					return usageError{fmt.Errorf("--value needs the ID of one server")}
+				}
+				body.Values = map[string]map[string]string{args[0]: typed}
+			}
+			var response connectorListDTO
+			if err := ctx.postJSON(cmd.Context(), "connectors/import", body, &response); err != nil {
+				return err
+			}
+			if jsonOutput {
+				return writeJSON(cmd.OutOrStdout(), response)
+			}
+			for i := range response.Connectors {
+				c := &response.Connectors[i]
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "added connector %s (%s). New sessions get its tools.\n", c.Key, connectorTarget(c)); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringArrayVar(&values, "value", nil, "Value the file does not hold, as NAME=value; repeat for more")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON")
+	return cmd
 }
 
 func connectorTarget(c *connectorDTO) string {

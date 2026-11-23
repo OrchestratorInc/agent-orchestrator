@@ -5313,6 +5313,28 @@ func TestNormalizeMCPServersStillGatesOptionalTransports(t *testing.T) {
 	}
 }
 
+func TestNormalizeMCPServersUsesTheRelayWhenTheAgentHasNoHTTPSupport(t *testing.T) {
+	config := ports.ChatMCPServerConfig{
+		Name: "linear", Type: "http", URL: "http://127.0.0.1:3011/mcp/s/mer-1/connectors/linear",
+		Headers: map[string]string{"Authorization": "Bearer t"},
+		Relay: &ports.ChatMCPServerConfig{
+			Name: "linear", Type: "stdio", Command: "/opt/ao-mcp",
+			Env: map[string]string{"AO_MCP_RELAY_URL": "http://127.0.0.1:3011/mcp/s/mer-1/connectors/linear"},
+		},
+	}
+	servers, err := normalizeMCPServers([]ports.ChatMCPServerConfig{config}, acpsdk.McpCapabilities{})
+	if err != nil || len(servers) != 1 || servers[0].Stdio == nil || servers[0].Http != nil {
+		t.Fatalf("without HTTP support: %+v, %v", servers, err)
+	}
+	if stdio := servers[0].Stdio; stdio.Name != "linear" || stdio.Command != "/opt/ao-mcp" || stdio.Args == nil || len(stdio.Env) != 1 {
+		t.Fatalf("relay server = %+v", stdio)
+	}
+	servers, err = normalizeMCPServers([]ports.ChatMCPServerConfig{config}, acpsdk.McpCapabilities{Http: true})
+	if err != nil || len(servers) != 1 || servers[0].Http == nil || servers[0].Stdio != nil {
+		t.Fatalf("with HTTP support: %+v, %v", servers, err)
+	}
+}
+
 // TestNormalizeMCPServersEmptyReturnsEmptySlice verifies that empty configs
 // return a non-nil empty slice (not nil) so the SDK serializes it correctly.
 func TestNormalizeMCPServersEmptyReturnsEmptySlice(t *testing.T) {
