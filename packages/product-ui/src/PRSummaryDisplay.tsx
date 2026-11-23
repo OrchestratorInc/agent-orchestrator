@@ -489,6 +489,7 @@ function StatusRow({
 					<PRCardStatusLink externalLink={ExternalLink} status={status} />
 				)}
 			</div>
+			{tally ? <ChecksBar tally={tally} /> : null}
 			{status.detail || (status.key === "review" && reviewDetailsAction) ? (
 				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", dot ? "pl-4" : plain && rowChildClass)}>
 					{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
@@ -552,27 +553,59 @@ export function CheckStateGlyph({ className, size = "xs", state }: { className?:
 }
 
 /**
- * "Checks", then how many checks stand at each state, worst first. The first
- * count leads in full weight; the rest are quieter.
+ * "Checks", then the count that matters most: the worst state some check is in.
+ * The bar under the row shows the rest; screen readers hear every count.
  */
 function ChecksTally({ tally }: { tally: PRChecksTally }) {
+	const [lead, ...rest] = tally.counts;
 	return (
 		<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-checks-tally">
 			<span className={rowLabelClass}>{tally.title}</span>
-			{tally.counts.map((count, index) => (
+			{lead ? (
 				<span
-					className={`${rowStateClass} ${cn(
-						"inline-flex items-center gap-1 tabular-nums",
-						index === 0 ? (count.state === "failed" ? "text-error" : "text-foreground") : "font-normal text-muted-foreground",
-					)}`}
-					data-state={count.state}
-					key={count.state}
+					className={`${rowStateClass} ${cn("inline-flex items-center gap-1 tabular-nums", lead.state === "failed" ? "text-error" : "font-normal text-muted-foreground")}`}
+					data-state={lead.state}
 				>
-					<CheckStateGlyph state={count.state} />
-					{count.label}
+					<CheckStateGlyph state={lead.state} />
+					{lead.label}
 				</span>
+			) : null}
+			{rest.map((count) => (
+				<span className="sr-only" data-state={count.state} key={count.state}>, {count.label}</span>
 			))}
 		</span>
+	);
+}
+
+/** The bar's order: done on the left, what still needs a look on the right. */
+const barOrder: PRCheckState[] = ["passed", "skipped", "pending", "running", "failed"];
+const barClass: Record<PRCheckState, string> = {
+	passed: "bg-success",
+	skipped: "bg-passive/50",
+	pending: "bg-muted-foreground/45",
+	running: "bg-status-working motion-safe:animate-status-pulse",
+	failed: "bg-error",
+};
+
+/**
+ * Every check as one thin bar, a segment per state sized by its count, like
+ * GitHub's merge box. Its tooltip spells out the counts; the row's text
+ * already reads them to screen readers.
+ */
+function ChecksBar({ tally }: { tally: PRChecksTally }) {
+	const segments = barOrder.map((state) => tally.counts.find((count) => count.state === state)).filter((count): count is PRChecksTally["counts"][number] => Boolean(count));
+	if (segments.length === 0) return null;
+	return (
+		<div
+			aria-hidden="true"
+			className="mt-1.5 flex h-1.5 min-w-0 gap-0.5 overflow-hidden rounded-full"
+			data-testid="pr-checks-bar"
+			title={tally.counts.map((count) => count.label).join(" · ")}
+		>
+			{segments.map((count) => (
+				<span className={cn("h-full min-w-1 first:rounded-l-full last:rounded-r-full", barClass[count.state])} data-state={count.state} key={count.state} style={{ flexGrow: count.count, flexBasis: 0 }} />
+			))}
+		</div>
 	);
 }
 

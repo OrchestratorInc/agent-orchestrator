@@ -7513,8 +7513,17 @@ describe("SessionInspector branch summary", () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [checked] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [checked]));
 
-    // The row says the counts, worst first; a cancelled run counts as failed.
-    expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks2 failing1 running1 pending2 passed1 skipped");
+    // The row leads with the worst count, and screen readers hear the rest, worst first; a cancelled run counts as failed.
+    const tally = await screen.findByTestId("pr-checks-tally");
+    expect(tally).toHaveTextContent("Checks2 failing, 1 running, 1 pending, 2 passed, 1 skipped");
+    expect([...tally.querySelectorAll("[data-state]:not(.sr-only)")].map((node) => node.textContent)).toEqual(["2 failing"]);
+    // The bar under it shows every state, done on the left, sized by its count.
+    const bar = screen.getByTestId("pr-checks-bar");
+    expect([...bar.children].map((segment) => [segment.getAttribute("data-state"), (segment as HTMLElement).style.flexGrow])).toEqual([
+      ["passed", "2"], ["skipped", "1"], ["pending", "1"], ["running", "1"], ["failed", "2"],
+    ]);
+    expect(bar).toHaveAttribute("title", "2 failing · 1 running · 1 pending · 2 passed · 1 skipped");
+    expect(bar).toHaveAttribute("aria-hidden", "true");
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     const checks = await screen.findByTestId("pr-checks");
     const groups = [...checks.querySelectorAll("section")].map((group) => [group.getAttribute("data-state"), [...group.querySelectorAll("li")].map((item) => item.textContent)]);
@@ -7614,7 +7623,8 @@ describe("SessionInspector branch summary", () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [passing] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [passing]));
 
-    expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks1 passed1 skipped");
+    expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks1 passed, 1 skipped");
+    expect([...screen.getByTestId("pr-checks-bar").children].map((segment) => segment.getAttribute("data-state"))).toEqual(["passed", "skipped"]);
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     expect(await screen.findByText("Conflicts")).toBeInTheDocument();
     const checks = within(screen.getByTestId("pr-checks"));
