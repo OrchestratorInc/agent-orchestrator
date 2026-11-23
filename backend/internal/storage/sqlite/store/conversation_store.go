@@ -1957,6 +1957,7 @@ func (s *Store) CleanupOwnedControllerWork(
 	return s.cleanupControllerWork(ctx, session, conversationID, generation, now, false)
 }
 
+// CleanupOwnedControllerWorkKeepingQueue is CleanupOwnedControllerWork without failing queued turns.
 func (s *Store) CleanupOwnedControllerWorkKeepingQueue(
 	ctx context.Context,
 	session domain.SessionID,
