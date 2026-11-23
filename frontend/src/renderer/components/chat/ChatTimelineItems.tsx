@@ -653,8 +653,14 @@ export function TurnOutcome({
 	onRollback,
 	rollbackDisabled,
 	timestamp,
+	failedAt,
+	failureKey,
 }: {
 	state: "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
+	/** When the turn ended; a failure is counted only when it just happened. */
+	failedAt?: string;
+	/** The turn's id, so one failure is counted once however often it renders. */
+	failureKey?: string;
 	error?: string;
 	failureCode?: ConversationTurn["failureCode"];
 	onConfigure?: () => void;
@@ -662,7 +668,7 @@ export function TurnOutcome({
 	login?: TurnOutcomeLogin;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
-	useFreshFailureReport(state, timestamp, failureCode);
+	useFreshFailureReport(state, failedAt, failureKey, failureCode);
 	// A usage limit has its own notice, whose resume action stands in for Retry. The
 	// turn still closes on the shared row, so copy and undo stay where they always are.
 	if (state === "failed" && usageLimit) {
@@ -826,16 +832,16 @@ const reportedFailures = new Set<string>();
 const FRESH_FAILURE_MS = 2 * 60_000;
 
 /** Counts a failed turn as an error shown, once, when it failed moments ago (not one read from history). */
-function useFreshFailureReport(state: string, timestamp: string | undefined, failureCode: string | undefined) {
+function useFreshFailureReport(state: string, failedAt: string | undefined, failureKey: string | undefined, failureCode: string | undefined) {
 	useEffect(() => {
-		if (state !== "failed" || !timestamp) return;
-		const at = Date.parse(timestamp);
+		if (state !== "failed" || !failedAt) return;
+		const at = Date.parse(failedAt);
 		if (!Number.isFinite(at) || Date.now() - at > FRESH_FAILURE_MS) return;
-		const key = `${timestamp}|${failureCode ?? ""}`;
+		const key = `${failureKey ?? failedAt}|${failureCode ?? ""}`;
 		if (reportedFailures.has(key)) return;
 		reportedFailures.add(key);
 		uiUsage.errorShown("chat_turn_failed", "inline", "chat", failureCode ? failureCode.toUpperCase() : undefined);
-	}, [failureCode, state, timestamp]);
+	}, [failedAt, failureCode, failureKey, state]);
 }
 
 function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {

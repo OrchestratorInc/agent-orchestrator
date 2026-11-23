@@ -1607,6 +1607,12 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [draftSessionId, draftScope, persistComposerText]);
 
 	const draftCaretRef = useRef<number | undefined>(undefined);
+	// Whether the draft being typed reached DISCARDED_DRAFT_MIN_CHARS, so erasing
+	// it a character at a time still counts as one discard.
+	const draftWorthDiscarding = useRef(false);
+	useEffect(() => {
+		draftWorthDiscarding.current = false;
+	}, [draftScope]);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
@@ -1614,9 +1620,15 @@ export const ChatComposer = memo(function ChatComposer({
 		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
-		// A real draft erased by hand (not cleared by a send) was given up on.
-		if (!snapshot.text.trim() && previousText.trim().length >= DISCARDED_DRAFT_MIN_CHARS && !submitInFlight.current && !historyBrowse.current && surfaceOf(document.activeElement) === "composer") {
-			uiUsage.draftDiscarded();
+		// A real draft erased by hand (not cleared by a send, not a recalled message) was given up on.
+		const trimmed = snapshot.text.trim();
+		if (submitInFlight.current || historyBrowse.current) {
+			draftWorthDiscarding.current = false;
+		} else if (trimmed.length >= DISCARDED_DRAFT_MIN_CHARS) {
+			draftWorthDiscarding.current = true;
+		} else if (!trimmed && previousText.trim() && draftWorthDiscarding.current) {
+			draftWorthDiscarding.current = false;
+			if (surfaceOf(document.activeElement) === "composer") uiUsage.draftDiscarded();
 		}
 		onQueuedDraftChange?.(snapshot.text);
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
@@ -1748,6 +1760,8 @@ export const ChatComposer = memo(function ChatComposer({
 			const matches = suggestionsFor(currentTrigger);
 			const chosen = matches[Math.min(highlightedRef.current, matches.length - 1)];
 			if (!chosen) return undefined;
+			if (currentTrigger.kind === "skill") markSlashPick();
+			else markMentionPick();
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
@@ -1761,16 +1775,18 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return chosen.value;
 		},
-		[modelMenuUsable, onCompact, openModelMenu, skills, suggestionsFor],
+		[markMentionPick, markSlashPick, modelMenuUsable, onCompact, openModelMenu, skills, suggestionsFor],
 	);
 
 	function submit(event?: FormEvent, forceSteer?: boolean, input?: SendInput): Promise<void> {
 		event?.preventDefault();
 		if (sendBlockedReason) return Promise.resolve();
 		// Only a person's Enter or click on a new message is counted: never a held
-		// draft sent later, a repeat Enter on the message already sending, or /model.
+		// draft sent later, a repeat Enter on the message already sending, /model or /compact.
 		const countSend = () => {
-			if (input && !typingLocked && (textRef.current.trim() || fileAttachments.attachments.length > 0)) {
+			const draft = textRef.current.trim();
+			if (draft === "/compact" && onCompact) return;
+			if (input && !typingLocked && (draft || fileAttachments.attachments.length > 0)) {
 				uiUsage.messageSent(input, forceSteer && canSteerDraft ? "steer" : queuesDraft ? "queue" : "send", fileAttachments.attachments.length > 0);
 			}
 		};
@@ -2424,6 +2440,8 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.setText(index < 0 ? browse.draft : browse.entries[index]!, "start");
 		const snapshot = editor.current?.getSnapshot();
 		historyBrowse.current = index < 0 || !snapshot ? null : { ...browse, index, shown: snapshot.text };
+		// Stepping back to the saved draft is not erasing anything.
+		draftWorthDiscarding.current = false;
 		if (snapshot) onEditorChange(snapshot);
 		return true;
 	}

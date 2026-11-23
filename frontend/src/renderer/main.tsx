@@ -50,6 +50,7 @@ void aoBridge.telemetry.getAnalyticsOptOut().then((optedOut) => {
 	if (!optedOut) return;
 	void applyAnalyticsOptOut(true);
 	applyPerformanceOptOut(true);
+	discardUiUsage();
 }).catch(() => undefined);
 aoBridge.telemetry.onAnalyticsOptOut((optedOut) => {
 	useAnalyticsOptOutStore.setState({ optedOut, loaded: true });

@@ -156,6 +156,25 @@ export const ERROR_KINDS = [
 ] as const;
 export type ErrorKind = (typeof ERROR_KINDS)[number];
 
+/**
+ * The only error codes `ao.ui.error_shown` may carry: the daemon's failure
+ * codes and a chat turn's known provider failures, upper-cased. Anything else
+ * is dropped, however it is spelled.
+ */
+export const ERROR_CODES = [
+	"NOT_CONFIGURED",
+	"DAEMON_UNREACHABLE",
+	"BINARY_MISSING",
+	"SPAWN_FAILED",
+	"EXITED",
+	"PORT_UNCONFIRMED",
+	"NOT_READY",
+	"IDENTITY_MISMATCH",
+	"DATADIR_UNWRITABLE",
+	"AUTH_REQUIRED",
+	"PROVIDER_KEY_MISSING",
+] as const;
+
 /** Where an attachment came from. */
 export const ATTACHMENT_SOURCES = ["paste", "drop", "picker"] as const;
 export type AttachmentSource = (typeof ATTACHMENT_SOURCES)[number];
@@ -322,9 +341,8 @@ export function sanitizeUiUsageProperties(event: string, properties?: Properties
 			set("surface", isUiSurface(properties?.surface) ? properties.surface : undefined);
 			set("presentation", oneOf(properties?.presentation, ERROR_PRESENTATIONS));
 			set("error_kind", oneOf(properties?.error_kind, ERROR_KINDS));
-			const code = properties?.error_code;
-			// A daemon or client error code, never a message.
-			set("error_code", typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code) ? code : undefined);
+			// A known daemon or provider code, never a message.
+			set("error_code", oneOf(properties?.error_code, ERROR_CODES));
 			break;
 		}
 		case "ao.ui.usage_summary": {

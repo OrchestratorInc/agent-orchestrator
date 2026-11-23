@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { releaseDailySlot, reserveDailySlot, UiUsageRuntime } from "./ui-usage-telemetry";
+import { releaseDailySlot, reserveDailySlot, UiUsageRuntime, type UiUsageRuntimeOptions } from "./ui-usage-telemetry";
 
 type CaptureMock = ReturnType<typeof vi.fn<(event: string, properties: Record<string, unknown>) => Promise<boolean>>>;
 
@@ -14,7 +14,7 @@ describe("UiUsageRuntime", () => {
 	let capture: CaptureMock;
 	let runtime: UiUsageRuntime;
 
-	const make = () =>
+	const make = (overrides: UiUsageRuntimeOptions = {}) =>
 		new UiUsageRuntime({
 			storage: localStorage,
 			now: () => now,
@@ -22,7 +22,9 @@ describe("UiUsageRuntime", () => {
 			optedOut: () => optedOut,
 			isWindowActive: () => true,
 			afterPaint: (callback) => callback(),
+			...overrides,
 		});
+	const views = () => capture.mock.calls.filter(([event]) => event === "ao.surfaces.viewed");
 	const summary = async () => {
 		await runtime.flush();
 		const call = capture.mock.calls.find(([event]) => event === "ao.ui.usage_summary");
@@ -410,6 +412,85 @@ describe("UiUsageRuntime", () => {
 		// The minute on screen while analytics was off is not counted after it comes back on.
 		expect(properties.active_seconds).toBe(0);
 		expect(surfaceRow(properties, "sidebar")?.visible_seconds).toBeUndefined();
+	});
+
+	it("waits out a double click before calling its first click dead", async () => {
+		runtime = make({ afterPaint: (callback) => setTimeout(callback, 500) });
+		const blank = document.getElementById("blank")!;
+		box(blank, { left: 0, top: 200, width: 300, height: 100 });
+		click(blank, 1, 20, 250);
+		click(blank, 2, 20, 250);
+		vi.advanceTimersByTime(500);
+		now += 2_000;
+		// An isolated click still counts, once.
+		click(blank, 1, 20, 250);
+		vi.advanceTimersByTime(500);
+		expect((await summary()).dead_click_count).toBe(1);
+	});
+
+	it("waits for the window to be on screen before sending a view", async () => {
+		let active = true;
+		runtime = make({ isWindowActive: () => active });
+		runtime.surfaceShown("board");
+		vi.advanceTimersByTime(500);
+		active = false;
+		runtime.windowStateChanged();
+		vi.advanceTimersByTime(5_000);
+		await settle();
+		expect(views()).toEqual([]);
+		active = true;
+		runtime.windowStateChanged();
+		vi.advanceTimersByTime(1_000);
+		await settle();
+		expect(views()).toHaveLength(1);
+	});
+
+	it("treats a capture that throws as not sent, so the daily slot is freed", async () => {
+		capture.mockRejectedValueOnce(new Error("offline"));
+		const first = runtime.surfaceShown("board");
+		vi.advanceTimersByTime(1_000);
+		await settle();
+		runtime.surfaceHidden(first);
+		runtime.surfaceShown("board");
+		vi.advanceTimersByTime(1_000);
+		await settle();
+		expect(views()).toHaveLength(2);
+	});
+
+	it("drops damaged rows from a saved window and still sends the rest", async () => {
+		localStorage.setItem("ao.telemetry.uiUsage.v1", JSON.stringify({
+			version: 1,
+			windowId: "123e4567-e89b-42d3-a456-426614174000",
+			windowStartedAt: START - 3_600_000,
+			windowFlushAt: START - 1,
+			activeMs: 0,
+			counters: { send_count: 2, bogus_count: 5, steer_count: "x" },
+			surfaces: { board: null, sidebar: { visible_ms: 5_000, open_count: -1 }, secret_panel: { open_count: 1 } },
+			controls: { "composer.send": { click_count: 3 }, "button.secret": { click_count: 1 } },
+		}));
+		runtime = make();
+		expect(runtime.isFlushOverdue()).toBe(true);
+		await runtime.flush("startup");
+		const properties = capture.mock.calls.find(([event]) => event === "ao.ui.usage_summary")?.[1];
+		expect(properties).toMatchObject({
+			send_count: 2,
+			surfaces: [{ surface: "sidebar", visible_seconds: 5 }],
+			controls: [{ control_id: "composer.send", click_count: 3 }],
+		});
+		expect(properties).not.toHaveProperty("bogus_count");
+		expect(properties).not.toHaveProperty("steer_count");
+	});
+
+	it("counts no time from while analytics was off once it is back on", async () => {
+		click(document.getElementById("home")!);
+		optedOut = true;
+		now += 30_000;
+		optedOut = false;
+		// The app discards the window on every change of the setting, opt-in included.
+		runtime.discard();
+		click(document.getElementById("home")!);
+		now += 1_000;
+		expect((await summary()).active_seconds).toBe(1);
 	});
 
 	it("lets flush listeners see each window", async () => {

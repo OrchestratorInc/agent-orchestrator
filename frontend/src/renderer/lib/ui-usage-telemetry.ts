@@ -10,6 +10,7 @@ import {
 	SURFACE_STAT_KEYS,
 	UI_FEATURES,
 	UI_USAGE_EVENTS,
+	USAGE_SUMMARY_COUNTERS,
 	type AttachmentSource,
 	type ControlStatKey,
 	type DirectCounter,
@@ -22,7 +23,7 @@ import {
 	type UiControl,
 	type UiFeature,
 } from "./ui-usage-registry";
-import { surfaceElementOf, TELEMETRY_SURFACE_ATTRIBUTE, type UiSurface } from "./ui-surfaces";
+import { isUiSurface, surfaceElementOf, TELEMETRY_SURFACE_ATTRIBUTE, type UiSurface } from "./ui-surfaces";
 
 // UI usage telemetry: which surfaces people look at and for how long, which
 // controls they use and how (pointer or keyboard, after a hover or not), and
@@ -61,6 +62,8 @@ const LATE_PICK_MS = 500;
 const REOPEN_GRACE_MS = 1_000;
 /** The same error, shown again within this time, is counted but not sent again. */
 const ERROR_REPEAT_MS = 5 * 60_000;
+/** A click is not judged dead until a second click of a double-click could have arrived. */
+const DEAD_CLICK_SETTLE_MS = 500;
 const TELEMETRY_ID_SELECTOR = "[data-telemetry-id]";
 // What a click can land on and still be "doing something". Anything else that
 // also has no pointer cursor is a dead click.
@@ -133,6 +136,38 @@ function isFiniteNonNegative(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+/** The finite, non-negative numbers of `value` under `keys`; anything else is dropped. */
+function numbersOf<K extends string>(value: unknown, keys: readonly K[]): Partial<Record<K, number>> | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const raw = value as Record<string, unknown>;
+	const out: Partial<Record<K, number>> = {};
+	for (const key of keys) {
+		const number = raw[key];
+		if (isFiniteNonNegative(number)) out[key] = number;
+	}
+	return out;
+}
+
+const SURFACE_STATE_KEYS = [...SURFACE_STAT_KEYS, "visible_ms", "focused_ms"] as const;
+
+/** Saved rows with only known names and numeric stats, so a damaged entry cannot stop a flush. */
+function cleanRows(parsed: Partial<PersistedState>): Pick<PersistedState, "counters" | "surfaces" | "controls"> {
+	const counters = (numbersOf(parsed.counters, USAGE_SUMMARY_COUNTERS) ?? {}) as PersistedState["counters"];
+	const surfaces: PersistedState["surfaces"] = {};
+	for (const [surface, stats] of Object.entries(parsed.surfaces ?? {})) {
+		if (!isUiSurface(surface)) continue;
+		const clean = numbersOf(stats, SURFACE_STATE_KEYS);
+		if (clean) surfaces[surface] = clean;
+	}
+	const controls: PersistedState["controls"] = {};
+	for (const [control, stats] of Object.entries(parsed.controls ?? {})) {
+		if (!isUiControl(control)) continue;
+		const clean = numbersOf(stats, CONTROL_STAT_KEYS);
+		if (clean) controls[control] = clean;
+	}
+	return { counters, surfaces, controls };
+}
+
 function loadState(storage: Pick<Storage, "getItem"> | undefined, now: number): PersistedState {
 	try {
 		const parsed = JSON.parse(storage?.getItem(STATE_KEY) ?? "null") as Partial<PersistedState> | null;
@@ -146,9 +181,14 @@ function loadState(storage: Pick<Storage, "getItem"> | undefined, now: number): 
 			parsed.surfaces && typeof parsed.surfaces === "object" &&
 			parsed.controls && typeof parsed.controls === "object"
 		) {
-			// Values are re-checked by the sanitizer at send time; a malformed
-			// entry is dropped there rather than here.
-			return parsed as PersistedState;
+			return {
+				version: 1,
+				windowId: parsed.windowId,
+				windowStartedAt: parsed.windowStartedAt,
+				windowFlushAt: parsed.windowFlushAt,
+				activeMs: parsed.activeMs,
+				...cleanRows(parsed),
+			};
 		}
 	} catch {
 		// Replace malformed local state.
@@ -233,6 +273,9 @@ export class UiUsageRuntime {
 	private rage: { key: unknown; times: number[]; reported: boolean } | undefined;
 	private hover: { control: UiControl; element: Element; start: number; clicked: boolean } | undefined;
 	private pendingDeadClicks: Array<{ element: Element; surface: UiSurface; x: number; y: number }> = [];
+	private deadClickCheckScheduled = false;
+	/** Surfaces waiting out their one second on screen before a daily view, and how they opened. */
+	private readonly pendingViews = new Map<UiSurface, SurfaceOpenedBy>();
 	private dirty = false;
 	private previousSessionKey: string | undefined;
 	private readonly flushListeners = new Set<FlushListener>();
@@ -240,15 +283,23 @@ export class UiUsageRuntime {
 	constructor(options: UiUsageRuntimeOptions = {}) {
 		this.storage = options.storage;
 		this.now = options.now ?? Date.now;
-		this.capture = options.capture ?? ((event, properties) => captureRendererEvent(event, properties));
+		const capture = options.capture ?? ((event, properties) => captureRendererEvent(event, properties));
+		// A capture that throws counts as not sent, so reserved slots are released.
+		this.capture = (event, properties) => {
+			try {
+				return Promise.resolve(capture(event, properties)).catch(() => false);
+			} catch {
+				return Promise.resolve(false);
+			}
+		};
 		this.optedOut = options.optedOut ?? (() => false);
 		this.isWindowActive = options.isWindowActive ?? (() => true);
-		this.afterPaint = options.afterPaint ?? ((callback) => setTimeout(callback, 0));
+		this.afterPaint = options.afterPaint ?? ((callback) => setTimeout(callback, DEAD_CLICK_SETTLE_MS));
 		const now = this.now();
 		this.startedAt = now;
 		this.lastActivityAt = now;
 		this.state = loadState(this.storage, now);
-		if (this.isWindowActive()) this.segmentStart = now;
+		if (this.isWindowActive() && !this.optedOut()) this.segmentStart = now;
 	}
 
 	// --- time accounting -------------------------------------------------
@@ -266,13 +317,18 @@ export class UiUsageRuntime {
 				if (this.focused) this.bumpSurface(this.focused, "focused_ms", elapsed);
 			}
 		}
-		this.segmentStart = this.isWindowActive() && now - this.lastActivityAt <= IDLE_MS ? now : null;
+		this.segmentStart = this.canTime(now) ? now : null;
+	}
+
+	/** Time counts while analytics is on, the window is active and someone used it recently. */
+	private canTime(now: number): boolean {
+		return !this.optedOut() && this.isWindowActive() && now - this.lastActivityAt <= IDLE_MS;
 	}
 
 	activity(now = this.now()): void {
 		if (now - this.lastActivityAt > IDLE_MS) this.accrue(now);
 		this.lastActivityAt = now;
-		if (this.segmentStart === null && this.isWindowActive()) this.segmentStart = now;
+		if (this.segmentStart === null && this.canTime(now)) this.segmentStart = now;
 	}
 
 	/** The window gained or lost focus or visibility. */
@@ -281,11 +337,19 @@ export class UiUsageRuntime {
 		this.accrue(now);
 		if (this.isWindowActive()) {
 			this.lastActivityAt = now;
-			this.segmentStart = now;
+			this.segmentStart = this.canTime(now) ? now : null;
+			// A view waits for one second of the window on screen, starting over now.
+			for (const [surface, openedBy] of this.pendingViews) this.scheduleView(surface, openedBy);
 		} else {
 			this.endHover(now);
+			this.cancelViewTimers();
 			this.persist();
 		}
+	}
+
+	private cancelViewTimers(): void {
+		for (const timer of this.viewTimers.values()) clearTimeout(timer);
+		this.viewTimers.clear();
 	}
 
 	// --- surfaces ----------------------------------------------------------
@@ -300,7 +364,12 @@ export class UiUsageRuntime {
 			// Menus count every open, since each ends in a pick or an abandon.
 			const remount = !choice && now - (this.lastHiddenAt.get(surface) ?? Number.NEGATIVE_INFINITY) <= REOPEN_GRACE_MS;
 			if (!remount) this.bumpSurface(surface, "open_count");
-			this.scheduleView(surface, this.openedBy(now));
+			const openedBy = this.openedBy(now);
+			// A deliberate open is the first use, however briefly it stays open.
+			const feature = SURFACE_FEATURES[surface];
+			if (feature && openedBy !== "auto" && openedBy !== "restore") this.featureUsed(feature);
+			this.pendingViews.set(surface, openedBy);
+			this.scheduleView(surface, openedBy);
 		}
 		return token;
 	}
@@ -314,6 +383,7 @@ export class UiUsageRuntime {
 		this.accrue(now);
 		if (count <= 1) {
 			this.visible.delete(token.surface);
+			this.pendingViews.delete(token.surface);
 			this.lastHiddenAt.set(token.surface, now);
 			const timer = this.viewTimers.get(token.surface);
 			if (timer !== undefined) {
@@ -357,14 +427,14 @@ export class UiUsageRuntime {
 	}
 
 	private scheduleView(surface: UiSurface, openedBy: SurfaceOpenedBy): void {
-		if (this.viewTimers.has(surface)) return;
+		// Only while the window is on screen; it starts again when the window comes back.
+		if (this.viewTimers.has(surface) || !this.isWindowActive()) return;
 		this.viewTimers.set(
 			surface,
 			setTimeout(() => {
 				this.viewTimers.delete(surface);
-				if ((this.visible.get(surface) ?? 0) === 0) return;
-				const feature = SURFACE_FEATURES[surface];
-				if (feature && openedBy !== "auto" && openedBy !== "restore") this.featureUsed(feature);
+				if ((this.visible.get(surface) ?? 0) === 0 || !this.isWindowActive()) return;
+				this.pendingViews.delete(surface);
 				this.sendDailyView(surface, openedBy);
 			}, VIEW_DEBOUNCE_MS),
 		);
@@ -477,14 +547,22 @@ export class UiUsageRuntime {
 		}
 		if (keyboard) return;
 		this.trackRage(controlElement ?? target, control, surface, now);
-		// detail > 1 is a double or triple click selecting text, never dead.
+		// detail > 1 is a double or triple click selecting text, never dead, and
+		// neither was the first click of it, still waiting to be judged.
+		if (event.detail > 1) {
+			this.pendingDeadClicks = this.pendingDeadClicks.filter((pending) => pending.element !== target);
+			return;
+		}
 		if (!surface || control || event.detail !== 1 || target.closest(INTERACTIVE_SELECTOR)) return;
 		this.pendingDeadClicks.push({ element: target, surface, x: event.clientX, y: event.clientY });
-		if (this.pendingDeadClicks.length === 1) this.afterPaint(() => this.processDeadClicks());
+		if (this.deadClickCheckScheduled) return;
+		this.deadClickCheckScheduled = true;
+		this.afterPaint(() => this.processDeadClicks());
 	}
 
 	/** Checks clicks on nothing interactive once their frame has painted. */
 	private processDeadClicks(): void {
+		this.deadClickCheckScheduled = false;
 		const clicks = this.pendingDeadClicks;
 		this.pendingDeadClicks = [];
 		if (this.optedOut()) return;
@@ -637,8 +715,9 @@ export class UiUsageRuntime {
 		this.state = freshState(now);
 		this.dirty = false;
 		this.pendingDeadClicks = [];
-		// Time up to now is not counted later either, even after an opt-in.
-		this.segmentStart = this.segmentStart === null ? null : now;
+		// Time up to now is never counted, and none while analytics is off: a
+		// segment starts again only once collection resumes.
+		this.segmentStart = this.canTime(now) ? now : null;
 		try {
 			this.storage?.removeItem(STATE_KEY);
 		} catch {
@@ -707,7 +786,8 @@ export class UiUsageRuntime {
 		this.accrue(now);
 		const properties = this.summaryProperties(reason);
 		const windowId = this.state.windowId;
-		const hasActivity = this.state.activeMs >= 1_000 || Object.keys(this.state.counters).length > 0;
+		const rows = (value: unknown) => Array.isArray(value) && value.some((row) => Object.keys(row as object).length > 1);
+		const hasActivity = this.state.activeMs >= 1_000 || Object.keys(this.state.counters).length > 0 || rows(properties.surfaces) || rows(properties.controls);
 		this.state = freshState(now);
 		this.dirty = true;
 		this.persist();
@@ -806,7 +886,7 @@ export const uiUsage = {
 
 // Surfaces that rendered before telemetry started. They are handed to the
 // runtime when it starts, so a layout restored at launch is still timed.
-const earlyTokens = new Map<object, { surface: UiSurface; choice: boolean; token?: SurfaceToken }>();
+const earlyTokens = new Map<object, { surface: UiSurface; choice: boolean; ref: { current: SurfaceToken | undefined }; token?: SurfaceToken }>();
 
 /**
  * Marks a surface as on screen while `visible` is true, for daily views, open
@@ -826,7 +906,7 @@ export function useTelemetrySurface(surface: UiSurface, visible = true, options?
 			tokenRef.current = token;
 			return () => runtime?.surfaceHidden(token);
 		}
-		earlyTokens.set(key, { surface, choice });
+		earlyTokens.set(key, { surface, choice, ref: tokenRef });
 		return () => {
 			const early = earlyTokens.get(key);
 			earlyTokens.delete(key);
@@ -838,7 +918,16 @@ export function useTelemetrySurface(surface: UiSurface, visible = true, options?
 
 /** Stops counting and drops what was counted when the person turns analytics off. */
 export function discardUiUsage(): void {
-	runtime?.discard();
+	if (runtime) {
+		runtime.discard();
+		return;
+	}
+	// Not started yet: drop the saved window so it is never restored and sent.
+	try {
+		telemetryStorage()?.removeItem?.(STATE_KEY);
+	} catch {
+		// Nothing persisted to remove.
+	}
 }
 
 export function startUiUsageTelemetry(): () => void {
@@ -850,10 +939,15 @@ export function startUiUsageTelemetry(): () => void {
 		storage,
 		optedOut: isAnalyticsOptedOut,
 		isWindowActive: active,
-		afterPaint: (callback) => requestAnimationFrame(() => setTimeout(callback, 0)),
+		// After paint, and late enough for a double-click's second click to cancel its first.
+		afterPaint: (callback) => requestAnimationFrame(() => setTimeout(callback, DEAD_CLICK_SETTLE_MS)),
 	});
 	runtime = current;
-	for (const early of earlyTokens.values()) early.token = current.surfaceShown(early.surface, early.choice);
+	for (const early of earlyTokens.values()) {
+		early.token = current.surfaceShown(early.surface, early.choice);
+		// The hook's pick goes to the same token its cleanup closes.
+		early.ref.current = early.token;
+	}
 
 	const passiveCapture = { passive: true, capture: true } as const;
 	const onClick = (event: MouseEvent) => current.click(event);

@@ -244,7 +244,9 @@ function PRAuthor({ pr }: { pr: SessionPRSummary }) {
  * half-written comment survives a look at the description. Merge is here so the
  * tab works with the sidebar closed; labels and the branch's work stay on the card.
  */
-export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
+export function PRTabPane({ active = true, hostId, onViewInDiff, request, session, url }: {
+	/** Whether this PR is the tab on screen; others stay mounted behind it. */
+	active?: boolean;
 	hostId?: string;
 	/** Opens a file's diff at a line, for a review thread's "View in diff". */
 	onViewInDiff?: (target: { line?: number; path: string }) => void;
@@ -254,7 +256,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 	url: string;
 }) {
 	const { t } = useTranslation();
-	useTelemetrySurface("pr_tab");
+	useTelemetrySurface("pr_tab", active);
 	const pr = useSessionPR(session, url, hostId);
 	const detailsFailed = usePRDetailsLoad(pr, session.id, hostId, !session.cloud);
 	usePRNoChecksClock([pr]);

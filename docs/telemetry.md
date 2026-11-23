@@ -668,12 +668,14 @@ telemetry off" also control these events.
 
 When desktop product telemetry is enabled, Orchestrator.inc records which parts
 of the interface people look at and use, so we can tell which surfaces earn
-their space, which controls nobody finds, and where people get stuck. These
-events carry only the closed values listed here, control ids, counts and
-durations. They never include text you typed or clicked, a file name, path,
-URL, session or project name, chat content, error message, click position,
-window size, DOM path, or screenshot. There is no heatmap and no session
-replay.
+their space, which controls nobody finds, and where people get stuck. The
+properties specific to these events are only the closed values listed here,
+control ids, counts and durations. Like every desktop event, they also carry
+the shared context described under What Orchestrator.inc sends, such as
+`install_id` and `days_since_install`. They never include text you typed or
+clicked, a file name, path, URL, session or project name, chat content, error
+message, click position, window size, DOM path, or screenshot. There is no
+heatmap and no session replay.
 
 | Event | When it is sent | Properties |
 | --- | --- | --- |
@@ -716,9 +718,12 @@ replay.
 - `presentation` is `toast`, `banner`, `inline`, or `dialog`.
 - `error_kind` is `toast` (any error toast), `daemon_unavailable`,
   `chat_turn_failed`, `composer_send_failed`, or `other`.
-- `error_code` is the daemon or provider error code in upper snake case (such
-  as `EXITED` or `AUTH_REQUIRED`), never a message. It is omitted when there
-  is none.
+- `error_code` is one of a closed list, never a message: a daemon failure
+  (`NOT_CONFIGURED`, `DAEMON_UNREACHABLE`, `BINARY_MISSING`, `SPAWN_FAILED`,
+  `EXITED`, `PORT_UNCONFIRMED`, `NOT_READY`, `IDENTITY_MISMATCH`,
+  `DATADIR_UNWRITABLE`) or a chat turn failure (`AUTH_REQUIRED`,
+  `PROVIDER_KEY_MISSING`). Any other code is dropped, and it is omitted when
+  there is none.
 - `surface` on `ao.ui.error_shown` is the surface that showed the error, or,
   for a toast, the surface you used in the 10 seconds before it. It is omitted
   when neither is known.

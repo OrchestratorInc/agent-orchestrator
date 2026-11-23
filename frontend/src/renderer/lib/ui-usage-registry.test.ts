@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { sanitizeRendererProperties } from "./telemetry";
 import {
 	CONTROL_STAT_KEYS,
+	ERROR_CODES,
 	ERROR_KINDS,
 	ERROR_PRESENTATIONS,
 	sanitizeUiUsageProperties,
@@ -67,6 +68,9 @@ describe("sanitizeUiUsageProperties", () => {
 		).toEqual({ surface: "chat", presentation: "inline", error_kind: "chat_turn_failed", error_code: "AUTH_REQUIRED" });
 		expect(sanitizeUiUsageProperties("ao.ui.error_shown", { error_code: "auth required: /Users/me/repo" })).toEqual({});
 		expect(sanitizeUiUsageProperties("ao.ui.error_shown", { error_code: "auth_required" })).toEqual({});
+		// Upper snake case is not enough: only codes the app emits pass.
+		expect(sanitizeUiUsageProperties("ao.ui.error_shown", { error_code: "CUSTOMER_ACME_REPO_MISSING" })).toEqual({});
+		expect(sanitizeUiUsageProperties("ao.ui.error_shown", { error_code: "EXITED" })).toEqual({ error_code: "EXITED" });
 		expect(sanitizeUiUsageProperties("ao.ui.error_shown", { error_kind: "toast_with_text", presentation: "modal" })).toEqual({});
 	});
 
@@ -160,6 +164,7 @@ describe("docs/telemetry.md", () => {
 			...SWITCH_SOURCES,
 			...ERROR_KINDS,
 			...ERROR_PRESENTATIONS,
+			...ERROR_CODES,
 		];
 		expect(values.filter((value) => !documented(value))).toEqual([]);
 	});
@@ -184,7 +189,11 @@ describe("docs/telemetry.md", () => {
 	});
 
 	it("lists the events under Event names", () => {
-		const eventNames = docs.slice(docs.indexOf("## Event names"));
+		const heading = docs.indexOf("## Event names");
+		expect(heading).toBeGreaterThanOrEqual(0);
+		// Only the Event names section itself, so a mention further down cannot stand in for it.
+		const next = docs.indexOf("\n## ", heading + 1);
+		const eventNames = docs.slice(heading, next === -1 ? undefined : next);
 		expect(UI_USAGE_EVENTS.filter((event) => !eventNames.includes(`\`${event}\``))).toEqual([]);
 	});
 });
