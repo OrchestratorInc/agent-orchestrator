@@ -1,6 +1,7 @@
 import { hashKey, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useLayoutEffect, useMemo, useSyncExternalStore } from "react";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
+import { savedConversationQueryKey } from "../lib/local-chat-cache";
 import type { WorkspaceSummary } from "../types/workspace";
 import { conversationQueryKey, conversationQueryOptions } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
@@ -34,12 +35,14 @@ export function useSwitchHistoryRead(sessionId: string | undefined): boolean {
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(sessionId));
 	}, [queryClient, sessionId]);
 	const hash = useMemo(() => (sessionId ? hashKey(conversationQueryKey(sessionId)) : undefined), [sessionId]);
+	const savedHash = useMemo(() => (sessionId ? hashKey(savedConversationQueryKey(sessionId)) : undefined), [sessionId]);
 	const subscribe = useCallback((onChange: () => void) => queryClient.getQueryCache().subscribe(onChange), [queryClient]);
 	// A boolean, so the chat's streamed updates (cache events too) re-render nothing.
 	const firstReadInFlight = useCallback(() => {
-		if (!hash) return false;
-		const state = queryClient.getQueryCache().get(hash)?.state;
-		return state !== undefined && state.data === undefined && state.fetchStatus === "fetching";
-	}, [hash, queryClient]);
+		if (!hash || !savedHash) return false;
+		const cache = queryClient.getQueryCache();
+		const state = cache.get(hash)?.state;
+		return state !== undefined && state.data === undefined && state.fetchStatus === "fetching" && cache.get(savedHash)?.state.data === undefined;
+	}, [hash, queryClient, savedHash]);
 	return useSyncExternalStore(subscribe, firstReadInFlight, firstReadInFlight);
 }

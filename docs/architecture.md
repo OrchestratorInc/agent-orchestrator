@@ -132,6 +132,7 @@ fragment email addresses stay readable. `--sort-key` and `--primary-key` are exe
 in space and `=` forms. Plain `-u` arguments stay readable; colon-separated
 `-u`/`--user` pairs remain conservatively redacted, including numeric UID:GID
 values, since these can also be credentials. This is not general secret detection.
+A task's command keeps its line breaks and length but gets the same redaction.
 
 Claude stop acknowledgments do not establish completion. After an SDK rejection,
 wait up to one second for native reconciliation. An observed completion maps to

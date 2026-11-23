@@ -18,6 +18,10 @@ var ErrBackgroundTasksUnsupported = errors.New("provider cannot report backgroun
 // it has no stop control, or the task is no longer running.
 var ErrBackgroundTaskNotStoppable = errors.New("background task cannot be stopped")
 
+// ErrBackgroundTaskOutputUnavailable means the provider cannot report this
+// task's output: it keeps none, or does not know the task.
+var ErrBackgroundTaskOutputUnavailable = errors.New("background task output unavailable")
+
 // ChatBackgroundTask is native background work, never an OS process or a
 // foreground tool call. IDs are scoped to one provider controller.
 type ChatBackgroundTask struct {
@@ -25,7 +29,10 @@ type ChatBackgroundTask struct {
 	RunID       string
 	Kind        string
 	Description string
-	State       string
+	// Command is the shell command line when the provider reports one apart
+	// from the description. Empty when unknown.
+	Command string
+	State   string
 	// StartedAt is the native start time or when AO observed its start event.
 	// Inventory membership alone leaves it nil.
 	StartedAt *time.Time
@@ -44,4 +51,21 @@ type ChatBackgroundTaskInspector interface {
 // returns ErrBackgroundTaskNotStoppable when the provider has no stop control.
 type ChatBackgroundTaskStopper interface {
 	StopBackgroundTask(ctx context.Context, taskID string) error
+}
+
+// ChatBackgroundTaskOutput is the recent output of one background task.
+type ChatBackgroundTaskOutput struct {
+	Text string
+	// Truncated is true when older output was left out.
+	Truncated bool
+	// Stale is true when the provider stopped sending this task's output, so
+	// anything it printed since is missing.
+	Stale bool
+}
+
+// ChatBackgroundTaskOutputReader reads one task's recent output. Like a
+// reading, it must not start or wake a provider. It returns
+// ErrBackgroundTaskOutputUnavailable when the provider keeps no output for it.
+type ChatBackgroundTaskOutputReader interface {
+	BackgroundTaskOutput(ctx context.Context, taskID string) (ChatBackgroundTaskOutput, error)
 }

@@ -33,6 +33,9 @@ describe("captured chat excerpts", () => {
 		const { container } = render(<ChatLinkProvider workspacePaths={[path]} onFileOpen={onFileOpen}><ChatMarkdown text={source} /></ChatLinkProvider>);
 		const buttons = container.querySelectorAll("button[data-excerpt-include]");
 		expect(buttons).toHaveLength(2);
+		// The file icon sits beside the code text, never inside the mapped element.
+		expect(buttons[1].querySelector("svg")).not.toBeNull();
+		expect(buttons[1].querySelector("code svg")).toBeNull();
 		const node = buttons[1].querySelector("code")!.firstChild!;
 		// Build from the DOM, independently of the projection under test.
 		const range = document.createRange();

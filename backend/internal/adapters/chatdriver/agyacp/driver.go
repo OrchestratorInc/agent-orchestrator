@@ -46,7 +46,9 @@ const (
 
 // thinkingLevelOption is the config option agy_acp_server 1.4 moved reasoning
 // levels into. Its model option then lists gemini-3.8-flash where 1.3 and the
-// agy CLI list gemini-3.8-flash-high.
+// agy CLI list gemini-3.8-flash-high. `agy acp` 1.5 splits its models the same
+// way but names the option thought_level; the ACP driver then sends the level to
+// the session's thought_level-category option instead.
 const thinkingLevelOption = "thinking_level"
 
 var modelVariantPattern = regexp.MustCompile(`^(.+)-(minimal|low|medium|high|xhigh)$`)
@@ -133,6 +135,11 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 		// a stricter approval mode.
 		PermissionPolicy: permissionPolicy,
 		SteerPrompt:      &acpdriver.SteerPrompt{Supported: cliSteers},
+		// run_command hands a command to the background once its
+		// WaitMsBeforeAsync passes, and the turn can end while it runs.
+		// Antigravity reports its exit later, then answers it in a cycle of its
+		// own, so the command is a background task, not a failed tool.
+		ToolsOutliveTurn: true,
 	}
 }
 
@@ -240,8 +247,8 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	return nil
 }
 
-// splitModelVariant turns gemini-3.8-flash-high into what server 1.4 offers: the
-// gemini-3.8-flash model at thinking level high.
+// splitModelVariant turns gemini-3.8-flash-high into what server 1.4 and `agy
+// acp` 1.5 offer: the gemini-3.8-flash model at thinking level high.
 func splitModelVariant(model string) (string, acpdriver.SessionOption, bool) {
 	match := modelVariantPattern.FindStringSubmatch(model)
 	if match == nil {
