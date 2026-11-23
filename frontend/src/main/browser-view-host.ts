@@ -4711,6 +4711,14 @@ export function createBrowserViewHost(
               "INVALID_ARGUMENT",
               "instruction is required",
             );
+            // An approval whose description matched no element approved none:
+            // a later match would act on something the user never saw.
+            if (approvalBinding && !approvalBinding.ref) {
+              throw browserError(
+                "BROWSER_TARGET_CHANGED",
+                "The user approved this action before Orchestrator could find the element it acts on. Take a new snapshot and try again.",
+              );
+            }
             const postcondition = actionPostcondition(args);
             const verb =
               typeof args.action === "string" && args.action.trim()
@@ -5186,6 +5194,18 @@ export function createBrowserViewHost(
                 },
               },
             });
+            // The facts, image, and binding must all be of one document: if
+            // the tab moved on while they were read, discard them and let the
+            // daemon ask for a fresh read.
+            if (
+              activeEntry(session) !== describeEntry ||
+              describeEntry.documentGeneration !== describeDocument
+            ) {
+              throw browserError(
+                "BROWSER_TARGET_CHANGED",
+                "The page changed while Orchestrator was reading it. Take a new snapshot and try again.",
+              );
+            }
             const boundRef =
               described.resolvedRef ??
               (typeof args.ref === "string" ? args.ref.replace(/^@/, "") : undefined);
