@@ -680,6 +680,13 @@ func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
 	if loadingHistory {
 		return nil
 	}
+	c.mu.Lock()
+	c.providerReportsState = true
+	c.mu.Unlock()
+	if status == domain.ThreadStatusIdle {
+		// The agent's own idle ends the cycle it ran without a prompt.
+		c.endProviderCycle()
+	}
 	event := ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: status}}
 	if eventID := stableACPEventID(payload.Meta); eventID != "" {
 		event.ProviderEventID = eventID + ":0"
@@ -712,6 +719,21 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	}
 
 	update := params.Update
+	// itemTurn names this update's message and reasoning items. Outside a turn
+	// it is the agent's own cycle, so each cycle gets items of its own.
+	itemTurn := turnID
+	var cycle *providerCycle
+	if turnID == "" && !c.historyReplayActive() {
+		var opened bool
+		cycle, opened = c.enterProviderCycle(update)
+		if cycle != nil {
+			itemTurn = cycle.id
+			defer c.armProviderCycle(cycle, update)
+		}
+		if opened {
+			c.emit(ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}})
+		}
+	}
 	providerOutputResumed := update.AgentMessageChunk != nil ||
 		update.AgentThoughtChunk != nil ||
 		update.ToolCall != nil ||
@@ -739,11 +761,13 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			break
 		}
 		parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta))
-		if parentID != "" {
-			// A steer goes to the parent turn, so a subagent's reply stays one message.
+		if parentID != "" || cycle != nil {
+			// A steer goes to the parent turn, so a subagent's reply stays one
+			// message. A cycle takes no steers.
 			segment = 0
 		}
-		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", turnID, segment))
+		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", itemTurn, segment))
+		c.trackCycleItem(cycle, id)
 		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
 			if parentID != "" {
 				c.mu.Lock()
@@ -775,7 +799,11 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		if isCompacting {
 			break
 		}
-		id := c.providerItemID(segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", turnID, segment))
+		if cycle != nil {
+			segment = 0
+		}
+		id := c.providerItemID(segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", itemTurn, segment))
+		c.trackCycleItem(cycle, id)
 		if delta := contentText(update.AgentThoughtChunk.Content); delta != "" {
 			c.mu.Lock()
 			_, existed := c.thoughts[id]

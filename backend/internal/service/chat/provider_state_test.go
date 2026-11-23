@@ -1191,3 +1191,44 @@ func TestATurnAfterARefusedLoginReadsTheAccountAgain(t *testing.T) {
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Turns) == 2 })
 	countsAfter(1, 1)
 }
+
+// An agent's own cycle after a turn (Antigravity or Claude Code answering a
+// background command that finished) is turn-less. The ACP driver gives each
+// cycle its own items and settles them when it ends, so the rows stop
+// streaming and a later cycle is a message of its own, not more text on an
+// earlier one.
+func TestProviderCycleItemsSettleAsTheirOwnRows(t *testing.T) {
+	h := newHarness(t)
+	cycle := func(id, text string) {
+		h.conv.emit(
+			ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusActive}},
+			ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderItemID: "thought-" + id,
+				ActivityKind: domain.ActivityKindReasoning, ActivityStatus: domain.ActivityStatusRunning, Summary: "Reasoning"},
+			ports.ChatEvent{Kind: ports.ChatEventReasoningDelta, ProviderItemID: "thought-" + id, Delta: "thinking"},
+			ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "assistant-" + id, Delta: text},
+			ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderItemID: "assistant-" + id, Text: text},
+			ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderItemID: "thought-" + id,
+				ActivityKind: domain.ActivityKindReasoning, ActivityStatus: domain.ActivityStatusCompleted,
+				Summary: "Reasoning", Text: "thinking"},
+			ports.ChatEvent{Kind: ports.ChatEventProviderState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}},
+		)
+	}
+	cycle("cycle-1", "All checks passed.")
+	awaitActivityEvent(t, h.activity, "chat.provider.idle", domain.ActivityIdle)
+	cycle("cycle-2", "Second note.")
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 2 && !s.Messages[1].Streaming
+	})
+	for i, want := range []string{"All checks passed.", "Second note."} {
+		message := snapshot.Messages[i]
+		if message.Text != want || message.Streaming || message.TurnID != "" {
+			t.Fatalf("cycle message %d = %+v, want settled turn-less %q", i, message, want)
+		}
+	}
+	for _, id := range []string{"thought-cycle-1", "thought-cycle-2"} {
+		if activity := activityByItem(snapshot, id); activity.Status != domain.ActivityStatusCompleted || activity.TurnID != "" {
+			t.Fatalf("cycle reasoning %s = %+v, want completed and turn-less", id, activity)
+		}
+	}
+}

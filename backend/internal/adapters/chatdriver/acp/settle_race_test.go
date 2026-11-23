@@ -51,7 +51,7 @@ func TestSettleOpenItemsReadsACopyWhileUpdatesStillArrive(t *testing.T) {
 		}
 	})
 	for range 50 {
-		c.settleOpenItems("turn-1")
+		c.settleOpenItems("turn-1", nil)
 	}
 	writers.Wait()
 	c.eventMu.Lock()
