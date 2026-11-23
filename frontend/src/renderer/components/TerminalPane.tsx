@@ -90,6 +90,8 @@ type TerminalPaneProps = {
 	focusRequested?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
 	onTerminalStateChange?: (state: TerminalSessionState) => void;
+	/** Open a web link from a standalone terminal that has no session Browser owner. */
+	onLinkOpen?: (uri: string) => void;
 	/** Cloud agent screen has painted nonblank terminal content. */
 	onTerminalContentReadyChange?: (ready: boolean) => void;
 	/** One-shot input initiated by an explicit UI action. */
@@ -166,6 +168,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.switchingLabel === right.switchingLabel &&
 		left.focusRequested === right.focusRequested &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
+		left.onLinkOpen === right.onLinkOpen &&
 		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
 		left.inputRequest === right.inputRequest &&
 		left.onInputRequestResult === right.onInputRequestResult &&
@@ -809,6 +812,7 @@ export function TerminalPane({
 	switchingLabel,
 	focusRequested,
 	onTerminalStateChange,
+	onLinkOpen,
 	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
@@ -922,6 +926,7 @@ export function TerminalPane({
 		switchingLabel,
 		focusRequested,
 		onTerminalStateChange,
+		onLinkOpen,
 		onTerminalContentReadyChange,
 		inputRequest,
 		onInputRequestResult,
@@ -956,6 +961,7 @@ export function TerminalPane({
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
 			onTerminalStateChange={onTerminalStateChange}
+			onLinkOpen={onLinkOpen}
 			onTerminalContentReadyChange={onTerminalContentReadyChange}
 			inputRequest={inputRequest}
 			onInputRequestResult={onInputRequestResult}
@@ -1122,6 +1128,7 @@ function AttachedTerminal({
 	switchingLabel,
 	focusRequested,
 	onTerminalStateChange,
+	onLinkOpen,
 	onTerminalContentReadyChange,
 	inputRequest,
 	onInputRequestResult,
@@ -1484,7 +1491,7 @@ function AttachedTerminal({
 					isVisible={isVisible}
 					onChangeFontSize={onChangeFontSize}
 					onError={handleInitError}
-					onLinkOpen={handleLinkOpen}
+					onLinkOpen={onLinkOpen ?? handleLinkOpen}
 					onSessionLinkOpen={handleSessionLinkOpen}
 					onReady={handleReady}
 					onVisibleContent={() => setHasVisibleContent(true)}
