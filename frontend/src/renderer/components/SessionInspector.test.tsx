@@ -7623,7 +7623,10 @@ describe("SessionInspector branch summary", () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [passing] });
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />, undefined, (client) => seedPRSummaries(client, [passing]));
 
-    expect(await screen.findByTestId("pr-checks-tally")).toHaveTextContent("Checks1 passed, 1 skipped");
+    // Nothing needs a look, so the row says just "Checks"; screen readers still hear the counts.
+    const tally = await screen.findByTestId("pr-checks-tally");
+    expect(tally).toHaveTextContent("Checks, 1 passed, 1 skipped");
+    expect(tally.querySelectorAll("[data-state]:not(.sr-only)")).toHaveLength(0);
     expect([...screen.getByTestId("pr-checks-bar").children].map((segment) => segment.getAttribute("data-state"))).toEqual(["passed", "skipped"]);
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     expect(await screen.findByText("Conflicts")).toBeInTheDocument();

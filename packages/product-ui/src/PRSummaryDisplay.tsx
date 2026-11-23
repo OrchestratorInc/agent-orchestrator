@@ -552,12 +552,18 @@ export function CheckStateGlyph({ className, size = "xs", state }: { className?:
 	);
 }
 
+/** States that still need a look; the row names the worst of them. */
+const attentionStates: PRCheckState[] = ["failed", "running", "pending"];
+
 /**
- * "Checks", then the count that matters most: the worst state some check is in.
- * The bar under the row shows the rest; screen readers hear every count.
+ * "Checks", then a count only for what still needs a look: the worst state some
+ * check is in ("2 failing"). When every check passed or was skipped, "Checks"
+ * stands alone, as on GitHub's merge box. The bar under the row shows every
+ * state; screen readers hear every count.
  */
 function ChecksTally({ tally }: { tally: PRChecksTally }) {
-	const [lead, ...rest] = tally.counts;
+	const lead = tally.counts[0] && attentionStates.includes(tally.counts[0].state) ? tally.counts[0] : undefined;
+	const rest = lead ? tally.counts.slice(1) : tally.counts;
 	return (
 		<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-checks-tally">
 			<span className={rowLabelClass}>{tally.title}</span>
