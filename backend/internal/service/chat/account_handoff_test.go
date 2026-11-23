@@ -670,4 +670,26 @@ func TestAccountHandoffStuckStepReleasesTheHeldQueue(t *testing.T) {
 	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
 	})
+
+	hh.accounts.mu.Lock()
+	hh.accounts.boundErr = nil
+	hh.accounts.mu.Unlock()
+	hh.advance(time.Minute)
+	hh.tick(t)
+	if got := hh.conv.sentTexts(); len(got) != 2 {
+		t.Fatalf("provider received %v, want no retry after giving up", got)
+	}
+}
+
+func TestAccountHandoffHungMoveReleasesTheHeldQueue(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+
+	hh.advance(11 * time.Minute)
+	hh.tick(t)
+	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+	})
 }
