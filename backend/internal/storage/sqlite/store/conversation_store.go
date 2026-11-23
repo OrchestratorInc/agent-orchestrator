@@ -1957,8 +1957,6 @@ func (s *Store) CleanupOwnedControllerWork(
 	return s.cleanupControllerWork(ctx, session, conversationID, generation, now, false)
 }
 
-// CleanupOwnedControllerWorkKeepingQueue is CleanupOwnedControllerWork for a
-// controller whose undispatched queue belongs to the session's next controller.
 func (s *Store) CleanupOwnedControllerWorkKeepingQueue(
 	ctx context.Context,
 	session domain.SessionID,
