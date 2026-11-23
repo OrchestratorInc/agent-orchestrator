@@ -303,3 +303,37 @@ func settledMessage(t *testing.T, events []ports.ChatEvent) ports.ChatEvent {
 	t.Fatalf("no settled message in %+v", events)
 	return ports.ChatEvent{}
 }
+
+// A turn can start, and detach the cycle, after an update entered the cycle
+// but before it wrote its text. The text must not land in the turn's maps: it
+// goes on the cycle's settled copy and comes back to be settled again whole.
+func TestACPProviderCycleTextAfterDetachSettlesWithTheCycle(t *testing.T) {
+	c := &conversation{messages: map[string]string{}, thoughts: map[string]string{},
+		nestedMessages: map[string]nestedMessageState{}}
+	cycle := &providerCycle{id: "cycle-1", items: map[string]bool{}, tools: map[string]bool{}}
+	c.cycle = cycle
+	if _, late := c.appendItemText(cycle, itemMessage, "assistant-cycle-1", "", "All checks"); late != nil {
+		t.Fatalf("open cycle returned a late settle: %+v", late)
+	}
+
+	c.mu.Lock()
+	settled := c.detachProviderCycleLocked()
+	c.messages = map[string]string{} // the turn's fresh maps
+	c.thoughts = map[string]string{}
+	c.mu.Unlock()
+	if got := settled.messages["assistant-cycle-1"]; got != "All checks" {
+		t.Fatalf("settled at detach = %q", got)
+	}
+
+	existed, late := c.appendItemText(cycle, itemMessage, "assistant-cycle-1", "", " passed.")
+	if !existed || late == nil || late.messages["assistant-cycle-1"] != "All checks passed." {
+		t.Fatalf("late message = %v, %+v; want the whole text to settle again", existed, late)
+	}
+	existed, late = c.appendItemText(cycle, itemThought, "thought-cycle-1", "", "thinking")
+	if existed || late == nil || late.thoughts["thought-cycle-1"] != "thinking" {
+		t.Fatalf("late thought = %v, %+v; want a new item to settle", existed, late)
+	}
+	if len(c.messages) != 0 || len(c.thoughts) != 0 {
+		t.Fatalf("cycle text landed in the turn's maps: %v %v", c.messages, c.thoughts)
+	}
+}

@@ -2,6 +2,7 @@ package acp
 
 import (
 	"encoding/json"
+	"maps"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -37,6 +38,8 @@ type providerCycle struct {
 	timerGen int
 	timer    *time.Timer
 	lastSeen time.Time
+	// settled is what the cycle had when it was detached; nil while it is open.
+	settled *settledCycle
 }
 
 // settledCycle is what a cycle left open, copied while holding mu.
@@ -83,13 +86,74 @@ func (c *conversation) enterProviderCycleLocked(update acpsdk.SessionUpdate) (*p
 	return cycle, opened
 }
 
-func (c *conversation) trackCycleItem(cycle *providerCycle, id string) {
-	if cycle == nil {
-		return
-	}
+type itemKind int
+
+const (
+	itemMessage itemKind = iota
+	itemThought
+	itemNested // a subagent's message
+)
+
+// appendItemText adds a delta to a streamed item and reports whether the item
+// already had text. A cycle's item is tracked in the same hold of mu, so the
+// cycle's detach sees the item with all of its text or not at all. If a turn
+// detached the cycle after this update entered it, the cycle has already
+// settled what it had: the delta goes on that settled copy, never in the
+// turn's maps, and late returns the item to be settled again after the delta
+// is emitted.
+func (c *conversation) appendItemText(cycle *providerCycle, kind itemKind, id, parentID, delta string) (existed bool, late *settledCycle) {
 	c.mu.Lock()
-	cycle.items[id] = true
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	if cycle != nil && c.cycle != cycle {
+		return cycle.settled.append(kind, id, parentID, delta)
+	}
+	if cycle != nil {
+		cycle.items[id] = true
+	}
+	switch kind {
+	case itemMessage:
+		_, existed = c.messages[id]
+		c.messages[id] += delta
+	case itemThought:
+		_, existed = c.thoughts[id]
+		c.thoughts[id] += delta
+	case itemNested:
+		var item nestedMessageState
+		item, existed = c.nestedMessages[id]
+		item.text += delta
+		item.parentID = parentID
+		c.nestedMessages[id] = item
+	}
+	return existed, nil
+}
+
+// append adds a late delta to a detached cycle's item and returns that item
+// alone, with its whole text, to settle again.
+func (s *settledCycle) append(kind itemKind, id, parentID, delta string) (bool, *settledCycle) {
+	late := newSettledCycle()
+	existed := false
+	switch kind {
+	case itemMessage:
+		_, existed = s.messages[id]
+		s.messages[id] += delta
+		late.messages[id] = s.messages[id]
+	case itemThought:
+		_, existed = s.thoughts[id]
+		s.thoughts[id] += delta
+		late.thoughts[id] = s.thoughts[id]
+	case itemNested:
+		var item nestedMessageState
+		item, existed = s.nested[id]
+		item.text += delta
+		item.parentID = parentID
+		s.nested[id] = item
+		late.nested[id] = item
+	}
+	return existed, late
+}
+
+func newSettledCycle() *settledCycle {
+	return &settledCycle{messages: map[string]string{}, thoughts: map[string]string{}, nested: map[string]nestedMessageState{}}
 }
 
 // armProviderCycle schedules the end of a quiet cycle once none of its tools is
@@ -158,7 +222,7 @@ func (c *conversation) detachProviderCycleLocked() *settledCycle {
 		cycle.timer.Stop()
 		cycle.timer = nil
 	}
-	settled := &settledCycle{messages: map[string]string{}, thoughts: map[string]string{}, nested: map[string]nestedMessageState{}}
+	settled := newSettledCycle()
 	for id := range cycle.items {
 		if text, ok := c.messages[id]; ok {
 			settled.messages[id] = text
@@ -173,6 +237,10 @@ func (c *conversation) detachProviderCycleLocked() *settledCycle {
 			delete(c.nestedMessages, id)
 		}
 	}
+	// The cycle keeps its own copy for a late delta (appendItemText); the
+	// caller emits this one after releasing mu.
+	cycle.settled = &settledCycle{messages: maps.Clone(settled.messages),
+		thoughts: maps.Clone(settled.thoughts), nested: maps.Clone(settled.nested)}
 	return settled
 }
 

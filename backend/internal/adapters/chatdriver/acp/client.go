@@ -778,15 +778,10 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			segment = 0
 		}
 		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", itemTurn, segment))
-		c.trackCycleItem(cycle, id)
 		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
 			if parentID != "" {
-				c.mu.Lock()
-				item, existed := c.nestedMessages[id]
-				item.text += delta
-				item.parentID = parentID
-				c.nestedMessages[id] = item
-				c.mu.Unlock()
+				existed, late := c.appendItemText(cycle, itemNested, id, parentID, delta)
+				defer c.emitSettledCycle(late)
 				detail, _ := json.Marshal(map[string]any{"parentProviderItemId": parentID, "nestedAgent": true})
 				if !existed {
 					emit(ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderTurnID: turnID,
@@ -797,9 +792,8 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 					ProviderItemID: id, Delta: delta})
 				break
 			}
-			c.mu.Lock()
-			c.messages[id] += delta
-			c.mu.Unlock()
+			_, late := c.appendItemText(cycle, itemMessage, id, "", delta)
+			defer c.emitSettledCycle(late)
 			emit(ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: turnID, ProviderItemID: id, Delta: delta})
 		}
 	case update.AgentThoughtChunk != nil:
@@ -814,12 +808,9 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			segment = 0
 		}
 		id := c.providerItemID(segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", itemTurn, segment))
-		c.trackCycleItem(cycle, id)
 		if delta := contentText(update.AgentThoughtChunk.Content); delta != "" {
-			c.mu.Lock()
-			_, existed := c.thoughts[id]
-			c.thoughts[id] += delta
-			c.mu.Unlock()
+			existed, late := c.appendItemText(cycle, itemThought, id, "", delta)
+			defer c.emitSettledCycle(late)
 			if !existed {
 				emit(ports.ChatEvent{Kind: ports.ChatEventActivityStarted, ProviderTurnID: turnID,
 					ProviderItemID: id, ActivityKind: domain.ActivityKindReasoning,
