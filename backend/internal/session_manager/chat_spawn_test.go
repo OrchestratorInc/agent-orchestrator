@@ -254,7 +254,7 @@ func (l *recordingLauncher) ArmChatHandoff(_ context.Context, id domain.SessionI
 	return nil
 }
 
-func (l *recordingLauncher) PrepareChatHandoff(_ context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
+func (l *recordingLauncher) PrepareChatHandoff(_ context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy, _ bool) error {
 	l.prepared = append(l.prepared, id)
 	l.preparePolicy = append(l.preparePolicy, policy)
 	return nil

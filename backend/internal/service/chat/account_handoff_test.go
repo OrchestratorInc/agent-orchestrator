@@ -541,10 +541,7 @@ func TestAccountHandoffMoveKeepsTheHeldQueueOffTheLimitedAccount(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := hh.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
 		t.Fatalf("prepare handoff: %v", err)
 	}
 	if err := hh.svc.Stop(ctx, testSession); err != nil {
@@ -658,10 +655,7 @@ func TestAccountHandoffAbortedMoveKeepsTheQueueHeld(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := hh.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain); err != nil {
+	if err := hh.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
 		t.Fatalf("prepare handoff: %v", err)
 	}
 	hh.svc.AbortChatHandoff(testSession)

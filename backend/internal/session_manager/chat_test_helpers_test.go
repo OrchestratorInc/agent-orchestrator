@@ -47,8 +47,8 @@ func (l integrationChatLauncher) ArmChatHandoff(ctx context.Context, id domain.S
 	return l.service.ArmChatHandoff(ctx, id, policy, accountMove)
 }
 
-func (l integrationChatLauncher) PrepareChatHandoff(ctx context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
-	return l.service.PrepareChatHandoff(ctx, id, policy)
+func (l integrationChatLauncher) PrepareChatHandoff(ctx context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy, accountMove bool) error {
+	return l.service.PrepareChatHandoff(ctx, id, policy, accountMove)
 }
 
 func (l integrationChatLauncher) AbortChatHandoff(id domain.SessionID) {

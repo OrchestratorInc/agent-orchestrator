@@ -291,9 +291,9 @@ type racingFreshChat struct {
 	beforePrepare func()
 }
 
-func (c *racingFreshChat) PrepareChatHandoff(ctx context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
+func (c *racingFreshChat) PrepareChatHandoff(ctx context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy, accountMove bool) error {
 	c.beforePrepare()
-	return c.transitionChat.PrepareChatHandoff(ctx, id, policy)
+	return c.transitionChat.PrepareChatHandoff(ctx, id, policy, accountMove)
 }
 
 func TestInterfaceTransitionFreshChatRechecksAfterFencing(t *testing.T) {

@@ -224,7 +224,9 @@ func TestInterfaceHandoffDrainsTheHeldQueue(t *testing.T) {
 				t.Fatal(err)
 			}
 			prepared := make(chan error, 1)
-			go func() { prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain) }()
+			go func() {
+				prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, false)
+			}()
 			var running string
 			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 				running = ""
@@ -263,7 +265,7 @@ func TestInterfaceHandoffDrainsPastANewUsageLimit(t *testing.T) {
 	defer cancel()
 	prepared := make(chan error, 1)
 	go func() {
-		prepared <- h.svc.PrepareChatHandoff(prepareCtx, testSession, domain.SessionInterfaceTransitionDrain)
+		prepared <- h.svc.PrepareChatHandoff(prepareCtx, testSession, domain.SessionInterfaceTransitionDrain, false)
 	}()
 	for _, step := range []struct {
 		text  string

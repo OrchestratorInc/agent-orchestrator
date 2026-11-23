@@ -808,7 +808,7 @@ var _ interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 	RunPromptSuggestionTask(context.Context, domain.SessionID, string, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy, bool) error
-	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
+	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy, bool) error
 	AbortChatHandoff(domain.SessionID)
 } = chatLauncher{}
 
@@ -987,8 +987,9 @@ func (c chatLauncher) PrepareChatHandoff(
 	ctx context.Context,
 	id domain.SessionID,
 	policy domain.SessionInterfaceTransitionPolicy,
+	accountMove bool,
 ) error {
-	return c.svc.PrepareChatHandoff(ctx, id, policy)
+	return c.svc.PrepareChatHandoff(ctx, id, policy, accountMove)
 }
 
 func (c chatLauncher) AbortChatHandoff(id domain.SessionID) {

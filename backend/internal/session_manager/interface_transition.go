@@ -55,7 +55,7 @@ type interfaceTransitionStore interface {
 
 type chatHandoffLauncher interface {
 	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy, bool) error
-	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
+	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy, bool) error
 	AbortChatHandoff(domain.SessionID)
 }
 
@@ -510,7 +510,7 @@ func (m *Manager) runInterfaceTransition(
 		fail("TRANSITION_STATE_FAILED", err)
 		return
 	}
-	if err := m.prepareSourceHandoff(ctx, rec, transition.Policy, lastTerminalInputAt); err != nil {
+	if err := m.prepareSourceHandoff(ctx, rec, transition.Policy, transition.AccountMove(), lastTerminalInputAt); err != nil {
 		code := "SOURCE_QUIESCE_FAILED"
 		switch {
 		case errors.Is(err, errDrainQuiescenceUnverified):
@@ -1158,6 +1158,7 @@ func (m *Manager) prepareSourceHandoff(
 	ctx context.Context,
 	rec domain.SessionRecord,
 	policy domain.SessionInterfaceTransitionPolicy,
+	accountMove bool,
 	lastTerminalInputAt time.Time,
 ) error {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
@@ -1165,7 +1166,7 @@ func (m *Manager) prepareSourceHandoff(
 		if !ok {
 			return ErrInterfaceHandoffUnsupported
 		}
-		return handoff.PrepareChatHandoff(ctx, rec.ID, policy)
+		return handoff.PrepareChatHandoff(ctx, rec.ID, policy, accountMove)
 	}
 	handle := runtimeHandle(rec.Metadata)
 	if handle.ID == "" {

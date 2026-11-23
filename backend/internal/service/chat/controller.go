@@ -2479,13 +2479,12 @@ func (c *Controller) ArmHandoff(
 func (c *Controller) BeginHandoff(
 	ctx context.Context,
 	policy domain.SessionInterfaceTransitionPolicy,
+	accountMove bool,
 ) error {
-	c.mu.Lock()
-	keepHeld := c.handoff == interfaceHandoff(policy) && c.keepHeld
-	c.mu.Unlock()
-	if err := c.ArmHandoff(ctx, policy, keepHeld); err != nil {
+	if err := c.ArmHandoff(ctx, policy, accountMove); err != nil {
 		return err
 	}
+	keepHeld := accountMove && policy == domain.SessionInterfaceTransitionDrain
 
 	if policy == domain.SessionInterfaceTransitionInterrupt {
 		// Target preflight has succeeded. Settle every accepted queue row while

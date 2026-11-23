@@ -85,7 +85,7 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	if request.Force {
 		policy = domain.SessionInterfaceTransitionInterrupt
 	}
-	if err := m.prepareSourceHandoff(ctx, rec, policy, lastInputAt); err != nil && request.Force {
+	if err := m.prepareSourceHandoff(ctx, rec, policy, false, lastInputAt); err != nil && request.Force {
 		m.logger.Warn("interrupt before forced provider switch failed", "session", id, "error", err)
 	} else if err != nil {
 		kind := domain.ProviderSwitchRefusalBusy
