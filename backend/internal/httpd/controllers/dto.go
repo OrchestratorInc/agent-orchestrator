@@ -738,6 +738,9 @@ type SpawnSessionRequest struct {
 	// DisplayNameExplicit says displayName was deliberately chosen, so it wins
 	// over a terminal program's title. Omit it for a name derived from the prompt.
 	DisplayNameExplicit bool `json:"displayNameExplicit,omitempty"`
+	// TerminateOnPRMerge explicitly sets whether this session auto-terminates
+	// when its PR is merged. Nil falls back to project/global defaults.
+	TerminateOnPRMerge *bool `json:"terminateOnPrMerge,omitempty"`
 	// Attachments are files pasted or dropped into the task brief. Each carries
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
@@ -2500,10 +2503,21 @@ type BackgroundTaskResponse struct {
 	RunID       string     `json:"runId,omitempty"`
 	Kind        string     `json:"kind" enum:"shell,agent,other"`
 	Description string     `json:"description"`
+	Command     string     `json:"command,omitempty" description:"The shell command line, when the provider reports one. Credentials in it are redacted."`
 	State       string     `json:"state" enum:"running,paused,completed,failed,stopped"`
 	StartedAt   *time.Time `json:"startedAt,omitempty" description:"When the provider started the task, or else when the daemon first observed it."`
 	EndedAt     *time.Time `json:"endedAt,omitempty"`
 	Stoppable   bool       `json:"stoppable,omitempty" description:"True when this provider can stop this running task."`
+}
+
+// BackgroundTaskOutputResponse is one background task's recent output.
+type BackgroundTaskOutputResponse struct {
+	SessionID    domain.SessionID `json:"sessionId"`
+	TaskID       string           `json:"taskId"`
+	Availability string           `json:"availability" enum:"ready,unavailable" description:"unavailable when this provider or session cannot report the task's output; output is then empty."`
+	Output       string           `json:"output" description:"The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed."`
+	Truncated    bool             `json:"truncated,omitempty" description:"True when older output was left out or is missing."`
+	Stale        bool             `json:"stale,omitempty" description:"True when the provider stopped sending this task's output, so anything it printed since is missing."`
 }
 
 // BackgroundTaskIDParam names one provider-owned background task.
@@ -3333,6 +3347,32 @@ type LinkPreviewResponse struct {
 	FaviconDarkURL string `json:"faviconDarkUrl,omitempty"`
 }
 
+// PRPreviewQuery selects the GitHub pull request to preview.
+type PRPreviewQuery struct {
+	URL string `query:"url" description:"A github.com pull request URL."`
+}
+
+// PRPreviewResponse is the body of GET /api/v1/pr-preview (200): the state and
+// summary of any GitHub pull request a chat links to, read through the
+// daemon's GitHub account.
+type PRPreviewResponse struct {
+	URL    string `json:"url"`
+	Repo   string `json:"repo" description:"owner/name"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	State  string `json:"state" enum:"open,draft,merged,closed"`
+	// Checks is omitted when the pull request has no checks.
+	Checks       string `json:"checks,omitempty" enum:"passing,failing,pending"`
+	Author       string `json:"author,omitempty"`
+	SourceBranch string `json:"sourceBranch,omitempty"`
+	TargetBranch string `json:"targetBranch,omitempty"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changedFiles"`
+	// StateChangedAt is when it merged or closed, else when it was opened.
+	StateChangedAt *time.Time `json:"stateChangedAt,omitempty"`
+}
+
 // MobileStatusResponse is the body of the Connect Mobile status/enable/disable/
 // regenerate endpoints. Password is populated only transiently, on enable and
 // regenerate responses (empty otherwise) — it is never persisted in plaintext.
@@ -3778,7 +3818,7 @@ type ConversationConfigOptionResponse struct {
 	Type           string                             `json:"type" enum:"select,boolean"`
 	CurrentValue   string                             `json:"currentValue,omitempty"`
 	CurrentBoolean *bool                              `json:"currentBoolean,omitempty"`
-	Choices        []ConversationConfigChoiceResponse `json:"choices,omitempty"`
+	Choices        []ConversationConfigChoiceResponse `json:"choices"`
 }
 
 // ConversationConfigChoiceResponse is one value in a provider select.

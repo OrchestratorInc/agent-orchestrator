@@ -158,10 +158,19 @@ func (p *Provider) Platforms(ctx context.Context) []ports.DevicePlatformAvailabi
 		android.Reason = "Install the Android SDK (platform-tools and emulator) or set ANDROID_HOME."
 	} else if !executable(filepath.Join(sdk, "platform-tools", "adb")) || !executable(filepath.Join(sdk, "emulator", "emulator")) {
 		android.Reason = "The Android SDK at " + sdk + " is missing platform-tools or the emulator."
+	} else if !executable(avdmanagerPath(sdk)) {
+		// The hub lists AVDs with avdmanager before every boot; Android
+		// Studio's default SDK does not include it, and every boot would fail.
+		android.Reason = "The Android SDK at " + sdk + " is missing the command-line tools (avdmanager). Install \"Android SDK Command-line Tools (latest)\" in Android Studio → SDK Manager → SDK Tools."
 	} else {
 		android.Available = true
 	}
 	return []ports.DevicePlatformAvailability{ios, android}
+}
+
+// avdmanagerPath is where the hub runs avdmanager from.
+func avdmanagerPath(sdk string) string {
+	return filepath.Join(sdk, "cmdline-tools", "latest", "bin", "avdmanager")
 }
 
 // errProviderClosed is EnsureReady's answer once the daemon is shutting down.
@@ -293,6 +302,8 @@ func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubPr
 		"TMPDIR="+tmp,
 		"SERVE_SIM_STATE_DIR="+filepath.Join(hubState, "serve-sim"),
 		"SERVE_SIM_CAPTURE_CA_DIR="+filepath.Join(hubState, "capture-ca"),
+		// serve-emu seeds the emulator's camera feed from here on every boot.
+		"SERVE_EMU_CAMERA_DIR="+filepath.Join(hubState, "serve-emu-camera"),
 		"NO_COLOR=1",
 	)
 	// The SDK the daemon uses for adb is the one the hub must use too.
@@ -583,13 +594,53 @@ func tabletModel(model string) bool {
 // List returns every simulator and emulator the hub sees, physical devices
 // excluded.
 func (p *Provider) List(ctx context.Context) ([]ports.DeviceInfo, error) {
+	devices, _, err := p.listReport(ctx)
+	return devices, err
+}
+
+// ListPlatform lists one platform's devices and fails when that platform's
+// listing reported an error, so a device it lacks is really gone rather than
+// missed (List still succeeds then, with whatever else listed).
+func (p *Provider) ListPlatform(ctx context.Context, platform ports.DevicePlatform) ([]ports.DeviceInfo, error) {
+	devices, failed, err := p.listReport(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if why := failed[platform]; why != "" {
+		return nil, fmt.Errorf("list %s devices: %s", platform, why)
+	}
+	out := make([]ports.DeviceInfo, 0, len(devices))
+	for _, d := range devices {
+		if d.Platform == platform {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+// listReport lists every device and, for each platform whose listing failed
+// (and so may be missing devices), why.
+func (p *Provider) listReport(ctx context.Context) ([]ports.DeviceInfo, map[ports.DevicePlatform]string, error) {
 	var body struct {
 		Simulators []hubDevice `json:"simulators"`
 		Emulators  []hubDevice `json:"emulators"`
 		Errors     hubErrors   `json:"errors"`
 	}
 	if err := p.hubJSON(ctx, http.MethodGet, "/api/devices", nil, &body); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	failed := map[ports.DevicePlatform]string{}
+	fail := func(platform ports.DevicePlatform, why string) {
+		if failed[platform] == "" {
+			failed[platform] = why
+		} else {
+			failed[platform] += "; " + why
+		}
+	}
+	for _, e := range body.Errors {
+		for _, platform := range e.platforms() {
+			fail(platform, hubErrors{e}.String())
+		}
 	}
 	out := make([]ports.DeviceInfo, 0, len(body.Simulators)+len(body.Emulators))
 	for _, d := range append(body.Simulators, body.Emulators...) {
@@ -598,27 +649,34 @@ func (p *Provider) List(ctx context.Context) ([]ports.DeviceInfo, error) {
 		}
 		out = append(out, ports.DeviceInfo{ID: d.ID, Name: d.Name, Platform: ports.DevicePlatform(d.Platform), Version: d.Version, Booted: d.Booted, Tablet: tabletModel(d.DeviceFrame)})
 	}
-	out = append(out, p.unlistedSimulators(ctx, out)...)
-	out = append(out, p.unlistedEmulators(ctx, out)...)
+	sims, simErr := p.unlistedSimulators(ctx, out)
+	if simErr != nil {
+		fail(ports.DevicePlatformIOS, simErr.Error())
+	}
+	emus, emuErr := p.unlistedEmulators(ctx, out)
+	if emuErr != nil {
+		fail(ports.DevicePlatformAndroid, emuErr.Error())
+	}
+	out = append(append(out, sims...), emus...)
 	// Nothing listed and the hub says why (no avdmanager, simctl failing):
 	// that is an error to show, not an empty machine.
 	if len(out) == 0 && len(body.Errors) > 0 {
-		return nil, fmt.Errorf("list devices: %s", body.Errors)
+		return nil, nil, fmt.Errorf("list devices: %s", body.Errors)
 	}
-	return out, nil
+	return out, failed, nil
 }
 
 // unlistedSimulators returns the iOS Simulators `simctl` knows and the hub
 // does not. The hub lists a simulator only once it has been booted, so on a
 // fresh Xcode install, or for one just created, its list is empty; the hub
 // still boots any simulator by id.
-func (p *Provider) unlistedSimulators(ctx context.Context, listed []ports.DeviceInfo) []ports.DeviceInfo {
+func (p *Provider) unlistedSimulators(ctx context.Context, listed []ports.DeviceInfo) ([]ports.DeviceInfo, error) {
 	if runtime.GOOS != "darwin" {
-		return nil
+		return nil, nil
 	}
 	out, err := p.run(ctx, "xcrun", "simctl", "list", "devices", "available", "-j")
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("simctl list devices: %w", err)
 	}
 	var parsed struct {
 		Devices map[string][]struct {
@@ -628,8 +686,8 @@ func (p *Provider) unlistedSimulators(ctx context.Context, listed []ports.Device
 			DeviceType string `json:"deviceTypeIdentifier"`
 		} `json:"devices"`
 	}
-	if json.Unmarshal(out, &parsed) != nil {
-		return nil
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return nil, fmt.Errorf("simctl list devices: %w", err)
 	}
 	known := make(map[string]bool, len(listed))
 	for _, d := range listed {
@@ -648,7 +706,7 @@ func (p *Provider) unlistedSimulators(ctx context.Context, listed []ports.Device
 		}
 	}
 	sort.Slice(extra, func(i, j int) bool { return extra[i].Name < extra[j].Name })
-	return extra
+	return extra, nil
 }
 
 // unlistedEmulators returns the Android Virtual Devices the SDK knows and the
@@ -656,18 +714,18 @@ func (p *Provider) unlistedSimulators(ctx context.Context, listed []ports.Device
 // it itself, so one made by Android Studio or `avdmanager` is missing until
 // then. A running one is reported by its serial, as the hub does, so it is
 // never offered twice.
-func (p *Provider) unlistedEmulators(ctx context.Context, listed []ports.DeviceInfo) []ports.DeviceInfo {
+func (p *Provider) unlistedEmulators(ctx context.Context, listed []ports.DeviceInfo) ([]ports.DeviceInfo, error) {
 	sdk := androidSDK()
 	if sdk == "" {
-		return nil
+		return nil, nil
 	}
 	emulator := filepath.Join(sdk, "emulator", "emulator")
 	if !executable(emulator) {
-		return nil
+		return nil, nil
 	}
 	avds, err := p.run(ctx, emulator, "-list-avds")
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("emulator -list-avds: %w", err)
 	}
 	known := make(map[string]bool, len(listed))
 	for _, d := range listed {
@@ -690,7 +748,7 @@ func (p *Provider) unlistedEmulators(ctx context.Context, listed []ports.DeviceI
 		extra = append(extra, device)
 	}
 	sort.Slice(extra, func(i, j int) bool { return extra[i].Name < extra[j].Name })
-	return extra
+	return extra, nil
 }
 
 // runningAVDs maps the name of each running emulator's AVD to its serial.
@@ -765,6 +823,31 @@ type hubError struct {
 	Error   string `json:"error"`
 }
 
+// platforms says which platform's listing an error came from. The hub tags
+// none, but its Android errors name avdmanager, adb or the emulator and its
+// iOS ones simctl or a simulator; one that names neither counts for both.
+func (e hubError) platforms() []ports.DevicePlatform {
+	text := strings.ToLower(e.Message + " " + e.Error)
+	has := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(text, w) {
+				return true
+			}
+		}
+		return false
+	}
+	android := has("android", "avd", "adb", "emulator")
+	ios := has("simctl", "simulator", "xcrun", "coresimulator", "apple", "ios")
+	switch {
+	case android && !ios:
+		return []ports.DevicePlatform{ports.DevicePlatformAndroid}
+	case ios && !android:
+		return []ports.DevicePlatform{ports.DevicePlatformIOS}
+	default:
+		return []ports.DevicePlatform{ports.DevicePlatformIOS, ports.DevicePlatformAndroid}
+	}
+}
+
 // hubErrors decodes the hub's error list, also accepting plain strings.
 type hubErrors []hubError
 
@@ -790,16 +873,37 @@ func (e *hubErrors) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// String joins each error's message with the first line of its detail: the
+// hub fills error with inspect(err), whose first line says what failed (for
+// instance "spawn …/avdmanager ENOENT") while the message often stops at a
+// colon before it.
 func (e hubErrors) String() string {
 	parts := make([]string, 0, len(e))
 	for _, item := range e {
-		if msg := strings.TrimSpace(item.Message); msg != "" {
+		msg := strings.TrimSpace(item.Message)
+		detail := firstLine(item.Error)
+		switch {
+		case msg == "":
+			if detail != "" {
+				parts = append(parts, detail)
+			}
+		case detail == "" || strings.Contains(msg, detail):
 			parts = append(parts, msg)
-		} else if detail := strings.TrimSpace(item.Error); detail != "" {
-			parts = append(parts, lastLines(detail, 1))
+		case strings.HasSuffix(msg, ":"):
+			parts = append(parts, msg+" "+detail)
+		default:
+			parts = append(parts, msg+": "+detail)
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 func (r hubActionResult) err(action string) error {

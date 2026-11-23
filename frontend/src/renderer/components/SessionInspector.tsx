@@ -1,3 +1,5 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
+import type { UiSurface } from "../lib/ui-surfaces";
 import { apiErrorException } from "../lib/api-error-exception";
 import { BrowserIcon, SubagentIcon } from "./icons";
 import { GitHubIcon } from "./GitHubIcon";
@@ -131,6 +133,17 @@ import {
 	type ReviewRunFacts,
 } from "../lib/session-reviews";
 import type { CloudCpAOReviewRun, CloudCpProjectRepo, CloudCpSessionReviewState, CloudCpPullRequestSummary } from "../lib/cloud-cp";
+
+const INSPECTOR_SURFACES: Record<InspectorView, UiSurface> = {
+	summary: "inspector_summary",
+	reviews: "inspector_reviews",
+	browser: "inspector_browser",
+	device: "inspector_device",
+	sideChat: "inspector_side_chat",
+	subagents: "inspector_subagents",
+	files: "inspector_files",
+	artifacts: "inspector_artifacts",
+};
 
 type ProjectConfig = components["schemas"]["ProjectConfig"];
 type OpenReviewerTerminal = (target: { handleId: string; harness: string }) => void;
@@ -289,6 +302,7 @@ export const SessionInspector = memo(function SessionInspector({
 			// link waits for the list to refresh.
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+	useTelemetrySurface(INSPECTOR_SURFACES[view], Boolean(isInspectorVisible));
 	const sessionLoaded = session !== undefined;
 	// The chat reports its subagents just after it mounts, so on the way back to a
 	// session the Subagents tab is briefly missing. Show Summary through that gap but

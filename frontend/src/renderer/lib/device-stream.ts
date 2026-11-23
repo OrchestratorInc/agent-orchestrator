@@ -1,3 +1,5 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
+
 // Canvas players for the Device tab, the same pipeline the phone uses natively:
 // Android's H.264 decoded by WebCodecs, iOS's MJPEG parsed and drawn newest
 // frame first. An <img> showing MJPEG paints a part only once the next starts,
@@ -197,7 +199,7 @@ export function playMjpeg(url: string, canvas: HTMLCanvasElement, onFrame: () =>
 		controller = new AbortController();
 		try {
 			const res = await fetch(url, { cache: "no-store", signal: controller.signal });
-			if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+			if (!res.ok || !res.body) throw new AoError("DEVICE_STREAM_FAILED", `stream ${res.status}`);
 			const reader = res.body.getReader();
 			const parser = new MultipartParser();
 			for (;;) {

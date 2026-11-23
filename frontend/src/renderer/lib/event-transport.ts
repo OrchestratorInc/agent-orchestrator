@@ -18,6 +18,7 @@ import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEdito
 import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
+import { persistLocalChats } from "./local-chat-cache";
 import { persistRemoteCache } from "./remote-chat-cache";
 
 export type EventTransport = {
@@ -103,6 +104,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					.finally(() => controller.abort());
 			};
 			const stopPersistingRemoteCache = persistRemoteCache(queryClient);
+			const stopPersistingLocalChats = persistLocalChats(queryClient);
 			let disposed = false;
 			type RemoteConnection = {
 				base: string;
@@ -676,6 +678,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				remoteSources.clear();
 				stopPersistingRemoteCache();
+				stopPersistingLocalChats();
 				setEventsConnectionState("idle");
 			};
 		},

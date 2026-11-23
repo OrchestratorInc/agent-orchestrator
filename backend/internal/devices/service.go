@@ -610,9 +610,17 @@ func agentControlFailed(device ports.DeviceInfo, err error) error {
 
 // releaseIfGone ends the session's lease when its device no longer exists (a
 // simulator deleted in Xcode, an AVD removed) and reports whether it did.
-// Only a list that succeeds and lacks the device counts as gone.
+// Only a clean list of the device's platform that lacks it counts as gone.
 func (s *Service) releaseIfGone(ctx context.Context, id domain.SessionID, held Lease) bool {
-	devices, err := s.cfg.Provider.List(ctx)
+	var devices []ports.DeviceInfo
+	var err error
+	// A list where the device's own platform failed (simctl erroring while
+	// emulators still list) says nothing about whether the device exists.
+	if lister, ok := s.cfg.Provider.(ports.DevicePlatformLister); ok {
+		devices, err = lister.ListPlatform(ctx, held.Device.Platform)
+	} else {
+		devices, err = s.cfg.Provider.List(ctx)
+	}
 	if err != nil {
 		return false
 	}

@@ -20,10 +20,12 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/devices"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -477,6 +479,8 @@ type Manager struct {
 	agentBrowserURL             string
 	agentBrowserToken           string
 	agentAccounts               ports.AgentAccountLaunchEnv
+	refusedModelRefreshMu       sync.Mutex
+	refusedModelRefreshAt       map[string]time.Time
 	accountOverrideMu           sync.Mutex
 	accountOverrides            map[domain.SessionID]string
 	attachments                 *attachmentstore.Store
@@ -581,8 +585,9 @@ type Manager struct {
 	sendConfirm sendConfirmConfig
 	// interfaceTransition bounds only contradictory stale-idle proof. Turns and
 	// user-paced waits reported through the activity boundary remain unbounded.
-	interfaceTransition interfaceTransitionConfig
-	logger              *slog.Logger
+	interfaceTransition       interfaceTransitionConfig
+	logger                    *slog.Logger
+	terminateOnPRMergeDefault *bool
 
 	// shellTerminalsMu guards shellTerminals: it is late-bound (see
 	// ShellTerminalCloser) after Manager already exists, so a setter mutates it
@@ -993,6 +998,9 @@ type Deps struct {
 	// Logger receives spawn-time diagnostics (e.g. when the session PATH
 	// cannot be pinned to the daemon binary). Nil defaults to slog.Default().
 	Logger *slog.Logger
+	// TerminateOnPRMerge is the daemon-wide default for whether sessions auto-terminate
+	// when their PR is merged. Nil falls back to env var / hardcoded false.
+	TerminateOnPRMerge *bool
 }
 
 func (m *Manager) beginAgentSwitchAttempt() error {
@@ -1066,8 +1074,9 @@ func New(d Deps) *Manager {
 			idleSettle:     interfaceTransitionIdleSettle,
 			staleIdleLimit: interfaceTransitionStaleIdleLimit,
 		},
-		logger:         d.Logger,
-		workspaceGates: make(map[domain.ProjectID]*sync.Mutex),
+		logger:                    d.Logger,
+		terminateOnPRMergeDefault: d.TerminateOnPRMerge,
+		workspaceGates:            make(map[domain.ProjectID]*sync.Mutex),
 	}
 	if m.clock == nil {
 		// UTC so spawn-stamped CreatedAt/UpdatedAt match every other session
@@ -1207,6 +1216,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 
+	// Keep the caller's policy separate from inherited settings. The merge below
+	// and the TUI and chat resolvers copy project and role values into cfg.AgentConfig.
+	if cfg.TerminateOnPRMerge == nil && cfg.AgentConfig.TerminateOnPRMerge != nil {
+		explicit := *cfg.AgentConfig.TerminateOnPRMerge
+		cfg.TerminateOnPRMerge = &explicit
+	}
+
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
@@ -1313,7 +1329,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	if prep != nil {
 		rec = prep.record
 	} else {
-		seed := seedRecord(cfg, project.Config, m.clock())
+		seed := m.seedRecord(cfg, project.Config, m.clock())
 		if mode == domain.SessionModeChat {
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
@@ -1435,7 +1451,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 			}
 		}
-		seed := seedRecord(cfg, project.Config, m.clock())
+		seed := m.seedRecord(cfg, project.Config, m.clock())
 		seed.ID = id
 		seed.Metadata.ArtifactDir = artifactDir
 		if mode == domain.SessionModeChat {
@@ -1956,6 +1972,11 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		// let the CLI reject unknown values at launch.
 		return resolved, nil
 	}
+	if cfg.Harness == domain.HarnessCodex {
+		if err := m.refuseUnavailableCodexModel(ctx, cfg, project, strings.TrimSpace(resolved.Model)); err != nil {
+			return ports.AgentConfig{}, err
+		}
+	}
 	modelID := strings.TrimSpace(resolved.Model)
 	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
 	if resolved.Effort == "" && !validateClaudeModel {
@@ -2053,6 +2074,117 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
+}
+
+// codexAccountHomes resolves the CODEX_HOME a Codex session runs under on an
+// account. The agent-accounts service implements it.
+type codexAccountHomes interface {
+	AccountHome(ctx context.Context, harness domain.AgentHarness, accountID string) (string, error)
+}
+
+// refusedModelRefreshInterval bounds how often a spawn refused on a Codex
+// model may start catalog rediscovery for its harness and project.
+const refusedModelRefreshInterval = 10 * time.Minute
+
+// Codex exposes no account-specific catalog for saved accounts or a project's
+// CODEX_HOME. Retry their refused models after a day so a plan or rollout change
+// cannot leave an account blocked indefinitely.
+const codexRefusalRetryInterval = 24 * time.Hour
+
+// refuseUnavailableCodexModel refuses a Codex session on a model Codex already
+// refused for the account the session runs on, instead of starting a worker
+// whose first turn fails (#4518). Another account is never refused for it. On
+// the computer's own account, a model a fresh saved catalog lists again is
+// allowed and forgotten; a stale catalog's listing proves nothing, so the
+// refusal stays. A home without its own catalog gets a retry after one day.
+func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, model string) error {
+	if model == "" {
+		return nil
+	}
+	home, ok := m.codexAccountHome(ctx, cfg, project)
+	unavailable := codexagent.DefaultUnavailableModels()
+	if !ok || !unavailable.Unavailable(home, model) {
+		return nil
+	}
+	if strings.TrimSpace(home) != "" {
+		expired, err := unavailable.ForgetExpired(home, model, time.Now(), codexRefusalRetryInterval)
+		if err != nil && m.logger != nil {
+			m.logger.Warn("spawn: could not persist an expired Codex model refusal", "error", err)
+		}
+		if expired {
+			return nil
+		}
+	}
+	var available []string
+	// Codex's catalog is discovered under the computer's own login only, never
+	// a saved account's or a project's CODEX_HOME, so it says nothing about
+	// another account's models: that account's refusal stays until expiry,
+	// without borrowing another account's list.
+	if m.modelCatalog != nil && strings.TrimSpace(home) == "" {
+		if catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false); err == nil {
+			for _, item := range catalog.Models {
+				if item.ID == model {
+					// The listing counts only as of when it was observed: a
+					// refusal recorded since then is newer and stays.
+					observed := catalog.ValidatedAt
+					if observed.IsZero() {
+						observed = catalog.FetchedAt
+					}
+					if catalog.Stale || observed.IsZero() {
+						continue
+					}
+					_ = unavailable.Forget(home, model, observed)
+					if !unavailable.Unavailable(home, model) {
+						return nil
+					}
+					continue
+				}
+				available = append(available, item.ID)
+			}
+		}
+		// The account may list the model again; look, at most once per interval.
+		if m.claimRefusedModelRefresh(cfg.Harness, cfg.ProjectID) {
+			m.refreshModelCatalogInBackground(cfg.Harness, cfg.ProjectID)
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrUnsupportedModel, codexagent.UnavailableModelMessage(model, available))
+}
+
+// codexAccountHome is the CODEX_HOME the spawn's Codex session will run under:
+// the selected saved account's, or the default account's. ok is false when the
+// account cannot be resolved, and then no refusal applies.
+func (m *Manager) codexAccountHome(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (string, bool) {
+	if homes, ok := m.agentAccounts.(codexAccountHomes); ok {
+		home, err := homes.AccountHome(ctx, cfg.Harness, cfg.AgentAccountID)
+		if err != nil {
+			return "", false
+		}
+		if home != "" {
+			return home, true
+		}
+	} else if cfg.AgentAccountID != "" {
+		return "", false
+	}
+	// The computer's own account: a project may still point Codex elsewhere.
+	return project.Env["CODEX_HOME"], true
+}
+
+// claimRefusedModelRefresh reports whether a refused spawn may start catalog
+// rediscovery for its harness and project now, at most once per
+// refusedModelRefreshInterval (refusedModelRefreshAt).
+func (m *Manager) claimRefusedModelRefresh(harness domain.AgentHarness, project domain.ProjectID) bool {
+	key := string(harness) + "\x00" + string(project)
+	now := time.Now()
+	m.refusedModelRefreshMu.Lock()
+	defer m.refusedModelRefreshMu.Unlock()
+	if last, ok := m.refusedModelRefreshAt[key]; ok && now.Sub(last) < refusedModelRefreshInterval {
+		return false
+	}
+	if m.refusedModelRefreshAt == nil {
+		m.refusedModelRefreshAt = map[string]time.Time{}
+	}
+	m.refusedModelRefreshAt[key] = now
+	return true
 }
 
 // refreshModelCatalogInBackground rediscovers a harness's catalog without
@@ -2758,6 +2890,9 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
 	}
+	if override.TerminateOnPRMerge != nil {
+		merged.TerminateOnPRMerge = override.TerminateOnPRMerge
+	}
 	// A project may carry a model from its previous worker harness. Memcode
 	// accepts only its native catalog; leave an incompatible inherited choice
 	// to the TUI instead of making every launch and restore fail.
@@ -2830,6 +2965,9 @@ func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {
 	}
 	if override.Permissions != "" {
 		base.Permissions = override.Permissions
+	}
+	if override.TerminateOnPRMerge != nil {
+		base.TerminateOnPRMerge = override.TerminateOnPRMerge
 	}
 	if base.Permissions == "" {
 		base.Permissions = ports.PermissionModeAuto
@@ -6531,7 +6669,43 @@ func normalizeWorkspacePath(p string) string {
 
 // ---- helpers ----
 
-func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+// resolveTerminateOnPRMerge resolves whether a newly created session should auto-terminate
+// when its PR merges. The precedence order is:
+// explicit per-session value > project default > user/global default > hardcoded FALSE.
+// Once created, the per-session toggle in the UI/API overrides.
+func resolveTerminateOnPRMerge(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, defaultPolicy *bool) bool {
+	// 1. Explicit per-session value
+	if cfg.TerminateOnPRMerge != nil {
+		return *cfg.TerminateOnPRMerge
+	}
+
+	// 2. Project default
+	role := roleOverride(cfg.Kind, projectConfig)
+	if role.AgentConfig.TerminateOnPRMerge != nil {
+		return *role.AgentConfig.TerminateOnPRMerge
+	}
+	if projectConfig.TerminateOnPRMerge != nil {
+		return *projectConfig.TerminateOnPRMerge
+	}
+	if projectConfig.AgentConfig.TerminateOnPRMerge != nil {
+		return *projectConfig.AgentConfig.TerminateOnPRMerge
+	}
+
+	// 3. User / global default
+	if defaultPolicy != nil {
+		return *defaultPolicy
+	}
+	if raw, present := os.LookupEnv(config.EnvTerminateOnPRMerge); present && strings.TrimSpace(raw) != "" {
+		if v, err := config.ParseToggle(config.EnvTerminateOnPRMerge, raw); err == nil {
+			return v
+		}
+	}
+
+	// 4. Hardcoded FALSE
+	return false
+}
+
+func seedRecordWithDefault(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, defaultPolicy *bool, now time.Time) domain.SessionRecord {
 	return domain.SessionRecord{
 		ProjectID:           cfg.ProjectID,
 		IssueID:             cfg.IssueID,
@@ -6547,14 +6721,27 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		Activity:            domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
-		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
-		RequestedOutput:   cfg.RequestedOutput,
-		OutputType:        domain.SessionOutputNone,
-		AutoReviewEnabled: projectConfig.AutoReview,
-		AutoInjectReview:  true,
-		AutoInjectCI:      true,
+		Mode:               domain.NormalizeSessionMode(cfg.RequestedMode),
+		Metadata:           domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		RequestedOutput:    cfg.RequestedOutput,
+		OutputType:         domain.SessionOutputNone,
+		TerminateOnPRMerge: resolveTerminateOnPRMerge(cfg, projectConfig, defaultPolicy),
+		AutoReviewEnabled:  projectConfig.AutoReview,
+		AutoInjectReview:   true,
+		AutoInjectCI:       true,
 	}
+}
+
+func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+	return seedRecordWithDefault(cfg, projectConfig, nil, now)
+}
+
+func (m *Manager) seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+	var globalDefault *bool
+	if m != nil {
+		globalDefault = m.terminateOnPRMergeDefault
+	}
+	return seedRecordWithDefault(cfg, projectConfig, globalDefault, now)
 }
 
 func defaultSessionBranch(id domain.SessionID, kind domain.SessionKind, prefix, branchNamespace string) string {
