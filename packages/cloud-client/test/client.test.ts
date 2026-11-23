@@ -85,6 +85,17 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("DELETE");
   });
 
+  it("restarts a session's agent, applying the current instructions only when asked", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ requested: true }));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+    await expect(client.restartSessionAgent("org/1", "session/1")).resolves.toEqual({ requested: true });
+    await client.restartSessionAgent("org/1", "session/1", { applyInstructions: true });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/agent/restart");
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ applyInstructions: true }));
+  });
+
   it("retries a session whose startup failed", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
