@@ -7,6 +7,7 @@ import { ARTIFACT_VIEWER_ORIGINS, artifactScreenTitle } from "../lib/artifactVie
 import { backOr } from "../lib/backNavigation";
 import { useGlassBarInset } from "../lib/useHeaderOverlap";
 import { Button, EmptyState } from "../lib/ui";
+import { ARTIFACT_MEDIA_PLAYBACK } from "../lib/artifactMediaPlayback";
 
 /** The published page checks access itself; never attach host/API credentials. */
 export default function SharedArtifactScreen() {
@@ -27,6 +28,7 @@ export default function SharedArtifactScreen() {
 		<Stack.Screen options={{ title: artifactScreenTitle(shownURL), headerBackVisible: true }} />
 		<View style={[styles.page, { paddingTop: inset }]}>
 			{url && failedURL !== url ? <WebView
+				{...ARTIFACT_MEDIA_PLAYBACK}
 				key={url}
 				source={{ uri: url }}
 				originWhitelist={["*"]}

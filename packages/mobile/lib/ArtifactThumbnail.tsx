@@ -8,6 +8,7 @@ import { ChatMarkdown } from "./chat/ChatMarkdown";
 import { useRenderTheme } from "./chat/RenderFrame";
 import { renderThemeScript, withRenderTheme } from "./chat/renderFrameModel";
 import type { ArtifactsBackend } from "./artifactsBackend";
+import { useVerifiedFor } from "./heldBackend";
 import type { Theme } from "./theme";
 import { useThemedStyles } from "./ThemeProvider";
 import { space } from "./tokens";
@@ -79,6 +80,8 @@ function PageThumbnail({ backend, sessionId, artifact, visible, width, height, o
 	// Off screen, the page lets its WebView go; the inlined page stays cached.
 	if (!visible || !html) return null;
 	return (
+		// No ARTIFACT_MEDIA_PLAYBACK: a card takes no touches, so it keeps the
+		// defaults, under which nothing plays with sound until a tap.
 		<WebView
 			ref={web}
 			source={{ html }}
@@ -121,8 +124,13 @@ function TextThumbnail({ backend, sessionId, artifact, visible, width, markdown,
 	useEffect(() => { if (empty) onFailed(); }, [empty, onFailed]);
 	// The document's own images, as the viewer shows them.
 	const resolveImage = useCallback((url: string) => backend.markdownImageSource(sessionId, artifact.path, url, versionOf), [artifact.path, backend, sessionId, versionOf]);
+	// Those images load with the credential, and the text may come from memory
+	// while the app reconnects: a document first drawn then waits for the machine
+	// to answer as itself (see heldBackend). One already drawn stays.
+	const drawable = useVerifiedFor(backend, markdown && value ? key : null);
 	if (!value) return null;
 	if (markdown) {
+		if (!drawable) return null;
 		return (
 			<View style={styles.surface}>
 				<View style={[styles.markdown, { width: width / MARKDOWN_SCALE }]}>

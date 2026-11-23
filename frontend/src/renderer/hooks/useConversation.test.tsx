@@ -691,6 +691,45 @@ describe("session-scoped conversation commands", () => {
 });
 
 describe("provider catalog controller epochs", () => {
+	it("normalizes omitted choices from older daemon reads and writes", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const option = { id: "model", name: "Model", type: "select" as const };
+		getMock.mockResolvedValueOnce({ data: { options: [option] }, error: undefined });
+		patchMock.mockResolvedValueOnce({ data: { options: [option] }, error: undefined });
+		const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.options).toEqual([{ ...option, choices: [] }]));
+		await act(async () => { await result.current.setOption("model", { value: "opus" }); });
+		expect(result.current.options).toEqual([{ ...option, choices: [] }]);
+	});
+
+	it("reports a queued selection when the preceding response omits choices", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const option = { id: "model", name: "Model", type: "select" as const, choices: [{ value: "a", name: "A" }, { value: "b", name: "B" }] };
+		getMock.mockResolvedValueOnce({ data: { options: [option] }, error: undefined });
+		const firstPatch = deferred<unknown>();
+		patchMock.mockReturnValueOnce(firstPatch.promise);
+		const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: Wrapper });
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+		let firstWrite!: Promise<unknown>;
+		let secondOutcome!: Promise<string>;
+		act(() => {
+			firstWrite = result.current.setOption("model", { value: "b" });
+			secondOutcome = result.current.setOption("model", { value: "a" }).then(() => "resolved", (error: Error) => error.message);
+		});
+		await waitFor(() => expect(patchMock).toHaveBeenCalledOnce());
+		apiErrorMessageMock.mockImplementation((error: Error) => error.message);
+		await act(async () => {
+			firstPatch.resolve({ data: { options: [{ id: "model", name: "Model", type: "select" }] }, error: undefined });
+			await firstWrite;
+		});
+		const expectedError = "No choices are available for this option. Your selection was not sent.";
+		expect(await secondOutcome).toBe(expectedError);
+		expect(patchMock).toHaveBeenCalledOnce();
+		await waitFor(() => expect(result.current.error).toBe(expectedError));
+	});
+
 	it("discards a config mutation response from before switch admission", async () => {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -1379,9 +1418,9 @@ describe("steering refusals", () => {
 		);
 	});
 
-	async function steerFailingWith(code: string) {
+	async function steerFailingWith(code: string, message = "a compaction turn is running.") {
 		apiErrorCodeMock.mockReturnValue(code);
-		apiErrorMessageMock.mockReturnValue("a compaction turn is running.");
+		apiErrorMessageMock.mockReturnValue(message);
 		postMock.mockResolvedValue({ data: undefined, error: { code } });
 
 		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
@@ -1466,8 +1505,7 @@ describe("steering refusals", () => {
 
 	// Daemon messages usually end without a full stop, so the advice would run on.
 	it("ends the daemon's sentence before the advice", async () => {
-		apiErrorMessageMock.mockReturnValueOnce("the agent did not collect the guidance within 5s");
-		const result = await steerFailingWith("CHAT_TURN_NOT_STEERABLE");
+		const result = await steerFailingWith("CHAT_TURN_NOT_STEERABLE", "the agent did not collect the guidance within 5s");
 		await waitFor(() => {
 			expect(result.current.steerRefusal).toBe(
 				"the agent did not collect the guidance within 5s. Try again once it finishes.",
@@ -1604,6 +1642,119 @@ describe("controller recovery", () => {
 
 		await waitFor(() => expect(result.current.resumeError).toBe("Unable to restore session"));
 		apiErrorMessageMock.mockReset();
+	});
+
+	describe("sending to an archived chat", () => {
+		const RESTORE = "/api/v1/sessions/{sessionId}/restore";
+		const MESSAGES = "/api/v1/sessions/{sessionId}/conversation/messages";
+		const archived = { id: "ao-1", workspaceId: "project-1", isTerminated: true, status: "terminated" };
+		function archivedClient() {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+			queryClient.setQueryData(workspaceQueryKey, [{ id: "project-1", sessions: [archived] }]);
+			return queryClient;
+		}
+		const archivedInCache = (queryClient: QueryClient) =>
+			(queryClient.getQueryData(workspaceQueryKey) as { sessions: { isTerminated?: boolean }[] }[])[0]?.sessions[0]?.isTerminated;
+		const paths = () => postMock.mock.calls.map(([path]) => path);
+		const sentIds = () => postMock.mock.calls
+			.filter(([path]) => path === MESSAGES)
+			.map(([, request]) => (request as { body: { clientMessageId: string } }).body.clientMessageId);
+
+		it("shows the message at once, restores, then sends it once after the restore", async () => {
+			const restored = deferred<{ data: object; error: undefined }>();
+			postMock.mockImplementation((path: string) => path === RESTORE
+				? restored.promise
+				: Promise.resolve({ data: { turnId: "turn-1", state: "running" }, error: undefined }));
+			const queryClient = archivedClient();
+			const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), {
+				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+			});
+
+			let sending: Promise<unknown> = Promise.resolve();
+			act(() => {
+				sending = result.current.send({ text: "pick this up", clientMessageId: "m1" });
+			});
+			await waitFor(() => expect(result.current.localEchos.map((echo) => echo.clientMessageId)).toEqual(["m1"]));
+			expect(result.current.localEchos[0]?.text).toBe("pick this up");
+			expect(paths()).toEqual([RESTORE]);
+			// Nothing marks it active before the daemon confirms the restore.
+			expect(archivedInCache(queryClient)).toBe(true);
+			// A second Enter while restoring cannot send the message twice.
+			await expect(result.current.send({ text: "pick this up", clientMessageId: "m2" })).rejects.toThrow();
+
+			await act(async () => {
+				restored.resolve({ data: {}, error: undefined });
+				await sending;
+			});
+			expect(paths().filter((path) => path === RESTORE)).toHaveLength(1);
+			expect(paths().indexOf(RESTORE)).toBeLessThan(paths().indexOf(MESSAGES));
+			expect(sentIds()).toEqual(["m1"]);
+		});
+
+		it("sends nothing and keeps the session archived when the restore fails", async () => {
+			apiErrorMessageMock.mockImplementation((error: { message?: string }, fallback: string) => error?.message ?? fallback);
+			postMock.mockResolvedValue({ data: undefined, error: { code: "WORKSPACE_RESTORE_FAILED", message: "Workspace restore failed" }, response: { status: 500 } });
+			const queryClient = archivedClient();
+			const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), {
+				wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+			});
+
+			let failure: unknown;
+			await act(async () => {
+				failure = await result.current.send({ text: "keep me", clientMessageId: "m1" }).catch((error: unknown) => error);
+			});
+			expect(failure).toMatchObject({ code: "SESSION_RESTORE_FAILED", message: "Workspace restore failed" });
+			expect(paths()).toEqual([RESTORE]);
+			expect(result.current.localEchos).toEqual([]);
+			expect(archivedInCache(queryClient)).toBe(true);
+
+			// The failed attempt released the session: sending again retries the restore.
+			await act(async () => {
+				await result.current.send({ text: "keep me", clientMessageId: "m2" }).catch(() => undefined);
+			});
+			expect(paths()).toEqual([RESTORE, RESTORE]);
+		});
+
+		it("sends when another window restored the session first", async () => {
+			postMock.mockImplementation((path: string) => Promise.resolve(path === RESTORE
+				? { data: undefined, error: { code: "SESSION_NOT_RESTORABLE", message: "Session is not restorable" }, response: { status: 409 } }
+				: { data: { turnId: "turn-1", state: "running" }, error: undefined }));
+			const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+
+			await act(async () => {
+				await result.current.send({ text: "already back", clientMessageId: "m1" });
+			});
+			expect(paths()).toEqual([RESTORE, MESSAGES]);
+			expect(sentIds()).toEqual(["m1"]);
+		});
+
+		it("retries an unanswered send after a restore with the same message id", async () => {
+			let restores = 0;
+			let sends = 0;
+			postMock.mockImplementation((path: string) => {
+				if (path === RESTORE) {
+					restores += 1;
+					// The first restore took; the session is live by the retry.
+					return Promise.resolve(restores === 1
+						? { data: {}, error: undefined }
+						: { data: undefined, error: { code: "SESSION_NOT_RESTORABLE", message: "Session is not restorable" }, response: { status: 409 } });
+				}
+				sends += 1;
+				// The first send's answer is lost; the daemon answers the retry as a duplicate.
+				return sends === 1 ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve({ data: { duplicate: true }, error: undefined });
+			});
+			const { result } = renderHook(() => useConversationCommands("ao-1", undefined, true), { wrapper });
+
+			await act(async () => {
+				await expect(result.current.send({ text: "once", clientMessageId: "m1" })).rejects.toBeInstanceOf(TypeError);
+			});
+			await act(async () => {
+				await result.current.send({ text: "once", clientMessageId: "m1" });
+			});
+			expect(paths()).toEqual([RESTORE, MESSAGES, RESTORE, MESSAGES]);
+			expect(sentIds()).toEqual(["m1", "m1"]);
+			expect(result.current.localEchos).toEqual([]);
+		});
 	});
 });
 
@@ -2201,5 +2352,226 @@ describe("opening a local chat it has cached", () => {
 		expect(second.result.current.snapshot?.latestSequence).toBe(20);
 		await act(async () => {});
 		expect(getMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("Stop", () => {
+	type StopProps = { turnId?: string };
+	const renderStop = (initialProps: StopProps = { turnId: "turn-1" }) => renderHook(
+		({ turnId }: StopProps) => useConversationCommands("ao-1", undefined, false, Boolean(turnId), turnId),
+		{ initialProps, wrapper },
+	);
+
+	it("names the turn it stops and ignores a second press while that turn winds down", async () => {
+		postMock.mockResolvedValue({ data: undefined, error: undefined, response: { status: 204 } });
+		const { result } = renderStop();
+
+		act(() => {
+			result.current.interrupt();
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(result.current.stoppingTurn).toBe(true));
+		act(() => {
+			result.current.interrupt();
+		});
+
+		const stops = postMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/conversation/interrupt");
+		expect(stops).toEqual([[
+			"/api/v1/sessions/{sessionId}/conversation/interrupt",
+			{ params: { path: { sessionId: "ao-1" } }, body: { turnId: "turn-1" } },
+		]]);
+	});
+
+	it("stops the next turn normally once the stopped one is gone", async () => {
+		postMock.mockResolvedValue({ data: undefined, error: undefined, response: { status: 204 } });
+		const { result, rerender } = renderStop();
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(result.current.stoppingTurn).toBe(true));
+
+		rerender({ turnId: "turn-2" });
+		expect(result.current.stoppingTurn).toBe(false);
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenLastCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/interrupt",
+			{ params: { path: { sessionId: "ao-1" } }, body: { turnId: "turn-2" } },
+		));
+	});
+
+	// The turn ended before Stop landed. That is the answer to Stop, not a failure.
+	it("shows no error when the turn had already ended", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_NO_ACTIVE_TURN");
+		apiErrorMessageMock.mockReturnValue("there is no turn in flight to interrupt");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_NO_ACTIVE_TURN" }, response: { status: 409 } });
+		const { result } = renderStop();
+
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(result.current.busy).toBe(false));
+		expect(result.current.error).toBeUndefined();
+	});
+
+	// A turn the session has queued but not started yet answers "nothing to stop".
+	// Stop must stay usable, or the turn could not be stopped once it starts.
+	it("keeps Stop usable when the daemon had nothing to stop", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_NO_ACTIVE_TURN");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_NO_ACTIVE_TURN" }, response: { status: 409 } });
+		const { result } = renderStop();
+
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(result.current.stoppingTurn).toBe(false));
+
+		apiErrorCodeMock.mockReturnValue(undefined);
+		postMock.mockResolvedValue({ data: undefined, error: undefined, response: { status: 204 } });
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+	});
+
+	it("lets Stop be pressed again when the turn keeps running long after Stop landed", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			postMock.mockResolvedValue({ data: undefined, error: undefined, response: { status: 204 } });
+			const { result } = renderStop();
+			act(() => {
+				result.current.interrupt();
+			});
+			await waitFor(() => expect(result.current.stoppingTurn).toBe(true));
+
+			act(() => {
+				vi.advanceTimersByTime(10_000);
+			});
+			expect(result.current.stoppingTurn).toBe(false);
+			act(() => {
+				result.current.interrupt();
+			});
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("reports a Stop that failed and lets the user press it again", async () => {
+		apiErrorCodeMock.mockReturnValue("INTERNAL");
+		apiErrorMessageMock.mockReturnValue("session/cancel did not reach the agent");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "INTERNAL" }, response: { status: 500 } });
+		const { result } = renderStop();
+
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(result.current.error).toBe("session/cancel did not reach the agent"));
+		await waitFor(() => expect(result.current.stoppingTurn).toBe(false));
+
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+	});
+
+	it("drops a failed Stop's error once its turn is no longer running", async () => {
+		apiErrorCodeMock.mockReturnValue("INTERNAL");
+		apiErrorMessageMock.mockReturnValue("session/cancel did not reach the agent");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "INTERNAL" }, response: { status: 500 } });
+		const { result, rerender } = renderStop();
+		act(() => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(result.current.error).toBeDefined());
+
+		rerender({ turnId: undefined });
+		expect(result.current.error).toBeUndefined();
+	});
+
+	it("drops a steer refusal once the turn it was aimed at is gone", async () => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		apiErrorMessageMock.mockReturnValue("the agent did not collect the guidance");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_TURN_NOT_STEERABLE" } });
+		const { result, rerender } = renderStop();
+		await act(async () => {
+			await result.current.steer("go left").catch(() => {});
+		});
+		await waitFor(() => expect(result.current.steerRefusal).toBeDefined());
+
+		rerender({ turnId: undefined });
+		await waitFor(() => expect(result.current.steerRefusal).toBeUndefined());
+	});
+
+	it("does not show a refusal for an earlier turn that lands during the next one", async () => {
+		const response = deferred<{ data: undefined; error: { code: string } }>();
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		postMock.mockReturnValue(response.promise);
+		const { result, rerender } = renderStop();
+		let steered: Promise<unknown> | undefined;
+		act(() => {
+			steered = result.current.steer("go left");
+		});
+		await waitFor(() => expect(result.current.steerPending).toBe(true));
+
+		rerender({ turnId: "turn-2" });
+		await act(async () => {
+			response.resolve({ data: undefined, error: { code: "CHAT_NO_ACTIVE_TURN" } });
+			await steered;
+		});
+		await waitFor(() => expect(result.current.steerPending).toBe(false));
+		expect(result.current.steerRefusal).toBeUndefined();
+	});
+
+	it("does not bring back a refusal from before a turn once that turn ends", async () => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_NO_ACTIVE_TURN" } });
+		const { result, rerender } = renderStop({ turnId: undefined });
+		await act(async () => {
+			await result.current.steer("go left").catch(() => {});
+		});
+		await waitFor(() => expect(result.current.steerRefusal).toMatch(/Send it as a message instead/));
+
+		rerender({ turnId: "turn-2" });
+		expect(result.current.steerRefusal).toBeUndefined();
+		rerender({ turnId: undefined });
+		expect(result.current.steerRefusal).toBeUndefined();
+	});
+
+	it("still knows the harness cannot steer after the turn changes", async () => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_STEER_UNSUPPORTED" } });
+		const { result, rerender } = renderStop();
+		await act(async () => {
+			await result.current.steer("go left").catch(() => {});
+		});
+		await waitFor(() => expect(result.current.steerUnsupported).toBe(true));
+
+		rerender({ turnId: "turn-2" });
+		expect(result.current.steerUnsupported).toBe(true);
+	});
+
+	it("keeps a steer that is still in flight pending when the turn changes", async () => {
+		const response = deferred<{ data: undefined; error: { code: string } }>();
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		postMock.mockReturnValue(response.promise);
+		const { result, rerender } = renderStop();
+		let steered: Promise<unknown> | undefined;
+		act(() => {
+			steered = result.current.steer("go left");
+		});
+		await waitFor(() => expect(result.current.steerPending).toBe(true));
+
+		rerender({ turnId: undefined });
+		expect(result.current.steerPending).toBe(true);
+
+		await act(async () => {
+			response.resolve({ data: undefined, error: { code: "CHAT_NO_ACTIVE_TURN" } });
+			await steered;
+		});
+		await waitFor(() => expect(result.current.steerRefusal).toMatch(/Send it as a message instead/));
 	});
 });
