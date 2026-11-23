@@ -125,7 +125,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		const live = transport ? transport() : new LocalBrowserTransport(localConfig!, sessionID);
 		live.connect({
 			onStatus: (next, message) => {
-				if (disposed || next === "closed") return;
+				if (disposed) return;
 				setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
 				if (next === "open") {
 					setError(undefined);
