@@ -429,7 +429,9 @@ func TestATokenIsNotSavedOnAnAddressTheSignInDidNotStartFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = svc.saveToken(created.ID, "https://old.example.com/mcp", &oauth2.Config{ClientID: "client-1"}, &oauth2.Token{AccessToken: "access-1"})
+	started, _ := svc.snapshot(created.ID)
+	started.OAuthClientID = "an-older-client"
+	err = svc.saveToken(&started, &oauth2.Config{ClientID: "client-1"}, &oauth2.Token{AccessToken: "access-1"})
 	if errCode(err) != "CONNECTOR_SIGNIN_STALE" {
 		t.Fatalf("save on a changed address = %v", err)
 	}
@@ -540,5 +542,34 @@ func TestTwoCallsThatAreRefusedTogetherRenewTheTokenOnce(t *testing.T) {
 	}
 	if !svc.renew(created.ID, "Bearer access-1") || svc.records[0].OAuth.AccessToken != "access-2" || svc.tokenSource(created.ID) != renewing {
 		t.Fatal("a late refused call with the old token started another renewal")
+	}
+}
+
+func TestARefusedSignInSaysWhyAndAPastedAddressNeedsNoScheme(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "fake", Transport: TransportHTTP, URL: fake.URL + "/mcp", Auth: AuthOAuth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.StartSignIn(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CompleteSignIn(ctx, signInState(t, page), "", "", "access_denied"); errCode(err) != "CONNECTOR_SIGNIN_REFUSED" {
+		t.Fatalf("a refused sign-in = %v", err)
+	}
+	if got, _ := svc.Get(ctx, created.ID); got.StatusStep != "sign-in" || !strings.Contains(got.StatusError, "access_denied") {
+		t.Fatalf("status after a refusal = %+v", got)
+	}
+
+	page, err = svc.StartSignIn(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pasted := strings.TrimPrefix(testBaseURL, "http://") + callbackPath + "?code=code-1&state=" + signInState(t, page) + "&iss=" + fake.URL
+	if done, err := svc.FinishFromAddress(ctx, created.ID, pasted); err != nil || !done.SignedIn {
+		t.Fatalf("a pasted address without a scheme = %+v, %v", done, err)
 	}
 }

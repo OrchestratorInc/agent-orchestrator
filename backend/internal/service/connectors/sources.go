@@ -59,6 +59,7 @@ type sourceDef struct {
 	URL       string            `json:"url" toml:"url"`
 	Headers   map[string]string `json:"headers" toml:"http_headers"`
 	BearerEnv string            `json:"-" toml:"bearer_token_env_var"`
+	Enabled   *bool             `json:"-" toml:"enabled"`
 }
 
 type sourceServer struct {
@@ -69,7 +70,10 @@ type sourceServer struct {
 type jsonSource struct {
 	MCPServers map[string]json.RawMessage `json:"mcpServers"`
 	Projects   map[string]struct {
-		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+		MCPServers     map[string]json.RawMessage `json:"mcpServers"`
+		Disabled       []string                   `json:"disabledMcpServers"`
+		ApprovedInRepo []string                   `json:"enabledMcpjsonServers"`
+		DisabledInRepo []string                   `json:"disabledMcpjsonServers"`
 	} `json:"projects"`
 }
 
@@ -94,21 +98,29 @@ func NativeNames(harness domain.AgentHarness, workspace string, env map[string]s
 		for name := range file.MCPServers {
 			names[name] = true
 		}
-		for name := range file.Projects[workspace].MCPServers {
+		project := file.Projects[workspace]
+		for name := range project.MCPServers {
 			names[name] = true
 		}
 		if workspace != "" {
 			for name := range readJSONSource(filepath.Join(workspace, ".mcp.json")).MCPServers {
-				names[name] = true
+				if slices.Contains(project.ApprovedInRepo, name) {
+					names[name] = true
+				}
 			}
+		}
+		for _, name := range slices.Concat(project.Disabled, project.DisabledInRepo) {
+			delete(names, name)
 		}
 	case domain.HarnessCodex:
 		dir := filepath.Join(home, ".codex")
 		if env["CODEX_HOME"] != "" {
 			dir = env["CODEX_HOME"]
 		}
-		for name := range readCodexSource(filepath.Join(dir, "config.toml")) {
-			names[name] = true
+		for name, def := range readCodexSource(filepath.Join(dir, "config.toml")) {
+			if def.Enabled == nil || *def.Enabled {
+				names[name] = true
+			}
 		}
 	case domain.HarnessCursor:
 		files := []string{filepath.Join(home, ".cursor", "mcp.json")}

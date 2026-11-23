@@ -348,3 +348,31 @@ func TestClosedSessionsAreForgottenWhenManyAreTracked(t *testing.T) {
 		t.Fatalf("tracked after the closed ones aged = %d", len(svc.sessions))
 	}
 }
+
+func TestARefusedRequestThatIsNotACallGetsNoMessageBody(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc, _ := newProxiedService(t)
+	ctx := context.Background()
+	signInFake(t, svc, fake, Input{Name: "fake"})
+	entry := svc.ForSession(ctx, SessionInput{SessionID: "ao-12"})[0]
+	if _, err := svc.SignOut(ctx, "fake"); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		req, err := http.NewRequestWithContext(ctx, method, entry.URL, http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", entry.Headers["Authorization"])
+		req.Header.Set("Accept", "text/event-stream")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed || len(body) != 0 || resp.Header.Get("WWW-Authenticate") != "" {
+			t.Fatalf("%s of a connector that needs sign-in = %d %q", method, resp.StatusCode, body)
+		}
+	}
+}

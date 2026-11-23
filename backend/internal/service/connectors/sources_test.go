@@ -32,7 +32,8 @@ func sourceHome(t *testing.T) (home, project string) {
 			"old": {"type": "sse", "url": "https://sse.example.com/sse"},
 			"files": {"command": "npx", "args": ["-y", "files"], "env": {"ROOT": "/tmp", "TOKEN": "tok-${FILES_TOKEN}"}}
 		},
-		"projects": {"`+filepath.ToSlash(project)+`": {"mcpServers": {"scoped": {"command": "scoped-server"}}}}
+		"projects": {"`+filepath.ToSlash(project)+`": {"mcpServers": {"scoped": {"command": "scoped-server"}, "off": {"command": "x"}},
+			"disabledMcpServers": ["off"], "enabledMcpjsonServers": ["repo"]}}
 	}`)
 	writeSource(t, filepath.Join(home, ".codex", "config.toml"), `
 [mcp_servers.sentry]
@@ -41,8 +42,12 @@ bearer_token_env_var = "AO_TEST_SENTRY_TOKEN"
 
 [mcp_servers.ao]
 command = "ao"
+
+[mcp_servers.paused]
+command = "paused-server"
+enabled = false
 `)
-	writeSource(t, filepath.Join(project, ".mcp.json"), `{"mcpServers": {"repo": {"command": "repo-server"}}}`)
+	writeSource(t, filepath.Join(project, ".mcp.json"), `{"mcpServers": {"repo": {"command": "repo-server"}, "unapproved": {"command": "x"}}}`)
 	return home, project
 }
 
@@ -54,7 +59,12 @@ func TestNativeNamesReadTheAgentsOwnConfiguration(t *testing.T) {
 			t.Errorf("claude names = %v, missing %q", claude, name)
 		}
 	}
-	if codex := NativeNames(domain.HarnessCodex, project, nil); !codex["sentry"] || codex["Linear"] {
+	for _, name := range []string{"off", "unapproved"} {
+		if claude[name] {
+			t.Errorf("claude names hold %q, which Claude Code does not load", name)
+		}
+	}
+	if codex := NativeNames(domain.HarnessCodex, project, nil); !codex["sentry"] || codex["Linear"] || codex["paused"] {
 		t.Errorf("codex names = %v", codex)
 	}
 	other := filepath.Join(home, "account")
@@ -84,7 +94,7 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 	for _, candidate := range candidates {
 		byKey[candidate.Key] = candidate
 	}
-	if len(byKey) != 5 || byKey["old"].ID != "" || byKey["ao"].ID != "" {
+	if len(byKey) != 8 || byKey["old"].ID != "" || byKey["ao"].ID != "" {
 		t.Fatalf("candidates = %+v", candidates)
 	}
 	if got := byKey["linear"]; got.URL != "https://mcp.linear.app/mcp?team=***" || got.Transport != TransportHTTP || len(got.NeedsValue) != 0 {

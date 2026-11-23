@@ -41,6 +41,19 @@ describe("ConnectorProposalDock", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
+	it("clears what the user typed when the agent replaces its request", async () => {
+		let pending = [paper];
+		vi.spyOn(apiClient, "GET").mockImplementation((async () => ({ data: { proposals: pending } })) as never);
+		renderDock({ asked: true, waiting: true });
+		const field = (await screen.findByLabelText("Value for PAPER_KEY")) as HTMLInputElement;
+		fireEvent.change(field, { target: { value: "secret" } });
+		expect(field.value).toBe("secret");
+		pending = [{ ...paper, id: "p3", args: ["-y", "other-mcp"] }];
+		await waitFor(() => expect(screen.getByRole("group", { name: "Connector request" })).toHaveTextContent("other-mcp"), { timeout: 5000 });
+		expect((screen.getByLabelText("Value for PAPER_KEY") as HTMLInputElement).value).toBe("");
+		expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+	});
+
 	it("asks and answers the machine that runs the chat", async () => {
 		const local = vi.spyOn(apiClient, "GET");
 		const remote = {

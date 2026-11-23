@@ -19,8 +19,7 @@ const authKeys = {
 export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { sessionId: string; hostId?: string; asked: boolean; waiting: boolean }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
-	const [values, setValues] = useState<Record<string, string>>({});
-	const [scope, setScope] = useState<string | undefined>(undefined);
+	const [draft, setDraft] = useState<{ id?: string; values: Record<string, string>; scope?: string }>({ values: {} });
 	const [signIn, setSignIn] = useState<Connector | null>(null);
 	const query = useQuery({
 		queryKey: sessionProposalsQueryKey(sessionId, hostId),
@@ -29,9 +28,10 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { s
 		refetchInterval: (state) => (waiting || (state.state.data?.length ?? 0) > 0 ? 2500 : false),
 	});
 	const proposal: ConnectorProposal | undefined = query.data?.[0];
+	const values = draft.id === proposal?.id ? draft.values : {};
+	const scope = draft.id === proposal?.id ? draft.scope : undefined;
 	const settle = () => {
-		setValues({});
-		setScope(undefined);
+		setDraft({ values: {} });
 		void queryClient.invalidateQueries({ queryKey: sessionProposalsQueryKey(sessionId, hostId) });
 	};
 	const approve = useMutation({
@@ -79,7 +79,7 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { s
 						placeholder={t("settings.connectors.dialog.importValue", { name })}
 						value={values[name] ?? ""}
 						disabled={busy}
-						onChange={(event) => setValues((prev) => ({ ...prev, [name]: event.target.value }))}
+						onChange={(event) => setDraft({ id: proposal.id, values: { ...values, [name]: event.target.value }, scope })}
 					/>
 				))}
 				<div className="flex flex-wrap items-center justify-between gap-2">
@@ -89,7 +89,7 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { s
 							<SettingsOptionMenu<string>
 								aria-label={t("settings.connectors.dialog.projects")}
 								value={scope ?? projectId}
-								onChange={setScope}
+								onChange={(next) => setDraft({ id: proposal.id, values, scope: next })}
 								disabled={busy}
 								triggerVariant="ghost"
 								menuAlign="start"

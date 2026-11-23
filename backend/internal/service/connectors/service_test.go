@@ -297,3 +297,11 @@ func TestAQueryNameWithoutAValueStaysAsItIs(t *testing.T) {
 		t.Fatalf("shown %q, after an edit of the project = %+v, %v", shown, got, err)
 	}
 }
+
+func TestAKeyMadeFromALongNameIsCutToFit(t *testing.T) {
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	created, err := svc.Create(context.Background(), httpInput("Internal Documentation Search Server"))
+	if err != nil || len(created.Key) > 32 || !strings.HasPrefix(created.Key, "internal-documentation-search") {
+		t.Fatalf("created = %+v, %v", created, err)
+	}
+}

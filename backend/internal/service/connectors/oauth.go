@@ -1,6 +1,7 @@
 package connectors
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -33,6 +34,7 @@ type signIn struct {
 	err         error
 	cancel      context.CancelFunc
 	cancelled   bool
+	refusal     string
 }
 
 // CallbackURL is the address a sign-in server sends the browser back to.
@@ -128,6 +130,9 @@ func (s *Service) CompleteSignIn(ctx context.Context, state, code, iss, refusal 
 		return Connector{}, apierr.NotFound("CONNECTOR_SIGNIN_NOT_FOUND", "This sign-in is not open on this machine")
 	}
 	if refusal != "" || code == "" {
+		s.mu.Lock()
+		pending.refusal = cmp.Or(refusal, "no code")
+		s.mu.Unlock()
 		pending.cancel()
 		<-pending.done
 		return Connector{}, invalid("CONNECTOR_SIGNIN_REFUSED", "The server refused the sign-in: "+refusal)
@@ -157,7 +162,7 @@ func (s *Service) FinishFromAddress(ctx context.Context, ref, address string) (C
 	}
 	wrong := invalid("CONNECTOR_SIGNIN_ADDRESS", "That address is not from this sign-in. Paste the address your browser opened after you approved.")
 	address = strings.TrimSpace(address)
-	if !strings.Contains(address, "://") {
+	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
 		address = "http://" + address
 	}
 	pasted, err := url.Parse(address)
@@ -226,7 +231,7 @@ func (s *Service) handlerConfig(rec *record, pending *signIn, pageReady chan<- s
 			}
 		},
 		NewTokenSource: func(_ context.Context, cfg *oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
-			if err := s.saveToken(rec.ID, rec.URL, cfg, token); err != nil {
+			if err := s.saveToken(rec, cfg, token); err != nil {
 				return nil, err
 			}
 			return s.tokenSource(rec.ID), nil
@@ -274,9 +279,12 @@ func (s *Service) endSignIn(pending *signIn, err error) {
 			delete(s.signIns, state)
 		}
 	}
-	cancelled := pending.cancelled
+	cancelled, refusal := pending.cancelled, pending.refusal
 	s.mu.Unlock()
 	if err != nil {
+		if refusal != "" {
+			err = errors.New("the server refused the sign-in: " + refusal)
+		}
 		pending.err = err
 		if !cancelled {
 			_, _ = s.setStatus(pending.connectorID, StatusNeedsSignIn, "sign-in", safeError(err, ""))
@@ -305,15 +313,16 @@ func (s *Service) cancelSignIns(connectorID string) {
 	}
 }
 
-func (s *Service) saveToken(id, address string, cfg *oauth2.Config, token *oauth2.Token) error {
+func (s *Service) saveToken(started *record, cfg *oauth2.Config, token *oauth2.Token) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	id := started.ID
 	i := s.index(id)
 	if i < 0 {
 		return errNotFound()
 	}
-	if s.records[i].URL != address {
-		return invalid("CONNECTOR_SIGNIN_STALE", "The connector's address changed during the sign-in")
+	if !sameTarget(s.records[i], *started) {
+		return invalid("CONNECTOR_SIGNIN_STALE", "The connector changed during the sign-in")
 	}
 	next := slices.Clone(s.records)
 	next[i].OAuth = &oauthToken{

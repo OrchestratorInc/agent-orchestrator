@@ -2383,7 +2383,7 @@ func connectorOperations() []operation {
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/connectors/{connectorId}", id: "updateConnector", tag: "connectors",
-			summary: "Replace a connector's definition, or turn it on or off", pathParams: one,
+			summary: "Change a connector: without transport only the named fields, with transport the whole definition", pathParams: one,
 			reqBody: controllers.ConnectorRequest{},
 			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}},
 				failures(http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge)...),

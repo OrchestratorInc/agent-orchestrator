@@ -324,7 +324,7 @@ func normalize(in Input, old record) (record, error) {
 	}
 	rec.Key = strings.TrimSpace(in.Key)
 	if rec.Key == "" {
-		rec.Key = strings.Trim(slugRun.ReplaceAllString(strings.ToLower(rec.Name), "-"), "-")
+		rec.Key = importKey(rec.Name)
 	}
 	if rec.Name == "" {
 		rec.Name = rec.Key

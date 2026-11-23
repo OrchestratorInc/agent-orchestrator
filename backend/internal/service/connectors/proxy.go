@@ -164,13 +164,20 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 		} `json:"params"`
 	}
 	_ = json.Unmarshal(body, &call)
+	fail := func(message string) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		writeRPCError(w, call.ID, message)
+	}
 	if problem != "" {
-		writeRPCError(w, call.ID, problem)
+		fail(problem)
 		return
 	}
 	target, err := url.Parse(rec.URL)
 	if err != nil {
-		writeRPCError(w, call.ID, rec.Name+" has a bad address. Ask the user to open Settings, Connectors.")
+		fail(rec.Name + " has a bad address. Ask the user to open Settings, Connectors.")
 		return
 	}
 	signed, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rec.URL, http.NoBody)
@@ -180,12 +187,12 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 	var refused *oauth2.RetrieveError
 	if err != nil && (!errors.As(err, &refused) || refused.ErrorCode != "invalid_grant") {
 		s.observe(rec.ID, StatusUnavailable, "reach", safeError(err, rec.URL))
-		writeRPCError(w, call.ID, rec.Name+" did not answer: its sign-in could not be renewed now. Try again.")
+		fail(rec.Name + " did not answer: its sign-in could not be renewed now. Try again.")
 		return
 	}
 	if err != nil {
 		s.observe(rec.ID, StatusNeedsSignIn, "sign-in", safeError(err, rec.URL))
-		writeRPCError(w, call.ID, signInAdvice(rec))
+		fail(signInAdvice(rec))
 		return
 	}
 	s.count(sessionID, rec.Key, call.Method, call.Params.Name)
@@ -215,8 +222,13 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 			switch {
 			case refused:
 				s.observe(rec.ID, StatusNeedsSignIn, "sign-in", "the server refused the sign-in")
-				answer := rpcError(call.ID, signInAdvice(rec))
 				_ = resp.Body.Close()
+				if r.Method != http.MethodPost {
+					resp.StatusCode, resp.Status = http.StatusMethodNotAllowed, "405 Method Not Allowed"
+					resp.Header, resp.Body, resp.ContentLength = http.Header{}, http.NoBody, 0
+					return nil
+				}
+				answer := rpcError(call.ID, signInAdvice(rec))
 				resp.StatusCode, resp.Status = http.StatusOK, "200 OK"
 				resp.Header = http.Header{"Content-Type": {"application/json"}}
 				resp.Body, resp.ContentLength = io.NopCloser(bytes.NewReader(answer)), int64(len(answer))
@@ -231,7 +243,7 @@ func (s *Service) ServeProxy(w http.ResponseWriter, r *http.Request, sessionID, 
 			if !errors.Is(err, context.Canceled) {
 				s.observe(rec.ID, StatusUnavailable, "reach", safeError(err, rec.URL))
 			}
-			writeRPCError(w, call.ID, rec.Name+" did not answer: "+safeError(err, rec.URL))
+			fail(rec.Name + " did not answer: " + safeError(err, rec.URL))
 		},
 	}).ServeHTTP(w, r)
 }

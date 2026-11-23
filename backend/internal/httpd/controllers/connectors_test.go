@@ -74,6 +74,13 @@ func TestConnectorRoutesHideStoredValues(t *testing.T) {
 	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/scoped", `{"transport":"http","url":"https://scoped.example.com/v2/mcp","projectId":""}`); status != http.StatusOK || strings.Contains(body, `"projectId":"p1"`) {
 		t.Fatalf("an edit to all projects = %d %s", status, body)
 	}
+	if status, body := connectorCall(t, srv, http.MethodPost, "/api/v1/connectors", `{"name":"own","transport":"http","url":"https://own.example.com/mcp","auth":"oauth","oauthClientId":"client-9","oauthClientSecret":"hidden-secret"}`); status != http.StatusCreated {
+		t.Fatalf("create with an own client = %d %s", status, body)
+	}
+	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/own", `{"name":"Own (work)"}`); status != http.StatusOK ||
+		!strings.Contains(body, `"oauthClientId":"client-9"`) || !strings.Contains(body, `"name":"Own (work)"`) || !strings.Contains(body, `"auth":"oauth"`) {
+		t.Fatalf("an edit of the name only = %d %s", status, body)
+	}
 	if status, body := connectorCall(t, srv, http.MethodPatch, "/api/v1/connectors/scoped", `{"enabled":false,"name":"Scoped v2"}`); status != http.StatusOK ||
 		!strings.Contains(body, `"enabled":false`) || !strings.Contains(body, `"name":"Scoped v2"`) || !strings.Contains(body, `/v2/mcp`) {
 		t.Fatalf("an edit of the name with a toggle = %d %s", status, body)

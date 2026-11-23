@@ -1406,7 +1406,7 @@ export interface paths {
         delete: operations["deleteConnector"];
         options?: never;
         head?: never;
-        /** Replace a connector's definition, or turn it on or off */
+        /** Change a connector: without transport only the named fields, with transport the whole definition */
         patch: operations["updateConnector"];
         trace?: never;
     };

@@ -343,8 +343,6 @@ func (a *API) Register(root chi.Router) {
 						computerUse.ServeHTTP(w, req)
 						return
 					}
-					// A test of a command connector waits up to 90 s for the
-					// command's first download.
 					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/connectors/{connectorId}/test" {
 						connectorTest.ServeHTTP(w, req)
 						return

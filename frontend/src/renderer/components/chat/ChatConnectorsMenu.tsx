@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plug, Settings2 } from "@/components/app-icons";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,11 @@ export function ChatConnectorsMenu({ sessionId, hostId, servers }: { sessionId: 
 		refetchInterval: open ? 3000 : false,
 		staleTime: 30_000,
 	});
+	const serverCount = servers.length;
+	const { refetch } = query;
+	useEffect(() => {
+		if (serverCount > 0) void refetch({ cancelRefetch: false });
+	}, [serverCount, refetch]);
 	const connectors = query.data ?? [];
 	if (connectors.length === 0) return null;
 	const reported = new Map(servers.map((server) => [server.name, server]));

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"html/template"
@@ -334,17 +335,10 @@ func (c *ConnectorsController) update(w http.ResponseWriter, r *http.Request) {
 		}
 		in := connectorInput(&req)
 		if in.Transport == "" {
-			in.Transport = current.Transport
-		}
-		if in.Transport == current.Transport {
-			if in.URL == "" {
-				in.URL = current.URL
-			}
-			if in.Command == "" && in.Args == nil {
-				in.Command, in.Args = current.Command, current.Args
-			}
-			if in.Auth == "" {
-				in.Auth = current.Auth
+			in.Transport, in.URL, in.Auth = current.Transport, cmp.Or(in.URL, current.URL), cmp.Or(in.Auth, current.Auth)
+			in.Command, in.PresetID, in.OAuthClientID = cmp.Or(in.Command, current.Command), cmp.Or(in.PresetID, current.PresetID), cmp.Or(in.OAuthClientID, current.OwnClientID)
+			if in.Args == nil {
+				in.Args = current.Args
 			}
 		}
 		if req.ProjectID == nil {

@@ -3718,7 +3718,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Replace a connector's definition, or turn it on or off
+      summary: 'Change a connector: without transport only the named fields, with
+        transport the whole definition'
       tags:
       - connectors
   /api/v1/connectors/{connectorId}/connect:
