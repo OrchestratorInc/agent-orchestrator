@@ -20,6 +20,8 @@ vi.mock("../../hooks/useAgentAuth", async (importOriginal) => ({
 	probeAgentAuth: auth.probe,
 }));
 
+import { setAnalyticsOptedOut } from "../../lib/analytics-opt-out";
+import { resetOnboardingTelemetryForTests, startOnboardingAction } from "../../lib/onboarding-telemetry";
 import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, closeLoginWorkflow, LOGIN_LIFETIME_MS, LOGIN_VERIFY_MS, useLoginLifetime, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn } from "./ToolInstalls";
 
 const plan = (agentId: string, automatic = true) => ({
@@ -68,6 +70,8 @@ function AgentHarness({ agentId, onInstalled = () => undefined }: { agentId: str
 beforeEach(() => {
 	api.GET.mockReset().mockResolvedValue({ data: undefined });
 	api.POST.mockReset();
+	// Attempts the funnel holds open between tests would change what a mount resumes.
+	resetOnboardingTelemetryForTests();
 });
 
 describe("useGhInstall", () => {
@@ -105,6 +109,43 @@ describe("useGhInstall", () => {
 		render(wrap(<GhHarness />));
 		await userEvent.click(screen.getByRole("button", { name: "install gh" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("daemon unavailable");
+	});
+
+	it("ignores a mount lookup that answers after a new install started", async () => {
+		let answerLookup: (value: unknown) => void = () => undefined;
+		api.GET.mockReturnValueOnce(new Promise((resolve) => { answerLookup = resolve; }));
+		api.POST.mockResolvedValue({ data: { target: "gh", status: "installing", command: "brew install gh" } });
+		render(wrap(<GhHarness />));
+		await userEvent.click(screen.getByRole("button", { name: "install gh" }));
+		expect(screen.getByTestId("busy")).toHaveTextContent("true");
+		// An older job's failure, from before this install, arrives late.
+		await act(async () => answerLookup({ data: { target: "gh", status: "failed", error: "An earlier install failed." } }));
+		expect(screen.getByTestId("busy")).toHaveTextContent("true");
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("follows an install started before the page was left, back to its end", async () => {
+		// Started on an earlier visit to the page (Back unmounted it).
+		startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+		api.GET.mockResolvedValue({ data: { target: "gh", status: "failed", error: "brew failed." } });
+		render(wrap(<GhHarness />));
+		expect(await screen.findByRole("alert")).toHaveTextContent("brew failed.");
+		expect(screen.getByTestId("ended")).toHaveTextContent("true");
+		expect(api.POST).not.toHaveBeenCalled();
+	});
+
+	it("follows an install started before the page was left with analytics off", async () => {
+		setAnalyticsOptedOut(true);
+		try {
+			const onInstalled = vi.fn();
+			startOnboardingAction("gh_install", { target: "gh", step: "tools" });
+			api.GET.mockResolvedValue({ data: { target: "gh", status: "succeeded" } });
+			render(wrap(<GhHarness onInstalled={onInstalled} />));
+			await waitFor(() => expect(onInstalled).toHaveBeenCalledOnce());
+			expect(api.POST).not.toHaveBeenCalled();
+		} finally {
+			setAnalyticsOptedOut(false);
+		}
 	});
 
 	it("follows a running install to the end", async () => {

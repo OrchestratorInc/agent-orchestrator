@@ -137,6 +137,32 @@ func TestCoordinatorEarlyFlushWaitsForProvisioningWorker(t *testing.T) {
 	}
 }
 
+func TestCoordinatorEarlyFlushWaitsForReviewerSession(t *testing.T) {
+	start := time.Date(2026, 10, 12, 10, 30, 0, 0, time.UTC)
+	h := newEarlyFlushHarness(start)
+	finished := earlyWorker("a", domain.ActivityIdle, start)
+	reviewer := domain.SessionRecord{
+		ID:        "rev",
+		ProjectID: "p",
+		Kind:      domain.KindReviewer,
+		Activity:  domain.Activity{State: domain.ActivityActive, LastActivityAt: start.Add(-time.Hour)},
+	}
+	h.store.setSessions(earlyOrchestrator(), finished, reviewer)
+	h.store.add(doneAt("done-a", "a", start, "a finished"))
+
+	h.now = start.Add(time.Minute)
+	if delay := h.run(t); delay != domain.ReportSettlementWindow-time.Minute || len(h.delivery.submitted()) != 0 {
+		t.Fatalf("active reviewer delay = %v, submissions = %d", delay, len(h.delivery.submitted()))
+	}
+
+	h.store.add(doneAt("done-rev", "rev", start.Add(2*time.Minute), "review finished"))
+	h.now = start.Add(2*time.Minute + domain.ReportEarlyFlushDebounce)
+	h.run(t)
+	if got := h.delivery.submitted(); len(got) != 1 || got[0].target != "orch" {
+		t.Fatalf("submissions = %#v, want early flush to orch", got)
+	}
+}
+
 func TestCoordinatorEarlyFlushKeepsSettlementUpperBound(t *testing.T) {
 	start := time.Date(2026, 10, 12, 11, 0, 0, 0, time.UTC)
 	h := newEarlyFlushHarness(start)

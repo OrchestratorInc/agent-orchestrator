@@ -106,12 +106,19 @@ type Service struct {
 	autoResumeRetryAt     map[string]time.Time
 	autoResumeInFlight    map[string]bool
 	autoResumeScanning    bool
-	usageLimitAccounts    usageLimitAccountReader
-	handoffMu             sync.Mutex
-	handoff               accountHandoffDeps
-	handoffSince          time.Time
-	handoffScanning       bool
-	handoffs              map[string]*accountHandoff
+	// autoResumeIdle is set when the last scan found no armed turn; the daemon's
+	// resume loop then waits longer, and arming a turn wakes it (autoResumeWake).
+	autoResumeIdle bool
+	autoResumeWake chan struct{}
+	// autoResumeArms counts arming calls, so a scan that started before one
+	// does not mark the loop idle when it finishes.
+	autoResumeArms     uint64
+	usageLimitAccounts usageLimitAccountReader
+	handoffMu          sync.Mutex
+	handoff            accountHandoffDeps
+	handoffSince       time.Time
+	handoffScanning    bool
+	handoffs           map[string]*accountHandoff
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool
@@ -426,6 +433,21 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 	}
 	if err := s.store.FailPendingInputs(ctx, conversationID, now); err != nil {
 		s.log.Error("chat start: close pending input requests", "session", session, "error", err)
+	}
+}
+
+// applyConversationSettings overlays a conversation's durable choices onto the
+// launch config of a provider that continues it. A chosen model and approval
+// mode win over what the session was spawned with; effort follows the
+// conversation outright, since an empty effort is itself the choice of the
+// provider default.
+func applyConversationSettings(cfg *StartConfig, settings domain.ConversationSettings) {
+	if settings.Model != "" {
+		cfg.Model = settings.Model
+	}
+	cfg.Effort = settings.ReasoningEffort
+	if settings.ApprovalMode != "" {
+		cfg.Permissions = settings.ApprovalMode
 	}
 }
 
@@ -838,14 +860,8 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// Conversation settings are durable user choices. Restore the selected
 	// model when rebuilding a controller after a daemon restart; the caller's
 	// session default must not silently replace it.
-	if cfg.ProviderConversationID != "" && conversation.Settings.Model != "" {
-		cfg.Model = conversation.Settings.Model
-	}
 	if cfg.ProviderConversationID != "" {
-		cfg.Effort = conversation.Settings.ReasoningEffort
-	}
-	if cfg.ProviderConversationID != "" && conversation.Settings.ApprovalMode != "" {
-		cfg.Permissions = conversation.Settings.ApprovalMode
+		applyConversationSettings(&cfg, conversation.Settings)
 	}
 	if cfg.ProviderConversationID == "" {
 		if err := chatAdmissionError(driver, cfg.Harness, caps, cfg.Permissions); err != nil {
@@ -1789,6 +1805,19 @@ func (s *Service) Interrupt(ctx context.Context, id domain.SessionID) error {
 		return err
 	}
 	return controller.Interrupt(ctx)
+}
+
+// InterruptTurn cancels a session's in-flight turn only while it is still the
+// turn the user pressed Stop on. See Controller.InterruptTurn.
+func (s *Service) InterruptTurn(ctx context.Context, id domain.SessionID, turnID string) error {
+	if _, err := s.requireChatSession(ctx, id); err != nil {
+		return err
+	}
+	controller, err := s.Controller(id)
+	if err != nil {
+		return err
+	}
+	return controller.InterruptTurn(ctx, turnID)
 }
 
 // InterruptForOwner cancels the in-flight turn for an owner-specific controller.

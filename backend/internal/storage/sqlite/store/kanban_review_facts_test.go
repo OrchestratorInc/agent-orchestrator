@@ -100,6 +100,43 @@ func TestListCurrentHeadReviewRunsForSessionKeepsLatestRunPerHarness(t *testing.
 	}
 }
 
+func TestCurrentHeadReviewRunsKeepPostedVerdictDuringNoVerdictRerun(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	const url = "pr/rerun"
+	if err := s.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: url, SessionID: rec.ID, Number: 1, HeadSHA: "head", UpdatedAt: now, ObservedAt: now,
+	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertReview(ctx, domain.Review{ID: "rev", SessionID: rec.ID, ProjectID: "mer", Harness: "codex", PRURL: url, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range []domain.ReviewRun{
+		{ID: "posted", ReviewID: "rev", SessionID: rec.ID, Harness: "codex", PRURL: url, TargetSHA: "head", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested, CreatedAt: now},
+		{ID: "rerun", ReviewID: "rev", SessionID: rec.ID, Harness: "codex", PRURL: url, TargetSHA: "head", Status: domain.ReviewRunRunning, CreatedAt: now.Add(time.Second)},
+	} {
+		if err := s.InsertReviewRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListCurrentHeadReviewRunsForSession(ctx, rec.ID)
+	byID := map[string]domain.ReviewVerdict{}
+	for _, run := range got {
+		byID[run.ID] = run.Verdict
+	}
+	if err != nil || len(got) != 2 || byID["posted"] != domain.VerdictChangesRequested || byID["rerun"] != domain.VerdictNone {
+		t.Fatalf("single current-head runs = %+v, err %v", got, err)
+	}
+	batch, err := s.ListCurrentHeadReviewRunsForSessions(ctx, []domain.SessionID{rec.ID})
+	if err != nil || len(batch[rec.ID]) != 2 {
+		t.Fatalf("batch current-head runs = %+v, err %v", batch, err)
+	}
+}
+
 // The aggregate review_decision mixes AO's own provider reviews with everyone
 // else's, so the PR facts must expose the human-only verdicts separately. AO's
 // review is matched by the review id it recorded when it posted.
@@ -359,6 +396,65 @@ func TestListPRFactsForSessionIgnoresHumanVerdictsFromAnOlderHead(t *testing.T) 
 	if got := byURL["pr/legacy"]; !got.ExternalApproved {
 		t.Fatalf("legacy approval with empty target_sha should remain compatible: %+v", got)
 	}
+}
+
+func TestPRFactsRequireProofBeforeClearingChangesRequested(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	cases := []struct {
+		url, provider string
+		reviews       []domain.PullRequestReview
+		wantStale     bool
+	}{
+		{"pr/old-head", "github", []domain.PullRequestReview{{ID: "old-1", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now}}, true},
+		{"pr/current-bot", "github", []domain.PullRequestReview{
+			{ID: "old-2", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now},
+			{ID: "bot-2", Author: "bot", IsBot: true, State: domain.ReviewChangesRequest, TargetSHA: "head2", SubmittedAt: now.Add(time.Second)},
+		}, false},
+		{"pr/superseded-current-bot", "github", []domain.PullRequestReview{
+			{ID: "old-5", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now},
+			{ID: "bot-5-request", Author: "bot", IsBot: true, State: domain.ReviewChangesRequest, TargetSHA: "head2", SubmittedAt: now.Add(time.Second)},
+			{ID: "bot-5-approval", Author: "bot", IsBot: true, State: domain.ReviewApproved, TargetSHA: "head2", SubmittedAt: now.Add(2 * time.Second)},
+		}, true},
+		{"pr/gitlab", "gitlab", []domain.PullRequestReview{{ID: "old-3", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now}}, false},
+		{"pr/unknown-head", "github", []domain.PullRequestReview{
+			{ID: "old-4", Author: "human", State: domain.ReviewChangesRequest, TargetSHA: "head1", SubmittedAt: now},
+			{ID: "unknown-4", Author: "bot", IsBot: true, State: domain.ReviewChangesRequest, SubmittedAt: now.Add(time.Second)},
+		}, false},
+	}
+	for _, tc := range cases {
+		if err := s.WriteSCMObservation(ctx, domain.PullRequest{
+			URL: tc.url, SessionID: rec.ID, Number: 1, Provider: tc.provider,
+			Review: domain.ReviewChangesRequest, HeadSHA: "head2", UpdatedAt: now, ObservedAt: now,
+		}, nil, tc.reviews, nil, nil, ports.ReviewWriteReplace); err != nil {
+			t.Fatalf("write %s: %v", tc.url, err)
+		}
+	}
+	check := func(facts []domain.PRFacts) {
+		t.Helper()
+		byURL := map[string]domain.PRFacts{}
+		for _, fact := range facts {
+			byURL[fact.URL] = fact
+		}
+		for _, tc := range cases {
+			if got, ok := byURL[tc.url]; !ok || got.StaleChangesRequested != tc.wantStale {
+				t.Fatalf("%s stale proof = %+v, want %v", tc.url, got, tc.wantStale)
+			}
+		}
+	}
+	facts, err := s.ListPRFactsForSession(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(facts)
+	batch, err := s.ListPRFactsForSessions(ctx, []domain.SessionID{rec.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(batch[rec.ID])
 }
 
 func TestListCurrentHeadReviewRunsForSessionsKeepsLatestRunPerHarness(t *testing.T) {

@@ -123,6 +123,51 @@ func TestProjectAddCommand_RequiresPath(t *testing.T) {
 	}
 }
 
+// A repository with no remote and no resolvable default branch is still
+// registered, with a warning naming the command that sets one. --default-branch
+// sets it up front.
+func TestProjectAddDefaultBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name, flag, replyBranch, replyRepo string
+		wantWarning                        bool
+	}{
+		{name: "unresolved without a remote warns", replyBranch: "auto", wantWarning: true},
+		{name: "unresolved with a remote resolves at spawn", replyBranch: "auto", replyRepo: "https://example.com/demo.git"},
+		{name: "flag is sent", flag: "trunk", replyBranch: "trunk"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			var body addProjectRequest
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/api/v1/projects" {
+					http.NotFound(w, r)
+					return
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"project":{"id":"demo","path":"/repo/demo","repo":"`+tc.replyRepo+`","defaultBranch":"`+tc.replyBranch+`"}}`)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+
+			args := []string{"project", "add", "--path", "/repo/demo"}
+			if tc.flag != "" {
+				args = append(args, "--default-branch", tc.flag)
+			}
+			out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, args...)
+			if err != nil || !strings.Contains(out, "registered project demo") {
+				t.Fatalf("project add: err=%v out=%q", err, out)
+			}
+			if got := strings.Contains(errOut, "ao project set-config demo --default-branch"); got != tc.wantWarning {
+				t.Fatalf("stderr = %q, warning present = %t, want %t", errOut, got, tc.wantWarning)
+			}
+			if tc.flag != "" && (body.Config == nil || body.Config.DefaultBranch != tc.flag) {
+				t.Fatalf("request config = %+v, want defaultBranch %q", body.Config, tc.flag)
+			}
+		})
+	}
+}
+
 func TestSpawnClaimPRWiring(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
@@ -226,6 +271,50 @@ func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	}
 	if !reflect.DeepEqual(requests, want) {
 		t.Fatalf("requests=%#v want %#v", requests, want)
+	}
+}
+
+func TestSpawnReviewSelectsReviewerLaunchSettingsAndPreservesWorkerKind(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var spawnReq spawnRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main","config":{"worker":{"harness":"codex"},"reviewers":[{"harness":"claude-code","agentConfig":{"model":"sonnet","effort":"high"}}]}}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
+			_, _ = io.WriteString(w, authorizedAgentsJSON("claude-code"))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
+			_ = json.NewDecoder(r.Body).Decode(&spawnReq)
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/demo-10/auto-inject"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/sessions/demo-10/auto-review":
+			_, _ = io.WriteString(w, `{"session":{"id":"demo-10","status":"idle"}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-10/pr/claim":
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-10","prs":[{"url":"https://github.com/o/r/pull/42","number":42}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--name", "review-pr-42", "--claim-pr", "42", "--review")
+	if err != nil {
+		t.Fatalf("spawn --review failed: %v stderr=%s", err, errOut)
+	}
+	if spawnReq.Kind != "worker" {
+		t.Fatalf("spawnReq.Kind = %q, want worker", spawnReq.Kind)
+	}
+	if spawnReq.Harness != "claude-code" {
+		t.Fatalf("spawnReq.Harness = %q, want claude-code", spawnReq.Harness)
+	}
+	if spawnReq.Model != "sonnet" {
+		t.Fatalf("spawnReq.Model = %q, want sonnet", spawnReq.Model)
+	}
+	if spawnReq.Effort != "high" {
+		t.Fatalf("spawnReq.Effort = %q, want high", spawnReq.Effort)
 	}
 }
 
@@ -1391,5 +1480,8 @@ func TestSpawnReportsBackgroundStartFailure(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--prompt", "fix it")
 	if err == nil || !strings.Contains(err.Error(), "session demo-9 failed to start: git worktree add failed") {
 		t.Fatalf("err = %v, want the start failure reason", err)
+	}
+	if !strings.Contains(err.Error(), "ao session resume-agent demo-9") {
+		t.Fatalf("err = %v, want the retry command", err)
 	}
 }

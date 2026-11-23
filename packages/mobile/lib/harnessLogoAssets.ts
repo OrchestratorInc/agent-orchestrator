@@ -36,6 +36,7 @@ const LOGOS: Record<string, { light: number; dark?: number }> = {
 	kimchi: { light: require("../assets/agents/kimchi.png") },
 	kimi: { light: require("../assets/agents/kimi-light.png"), dark: require("../assets/agents/kimi-dark.png") },
 	kiro: { light: require("../assets/agents/kiro.png") },
+	"mastra-code": { light: require("../assets/agents/mastra-code.png") },
 	memcode: { light: require("../assets/agents/memcode.png") },
 	"mimo-code": { light: require("../assets/agents/mimo-code.png") },
 	"minimax-code": { light: require("../assets/agents/minimax-code.png") },

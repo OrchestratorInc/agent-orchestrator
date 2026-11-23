@@ -139,6 +139,7 @@ export type ReviewTarget = {
 
 /** A failed workspace read that keeps the daemon's error code, for callers that act on it. */
 export class WorkspaceRequestError extends Error {
+	readonly telemetryCode: string = "WORKSPACE_REQUEST_ERROR";
 	constructor(
 		message: string,
 		readonly code?: string,
@@ -214,12 +215,13 @@ export const sessionWorkspaceFilesQueryKey = (sessionId: string, hostId?: string
 const WORKSPACE_FILES_DEGRADED_REFETCH_MS = 30_000;
 const MAX_ARTIFACT_TEXT_BYTES = 256 * 1024;
 
-async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceFilesResponse> {
+async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string, hostId?: string, signal?: AbortSignal): Promise<WorkspaceFilesResponse> {
 	const missing = knownMissingWorkspace(sessionId, hostId);
 	if (missing) throw missing;
 	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
 	const { data, error, response: httpResponse } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/manifest", {
 		params: { path: { sessionId } },
+		signal,
 	});
 	if (error) throw recordWorkspaceResult(sessionId, hostId, error, httpResponse, errorMessage, epoch);
 	const response = (data ? { ...data, commits: [] } : {
@@ -238,7 +240,7 @@ async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: strin
 	};
 }
 
-async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: string, hostId?: string, branch: FilesBranchTarget = CHECKED_OUT_BRANCH): Promise<WorkspaceHistoryResponse> {
+async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: string, hostId?: string, branch: FilesBranchTarget = CHECKED_OUT_BRANCH, signal?: AbortSignal): Promise<WorkspaceHistoryResponse> {
 	const missing = knownMissingWorkspace(sessionId, hostId);
 	if (missing) throw missing;
 	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
@@ -247,6 +249,7 @@ async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: str
 		: undefined;
 	const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/history", {
 		params: query ? { path: { sessionId }, query } : { path: { sessionId } },
+		signal,
 	});
 	if (error) throw recordWorkspaceResult(sessionId, hostId, error, response, errorMessage, epoch);
 	if (!data) throw new Error(errorMessage);
@@ -346,7 +349,9 @@ async function fetchSessionPRFile(sessionId: string, number: number, sourceUrl: 
 export const CLOUD_TEXT_ARTIFACT = /\.(md|markdown|mmd|mermaid|txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|xml|svg|css|js|mjs|ts|tsx|jsx|py|go|rs|sh|sql|diff|patch|html?)$/i;
 
 /** A cloud artifact read refused because the access prefix expired or the user lost access. */
-export class CloudArtifactAccessError extends Error {}
+export class CloudArtifactAccessError extends Error {
+	readonly code: string = "CLOUD_ARTIFACT_ACCESS_ERROR";
+}
 
 // Artifact files live in the session's artifact directory, outside the git
 // workspace, so they have no diff/status and aren't reachable through the
@@ -813,7 +818,7 @@ export function sessionWorkspaceSearchQueryOptions(
 export function sessionWorkspaceFilesQueryOptions(sessionId: string, errorMessage = "Unable to load workspace files", hostId?: string) {
 	return {
 		queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId),
-		queryFn: () => fetchSessionWorkspaceFiles(sessionId, errorMessage, hostId),
+		queryFn: ({ signal }: { signal?: AbortSignal } = {}) => fetchSessionWorkspaceFiles(sessionId, errorMessage, hostId, signal),
 		retry: retryWorkspaceRead,
 		refetchOnWindowFocus: false,
 	};
@@ -835,7 +840,7 @@ export function sessionWorkspaceHistoryQueryOptions(sessionId: string, errorMess
 		queryKey: branch.kind === "branch" ? [...prefix, "branch", branch.name, branch.tipSha ?? ""] as const
 			: branch.kind === "pull_request" ? [...prefix, "pr", branch.url, branch.tipSha ?? ""] as const
 			: prefix,
-		queryFn: () => fetchSessionWorkspaceHistory(sessionId, errorMessage, hostId, branch),
+		queryFn: ({ signal }: { signal?: AbortSignal } = {}) => fetchSessionWorkspaceHistory(sessionId, errorMessage, hostId, branch, signal),
 		staleTime: Infinity,
 		retry: retryWorkspaceRead,
 	};

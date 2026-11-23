@@ -5,7 +5,7 @@ import { AppSymbol } from "./AppSymbol";
 import { ChatAttachmentMenu } from "./chat/ChatAttachmentMenu";
 import { ComposerGlass } from "./chat/composer-glass";
 import type { ComposerImageAsset, PasteOverflow } from "./chat/composerImages";
-import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./chat/composerStyles";
+import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./chat/composerStyles";
 import { usePressFeedback } from "./pressFeedback";
 import type { SpawnComposerVoice } from "./spawn-composer-controls.types";
 import { useImagePaste } from "./chat/useImagePaste";
@@ -51,6 +51,9 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const field = useRef<TextInput>(null);
 	const pasteLayout = useImagePaste(onPasteImages ?? null);
+	// The field's heights at the reader's text size, as the chat's: in points
+	// alone, the largest sizes cut the placeholder off top and bottom.
+	const fieldSize = useComposerFieldSize();
 	const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
 	// A new task is for typing into, so the page opens with the keyboard up, as
 	// a new chat does. iOS focuses
@@ -129,11 +132,12 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 					onChangeText={onChangePrompt}
 					placeholder={placeholder}
 					placeholderTextColor={t.textFaint}
+					maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
 					{...textSelectionColors(t)}
 					// Grows on its own between the style's min and max height, as the
 					// chat's field does: a height set from the content-size event lagged
 					// a line behind and scrolled the top line out of view.
-					style={[styles.input, dictating && styles.hiddenField]}
+					style={[styles.input, fieldSize.field, dictating && styles.hiddenField]}
 					multiline
 					// Android focuses once the push has finished (see above).
 					autoFocus={Platform.OS === "ios"}

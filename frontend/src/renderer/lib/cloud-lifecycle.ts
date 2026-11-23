@@ -20,7 +20,15 @@ export function isCloudPausedStage(stage: CloudLifecycleStage | undefined): stag
 const STARTING_SANDBOX_STATES = new Set(["requested", "provisioning", "bootstrapping", "stopped", "restoring"]);
 
 /**
- * A Freestyle Chat session starting or waking: it stays on its conversation
+ * Sandbox states in which a session meant to run can still lack its worker: the
+ * sandbox is up (or its start failed and is retried) but the worker has not
+ * connected, or has disconnected, as with a stalled worker.
+ */
+const WORKER_PENDING_SANDBOX_STATES = new Set([...STARTING_SANDBOX_STATES, "running", "failed"]);
+
+/**
+ * A Freestyle Chat session starting, waking, or waiting on a worker that is not
+ * connected (including a running sandbox whose worker dropped): it stays on its conversation
  * (no startup screen), its composer shimmers, and messages queue until its
  * worker connects. Other providers start behind the startup screen, which
  * shows a Coder start's steps and workspace link.
@@ -30,7 +38,7 @@ export function cloudChatStartingInPlace(session?: WorkspaceSession): boolean {
 	if (session?.mode !== "chat" || cloud?.sandboxProvider !== FREESTYLE_PROVIDER || session.runtimeConnected) return false;
 	// Only a session meant to run is starting: a paused one keeps its badge, and
 	// one being deleted (or archived) is going away, not getting ready.
-	return cloud.desiredState === "running" && STARTING_SANDBOX_STATES.has(cloud.observedState ?? "");
+	return cloud.desiredState === "running" && WORKER_PENDING_SANDBOX_STATES.has(cloud.observedState ?? "");
 }
 
 /**

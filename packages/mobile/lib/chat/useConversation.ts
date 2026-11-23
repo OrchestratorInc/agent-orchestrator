@@ -41,6 +41,7 @@ import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
+import { createRefreshScheduler } from "./refreshScheduler";
 import { withAttachmentReferences } from "./messageAttachments";
 import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
@@ -48,7 +49,7 @@ import { NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionE
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
-const REFRESH_DEBOUNCE_MS = 120;
+const REFRESH_WINDOW_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
@@ -184,7 +185,6 @@ export function useMobileConversation(
 	// lands late must not undo it. `ifMissing` waits on the one in flight.
 	const turnOptionsRequest = useRef(0);
 	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
-	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const refreshGate = useRef(createRequestGate()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
@@ -248,10 +248,11 @@ export function useMobileConversation(
 		}
 	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
 
-	const scheduleRefresh = useCallback(() => {
-		if (refreshTimer.current) clearTimeout(refreshTimer.current);
-		refreshTimer.current = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
-	}, [refresh]);
+	// Event-driven reads always run the current refresh (connection, chat).
+	const refreshRef = useRef(refresh);
+	refreshRef.current = refresh;
+	const [refreshScheduler] = useState(() => createRefreshScheduler(() => refreshRef.current(), REFRESH_WINDOW_MS));
+	const scheduleRefresh = useCallback(() => refreshScheduler.request(), [refreshScheduler]);
 
 	const loadOlder = useCallback(async () => {
 		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
@@ -287,9 +288,9 @@ export function useMobileConversation(
 		return () => {
 			mounted.current = false;
 			refreshGate.invalidate();
-			if (refreshTimer.current) clearTimeout(refreshTimer.current);
+			refreshScheduler.cancel();
 		};
-	}, [refresh, refreshGate]);
+	}, [refresh, refreshGate, refreshScheduler]);
 
 	useEffect(() => {
 		setPendingSends([]);

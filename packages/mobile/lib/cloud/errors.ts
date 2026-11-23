@@ -4,6 +4,7 @@
  * and `requestId` come from the control plane's error envelope.
  */
 export class CloudError extends Error {
+	readonly telemetryCode: string = "CLOUD_ERROR";
 	readonly status: number;
 	readonly code?: string;
 	readonly requestId?: string;
@@ -25,6 +26,7 @@ export class CloudError extends Error {
 
 /** The account token is missing, expired or refused: the person has to sign in again. */
 export class CloudAuthError extends CloudError {
+	override readonly telemetryCode: string = "CLOUD_AUTH_ERROR";
 	constructor(message: string, options: { status: number; code?: string; requestId?: string }) {
 		super(message, options);
 		this.name = "CloudAuthError";

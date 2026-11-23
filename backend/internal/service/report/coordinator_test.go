@@ -891,6 +891,59 @@ func TestCoordinatorOverlappingBatchesFailureNoticeCheckpoint(t *testing.T) {
 	}
 }
 
+func TestCoordinatorDeliversReviewerCompletionReportToOrchestrator(t *testing.T) {
+	now := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{
+		{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat},
+		{ID: "reviewer-1", ProjectID: "p", Kind: domain.KindReviewer, Mode: domain.SessionModeChat},
+	}
+	report := reportAt("rpt-rev", "reviewer-1", now, now.Add(5*time.Minute), "review complete")
+	report.State = domain.ReportDone
+	report.SettlementDeadline = report.AvailableAt
+	report.Outputs = []domain.ReportOutput{
+		{Kind: domain.ReportOutputPRReviewed, Reference: "https://github.com/o/r/pull/42"},
+	}
+	store.add(report)
+
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{
+		Store:    store,
+		Delivery: delivery,
+		Now:      func() time.Time { return now },
+		NewToken: func() string { return "claim" },
+	})
+
+	if delay, err := c.RunDue(context.Background()); err != nil || delay != domain.ReportEarlyFlushDebounce {
+		t.Fatalf("before early flush debounce delay = %v, err = %v", delay, err)
+	}
+
+	now = now.Add(domain.ReportEarlyFlushDebounce)
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatalf("RunDue err = %v", err)
+	}
+
+	if len(delivery.submissions) != 1 {
+		t.Fatalf("submissions = %#v, want 1 delivered to orchestrator", delivery.submissions)
+	}
+	sub := delivery.submissions[0]
+	if sub.target != "orch" {
+		t.Fatalf("submission target = %s, want orch", sub.target)
+	}
+	if !strings.Contains(sub.message, "review complete") {
+		t.Fatalf("message %q does not contain note", sub.message)
+	}
+	if !strings.Contains(sub.message, "pr_reviewed: https://github.com/o/r/pull/42") {
+		t.Fatalf("message %q does not contain reviewed PR output", sub.message)
+	}
+	if !strings.Contains(sub.message, "ao://sessions/p/reviewer-1") {
+		t.Fatalf("message %q does not link reviewer session", sub.message)
+	}
+	if store.acked != 1 {
+		t.Fatalf("acknowledged = %d, want 1", store.acked)
+	}
+}
+
 type coordinatorStore struct {
 	unacknowledgedAttempts map[string]int
 	mu                     sync.Mutex
