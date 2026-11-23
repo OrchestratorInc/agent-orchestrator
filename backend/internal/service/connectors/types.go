@@ -40,6 +40,8 @@ type Connector struct {
 	EnvKeys     []string
 	HeaderKeys  []string
 	Auth        Auth
+	OwnClientID string
+	SignedIn    bool
 	ProjectID   string
 	Enabled     bool
 	Status      Status
@@ -65,4 +67,7 @@ type Input struct {
 	Auth      Auth
 	ProjectID string
 	Enabled   *bool
+
+	OAuthClientID     string
+	OAuthClientSecret string
 }

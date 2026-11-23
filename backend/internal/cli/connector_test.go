@@ -128,3 +128,47 @@ func TestConnectorListRemoveAndDisable(t *testing.T) {
 		t.Fatalf("calls = %v", calls)
 	}
 }
+
+func TestConnectorConnectTestAndDisconnect(t *testing.T) {
+	var finishBody string
+	connectorDaemon(t, func(w http.ResponseWriter, r *http.Request) bool {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/connectors/linear/connect":
+			_, _ = io.WriteString(w, `{"authorizationUrl":"https://auth.example.com/authorize?state=s1","callbackUrl":"http://127.0.0.1:3001/oauth/mcp/callback","connector":{"key":"linear","status":"needs_signin","args":[],"envKeys":[],"headerKeys":[],"tools":[]}}`)
+		case "POST /api/v1/connectors/open/connect":
+			_, _ = io.WriteString(w, `{"callbackUrl":"http://127.0.0.1:3001/oauth/mcp/callback","connector":{"key":"open","status":"connected","args":[],"envKeys":[],"headerKeys":[],"tools":["a","b"]}}`)
+		case "POST /api/v1/connectors/linear/connect/finish":
+			body, _ := io.ReadAll(r.Body)
+			finishBody = string(body)
+			_, _ = io.WriteString(w, `{"connector":{"key":"linear","status":"connected","signedIn":true,"args":[],"envKeys":[],"headerKeys":[],"tools":["create_issue"]}}`)
+		case "POST /api/v1/connectors/down/test":
+			_, _ = io.WriteString(w, `{"connector":{"key":"down","status":"unavailable","statusDetail":{"step":"reach","error":"dial tcp: refused"},"args":[],"envKeys":[],"headerKeys":[],"tools":[]}}`)
+		case "POST /api/v1/connectors/linear/disconnect":
+			_, _ = io.WriteString(w, `{"connector":{"key":"linear","status":"needs_signin","args":[],"envKeys":[],"headerKeys":[],"tools":[]}}`)
+		default:
+			return false
+		}
+		return true
+	})
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+	out, _, err := executeCLI(t, deps, "connector", "connect", "linear", "--no-wait")
+	if err != nil || !strings.Contains(out, "https://auth.example.com/authorize?state=s1") || !strings.Contains(out, "ao connector connect linear --finish") {
+		t.Fatalf("connect: %v %q", err, out)
+	}
+	if out, _, err := executeCLI(t, deps, "connector", "connect", "open"); err != nil || !strings.Contains(out, "open: connected, 2 tools") {
+		t.Fatalf("connect without sign-in: %v %q", err, out)
+	}
+	out, _, err = executeCLI(t, deps, "connector", "connect", "linear", "--finish", "127.0.0.1:3001/oauth/mcp/callback?code=c&state=s1")
+	var sent map[string]string
+	_ = json.Unmarshal([]byte(finishBody), &sent)
+	if err != nil || !strings.Contains(out, "linear: connected, 1 tools") || sent["callbackUrl"] != "127.0.0.1:3001/oauth/mcp/callback?code=c&state=s1" {
+		t.Fatalf("finish: %v %q body=%s", err, out, finishBody)
+	}
+	out, _, err = executeCLI(t, deps, "connector", "test", "down")
+	if ExitCode(err) != 1 || !strings.Contains(out, `down: unavailable at step "reach": dial tcp: refused`) {
+		t.Fatalf("test: code=%d %q", ExitCode(err), out)
+	}
+	if out, _, err := executeCLI(t, deps, "connector", "disconnect", "linear"); err != nil || !strings.Contains(out, "signed out of connector linear") {
+		t.Fatalf("disconnect: %v %q", err, out)
+	}
+}

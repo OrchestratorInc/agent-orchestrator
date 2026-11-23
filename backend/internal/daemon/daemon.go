@@ -1330,7 +1330,7 @@ func Run(buildVersion string) (retErr error) {
 		ShellTerminals:     shellTermSvc,
 		PaneTerminals:      shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
-		Connectors:         connectors.New(cfg.DataDir),
+		Connectors:         connectors.New(cfg.DataDir, fmt.Sprintf("http://%s:%d", config.LoopbackHost, cfg.Port)),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      sessionConversationService{Service: chatSvc, sessions: sessMgr},

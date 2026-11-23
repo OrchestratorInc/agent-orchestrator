@@ -36,6 +36,21 @@ type record struct {
 	CheckedAt   time.Time         `json:"checkedAt,omitzero"`
 	CreatedAt   time.Time         `json:"createdAt"`
 	UpdatedAt   time.Time         `json:"updatedAt"`
+
+	OAuthClientID     string      `json:"oauthClientId,omitempty"`
+	OAuthClientSecret string      `json:"oauthClientSecret,omitempty"`
+	OAuth             *oauthToken `json:"oauth,omitempty"`
+}
+
+type oauthToken struct {
+	ClientID     string    `json:"clientId"`
+	ClientSecret string    `json:"clientSecret,omitempty"`
+	TokenURL     string    `json:"tokenUrl"`
+	AuthStyle    int       `json:"authStyle,omitempty"`
+	AccessToken  string    `json:"accessToken"`
+	TokenType    string    `json:"tokenType,omitempty"`
+	RefreshToken string    `json:"refreshToken,omitempty"`
+	Expiry       time.Time `json:"expiry,omitzero"`
 }
 
 type fileData struct {

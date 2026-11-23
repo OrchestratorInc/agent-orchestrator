@@ -3,11 +3,13 @@ package controllers
 import (
 	"context"
 	"errors"
+	"html/template"
 	"net/http"
 	"net/url"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
@@ -24,6 +26,12 @@ type ConnectorService interface {
 	Update(ctx context.Context, ref string, in connectors.Input) (connectors.Connector, error)
 	SetEnabled(ctx context.Context, ref string, enabled bool) (connectors.Connector, error)
 	Delete(ctx context.Context, ref string) error
+	Test(ctx context.Context, ref string) (connectors.Connector, error)
+	StartSignIn(ctx context.Context, ref string) (string, error)
+	CompleteSignIn(ctx context.Context, state, code, iss, refusal string) (connectors.Connector, error)
+	FinishFromAddress(ctx context.Context, ref, address string) (connectors.Connector, error)
+	SignOut(ctx context.Context, ref string) (connectors.Connector, error)
+	CallbackURL() string
 }
 
 // ConnectorsController owns the connector routes.
@@ -38,6 +46,15 @@ func (c *ConnectorsController) Register(r chi.Router) {
 	r.Get("/connectors/{connectorId}", c.get)
 	r.Patch("/connectors/{connectorId}", c.update)
 	r.Delete("/connectors/{connectorId}", c.delete)
+	r.Post("/connectors/{connectorId}/test", c.test)
+	r.Post("/connectors/{connectorId}/connect", c.connect)
+	r.Post("/connectors/{connectorId}/connect/finish", c.finishConnect)
+	r.Post("/connectors/{connectorId}/disconnect", c.disconnect)
+}
+
+// RegisterCallback mounts the page a sign-in server sends the browser back to.
+func (c *ConnectorsController) RegisterCallback(root chi.Router) {
+	root.Get(connectorCallbackPath, c.callback)
 }
 
 func (c *ConnectorsController) ready(w http.ResponseWriter, r *http.Request, method, path string) bool {
@@ -134,6 +151,105 @@ func (c *ConnectorsController) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (c *ConnectorsController) test(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodPost, "/api/v1/connectors/{connectorId}/test") {
+		return
+	}
+	tested, err := c.Svc.Test(r.Context(), connectorRef(r))
+	c.writeOne(w, r, &tested, err)
+}
+
+func (c *ConnectorsController) disconnect(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodPost, "/api/v1/connectors/{connectorId}/disconnect") {
+		return
+	}
+	out, err := c.Svc.SignOut(r.Context(), connectorRef(r))
+	c.writeOne(w, r, &out, err)
+}
+
+func (c *ConnectorsController) connect(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodPost, "/api/v1/connectors/{connectorId}/connect") {
+		return
+	}
+	ref := connectorRef(r)
+	page, err := c.Svc.StartSignIn(r.Context(), ref)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	current, err := c.Svc.Get(r.Context(), ref)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ConnectorSignInResponse{
+		AuthorizationURL: page, CallbackURL: c.Svc.CallbackURL(), Connector: connectorResponse(&current),
+	})
+}
+
+func (c *ConnectorsController) finishConnect(w http.ResponseWriter, r *http.Request) {
+	if !c.ready(w, r, http.MethodPost, "/api/v1/connectors/{connectorId}/connect/finish") {
+		return
+	}
+	var req FinishConnectorSignInRequest
+	if !decodeConnectorBody(w, r, &req) {
+		return
+	}
+	done, err := c.Svc.FinishFromAddress(r.Context(), connectorRef(r), req.CallbackURL)
+	c.writeOne(w, r, &done, err)
+}
+
+func (c *ConnectorsController) writeOne(w http.ResponseWriter, r *http.Request, one *connectors.Connector, err error) {
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ConnectorEnvelope{Connector: connectorResponse(one)})
+}
+
+const connectorCallbackPath = "/oauth/mcp/callback"
+
+var connectorCallbackPage = template.Must(template.New("callback").Parse(`<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orchestrator</title>
+<body style="font: 16px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 34rem; margin: 18vh auto; padding: 0 1.25rem; color: #1d1d1f">
+<h1 style="font-size: 1.25rem">{{.Title}}</h1>
+<p style="color: #55555a">{{.Detail}}</p>
+</body></html>`))
+
+func (c *ConnectorsController) callback(w http.ResponseWriter, r *http.Request) {
+	page := struct{ Title, Detail string }{"The sign-in did not complete", "Open Orchestrator and try again."}
+	status := http.StatusBadRequest
+	if c.Svc != nil {
+		query := r.URL.Query()
+		done, err := c.Svc.CompleteSignIn(r.Context(), query.Get("state"), query.Get("code"), query.Get("iss"), query.Get("error"))
+		switch {
+		case err == nil:
+			status = http.StatusOK
+			page.Title, page.Detail = "Signed in to "+done.Name, "You can close this tab and go back to Orchestrator."
+		case connectorErrorCode(err) == "CONNECTOR_SIGNIN_NOT_FOUND":
+			status = http.StatusNotFound
+			page.Title = "This sign-in is not open on this computer"
+			page.Detail = "If you started it for another machine, copy the address of this page and paste it in Orchestrator."
+		default:
+			page.Detail = err.Error()
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.WriteHeader(status)
+	_ = connectorCallbackPage.Execute(w, page)
+}
+
+func connectorErrorCode(err error) string {
+	var typed *apierr.Error
+	if errors.As(err, &typed) {
+		return typed.Code
+	}
+	return ""
+}
+
 func connectorRef(r *http.Request) string {
 	ref, err := url.PathUnescape(chi.URLParam(r, "connectorId"))
 	if err != nil {
@@ -175,6 +291,7 @@ func connectorInput(req *ConnectorRequest) connectors.Input {
 		Key: req.Key, Name: req.Name, PresetID: req.PresetID,
 		Transport: connectors.Transport(req.Transport), URL: req.URL, Command: req.Command, Args: req.Args,
 		Env: req.Env, Headers: req.Headers, Auth: connectors.Auth(req.Auth), Enabled: req.Enabled,
+		OAuthClientID: req.OAuthClientID, OAuthClientSecret: req.OAuthClientSecret,
 	}
 	if req.ProjectID != nil {
 		in.ProjectID = *req.ProjectID
@@ -186,7 +303,8 @@ func connectorResponse(c *connectors.Connector) ConnectorResponse {
 	out := ConnectorResponse{
 		ID: c.ID, Key: c.Key, Name: c.Name, PresetID: c.PresetID, Transport: string(c.Transport),
 		URL: withoutQuery(c.URL), Command: c.Command, Args: nonNil(c.Args), EnvKeys: nonNil(c.EnvKeys), HeaderKeys: nonNil(c.HeaderKeys),
-		Auth: string(c.Auth), Enabled: c.Enabled, Status: string(c.Status), Tools: nonNil(c.Tools),
+		Auth: string(c.Auth), OAuthClientID: c.OwnClientID, SignedIn: c.SignedIn,
+		Enabled: c.Enabled, Status: string(c.Status), Tools: nonNil(c.Tools),
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 	}
 	if c.ProjectID != "" {

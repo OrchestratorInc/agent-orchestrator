@@ -308,6 +308,7 @@ func serveWithSetupBudget(next http.Handler, w http.ResponseWriter, req *http.Re
 // Register mounts the bounded /api/v1 REST surface. Long-lived surfaces such
 // as muxed terminal streams stay outside this timeout group.
 func (a *API) Register(root chi.Router) {
+	a.connectors.RegisterCallback(root)
 	timeout := a.cfg.RequestTimeout
 	if timeout <= 0 {
 		timeout = config.DefaultRequestTimeout

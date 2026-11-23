@@ -25,7 +25,7 @@ func errCode(err error) string {
 
 func TestCreateSavesAPrivateFileAndHidesValues(t *testing.T) {
 	dir := t.TempDir()
-	svc := New(dir)
+	svc := New(dir, "http://127.0.0.1:3001")
 	created, err := svc.Create(context.Background(), Input{
 		Name: "Docs API", Transport: TransportHTTP, URL: "https://docs.example.com/mcp#frag",
 		Auth: AuthHeader, Headers: map[string]string{"Authorization": "Bearer secret-value"},
@@ -46,7 +46,7 @@ func TestCreateSavesAPrivateFileAndHidesValues(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("file mode = %v, want 0600", info.Mode().Perm())
 	}
-	again, err := New(dir).Get(context.Background(), "docs-api")
+	again, err := New(dir, "http://127.0.0.1:3001").Get(context.Background(), "docs-api")
 	if err != nil || again.ID != created.ID {
 		t.Fatalf("reload = %+v, %v", again, err)
 	}
@@ -70,7 +70,7 @@ func TestCreateRefusesBadDefinitions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := New(t.TempDir()).Create(context.Background(), tt.in)
+			_, err := New(t.TempDir(), "http://127.0.0.1:3001").Create(context.Background(), tt.in)
 			if errCode(err) != tt.code {
 				t.Fatalf("err = %v (%s), want %s", err, errCode(err), tt.code)
 			}
@@ -79,7 +79,7 @@ func TestCreateRefusesBadDefinitions(t *testing.T) {
 }
 
 func TestLoopbackHTTPAndDuplicateKeys(t *testing.T) {
-	svc := New(t.TempDir())
+	svc := New(t.TempDir(), "http://127.0.0.1:3001")
 	ctx := context.Background()
 	if _, err := svc.Create(ctx, Input{Name: "local", Transport: TransportHTTP, URL: "http://127.0.0.1:8000/mcp"}); err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestLoopbackHTTPAndDuplicateKeys(t *testing.T) {
 
 func TestUpdateKeepsEmptyValuesAndResetsStatusOnANewTarget(t *testing.T) {
 	dir := t.TempDir()
-	svc := New(dir)
+	svc := New(dir, "http://127.0.0.1:3001")
 	ctx := context.Background()
 	created, err := svc.Create(ctx, Input{Name: "db", Transport: TransportStdio, Command: "uvx", Args: []string{"db-mcp"}, Env: map[string]string{"DATABASE_URI": "postgres://secret", "MODE": "ro"}})
 	if err != nil {
@@ -117,7 +117,7 @@ func TestUpdateKeepsEmptyValuesAndResetsStatusOnANewTarget(t *testing.T) {
 }
 
 func TestEnableDeleteAndUnknown(t *testing.T) {
-	svc := New(t.TempDir())
+	svc := New(t.TempDir(), "http://127.0.0.1:3001")
 	ctx := context.Background()
 	created, err := svc.Create(ctx, httpInput("Linear"))
 	if err != nil {

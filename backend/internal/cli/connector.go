@@ -1,14 +1,22 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
+)
+
+const (
+	connectorSignInWait = 10 * time.Minute
+	connectorSignInPoll = 2 * time.Second
 )
 
 type connectorDTO struct {
@@ -22,6 +30,7 @@ type connectorDTO struct {
 	EnvKeys      []string `json:"envKeys"`
 	HeaderKeys   []string `json:"headerKeys"`
 	Auth         string   `json:"auth"`
+	SignedIn     bool     `json:"signedIn"`
 	ProjectID    *string  `json:"projectId,omitempty"`
 	Enabled      bool     `json:"enabled"`
 	Status       string   `json:"status"`
@@ -38,6 +47,12 @@ type connectorEnvelopeDTO struct {
 
 type connectorListDTO struct {
 	Connectors []connectorDTO `json:"connectors"`
+}
+
+type connectorSignInDTO struct {
+	AuthorizationURL string       `json:"authorizationUrl,omitempty"`
+	CallbackURL      string       `json:"callbackUrl"`
+	Connector        connectorDTO `json:"connector"`
 }
 
 type connectorRequestDTO struct {
@@ -68,6 +83,9 @@ func newConnectorCommand(ctx *commandContext) *cobra.Command {
 		newConnectorRemoveCommand(ctx),
 		newConnectorEnableCommand(ctx, "enable", "Give the connector to new sessions", true),
 		newConnectorEnableCommand(ctx, "disable", "Keep the connector but leave it out of new sessions", false),
+		newConnectorConnectCommand(ctx),
+		newConnectorDisconnectCommand(ctx),
+		newConnectorTestCommand(ctx),
 	)
 	return cmd
 }
@@ -201,6 +219,116 @@ func newConnectorEnableCommand(ctx *commandContext, use, short string, enabled b
 			_, err := fmt.Fprintf(cmd.OutOrStdout(), "%sd connector %s\n", use, response.Connector.Key)
 			return err
 		},
+	}
+}
+
+func newConnectorConnectCommand(ctx *commandContext) *cobra.Command {
+	var finish string
+	var noWait bool
+	cmd := &cobra.Command{
+		Use:   "connect <key>",
+		Short: "Sign in to a connector",
+		Long: "Sign in to a connector. The command prints a page to open and waits until you approve.\n\n" +
+			"When the browser is on another device, the page that opens after approval does not load.\n" +
+			"Copy its address and run the command again with --finish.",
+		Args: usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := "connectors/" + url.PathEscape(args[0])
+			out := cmd.OutOrStdout()
+			if strings.TrimSpace(finish) != "" {
+				var done connectorEnvelopeDTO
+				if err := ctx.postJSON(cmd.Context(), path+"/connect/finish", map[string]string{"callbackUrl": finish}, &done); err != nil {
+					return err
+				}
+				return printConnectorStatus(out, &done.Connector)
+			}
+			var started connectorSignInDTO
+			if err := ctx.postJSON(cmd.Context(), path+"/connect", nil, &started); err != nil {
+				return err
+			}
+			if started.AuthorizationURL == "" {
+				return printConnectorStatus(out, &started.Connector)
+			}
+			if _, err := fmt.Fprintf(out, "Open this page and approve:\n\n  %s\n\nIf the page after approval does not load, copy its address and run:\n  ao connector connect %s --finish '<address>'\n", started.AuthorizationURL, args[0]); err != nil {
+				return err
+			}
+			if noWait {
+				return nil
+			}
+			waitCtx, cancel := context.WithTimeout(cmd.Context(), connectorSignInWait)
+			defer cancel()
+			for {
+				select {
+				case <-waitCtx.Done():
+					return errors.New("the sign-in was not completed in time")
+				case <-time.After(connectorSignInPoll):
+				}
+				var current connectorEnvelopeDTO
+				if err := ctx.getJSON(waitCtx, path, &current); err != nil {
+					return err
+				}
+				if current.Connector.SignedIn {
+					return printConnectorStatus(out, &current.Connector)
+				}
+			}
+		},
+	}
+	cmd.Flags().StringVar(&finish, "finish", "", "Address of the page your browser opened after you approved")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Print the page and return")
+	return cmd
+}
+
+func newConnectorDisconnectCommand(ctx *commandContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "disconnect <key>",
+		Short: "Forget the sign-in of a connector",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var response connectorEnvelopeDTO
+			if err := ctx.postJSON(cmd.Context(), "connectors/"+url.PathEscape(args[0])+"/disconnect", nil, &response); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "signed out of connector %s\n", response.Connector.Key)
+			return err
+		},
+	}
+}
+
+func newConnectorTestCommand(ctx *commandContext) *cobra.Command {
+	return &cobra.Command{
+		Use:   "test <key>",
+		Short: "Connect to the server and list its tools",
+		Args:  usageArgs(cobra.ExactArgs(1)),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var response connectorEnvelopeDTO
+			if err := ctx.postJSON(cmd.Context(), "connectors/"+url.PathEscape(args[0])+"/test", nil, &response); err != nil {
+				return err
+			}
+			if err := printConnectorStatus(cmd.OutOrStdout(), &response.Connector); err != nil {
+				return err
+			}
+			if response.Connector.Status != "connected" {
+				return fmt.Errorf("connector %s is not connected", response.Connector.Key)
+			}
+			return nil
+		},
+	}
+}
+
+func printConnectorStatus(out io.Writer, c *connectorDTO) error {
+	switch {
+	case c.Status == "connected":
+		_, err := fmt.Fprintf(out, "%s: connected, %d tools\n", c.Key, len(c.Tools))
+		return err
+	case c.Status == "needs_signin":
+		_, err := fmt.Fprintf(out, "%s: needs sign-in. Run: ao connector connect %s\n", c.Key, c.Key)
+		return err
+	case c.StatusDetail != nil:
+		_, err := fmt.Fprintf(out, "%s: %s at step %q: %s\n", c.Key, c.Status, c.StatusDetail.Step, c.StatusDetail.Error)
+		return err
+	default:
+		_, err := fmt.Fprintf(out, "%s: %s\n", c.Key, c.Status)
+		return err
 	}
 }
 

@@ -647,12 +647,14 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersInvokeCueResponse":    "InvokeCueResponse",
 	"ControllersCueEnvelope":          "CueEnvelope",
 	// httpd/controllers — connector wire envelopes
-	"ControllersConnectorIDParam":       "ConnectorIDParam",
-	"ControllersConnectorRequest":       "ConnectorRequest",
-	"ControllersConnectorStatusDetail":  "ConnectorStatusDetail",
-	"ControllersConnectorResponse":      "ConnectorResponse",
-	"ControllersListConnectorsResponse": "ListConnectorsResponse",
-	"ControllersConnectorEnvelope":      "ConnectorEnvelope",
+	"ControllersConnectorIDParam":             "ConnectorIDParam",
+	"ControllersConnectorRequest":             "ConnectorRequest",
+	"ControllersConnectorStatusDetail":        "ConnectorStatusDetail",
+	"ControllersConnectorResponse":            "ConnectorResponse",
+	"ControllersListConnectorsResponse":       "ListConnectorsResponse",
+	"ControllersConnectorEnvelope":            "ConnectorEnvelope",
+	"ControllersConnectorSignInResponse":      "ConnectorSignInResponse",
+	"ControllersFinishConnectorSignInRequest": "FinishConnectorSignInRequest",
 	// httpd/controllers — PR wire envelopes
 	"ControllersMergePRRequest":             "MergePRRequest",
 	"ControllersPRStackLayerResponse":       "PRStackLayerResponse",
@@ -2338,6 +2340,29 @@ func connectorOperations() []operation {
 			method: http.MethodDelete, path: "/api/v1/connectors/{connectorId}", id: "deleteConnector", tag: "connectors",
 			summary: "Remove a connector and its stored values", pathParams: one,
 			resps: append([]respUnit{{http.StatusNoContent, nil}}, failures(http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/test", id: "testConnector", tag: "connectors",
+			summary: "Connect to the server, list its tools and save the result as the status", pathParams: one,
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}}, failures(http.StatusNotFound)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/connect", id: "startConnectorSignIn", tag: "connectors",
+			summary: "Start a sign-in and return the page to open", pathParams: one,
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorSignInResponse{}}},
+				failures(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/connect/finish", id: "finishConnectorSignIn", tag: "connectors",
+			summary: "Complete a sign-in from the address the browser opened on another device", pathParams: one,
+			reqBody: controllers.FinishConnectorSignInRequest{},
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}},
+				failures(http.StatusBadRequest, http.StatusNotFound, http.StatusRequestEntityTooLarge, http.StatusServiceUnavailable)...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/connectors/{connectorId}/disconnect", id: "signOutConnector", tag: "connectors",
+			summary: "Forget the sign-in tokens of a connector", pathParams: one,
+			resps: append([]respUnit{{http.StatusOK, controllers.ConnectorEnvelope{}}}, failures(http.StatusNotFound)...),
 		},
 	}
 }

@@ -3721,6 +3721,198 @@ paths:
       summary: Replace a connector's definition, or turn it on or off
       tags:
       - connectors
+  /api/v1/connectors/{connectorId}/connect:
+    post:
+      operationId: startConnectorSignIn
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorSignInResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start a sign-in and return the page to open
+      tags:
+      - connectors
+  /api/v1/connectors/{connectorId}/connect/finish:
+    post:
+      operationId: finishConnectorSignIn
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FinishConnectorSignInRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "413":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Request Entity Too Large
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Complete a sign-in from the address the browser opened on another device
+      tags:
+      - connectors
+  /api/v1/connectors/{connectorId}/disconnect:
+    post:
+      operationId: signOutConnector
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Forget the sign-in tokens of a connector
+      tags:
+      - connectors
+  /api/v1/connectors/{connectorId}/test:
+    post:
+      operationId: testConnector
+      parameters:
+      - description: Connector ID or key.
+        in: path
+        name: connectorId
+        required: true
+        schema:
+          description: Connector ID or key.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorEnvelope'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Connect to the server, list its tools and save the result as the status
+      tags:
+      - connectors
   /api/v1/conversations/{conversationId}/find:
     get:
       operationId: findConversation
@@ -19134,6 +19326,14 @@ components:
           description: Display name.
           maxLength: 64
           type: string
+        oauthClientId:
+          description: Client ID of your own OAuth app, for a server that does not
+            let apps register themselves.
+          type: string
+        oauthClientSecret:
+          description: Client secret of your own OAuth app. An empty value keeps the
+            stored one.
+          type: string
         presetId:
           description: Catalog entry this connector came from.
           type: string
@@ -19194,6 +19394,9 @@ components:
           type: string
         name:
           type: string
+        oauthClientId:
+          description: Client ID of the user's own OAuth app, when one is set.
+          type: string
         presetId:
           type: string
         projectId:
@@ -19201,6 +19404,9 @@ components:
           type:
           - "null"
           - string
+        signedIn:
+          description: Whether a sign-in token is stored.
+          type: boolean
         status:
           enum:
           - unchecked
@@ -19234,11 +19440,28 @@ components:
       - envKeys
       - headerKeys
       - auth
+      - signedIn
       - enabled
       - status
       - tools
       - createdAt
       - updatedAt
+      type: object
+    ConnectorSignInResponse:
+      properties:
+        authorizationUrl:
+          description: Page the user must open to approve. Absent when the server
+            asks for no sign-in.
+          type: string
+        callbackUrl:
+          description: Address the browser goes to after approval. It is on the machine
+            that runs this daemon.
+          type: string
+        connector:
+          $ref: '#/components/schemas/ConnectorResponse'
+      required:
+      - callbackUrl
+      - connector
       type: object
     ConnectorStatusDetail:
       properties:
@@ -21774,6 +21997,16 @@ components:
       - name
       - path
       - gitRepo
+      type: object
+    FinishConnectorSignInRequest:
+      properties:
+        callbackUrl:
+          description: Address the user's browser opened after approval, pasted as
+            it is.
+          maxLength: 16384
+          type: string
+      required:
+      - callbackUrl
       type: object
     GetPRStackResponse:
       properties:

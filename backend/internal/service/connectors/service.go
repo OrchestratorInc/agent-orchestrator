@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"maps"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
@@ -22,6 +24,7 @@ const (
 	maxValueBytes  = 8192
 	maxArgs        = 64
 	maxSecretPairs = 32
+	maxErrorBytes  = 500
 	reservedKey    = "ao"
 )
 
@@ -36,14 +39,22 @@ var (
 type Service struct {
 	mu      sync.Mutex
 	path    string
+	baseURL string
+	http    *http.Client
 	now     func() time.Time
 	loaded  bool
 	records []record
+	signIns map[string]*signIn
+	sources map[string]oauth2.TokenSource
 }
 
-// New returns a Service that keeps its file in dataDir.
-func New(dataDir string) *Service {
-	return &Service{path: filepath.Join(dataDir, fileName), now: time.Now}
+// New returns a Service that keeps its file in dataDir. baseURL is the loopback address of the daemon.
+func New(dataDir, baseURL string) *Service {
+	return &Service{
+		path: filepath.Join(dataDir, fileName), baseURL: strings.TrimRight(baseURL, "/"),
+		http: &http.Client{Timeout: 30 * time.Second}, now: time.Now,
+		signIns: map[string]*signIn{}, sources: map[string]oauth2.TokenSource{},
+	}
 }
 
 // List returns every connector in name order.
@@ -127,9 +138,10 @@ func (s *Service) Update(_ context.Context, ref string, in Input) (Connector, er
 	}
 	if sameTarget(old, rec) {
 		rec.Status, rec.StatusStep, rec.StatusError = old.Status, old.StatusStep, old.StatusError
-		rec.Tools, rec.CheckedAt = old.Tools, old.CheckedAt
+		rec.Tools, rec.CheckedAt, rec.OAuth = old.Tools, old.CheckedAt, old.OAuth
 	} else {
 		rec.Status = StatusUnchecked
+		delete(s.sources, old.ID)
 	}
 	next := slices.Clone(s.records)
 	next[i] = rec
@@ -169,7 +181,56 @@ func (s *Service) Delete(_ context.Context, ref string) error {
 	if i < 0 {
 		return errNotFound()
 	}
-	return s.save(slices.Delete(slices.Clone(s.records), i, i+1))
+	id := s.records[i].ID
+	if err := s.save(slices.Delete(slices.Clone(s.records), i, i+1)); err != nil {
+		return err
+	}
+	delete(s.sources, id)
+	for state, pending := range s.signIns {
+		if pending.connectorID == id {
+			pending.cancel()
+			delete(s.signIns, state)
+		}
+	}
+	return nil
+}
+
+func (s *Service) snapshot(ref string) (record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.load(); err != nil {
+		return record{}, err
+	}
+	i := s.index(ref)
+	if i < 0 {
+		return record{}, errNotFound()
+	}
+	return s.records[i], nil
+}
+
+func (s *Service) setStatus(id string, status Status, step, detail string, tools []string) (Connector, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.load(); err != nil {
+		return Connector{}, err
+	}
+	i := s.index(id)
+	if i < 0 {
+		return Connector{}, errNotFound()
+	}
+	if len(detail) > maxErrorBytes {
+		detail = strings.ToValidUTF8(detail[:maxErrorBytes], "")
+	}
+	next := slices.Clone(s.records)
+	rec := &next[i]
+	rec.Status, rec.StatusStep, rec.StatusError, rec.CheckedAt = status, step, detail, s.now().UTC()
+	if tools != nil {
+		rec.Tools = tools
+	}
+	if err := s.save(next); err != nil {
+		return Connector{}, err
+	}
+	return rec.public(), nil
 }
 
 func (s *Service) load() error {
@@ -206,7 +267,7 @@ func (r *record) public() Connector {
 		ID: r.ID, Key: r.Key, Name: r.Name, PresetID: r.PresetID, Transport: r.Transport,
 		URL: r.URL, Command: r.Command, Args: slices.Clone(r.Args),
 		EnvKeys: slices.Sorted(maps.Keys(r.Env)), HeaderKeys: slices.Sorted(maps.Keys(r.Headers)),
-		Auth: r.Auth, ProjectID: r.ProjectID, Enabled: r.Enabled,
+		Auth: r.Auth, OwnClientID: r.OAuthClientID, SignedIn: r.OAuth != nil, ProjectID: r.ProjectID, Enabled: r.Enabled,
 		Status: r.Status, StatusStep: r.StatusStep, StatusError: r.StatusError, Tools: slices.Clone(r.Tools),
 		CheckedAt: r.CheckedAt, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
@@ -214,7 +275,8 @@ func (r *record) public() Connector {
 
 func sameTarget(a, b record) bool {
 	return a.Transport == b.Transport && a.URL == b.URL && a.Command == b.Command && slices.Equal(a.Args, b.Args) &&
-		a.Auth == b.Auth && maps.Equal(a.Env, b.Env) && maps.Equal(a.Headers, b.Headers)
+		a.Auth == b.Auth && maps.Equal(a.Env, b.Env) && maps.Equal(a.Headers, b.Headers) &&
+		a.OAuthClientID == b.OAuthClientID && a.OAuthClientSecret == b.OAuthClientSecret
 }
 
 func normalize(in Input, old record) (record, error) {
@@ -269,6 +331,16 @@ func normalizeHTTP(in Input, old, rec record) (record, error) {
 	}
 	if rec.Auth == AuthHeader && len(rec.Headers) == 0 {
 		return record{}, invalid("INVALID_CONNECTOR_HEADERS", "Header sign-in needs at least one header with a value")
+	}
+	rec.OAuthClientID = strings.TrimSpace(in.OAuthClientID)
+	if rec.OAuthClientID != "" {
+		if rec.Auth != AuthOAuth || len(rec.OAuthClientID) > maxValueBytes || len(in.OAuthClientSecret) > maxValueBytes {
+			return record{}, invalid("INVALID_CONNECTOR_CLIENT", "Your own OAuth app needs automatic sign-in and a valid client ID")
+		}
+		rec.OAuthClientSecret = in.OAuthClientSecret
+		if rec.OAuthClientSecret == "" && rec.OAuthClientID == old.OAuthClientID {
+			rec.OAuthClientSecret = old.OAuthClientSecret
+		}
 	}
 	return rec, nil
 }

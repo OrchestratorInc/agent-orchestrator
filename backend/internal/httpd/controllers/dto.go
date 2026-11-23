@@ -3033,6 +3033,9 @@ type ConnectorRequest struct {
 	Auth      string            `json:"auth,omitempty" enum:"none,oauth,header" description:"Sign-in of a server URL."`
 	ProjectID *string           `json:"projectId,omitempty" description:"Project that gets the connector. Omit for all projects."`
 	Enabled   *bool             `json:"enabled,omitempty" description:"Whether new sessions get the connector."`
+
+	OAuthClientID     string `json:"oauthClientId,omitempty" description:"Client ID of your own OAuth app, for a server that does not let apps register themselves."`
+	OAuthClientSecret string `json:"oauthClientSecret,omitempty" description:"Client secret of your own OAuth app. An empty value keeps the stored one."`
 }
 
 // ConnectorStatusDetail names the failed step of the last test.
@@ -3043,25 +3046,27 @@ type ConnectorStatusDetail struct {
 
 // ConnectorResponse is one connector without its secret values.
 type ConnectorResponse struct {
-	ID           string                 `json:"id"`
-	Key          string                 `json:"key" description:"Tool names start with this."`
-	Name         string                 `json:"name"`
-	PresetID     string                 `json:"presetId,omitempty"`
-	Transport    string                 `json:"transport" enum:"http,stdio"`
-	URL          string                 `json:"url,omitempty" description:"Server URL without its query string."`
-	Command      string                 `json:"command,omitempty"`
-	Args         []string               `json:"args"`
-	EnvKeys      []string               `json:"envKeys" description:"Names of the stored environment values."`
-	HeaderKeys   []string               `json:"headerKeys" description:"Names of the stored headers."`
-	Auth         string                 `json:"auth" enum:"none,oauth,header"`
-	ProjectID    *string                `json:"projectId,omitempty" description:"Absent when the connector is for all projects."`
-	Enabled      bool                   `json:"enabled"`
-	Status       string                 `json:"status" enum:"unchecked,connected,needs_signin,unavailable"`
-	StatusDetail *ConnectorStatusDetail `json:"statusDetail,omitempty"`
-	Tools        []string               `json:"tools"`
-	CheckedAt    *time.Time             `json:"checkedAt,omitempty"`
-	CreatedAt    time.Time              `json:"createdAt"`
-	UpdatedAt    time.Time              `json:"updatedAt"`
+	ID            string                 `json:"id"`
+	Key           string                 `json:"key" description:"Tool names start with this."`
+	Name          string                 `json:"name"`
+	PresetID      string                 `json:"presetId,omitempty"`
+	Transport     string                 `json:"transport" enum:"http,stdio"`
+	URL           string                 `json:"url,omitempty" description:"Server URL without its query string."`
+	Command       string                 `json:"command,omitempty"`
+	Args          []string               `json:"args"`
+	EnvKeys       []string               `json:"envKeys" description:"Names of the stored environment values."`
+	HeaderKeys    []string               `json:"headerKeys" description:"Names of the stored headers."`
+	Auth          string                 `json:"auth" enum:"none,oauth,header"`
+	OAuthClientID string                 `json:"oauthClientId,omitempty" description:"Client ID of the user's own OAuth app, when one is set."`
+	SignedIn      bool                   `json:"signedIn" description:"Whether a sign-in token is stored."`
+	ProjectID     *string                `json:"projectId,omitempty" description:"Absent when the connector is for all projects."`
+	Enabled       bool                   `json:"enabled"`
+	Status        string                 `json:"status" enum:"unchecked,connected,needs_signin,unavailable"`
+	StatusDetail  *ConnectorStatusDetail `json:"statusDetail,omitempty"`
+	Tools         []string               `json:"tools"`
+	CheckedAt     *time.Time             `json:"checkedAt,omitempty"`
+	CreatedAt     time.Time              `json:"createdAt"`
+	UpdatedAt     time.Time              `json:"updatedAt"`
 }
 
 // ListConnectorsResponse is the body of GET /api/v1/connectors.
@@ -3072,6 +3077,18 @@ type ListConnectorsResponse struct {
 // ConnectorEnvelope is the { connector } response body for connector reads and changes.
 type ConnectorEnvelope struct {
 	Connector ConnectorResponse `json:"connector"`
+}
+
+// ConnectorSignInResponse is the body of POST /api/v1/connectors/{connectorId}/connect.
+type ConnectorSignInResponse struct {
+	AuthorizationURL string            `json:"authorizationUrl,omitempty" description:"Page the user must open to approve. Absent when the server asks for no sign-in."`
+	CallbackURL      string            `json:"callbackUrl" description:"Address the browser goes to after approval. It is on the machine that runs this daemon."`
+	Connector        ConnectorResponse `json:"connector"`
+}
+
+// FinishConnectorSignInRequest is the body of POST /api/v1/connectors/{connectorId}/connect/finish.
+type FinishConnectorSignInRequest struct {
+	CallbackURL string `json:"callbackUrl" maxLength:"16384" description:"Address the user's browser opened after approval, pasted as it is."`
 }
 
 // MarkAllNotificationsReadRequest is the optional body of
