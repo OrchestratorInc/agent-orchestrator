@@ -2,6 +2,8 @@ package agy
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -53,10 +55,90 @@ func TestReviewCommandLaunchesHostTrustedInteractiveTUI(t *testing.T) {
 	if spec.Env["HOME"] != filepath.Join(dataDir, "reviewer-runtime", "review-worker-1", "config") || spec.Env["AO_DATA_DIR"] != dataDir {
 		t.Fatalf("AO-owned environment = %#v", spec.Env)
 	}
+	assertOnboardingComplete(t, filepath.Join(spec.Env["HOME"], ".gemini", "antigravity-cli", "cache", "onboarding.json"))
+}
+
+func TestReviewCommandPassesConfiguredModel(t *testing.T) {
+	inv := ports.ReviewInvocation{
+		DataDir:        t.TempDir(),
+		ReviewerID:     "review-worker-1",
+		TaskPromptRoot: "/ao/prompts/worker/reviewer",
+		WorkspacePath:  "/worker",
+		Prompt:         "Read and follow `/ao/task.md`.",
+	}
+	inv.Config.Model = "  gemini-3-pro  "
+	spec, err := testReviewer(strings.Join(requiredFlags, "\n"), "1.1.9").ReviewCommand(context.Background(), inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/opt/agy/bin/agy", "--sandbox", "--model", "gemini-3-pro", "--add-dir", "/worker", "--add-dir", "/ao/prompts/worker/reviewer", "--prompt-interactive", "Read and follow `/ao/task.md`."}
+	if !slices.Equal(spec.Argv, want) {
+		t.Fatalf("argv = %#v, want %#v", spec.Argv, want)
+	}
+}
+
+func TestInteractiveArgvModelFlag(t *testing.T) {
+	for _, tc := range []struct {
+		model string
+		want  []string
+	}{
+		{"", []string{"agy", "--sandbox", "--prompt-interactive", "p"}},
+		{"   ", []string{"agy", "--sandbox", "--prompt-interactive", "p"}},
+		{"gemini-3-flash", []string{"agy", "--sandbox", "--model", "gemini-3-flash", "--prompt-interactive", "p"}},
+	} {
+		if got := interactiveArgv("agy", "", "", tc.model, "p"); !slices.Equal(got, tc.want) {
+			t.Errorf("interactiveArgv(model=%q) = %#v, want %#v", tc.model, got, tc.want)
+		}
+	}
+}
+
+func TestSeedOnboardingCompletePreservesExistingState(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".gemini", "antigravity-cli", "cache", "onboarding.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"consumerOnboardingComplete":false,"enterpriseOnboardingComplete":false,"onboardingComplete":false,"other":"kept"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedOnboardingComplete(root); err != nil {
+		t.Fatalf("seedOnboardingComplete: %v", err)
+	}
+	state := assertOnboardingComplete(t, path)
+	if string(state["other"]) != `"kept"` || string(state["enterpriseOnboardingComplete"]) != "false" {
+		t.Fatalf("existing keys not preserved: %s", state)
+	}
+
+	// Corrupt state is replaced rather than blocking the reviewer launch.
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedOnboardingComplete(root); err != nil {
+		t.Fatalf("seedOnboardingComplete(corrupt): %v", err)
+	}
+	assertOnboardingComplete(t, path)
+}
+
+func assertOnboardingComplete(t *testing.T, path string) map[string]json.RawMessage {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read onboarding state: %v", err)
+	}
+	state := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatalf("decode onboarding state %q: %v", raw, err)
+	}
+	for _, key := range []string{"consumerOnboardingComplete", "onboardingComplete"} {
+		if string(state[key]) != "true" {
+			t.Fatalf("%s = %s, want true (state %s)", key, state[key], raw)
+		}
+	}
+	return state
 }
 
 func TestInteractiveArgvIsPermanentTUIOnly(t *testing.T) {
-	argv := interactiveArgv("agy", "/worker", "/ao/prompts", "Read and follow `/ao/task.md`.")
+	argv := interactiveArgv("agy", "/worker", "/ao/prompts", "", "Read and follow `/ao/task.md`.")
 	want := []string{"agy", "--sandbox", "--add-dir", "/worker", "--add-dir", "/ao/prompts", "--prompt-interactive", "Read and follow `/ao/task.md`."}
 	if !slices.Equal(argv, want) {
 		t.Fatalf("argv = %#v, want %#v", argv, want)

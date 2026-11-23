@@ -3,6 +3,7 @@ package agy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -71,6 +72,9 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	}
 	envVars := env.TUIEnvironment()
 	envVars["AO_DATA_DIR"] = env.DataDir
+	if err := seedOnboardingComplete(env.ConfigRoot); err != nil {
+		return ports.ReviewCommandSpec{}, fmt.Errorf("agy reviewer: seed first-run state: %w", err)
+	}
 	if err := r.verifyCompatibility(ctx, binary, envVars); err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
@@ -79,7 +83,7 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 		prompt = "Read and follow the reviewer system instructions at `" + filepath.ToSlash(inv.SystemPromptFile) + "`, then " + prompt
 	}
 	return ports.ReviewCommandSpec{
-		Argv:             interactiveArgv(binary, inv.WorkspacePath, inv.TaskPromptRoot, prompt),
+		Argv:             interactiveArgv(binary, inv.WorkspacePath, inv.TaskPromptRoot, inv.Config.Model, prompt),
 		Env:              envVars,
 		WorkingDirectory: inv.WorkspacePath,
 	}, nil
@@ -139,8 +143,46 @@ func (*Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInterrupt, Interrupts: 1}, nil
 }
 
-func interactiveArgv(binary, workspacePath, promptRoot, prompt string) []string {
+// onboardingFlags are the cache/onboarding.json keys Agy's TUI reads to decide
+// whether to show its first-run setup wizard. Enterprise onboarding is left
+// untouched because it depends on the account, not on local setup.
+var onboardingFlags = []string{"consumerOnboardingComplete", "onboardingComplete"}
+
+// seedOnboardingComplete marks Agy's first-run setup as done inside the
+// isolated reviewer home. Without it the reviewer TUI opens on the setup
+// wizard (theme picker), which nobody can answer, so no verdict is returned
+// (#8862). Existing keys written by Agy are preserved.
+func seedOnboardingComplete(configRoot string) error {
+	dir := filepath.Join(configRoot, ".gemini", agentagy.CLIStorageDir, "cache")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "onboarding.json")
+	state := map[string]json.RawMessage{}
+	if raw, err := os.ReadFile(path); err == nil {
+		if json.Unmarshal(raw, &state) != nil || state == nil {
+			state = map[string]json.RawMessage{}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, key := range onboardingFlags {
+		state[key] = json.RawMessage("true")
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, raw, 0o600)
+}
+
+func interactiveArgv(binary, workspacePath, promptRoot, model, prompt string) []string {
 	argv := []string{binary, "--sandbox"}
+	// Mirror the Agy worker launcher: pass the configured model, and omit the
+	// flag when unset so Agy falls back to its own default (#8919).
+	if model = strings.TrimSpace(model); model != "" {
+		argv = append(argv, "--model", model)
+	}
 	if strings.TrimSpace(workspacePath) != "" {
 		argv = append(argv, "--add-dir", workspacePath)
 	}
