@@ -68,14 +68,17 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 	const written = new WeakSet<object>();
 	const timers = new Map<string, ReturnType<typeof setTimeout>>();
 	const workspacesHash = hashKey(workspaceQueryKey);
-	let listed: WorkspaceSummary[] | undefined;
+	let listed: string | undefined;
 	const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
 		if (event.type !== "updated") return;
 		if (event.query.queryHash === workspacesHash) {
 			const workspaces = event.query.state.data as WorkspaceSummary[] | undefined;
-			if (event.action.type !== "success" || event.action.manual || !workspaces || workspaces === listed) return;
-			listed = workspaces;
-			void keepLocalChats(workspaces.flatMap((workspace) => workspace.sessions.map((session) => session.id)));
+			if (event.action.type !== "success" || event.action.manual || !workspaces) return;
+			const sessionIds = workspaces.flatMap((workspace) => workspace.sessions.map((session) => session.id));
+			const key = sessionIds.join("\0");
+			if (key === listed) return;
+			listed = key;
+			void keepLocalChats(sessionIds);
 			return;
 		}
 		const sessionId = localChat(event.query.queryKey);
