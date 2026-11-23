@@ -1065,6 +1065,9 @@ function ChatWorkspaceContent({
 	if (terminated) restoringArchived.current = session?.id;
 	else if (!resumingAgent) restoringArchived.current = undefined;
 	const restoring = Boolean(resumingAgent) && restoringArchived.current !== undefined && restoringArchived.current === session?.id;
+	// Nothing here resumes a chat that is a saved copy, blocked on its import, archived
+	// or mid-restore: the stopped banner and the version chip both stay out of it.
+	const resumeHidden = savedCopy || Boolean(importBlock) || terminated || restoring;
 	// After a restart the daemon is still verifying this session and reconnects
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
@@ -2202,7 +2205,7 @@ function ChatWorkspaceContent({
 				headerActions={
 					<>
 						<VersionSwitchChip
-							staleBinary={session?.staleBinary}
+							staleBinary={resumeHidden ? undefined : session?.staleBinary}
 							hostId={activeRemoteHostId}
 							harness={snapshot.harness}
 							// Only a resume starts a stopped agent, on the new release.
@@ -2300,7 +2303,7 @@ function ChatWorkspaceContent({
 					) : null}
 					{/* An archived chat reads as an ordinary one: sending to it restores it, and the
 					    composer, not a banner, says so until the agent is back. */}
-					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock || terminated || restoring ? null : (
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : resumeHidden ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
