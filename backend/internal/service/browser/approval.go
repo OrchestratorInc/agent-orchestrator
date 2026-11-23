@@ -152,8 +152,8 @@ func (s *Service) preflightDialog(ctx context.Context, sessionID domain.SessionI
 		return args, nil
 	}
 	// An unread dialog has no type, so it is never taken for an alert: ask.
-	kind, message, read := s.readDialog(ctx, sessionID, rt)
-	verdict := approval.ClassifyDialog(kind, message, mode)
+	dialog, read := s.readDialog(ctx, sessionID, rt)
+	verdict := approval.ClassifyDialog(dialog.kind, dialog.message, mode)
 	if !verdict.NeedsApproval {
 		return args, nil
 	}
@@ -167,17 +167,33 @@ func (s *Service) preflightDialog(ctx context.Context, sessionID domain.SessionI
 	if !outcome.Allowed() {
 		return nil, approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
 	}
-	// The dialog the user approved must be the one still open.
-	if nowKind, nowMessage, nowRead := s.readDialog(ctx, sessionID, rt); read && (!nowRead || nowKind != kind || nowMessage != message) {
+	// The dialog the user approved must be the one still open, on the same
+	// tab: another tab can show the very same "Are you sure?".
+	if now, nowRead := s.readDialog(ctx, sessionID, rt); read && (!nowRead || now != dialog) {
 		return nil, apierr.Conflict("BROWSER_TARGET_CHANGED",
 			"The page's dialog changed while the action waited for approval, so it is not the one the user approved. Check the dialog and try again.", nil)
 	}
-	return args, nil
+	if !read || dialog.tab == "" {
+		return args, nil
+	}
+	// The runtime answers the dialog on its active tab when the accept
+	// arrives; it refuses if that is no longer the approved tab.
+	bound := make(map[string]interface{}, len(args)+1)
+	for key, value := range args {
+		bound[key] = value
+	}
+	bound["dialogTab"] = dialog.tab
+	return bound, nil
 }
 
-// readDialog returns the open dialog's type and message; read is false when
-// the runtime could not say, or no dialog is open.
-func (s *Service) readDialog(ctx context.Context, sessionID domain.SessionID, rt runtime) (kind, message string, read bool) {
+// openDialog is what a runtime reported about a page's open dialog.
+type openDialog struct {
+	kind, message, tab string
+}
+
+// readDialog returns the open dialog's type, message and tab; read is false
+// when the runtime could not say, or no dialog is open.
+func (s *Service) readDialog(ctx context.Context, sessionID domain.SessionID, rt runtime) (openDialog, bool) {
 	limit := s.describeTimeout
 	if limit <= 0 {
 		limit = DefaultDescribeTimeout
@@ -186,18 +202,22 @@ func (s *Service) readDialog(ctx context.Context, sessionID domain.SessionID, rt
 	defer cancel()
 	result, err := rt.Execute(readCtx, sessionID, "dialog", map[string]interface{}{"operation": "status"})
 	if err != nil {
-		return "", "", false
+		return openDialog{}, false
 	}
 	status, _ := result.Value.(map[string]interface{})
+	var dialog openDialog
+	if target, ok := status["target"].(map[string]interface{}); ok {
+		dialog.tab, _ = target["tabId"].(string)
+	}
 	if nested, ok := status["dialog"].(map[string]interface{}); ok {
 		status = nested
 	}
 	if open, ok := status["open"].(bool); ok && !open {
-		return "", "", false
+		return openDialog{}, false
 	}
-	kind, _ = status["type"].(string)
-	message, _ = status["message"].(string)
-	return kind, message, kind != "" || message != ""
+	dialog.kind, _ = status["type"].(string)
+	dialog.message, _ = status["message"].(string)
+	return dialog, dialog.kind != "" || dialog.message != ""
 }
 
 // unidentifiedSummary says what will happen when the target is unknown.

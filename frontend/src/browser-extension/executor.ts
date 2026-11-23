@@ -178,6 +178,14 @@ export class Executor {
 					if (operation !== "status" && operation !== "accept" && operation !== "dismiss") {
 						throw new BridgeError("INVALID_ARGUMENT", "operation must be status, accept, or dismiss");
 					}
+					// An approved accept names the tab whose dialog the user saw;
+					// another tab can show the very same text.
+					if (typeof args.dialogTab === "string" && args.dialogTab !== page.logicalId) {
+						throw new BridgeError(
+							"BROWSER_TARGET_CHANGED",
+							"The active tab changed while the action waited for approval, so this dialog is not the one the user approved. Check the dialog and try again.",
+						);
+					}
 					return {
 						...(await this.deps.trusted.dialog(page.tabId, operation, typeof args.text === "string" ? args.text : undefined, ctx.signal)),
 						target: this.target(page),

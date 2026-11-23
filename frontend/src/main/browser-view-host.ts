@@ -4521,6 +4521,18 @@ export function createBrowserViewHost(
               // An approved action may only land on the tab, document, and (for
               // act) element the user approved; checked in the same queued
               // operation that dispatches it.
+              // An approved dialog accept names the tab whose dialog the user
+              // saw; another tab can show the very same text.
+              if (
+                nativeAction === "dialog" &&
+                typeof nativeArgs.dialogTab === "string" &&
+                nativeArgs.dialogTab !== targetEntry.tabId
+              ) {
+                throw browserError(
+                  "BROWSER_TARGET_CHANGED",
+                  "The active tab changed while the action waited for approval, so this dialog is not the one the user approved. Check the dialog and try again.",
+                );
+              }
               if (approvalBinding && APPROVAL_BOUND_ACTIONS.has(nativeAction)) {
                 const ref = typeof nativeArgs.ref === "string" ? nativeArgs.ref.replace(/^@/, "") : undefined;
                 if (
