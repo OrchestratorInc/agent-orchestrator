@@ -5525,5 +5525,17 @@
 	"settings.connectors.signInDialog.finish": "Terminer",
 	"settings.connectors.signInDialog.done": "Connecté.",
 	"settings.connectors.signInDialog.notNeeded": "Ce serveur ne demande pas de connexion.",
-	"settings.connectors.signInDialog.close": "Terminé"
+	"settings.connectors.signInDialog.close": "Terminé",
+	"chat.connectors.chip_one": "{{count}} connecteur dans ce chat",
+	"chat.connectors.chip_other": "{{count}} connecteurs dans ce chat",
+	"chat.connectors.chip_many": "{{count}} connecteurs dans ce chat",
+	"chat.connectors.calls_one": "{{count}} appel",
+	"chat.connectors.calls_other": "{{count}} appels",
+	"chat.connectors.calls_many": "{{count}} appels",
+	"chat.connectors.noCalls": "Aucun appel pour l'instant",
+	"chat.connectors.loaded": "Chargé",
+	"chat.connectors.starting": "Démarrage",
+	"chat.connectors.failed": "Échec",
+	"chat.connectors.added": "Dans ce chat",
+	"chat.connectors.manage": "Gérer les connecteurs"
 }

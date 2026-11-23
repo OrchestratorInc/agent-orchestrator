@@ -5671,5 +5671,19 @@
 	"settings.connectors.signInDialog.finish": "Завершить",
 	"settings.connectors.signInDialog.done": "Вход выполнен.",
 	"settings.connectors.signInDialog.notNeeded": "Этому серверу вход не нужен.",
-	"settings.connectors.signInDialog.close": "Готово"
+	"settings.connectors.signInDialog.close": "Готово",
+	"chat.connectors.chip_one": "{{count}} коннектор в этом чате",
+	"chat.connectors.chip_few": "{{count}} коннектора в этом чате",
+	"chat.connectors.chip_many": "{{count}} коннекторов в этом чате",
+	"chat.connectors.chip_other": "{{count}} коннектора в этом чате",
+	"chat.connectors.calls_one": "{{count}} вызов",
+	"chat.connectors.calls_few": "{{count}} вызова",
+	"chat.connectors.calls_many": "{{count}} вызовов",
+	"chat.connectors.calls_other": "{{count}} вызова",
+	"chat.connectors.noCalls": "Вызовов пока нет",
+	"chat.connectors.loaded": "Загружен",
+	"chat.connectors.starting": "Запускается",
+	"chat.connectors.failed": "Сбой",
+	"chat.connectors.added": "В этом чате",
+	"chat.connectors.manage": "Управление коннекторами"
 }

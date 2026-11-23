@@ -5353,5 +5353,15 @@
 	"settings.connectors.signInDialog.finish": "完成",
 	"settings.connectors.signInDialog.done": "已登录。",
 	"settings.connectors.signInDialog.notNeeded": "此服务器无需登录。",
-	"settings.connectors.signInDialog.close": "完成"
+	"settings.connectors.signInDialog.close": "完成",
+	"chat.connectors.chip_one": "此聊天有 {{count}} 个连接器",
+	"chat.connectors.chip_other": "此聊天有 {{count}} 个连接器",
+	"chat.connectors.calls_one": "{{count}} 次调用",
+	"chat.connectors.calls_other": "{{count}} 次调用",
+	"chat.connectors.noCalls": "尚无调用",
+	"chat.connectors.loaded": "已加载",
+	"chat.connectors.starting": "正在启动",
+	"chat.connectors.failed": "失败",
+	"chat.connectors.added": "此聊天可用",
+	"chat.connectors.manage": "管理连接器"
 }

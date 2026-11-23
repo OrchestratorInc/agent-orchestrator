@@ -5371,5 +5371,15 @@
 	"settings.connectors.signInDialog.finish": "완료",
 	"settings.connectors.signInDialog.done": "로그인되었습니다.",
 	"settings.connectors.signInDialog.notNeeded": "이 서버는 로그인이 필요하지 않습니다.",
-	"settings.connectors.signInDialog.close": "완료"
+	"settings.connectors.signInDialog.close": "완료",
+	"chat.connectors.chip_one": "이 채팅의 커넥터 {{count}}개",
+	"chat.connectors.chip_other": "이 채팅의 커넥터 {{count}}개",
+	"chat.connectors.calls_one": "호출 {{count}}회",
+	"chat.connectors.calls_other": "호출 {{count}}회",
+	"chat.connectors.noCalls": "아직 호출 없음",
+	"chat.connectors.loaded": "로드됨",
+	"chat.connectors.starting": "시작 중",
+	"chat.connectors.failed": "실패",
+	"chat.connectors.added": "이 채팅에 포함",
+	"chat.connectors.manage": "커넥터 관리"
 }

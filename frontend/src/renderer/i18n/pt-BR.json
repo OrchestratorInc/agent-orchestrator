@@ -5525,5 +5525,17 @@
 	"settings.connectors.signInDialog.finish": "Concluir",
 	"settings.connectors.signInDialog.done": "Login concluído.",
 	"settings.connectors.signInDialog.notNeeded": "Este servidor não precisa de login.",
-	"settings.connectors.signInDialog.close": "Concluído"
+	"settings.connectors.signInDialog.close": "Concluído",
+	"chat.connectors.chip_one": "{{count}} conector neste chat",
+	"chat.connectors.chip_other": "{{count}} conectores neste chat",
+	"chat.connectors.chip_many": "{{count}} conectores neste chat",
+	"chat.connectors.calls_one": "{{count}} chamada",
+	"chat.connectors.calls_other": "{{count}} chamadas",
+	"chat.connectors.calls_many": "{{count}} chamadas",
+	"chat.connectors.noCalls": "Nenhuma chamada ainda",
+	"chat.connectors.loaded": "Carregado",
+	"chat.connectors.starting": "Iniciando",
+	"chat.connectors.failed": "Falhou",
+	"chat.connectors.added": "Neste chat",
+	"chat.connectors.manage": "Gerenciar conectores"
 }

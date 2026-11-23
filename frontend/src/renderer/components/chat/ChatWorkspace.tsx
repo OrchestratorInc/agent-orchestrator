@@ -213,6 +213,7 @@ import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
+import { ChatConnectorsMenu } from "./ChatConnectorsMenu";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
@@ -223,6 +224,7 @@ import {
 	activityPlan,
 	brokenMcpServers,
 	can,
+	type McpServer,
 	isCompaction,
 	isSteer,
 	fullQueuedTurnOrder,
@@ -1849,6 +1851,7 @@ function ChatWorkspaceContent({
 	// The running agent's limit; a pending switch names another agent, so the sign steps aside.
 	const runningQuota = agentSwitch?.pending ? undefined : nearQuota;
 	const quotaSign = runningQuota ? <QuotaSign quota={runningQuota} /> : null;
+	const stableMcpServers = useStableValue(snapshot.mcpServers);
 	// A reroute describes the model it was recorded against; once the user picks a
 	// different model it no longer says anything about the next turn.
 	const currentModelReroute =
@@ -1867,7 +1870,12 @@ function ChatWorkspaceContent({
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
 					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
-					afterPicker={quotaSign}
+					afterPicker={(
+						<>
+							{quotaSign}
+							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} servers={stableMcpServers ?? NO_MCP_SERVERS} /> : null}
+						</>
+					)}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
 					lastModel={lastModel}
@@ -1903,6 +1911,8 @@ function ChatWorkspaceContent({
 				/>
 			) : null,
 		[
+			stableMcpServers,
+			uiSessionId,
 			settingsReady,
 			settingsLocked,
 			settingsLoading,
@@ -7021,6 +7031,8 @@ function useStableCallback<Args extends unknown[], Result>(
 }
 
 /** Retain an unchanged JSON-shaped value across snapshot refreshes. */
+const NO_MCP_SERVERS: readonly McpServer[] = [];
+
 function useStableValue<T>(value: T): T {
 	const previous = useRef(value);
 	if (!sameContent(previous.current, value)) previous.current = value;

@@ -5351,5 +5351,15 @@
 	"settings.connectors.signInDialog.finish": "Bitir",
 	"settings.connectors.signInDialog.done": "Oturum açıldı.",
 	"settings.connectors.signInDialog.notNeeded": "Bu sunucu oturum açma gerektirmez.",
-	"settings.connectors.signInDialog.close": "Tamam"
+	"settings.connectors.signInDialog.close": "Tamam",
+	"chat.connectors.chip_one": "Bu sohbette {{count}} bağlayıcı",
+	"chat.connectors.chip_other": "Bu sohbette {{count}} bağlayıcı",
+	"chat.connectors.calls_one": "{{count}} çağrı",
+	"chat.connectors.calls_other": "{{count}} çağrı",
+	"chat.connectors.noCalls": "Henüz çağrı yok",
+	"chat.connectors.loaded": "Yüklendi",
+	"chat.connectors.starting": "Başlatılıyor",
+	"chat.connectors.failed": "Başarısız",
+	"chat.connectors.added": "Bu sohbette",
+	"chat.connectors.manage": "Bağlayıcıları yönet"
 }

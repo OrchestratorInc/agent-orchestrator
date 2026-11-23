@@ -5351,5 +5351,15 @@
 	"settings.connectors.signInDialog.finish": "Finish",
 	"settings.connectors.signInDialog.done": "Signed in.",
 	"settings.connectors.signInDialog.notNeeded": "This server needs no sign-in.",
-	"settings.connectors.signInDialog.close": "Done"
+	"settings.connectors.signInDialog.close": "Done",
+	"chat.connectors.chip_one": "{{count}} connector in this chat",
+	"chat.connectors.chip_other": "{{count}} connectors in this chat",
+	"chat.connectors.calls_one": "{{count}} call",
+	"chat.connectors.calls_other": "{{count}} calls",
+	"chat.connectors.noCalls": "No calls yet",
+	"chat.connectors.loaded": "Loaded",
+	"chat.connectors.starting": "Starting",
+	"chat.connectors.failed": "Failed",
+	"chat.connectors.added": "In this chat",
+	"chat.connectors.manage": "Manage connectors"
 }

@@ -5371,5 +5371,15 @@
 	"settings.connectors.signInDialog.finish": "Abschließen",
 	"settings.connectors.signInDialog.done": "Angemeldet.",
 	"settings.connectors.signInDialog.notNeeded": "Dieser Server braucht keine Anmeldung.",
-	"settings.connectors.signInDialog.close": "Fertig"
+	"settings.connectors.signInDialog.close": "Fertig",
+	"chat.connectors.chip_one": "{{count}} Konnektor in diesem Chat",
+	"chat.connectors.chip_other": "{{count}} Konnektoren in diesem Chat",
+	"chat.connectors.calls_one": "{{count}} Aufruf",
+	"chat.connectors.calls_other": "{{count}} Aufrufe",
+	"chat.connectors.noCalls": "Noch keine Aufrufe",
+	"chat.connectors.loaded": "Geladen",
+	"chat.connectors.starting": "Startet",
+	"chat.connectors.failed": "Fehlgeschlagen",
+	"chat.connectors.added": "In diesem Chat",
+	"chat.connectors.manage": "Konnektoren verwalten"
 }
