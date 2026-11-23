@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -38,8 +39,10 @@ var safeLeaseToken = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 const (
 	hubReadyTimeout = 30 * time.Second
-	bootTimeout     = 3 * time.Minute
-	commandTimeout  = 2 * time.Minute
+	// bootTimeout outlasts the hub's own 180 s wait for a cold boot, so a slow
+	// boot ends with the hub's answer rather than our deadline mid-boot.
+	bootTimeout    = 4 * time.Minute
+	commandTimeout = 2 * time.Minute
 )
 
 // Config locates the provider's tools and state under the AO data dir.
@@ -89,6 +92,10 @@ type hubProcess struct {
 	token  string
 	cancel context.CancelFunc
 	done   chan struct{}
+	// ready is set once the hub answered its readiness probe. Only a hub that
+	// ran is restarted when it exits: one that dies during startup (a wrong
+	// Node, a broken install) would otherwise be respawned forever.
+	ready atomic.Bool
 }
 
 var _ ports.DeviceProvider = (*Provider)(nil)
@@ -260,23 +267,37 @@ func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubPr
 	if err := os.MkdirAll(hubState, 0o750); err != nil {
 		return nil, fmt.Errorf("create device hub state dir: %w", err)
 	}
-	logFile, err := os.OpenFile(filepath.Join(p.stateRoot(), "hub.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	tmp := filepath.Join(hubState, "tmp")
+	if err := os.MkdirAll(tmp, 0o750); err != nil {
+		return nil, fmt.Errorf("create device hub temp dir: %w", err)
+	}
+	// Appended, not truncated: a failed start's own output is what the error
+	// sends the user to read, and a restart must not wipe it.
+	logFile, err := os.OpenFile(filepath.Join(p.stateRoot(), "hub.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open device hub log: %w", err)
 	}
+	_, _ = fmt.Fprintf(logFile, "\n--- device hub starting %s ---\n", time.Now().Format(time.RFC3339))
 	hubCtx, cancel := context.WithCancel(context.Background())
 	// Port 0: the hub binds a free port itself and prints it. A port picked
 	// here and handed over could be taken by another local process in between,
 	// which would then pass the readiness probe and receive the hub's token.
 	cmd := process.CommandContext(hubCtx, nodePath, entry, "--port", "0", "--host", "127.0.0.1")
 	process.ConfigureTreeCancellation(cmd)
+	// The hub's helpers keep state under the temp dir and a capture CA under
+	// ~/Library/Application Support by default; both stay under AO's data
+	// dir instead, so a dev daemon and the app's own do not share them.
 	cmd.Env = append(os.Environ(),
 		"EXPO_DEVICE_HUB_SESSION_TOKEN="+token,
 		"EXPO_DEVICE_HUB_STATE_DIR="+hubState,
+		"TMPDIR="+tmp,
+		"SERVE_SIM_STATE_DIR="+filepath.Join(hubState, "serve-sim"),
+		"SERVE_SIM_CAPTURE_CA_DIR="+filepath.Join(hubState, "capture-ca"),
 		"NO_COLOR=1",
 	)
-	if sdk := androidSDK(); sdk != "" && os.Getenv("ANDROID_HOME") == "" {
-		cmd.Env = append(cmd.Env, "ANDROID_HOME="+sdk)
+	// The SDK the daemon uses for adb is the one the hub must use too.
+	if sdk := androidSDK(); sdk != "" {
+		cmd.Env = append(cmd.Env, "ANDROID_HOME="+sdk, "ANDROID_SDK_ROOT="+sdk)
 	}
 	announced := newPortWatcher()
 	cmd.Stdout, cmd.Stderr = io.MultiWriter(logFile, announced), logFile
@@ -293,9 +314,13 @@ func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubPr
 		p.forgetHubPID(pid)
 		_ = logFile.Close()
 		close(hub.done)
-		if hubCtx.Err() == nil {
+		switch {
+		case hubCtx.Err() != nil:
+		case hub.ready.Load():
 			p.log.Warn("device hub exited; restarting it", "err", err)
 			go p.reviveHub()
+		default:
+			p.log.Warn("device hub exited during startup", "err", err)
 		}
 	}()
 	// Each probe carries the deadline: a hub that accepts the connection but
@@ -319,6 +344,7 @@ func (p *Provider) startHub(ctx context.Context, nodePath, entry string) (*hubPr
 		default:
 		}
 		if ready(probeCtx, hub.origin+"/readyz") {
+			hub.ready.Store(true)
 			return hub, nil
 		}
 		select {
@@ -560,6 +586,7 @@ func (p *Provider) List(ctx context.Context) ([]ports.DeviceInfo, error) {
 	var body struct {
 		Simulators []hubDevice `json:"simulators"`
 		Emulators  []hubDevice `json:"emulators"`
+		Errors     hubErrors   `json:"errors"`
 	}
 	if err := p.hubJSON(ctx, http.MethodGet, "/api/devices", nil, &body); err != nil {
 		return nil, err
@@ -572,7 +599,13 @@ func (p *Provider) List(ctx context.Context) ([]ports.DeviceInfo, error) {
 		out = append(out, ports.DeviceInfo{ID: d.ID, Name: d.Name, Platform: ports.DevicePlatform(d.Platform), Version: d.Version, Booted: d.Booted, Tablet: tabletModel(d.DeviceFrame)})
 	}
 	out = append(out, p.unlistedSimulators(ctx, out)...)
-	return append(out, p.unlistedEmulators(ctx, out)...), nil
+	out = append(out, p.unlistedEmulators(ctx, out)...)
+	// Nothing listed and the hub says why (no avdmanager, simctl failing):
+	// that is an error to show, not an empty machine.
+	if len(out) == 0 && len(body.Errors) > 0 {
+		return nil, fmt.Errorf("list devices: %s", body.Errors)
+	}
+	return out, nil
 }
 
 // unlistedSimulators returns the iOS Simulators `simctl` knows and the hub
@@ -717,10 +750,56 @@ func iosRuntimeVersion(runtimeID string) (string, bool) {
 }
 
 type hubActionResult struct {
-	OK     bool     `json:"ok"`
-	ID     string   `json:"id"`
-	Error  string   `json:"error"`
-	Errors []string `json:"errors"`
+	OK    bool   `json:"ok"`
+	ID    string `json:"id"`
+	Error string `json:"error"`
+	// Errors explain a failure, and can come with a success too (a boot whose
+	// camera feed could not be set up): ok decides, errors only explain.
+	Errors hubErrors `json:"errors"`
+}
+
+// hubError is one entry of a hub answer's errors: {id, message, error}, where
+// message is the readable part and error the underlying detail.
+type hubError struct {
+	Message string `json:"message"`
+	Error   string `json:"error"`
+}
+
+// hubErrors decodes the hub's error list, also accepting plain strings.
+type hubErrors []hubError
+
+func (e *hubErrors) UnmarshalJSON(raw []byte) error {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return err
+	}
+	out := make(hubErrors, 0, len(items))
+	for _, item := range items {
+		var text string
+		if json.Unmarshal(item, &text) == nil {
+			out = append(out, hubError{Message: text})
+			continue
+		}
+		var entry hubError
+		if err := json.Unmarshal(item, &entry); err != nil {
+			return err
+		}
+		out = append(out, entry)
+	}
+	*e = out
+	return nil
+}
+
+func (e hubErrors) String() string {
+	parts := make([]string, 0, len(e))
+	for _, item := range e {
+		if msg := strings.TrimSpace(item.Message); msg != "" {
+			parts = append(parts, msg)
+		} else if detail := strings.TrimSpace(item.Error); detail != "" {
+			parts = append(parts, lastLines(detail, 1))
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (r hubActionResult) err(action string) error {
@@ -728,8 +807,12 @@ func (r hubActionResult) err(action string) error {
 		return nil
 	}
 	msg := r.Error
-	if msg == "" && len(r.Errors) > 0 {
-		msg = strings.Join(r.Errors, "; ")
+	if why := r.Errors.String(); why != "" {
+		if msg == "" {
+			msg = why
+		} else {
+			msg += ": " + why
+		}
 	}
 	if msg == "" {
 		msg = "unknown error"
@@ -750,7 +833,15 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 	}
 	startedHere := !device.Booted
 	if device.Platform == ports.DevicePlatformIOS && startedHere {
-		p.resetSimulatorHelper(ctx, device)
+		// The listed state can be seconds old: a simulator another open just
+		// booted, or one started from Xcode, must not be reset (the reset shuts
+		// down a running simulator). Ask simctl what it is now.
+		if booted, known := p.simulatorBooted(ctx, device.ID); known && booted {
+			startedHere = false
+			device.Booted = true
+		} else {
+			p.resetSimulatorHelper(ctx, device)
+		}
 	}
 	var res hubActionResult
 	body := map[string]string{"platform": string(device.Platform), "id": device.ID, "name": device.Name}
@@ -758,6 +849,14 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 		return device, err
 	}
 	if err := res.err("boot"); err != nil {
+		// An emulator the hub spawned before failing is left running otherwise.
+		if device.Platform == ports.DevicePlatformAndroid && startedHere && res.ID != "" {
+			stopCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			if stopErr := p.Shutdown(stopCtx, ports.DeviceInfo{ID: res.ID, Name: device.Name, Platform: device.Platform}); stopErr != nil {
+				p.log.Warn("shut down an emulator whose boot failed", "device", res.ID, "err", stopErr)
+			}
+			stop()
+		}
 		return device, err
 	}
 	if res.ID != "" {
@@ -789,6 +888,35 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 	}
 	p.restoreQuality(ctx, device)
 	return device, nil
+}
+
+// simulatorBooted asks simctl whether a simulator is booted now; known is
+// false when simctl cannot say.
+func (p *Provider) simulatorBooted(ctx context.Context, udid string) (booted, known bool) {
+	if runtime.GOOS != "darwin" {
+		return false, false
+	}
+	out, err := p.run(ctx, "xcrun", "simctl", "list", "devices", "-j")
+	if err != nil {
+		return false, false
+	}
+	var parsed struct {
+		Devices map[string][]struct {
+			UDID  string `json:"udid"`
+			State string `json:"state"`
+		} `json:"devices"`
+	}
+	if json.Unmarshal(out, &parsed) != nil {
+		return false, false
+	}
+	for _, sims := range parsed.Devices {
+		for _, sim := range sims {
+			if sim.UDID == udid {
+				return sim.State == "Booted", true
+			}
+		}
+	}
+	return false, false
 }
 
 // resetSimulatorHelper drops the hub's stream helper for a simulator that is
@@ -1081,21 +1209,37 @@ func (p *Provider) hubRaw(ctx context.Context, method, path string, raw []byte) 
 	return body, nil
 }
 
-// androidSDK finds the Android SDK the way the hub and Android Studio do.
+// androidSDK finds the Android SDK: the first candidate that has both adb and
+// the emulator (as the hub looks for the tools, not just a folder), else the
+// first that exists. adb on PATH counts as a candidate too.
 func androidSDK() string {
 	candidates := []string{os.Getenv("ANDROID_HOME"), os.Getenv("ANDROID_SDK_ROOT")}
 	if home, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates, filepath.Join(home, "Library", "Android", "sdk"), filepath.Join(home, "Android", "Sdk"))
 	}
+	if adb, err := exec.LookPath("adb"); err == nil {
+		if resolved, err := filepath.EvalSymlinks(adb); err == nil {
+			adb = resolved
+		}
+		candidates = append(candidates, filepath.Dir(filepath.Dir(adb)))
+	}
+	existing := ""
 	for _, dir := range candidates {
 		if dir == "" {
 			continue
 		}
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if executable(filepath.Join(dir, "platform-tools", "adb")) && executable(filepath.Join(dir, "emulator", "emulator")) {
 			return dir
 		}
+		if existing == "" {
+			existing = dir
+		}
 	}
-	return ""
+	return existing
 }
 
 func adbPath() string {

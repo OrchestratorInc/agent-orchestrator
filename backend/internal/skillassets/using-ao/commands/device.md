@@ -68,8 +68,8 @@ run setup yourself unless the user asked for device support.
    ao device close
    ```
 
-   A session that ends releases its device automatically; the device keeps
-   running for the next session.
+   A session that ends releases its device automatically within half a
+   minute; the device keeps running for the next session.
 
 ## Other commands
 

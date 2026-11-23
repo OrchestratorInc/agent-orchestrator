@@ -115,7 +115,13 @@ type Service struct {
 	// released or replaced, so a viewer cannot keep driving a device another
 	// session now holds.
 	watches map[domain.SessionID]leaseWatch
+	// stopReaper ends the loop that frees ended sessions' devices.
+	stopReaper context.CancelFunc
 }
+
+// reapEvery is how often leases of ended sessions are freed when nothing else
+// asks about them. A variable for tests.
+var reapEvery = 30 * time.Second
 
 type leaseWatch struct {
 	deviceID string
@@ -212,7 +218,29 @@ func New(cfg Config) *Service {
 	if Enabled(cfg.DataDir) {
 		s.startLocked()
 	}
+	if cfg.Sessions != nil {
+		// A killed or archived session frees its device within half a minute
+		// even when nobody opens the Device tab or another device.
+		ctx, stop := context.WithCancel(context.Background())
+		s.stopReaper = stop
+		go s.reap(ctx, reapEvery)
+	}
 	return s
+}
+
+func (s *Service) reap(ctx context.Context, every time.Duration) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			pass, cancel := context.WithTimeout(ctx, every)
+			s.pruneEnded(pass)
+			cancel()
+		}
+	}
 }
 
 // Setup records the opt-in and starts the provider. It returns at once; the
@@ -489,12 +517,19 @@ func (s *Service) Open(ctx context.Context, id domain.SessionID, req OpenRequest
 			taken[l.Device.ID] = owner
 		}
 	}
-	releasing := make(map[string]bool, len(s.releasing))
+	// Busy: being released, or being booted by another open (its listed state
+	// is stale, and booting it again would reset it).
+	busy := make(map[string]bool, len(s.releasing)+len(s.booting))
 	for deviceID := range s.releasing {
-		releasing[deviceID] = true
+		busy[deviceID] = true
+	}
+	for key := range s.booting {
+		if !strings.HasPrefix(key, "name:") {
+			busy[key] = true
+		}
 	}
 	s.mu.Unlock()
-	device, err := pickDevice(devices, decision.Platform, req.DeviceID, taken, owned, releasing)
+	device, err := pickDevice(devices, decision.Platform, req.DeviceID, taken, owned, busy)
 	if err != nil {
 		return Lease{}, err
 	}
@@ -573,7 +608,7 @@ func (s *Service) ownerOfLocked(deviceID string) (domain.SessionID, bool) {
 // sessions and the user's own work share these machines, and a running
 // simulator may be mid-use. Within each, a phone beats a tablet and the newest
 // OS wins: what an app is mostly built for and tested on.
-func pickDevice(devices []ports.DeviceInfo, platform ports.DevicePlatform, wantID string, taken map[string]domain.SessionID, owned, releasing map[string]bool) (ports.DeviceInfo, error) {
+func pickDevice(devices []ports.DeviceInfo, platform ports.DevicePlatform, wantID string, taken map[string]domain.SessionID, owned, busy map[string]bool) (ports.DeviceInfo, error) {
 	if wantID != "" {
 		for _, d := range devices {
 			if d.ID != wantID && d.Name != wantID {
@@ -582,8 +617,8 @@ func pickDevice(devices []ports.DeviceInfo, platform ports.DevicePlatform, wantI
 			if owner, ok := taken[d.ID]; ok {
 				return ports.DeviceInfo{}, apierr.Conflict("DEVICE_IN_USE", d.Name+" is in use by session "+string(owner)+".", nil)
 			}
-			if releasing[d.ID] {
-				return ports.DeviceInfo{}, apierr.Conflict("DEVICE_IN_USE", d.Name+" is being released by another session. Try again in a moment.", nil)
+			if busy[d.ID] {
+				return ports.DeviceInfo{}, apierr.Conflict("DEVICE_IN_USE", d.Name+" is busy with another session (starting or being released). Try again in a moment.", nil)
 			}
 			return d, nil
 		}
@@ -594,7 +629,7 @@ func pickDevice(devices []ports.DeviceInfo, platform ports.DevicePlatform, wantI
 		if d.Platform != platform {
 			continue
 		}
-		if _, ok := taken[d.ID]; ok || releasing[d.ID] {
+		if _, ok := taken[d.ID]; ok || busy[d.ID] {
 			continue
 		}
 		free = append(free, d)
@@ -886,6 +921,19 @@ func (s *Service) HubTarget(ctx context.Context, id domain.SessionID) (ports.Dev
 	if err != nil {
 		return ports.DeviceHubEndpoint{}, Lease{}, nil, err
 	}
+	// A killed session's viewer must not keep driving the device: the stream
+	// and touch socket are where it would.
+	if s.cfg.Sessions != nil {
+		if info, err := s.cfg.Sessions(ctx, id); sessionGone(info, err) {
+			s.mu.Lock()
+			ended, held := s.endLeaseLocked(id)
+			s.mu.Unlock()
+			if held {
+				_ = s.finishRelease(ctx, ended.Device, false)
+			}
+			return ports.DeviceHubEndpoint{}, Lease{}, nil, apierr.NotFound("NO_DEVICE_LEASE", "This session has ended and no longer holds a device.")
+		}
+	}
 	endpoint, err := s.cfg.Provider.Hub(ctx)
 	if err != nil {
 		return ports.DeviceHubEndpoint{}, Lease{}, nil, apierr.Unavailable("DEVICE_HUB_UNAVAILABLE", err.Error())
@@ -913,5 +961,8 @@ func (s *Service) HubTarget(ctx context.Context, id domain.SessionID) (ports.Dev
 
 // Shutdown stops the provider's helpers when the daemon exits.
 func (s *Service) Shutdown() error {
+	if s.stopReaper != nil {
+		s.stopReaper()
+	}
 	return s.cfg.Provider.Close()
 }
