@@ -1394,11 +1394,23 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.providerFailure = nil
 	c.mu.Unlock()
 
-	c.settleEndedCycle(cycle)
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
-
-	go c.runCompactionTurn(turnCtx, sessionID, id)
+	start := func() {
+		c.settleEndedCycle(cycle)
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
+	}
+	if cycle == nil {
+		start()
+		go c.runCompactionTurn(turnCtx, sessionID, id)
+	} else {
+		// The ended cycle settles off this call, as in runTurn: its settle can
+		// wait on an update blocked emitting, and the caller may hold a lock the
+		// event drain needs. Its items still settle before the turn starts.
+		go func() {
+			start()
+			c.runCompactionTurn(turnCtx, sessionID, id)
+		}()
+	}
 	return ports.ChatCompactionResult{TokensBefore: before}, nil
 }
 
