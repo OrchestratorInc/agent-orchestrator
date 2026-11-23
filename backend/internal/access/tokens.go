@@ -71,13 +71,14 @@ type Registry struct {
 	byHash       map[string]string
 	sessions     map[string]string
 	sessionsLost bool
+	unbound      map[string]bool
 }
 
 // LoadRegistry reads the registry. A token file that cannot be parsed is moved
 // aside and reported. One that cannot be read stays where it is, and the
 // registry refuses writes for this run.
 func LoadRegistry(path string) (*Registry, error) {
-	r := &Registry{path: path, tokens: map[string]Token{}, byHash: map[string]string{}, sessions: map[string]string{}}
+	r := &Registry{path: path, tokens: map[string]Token{}, byHash: map[string]string{}, sessions: map[string]string{}, unbound: map[string]bool{}}
 	bindingsErr := r.loadBindings()
 	raw, err := os.ReadFile(path) // #nosec G304 -- path is the daemon's own data dir.
 	if errors.Is(err, fs.ErrNotExist) {
@@ -282,7 +283,11 @@ func (r *Registry) SessionCreated(ctx context.Context, sessionID string) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, bound := r.sessions[sessionID]; !bound && !r.sessionsLost {
+	if _, bound := r.sessions[sessionID]; !bound {
+		if r.sessionsLost {
+			r.unbound[sessionID] = true
+			_ = os.Remove(r.bindingPath(sessionID))
+		}
 		return nil
 	}
 	if err := os.Remove(r.bindingPath(sessionID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -299,6 +304,7 @@ func (r *Registry) Bind(sessionID, tokenID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions[sessionID] = tokenID
+	delete(r.unbound, sessionID)
 	if err := os.MkdirAll(r.bindingsDir(), 0o700); err != nil {
 		return err
 	}
@@ -315,7 +321,7 @@ func (r *Registry) ForSession(sessionID string) (tokenID string, bound bool) {
 	}
 	r.mu.RLock()
 	tokenID, bound = r.sessions[sessionID]
-	lost := r.sessionsLost
+	lost := r.sessionsLost && !r.unbound[sessionID]
 	r.mu.RUnlock()
 	if bound || !lost {
 		return tokenID, bound

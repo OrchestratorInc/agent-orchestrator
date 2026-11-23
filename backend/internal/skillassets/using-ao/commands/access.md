@@ -17,7 +17,8 @@ ao whoami [--json]
 
 Inside a session the caller is always the session. `AO_TOKEN` is not sent
 there, so a token exported in a shell profile does not change what sessions may
-do, and `ao whoami` says so.
+do, and `ao whoami` says so. Outside a session, an `AO_TOKEN` that does not
+start with `aoa_` is refused with exit 4. It is never treated as no token.
 
 A grant is a preset (`read`, `operate`, `manage`) or named groups, optionally
 limited to project ids, with an optional expiry.

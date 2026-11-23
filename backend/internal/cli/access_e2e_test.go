@@ -322,6 +322,10 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 		!strings.Contains(err.Error(), "the message was sent") || !strings.Contains(err.Error(), "STORAGE_BUSY") {
 		t.Errorf("a failure after delivery must say the message was sent: sent %v, exit %d, err %v", sent, ExitCode(err), err)
 	}
+	sent = false
+	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--timeout", "30s"); ExitCode(err) != 2 || sent {
+		t.Errorf("--timeout without --wait: exit %d, sent %v, want a usage error before sending", ExitCode(err), sent)
+	}
 	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--steer", "--recover-only", "--client-message-id", "m-1", "--wait"); ExitCode(err) != 2 {
 		t.Errorf("--wait with --recover-only: exit %d, want 2", ExitCode(err))
 	}
@@ -355,5 +359,34 @@ func TestTokenIsNotPresentedFromInsideASession(t *testing.T) {
 	t.Setenv(caller.ShellTerminalEnv, "1")
 	if _, _, err := executeCLI(t, deps, "whoami"); err != nil || authorization != "Bearer aoa_secret" {
 		t.Errorf("the user's own terminal in a session presents the token: authorization %q, err %v", authorization, err)
+	}
+}
+
+func TestMalformedTokenIsRefusedBeforeAnyRequest(t *testing.T) {
+	cfg := setConfigEnv(t)
+	asked := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/access/whoami" {
+			asked++
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"kind": "user"})
+	}))
+	t.Cleanup(server.Close)
+	writeRunFileFor(t, cfg, server)
+	t.Setenv("AO_SESSION_ID", "")
+	t.Setenv(caller.ShellTerminalEnv, "")
+	for _, value := range []string{`"aoa_abc"`, "Bearer aoa_abc", "abc"} {
+		t.Setenv(agentTokenEnv, value)
+		if out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "whoami"); ExitCode(err) != exitRefused || asked != 0 {
+			t.Errorf("AO_TOKEN=%s must be refused before the daemon is asked: exit %d, requests %d, out %q", value, ExitCode(err), asked, out)
+		}
+	}
+}
+
+func TestCallGivesSetupActionsNoClientTimeout(t *testing.T) {
+	for action, want := range map[string]time.Duration{"session.spawn": 0, "orchestrator.spawn": 0, "session.restore": 0, "session.send": commandTimeout, "project.list": commandTimeout} {
+		if got := callTimeout(action); got != want {
+			t.Errorf("%s: client timeout %s, want %s", action, got, want)
+		}
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/access"
 	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
@@ -205,6 +206,9 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	}
 	callerID := callerSession()
 	if token := strings.TrimSpace(os.Getenv(agentTokenEnv)); token != "" && callerID == "" {
+		if !strings.HasPrefix(token, access.TokenPrefix) {
+			return exitError{code: exitRefused, err: fmt.Errorf("%s is not an agent token: it must start with %s", agentTokenEnv, access.TokenPrefix)}
+		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	for name, value := range headers {

@@ -426,6 +426,14 @@ func actionRequest(action accessActionDTO, input map[string]any) (path string, b
 	return path, input, nil
 }
 
+func callTimeout(action string) time.Duration {
+	switch action {
+	case "session.spawn", "orchestrator.spawn", "session.restore":
+		return 0
+	}
+	return commandTimeout
+}
+
 func newCallCommand(ctx *commandContext) *cobra.Command {
 	var input string
 	cmd := &cobra.Command{
@@ -472,7 +480,7 @@ the token, 1 any other failure.`,
 				return err
 			}
 			var res rawResponse
-			if err := ctx.doJSONPath(cmd.Context(), action.Method, path, body, &res); err != nil {
+			if err := ctx.doJSONPathWithHeadersAndTimeout(cmd.Context(), action.Method, path, body, &res, nil, callTimeout(args[0])); err != nil {
 				return err
 			}
 			if len(res.body) == 0 {

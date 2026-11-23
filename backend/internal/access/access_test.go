@@ -267,6 +267,12 @@ func TestBindingsOutliveTheTokenFile(t *testing.T) {
 	if err := lost.Bind("api-2", token.ID); err == nil {
 		t.Error("Bind must report a write that failed")
 	}
+	if err := lost.SessionCreated(context.Background(), "api-7"); err != nil {
+		t.Errorf("a caller with no grant must still be able to start a session: %v", err)
+	}
+	if _, bound := lost.ForSession("api-7"); bound {
+		t.Error("a session a caller with no grant started in this run has no binding, whatever the disk says")
+	}
 
 	if err := os.Remove(sessions); err != nil {
 		t.Fatal(err)

@@ -67,6 +67,9 @@ func newSendCommand(ctx *commandContext) *cobra.Command {
 			if opts.wait {
 				return ctx.sendAndWait(cmd, opts)
 			}
+			if cmd.Flags().Changed("timeout") {
+				return usageError{errors.New("usage: --timeout needs --wait")}
+			}
 			return ctx.sendMessage(cmd.Context(), opts)
 		},
 	}

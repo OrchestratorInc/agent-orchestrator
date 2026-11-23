@@ -100,7 +100,7 @@ For code entry points:
 - Follow existing Go package boundaries. CLI code should call daemon HTTP routes through shared CLI client helpers; it should not open SQLite, spawn runtimes, or call adapters directly.
 - Keep Cobra commands in the relevant command file and table-test them in the style of `backend/internal/cli/*_test.go`.
 - Mirror existing response/request DTOs in the CLI instead of importing HTTP controller packages into CLI code, unless the package already establishes that dependency.
-- Return usage errors as `usageError` so CLI misuse exits 2; runtime/daemon failures should exit 1.
+- Return usage errors as `usageError` so CLI misuse exits 2; runtime/daemon failures should exit 1. Four other codes exist so an agent can branch on them: 3 for an unknown catalog action (`ao call`), 4 when a grant or an agent token refuses the call, 5 when a waited session asks for an answer, and 124 when a wait times out.
 - Preserve API error envelopes and request IDs when surfacing daemon errors.
 - Use `context.Context` as the first argument for functions that do I/O or blocking work.
 - Do not add abstractions for one-off use cases. Add helpers only when they remove duplication across real call sites.
