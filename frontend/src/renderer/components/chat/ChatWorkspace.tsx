@@ -6308,7 +6308,6 @@ const TurnGroup = memo(function TurnGroup({
 	const updateIndex = useContext(WorkerUpdateIndexContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
-	if (group.live) watchedLive.add(group.key);
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
 		() => runsOf(turnFlowItems(group)),
@@ -6318,6 +6317,9 @@ const TurnGroup = memo(function TurnGroup({
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
+	useEffect(() => {
+		if (group.live && lastAssistantId && !pageHidden()) watchedLive.add(lastAssistantId);
+	});
 	// A running turn offers copy only while its newest item is the reply itself, so the
 	// action does not flash under prose the agent is about to follow with more work.
 	const copyableMessageId = group.outcome
@@ -6466,7 +6468,7 @@ const TurnGroup = memo(function TurnGroup({
 			}
 			rollbackDisabled={rollbackDisabled}
 			onSelectAnnotation={onSelectAnnotation}
-			details={workerUpdates && group.outcome && !watchedLive.has(group.key) && run.items[0]?.id === lastAssistantId ? {
+			details={workerUpdates && group.outcome && !watchedLive.has(lastAssistantId ?? "") && run.items[0]?.id === lastAssistantId ? {
 				open: Boolean(activityDisclosureOverrides[`${group.key}:reply`]),
 				onOpenChange: (open) => onActivityDisclosureChange(`${group.key}:reply`, open),
 			} : undefined}
@@ -7130,7 +7132,7 @@ function backgroundRows(members: readonly TimelineGroup[]) {
 		const row = at >= 0 ? rows.splice(at, 1)[0]! : { key: member.key, members: [], sender, count: 0 };
 		row.members.push(member);
 		if (sender !== undefined) {
-			row.latest = updates.at(-1);
+			if (!isAccountFailure(member) || !row.latest) row.latest = updates.at(-1);
 			row.count += updates.length;
 		}
 		rows.push(row);

@@ -563,10 +563,14 @@ describe("background turns in the orchestrator chat", () => {
 			reply("t1", 2, `Menus and iOS pages are merged.\n\n${detail}\n\nShould I close the remote host PR? Meanwhile I'll rerun CI.`),
 			human("t2", 3, "And the docs?"),
 			reply("t2", 4, `Here's where everything stands:\n\n${detail}`),
+			human("t3", 5, "And the menus?"),
+			reply("t3", 6, `Status\n======\n\n${detail}`),
+			human("t4", 7, "And the PRs?"),
+			reply("t4", 8, `See [the PR] for the rest.\n\n${detail}\n\n[the PR]: https://example.com/pr/1`),
 		]);
 
 		expect(screen.getByText(/Should I close the remote host PR\?/)).toBeInTheDocument();
-		expect(screen.getAllByText(/Session 12:/)).toHaveLength(2);
+		expect(screen.getAllByText(/Session 12:/)).toHaveLength(4);
 		expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
 	});
 
@@ -579,6 +583,19 @@ describe("background turns in the orchestrator chat", () => {
 
 		expect(screen.getByText(/Session 12:/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
+	});
+
+	it("collapses a long reply that arrived while the window was hidden", () => {
+		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
+		const items = [human("h1", 1, "How is the browser work going?"), reply("h1", 2, `Menus and iOS pages are merged.\n\n${detail}`)];
+		const view = orchestratorView();
+		const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		const { rerender } = render(view(snapshot(items, "running")));
+		visibility.mockRestore();
+		rerender(view(snapshot(items)));
+
+		expect(screen.queryByText(/Session 12:/)).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Details" })).toBeInTheDocument();
 	});
 
 	it("opens a long reply's Details to bring a quote from its rest into view", async () => {
