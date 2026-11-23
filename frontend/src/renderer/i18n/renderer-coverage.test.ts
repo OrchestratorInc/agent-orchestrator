@@ -21,6 +21,7 @@ const approvedLiterals: Record<string, readonly string[]> = {
 	],
 	"components/CenterPane.tsx": ["px"],
 	// Key-cap hint beside Deny.
+	"components/approvals/ApprovalChatCard.tsx": ["Esc"],
 	"components/approvals/ApprovalPrompt.tsx": ["Esc"],
 	"components/CreateProjectFlow.tsx": [
 		"my-workspace/", "my-project", "web-app", "main",

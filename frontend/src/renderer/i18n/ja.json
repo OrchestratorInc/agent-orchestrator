@@ -5282,6 +5282,7 @@
 	"approvals.allow": "許可",
 	"approvals.preview": "プレビュー",
 	"approvals.allowSite": "{{site}} で常に許可",
+	"approvals.moreOptions": "その他の承認オプション",
 	"approvals.openSession": "セッションを開く",
 	"approvals.elementAlt": "エージェントが使おうとしている要素",
 	"approvals.region": "承認待ちのエージェント操作",

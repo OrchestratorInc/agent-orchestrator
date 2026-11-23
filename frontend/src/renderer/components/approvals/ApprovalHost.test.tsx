@@ -35,7 +35,7 @@ vi.mock("../../hooks/useWorkspaceQuery", () => ({
 }));
 
 import { useUiStore } from "../../stores/ui-store";
-import { GlobalApprovalCard, SessionApprovalDock } from "./ApprovalHost";
+import { GlobalApprovalCard, SessionApprovalDock, SessionChatApprovalCard } from "./ApprovalHost";
 
 function request(id: string, sessionId: string): PendingApproval {
 	return {
@@ -65,6 +65,28 @@ describe("approval hosts", () => {
 		expect(screen.getByText("+1 more")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
 		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything(), undefined));
+	});
+
+	it("shows a session's request at the end of its chat and leaves once decided", async () => {
+		state.pending = [request("a", "ao-1"), request("b", "ao-2")];
+		const { container, rerender } = renderWith(<SessionChatApprovalCard sessionId="ao-1" />);
+		expect(screen.getByTestId("approval-action")).toHaveTextContent("(a)");
+		expect(screen.getByText(/Payment/)).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything(), undefined));
+		state.pending = [request("b", "ao-2")];
+		rerender(<QueryClientProvider client={new QueryClient()}><SessionChatApprovalCard sessionId="ao-1" /></QueryClientProvider>);
+		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("keeps Always allow behind Allow's menu, and Escape denies in the chat card", async () => {
+		state.pending = [request("a", "ao-1")];
+		renderWith(<SessionChatApprovalCard sessionId="ao-1" />);
+		expect(screen.queryByText("Always allow on shop.example")).not.toBeInTheDocument();
+		fireEvent.keyDown(screen.getByRole("button", { name: "Allow once" }), { key: "Enter" });
+		expect(state.decide).not.toHaveBeenCalled();
+		fireEvent.keyDown(screen.getByTestId("approval-prompt"), { key: "Escape" });
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "deny", expect.anything(), undefined));
 	});
 
 	it("renders nothing for a session with no requests", () => {

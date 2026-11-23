@@ -5429,6 +5429,7 @@
 	"approvals.allow": "Autoriser",
 	"approvals.preview": "Aperçu",
 	"approvals.allowSite": "Toujours autoriser sur {{site}}",
+	"approvals.moreOptions": "Plus d’options d’approbation",
 	"approvals.openSession": "Ouvrir la session",
 	"approvals.elementAlt": "L’élément que l’agent veut utiliser",
 	"approvals.region": "Action de l’agent en attente d’approbation",

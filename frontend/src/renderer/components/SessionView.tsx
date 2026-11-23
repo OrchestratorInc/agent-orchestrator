@@ -1955,6 +1955,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const reviewerInPane = Boolean(reviewerPaneKey && shownLayout?.leaves.has(reviewerPaneKey));
 	const reviewerVisible = reviewerInPane || Boolean(retainedReviewerChatId && mainReviewerChatId === retainedReviewerChatId);
 	const sessionPaneHidden = Boolean(shownLayout && !shownLayout.leaves.has(SESSION_TAB_KEY));
+	// A visible worker chat shows the session's browser approval at its end;
+	// anything else (a terminal, a file, PR or reviewer tab over it) gets the dock.
+	const chatShowsApprovals =
+		showChatSurface &&
+		!session?.cloud &&
+		chatTargetKind === "worker" &&
+		!(mainActiveFilePath || mainReviewerChatId || sessionPaneHidden || activePRUrl);
 	const paneCreateMux = useMemo(
 		() => (remoteBase ? () => createTerminalMux(muxUrlFromApiBase(remoteBase)) : undefined),
 		[remoteBase],
@@ -2950,7 +2957,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							className="relative z-chrome flex h-toolbar w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
-						{!session?.cloud ? <SessionApprovalDock sessionId={sessionId} hostId={hostId} /> : null}
+						{!session?.cloud && !chatShowsApprovals ? <SessionApprovalDock sessionId={sessionId} hostId={hostId} /> : null}
 						<div
 							className="relative min-h-0 flex-1"
 							data-split-group={shownGroup?.id}
@@ -3028,6 +3035,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}
+									showApprovals={chatShowsApprovals}
 									session={session}
 									reviewerTerminal={reviewerTerminal}
 									reviewerChat={reviewerChat}

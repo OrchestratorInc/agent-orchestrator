@@ -5568,6 +5568,7 @@
 	"approvals.allow": "Разрешить",
 	"approvals.preview": "Предпросмотр",
 	"approvals.allowSite": "Всегда разрешать на {{site}}",
+	"approvals.moreOptions": "Другие варианты одобрения",
 	"approvals.openSession": "Открыть сессию",
 	"approvals.elementAlt": "Элемент, который агент хочет использовать",
 	"approvals.region": "Действие агента ждёт подтверждения",

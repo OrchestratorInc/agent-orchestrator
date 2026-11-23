@@ -14,6 +14,7 @@ import {
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { useUiStore } from "../../stores/ui-store";
 import type { AgentAvatarProps } from "../AgentAvatar";
+import { ApprovalChatCard } from "./ApprovalChatCard";
 import { ApprovalNoticeCard } from "./ApprovalNoticeCard";
 import { ApprovalPrompt } from "./ApprovalPrompt";
 
@@ -40,16 +41,22 @@ function useDecide(request: PendingApproval | undefined) {
 	};
 }
 
-/**
- * The session's own approval prompt, under its topbar so it shows over chat
- * and terminal sessions alike. Requests are answered oldest first.
- */
-export function SessionApprovalDock({ sessionId, hostId }: { sessionId: string; hostId?: string }) {
+/** The session's pending requests, oldest first. */
+function useSessionApprovals(sessionId: string, hostId: string | undefined) {
 	const local = usePendingApprovals();
 	const remote = useRemotePendingApprovals();
-	const mine = (hostId ? remote : local.data ?? []).filter(
+	return (hostId ? remote : local.data ?? []).filter(
 		(request) => request.sessionId === sessionId && (request.hostId ?? undefined) === hostId,
 	);
+}
+
+/**
+ * The session's own approval prompt, under its topbar, for a session that is
+ * not showing its chat (a terminal, or a file or PR tab over the chat).
+ * Requests are answered oldest first.
+ */
+export function SessionApprovalDock({ sessionId, hostId }: { sessionId: string; hostId?: string }) {
+	const mine = useSessionApprovals(sessionId, hostId);
 	const request = mine[0];
 	const { decide, busy, error } = useDecide(request);
 	if (!request) return null;
@@ -58,6 +65,22 @@ export function SessionApprovalDock({ sessionId, hostId }: { sessionId: string; 
 			<div className="animate-in fade-in-0 slide-in-from-top-1 duration-200 rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface">
 				<ApprovalPrompt key={request.id} request={request} onDecide={decide} busy={busy} error={error} more={mine.length - 1} />
 			</div>
+		</div>
+	);
+}
+
+/**
+ * The session's own approval request at the end of its chat. It is gone once
+ * decided: the agent's command was waiting on it and carries on from there.
+ */
+export function SessionChatApprovalCard({ sessionId, hostId }: { sessionId: string; hostId?: string }) {
+	const mine = useSessionApprovals(sessionId, hostId);
+	const request = mine[0];
+	const { decide, busy, error } = useDecide(request);
+	if (!request) return null;
+	return (
+		<div className="animate-in fade-in-0 duration-200" data-testid="session-approval-card">
+			<ApprovalChatCard key={request.id} request={request} onDecide={decide} busy={busy} error={error} more={mine.length - 1} />
 		</div>
 	);
 }

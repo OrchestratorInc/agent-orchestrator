@@ -5262,6 +5262,7 @@
 	"approvals.allow": "Allow",
 	"approvals.preview": "Preview",
 	"approvals.allowSite": "Always allow on {{site}}",
+	"approvals.moreOptions": "More approval options",
 	"approvals.openSession": "Open session",
 	"approvals.elementAlt": "The element the agent wants to use",
 	"approvals.region": "Agent action waiting for approval",
