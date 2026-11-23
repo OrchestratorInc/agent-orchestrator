@@ -19,12 +19,12 @@ import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useConnectedHosts } from "./useHostConnection";
-import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
+import { startsInPlace } from "../lib/cloud-offering";
 import type { CloudCpSession } from "../lib/cloud-cp";
 
 function isCachedFreestyleSession(queryClient: QueryClient, sessionId: string): boolean {
 	return queryClient.getQueriesData<CloudCpSession[]>({ queryKey: cloudSessionsQueryKey })
-		.some(([, sessions]) => sessions?.some((session) => session.id === sessionId && session.sandboxProvider === FREESTYLE_PROVIDER));
+		.some(([, sessions]) => sessions?.some((session) => session.id === sessionId && startsInPlace(session.sandboxProvider)));
 }
 
 export function useProjectOrchestratorAction({

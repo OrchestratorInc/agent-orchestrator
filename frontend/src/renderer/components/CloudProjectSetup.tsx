@@ -15,7 +15,7 @@ import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { cloudAgentInfos } from "../lib/cloud-agents";
 import { CloudCpError, type CloudCpProject } from "../lib/cloud-cp";
-import { FREESTYLE_PROVIDER, projectSandboxProvider, type ResolvedCloudOffering } from "../lib/cloud-offering";
+import { projectSandboxProvider, startsInPlace, type ResolvedCloudOffering } from "../lib/cloud-offering";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { onboardingAlertErrorClass, onboardingFieldErrorClass, onboardingFieldHintClass, onboardingFooterActionsClass } from "../lib/onboarding-ui";
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
@@ -534,7 +534,7 @@ export function CloudCoderSetupFields({ setup, disabled, projectName, repository
 
 /**
  * After the control plane created a project: it goes to the top of the
- * sidebar, the project list refetches, and a Freestyle project opens on its
+ * sidebar, the project list refetches, and a Freestyle or boat project opens on its
  * orchestrator, already starting (a Coder one opens on its board).
  */
 export function useFinishCloudProjectCreate() {
@@ -542,7 +542,7 @@ export function useFinishCloudProjectCreate() {
 	return async (project: CloudCpProject, offering: Pick<ResolvedCloudOffering, "defaultProvider">) => {
 		useSidebarOrderStore.getState().moveProjectToTop(project.id);
 		await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
-		if (projectSandboxProvider(project.config, offering) === FREESTYLE_PROVIDER) {
+		if (startsInPlace(projectSandboxProvider(project.config, offering))) {
 			useUiStore.getState().setAutoStartOrchestrator(project.id, true);
 		}
 	};

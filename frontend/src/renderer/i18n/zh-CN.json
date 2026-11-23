@@ -770,6 +770,7 @@
 	"createProject.sandboxProvider.nodeops": "NodeOps",
 	"createProject.sandboxProvider.coder": "开发工作区 (Coder)",
 	"createProject.sandboxProvider.freestyle": "即时",
+	"createProject.sandboxProvider.boat": "完整虚拟机",
 	"createProject.sandboxProvider.ecs": "ECS",
 	"createProject.sandboxProvider.daytona": "Daytona",
 	"createProject.addWorkspace": "添加工作区文件夹",

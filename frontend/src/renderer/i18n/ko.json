@@ -770,6 +770,7 @@
 	"createProject.sandboxProvider.nodeops": "NodeOps",
 	"createProject.sandboxProvider.coder": "개발 워크스페이스 (Coder)",
 	"createProject.sandboxProvider.freestyle": "인스턴트",
+	"createProject.sandboxProvider.boat": "전체 VM",
 	"createProject.sandboxProvider.ecs": "ECS",
 	"createProject.sandboxProvider.daytona": "Daytona",
 	"createProject.addWorkspace": "워크스페이스 폴더 추가",

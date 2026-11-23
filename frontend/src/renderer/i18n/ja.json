@@ -770,6 +770,7 @@
 	"createProject.sandboxProvider.nodeops": "NodeOps",
 	"createProject.sandboxProvider.coder": "開発ワークスペース (Coder)",
 	"createProject.sandboxProvider.freestyle": "インスタント",
+	"createProject.sandboxProvider.boat": "フルVM",
 	"createProject.sandboxProvider.ecs": "ECS",
 	"createProject.sandboxProvider.daytona": "Daytona",
 	"createProject.addWorkspace": "ワークスペースフォルダーを追加",

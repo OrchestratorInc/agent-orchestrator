@@ -777,6 +777,7 @@
 	"createProject.sandboxProvider.nodeops": "NodeOps",
 	"createProject.sandboxProvider.coder": "Espace de développement (Coder)",
 	"createProject.sandboxProvider.freestyle": "Instantané",
+	"createProject.sandboxProvider.boat": "VM complète",
 	"createProject.sandboxProvider.ecs": "ECS",
 	"createProject.sandboxProvider.daytona": "Daytona",
 	"createProject.addWorkspace": "Ajouter un dossier d'espace de travail",

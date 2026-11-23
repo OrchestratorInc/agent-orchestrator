@@ -920,7 +920,7 @@ async function sanitizeRendererContextProperties(properties?: TelemetryPropertie
 
 // Values the cloud funnel events may carry. Anything outside a vocabulary is
 // reported as "other" so a free-form string can never leak through.
-const CLOUD_PROVIDERS = new Set(["coder", "freestyle", "docker", "nodeops", "ecs", "daytona", "default"]);
+const CLOUD_PROVIDERS = new Set(["coder", "freestyle", "boat", "docker", "nodeops", "ecs", "daytona", "default"]);
 const CLOUD_SIGN_IN_METHODS = new Set(["workos", "local"]);
 const CLOUD_SIGN_IN_SOURCES = new Set(["artifact_publish", "onboarding", "other"]);
 const CLOUD_SESSION_KINDS = new Set(["worker", "orchestrator"]);
