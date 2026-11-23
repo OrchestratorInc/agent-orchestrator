@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2 } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2 } from "@/components/app-icons";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";
@@ -405,6 +405,35 @@ function FormRequest({
 		void onResolve("accept", values);
 	}
 
+	// On a form of several questions, Skip leaves only the shown question blank,
+	// as the phone's card does: it moves on, and on the last question sends what
+	// was answered. A required question has no Skip; the close still ends the
+	// form. Anywhere else, Skip declines the whole request.
+	const skipsOneQuestion = questionGroups !== undefined && questionGroups.length > 1;
+	const canSkip = !skipsOneQuestion || !visibleProperties.some(([name]) => required.has(name));
+
+	function skip() {
+		if (!skipsOneQuestion) {
+			void onResolve("decline");
+			return;
+		}
+		const next = { ...values };
+		// Cleared, not reset: a schema default would send the question as answered.
+		for (const [name, property] of visibleProperties) {
+			if (property.type === "array") next[name] = [];
+			else delete next[name];
+		}
+		setValues(next);
+		setMissing(new Set());
+		if (hasNextQuestion) {
+			setActiveQuestion((current) => current + 1);
+			return;
+		}
+		// With every question left blank, the whole form was skipped.
+		const answered = properties.some(([name]) => !isBlank(next[name]));
+		void (answered ? onResolve("accept", next) : onResolve("decline"));
+	}
+
 	return (
 		<form ref={formRef} onSubmit={submit} onKeyDown={pickByNumber} className="flex min-h-0 flex-1 flex-col">
 			<DockHeader
@@ -508,16 +537,18 @@ function FormRequest({
 								))}
 							</div>
 						) : null}
-						<Button
-							type="button"
-							variant="quiet"
-							size="sm"
-							shape="pill"
-							disabled={disabled}
-							onClick={() => onResolve("decline")}
-						>
-							Skip
-						</Button>
+						{canSkip ? (
+							<Button
+								type="button"
+								variant="quiet"
+								size="sm"
+								shape="pill"
+								disabled={disabled}
+								onClick={skip}
+							>
+								Skip
+							</Button>
+						) : null}
 					</div>
 					{/* Sending an answer is the composer's send, so it wears the composer's send colour. */}
 					<Button

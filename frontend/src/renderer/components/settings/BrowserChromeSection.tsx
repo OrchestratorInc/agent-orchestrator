@@ -1,13 +1,15 @@
+import { apiErrorException } from "../../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../api/schema";
-import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { isMacPlatform } from "../../lib/platform";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
 import { useUiStore, type GlobalSettingsSection } from "../../stores/ui-store";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
@@ -48,7 +50,7 @@ const previewStatus: ChromeStatus = {
 async function fetchChromeStatus(): Promise<ChromeStatus> {
 	if (usesPreviewWorkspaceData) return previewStatus;
 	const { data, error } = await apiClient.GET("/api/v1/browser/chrome");
-	if (error || !data) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw apiErrorException(error);
 	return data;
 }
 
@@ -69,7 +71,7 @@ export function BrowserChromeSection() {
 			const { data, error } = enable
 				? await apiClient.POST("/api/v1/browser/chrome")
 				: await apiClient.DELETE("/api/v1/browser/chrome");
-			if (error || !data) throw new Error(apiErrorMessage(error));
+			if (error || !data) throw apiErrorException(error);
 			queryClient.setQueryData(browserChromeQueryKey, data);
 			if (enable && !data.connected) await startLoading(data.extensionPath);
 		},
@@ -148,10 +150,13 @@ export function BrowserChromeSection() {
 									<li>{t("settings.browserChrome.loadStep3")}</li>
 								</ol>
 								{openFailed ? <span className="mt-1 block text-error">{t("settings.browserChrome.openFailed")}</span> : null}
-								<span className="mt-1 block font-mono break-all">{status.extensionPath}</span>
-								<span className="mt-1 block">
-									{t("settings.browserChrome.extensionId")}: <span className="font-mono">{status.extensionId}</span>
-								</span>
+								<Input
+									aria-label={t("settings.browserChrome.extensionPath")}
+									className="mt-2 font-mono"
+									onFocus={(event) => event.currentTarget.select()}
+									readOnly
+									value={status.extensionPath}
+								/>
 							</>
 						) : (
 							<span className="text-error">{t("settings.browserChrome.bundleMissing")}</span>

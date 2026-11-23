@@ -42,7 +42,7 @@ type Report struct {
 // The implementation delegates freshness to the shared readiness coordinator.
 type HarnessCatalog interface {
 	RefreshFresh(ctx context.Context) (agentsvc.Inventory, error)
-	FindInstalledBinary(ctx context.Context) (agentsvc.Info, bool)
+	FindInstalledBinary(ctx context.Context) (agentsvc.Info, agentsvc.Presence)
 }
 
 // GitHubAuthTerminalOpener starts the reviewed GitHub CLI login command in a
@@ -180,7 +180,7 @@ func (s *Service) checkTmux() Requirement {
 		// terminal runtime on Windows instead, so this always passes there.
 		return Requirement{
 			ID: "tmux", Label: "tmux", Satisfied: true, Required: true,
-			Detail: "Not required on Windows — AO uses the built-in ConPTY terminal runtime instead of tmux.",
+			Detail: "Not required on Windows — Orchestrator uses the built-in ConPTY terminal runtime instead of tmux.",
 		}
 	}
 	configured := strings.TrimSpace(os.Getenv("AO_TMUX_BINARY"))
@@ -188,7 +188,7 @@ func (s *Service) checkTmux() Requirement {
 	if err != nil || resolution.Path == "" {
 		detail := "tmux was not found on PATH; it is required on macOS/Linux to start sessions."
 		if configured != "" {
-			detail = "AO's bundled tmux is missing or not executable: " + configured
+			detail = "Orchestrator's bundled tmux is missing or not executable: " + configured
 		}
 		return Requirement{
 			ID: "tmux", Label: "tmux", Required: true,
@@ -222,8 +222,17 @@ func (s *Service) checkHarness(ctx context.Context) Requirement {
 // determine it by starting a process, which must not delay first render.
 func (s *Service) checkStartupHarness(ctx context.Context) Requirement {
 	const label = "agent harness"
-	info, ok := s.harnesses.FindInstalledBinary(ctx)
-	if !ok {
+	info, search := s.harnesses.FindInstalledBinary(ctx)
+	if search == agentsvc.PresenceUnconfirmed {
+		// A slow or failed check is not proof that no agent is installed, so it
+		// must not block startup. The checks keep running in the background, and
+		// a session still verifies its agent before it launches.
+		return Requirement{
+			ID: "harness", Label: label,
+			Detail: "Orchestrator could not finish checking for an agent CLI in time. It keeps checking in the background.",
+		}
+	}
+	if search != agentsvc.PresenceFound {
 		return Requirement{
 			ID: "harness", Label: label, Required: true,
 			Detail: "No agent CLI (Claude Code, Codex, etc.) was found on PATH or in a supported install location.",
@@ -240,7 +249,7 @@ func (s *Service) checkGH() Requirement {
 	if err != nil || path == "" {
 		return Requirement{
 			ID: "gh", Label: "gh",
-			Detail: "gh was not found on PATH. It lets agent sessions open pull requests and read issues, but AO runs fine without it.",
+			Detail: "gh was not found on PATH. It lets agent sessions open pull requests and read issues, but Orchestrator runs fine without it.",
 		}
 	}
 	return Requirement{ID: "gh", Label: "gh", Satisfied: true, Detail: path}

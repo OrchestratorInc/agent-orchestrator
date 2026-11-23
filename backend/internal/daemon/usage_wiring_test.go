@@ -25,10 +25,23 @@ func TestUsagePipelineWatchRootsIncludesKimiWrites(t *testing.T) {
 	}
 
 	roots := usagesvc.SourceRoots{
-		ClaudeProjects: t.TempDir(),
-		CodexSessions:  t.TempDir(),
-		CodexArchived:  t.TempDir(),
-		KimiHome:       kimiHome,
+		ClaudeProjects:      t.TempDir(),
+		CodexSessions:       t.TempDir(),
+		CodexArchived:       t.TempDir(),
+		KimiHome:            kimiHome,
+		PiSessions:          t.TempDir(),
+		PiAgentSessions:     t.TempDir(),
+		QwenUsage:           t.TempDir(),
+		OMPSessions:         t.TempDir(),
+		KimchiSessions:      t.TempDir(),
+		GooseSessions:       t.TempDir(),
+		OpenCodeData:        t.TempDir(),
+		KiloData:            t.TempDir(),
+		PrimeAgentSessions:  t.TempDir(),
+		GrokSessions:        t.TempDir(),
+		AgyCLIConversations: t.TempDir(),
+		AgyACPConversations: t.TempDir(),
+		DeepSeekSessions:    t.TempDir(),
 	}
 	watcher, err := usagepipeline.NewTranscriptWatcher(
 		context.Background(), usagePipelineWatchRoots(roots),

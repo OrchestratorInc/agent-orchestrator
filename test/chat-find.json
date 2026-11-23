@@ -1,0 +1,435 @@
+[
+  {
+    "name": "inline formatting",
+    "markdown": true,
+    "source": "hello **world** and *world*",
+    "blocks": [
+      "hello world and world"
+    ],
+    "query": "HELLO WORLD",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 11
+      }
+    ]
+  },
+  {
+    "name": "literal syntax",
+    "markdown": false,
+    "source": "a.*[b] %_ C:\\files",
+    "blocks": [
+      "a.*[b] %_ C:\\files"
+    ],
+    "query": ".*[b]",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 1,
+        "end": 6
+      }
+    ]
+  },
+  {
+    "name": "non-overlap",
+    "markdown": false,
+    "source": "aaaa",
+    "blocks": [
+      "aaaa"
+    ],
+    "query": "aa",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 2
+      },
+      {
+        "block": 0,
+        "start": 2,
+        "end": 4
+      }
+    ]
+  },
+  {
+    "name": "canonical accent",
+    "markdown": true,
+    "source": "Café CAFÉ cafe",
+    "blocks": [
+      "Café CAFÉ cafe"
+    ],
+    "query": "café",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 5
+      },
+      {
+        "block": 0,
+        "start": 6,
+        "end": 10
+      }
+    ]
+  },
+  {
+    "name": "full case fold",
+    "markdown": false,
+    "source": "Straße STRASSE",
+    "blocks": [
+      "Straße STRASSE"
+    ],
+    "query": "strasse",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 6
+      },
+      {
+        "block": 0,
+        "start": 7,
+        "end": 14
+      }
+    ]
+  },
+  {
+    "name": "fold expansion one glyph",
+    "markdown": false,
+    "source": "ß",
+    "blocks": [
+      "ß"
+    ],
+    "query": "s",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 1
+      }
+    ]
+  },
+  {
+    "name": "Greek sigma",
+    "markdown": false,
+    "source": "Σ σ ς",
+    "blocks": [
+      "Σ σ ς"
+    ],
+    "query": "σ",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 1
+      },
+      {
+        "block": 0,
+        "start": 2,
+        "end": 3
+      },
+      {
+        "block": 0,
+        "start": 4,
+        "end": 5
+      }
+    ]
+  },
+  {
+    "name": "Turkish locale independent",
+    "markdown": false,
+    "source": "I i İ ı",
+    "blocks": [
+      "I i İ ı"
+    ],
+    "query": "i",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 1
+      },
+      {
+        "block": 0,
+        "start": 2,
+        "end": 3
+      }
+    ]
+  },
+  {
+    "name": "emoji offsets",
+    "markdown": false,
+    "source": "👩🏽‍💻 café 🐈",
+    "blocks": [
+      "👩🏽‍💻 café 🐈"
+    ],
+    "query": "café",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 8,
+        "end": 12
+      }
+    ]
+  },
+  {
+    "name": "whitespace collapse",
+    "markdown": false,
+    "source": "hello \t\n world",
+    "blocks": [
+      "hello \t\n world"
+    ],
+    "query": " hello world ",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 14
+      }
+    ]
+  },
+  {
+    "name": "links and images",
+    "markdown": true,
+    "source": "See [label](https://hidden.example) ![secret](image.png).",
+    "blocks": [
+      "See label ."
+    ],
+    "query": "hidden",
+    "ranges": []
+  },
+  {
+    "name": "block boundaries",
+    "markdown": true,
+    "source": "hello\n\nworld",
+    "blocks": [
+      "hello",
+      "world"
+    ],
+    "query": "hello world",
+    "ranges": []
+  },
+  {
+    "name": "headings and lists",
+    "markdown": true,
+    "source": "# Title\n\n- first\n- second",
+    "blocks": [
+      "Title",
+      "first",
+      "second"
+    ],
+    "query": "second",
+    "ranges": [
+      {
+        "block": 2,
+        "start": 0,
+        "end": 6
+      }
+    ]
+  },
+  {
+    "name": "fenced code",
+    "markdown": true,
+    "source": "```js\nconst x = \".*\";\n```",
+    "blocks": [
+      "const x = \".*\";\n"
+    ],
+    "query": ".*",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 11,
+        "end": 13
+      }
+    ]
+  },
+  {
+    "name": "inline code",
+    "markdown": true,
+    "source": "Use `a_*` and **b**",
+    "blocks": [
+      "Use a_* and b"
+    ],
+    "query": "a_*",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 4,
+        "end": 7
+      }
+    ]
+  },
+  {
+    "name": "entities and escapes",
+    "markdown": true,
+    "source": "Fish &amp; chips \\*literal\\*",
+    "blocks": [
+      "Fish & chips *literal*"
+    ],
+    "query": "& chips",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 5,
+        "end": 12
+      }
+    ]
+  },
+  {
+    "name": "diagram exclusion",
+    "markdown": true,
+    "source": "```mermaid\nsecret diagram\n```\n\nVisible",
+    "blocks": [
+      "Visible"
+    ],
+    "query": "secret",
+    "ranges": []
+  },
+  {
+    "name": "empty query",
+    "markdown": false,
+    "source": "hello",
+    "blocks": [
+      "hello"
+    ],
+    "query": " \t ",
+    "ranges": []
+  },
+  {
+    "name": "CJK Hindi RTL",
+    "markdown": false,
+    "source": "你好 नमस्ते مرحبا",
+    "blocks": [
+      "你好 नमस्ते مرحبا"
+    ],
+    "query": "नमस्ते",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 3,
+        "end": 9
+      }
+    ]
+  },
+  {
+    "name": "accent preservation",
+    "source": "café cafe",
+    "markdown": false,
+    "blocks": [
+      "café cafe"
+    ],
+    "query": "cafe",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 5,
+        "end": 9
+      }
+    ]
+  },
+  {
+    "name": "autolinks",
+    "markdown": true,
+    "source": "Visit https://example.com and <https://other.example>",
+    "blocks": [
+      "Visit https://example.com and https://other.example"
+    ],
+    "query": "EXAMPLE.COM",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 14,
+        "end": 25
+      }
+    ]
+  },
+  {
+    "name": "nested list",
+    "markdown": true,
+    "source": "- parent\n  - child",
+    "blocks": [
+      "parent",
+      "child"
+    ],
+    "query": "parent",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 6
+      }
+    ]
+  },
+  {
+    "name": "table cells",
+    "markdown": true,
+    "source": "| Name | Value |\n| --- | --- |\n| Hello | World |",
+    "blocks": [
+      "Name",
+      "Value",
+      "Hello",
+      "World"
+    ],
+    "query": "hello world",
+    "ranges": []
+  },
+  {
+    "name": "raw HTML remains text",
+    "markdown": true,
+    "source": "<div>literal</div>",
+    "blocks": [
+      "<div>literal</div>"
+    ],
+    "query": "literal",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 5,
+        "end": 12
+      }
+    ]
+  },
+  {
+    "name": "hard break",
+    "markdown": true,
+    "source": "hello  \nworld",
+    "blocks": [
+      "hello\nworld"
+    ],
+    "query": "hello world",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 11
+      }
+    ]
+  },
+  {
+    "name": "Unicode whitespace agreement",
+    "source": "hello﻿world",
+    "markdown": false,
+    "blocks": [
+      "hello﻿world"
+    ],
+    "query": "hello world",
+    "ranges": [
+      {
+        "block": 0,
+        "start": 0,
+        "end": 12
+      }
+    ]
+  },
+  {
+    "name": "rendered math fence is embedded content",
+    "source": "```math\nsecret formula\n```\n\nVisible",
+    "markdown": true,
+    "blocks": [
+      "Visible"
+    ],
+    "query": "secret",
+    "ranges": []
+  }
+]

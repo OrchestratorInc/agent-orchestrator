@@ -107,10 +107,10 @@ func settledHibernationHarness(t *testing.T, state domain.TurnState, gate ...fun
 	return hibernationHarnessWith(t, state, func(opts *chatsvc.Options) { opts.HibernationEnabled = enabled })
 }
 
-func hibernationHarnessWith(t *testing.T, state domain.TurnState, configure func(*chatsvc.Options)) (*harness, *hibernationConversation) {
+func hibernationHarnessWith(t *testing.T, state domain.TurnState, configure func(*chatsvc.Options), imports ...*domain.SessionImportSource) (*harness, *hibernationConversation) {
 	t.Helper()
 	conv := &hibernationConversation{fakeConversation: newFakeConversation()}
-	st := openStore(t)
+	st := openStore(t, imports...)
 	h := &harness{st: st, conv: conv.fakeConversation, activity: &recordingActivity{}, clock: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)}
 	var nextID atomic.Int32
 	opts := chatsvc.Options{
@@ -1246,13 +1246,13 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 	if err := svc.DrainQueued(ctx, testSession); err != nil {
 		t.Fatal(err)
 	}
-	h.advance(6 * time.Minute)
+	h.advance(chatsvc.IdleBeforeHibernate + time.Minute)
 	rec, found, err := st.GetSession(ctx, testSession)
 	if err != nil || !found {
 		t.Fatalf("get session = %v, %v", found, err)
 	}
 	rec.Kind = domain.KindWorker
-	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: h.now().Add(-6 * time.Minute)}
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: h.now().Add(-chatsvc.IdleBeforeHibernate - time.Minute)}
 	rec.Metadata.ProviderConversationID = first.ProviderConversationID()
 	if err := st.UpdateSession(ctx, rec); err != nil {
 		t.Fatal(err)

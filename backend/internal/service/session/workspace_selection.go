@@ -610,11 +610,12 @@ func applyCommitRun(ctx context.Context, root string, env []string, run commitRu
 		// git apply rejects empty input.
 		_ = patch.Close()
 		if waitErr := diff.Wait(); waitErr != nil {
-			return nil, classifyWorkspaceGitError(ctx, waitErr, strings.TrimSpace(diffStderr.buffer.String()))
+			return nil, classifyWorkspaceGitError(ctx, root, "selection-diff", waitErr, strings.TrimSpace(diffStderr.buffer.String()))
 		}
 		if !errors.Is(peekErr, io.EOF) {
 			return nil, peekErr
 		}
+		noteWorkspaceGitReadOK(root, "selection-diff")
 		return nil, nil
 	}
 	apply := workspaceGitCommand(ctx, root, "-c", "core.splitIndex=false", "apply", "--cached", "--whitespace=nowarn")
@@ -637,8 +638,9 @@ func applyCommitRun(ctx context.Context, root string, env []string, run commitRu
 		return applyConflictPaths(applyStderr.buffer.String()), nil
 	}
 	if diffErr != nil {
-		return nil, classifyWorkspaceGitError(ctx, diffErr, strings.TrimSpace(diffStderr.buffer.String()))
+		return nil, classifyWorkspaceGitError(ctx, root, "selection-diff", diffErr, strings.TrimSpace(diffStderr.buffer.String()))
 	}
+	noteWorkspaceGitReadOK(root, "selection-diff")
 	return nil, nil
 }
 

@@ -1,22 +1,27 @@
-import { Feather } from "../icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import { AppSymbol } from "../AppSymbol";
 import { haptics } from "../haptics";
+import { usePressFeedback } from "../pressFeedback";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
-import { iconSize } from "../tokens";
+import { iconSize, stateOpacity, touchTarget } from "../tokens";
+import { DictationField } from "../voice/DictationField";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
+import { ComposerAttachmentTray } from "./ComposerAttachmentTray";
 import { ComposerGlass } from "./composer-glass";
-import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
+import { HardwareReturn } from "./HardwareReturn";
+import { useKeyboardSendRefocus } from "./useKeyboardSendRefocus";
+import { COMPOSER_FIELD_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import type { ChatImage, ChatResource } from "./types";
-import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
+import { composerTrayItems, forgetComposerAttachments, readComposerAttachments, removeComposerAttachment, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
 import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
 import { useImagePaste } from "./useImagePaste";
 
@@ -40,15 +45,21 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const stopFeedback = usePressFeedback("button");
+	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const [text, setText] = useState("");
 	const { items: attachments, notice: attachmentNotice } = useComposerAttachments(attachmentKey);
+	const trayItems = useMemo(() => composerTrayItems(attachments), [attachments]);
 	const clearAttachments = useCallback(() => updateComposerAttachments(attachmentKey, () => ({ items: [] })), [attachmentKey]);
 	const dismissAttachmentNotice = useCallback(() => updateComposerAttachments(attachmentKey, (current) => current.notice ? { items: current.items } : current), [attachmentKey]);
 	const [submitting, setSubmitting] = useState(false);
+	const inputRef = useRef<TextInput>(null);
+	// See ChatComposer: a hardware-keyboard send gives the field its focus back.
+	const keyboardSend = useKeyboardSendRefocus(inputRef, submitting);
 	const [error, setError] = useState("");
-	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
 	const keyboard = useReanimatedKeyboardAnimation();
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
+	const listening = voice.state === "starting" || voice.state === "recording" || voice.state === "transcribing";
 	useEffect(() => {
 		if (!completedRetry) return;
 		if (text.trim() === completedRetry.draftText) { setText(""); clearAttachments(); }
@@ -98,15 +109,16 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 		}
 	};
 
-	const submit = async () => {
+	const submit = async (from: "button" | "keyboard" = "button") => {
 		if (submitting || stopped || (!text.trim() && !attachments.length)) return;
+		if (from === "keyboard") keyboardSend.begin();
 		// Only what this send submitted; see ChatComposer.
 		const sentKey = attachmentKey;
 		const sent = new Set(attachments.map((item) => item.id));
 		setSubmitting(true); setError(""); dismissAttachmentNotice();
 		try {
 			const id = await onSend(text.trim(), attachments.flatMap((item) => item.kind === "image" ? [item.image] : []), attachments.flatMap((item) => item.kind === "resource" ? [item.resource] : []));
-			setText(""); forgetComposerAttachments(sentKey, sent); setFieldHeight(COMPOSER_FIELD_HEIGHT);
+			setText(""); forgetComposerAttachments(sentKey, sent);
 			await onAcknowledgeSend(id);
 			haptics.success();
 		} catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send this reply."); }
@@ -122,34 +134,42 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 	}));
 	const sendDisabled = stopped || submitting || (!text.trim() && !attachments.length);
 	return <Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
-		{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><Feather name="mic" size={12} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
-		{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={12} color={t.accent} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); updateComposerAttachments(attachmentKey, (current) => ({ items: current.items.filter((candidate) => candidate.id !== item.id), notice: current.notice })); }}><Feather name="x" size={12} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
 		{error || attachmentNotice || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{error || attachmentNotice || voice.error}</Text> : null}
-		<View style={[styles.composer, stopped && { opacity: 0.55 }]}>
+		<View style={[styles.composer, stopped && inactive]}>
 			<ComposerGlass radius={COMPOSER_RADIUS} />
+			{/* What goes with the reply, inside the pill over the field, as in ChatComposer. */}
+			<ComposerAttachmentTray items={trayItems} onRemove={(id) => removeComposerAttachment(attachmentKey, id)} />
 			<View style={styles.composerRow}>
 				<ChatAttachmentMenu disabled={stopped || submitting || !attachmentsEnabled} canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
-				<TextInput
-					onLayout={pasteLayout}
-					accessibilityLabel="Reply to reviewer"
-					value={text}
-					onChangeText={setText}
-					onContentSizeChange={(event) => {
-						// Native contentSize already includes the field's vertical padding,
-						// as in ChatComposer.
-						const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
-						setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
-					}}
-					placeholder={stopped ? "Reviewer is stopped" : "Reply to reviewer…"}
-					placeholderTextColor={t.textFaint}
-					{...textSelectionColors(t)}
-					multiline
-					maxLength={40_000}
-					editable={!stopped && !submitting}
-					style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
-				/>
-				<MicKey variant="plain" size={44} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
-				{busy ? <Pressable accessibilityRole="button" accessibilityLabel="Stop reviewer" onPress={() => { haptics.tap(); void onInterrupt().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not stop the reviewer.")); }} style={({ pressed }) => [styles.stop, pressed && { opacity: 0.8 }]}><Feather name="square" size={12} color={t.textPrimary} /></Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Send reply" accessibilityState={{ disabled: sendDisabled, busy: submitting }} disabled={sendDisabled} onPress={() => { haptics.tap(); void submit(); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, sendDisabled && { opacity: 0.35 }]}>{submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+				{/* While the mic is open the dictation takes the field's place, as in ChatComposer. */}
+				{listening ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={dictation} /> : null}
+				{/* Return on a hardware keyboard sends; Cmd/Ctrl have no steer to pick here.
+				    The wrapper holds the field's place in the row, so it hides with it.
+				    While the reviewer works there is no Send, only Stop, so Return is still
+				    taken but does nothing, rather than turning into a newline for that turn. */}
+				<HardwareReturn style={[styles.inputSlot, listening && hiddenField]} enabled={!stopped && !submitting} onReturn={() => { if (!busy) void submit("keyboard"); }}>
+					<TextInput
+						ref={inputRef}
+						onLayout={pasteLayout}
+						accessibilityLabel="Reply to reviewer"
+						value={text}
+						onChangeText={setText}
+						onFocus={keyboardSend.focused}
+						placeholder={stopped ? "Reviewer is stopped" : "Reply to reviewer…"}
+						placeholderTextColor={t.textFaint}
+						{...textSelectionColors(t)}
+						multiline
+						maxLength={40_000}
+						editable={!stopped && !submitting}
+						// Grows with its text between the rule's min and max, as ChatComposer's does.
+						style={[styles.input, listening && hiddenField]}
+					/>
+				</HardwareReturn>
+				<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} onToggleLatched={voice.toggleLatched} />
+				{/* A view per face: both clip (keeping the ripple round), and Android skips
+				    drawing a clipping view's child that resized in the same update as the
+				    view's own fill, so a reused stop view left the send arrow blank. */}
+				{busy ? <Pressable key="stop" accessibilityRole="button" accessibilityLabel="Stop reviewer" android_ripple={stopFeedback.android_ripple} onPress={() => { haptics.tap(); void onInterrupt().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not stop the reviewer.")); }} style={({ pressed }) => [styles.stop, pressed && stopFeedback.pressed]}><AppSymbol name="stop" size={iconSize.xs} color={t.textPrimary} /></Pressable> : <Pressable key="send" accessibilityRole="button" accessibilityLabel="Send reply" accessibilityState={{ disabled: sendDisabled, busy: submitting }} disabled={sendDisabled} android_ripple={sendFeedback.android_ripple} onPress={() => void submit()} style={({ pressed }) => [styles.send, pressed && sendFeedback.pressed, sendDisabled && inactive]}>{submitting ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.md} color={t.onAccent} />}</Pressable>}
 			</View>
 		</View>
 	</Animated.View>;
@@ -157,3 +177,8 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 
 // The session composer's dock, pill, field and controls; it draws nothing of its own.
 const makeStyles = composerStyleRules;
+/** The pill, or a control in it, that cannot act right now. */
+const inactive = { opacity: stateOpacity.disabled };
+/** Out of the layout while dictating, but still mounted with its draft. */
+const hiddenField = { display: "none" } as const;
+const dictation = { minHeight: COMPOSER_FIELD_HEIGHT };

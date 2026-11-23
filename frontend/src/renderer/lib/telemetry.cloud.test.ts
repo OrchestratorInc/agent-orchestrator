@@ -10,6 +10,15 @@ import {
 afterEach(() => resetCloudTelemetryContextForTest());
 
 describe("cloud funnel event allowlist", () => {
+	it.each(["ao.renderer.cloud_limit_reached", "ao.renderer.cloud_plan_refusal_shown"])("keeps the chat source on %s", async (event) => {
+		expect(await sanitizeRendererProperties(event, { code: "WORKER_SLOTS_FULL", shown: false, source: "chat" })).toEqual({
+			code: "WORKER_SLOTS_FULL", shown: false, source: "chat",
+		});
+		expect(await sanitizeRendererProperties(event, { code: "WORKER_SLOTS_FULL", shown: true, source: "private text" })).toEqual({
+			code: "WORKER_SLOTS_FULL", shown: true,
+		});
+	});
+
 	it("keeps vocabulary values and hashes ids", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.cloud_session_failed", {
 			provider: "coder",
@@ -47,11 +56,34 @@ describe("cloud funnel event allowlist", () => {
 		});
 		expect(offering).toEqual({ org_kind: "unknown", billing_mode: "unknown", default_provider: "freestyle", provider_count: 2 });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_started", { plan: "Pro Plan $$" })).toEqual({ plan: "other" });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_started", { plan: "starter", trial: true })).toEqual({ plan: "starter", trial: true });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_completed", { plan: "starter", trial: false, duration_ms: 5 })).toEqual({
+			plan: "starter",
+			trial: false,
+			duration_ms: 5,
+		});
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_completed", { plan: "starter", trial: "7 days" })).toEqual({ plan: "starter" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", email: "a@b.c" })).toEqual({ method: "workos" });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "artifact_publish" })).toEqual({ method: "workos", source: "artifact_publish" });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "onboarding" })).toEqual({ method: "workos", source: "onboarding" });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "/Users/a/plan.md" })).toEqual({ method: "workos" });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", same_account: true })).toEqual({ method: "workos", same_account: true });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", same_account: "user-1" })).toEqual({ method: "workos" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_limit_reached", { code: "WEEKLY_LIMIT_REACHED", shown: true })).toEqual({
 			code: "WEEKLY_LIMIT_REACHED",
 			shown: true,
 		});
+	});
+
+	it("keeps only a well-formed website visitor id on the visit link event", async () => {
+		const event = "ao.renderer.cloud_web_visitor_link_requested";
+		const visitor = "019a3f5e-8c2b-7d41-b6f0-3e2d1c0b9a87";
+		expect(await sanitizeRendererProperties(event, { website_distinct_id: visitor, email: "a@b.c", user_id: "user_A" })).toEqual({
+			website_distinct_id: visitor,
+		});
+		for (const invalid of ["", "has space", "/Users/me/secret", "a".repeat(201), "undefined", 7, null]) {
+			expect(await sanitizeRendererProperties(event, { website_distinct_id: invalid })).toEqual({});
+		}
 	});
 
 	it("tags every event and exception with the hashed cloud org, kind and billing mode", async () => {

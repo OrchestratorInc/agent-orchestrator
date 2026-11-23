@@ -1,11 +1,12 @@
 import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "lucide-react";
+import { Eye, FileCode2, FileText, GitCompareArrows, LoaderCircle, MessageSquarePlus, Pencil, Save, X } from "@/components/app-icons";
 import { Editor, type EditorFactory } from "@pierre/diffs/edit";
+import type { ArtifactMenuAction, ArtifactMenuActions } from "../lib/artifact-menu";
 import { EditProvider } from "@pierre/diffs/react";
 import {
 	sessionArtifactFileQueryOptions,
@@ -84,7 +85,7 @@ function canRenderMermaid(path: string, detail: WorkspaceFileDetail): boolean {
 export function FileContentPane({
 	onOpenInCenter,
 	active = true,
-	annotation,
+	annotation: annotationProp,
 	initialEditing = false,
 	initialLine,
 	annotationRange,
@@ -103,6 +104,8 @@ export function FileContentPane({
 	scope = "combined",
 	source = DEFAULT_FILES_SOURCE,
 	toolbarHost,
+	menuActions,
+	footerHost,
 	onEditingChange,
 }: {
 	annotation: FileAnnotationModel;
@@ -132,6 +135,17 @@ export function FileContentPane({
 	 * path row; null renders none until the host mounts.
 	 */
 	toolbarHost?: HTMLElement | null;
+	/**
+	 * Takes the mode and action buttons into the host's file menu instead of
+	 * toolbarHost, which then shows only the edit's own Cancel and Save.
+	 */
+	menuActions?: ArtifactMenuActions;
+	/**
+	 * Where the feedback Send bar renders, outside the pane's scrolling content:
+	 * a host that scales that content (the artifact zoom) would otherwise move
+	 * a sticky bar along with it. Unset, the bar sticks to the pane's bottom.
+	 */
+	footerHost?: HTMLElement | null;
 	/** Told whenever the file enters or leaves edit mode. */
 	onEditingChange?: (editing: boolean) => void;
 	/**
@@ -141,6 +155,25 @@ export function FileContentPane({
 	toolbar?: "tabs" | "compact";
 }) {
 	const { t } = useTranslation();
+	// An archived session's artifact takes no feedback: nothing starts or sends
+	// a comment, none shows, and the buttons that would are not offered.
+	const feedbackOff = source.kind === "artifact" && source.noFeedback === true;
+	const annotation = useMemo<FileAnnotationModel>(() => feedbackOff
+		? { ...annotationProp, targets: [], begin: () => {}, submit: async () => {} }
+		: annotationProp, [annotationProp, feedbackOff]);
+	// A comment already open on the file when its session is archived is closed.
+	useEffect(() => {
+		if (feedbackOff && path) cancelFileAnnotations(annotationProp, (target) => target.path === path);
+	}, [annotationProp, feedbackOff, path]);
+	// The menu actions this render offers; published once it commits, and
+	// withdrawn while loading, on an error, or when the pane goes away.
+	const menuPublish = useRef<ArtifactMenuAction[]>([]);
+	menuPublish.current = [];
+	useLayoutEffect(() => {
+		if (!menuActions) return;
+		menuActions.current = menuPublish.current;
+		return () => { menuActions.current = []; };
+	});
 	const queryClient = useQueryClient();
 	const openInBrowser = useContext(AppBrowserLinkContext);
 	const setFileDisplayMode = useUiStore((state) => state.setFileDisplayMode);
@@ -490,7 +523,7 @@ export function FileContentPane({
 					) : source.kind === "snapshot" ? (
       <Tooltip><TooltipTrigger asChild><span tabIndex={0}><Button aria-label={t("files.editFile")} disabled size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm"/></Button></span></TooltipTrigger><TooltipContent side="bottom">{t("files.readOnlySnapshot")}</TooltipContent></Tooltip>
      ) : null}
-     <Tooltip>
+     {feedbackOff ? null : <Tooltip>
 						<TooltipTrigger asChild>
 							<Button
 								aria-label={t("files.addFeedback")}
@@ -504,12 +537,41 @@ export function FileContentPane({
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("files.addFeedback")}</TooltipContent>
-					</Tooltip>
+					</Tooltip>}
 				</div>
 			)}
 		</div>
 	);
-	const compactTabs = toolbarHost !== undefined ? (toolbarHost ? createPortal(toolbarActions, toolbarHost) : null) : (
+	if (menuActions) {
+		menuPublish.current = [
+			...(hasDisplayModeChoice ? [
+				...(detail.status !== "unmodified" ? [{ id: "diff" as const, label: t("files.diff"), icon: <GitCompareArrows aria-hidden="true" /> }] : []),
+				{ id: "file" as const, label: t("files.fileView"), icon: <FileCode2 aria-hidden="true" /> },
+				...(renderedAvailable ? [{ id: "rendered" as const, label: t("files.rendered"), icon: <Eye aria-hidden="true" /> }] : []),
+			].map(({ id, label, icon }) => ({
+				id: `mode:${id}`, label, icon, disabled: editing, mode: { checked: effectiveMode === id }, onSelect: () => selectMode(id),
+			})) : []),
+			...(!editing && editable ? [{ id: "edit", label: t("files.editFile"), icon: <Pencil aria-hidden="true" />, onSelect: beginEditing }] : []),
+			...(!editing && !feedbackOff ? [{
+				id: "feedback",
+				label: t("files.addFeedback"),
+				icon: <MessageSquarePlus aria-hidden="true" />,
+				disabled: Boolean(newerLiveText),
+				onSelect: () => annotation.begin({ path: detail.path, previousPath: detail.previousPath, side: "file", scope, surface: "focused", workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }),
+			}] : []),
+		];
+	}
+	const sendBar = footerHost !== undefined
+		? (footerHost ? createPortal(<FileAnnotationSendBar annotation={annotation} surface="focused" />, footerHost) : null)
+		: <FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />;
+	// With a file menu, the header keeps only an edit's own Cancel and Save.
+	const headerActions = menuActions ? (editing ? (
+		<div className="flex shrink-0 items-center gap-1">
+			<Button aria-label={t("files.cancelEditing")} disabled={saving} onClick={cancelEditing} size="xs" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>
+			<Button aria-label={t("files.saveFile")} disabled={saving || !hasUnsavedChanges} onClick={() => void saveEditing()} size="xs" type="button" variant="primary">{saving ? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" /> : <Save aria-hidden="true" className="size-icon-sm" />}{t("files.saveFile")}</Button>
+		</div>
+	) : null) : toolbarActions;
+	const compactTabs = toolbarHost !== undefined ? (toolbarHost && headerActions ? createPortal(headerActions, toolbarHost) : null) : (
 		<div data-selection-toolbar-header="" className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1">
 			<nav aria-label={t("files.filePath")} className="flex min-w-0 flex-1 items-center gap-1.5" title={detail.path}>
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={fileName} />
@@ -590,7 +652,7 @@ export function FileContentPane({
 				)}
 				</EditProvider>
 				{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
-				<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
+				{sendBar}
 			</div>
 		);
 	}
@@ -601,7 +663,7 @@ export function FileContentPane({
 			{effectiveMode === "rendered" && renderedAvailable ? renderedView : fileView}
 			</EditProvider>
 			{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
-			<FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />
+			{sendBar}
 		</div>
 	);
 }
