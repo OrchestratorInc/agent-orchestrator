@@ -51,6 +51,15 @@ type ChatSteerWithdrawer interface {
 	WithdrawPendingSteers() (restore func())
 }
 
+// ChatTurnSteerWithdrawer withdraws steers only while providerTurnID is still
+// the running turn, checked and withdrawn in one step. A Stop aimed at a named
+// turn uses it: if that turn already ended and the next one started, the next
+// turn's waiting steers are left alone, since settling them cannot be undone.
+// restore is nil when nothing was withdrawn.
+type ChatTurnSteerWithdrawer interface {
+	WithdrawPendingSteersFor(providerTurnID string) (restore func())
+}
+
 // Errors a ChatSteerer returns. Both are ordinary outcomes rather than failures,
 // and they are distinct because the advice a client should give differs: one means
 // "send this as a new message instead", the other means "wait, then try again".

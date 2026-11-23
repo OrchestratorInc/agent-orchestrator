@@ -57,6 +57,8 @@ type LaunchConfig struct {
 
 // Config binds one harness to an ACP agent implementation.
 type Config struct {
+	// AsyncTasks advertises the Air extension only for bindings verified to use it.
+	AsyncTasks   bool
 	Harness      domain.AgentHarness
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
@@ -125,6 +127,10 @@ type Config struct {
 	ImplicitWorkspaceDirectories bool
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
+	// SplitModelVariant maps a model id the session does not offer onto the base
+	// model it may offer instead, plus the option that selects the variant. Set
+	// it for agents that moved a suffix of their model ids into its own option.
+	SplitModelVariant func(model string) (base string, variant SessionOption, ok bool)
 	// LaunchSessionOptions returns config options whose value is fixed for the
 	// whole session and known only from the launch, such as a persona the agent
 	// lets AO select by id but not by launch flag. They are set once after
@@ -223,6 +229,14 @@ type Config struct {
 	QuickStop bool
 	// CanHibernate checks provider-owned work that outlives an ACP prompt.
 	CanHibernate func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
+	// BackgroundTasks reads native background work without issuing a prompt.
+	BackgroundTasks func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) ([]ports.ChatBackgroundTask, error)
+	// StopBackgroundTask stops one native background task. Nil when the
+	// provider has no stop control; tasks are then never reported stoppable.
+	StopBackgroundTask func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) error
+	// BackgroundTaskOutput reads one native background task's recent output.
+	// Nil when the provider keeps none; reads then report it unavailable.
+	BackgroundTaskOutput func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) (ports.ChatBackgroundTaskOutput, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
 	// persist ownership metadata around an opaque provider ID while keeping the
 	// raw value on the ACP wire.
@@ -708,6 +722,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
 		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+		// The snapshot's current values are the agent's launch defaults; the
+		// provider process is in the state these restored settings describe.
+		conv.markSettingsApplied(ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions})
 		return conv, nil
 	}
 	return d.resumeSession(ctx, conv, init, launchCfg, cfg, reportedProviderConversationID)
@@ -943,6 +960,9 @@ func (d *Driver) initialize(
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
 	conv.promptErrorFailure = d.cfg.PromptErrorFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
+	conv.backgroundTasks = d.cfg.BackgroundTasks
+	conv.stopBackgroundTask = d.cfg.StopBackgroundTask
+	conv.backgroundTaskOutput = d.cfg.BackgroundTaskOutput
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.hideCommand = d.cfg.HideCommand
@@ -956,6 +976,7 @@ func (d *Driver) initialize(
 			return servedModel(ctx, cfg, sessionID, selectedModel)
 		}
 	}
+	conv.splitModelVariant = d.cfg.SplitModelVariant
 	if d.cfg.ValidateModel != nil {
 		validateModel := d.cfg.ValidateModel
 		conv.validateModel = func(ctx context.Context, model string) error {
@@ -993,6 +1014,10 @@ func (d *Driver) initialize(
 
 	initCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+	airCapabilities := []string{"sessionFailure"}
+	if d.cfg.AsyncTasks {
+		airCapabilities = append(airCapabilities, "asyncTasks")
+	}
 	init, err := conv.conn.Initialize(initCtx, acpsdk.InitializeRequest{
 		Meta: map[string]any{
 			persistenthost.ACPInitialPermissionsMetaKey: string(ports.NormalizePermissionMode(cfg.Permissions)),
@@ -1018,7 +1043,7 @@ func (d *Driver) initialize(
 				"jetbrains": map[string]any{
 					"air": map[string]any{
 						"version":      1,
-						"capabilities": []string{"sessionFailure"},
+						"capabilities": airCapabilities,
 					},
 				},
 			},

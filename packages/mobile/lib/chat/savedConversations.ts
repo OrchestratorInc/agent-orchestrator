@@ -191,7 +191,7 @@ export async function loadSavedConversation(key: string, now = Date.now()): Prom
  * answered or gone, and a turn running then may have ended days ago, so the
  * page offers no Approve/Deny or answer form (an open request is left out) and
  * shows nothing as working: no running turn with its ticking timer, no running
- * step, no reply still streaming in (no cursor), no busy or starting agent.
+ * step, no reply still streaming in, no busy or starting agent.
  * The live read brings back whatever is still open. A page with none of these
  * is returned as it is.
  */
@@ -214,7 +214,7 @@ export function savedPageView(page: ConversationPage): ConversationPage {
 			if (openRequest(item)) return [];
 			// A settled step draws no spinner, and claims no outcome ("failed", "stopped").
 			if (item.kind === "activity" && runningStep(item)) return [{ ...item, status: "completed" }];
-			// The words saved are all that will come until the live read: drawn whole, with no cursor.
+			// The words saved are all that will come until the live read: drawn as a finished reply.
 			if (item.kind === "message" && item.streaming) return [{ ...item, streaming: false }];
 			return [item];
 		}),

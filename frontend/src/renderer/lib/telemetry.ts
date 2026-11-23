@@ -793,16 +793,6 @@ export function startDailyActiveHeartbeat({
 	};
 }
 
-function normalizeException(reason: unknown): Error {
-	if (reason instanceof Error) return reason;
-	if (typeof reason === "string") return new Error(reason);
-	try {
-		return new Error(JSON.stringify(reason));
-	} catch {
-		return new Error("Unknown renderer exception");
-	}
-}
-
 function routeSurface(pathname: string): string {
 	if (pathname === "/") return "home";
 	if (/^\/settings(?:\/|$)/.test(pathname)) return "global_settings";
@@ -1422,7 +1412,7 @@ export async function sanitizeRendererExceptionProperties(
 export function bindRendererErrorHandlers() {
 	if (errorHandlersBound) return;
 	errorHandlersBound = true;
-	installRendererErrorHandlers((error, source) => { void captureRendererException(error, { source, unhandled: true }); });
+	installRendererErrorHandlers((error, source, event) => { void captureRendererException(error, { source, unhandled: true }, event); });
 }
 
 type PostHogClient = typeof posthogModule;
@@ -1689,7 +1679,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	}
 }
 
-export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {
+export async function captureRendererException(error: unknown, properties?: Record<string, unknown>, event?: ErrorEvent): Promise<void> {
 	if (!reserveException(error)) return;
 	try {
 		await initTelemetry();
@@ -1701,11 +1691,16 @@ export async function captureRendererException(error: unknown, properties?: Reco
 	// Electron main samples and budgets it per install on the final scrubbed
 	// fingerprint. Renderer exceptions no longer enter the PostHog path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
-	captureExceptionToSentry(normalizeException(error), {
-		category: source === "react-error-boundary" ? "render_crash" : undefined,
+	captureExceptionToSentry(error, {
+		category: source === "react-error-boundary" || source === "route-error" ? "render_crash"
+			: source === "window-error" || source === "script-load" ? "renderer_exception"
+			: source === "unhandledrejection" ? "renderer_rejection" : undefined,
+		code: source === "window-error" ? "WINDOW_ERROR"
+			: source === "script-load" ? "RENDERER_SCRIPT_LOAD_FAILED"
+			: source === "unhandledrejection" ? "UNHANDLED_REJECTION" : undefined,
 		operation: typeof properties?.operation === "string" ? properties.operation : undefined,
 		unhandled: properties?.unhandled === true,
-	});
+	}, event);
 }
 
 export async function addRendererExceptionStep(message: string, properties?: Record<string, unknown>): Promise<void> {

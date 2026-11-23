@@ -74,6 +74,22 @@ export function isDesktopUnreachable(poll: {
 }
 
 /**
+ * Whether the board's last poll was answered with a refusal that stopped it
+ * (see shouldKeepPolling): a rejected pairing (401/403, after a password
+ * change or a removed device), the failed-attempt lockout (429), or a version
+ * the phone cannot use (426). The opposite of isDesktopUnreachable: the
+ * machine answered, so no reconnect clears it, and nothing asks it again
+ * until the phone is paired afresh or the app comes back to the foreground.
+ */
+export function isPollRejected(poll: {
+	connection: string;
+	error: string | null;
+	errorStatus: number | null;
+}): boolean {
+	return poll.connection === "closed" && poll.error !== null && poll.errorStatus !== null && !shouldKeepPolling(poll.errorStatus);
+}
+
+/**
  * Whether a failed request is the daemon's word that the session no longer
  * exists. Only a 404 or 410 says that. A timeout, a refused connection or a 5xx
  * is a fact about the link, not the session, and a link comes back — so none of

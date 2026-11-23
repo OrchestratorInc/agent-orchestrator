@@ -564,6 +564,21 @@ describe("send keys", () => {
 		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
 	});
 
+	// Stop already landed and the agent is winding the turn down. Another press
+	// would only repeat the request, so the button shows progress instead.
+	it("shows Stop in progress without firing again, and still takes a draft", async () => {
+		const onInterrupt = vi.fn();
+		const { field } = renderComposer({ willQueue: true, onInterrupt, stopping: true });
+
+		const stopping = screen.getByRole("button", { name: "Stopping turn" });
+		expect(stopping).toBeDisabled();
+		expect(onInterrupt).not.toHaveBeenCalled();
+
+		await typeInComposer(field, "next question");
+		expect(field.textContent).toBe("next question");
+		expect(screen.getByRole("button", { name: "Queue message" })).toBeEnabled();
+	});
+
 	it("turns the empty send action into Continue after a stop, and back into Send once typed", async () => {
 		const onContinue = vi.fn();
 		const { onSend, field } = renderComposer({ onContinue });
@@ -2129,6 +2144,14 @@ describe("slash commands", () => {
 		expect(screen.queryByText("Loading skills…")).toBeNull();
 	});
 
+	it("says the files are loading on the first @, and closes with Escape", async () => {
+		const { field } = renderComposer({ filePaths: [], filePathsLoading: true });
+		await typeInComposer(field, "@src");
+		expect(screen.getByText("Loading files…")).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByText("Loading files…")).toBeNull();
+	});
+
 	it("opens on a slash after existing text", async () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "look here /rev");
@@ -2204,7 +2227,7 @@ describe("slash commands", () => {
 		expect(onSend).not.toHaveBeenCalled();
 		const token = field.querySelector('[data-composer-token="skill"]');
 		expect(token).toHaveTextContent("/review");
-		expect(token).toHaveClass("text-logo-accent");
+		expect(token).toHaveClass("text-logo-accent-text");
 		expect(token).not.toHaveClass("text-accent");
 		expect(field.textContent).toBe("/review ");
 		// The trigger is finished, so the menu closes rather than re-filtering what was

@@ -114,7 +114,7 @@ describe("Electron main Sentry configuration", () => {
 			message: "Electron main daemon failure (exited)",
 			fingerprint: ["electron", "handled", "daemon", "exited", "electron-main"],
 			tags: { surface: "electron-main", kind: "handled", category: "daemon", reason: "exited", detail: "signal:SIGKILL" },
-			exception: { values: [{ type: "TypeError", value: "" }] },
+			exception: { values: [{ type: "TypeError", value: "Electron main daemon failure (exited)" }] },
 		});
 		const second = beforeSend(sdk.captureEvent.mock.calls[1]?.[0] as ErrorEvent);
 		expect(second?.tags).not.toHaveProperty("detail");
@@ -126,7 +126,7 @@ describe("Electron main Sentry configuration", () => {
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		transport.captureMain?.({ category: "side_chat", reason: "recovery", error: new TypeError("private-session /Users/private token=secret"), detail: "private-project" });
 		const event = beforeSend(sdk.captureEvent.mock.calls[0][0]);
-		expect(event).toMatchObject({ message: "Electron main side_chat failure (recovery)", tags: { category: "side_chat", reason: "recovery" }, exception: { values: [{ type: "TypeError", value: "" }] } });
+		expect(event).toMatchObject({ message: "Electron main side_chat failure (recovery)", tags: { category: "side_chat", reason: "recovery" }, exception: { values: [{ type: "TypeError", value: "Electron main side_chat failure (recovery)" }] } });
 		expect(JSON.stringify(event)).not.toMatch(/private|Users|secret/);
 	});
 
@@ -534,7 +534,7 @@ describe("sanitizeRendererCapture", () => {
 			consentGeneration: "generation-1",
 			kind: "exception",
 			level: "error",
-			message: "failed [redacted-path] at [redacted-url] and [redacted-path]",
+			message: "",
 			tags: {
 				operation: "GET [redacted-url]",
 				category: "[redacted-url]",
@@ -550,11 +550,11 @@ describe("sanitizeRendererCapture", () => {
 		expect(sanitizeRendererCapture({ ...base, kind: "trace" })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, level: "debug" })).toBeNull();
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "ProjectError", frames: [] } })).toBeNull();
-		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "loadProject", filename: "/Users/alice/private-repo" }] } })).toBeNull();
-		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "loadProject", filename: "assets/../private.js" }] } })).toBeNull();
-		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "private-repo" }] } })).toBeNull();
+		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "loadProject", filename: "/Users/alice/private-repo" }] } })?.exception?.frames).toEqual([]);
+		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "loadProject", filename: "assets/../private.js" }] } })?.exception?.frames).toEqual([]);
+		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "<anonymous>", lineno: 5 }] } })?.exception?.frames).toEqual([{ function: "renderer_frame", lineno: 5 }]);
 		for (const colno of [0, -1, 10_000_001, 1.5, "private", null]) {
-			expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "privateProject", colno }] } })).toBeNull();
+			expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "privateProject", colno }] } })?.exception?.frames).toEqual([]);
 		}
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "privateProject", filename: "assets/app-A1B2C3D4.js", lineno: 5, colno: 138_000 }] } })?.exception?.frames).toEqual([{ function: "renderer_frame", filename: "assets/app-A1B2C3D4.js", lineno: 5, colno: 138_000 }]);
 	});
@@ -612,17 +612,17 @@ describe("Electron main error sampling and budget", () => {
 	it("titles an anonymous renderer frame by bundle file and line and keeps its debug ID", async () => {
 		const debugId = "8a1f4c2e-1b3d-4e5f-9a6b-7c8d9e0f1a2b";
 		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
-		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "error", exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45, debug_id: debugId }] } });
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "error", exception: { type: "TypeError", frames: [{ function: "<anonymous>", filename: "/home/alice/private.js" }, { function: "Object.a [as then]", filename: "assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45, debug_id: debugId }] } });
 		const sent = sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent;
 		expect(sent.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
 		const event = beforeSendOf()(sent);
 		expect(event?.message).toBe("Renderer TypeError in assets/useSessionWorkspaceFiles:123:45 (unknown)");
 		// Sentry applies source maps only to javascript or node events.
 		expect(event?.platform).toBe("javascript");
-		expect(event?.exception?.values?.[0]?.value).toBe("");
+		expect(event?.exception?.values?.[0]?.value).toBe("Renderer TypeError in assets/useSessionWorkspaceFiles:123:45 (unknown)");
 		expect(event?.exception?.values?.[0]?.stacktrace?.frames?.[0]).toMatchObject({ abs_path: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45 });
 		expect(event?.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
-		expect(sanitizeRendererCapture({ consentGeneration: "g", kind: "exception", message: "m", exception: { type: "Error", frames: [{ function: "renderer_frame", filename: "assets/x-BjAotn5p.js", debug_id: "not-a-uuid" }] } })).toBeNull();
+		expect(sanitizeRendererCapture({ consentGeneration: "g", kind: "exception", message: "m", exception: { type: "Error", frames: [{ function: "renderer_frame", filename: "assets/x-BjAotn5p.js", debug_id: "not-a-uuid" }] } })?.exception?.frames).toEqual([{ function: "renderer_frame", filename: "assets/x-BjAotn5p.js" }]);
 	});
 
 	it("maps main bundle frames and debug images to app URLs without install paths", async () => {
@@ -668,4 +668,36 @@ describe("Electron main error sampling and budget", () => {
 		expect(beforeSendOf()(mainError("main"))).toBeNull();
 		expect(beforeSendOf()(mainError("other"))).not.toBeNull();
 	});
+});
+
+it("uses scrubbed renderer exception text for titles and grouping", async () => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
+	const send = (message: string) => {
+		transport.capture({ consentGeneration: "g", kind: "exception", message,
+			tags: { category: "render_crash" },
+			exception: { type: "TypeError", frames: [] },
+		});
+		return beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
+	};
+	const first = send("HTTP error 500: /etc/private http://localhost:8080/token alice@example.test '0xdeadbeef'");
+	const same = send("HTTP error 503: ~/private http://127.0.0.1/x bob@example.test '12345678-1234-1234-1234-123456789abc'");
+	const other = send("Cannot read properties of undefined (reading 'id')");
+	expect(first?.exception?.values?.[0]?.value).toBe("HTTP error 500 (in unknown, render_crash)");
+	expect(same?.fingerprint).toEqual(first?.fingerprint);
+	expect(other?.fingerprint).not.toEqual(first?.fingerprint);
+	expect(other?.exception?.values?.[0]?.value).toBe("Cannot read properties of undefined (reading 'id') (in unknown, render_crash)");
+	expect(send("/home/alice/private.txt")?.exception?.values?.[0]?.value).toBe("Renderer TypeError in unknown (render_crash)");
+});
+
+it("uses scrubbed messages for handled and SDK-originated main errors", async () => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
+	const value = "ENOENT: no such file or directory, open '/var/projects/alice/private'";
+	transport.captureMain?.({ category: "ipc", reason: "handler", detail: "channel:project:read", error: new Error(value) });
+	const handled = beforeSend(sdk.captureEvent.mock.calls[0][0]);
+	expect(handled?.exception?.values?.[0]?.value).toBe("ENOENT: no such file or directory, open [redacted] (in channel:project:read, ipc/handler)");
+	expect(handled?.fingerprint?.at(-1)).toBe("enoent: no such file or directory, open [redacted]");
+	const uncaught = beforeSend({ type: undefined, exception: { values: [{ type: "Error", value }] } });
+	expect(uncaught?.exception?.values?.[0]?.value).toBe("ENOENT: no such file or directory, open [redacted] (in unknown, main_error)");
 });

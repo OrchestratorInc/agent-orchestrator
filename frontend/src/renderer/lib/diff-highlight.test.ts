@@ -16,11 +16,11 @@ function root(children: Root["children"]): Root {
 }
 
 describe("languageForPath", () => {
-	it("resolves common extensions to the bundled Shiki grammar", () => {
+	it("resolves common extensions to a grammar", () => {
 		expect(languageForPath("src/App.tsx")).toBe("tsx");
 		expect(languageForPath("main.go")).toBe("go");
-		expect(languageForPath("README.md")).toBe("markdown");
-		expect(languageForPath("script.py")).toBe("python");
+		expect(languageForPath("README.md")).toBe("md");
+		expect(languageForPath("script.py")).toBe("py");
 	});
 
 	it("is case-insensitive, matching canonicalLanguage", () => {
@@ -36,7 +36,7 @@ describe("languageForPath", () => {
 	});
 
 	it("uses the last dot in the filename, not in a parent directory", () => {
-		expect(languageForPath("src/v1.2/main.rs")).toBe("rust");
+		expect(languageForPath("src/v1.2/main.rs")).toBe("rs");
 	});
 });
 
