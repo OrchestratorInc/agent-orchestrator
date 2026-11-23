@@ -117,9 +117,15 @@ jobs:
           dnf install -y -q sudo shadow-utils gzip findutils gawk procps-ng
           useradd -m ao
           echo 'ao ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ao
-          # A container has no systemd user session, so the bootstrap stops at
-          # that check, after its dnf installs.
-          sudo -iu ao bash /src/scripts/bootstrap-self-hosted.sh || true
+          # A container has no systemd. With loginctl stubbed, the bootstrap must
+          # get through its dnf installs and stop exactly at the user session check.
+          printf '#!/bin/sh\nexit 0\n' > /usr/bin/loginctl
+          chmod 755 /usr/bin/loginctl
+          if sudo -iu ao bash /src/scripts/bootstrap-self-hosted.sh > /tmp/bootstrap.out 2>&1; then
+            cat /tmp/bootstrap.out; echo 'bootstrap succeeded without systemd' >&2; exit 1
+          fi
+          tail -n 5 /tmp/bootstrap.out
+          grep -q 'A systemd user session is required' /tmp/bootstrap.out || { cat /tmp/bootstrap.out >&2; exit 1; }
           sudo -iu ao bash -c 'gh --version && git --version && python3 --version'
           sudo -iu ao bash /src/scripts/setup-self-hosted.sh --bundle /src/frontend/dist-host/ao-host-linux-arm64.tar.gz --install-only
           cat > /tmp/check.sh <<'CHECK'
