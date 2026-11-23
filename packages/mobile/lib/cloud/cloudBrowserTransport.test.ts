@@ -58,6 +58,31 @@ describe("cloud browser transport", () => {
 		expect(handlers.onStatus).toHaveBeenLastCalledWith("open");
 	});
 
+	it("pings the host while open, so a still page doesn't look idle to proxies", async () => {
+		vi.useFakeTimers();
+		try {
+			const { transport, socket } = await connected();
+			const pings = () => socket.sent.filter((m) => (m as { t: string }).t === "ping").length;
+			expect(pings()).toBe(0);
+			vi.advanceTimersByTime(5_000);
+			expect(pings()).toBe(1);
+			vi.advanceTimersByTime(10_000);
+			expect(pings()).toBe(3);
+			transport.close();
+			vi.advanceTimersByTime(20_000);
+			expect(pings()).toBe(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps the connection error when the failed socket then closes", async () => {
+		const { socket, handlers } = await connected();
+		socket.onerror?.();
+		socket.onclose?.();
+		expect(handlers.onStatus).toHaveBeenLastCalledWith("error", "Couldn't reach this session's browser. It starts when the agent first uses it.");
+	});
+
 	it("parses viewer frame header", () => {
 		const frame = parseViewerFrame(viewerFrame({ seq: 7, ts: 1700, inputSeq: 2, q: 60, meta: { deviceWidth: 1280, deviceHeight: 720 } }, [1, 2, 3, 4]));
 		expect(frame.seq).toBe(7);

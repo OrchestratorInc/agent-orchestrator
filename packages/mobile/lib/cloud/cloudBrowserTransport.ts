@@ -31,6 +31,9 @@ export type CloudBrowserTransportOptions = {
 };
 
 const OPEN = 1;
+// The host's own viewer pings every 2 s. Without traffic a still page sends
+// nothing after its first frame, and a proxy on the way closes the socket as idle.
+const PING_MS = 5_000;
 // The host's own defaults: the phone shows the desktop layout and doesn't
 // resize the agent's page to its own screen (phone layout is a later option).
 const HELLO = { t: "hello", w: 1280, h: 800, dpr: 1, quality: 60, maxInFlight: 0 };
@@ -109,6 +112,7 @@ export class CloudBrowserTransport implements BrowserTransport {
 	private generation = 0;
 	private inputSeq = 0;
 	private unsubscribe: (() => void) | null = null;
+	private pinger: ReturnType<typeof setInterval> | null = null;
 	private handlers: BrowserTransportHandlers = { onStatus() {}, onState() {}, onFrame() {} };
 	private tabs: HostTab[] = [];
 	private state = {
@@ -161,16 +165,25 @@ export class CloudBrowserTransport implements BrowserTransport {
 		socket.onopen = () => {
 			if (this.socket !== socket) return;
 			socket.send(JSON.stringify(HELLO));
+			this.stopPinging();
+			this.pinger = setInterval(() => {
+				if (this.socket === socket && socket.readyState === OPEN) socket.send(JSON.stringify({ t: "ping", c: Date.now() }));
+			}, PING_MS);
 			this.handlers.onStatus("open");
 		};
+		// A refused handshake errors and then closes: the close keeps the error's words.
+		let failed = false;
 		socket.onerror = () => {
-			if (this.socket === socket) this.handlers.onStatus("error", "Couldn't reach this session's browser. It starts when the agent first uses it.");
+			if (this.socket !== socket) return;
+			failed = true;
+			this.handlers.onStatus("error", "Couldn't reach this session's browser. It starts when the agent first uses it.");
 		};
 		socket.onclose = () => {
 			if (this.socket !== socket) return;
 			this.socket = null;
+			this.stopPinging();
 			if (this.closed) this.handlers.onStatus("closed");
-			else this.handlers.onStatus("error", "The browser stream ended. Try reconnecting.");
+			else if (!failed) this.handlers.onStatus("error", "The browser stream ended. Try reconnecting.");
 		};
 		socket.onmessage = (event) => { void this.receive(socket, event.data); };
 	}
@@ -188,7 +201,13 @@ export class CloudBrowserTransport implements BrowserTransport {
 		this.drop();
 	}
 
+	private stopPinging(): void {
+		if (this.pinger) clearInterval(this.pinger);
+		this.pinger = null;
+	}
+
 	private drop(): void {
+		this.stopPinging();
 		const socket = this.socket;
 		this.socket = null;
 		socket?.close();
