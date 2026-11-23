@@ -176,6 +176,7 @@ export function resetKeptTaskPreparationsForTests(): void {
 }
 
 class TaskCreateError extends Error {
+	readonly telemetryCode: string = "TASK_CREATE_ERROR";
 	constructor(
 		message: string,
 		readonly code?: string,
