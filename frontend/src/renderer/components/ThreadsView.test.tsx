@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
 	replyToSessionAside: vi.fn(),
 	listMentionCandidates: vi.fn(),
 	getSession: vi.fn(),
-	me: vi.fn(),
 	openInSession: vi.fn(),
 }));
 vi.mock("../hooks/useCloudCp", () => ({
@@ -37,6 +36,7 @@ function row(asideId: string, overrides: Partial<CloudCpCommentThread> = {}): Cl
 		sessionTitle: `Session ${asideId}`,
 		projectName: "finance-controller",
 		sessionTerminated: false,
+		canPrompt: true,
 		aside: { asideId, anchor: { sequence: 41, kind: "agent_message" }, replyCount: 2, unread: false, muted: false, origin: "comment", quote: "real backoff" },
 		lastComment: { authorName: "Mohak", preview: "Yes, 1 s with jitter.", at },
 		participants: [{ userId: "u-mohak", name: "Mohak" }, { userId: "u-priya", name: "Priya Shah" }],
@@ -86,7 +86,6 @@ beforeEach(() => {
 	mocks.countMyUnreadCommentThreads.mockResolvedValue({ count: 0 });
 	mocks.getSessionAside.mockImplementation(async (_org: string, _session: string, asideId: string) => thread(asideId));
 	mocks.markSessionAsideRead.mockImplementation(async (_org: string, _session: string, asideId: string) => ({ ...thread(asideId).aside, unread: false }));
-	mocks.me.mockResolvedValue({ user: { id: "u-priya", email: "priya@example.com", displayName: "Priya Shah", authProvider: "workos" }, organizations: [{ id: "org-1", slug: "org", displayName: "Org", role: "member" }] });
 	mocks.listMentionCandidates.mockResolvedValue({ people: [], teams: [] });
 });
 
@@ -143,8 +142,8 @@ describe("a thread's row", () => {
 		expect(within(first).getByRole("img", { name: "Unread" })).toBeInTheDocument();
 		expect(first.querySelector("[data-thread-sent]")).toHaveTextContent("Sent to agent");
 		const second = document.querySelector<HTMLElement>("[data-thread-row='c-2']")!;
-		// A thread on the whole answer, with no quote.
-		expect(second.querySelector("[data-thread-anchor]")).toHaveTextContent("On the agent's answer");
+		// A thread on the whole answer, with no quote: and no anchorAt (the message is gone), so no time.
+		expect(second.querySelector("[data-thread-anchor]")).toHaveTextContent(/^On the agent's answer$/);
 		expect(second.querySelector("[data-thread-muted]")).toHaveTextContent("Muted");
 		expect(second.querySelector("[data-thread-unread]")).toBeNull();
 		expect(second.querySelector("[data-thread-sent]")).toBeNull();
@@ -206,5 +205,49 @@ describe("opening a thread from the list", () => {
 		await waitFor(() => expect(pane.querySelector("[data-comment-pane-title]")).toHaveTextContent("Notification session"));
 		await waitFor(() => expect(mocks.markSessionAsideRead).toHaveBeenCalledWith("org-1", "session-x", "c-9"));
 		expect(peekThreadInView()?.asideId).toBe("c-9");
+	});
+});
+
+describe("a thread on a whole message", () => {
+	it("says when the message was sent, when it still exists", async () => {
+		const whole = (asideId: string, anchor: CloudCpCommentThread["aside"]["anchor"], extra: Partial<CloudCpCommentThread["aside"]> = {}, anchorAt?: string) =>
+			row(asideId, { ...(anchorAt ? { anchorAt } : {}), aside: { asideId, anchor, replyCount: 1, unread: false, muted: false, origin: "comment", ...extra } });
+		mocks.listMyCommentThreads.mockResolvedValue(page([
+			whole("c-1", { sequence: 41, kind: "agent_message" }, {}, at),
+			whole("c-2", { sequence: 42, kind: "user_message" }, { origin: "tag", startedBy: { userId: "u-chen", name: "Chen Li" } }, at),
+			whole("c-3", { sequence: 43, kind: "user_message" }, {}, at),
+		]));
+		renderView();
+		const anchorOf = async (asideId: string) => (await findRow(asideId)).querySelector("[data-thread-anchor]")?.textContent;
+		expect(await anchorOf("c-1")).toMatch(/^On the agent's answer · \S/);
+		// A tagged message's thread: its author started it.
+		expect(await anchorOf("c-2")).toMatch(/^On Chen Li's message · \S/);
+		expect(await anchorOf("c-3")).toMatch(/^On a message · \S/);
+	});
+});
+
+describe("Also send to agent in the threads view", () => {
+	it("follows whether the row says this person may prompt the session", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { canPrompt: true }), row("c-2", { canPrompt: false })]));
+		renderView();
+		fireEvent.click(await findRow("c-1"));
+		let pane = await screen.findByTestId("aside-pane");
+		expect(await within(pane).findByRole("checkbox", { name: "Also send to agent" })).toBeInTheDocument();
+		fireEvent.click(await findRow("c-2"));
+		pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(pane.querySelector("[data-comment-pane-title]")).toHaveTextContent("Session c-2"));
+		await waitFor(() => expect(within(pane).getByText("Should this use jitter?")).toBeInTheDocument());
+		expect(within(pane).queryByRole("checkbox", { name: "Also send to agent" })).toBeNull();
+	});
+
+	it("isn't offered by an older control plane that doesn't say", async () => {
+		const older = row("c-1");
+		delete older.canPrompt;
+		mocks.listMyCommentThreads.mockResolvedValue(page([older]));
+		renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(within(pane).getByText("Should this use jitter?")).toBeInTheDocument());
+		expect(within(pane).queryByRole("checkbox", { name: "Also send to agent" })).toBeNull();
 	});
 });

@@ -431,6 +431,8 @@ export interface ThreadInView {
 	sessionTitle?: string;
 	/** The session ended: the thread is read-only. */
 	ended?: boolean;
+	/** The person may prompt the session's agent ("Also send to agent"). */
+	canPrompt?: boolean;
 	/** Changes on every open that should put the caret in the reply box. */
 	focusKey?: number;
 }

@@ -380,6 +380,10 @@ export interface CloudCpCommentThread {
 	projectName: string;
 	/** The session ended: the thread is read-only. */
 	sessionTerminated: boolean;
+	/** The caller may prompt the session's agent, so the pane offers "Also send to agent". Absent from an older control plane. */
+	canPrompt?: boolean;
+	/** When the message the thread is about was sent; absent when that message is gone. */
+	anchorAt?: string;
 	aside: CloudCpAside;
 	/** The newest comment; absent for a tagged message's thread with no reply yet. */
 	lastComment?: { replyId?: string; authorUserId?: string; authorName: string; preview: string; at: string };

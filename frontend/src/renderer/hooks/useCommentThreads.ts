@@ -1,8 +1,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { cloudCommentThreadsKey, cloudUnreadThreadsKey } from "../lib/cloud-asides";
 import { CloudCpError } from "../lib/cloud-cp/errors";
-import type { CloudCpCommentThread, CloudCpCommentThreadPage, CloudCpMeResponse } from "../lib/cloud-cp/types";
-import { cloudMeQueryKey } from "../lib/cloud-offering";
+import type { CloudCpCommentThread, CloudCpCommentThreadPage } from "../lib/cloud-cp/types";
 import { useCloudCp } from "./useCloudCp";
 
 // The threads view: the comment threads this person is in, across every
@@ -62,25 +61,4 @@ export function uniqueThreadRows(pages: readonly CloudCpCommentThreadPage[] | un
 		}
 	}
 	return rows;
-}
-
-/**
- * Whether this person may send threads in an organization's sessions to the
- * agent: a member who isn't a viewer. Someone a session was only shared with
- * (an organization they're not in) gets no "Also send to agent" here; they
- * can still send from the session itself, which knows their role there.
- */
-export function useCanPromptInOrg(): (orgId: string) => boolean {
-	const { client, ready, baseUrl, userId } = useCloudCp();
-	const me = useQuery<CloudCpMeResponse>({
-		queryKey: [...cloudMeQueryKey, baseUrl, userId],
-		enabled: ready,
-		staleTime: 30_000,
-		retry: 1,
-		queryFn: ({ signal }) => client.me({ signal }),
-	});
-	return (orgId: string) => {
-		const role = me.data?.organizations.find((org) => org.id === orgId)?.role;
-		return role !== undefined && role !== "viewer";
-	};
 }

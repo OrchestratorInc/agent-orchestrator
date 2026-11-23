@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { BellOff, Loader2, MessagesSquare } from "@/components/app-icons";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useCanPromptInOrg, useCommentThreadList } from "../hooks/useCommentThreads";
+import { useCommentThreadList } from "../hooks/useCommentThreads";
 import { useWindowAttention } from "../hooks/useWindowAttention";
 import { closeThreadInView, cloudCommentThreadsRootKey, openThreadInView, useThreadInView, type ThreadInView } from "../lib/cloud-asides";
 import type { CloudCpCommentThread, CloudCpSession } from "../lib/cloud-cp/types";
@@ -124,6 +124,7 @@ function threadTarget(row: CloudCpCommentThread): ThreadInView {
 		projectId: row.projectId,
 		sessionTitle: row.sessionTitle,
 		ended: row.sessionTerminated,
+		canPrompt: row.canPrompt === true,
 	};
 }
 
@@ -134,9 +135,7 @@ function threadTarget(row: CloudCpCommentThread): ThreadInView {
  */
 export function ThreadRow({ row, selected, onOpen }: { row: CloudCpCommentThread; selected: boolean; onOpen: () => void }) {
 	const { t } = useTranslation();
-	const anchor = row.aside.quote
-		? `“${row.aside.quote.replace(/\s+/g, " ")}”`
-		: row.aside.anchor.kind === "agent_message" ? t("comment.onAgentAnswer") : t("comment.wholeMessage");
+	const anchor = row.aside.quote ? `“${row.aside.quote.replace(/\s+/g, " ")}”` : wholeMessageLabel(t as unknown as AnchorLabelT, row);
 	return (
 		<Pressable
 			aria-current={selected ? "true" : undefined}
@@ -193,7 +192,6 @@ function ThreadPane({ thread }: { thread: ThreadInView }) {
 	const { client, ready, baseUrl, userId } = useCloudCp();
 	const queryClient = useQueryClient();
 	const attentive = useWindowAttention();
-	const canPromptInOrg = useCanPromptInOrg();
 	const openInSession = useOpenThreadInSession();
 	const cachedRow = useMemo(() => {
 		for (const [, data] of queryClient.getQueriesData<{ pages: Array<{ items: CloudCpCommentThread[] }> }>({ queryKey: cloudCommentThreadsRootKey(baseUrl, userId) })) {
@@ -212,6 +210,9 @@ function ThreadPane({ thread }: { thread: ThreadInView }) {
 	const sessionTitle = known.sessionTitle ?? session.data?.displayName ?? "";
 	const projectId = known.projectId ?? session.data?.projectId;
 	const ended = known.ended ?? false;
+	// The row says whether this person may prompt the session's agent; a thread
+	// opened before its row is listed doesn't offer the send until it is.
+	const canPrompt = !ended && known.canPrompt === true;
 	const onOpenInSession = useCallback((sequence: number) => {
 		if (!projectId) return;
 		openInSession({ orgId: thread.orgId, projectId, sessionId: thread.sessionId, asideId: thread.asideId, sequence });
@@ -220,7 +221,7 @@ function ThreadPane({ thread }: { thread: ThreadInView }) {
 		<CloudAsidePane
 			asideId={thread.asideId}
 			attentive={attentive}
-			canPrompt={!ended && canPromptInOrg(thread.orgId)}
+			canPrompt={canPrompt}
 			ended={ended}
 			focusKey={thread.focusKey}
 			onClose={closeThreadInView}
@@ -235,4 +236,16 @@ function ThreadPane({ thread }: { thread: ThreadInView }) {
 /** The fields that are set, so they override what a cached row says. */
 function definedOf(thread: ThreadInView): Partial<ThreadInView> {
 	return Object.fromEntries(Object.entries(thread).filter(([, value]) => value !== undefined)) as Partial<ThreadInView>;
+}
+
+/** A thread on a whole message: "On the agent's answer · 2h ago", "On Mohak's message", "On a steer". */
+type AnchorLabelT = (key: "comment.onAgentAnswer" | "comment.onSteer" | "comment.onMessage" | "comment.onAMessage", values?: { name: string }) => string;
+
+function wholeMessageLabel(t: AnchorLabelT, row: CloudCpCommentThread): string {
+	const kind = row.aside.anchor.kind;
+	const what = kind === "agent_message" ? t("comment.onAgentAnswer")
+		: kind === "steer" ? t("comment.onSteer")
+			// A tagged message's thread was started by its author.
+			: row.aside.origin === "tag" && row.aside.startedBy ? t("comment.onMessage", { name: row.aside.startedBy.name }) : t("comment.onAMessage");
+	return row.anchorAt ? `${what} · ${formatTimeCompact(row.anchorAt)}` : what;
 }
