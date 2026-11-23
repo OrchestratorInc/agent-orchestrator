@@ -668,6 +668,184 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## UI usage
+
+When desktop product telemetry is enabled, Orchestrator.inc records which parts
+of the interface people look at and use, so we can tell which surfaces earn
+their space, which controls nobody finds, and where people get stuck. The
+properties specific to these events are only the closed values listed here,
+control ids, counts and durations. Like every desktop event, they also carry
+the shared context described under What Orchestrator.inc sends, such as
+`install_id` and `days_since_install`. They never include text you typed or
+clicked, a file name, path, URL, session or project name, chat content, error
+message, click position, window size, DOM path, or screenshot. There is no
+heatmap and no session replay.
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `ao.surfaces.viewed` | A surface stays on screen for a second. At most once per surface per UTC day | `surface`, `opened_by` |
+| `ao.features.first_used` | The first deliberate use of a feature on this install. At most once per feature | `feature` |
+| `ao.ui.usage_summary` | Every 45 to 60 minutes of app time, or at the next launch when a window ended while the app was closed. Not sent when nothing was counted | Window fields, counters, `surfaces`, `controls` (below) |
+| `ao.ui.error_shown` | A user-visible error renders: an error toast, the daemon banner, a failed chat turn, or a composer send failure. The same error shown again within 5 minutes is counted in the summary but not sent again | `presentation`, `error_kind`, `surface`, `error_code` |
+| `ao.ui.rage_clicked` | The first rage click on a surface each UTC day | `surface` |
+
+### Closed values
+
+- `surface` is one of `sidebar`, `topbar` (the top bar and its tabs), `chat`
+  (the transcript), `composer`, `new_chat`, `board`, `pr_tab`,
+  `inspector_summary`, `inspector_reviews`, `inspector_browser`,
+  `inspector_files`, `inspector_artifacts`, `inspector_side_chat`,
+  `inspector_subagents`, `cmdk`, `notifications_panel`, `archive_modal`,
+  `model_picker`, `slash_menu`, `mention_menu`, `split_view`, `terminal`,
+  `onboarding`, `toast`, or a settings page: `settings_general`,
+  `settings_agents`, `settings_teams`, `settings_billing`, `settings_browser`,
+  `settings_computer_use`, `settings_coder`, `settings_remote_hosts`,
+  `settings_mobile`, `settings_shortcuts`, `settings_diagnostics`,
+  `settings_updates`, `settings_help`, or `settings_project`. A settings page
+  added later reports as `settings_general` until it is listed.
+- `opened_by` is `click`, `keyboard` (Enter, Space, Escape, Tab or an arrow key
+  on a focused control), `shortcut` (a key chord or a swipe gesture), `cmdk`
+  (a Cmd+K command), `restore` (on screen within 10 seconds of launch, such as
+  a restored layout), or `auto` (opened by the app, with no input in the 1.5
+  seconds before).
+- `feature` is `cmdk`, `slash_menu`, `mention_menu`, `model_change`,
+  `attachment`, `steer`, `queue`, `keyboard_send`, `split_pane`,
+  `terminal_tab`, `side_chat`, `board`, `pin_session`, `archive_modal`,
+  `dictation`, `swipe_navigation`, `notifications_panel`, `inspector_summary`,
+  `inspector_reviews`, `inspector_browser`, `inspector_files`,
+  `inspector_artifacts`, or `inspector_subagents`. Opening a surface counts as
+  using its feature only when you opened it (`opened_by` is not `restore` or
+  `auto`). The marker is kept in the app's local storage, so an install that
+  used a feature before this release reports it again the first time it is
+  used after updating; read `first_used` as "first use since this release" for
+  those installs.
+- `presentation` is `toast`, `banner`, `inline`, or `dialog`.
+- `error_kind` is `toast` (any error toast), `daemon_unavailable`,
+  `chat_turn_failed`, `composer_send_failed`, or `other`.
+- `error_code` is one of a closed list, never a message: a daemon failure
+  (`NOT_CONFIGURED`, `DAEMON_UNREACHABLE`, `BINARY_MISSING`, `SPAWN_FAILED`,
+  `EXITED`, `PORT_UNCONFIRMED`, `NOT_READY`, `IDENTITY_MISMATCH`,
+  `DATADIR_UNWRITABLE`) or a chat turn failure (`AUTH_REQUIRED`,
+  `PROVIDER_KEY_MISSING`). Any other code is dropped, and it is omitted when
+  there is none.
+- `surface` on `ao.ui.error_shown` is the surface that showed the error, or,
+  for a toast, the surface you used in the 10 seconds before it. It is omitted
+  when neither is known.
+- A failed chat turn is reported when it renders within two minutes of failing,
+  once per turn while the app runs, so opening an old chat does not report its
+  past failures.
+
+### `ao.ui.usage_summary`
+
+Window fields:
+
+| Property | Meaning |
+| --- | --- |
+| `measurement_schema_version` | `1` |
+| `window_id` | A random UUID for this window, not tied to anything else |
+| `window_duration_seconds` | Wall time from the window's start to the send |
+| `active_seconds` | Time the window was focused and visible, with input in the last 5 minutes |
+| `flush_reason` | `interval`, or `startup` for a window that ended while the app was closed |
+
+Counters (a counter that stayed at 0 is left out):
+
+| Property | Counts |
+| --- | --- |
+| `session_switch_count` | Switches from one open session to another |
+| `switch_from_<source>_count` | Those switches by where they started. `<source>` is `sidebar`, `tab`, `cmdk`, `shortcut`, `notification`, `board`, `swipe`, `archive`, or `other` (no input in the 1.5 seconds before) |
+| `send_count`, `send_keyboard_count`, `send_button_count` | Messages sent from a composer, all and by Enter or the send button |
+| `steer_count`, `queue_count` | Sends that steered a running turn or were queued behind it |
+| `send_with_attachment_count` | Sends with at least one attachment |
+| `attachment_add_paste_count`, `attachment_add_drop_count`, `attachment_add_picker_count` | Attachments added by paste, drag and drop, or the file picker |
+| `composer_draft_discarded_count` | A draft of 10 or more characters erased without sending while the composer had focus |
+| `model_picker_change_count` | Model changes made in the composer's model picker |
+| `cmdk_open_count`, `cmdk_pick_count`, `cmdk_abandon_count` | Cmd+K opens, opens that ran a command, and opens closed without one |
+| `model_picker_open_count`, `model_picker_abandon_count` | Model picker opens and opens closed without a change |
+| `slash_menu_open_count`, `slash_menu_pick_count`, `slash_menu_abandon_count` | The composer's `/` menu |
+| `mention_menu_open_count`, `mention_menu_pick_count`, `mention_menu_abandon_count` | The composer's `@` menu |
+| `notifications_panel_open_count` | Notification panel opens |
+| `click_count`, `keyboard_activation_count` | Pointer clicks, and clicks made with Enter or Space on a focused control |
+| `shortcut_count` | Key chords (Cmd, Ctrl or Alt with a key). Copy, paste, cut, undo, redo and select all inside a text field are not counted |
+| `hover_click_count`, `hover_only_count` | On controls with a hover card or preview: clicks after hovering for at least 500 ms, and hovers of 500 ms or more that ended without a click |
+| `rage_click_count` | Rage clicks (below) |
+| `dead_click_count` | Dead clicks (below) |
+| `error_shown_count`, `error_toast_count` | User-visible errors, all and toasts only |
+| `retry_click_count` | Clicks on a Retry control after a failure |
+
+`surfaces` is a list with one entry per surface that had any activity in the
+window. Each entry has `surface` and any of these that are above 0:
+
+| Property | Meaning |
+| --- | --- |
+| `visible_seconds` | Time the surface was on screen while the window was active |
+| `focused_seconds` | Time keyboard focus was inside the surface while the window was active |
+| `open_count` | Times it came on screen. A surface back on screen within a second of leaving it, such as a panel that re-renders, is the same open. Menus and pickers count every open |
+| `pick_count`, `abandon_count` | For menus and pickers (`cmdk`, `model_picker`, `slash_menu`, `mention_menu`, `notifications_panel`, `archive_modal`): closes after a choice, and closes without one |
+| `dismiss_count` | Explicit dismissals, such as closing a toast |
+| `dead_click_count`, `rage_click_count` | Dead and rage clicks inside it |
+| `error_count`, `retry_count` | Errors attributed to it and Retry clicks inside it |
+
+`controls` is a list with one entry per named control used in the window.
+Each entry has `control_id` and any of `click_count`, `keyboard_count`,
+`hover_click_count`, `hover_only_count`, and `rage_click_count` that are above
+0. `control_id` is a stable product name from a fixed list, not a DOM path or
+label:
+
+- Sidebar: `sidebar.home`, `sidebar.collapse`, `sidebar.new_project`,
+  `sidebar.settings`, `sidebar.connect_mobile`, `sidebar.project_row`,
+  `sidebar.project_toggle`, `sidebar.project_new_session`,
+  `sidebar.project_menu`, `sidebar.project_unpin`, `sidebar.session_row`,
+  `sidebar.session_pin`, `sidebar.session_archive`,
+  `sidebar.archived_sessions`
+- Tabs and top bar: `tab.select`, `tab.close`, `tab.new`,
+  `topbar.notifications`, `topbar.inspector`, `topbar.new_task`,
+  `topbar.open_board`, `topbar.open_orchestrator`, `topbar.open_editor`
+- Composer: `composer.send`, `composer.stop`, `composer.attach`,
+  `composer.model_picker`, `composer.dictation`
+- Chat: `chat.retry`
+- Inspector tabs: `inspector.tab_summary`, `inspector.tab_reviews`,
+  `inspector.tab_browser`, `inspector.tab_files`, `inspector.tab_artifacts`,
+  `inspector.tab_side_chat`, `inspector.tab_subagents`
+- Board: `board.card`
+- Toasts and banners: `toast.action`, `toast.dismiss`, `daemon_banner.retry`
+
+Hover counts are kept for `sidebar.session_row`, `tab.select`, and
+`board.card`. Retry clicks are `chat.retry` and `daemon_banner.retry`.
+
+### Definitions
+
+- A rage click is the fourth pointer click on the same element within one
+  second. A burst is counted once, however long it lasts.
+- A dead click is a single pointer click inside a surface that lands on
+  nothing interactive (no button, link, field, tab, menu item, terminal, named
+  control or other focusable element), shows no pointer cursor, does not
+  select text, and is not on a scrollbar. Double clicks are never dead, since
+  they usually select text.
+- Visible and focused time stop counting after 5 minutes with no input, and
+  while the window is hidden or not focused. A surface that is mounted but
+  hidden, such as a chat kept alive in the background, is not on screen.
+
+### Limits and the opt-out
+
+Counting happens in memory and is saved to the app's local storage every five
+minutes and when the window closes. Turning off Share usage analytics drops
+everything counted so far, removes the saved window and stops counting. The
+daily view, rage-click and first-use markers are kept only so the same value
+is not sent twice. The kill switch in `AO_TELEMETRY_DISABLED_EVENTS` silences
+any of these events by name; silencing all five also stops the counting.
+`ao.ui.error_shown` is sent at most once per 5 minutes for the same kind,
+presentation, surface and code, and also uses the standard renderer caps of 5
+per minute and 200 per day. The once-per-day and once-per-install events skip the per-minute cap,
+since several can be sent together at launch, and keep the daily cap.
+
+The listeners are passive and attached once to the document, so they cannot
+delay a click, scroll or key press. Telling which surface or control was used
+walks up the DOM from the event target and reads no layout. Hover is checked
+at most once per animation frame, for the last element the mouse entered. The
+only layout read is for a click on nothing interactive: the clicked element's
+box and cursor, read after the click's frame has painted, to tell a dead click
+from a scrollbar or a pointer-cursor element.
+
 ## UI responsiveness
 
 When product telemetry is enabled, the desktop app sends launch timings in
@@ -1010,6 +1188,8 @@ Product telemetry is designed not to include:
 - API keys, access tokens, passwords, or other credentials
 - Names, or email addresses other than the one on your signed-in AO Cloud
   account (invitee emails are never sent)
+- Screen recordings, session replays, screenshots, pointer coordinates, or
+  the text of anything you click or hover
 
 The explicit account fields are the GitHub owner segment, your authenticated
 GitHub username, and, only if you sign in to AO Cloud, your AO Cloud user ID and
@@ -1397,6 +1577,7 @@ renamed event. Events not listed keep their names.
 | `ao.renderer.artifact_create_succeeded` | `ao.artifacts.session_started` |
 | `ao.renderer.artifact_create_failed` | `ao.artifacts.session_start_failed` |
 | (new) | other `ao.artifacts.*` events (see "Artifacts") |
+| (new) | `ao.surfaces.viewed`, `ao.features.first_used`, `ao.ui.usage_summary`, `ao.ui.error_shown`, `ao.ui.rage_clicked` (see "UI usage") |
 
 
 ## Questions or corrections
