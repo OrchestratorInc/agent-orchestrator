@@ -63,8 +63,26 @@ func (e usageError) Unwrap() error { return e.err }
 // start can succeed once that process exits.
 const exitDataDirLocked = 75
 
-// ExitCode maps a CLI error to a process exit code: 2 for usage errors, 75 when
-// another AO process owns the data dir, 1 for any other failure, 0 for success.
+const (
+	exitNotFound   = 3
+	exitRefused    = 4
+	exitNeedsInput = 5
+	exitTimedOut   = 124
+)
+
+type exitError struct {
+	code int
+	err  error
+}
+
+func (e exitError) Error() string { return e.err.Error() }
+func (e exitError) Unwrap() error { return e.err }
+
+// ExitCode maps a CLI error to a process exit code: 2 for usage errors, 3 for
+// an unknown catalog action, 4 when the caller's grant or agent token refuses
+// the call, 5 when a session waits for an answer, 124 for a wait that timed
+// out, 75 when another AO process owns the data dir, 1 for any other failure,
+// 0 for success.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
@@ -72,6 +90,14 @@ func ExitCode(err error) int {
 	var ue usageError
 	if errors.As(err, &ue) {
 		return 2
+	}
+	var ee exitError
+	if errors.As(err, &ee) {
+		return ee.code
+	}
+	var apiErr apiResponseError
+	if errors.As(err, &apiErr) && (apiErr.ErrorBody.Code == "GRANT_REFUSED" || apiErr.ErrorBody.Code == "AGENT_TOKEN_INVALID") {
+		return exitRefused
 	}
 	if errors.Is(err, datadirlock.ErrLocked) {
 		return exitDataDirLocked
@@ -283,6 +309,10 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newAutomationCommand(ctx))
 	root.AddCommand(newCueCommand(ctx))
 	root.AddCommand(newSearchCommand(ctx))
+	root.AddCommand(newTokenCommand(ctx))
+	root.AddCommand(newWhoamiCommand(ctx))
+	root.AddCommand(newActionsCommand(ctx))
+	root.AddCommand(newCallCommand(ctx))
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
 

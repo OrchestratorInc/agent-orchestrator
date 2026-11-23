@@ -47,6 +47,7 @@ type ControlDeps struct {
 //	RequestID     → attach a request id for correlation
 //	requestLogger → slog-backed access log + 5xx telemetry, carries the request id
 //	recoverer     → turn a handler panic into 500 instead of crashing the daemon
+//	accessGate    → resolve the caller; hold a caller with a grant to the action catalog
 //	rendererOrigin → exact renderer-origin boundary for Codex account management
 //	                 and computer use
 //	cors          → CORS allowlist for the Electron renderer / dev origins
@@ -64,6 +65,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.Use(caller.Middleware)
 	r.Use(requestLogger(log, deps.Telemetry))
 	r.Use(recoverTelemetry(log, deps.Telemetry))
+	r.Use(newAccessGate(deps.Access, r, deps.Sessions).middleware)
 	// Account-management and computer-use routes retain their exact
 	// renderer-only boundary, even for authenticated LAN callers, and so do
 	// mobile controls. Check before CORS can answer a preflight.

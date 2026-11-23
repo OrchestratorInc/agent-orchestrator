@@ -1,0 +1,346 @@
+package httpd
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/access"
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
+)
+
+type gateFixture struct {
+	t        *testing.T
+	registry *access.Registry
+	router   chi.Router
+	served   []string
+	bodies   []string
+}
+
+func newGateFixture(t *testing.T) *gateFixture {
+	t.Helper()
+	registry, err := access.LoadRegistry(access.TokensPath(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &gateFixture{t: t, registry: registry}
+	r := chi.NewRouter()
+	gate := &accessGate{
+		registry: registry, routes: r, now: time.Now,
+		sessionProject: func(_ context.Context, sessionID string) (string, bool) {
+			project, ok := map[string]string{"api-1": "api", "web-1": "web"}[sessionID]
+			return project, ok
+		},
+	}
+	r.Use(caller.Middleware)
+	r.Use(gate.middleware)
+	ok := func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		f.served = append(f.served, req.Method+" "+req.URL.Path)
+		f.bodies = append(f.bodies, string(body))
+		w.WriteHeader(http.StatusOK)
+	}
+	r.Get("/healthz", ok)
+	r.Get("/api/v1/sessions", ok)
+	r.Post("/api/v1/sessions", func(w http.ResponseWriter, req *http.Request) {
+		ok(w, req)
+		_, _ = io.WriteString(w, `{"session":{"id":"api-9"}}`)
+	})
+	r.Get("/api/v1/sessions/{sessionId}", ok)
+	r.Post("/api/v1/sessions/{sessionId}/send", ok)
+	r.Get("/api/v1/projects", ok)
+	r.Delete("/api/v1/projects/{id}", ok)
+	r.Get("/api/v1/settings", ok)
+	r.Post("/api/v1/access/tokens", ok)
+	r.Get("/api/v1/access/whoami", ok)
+	r.Get("/api/v1/mobile/status", ok)
+	r.Post("/api/v1/sessions/{sessionId}/activity", ok)
+	r.Post("/api/v1/browser/commands", ok)
+	f.router = r
+	return f
+}
+
+func (f *gateFixture) token(name, preset string, projects ...string) string {
+	f.t.Helper()
+	grant, err := access.NewGrant(preset, nil, projects, time.Time{})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	_, secret, err := f.registry.Create(name, grant, time.Now())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return secret
+}
+
+type gateCall struct {
+	method, path, body, token, session string
+}
+
+func (f *gateFixture) do(call gateCall) (status int, code, reason string) {
+	f.t.Helper()
+	req := httptest.NewRequest(call.method, call.path, strings.NewReader(call.body))
+	if call.token != "" {
+		req.Header.Set("Authorization", "Bearer "+call.token)
+	}
+	if call.session != "" {
+		req.Header.Set(caller.Header, call.session)
+	}
+	w := httptest.NewRecorder()
+	f.router.ServeHTTP(w, req)
+	var envelope struct {
+		Code    string         `json:"code"`
+		Details map[string]any `json:"details"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &envelope)
+	reason, _ = envelope.Details["reason"].(string)
+	return w.Code, envelope.Code, reason
+}
+
+func TestGateLeavesCallersWithNoGrantAlone(t *testing.T) {
+	f := newGateFixture(t)
+	for _, call := range []gateCall{
+		{method: http.MethodGet, path: "/api/v1/mobile/status"},
+		{method: http.MethodPost, path: "/api/v1/access/tokens"},
+		{method: http.MethodDelete, path: "/api/v1/projects/api", session: "api-1"},
+	} {
+		if status, _, _ := f.do(call); status != http.StatusOK {
+			t.Errorf("%s %s: status %d, want 200", call.method, call.path, status)
+		}
+	}
+}
+
+func TestGateHoldsATokenToItsGrant(t *testing.T) {
+	f := newGateFixture(t)
+	read := f.token("reader", access.PresetRead)
+	operateAPI := f.token("api-bot", access.PresetOperate, "api")
+	manage := f.token("admin", access.PresetManage)
+	spawn := func(project string) string { return `{"projectId":"` + project + `","prompt":"hi"}` }
+
+	for name, tc := range map[string]struct {
+		call   gateCall
+		status int
+		code   string
+		reason string
+	}{
+		"read lists sessions":             {gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: read}, 200, "", ""},
+		"read cannot send":                {gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-1/send", token: read}, 403, "GRANT_REFUSED", access.ReasonGroup},
+		"probe is open":                   {gateCall{method: http.MethodGet, path: "/healthz", token: read}, 200, "", ""},
+		"whoami is open":                  {gateCall{method: http.MethodGet, path: "/api/v1/access/whoami", token: read}, 200, "", ""},
+		"route outside the catalog":       {gateCall{method: http.MethodGet, path: "/api/v1/mobile/status", token: manage}, 403, "GRANT_REFUSED", access.ReasonCatalog},
+		"token cannot make tokens":        {gateCall{method: http.MethodPost, path: "/api/v1/access/tokens", token: manage}, 403, "GRANT_REFUSED", access.ReasonCatalog},
+		"unknown route":                   {gateCall{method: http.MethodGet, path: "/api/v1/nope", token: manage}, 404, "ROUTE_NOT_FOUND", ""},
+		"unknown token":                   {gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: access.TokenPrefix + "ff"}, 401, "AGENT_TOKEN_INVALID", ""},
+		"limited: session in its project": {gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-1/send", token: operateAPI}, 200, "", ""},
+		"limited: session elsewhere":      {gateCall{method: http.MethodPost, path: "/api/v1/sessions/web-1/send", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: unknown session":        {gateCall{method: http.MethodGet, path: "/api/v1/sessions/ghost", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: list needs a project":   {gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: list in its project":    {gateCall{method: http.MethodGet, path: "/api/v1/sessions?project=api", token: operateAPI}, 200, "", ""},
+		"limited: every project":          {gateCall{method: http.MethodGet, path: "/api/v1/projects", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: machine data":           {gateCall{method: http.MethodGet, path: "/api/v1/settings", token: operateAPI}, 200, "", ""},
+		"limited: spawn in its project":   {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("api"), token: operateAPI}, 200, "", ""},
+		"limited: spawn elsewhere":        {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("web"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: spawn with no project":  {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"prompt":"hi"}`, token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"manage removes a project":        {gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", token: manage}, 200, "", ""},
+	} {
+		status, code, reason := f.do(tc.call)
+		if status != tc.status || (tc.code != "" && code != tc.code) || reason != tc.reason {
+			t.Errorf("%s: got %d %q %q, want %d %q %q", name, status, code, reason, tc.status, tc.code, tc.reason)
+		}
+	}
+	if !slices.Contains(f.bodies, spawn("api")) {
+		t.Errorf("the spawn handler must still read the whole body, got %q", f.bodies)
+	}
+}
+
+func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
+	f := newGateFixture(t)
+	operateAPI := f.token("api-bot", access.PresetOperate, "api")
+	if status, _, _ := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"}`, token: operateAPI}); status != 200 {
+		t.Fatalf("spawn: status %d", status)
+	}
+	if _, bound := f.registry.ForSession("api-9"); !bound {
+		t.Fatal("the started session is not bound to the token")
+	}
+	asSession := func(method, path string) (int, string, string) {
+		return f.do(gateCall{method: method, path: path, session: "api-9"})
+	}
+	if status, _, _ := asSession(http.MethodGet, "/api/v1/sessions?project=api"); status != 200 {
+		t.Errorf("the session may still read its project: status %d", status)
+	}
+	if status, _, reason := asSession(http.MethodDelete, "/api/v1/projects/api"); status != 403 || reason != access.ReasonGroup {
+		t.Errorf("the session must not exceed the grant: %d %q", status, reason)
+	}
+	if status, _, reason := asSession(http.MethodPost, "/api/v1/access/tokens"); status != 403 || reason != access.ReasonCatalog {
+		t.Errorf("the session must not make tokens: %d %q", status, reason)
+	}
+	ownTooling := func(when string) {
+		for _, path := range []string{"/api/v1/sessions/api-9/activity", "/api/v1/browser/commands"} {
+			if status, _, _ := asSession(http.MethodPost, path); status != 200 {
+				t.Errorf("%s: the session's own tooling %s: status %d, want 200", when, path, status)
+			}
+		}
+	}
+	ownTooling("under the grant")
+	if status, _, reason := asSession(http.MethodPost, "/api/v1/sessions/api-1/activity"); status != 403 || reason != access.ReasonCatalog {
+		t.Errorf("another session's own route: %d %q", status, reason)
+	}
+	if status, _, reason := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-9/activity", token: operateAPI}); status != 403 || reason != access.ReasonCatalog {
+		t.Errorf("a token has no own session: %d %q", status, reason)
+	}
+	if status, _, _ := f.do(gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"}`, session: "api-9"}); status != 200 {
+		t.Errorf("the session may start a session in its project: status %d", status)
+	}
+
+	if _, found, err := f.registry.Revoke("api-bot", time.Now()); err != nil || !found {
+		t.Fatalf("revoke: %v %v", found, err)
+	}
+	if status, code, _ := f.do(gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: operateAPI}); status != 401 || code != "AGENT_TOKEN_INVALID" {
+		t.Errorf("a revoked token: %d %q", status, code)
+	}
+	if status, _, reason := asSession(http.MethodGet, "/api/v1/sessions?project=api"); status != 403 || reason != access.ReasonEnded {
+		t.Errorf("a session of a revoked token: %d %q", status, reason)
+	}
+	ownTooling("after the grant ended")
+}
+
+func TestRealRouterGatesTokensAndServesWhoami(t *testing.T) {
+	registry, err := access.LoadRegistry(access.TokensPath(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, _ := access.NewGrant(access.PresetRead, nil, []string{"api"}, time.Time{})
+	_, secret, err := registry.Create("reader", grant, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, APIDeps{Access: registry}, ControlDeps{})
+	call := func(method, path, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, http.NoBody)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	var who struct {
+		Kind  string
+		Name  string
+		Grant *struct {
+			Preset   string
+			Projects []string
+		}
+	}
+	if w := call(http.MethodGet, "/api/v1/access/whoami", secret); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &who) != nil ||
+		who.Kind != access.CallerToken || who.Name != "reader" || who.Grant == nil || who.Grant.Preset != access.PresetRead || len(who.Grant.Projects) != 1 {
+		t.Errorf("whoami with a token: %d %s", w.Code, w.Body)
+	}
+	who.Grant = nil
+	if w := call(http.MethodGet, "/api/v1/access/whoami", ""); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &who) != nil || who.Kind != access.CallerUser || who.Grant != nil {
+		t.Errorf("whoami with no token: %d %s", w.Code, w.Body)
+	}
+	if w := call(http.MethodGet, "/api/v1/sessions/x/workspace/file?path=.env", secret); w.Code != 403 {
+		t.Errorf("a route outside the catalog: status %d, want 403", w.Code)
+	}
+	if w := call(http.MethodGet, "/mux", secret); w.Code != 403 && w.Code != 404 {
+		t.Errorf("the terminal socket: status %d, want 403 or 404", w.Code)
+	}
+	if w := call(http.MethodPost, "/shutdown", secret); w.Code != 403 && w.Code != 404 {
+		t.Errorf("shutdown: status %d, want 403 or 404", w.Code)
+	}
+	if w := call(http.MethodGet, "/api/v1/access/tokens", secret); w.Code != 403 {
+		t.Errorf("token list with a token: status %d, want 403", w.Code)
+	}
+
+	var actions struct {
+		Actions []struct {
+			ID      string
+			Summary string
+			Allowed bool
+		}
+	}
+	if w := call(http.MethodGet, "/api/v1/access/actions", secret); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &actions) != nil || len(actions.Actions) != len(access.Catalog()) {
+		t.Fatalf("actions: %d %s", w.Code, w.Body)
+	}
+	for _, action := range actions.Actions {
+		if action.Summary == "" {
+			t.Errorf("%s has no summary: its route is not in the API spec", action.ID)
+		}
+		if want := strings.HasSuffix(action.ID, ".list") || strings.HasSuffix(action.ID, ".get"); action.ID == "session.spawn" && action.Allowed || want && !action.Allowed {
+			t.Errorf("%s: allowed = %v for a read grant", action.ID, action.Allowed)
+		}
+	}
+	var detail struct {
+		Action struct {
+			Parameters []map[string]any
+			Body       map[string]any
+		}
+	}
+	if w := call(http.MethodGet, "/api/v1/access/actions/session.spawn", secret); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &detail) != nil {
+		t.Fatalf("action detail: %d %s", w.Code, w.Body)
+	}
+	properties, _ := detail.Action.Body["properties"].(map[string]any)
+	if _, ok := properties["projectId"]; !ok {
+		t.Errorf("session.spawn body schema has no projectId: %v", detail.Action.Body)
+	}
+}
+
+func TestRemoteListenerAcceptsAnAgentTokenAndKeepsItGated(t *testing.T) {
+	registry, err := access.LoadRegistry(access.TokensPath(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, _ := access.NewGrant(access.PresetRead, nil, nil, time.Time{})
+	_, secret, err := registry.Create("remote-bot", grant, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, APIDeps{Access: registry}, ControlDeps{})
+	state := &authState{agents: registry}
+	state.setHash(mobilebridge.HashPassword("secret12"))
+	lan := NewLANManager(router, state, 0, slog.Default(), nil)
+	call := func(method, path, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, http.NoBody)
+		req.RemoteAddr = "192.168.1.50:5555"
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		lan.dispatch().ServeHTTP(w, req)
+		return w
+	}
+	if w := call(http.MethodGet, "/api/v1/access/whoami", secret); w.Code != 200 || !strings.Contains(w.Body.String(), `"kind":"token"`) {
+		t.Errorf("whoami over the remote listener: %d %s", w.Code, w.Body)
+	}
+	if w := call(http.MethodGet, "/api/v1/sessions/x/workspace/file?path=.env", secret); w.Code != 403 {
+		t.Errorf("a token off the catalog over the remote listener: status %d, want 403", w.Code)
+	}
+	if w := call(http.MethodGet, "/api/v1/sessions/x/workspace/file?path=.env", "secret12"); w.Code == 403 || w.Code == 401 {
+		t.Errorf("the pairing password must keep its reach: status %d", w.Code)
+	}
+	if w := call(http.MethodPost, "/api/v1/access/tokens", "secret12"); w.Code != 404 {
+		t.Errorf("token management over the remote listener: status %d, want 404", w.Code)
+	}
+	if _, _, err := registry.Revoke("remote-bot", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for range 6 {
+		if w := call(http.MethodGet, "/api/v1/access/whoami", secret); w.Code != 401 || !strings.Contains(w.Body.String(), "AGENT_TOKEN_INVALID") {
+			t.Fatalf("a revoked token over the remote listener: %d %s", w.Code, w.Body)
+		}
+	}
+	if w := call(http.MethodGet, "/api/v1/access/whoami", "secret12"); w.Code != 200 {
+		t.Errorf("an ended token must not lock out its address: status %d", w.Code)
+	}
+}

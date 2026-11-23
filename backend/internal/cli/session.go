@@ -268,6 +268,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionHistoryCommand(ctx))
 	cmd.AddCommand(newSessionForkCommand(ctx))
 	cmd.AddCommand(newSessionSwitchCommand(ctx))
+	cmd.AddCommand(newSessionWaitCommand(ctx))
 	return cmd
 }
 

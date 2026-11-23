@@ -8,6 +8,215 @@ servers:
 - description: Local daemon (loopback only)
   url: http://127.0.0.1:3001
 paths:
+  /api/v1/access/actions:
+    get:
+      operationId: listAccessActions
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAccessActionsResponse'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unauthorized
+      summary: List the actions a caller with a grant can run
+      tags:
+      - access
+  /api/v1/access/actions/{actionId}:
+    get:
+      operationId: getAccessAction
+      parameters:
+      - description: Catalog action id, for example session.spawn.
+        in: path
+        name: actionId
+        required: true
+        schema:
+          description: Catalog action id, for example session.spawn.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessActionEnvelope'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unauthorized
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Show one catalog action with its input shape
+      tags:
+      - access
+  /api/v1/access/tokens:
+    get:
+      operationId: listAccessTokens
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAccessTokensResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List this machine's agent tokens
+      tags:
+      - access
+    post:
+      operationId: createAccessToken
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccessTokenRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAccessTokenResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Create a named agent token with a grant
+      tags:
+      - access
+  /api/v1/access/tokens/{tokenId}:
+    delete:
+      operationId: revokeAccessToken
+      parameters:
+      - description: Agent token id or name.
+        in: path
+        name: tokenId
+        required: true
+        schema:
+          description: Agent token id or name.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Revoke an agent token by id or name
+      tags:
+      - access
+  /api/v1/access/whoami:
+    get:
+      operationId: getAccessWhoami
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhoamiResponse'
+          description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Unauthorized
+      summary: Show who the daemon takes the caller to be, and its grant
+      tags:
+      - access
   /api/v1/agents:
     get:
       operationId: listAgents
@@ -16000,6 +16209,122 @@ components:
       - code
       - message
       type: object
+    AccessActionDetailResponse:
+      properties:
+        allowed:
+          description: Whether the caller's grant has the action's group. Project
+            limits are checked on the call.
+          type: boolean
+        body:
+          additionalProperties: {}
+          description: The JSON body schema, when the action takes a body.
+          type: object
+        group:
+          type: string
+        id:
+          type: string
+        method:
+          type: string
+        parameters:
+          description: The path and query parameters, as OpenAPI parameter objects.
+          items:
+            additionalProperties: {}
+            type: object
+          type: array
+        path:
+          type: string
+        summary:
+          type: string
+      required:
+      - id
+      - group
+      - method
+      - path
+      - allowed
+      - parameters
+      type: object
+    AccessActionEnvelope:
+      properties:
+        action:
+          $ref: '#/components/schemas/AccessActionDetailResponse'
+      required:
+      - action
+      type: object
+    AccessActionResponse:
+      properties:
+        allowed:
+          description: Whether the caller's grant has the action's group. Project
+            limits are checked on the call.
+          type: boolean
+        group:
+          type: string
+        id:
+          type: string
+        method:
+          type: string
+        path:
+          type: string
+        summary:
+          type: string
+      required:
+      - id
+      - group
+      - method
+      - path
+      - allowed
+      type: object
+    AccessGrantResponse:
+      properties:
+        ended:
+          description: True when the grant expired or its token was revoked.
+          type: boolean
+        expiresAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        groups:
+          description: The action groups the grant allows.
+          items:
+            type: string
+          type: array
+        preset:
+          description: The preset the grant was made from, when it was.
+          enum:
+          - read
+          - operate
+          - manage
+          type: string
+        projects:
+          description: Project ids the grant is limited to. Empty means every project.
+          items:
+            type: string
+          type: array
+      required:
+      - groups
+      type: object
+    AccessTokenResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        grant:
+          $ref: '#/components/schemas/AccessGrantResponse'
+        id:
+          type: string
+        lastUsedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        name:
+          type: string
+      required:
+      - id
+      - name
+      - grant
+      - createdAt
+      type: object
     AcknowledgeSessionInterfaceTransitionNoticeResponse:
       properties:
         ok:
@@ -20722,6 +21047,44 @@ components:
       - cachedTokens
       - totalTokens
       type: object
+    CreateAccessTokenRequest:
+      properties:
+        expiresAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        groups:
+          items:
+            type: string
+          type: array
+        name:
+          maxLength: 64
+          minLength: 1
+          type: string
+        preset:
+          enum:
+          - read
+          - operate
+          - manage
+          type: string
+        projects:
+          items:
+            type: string
+          type: array
+      required:
+      - name
+      type: object
+    CreateAccessTokenResponse:
+      properties:
+        secret:
+          type: string
+        token:
+          $ref: '#/components/schemas/AccessTokenResponse'
+      required:
+      - token
+      - secret
+      type: object
     CreateAutomationRequest:
       properties:
         cron:
@@ -21911,6 +22274,24 @@ components:
           type: string
       required:
       - url
+      type: object
+    ListAccessActionsResponse:
+      properties:
+        actions:
+          items:
+            $ref: '#/components/schemas/AccessActionResponse'
+          type: array
+      required:
+      - actions
+      type: object
+    ListAccessTokensResponse:
+      properties:
+        tokens:
+          items:
+            $ref: '#/components/schemas/AccessTokenResponse'
+          type: array
+      required:
+      - tokens
       type: object
     ListAgentAuthPlansResponse:
       properties:
@@ -27465,6 +27846,27 @@ components:
           type: string
       required:
       - status
+      type: object
+    WhoamiResponse:
+      properties:
+        grant:
+          $ref: '#/components/schemas/AccessGrantResponse'
+        id:
+          type: string
+        kind:
+          description: user is a caller on this machine with no token. A session is
+            named by its own header, which is not a proof.
+          enum:
+          - user
+          - session
+          - token
+          - device
+          type: string
+        name:
+          description: The token name, also for a session that a token started.
+          type: string
+      required:
+      - kind
       type: object
     WorkspaceBranchResponse:
       properties:

@@ -172,6 +172,34 @@ The id defaults to the current session.
 
 ---
 
+### ao session wait
+
+Block until the first of the given sessions stops working, then print which one
+and why. Use it once after `ao spawn` or `ao send` in place of repeated
+`ao session get` checks.
+
+**Syntax:**
+```
+ao session wait <id>... [--timeout 10m] [--interval 2s] [--json]
+```
+
+**Exit codes:**
+
+| Code | Meaning | What to do next |
+|---|---|---|
+| 0 | The agent finished its turn (`idle`), exited or was terminated | Read the result with `ao session get <id> --transcript N` |
+| 5 | The session waits for an answer or an approval (`needs_input`) | Read the question in the transcript, then answer it or ask the user |
+| 124 | No session settled before `--timeout` | Wait again, or report that it is still working |
+| 4 | Your grant does not allow reading that session | Tell the user; do not retry |
+
+`--json` prints `{"sessionId","state","status","waitedSeconds"}`.
+
+A session that was just spawned reads as idle until its agent starts. For the
+first minute after creation, `wait` therefore accepts idle only once the
+session has completed a turn.
+
+---
+
 ### ao session kill
 
 Terminate a session.

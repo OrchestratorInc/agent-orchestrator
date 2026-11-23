@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/access"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
@@ -123,6 +124,8 @@ type APIDeps struct {
 	DeviceAccess controllers.DeviceAccess
 	// AccessDevices links push registrations to device tokens.
 	AccessDevices *mobilebridge.AccessDevices
+	// Access holds the agent tokens and their grants. Nil accepts none.
+	Access *access.Registry
 }
 
 // normalizeAPIDeps closes the Presence/DeviceLive duplication trap structurally.
@@ -191,6 +194,7 @@ type API struct {
 	linkPreview   *controllers.LinkPreviewController
 	sessionSearch *controllers.SessionSearchController
 	github        *controllers.GitHubController
+	access        *controllers.AccessController
 	events        *EventsController
 }
 
@@ -248,6 +252,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		cues:          &controllers.CuesController{Svc: deps.Cues},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions), Models: deps.Agents},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
+		access:        &controllers.AccessController{Registry: deps.Access},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
 		panes:         &controllers.PanesController{Svc: deps.Panes, Terminals: deps.PaneTerminals, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
@@ -414,6 +419,7 @@ func (a *API) Register(root chi.Router) {
 			a.linkPreview.Register(r)
 			a.sessionSearch.Register(r)
 			a.github.Register(r)
+			a.access.Register(r)
 			// Sibling REST controllers plug in here.
 		})
 		// Long-lived streams intentionally bypass the REST timeout middleware.

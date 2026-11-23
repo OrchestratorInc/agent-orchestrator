@@ -28,12 +28,15 @@ const (
 	CredentialAccount     CredentialKind = "account"
 	CredentialDevice      CredentialKind = "device"
 	CredentialPairingCode CredentialKind = "pairing-code"
+	CredentialAgent       CredentialKind = "agent"
 )
 
-// Credential is what the LAN listener accepted. DeviceID is set for CredentialDevice.
+// Credential is what the LAN listener accepted. DeviceID is set for
+// CredentialDevice and TokenID for CredentialAgent.
 type Credential struct {
 	Kind     CredentialKind
 	DeviceID string
+	TokenID  string
 }
 
 type credentialKey struct{}

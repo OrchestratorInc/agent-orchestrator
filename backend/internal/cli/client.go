@@ -28,6 +28,12 @@ const commandTimeout = 2 * time.Minute
 // discards for keep-alive reuse without an unbounded read.
 const maxDrainedBodyBytes = 4 << 10
 
+const agentTokenEnv = "AO_TOKEN"
+
+type rawResponse struct{ body []byte }
+
+const maxRawResponseBytes = 64 << 20
+
 // apiError is the subset of the daemon's JSON error envelope the CLI surfaces.
 // RequestID is surfaced so a failed command can be correlated with daemon logs.
 type apiError struct {
@@ -197,6 +203,9 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if token := strings.TrimSpace(os.Getenv(agentTokenEnv)); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	for name, value := range headers {
 		req.Header.Set(name, value)
 	}
@@ -222,6 +231,10 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		var e apiError
 		_ = json.NewDecoder(resp.Body).Decode(&e)
 		return apiResponseError{StatusCode: resp.StatusCode, ErrorBody: e}
+	}
+	if raw, ok := out.(*rawResponse); ok {
+		raw.body, err = io.ReadAll(io.LimitReader(resp.Body, maxRawResponseBytes))
+		return err
 	}
 	if out == nil {
 		// Explicitly bodyless call (telemetry/activity hooks, fire-and-forget

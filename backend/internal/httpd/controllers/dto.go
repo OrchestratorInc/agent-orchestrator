@@ -4932,3 +4932,87 @@ type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
 }
+
+// AccessGrantResponse is what a caller may do. No projects means every project.
+type AccessGrantResponse struct {
+	Preset    string     `json:"preset,omitempty" enum:"read,operate,manage" description:"The preset the grant was made from, when it was."`
+	Groups    []string   `json:"groups" description:"The action groups the grant allows."`
+	Projects  []string   `json:"projects,omitempty" description:"Project ids the grant is limited to. Empty means every project."`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	Ended     bool       `json:"ended,omitempty" description:"True when the grant expired or its token was revoked."`
+}
+
+// WhoamiResponse is who the daemon resolved the caller to be.
+type WhoamiResponse struct {
+	Kind string `json:"kind" enum:"user,session,token,device" description:"user is a caller on this machine with no token. A session is named by its own header, which is not a proof."`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty" description:"The token name, also for a session that a token started."`
+	// Grant is absent for a caller with no limit.
+	Grant *AccessGrantResponse `json:"grant,omitempty"`
+}
+
+// AccessActionResponse is one catalog action.
+type AccessActionResponse struct {
+	ID      string `json:"id"`
+	Group   string `json:"group"`
+	Method  string `json:"method"`
+	Path    string `json:"path"`
+	Summary string `json:"summary,omitempty"`
+	Allowed bool   `json:"allowed" description:"Whether the caller's grant has the action's group. Project limits are checked on the call."`
+}
+
+// ListAccessActionsResponse is the action catalog.
+type ListAccessActionsResponse struct {
+	Actions []AccessActionResponse `json:"actions"`
+}
+
+// AccessActionDetailResponse is one catalog action with its input shape.
+type AccessActionDetailResponse struct {
+	AccessActionResponse
+	Parameters []map[string]any `json:"parameters" description:"The path and query parameters, as OpenAPI parameter objects."`
+	Body       map[string]any   `json:"body,omitempty" description:"The JSON body schema, when the action takes a body."`
+}
+
+// AccessActionEnvelope wraps one catalog action.
+type AccessActionEnvelope struct {
+	Action AccessActionDetailResponse `json:"action"`
+}
+
+// AccessActionIDParam is the catalog action path parameter.
+type AccessActionIDParam struct {
+	ActionID string `path:"actionId" description:"Catalog action id, for example session.spawn."`
+}
+
+// AccessTokenResponse is one agent token. The secret is never returned after creation.
+type AccessTokenResponse struct {
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	Grant      AccessGrantResponse `json:"grant"`
+	CreatedAt  time.Time           `json:"createdAt"`
+	LastUsedAt *time.Time          `json:"lastUsedAt,omitempty"`
+}
+
+// ListAccessTokensResponse lists the agent tokens of this machine.
+type ListAccessTokensResponse struct {
+	Tokens []AccessTokenResponse `json:"tokens"`
+}
+
+// CreateAccessTokenRequest makes a named agent token with a preset or with groups.
+type CreateAccessTokenRequest struct {
+	Name      string     `json:"name" minLength:"1" maxLength:"64"`
+	Preset    string     `json:"preset,omitempty" enum:"read,operate,manage"`
+	Groups    []string   `json:"groups,omitempty"`
+	Projects  []string   `json:"projects,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+}
+
+// CreateAccessTokenResponse returns the new token and its secret, shown once.
+type CreateAccessTokenResponse struct {
+	Token  AccessTokenResponse `json:"token"`
+	Secret string              `json:"secret"`
+}
+
+// AccessTokenIDParam is the agent token path parameter.
+type AccessTokenIDParam struct {
+	TokenID string `path:"tokenId" description:"Agent token id or name."`
+}

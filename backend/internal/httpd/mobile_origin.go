@@ -10,11 +10,20 @@ import (
 // Mobile controls create remote access and disclose pairing credentials. They
 // require exact renderer origins even when other APIs allow paired mobile clients.
 // Run this before CORS so rejected preflights cannot acquire a browser grant.
+func remoteAccessControlPath(path string) bool {
+	for _, prefix := range []string{"/api/v1/mobile", "/api/v1/access/tokens"} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func mobileControlOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := exactAllowedOrigins(allowedOrigins)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/api/v1/mobile" && !strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
+			if !remoteAccessControlPath(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}

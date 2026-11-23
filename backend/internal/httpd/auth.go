@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/access"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -21,6 +22,7 @@ type authState struct {
 	// Set once before the listener starts. Nil accepts only the shared credentials.
 	devices *mobilebridge.AccessDevices
 	codes   *mobilebridge.PairingCodes
+	agents  *access.Registry
 	// passwordOff makes the listener refuse the pairing password.
 	passwordOff atomic.Bool
 }
@@ -101,10 +103,17 @@ func (a *authState) authenticate(tok string, pairing bool) (credential requestsc
 	if pairing && a.codes != nil && a.codes.Valid(tok) {
 		return requestscope.Credential{Kind: requestscope.CredentialPairingCode}, true, false
 	}
+	if token, found := a.agents.Match(tok, time.Now()); found {
+		return requestscope.Credential{Kind: requestscope.CredentialAgent, TokenID: token.ID}, true, false
+	}
 	return requestscope.Credential{}, false, false
 }
 
 func (a *authState) noteUse(credential requestscope.Credential, now time.Time) {
+	if credential.Kind == requestscope.CredentialAgent {
+		a.agents.Touch(credential.TokenID, now)
+		return
+	}
 	if a.devices == nil {
 		return
 	}
@@ -115,7 +124,7 @@ func (a *authState) noteUse(credential requestscope.Credential, now time.Time) {
 		a.devices.TouchShared(mobilebridge.SharedPassword, now)
 	case requestscope.CredentialAccount:
 		a.devices.TouchShared(mobilebridge.SharedAccount, now)
-	case requestscope.CredentialPairingCode:
+	case requestscope.CredentialPairingCode, requestscope.CredentialAgent:
 	}
 }
 
@@ -392,6 +401,10 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				// Not a guess, so it does not count toward the lockout.
 				envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_CREDENTIAL_REQUIRED",
 					"this host no longer accepts the pairing password; pair this device again", nil)
+				return
+			}
+			if strings.HasPrefix(tok, access.TokenPrefix) {
+				writeAgentTokenInvalid(w, r)
 				return
 			}
 			if strings.HasPrefix(tok, mobilebridge.DeviceTokenPrefix) {

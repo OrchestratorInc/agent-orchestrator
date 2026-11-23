@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/access"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -76,6 +77,7 @@ var lanControlBlockedPrefixes = []string{
 	"/shutdown",
 	"/internal/",
 	"/api/v1/mobile",
+	"/api/v1/access/tokens",
 	"/api/v1/dev",
 	"/api/v1/browser",
 	"/api/v1/desktop",
@@ -202,6 +204,11 @@ func (m *LANManager) SetAccountTokenHash(hash string) {
 // codes. Call it before Start.
 func (m *LANManager) UseDeviceCredentials(devices *mobilebridge.AccessDevices, codes *mobilebridge.PairingCodes) {
 	m.state.devices, m.state.codes = devices, codes
+}
+
+// UseAgentTokens makes the listener accept named agent tokens. Call it before Start.
+func (m *LANManager) UseAgentTokens(agents *access.Registry) {
+	m.state.agents = agents
 }
 
 // SetPasswordLoginDisabled turns the pairing password off or on. Off closes its connections.
