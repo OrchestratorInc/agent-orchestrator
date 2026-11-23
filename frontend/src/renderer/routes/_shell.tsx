@@ -98,7 +98,6 @@ import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to
 import { sessionUiKey } from "../lib/hosts";
 import { pageHasTopbar } from "../lib/shell-topbar";
 import { forgetRemoteHost, syncRemoteCache } from "../lib/remote-chat-cache";
-import { keepLocalChats } from "../lib/local-chat-cache";
 import { watchRemoteUnpins } from "../lib/remote-session-unpins";
 import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
@@ -368,10 +367,6 @@ function ShellLayout() {
 	useSettingsPolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const localSessionIdsKey = useMemo(() => workspaces.flatMap((workspace) => workspace.sessions.map((session) => session.id)).join("\0"), [workspaces]);
-	useEffect(() => {
-		if (localSessionIdsKey) void keepLocalChats(localSessionIdsKey.split("\0"));
-	}, [localSessionIdsKey]);
 	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);

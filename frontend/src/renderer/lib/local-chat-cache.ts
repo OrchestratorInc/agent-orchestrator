@@ -1,4 +1,4 @@
-import type { InfiniteData, QueryClient, QueryKey } from "@tanstack/react-query";
+import { hashKey, type InfiniteData, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import type { ConversationSnapshot } from "../types/conversation";
 import type { WorkspaceSummary } from "../types/workspace";
@@ -49,8 +49,7 @@ async function pruneOldChats(): Promise<void> {
 	};
 }
 
-export function keepLocalChats(sessionIds: string[]): Promise<void> {
-	if (typeof indexedDB === "undefined") return Promise.resolve();
+function keepLocalChats(sessionIds: string[]): Promise<void> {
 	const keep = new Set(sessionIds);
 	return openDatabase()
 		.then(async (db) => {
@@ -68,8 +67,17 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 	void pruneOldChats().catch(() => undefined);
 	const written = new WeakSet<object>();
 	const timers = new Map<string, ReturnType<typeof setTimeout>>();
+	const workspacesHash = hashKey(workspaceQueryKey);
+	let listed: WorkspaceSummary[] | undefined;
 	const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
 		if (event.type !== "updated") return;
+		if (event.query.queryHash === workspacesHash) {
+			const workspaces = event.query.state.data as WorkspaceSummary[] | undefined;
+			if (event.action.type !== "success" || event.action.manual || !workspaces || workspaces === listed) return;
+			listed = workspaces;
+			void keepLocalChats(workspaces.flatMap((workspace) => workspace.sessions.map((session) => session.id)));
+			return;
+		}
 		const sessionId = localChat(event.query.queryKey);
 		if (!sessionId) return;
 		if (event.action.type === "fetch" && event.query.state.data === undefined) {
@@ -96,6 +104,7 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 			const entry: Entry = { sessionId, createdAt, build: DEV_BUILD_INFO.commit, savedAt: Date.now(), page };
 			void openDatabase()
 				.then((db) => done(db.transaction(STORE, "readwrite").objectStore(STORE).put(entry)))
+				.then(pruneOldChats)
 				.catch(() => written.delete(page));
 		}, WRITE_DELAY_MS));
 	});
