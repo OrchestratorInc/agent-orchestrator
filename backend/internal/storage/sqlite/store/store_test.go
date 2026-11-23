@@ -2821,3 +2821,67 @@ func artifactRegistrations(paths ...string) []domain.SessionArtifactRegistration
 	}
 	return out
 }
+
+func TestFillProjectRoleAgentsFillsOnlyEmptyRoles(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	worker := domain.RoleOverride{
+		Harness:     domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-5.2", Effort: "xhigh"},
+	}
+	orchestrator := domain.RoleOverride{
+		Harness:     domain.HarnessClaudeCode,
+		AgentConfig: domain.AgentConfig{Permissions: domain.PermissionModeAcceptEdits},
+	}
+	if err := s.UpsertProject(ctx, domain.ProjectRecord{
+		ID: "half", DisplayName: "Half", Path: "/tmp/half", RegisteredAt: now,
+		Config: domain.ProjectConfig{
+			DefaultBranch: "develop",
+			Worker:        worker,
+			Orchestrator: domain.RoleOverride{AgentConfig: domain.AgentConfig{
+				Model: "gpt-5.2", Mode: "high", Effort: "xhigh", Permissions: domain.PermissionModeAcceptEdits,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("seed half: %v", err)
+	}
+
+	row, changed, err := s.FillProjectRoleAgents(ctx, "half", domain.HarnessClaudeCode)
+	if err != nil || !changed {
+		t.Fatalf("fill half: changed=%v err=%v", changed, err)
+	}
+	if row.Config.Worker != worker || row.Config.Orchestrator != orchestrator {
+		t.Fatalf("returned roles = worker %+v orchestrator %+v", row.Config.Worker, row.Config.Orchestrator)
+	}
+	got, _, err := s.GetProject(ctx, "half")
+	if err != nil {
+		t.Fatalf("get half: %v", err)
+	}
+	// The chosen worker, approval setting, and unrelated project details survive.
+	if got.Config.Worker != worker || got.Config.Orchestrator != orchestrator ||
+		got.Config.DefaultBranch != "develop" || got.DisplayName != "Half" {
+		t.Fatalf("stored project = %+v", got)
+	}
+
+	// Both roles named: nothing to change.
+	if _, changed, err := s.FillProjectRoleAgents(ctx, "half", domain.HarnessCursor); err != nil || changed {
+		t.Fatalf("second fill: changed=%v err=%v", changed, err)
+	}
+}
+
+func TestFillProjectRoleAgentsSkipsArchivedAndMissingProjects(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	seedProject(t, s, "gone")
+	if ok, err := s.ArchiveProject(ctx, "gone", now); err != nil || !ok {
+		t.Fatalf("archive: ok=%v err=%v", ok, err)
+	}
+	if _, changed, err := s.FillProjectRoleAgents(ctx, "gone", domain.HarnessClaudeCode); err != nil || changed {
+		t.Fatalf("archived fill: changed=%v err=%v", changed, err)
+	}
+	if row, changed, err := s.FillProjectRoleAgents(ctx, "nope", domain.HarnessClaudeCode); err != nil || changed || row.ID != "" {
+		t.Fatalf("missing fill: row=%+v changed=%v err=%v", row, changed, err)
+	}
+}

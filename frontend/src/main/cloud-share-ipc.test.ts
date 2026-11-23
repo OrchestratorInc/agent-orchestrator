@@ -26,6 +26,8 @@ beforeEach(async () => {
 	await fs.mkdir(path.join(dataDir, "artifacts", "sess-1", "docs"), { recursive: true });
 	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "docs", "report.html"), "<h1>quarterly</h1>!!");
 	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "clip.mp4"), "video");
+	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "clip.mkv"), "video");
+	await fs.writeFile(path.join(dataDir, "artifacts", "sess-1", "clip.ogv"), "video");
 });
 
 afterEach(async () => {
@@ -38,7 +40,7 @@ const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
 /** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
 type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void };
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -86,16 +88,23 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 				if (options.listGate) await options.listGate;
 				return json({ shares, limit: 3, used: 1 });
 			}
+			// A control plane that does not serve videos yet (its CDN is off) refuses them.
+			const video = (name: string) => options.refuseVideos && /\.(mp4|webm)$/.test(name);
 			if (pathname.endsWith("/uploads/files") && options.files) {
 				const { path: served } = JSON.parse(String(init.body)) as { path: string };
 				if (served === "") return json({ code: "invalid_request", message: "path" }, 400);
+				if (video(served)) return json({ code: "artifact_share_type_unsupported", message: "Videos can't be included in a shared page yet." }, 415);
 				return json({ uploadToken: `file:${served}`, partSize: 1024, partCount: 1 }, 201);
 			}
 			if (pathname.endsWith("/uploads/files/complete") && options.files) {
 				const { uploadToken } = JSON.parse(String(init.body)) as { uploadToken: string };
 				return json({ fileToken: `ft:${uploadToken.slice("file:".length)}`, path: uploadToken.slice("file:".length), expiresAt: "" });
 			}
-			if (pathname.endsWith("/uploads")) return json({ uploadToken: "tok", partSize: 1024, partCount: 1 }, 201);
+			if (pathname.endsWith("/uploads")) {
+				const { name } = JSON.parse(String(init.body)) as { name: string };
+				if (video(name)) return json({ code: "artifact_share_type_unsupported", message: "Sharing videos is coming soon." }, 415);
+				return json({ uploadToken: "tok", partSize: 1024, partCount: 1 }, 201);
+			}
 			if (pathname.endsWith("/uploads/parts")) return json({ parts: [{ partNumber: 1, method: "PUT", url: "https://s3.test/p", headers: {}, size: 20 }] });
 			if (pathname === "/p") return new Response("", { headers: { etag: '"e1"' } });
 			if (pathname.endsWith("/finalize")) {
@@ -111,8 +120,12 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 				return json({ share: { id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/" }, replaced: false }, 201);
 			}
 			if (pathname === `/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`) {
-				const emails = init.method === "POST" ? (JSON.parse(String(init.body)) as { emails: string[] }).emails : ["maya@acme.co"];
-				return json({ grants: emails.map((email, index) => ({ id: `${GRANT_ID.slice(0, -1)}${index}`, email: email.toLowerCase(), createdAt: "" })) });
+				const body = init.method === "POST" ? (JSON.parse(String(init.body)) as { emails?: string[]; orgId?: string; teamIds?: string[]; workspace?: boolean }) : { emails: ["maya@acme.co"] };
+				const grants = (body.emails ?? []).map((email, index) => ({ id: `${GRANT_ID.slice(0, -1)}${index}`, email: email.toLowerCase(), createdAt: "" }));
+				// Answering without teams, as a control plane that predates team sharing does.
+				if (!body.orgId) return json({ grants });
+				const subject = (teamId?: string) => ({ id: GRANT_ID, orgId: body.orgId, ...(teamId ? { teamId } : {}), name: teamId ? "Design" : "Acme", memberCount: 3, createdAt: "" });
+				return json({ grants, teams: (body.teamIds ?? []).map(subject), workspaces: body.workspace ? [subject()] : [] });
 			}
 			if (init.method === "PATCH" && pathname === `/api/cloud/v1/me/artifact-shares/${SHARE_ID}`) {
 				return json({ id: SHARE_ID, slug: "abc", contentUrl: "https://abc.share.test/", ...(JSON.parse(String(init.body)) as object) });
@@ -308,9 +321,24 @@ describe("cloudShare IPC", () => {
 	});
 
 	it("turns refusals into results the dialog can act on", async () => {
-		const video = setup();
-		await expect(video.invoke("cloudShare:publish", { ...video.file, path: "clip.mp4" })).resolves.toMatchObject({ status: "unsupported" });
-		expect(video.requests).toEqual([]);
+		// A video browsers cannot play is refused before anything is sent.
+		const unplayable = setup();
+		for (const name of ["clip.mkv", "clip.ogv"]) {
+			await expect(unplayable.invoke("cloudShare:inspect", { ...unplayable.file, path: name })).resolves.toMatchObject({ unsupported: true });
+			await expect(unplayable.invoke("cloudShare:publish", { ...unplayable.file, path: name })).resolves.toEqual({
+				status: "unsupported", message: "This video format can't be played in a browser. Use MP4, MOV or WebM.",
+			});
+		}
+		expect(unplayable.requests).toEqual([]);
+
+		// A playable video goes to the control plane, which refuses it while it serves none.
+		const video = setup({ refuseVideos: true });
+		await expect(video.invoke("cloudShare:inspect", { ...video.file, path: "clip.mp4" })).resolves.toMatchObject({ unsupported: false });
+		await expect(video.publish({ ...video.file, path: "clip.mp4" })).resolves.toEqual({ status: "unsupported", message: "Sharing videos is coming soon." });
+
+		// One that serves videos publishes it as any other file.
+		const served = setup();
+		await expect(served.publish({ ...served.file, path: "clip.mp4" })).resolves.toMatchObject({ status: "published" });
 
 		const limit = setup({ finalizeStatus: 409, finalizeCode: "artifact_share_limit_reached" });
 		await expect(limit.publish()).resolves.toEqual({
@@ -383,9 +411,13 @@ describe("cloudShare IPC", () => {
 		await expect(unseen.invoke("cloudShare:publish", unseen.cloudFile)).resolves.toMatchObject({ status: "changed" });
 		expect(unseen.requests.filter((request) => request.endsWith("/share"))).toEqual([]);
 
-		const video = setup();
-		await expect(video.invoke("cloudShare:publish", { ...video.cloudFile, path: "demo.mp4" })).resolves.toMatchObject({ status: "unsupported" });
-		expect(video.requests).toEqual([]);
+		const unplayable = setup();
+		await expect(unplayable.invoke("cloudShare:publish", { ...unplayable.cloudFile, path: "demo.mkv" })).resolves.toMatchObject({ status: "unsupported" });
+		expect(unplayable.requests).toEqual([]);
+
+		// A playable one is the control plane's to refuse.
+		const video = setup({ shareStatus: 415, shareCode: "artifact_share_type_unsupported" });
+		await expect(video.publish(video.cloudFile)).resolves.toEqual({ status: "unsupported", message: "Refused." });
 
 		const signedOut = setup({ token: null });
 		await expect(signedOut.invoke("cloudShare:publish", signedOut.cloudFile)).resolves.toEqual({ status: "signed_out" });
@@ -403,17 +435,33 @@ describe("cloudShare IPC", () => {
 		await fs.writeFile(path.join(docs, "photo.jpg"), "jpeg");
 		await fs.writeFile(path.join(docs, "clip.webm"), "video");
 		await fs.writeFile(path.join(docs, "report.html"), `<img src="images/chart.png"><img src="photo.jpg"><video src="clip.webm"></video><img src="../clip.mp4"><img src="https://cdn.test/x.png">`);
-		const { publish, requests, bodies, sent } = setup({ files: true });
+		const { publish, requests, bodies, sent, records } = setup({ files: true, refuseVideos: true });
 		const result = await publish();
+		// The video is refused by a control plane that serves none yet; the page goes without it.
 		expect(result).toMatchObject({ status: "published", pageFiles: { included: 2, skipped: 2, videos: 1, unsupported: false } });
 		const starts = requests.filter((request) => request.endsWith("/uploads/files"));
-		expect(starts).toHaveLength(2);
+		expect(starts).toHaveLength(3);
+		// Recorded as missing, so the control plane taking videos later offers a republish.
+		expect((await records.publishedPageFiles(JSON.stringify(["https://cp.test", "sess-1", "docs/report.html"])))?.["docs/clip.webm"]).toBe("");
 		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:images/chart.png" }, { fileToken: "ft:photo.jpg" }] });
 		// Progress ends at the page's and its files' bytes, copied and sent.
 		const last = sent.at(-1) as { sentBytes: number; totalBytes: number };
 		const pageSize = (await fs.stat(path.join(docs, "report.html"))).size;
-		expect(last).toMatchObject({ sentBytes: (pageSize + 3 + 4) * 2, totalBytes: (pageSize + 3 + 4) * 2 });
+		expect(last).toMatchObject({ sentBytes: (pageSize + 3 + 4 + 5) * 2, totalBytes: (pageSize + 3 + 4 + 5) * 2 });
 		expect(await snapshots()).toEqual([]);
+	});
+
+	it("uploads a page's video with it once the control plane serves videos", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.writeFile(path.join(docs, "clip.webm"), "video");
+		await fs.writeFile(path.join(docs, "take.mkv"), "video");
+		await fs.writeFile(path.join(docs, "theora.ogv"), "video");
+		await fs.writeFile(path.join(docs, "report.html"), `<video src="clip.webm"></video><video src="take.mkv"></video><video src="theora.ogv"></video>`);
+		const { publish, bodies, requests } = setup({ files: true });
+		// A format browsers cannot play is left out, though not as a video the control plane refused.
+		await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 2, videos: 0, unsupported: false } });
+		expect(requests.filter((request) => request.endsWith("/uploads/files"))).toHaveLength(1);
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:clip.webm" }] });
 	});
 
 	it("leaves out a page's file that is removed before it is copied, and still publishes the page", async () => {
@@ -449,9 +497,9 @@ describe("cloudShare IPC", () => {
 
 	it("says what a page left out though the control plane cannot take its files", async () => {
 		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
-		await fs.writeFile(path.join(docs, "report.html"), `<video src="clip.mp4"></video><img src="../outside.png">`);
+		await fs.writeFile(path.join(docs, "report.html"), `<video src="clip.mkv"></video><img src="../outside.png">`);
 		const { publish } = setup();
-		await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 2, videos: 1, unsupported: false } });
+		await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 2, videos: 0, unsupported: false } });
 	});
 
 	it("offers to republish a page when a file it uses changes, appears or goes, though the page did not", async () => {
@@ -596,8 +644,8 @@ describe("cloudShare IPC", () => {
 		const { invoke, requests, bodies } = setup();
 		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: SHARE_ID, access: "anyone" })).resolves.toMatchObject({ id: SHARE_ID, access: "anyone" });
 		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}`)).toEqual({ access: "anyone" });
-		await expect(invoke("cloudShare:grants", { baseUrl: "https://cp.test", shareId: SHARE_ID })).resolves.toEqual([{ id: `${GRANT_ID.slice(0, -1)}0`, email: "maya@acme.co", createdAt: "" }]);
-		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: ["Dev@acme.co"] })).resolves.toEqual([{ id: `${GRANT_ID.slice(0, -1)}0`, email: "dev@acme.co", createdAt: "" }]);
+		await expect(invoke("cloudShare:grants", { baseUrl: "https://cp.test", shareId: SHARE_ID })).resolves.toEqual({ people: [{ id: `${GRANT_ID.slice(0, -1)}0`, email: "maya@acme.co", createdAt: "" }], teams: [], workspaces: [] });
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: ["Dev@acme.co"] })).resolves.toEqual({ people: [{ id: `${GRANT_ID.slice(0, -1)}0`, email: "dev@acme.co", createdAt: "" }], teams: [], workspaces: [] });
 		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`)).toEqual({ emails: ["Dev@acme.co"] });
 		await expect(invoke("cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: GRANT_ID })).resolves.toBeUndefined();
 		expect(requests).toEqual([
@@ -610,6 +658,20 @@ describe("cloudShare IPC", () => {
 		await expect(invoke("cloudShare:setAccess", { baseUrl: "https://cp.test", shareId: "../x", access: "anyone" })).rejects.toThrow("Not a share link");
 		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, emails: [] })).rejects.toThrow("Not a list of emails");
 		await expect(invoke("cloudShare:removeGrant", { baseUrl: "https://cp.test", shareId: SHARE_ID, grantId: "../x" })).rejects.toThrow("Not someone the link is shared with");
+	});
+
+	it("shares a link with a team workspace's teams and everyone in it", async () => {
+		const { invoke, bodies } = setup();
+		const orgId = "0c6e6d0a-7a3b-4c39-9a51-5d0f3c1d2e41";
+		const teamId = "1d7f7e1b-8b4c-4d4a-8b62-6e1a4d2e3f52";
+		const shared = await invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, orgId, teamIds: [teamId], workspace: true });
+		// Only what is set is sent: no empty emails.
+		expect(bodies.get(`/api/cloud/v1/me/artifact-shares/${SHARE_ID}/grants`)).toEqual({ orgId, teamIds: [teamId], workspace: true });
+		expect(shared).toMatchObject({ people: [], teams: [{ orgId, teamId, name: "Design" }], workspaces: [{ orgId, name: "Acme" }] });
+		// A team needs the workspace it belongs to.
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, teamIds: [teamId] })).rejects.toThrow("Not a team or workspace");
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, orgId: "../x", workspace: true })).rejects.toThrow("Not a team or workspace");
+		await expect(invoke("cloudShare:invite", { baseUrl: "https://cp.test", shareId: SHARE_ID, orgId, workspace: "yes" })).rejects.toThrow("Not a workspace");
 	});
 
 	it("changes access, invites and removes people only from the app's main frame", async () => {

@@ -76,3 +76,8 @@ it("fails closed when Electron preload is missing outside explicit browser previ
 	await expect(bridge.requestClose({ sessionId: "session", sideId: "side", epoch: "missing", requestId: "one", expectedVersion: 0 })).rejects.toThrow("Desktop side chat bridge is unavailable");
 	expect(remove).not.toHaveBeenCalled();
 });
+
+it("explains the desktop requirement when looking up an issue in the browser", async () => {
+	const { aoBridge } = await import("./bridge");
+	await expect(aoBridge.app.findArtifactIssues("acme/web", "12")).rejects.toThrow("Open the desktop app");
+});

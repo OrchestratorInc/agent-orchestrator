@@ -61,6 +61,7 @@ export function TabCloseButton({ label, onClose }: { label: string; onClose: () 
 	return (
 		<Pressable
 			aria-label={label}
+			data-telemetry-id="tab.close"
 			className={terminalTabActionClassName}
 			onClick={(event) => {
 				event.stopPropagation();
@@ -132,6 +133,8 @@ export function TerminalTabFrame({
 			) : (
 				<Pressable
 					ref={buttonRef}
+					// On the select button only: the rename field and the action slot are not a selection.
+					data-telemetry-id="tab.select"
 					className={cn(
 						"inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 text-control leading-none in-data-dragging:cursor-grabbing!",
 						slotted ? "pl-2 pr-1.5" : "px-2",

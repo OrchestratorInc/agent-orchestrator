@@ -12,7 +12,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
-import type { CloudShareAccess, CloudShareGrant, CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
+import type { CloudShareAccess, CloudShareGrant, CloudShareGrants, CloudShareInvite, CloudShareLink, CloudShareLinks, CloudShareSubjectGrant } from "../shared/cloud-share";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -525,14 +525,40 @@ export function setShareLinkAccess(api: CloudShareApi, baseUrl: string, shareId:
 	return callApi<CloudShareLink>(api, baseUrl, "PATCH", shareLinkPath(shareId), { access });
 }
 
-/** The emails a link is shared with. */
-export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrant[]> {
-	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`)).grants;
+interface ShareGrantsBody {
+	grants: CloudShareGrant[];
+	teams?: CloudShareSubjectGrant[];
+	workspaces?: CloudShareSubjectGrant[];
 }
 
-/** Shares a link with emails at once, and returns everyone it is shared with now. */
-export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, emails: string[]): Promise<CloudShareGrant[]> {
-	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, { emails })).grants;
+/** A control plane that predates team sharing lists only people. */
+function shareGrants(body: ShareGrantsBody): CloudShareGrants {
+	return { people: body.grants, teams: body.teams ?? [], workspaces: body.workspaces ?? [] };
+}
+
+/** Everyone a link is shared with: people, teams and workspaces. */
+export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrants> {
+	return shareGrants(await callApi<ShareGrantsBody>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`));
+}
+
+/**
+ * Shares a link with people, teams and a workspace at once, and returns
+ * everyone it is shared with now. Only the fields set are sent, so sharing
+ * with people alone works on a control plane that predates team sharing.
+ */
+export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, invite: CloudShareInvite): Promise<CloudShareGrants> {
+	const teamIds = invite.teamIds ?? [];
+	const subjects = teamIds.length > 0 || invite.workspace === true;
+	if (subjects && (!invite.orgId || !UUID_PATTERN.test(invite.orgId) || !teamIds.every((id) => UUID_PATTERN.test(id)))) {
+		throw new CloudShareError("invalid_request", "Not a team or workspace to share with.");
+	}
+	const body = {
+		...(invite.emails && invite.emails.length > 0 ? { emails: invite.emails } : {}),
+		...(subjects ? { orgId: invite.orgId } : {}),
+		...(teamIds.length > 0 ? { teamIds } : {}),
+		...(invite.workspace === true ? { workspace: true } : {}),
+	};
+	return shareGrants(await callApi<ShareGrantsBody>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, body));
 }
 
 export async function removeShareGrant(api: CloudShareApi, baseUrl: string, shareId: string, grantId: string): Promise<void> {
@@ -637,6 +663,13 @@ export interface PageFilesOutcome {
 	 * page was published alone, and an active link kept the files it had.
 	 */
 	unsupported: boolean;
+	/**
+	 * The paths of the videos the control plane refused to include (it does
+	 * not serve videos yet): left out, as a page's missing files are.
+	 */
+	refusedVideos: string[];
+	/** The paths of the videos over the control plane's size limit: left out too. */
+	tooLargeVideos: string[];
 }
 
 interface UploadStart {
@@ -742,12 +775,31 @@ function isMissingRoute(error: unknown): boolean {
 	return error instanceof CloudShareError && error.status === 404;
 }
 
+/** Whether a refusal says the control plane does not publish this type: a video while it serves none. */
+function isRefusedType(error: unknown): boolean {
+	return error instanceof CloudShareError && error.code === "artifact_share_type_unsupported";
+}
+
+/** Whether a refusal says a video is over the control plane's size limit. */
+function isVideoTooLarge(error: unknown): boolean {
+	return error instanceof CloudShareError && error.code === "artifact_share_video_too_large";
+}
+
+/** The file tokens of a page's uploaded files, and the videos the control plane refused. */
+interface UploadedPageFiles {
+	tokens: string[];
+	refusedVideos: string[];
+	tooLargeVideos: string[];
+}
+
 /**
  * Uploads the files a page uses under the page's upload (pageToken) and
  * returns their file tokens for finalizing, or null when the control plane
  * predates included files: it then cannot take a files list either, since it
  * refuses fields it does not know. With no files, one request that is refused
  * either way tells which: an unknown route (404) or a path it checks (400).
+ * A video the control plane refuses (415: it serves no videos yet) is left
+ * out and the page is published without it.
  */
 async function uploadPageFiles(
 	api: CloudShareApi,
@@ -756,19 +808,21 @@ async function uploadPageFiles(
 	files: PageFileSnapshot[],
 	onSent: (bytes: number) => void,
 	signal?: AbortSignal,
-): Promise<string[] | null> {
+): Promise<UploadedPageFiles | null> {
 	if (files.length === 0) {
 		try {
 			await callApi<unknown>(api, baseUrl, "POST", "/me/artifact-shares/uploads/files",
 				{ uploadToken: pageToken, path: "", size: 0, sha256: "0".repeat(64) }, signal);
 		} catch (error) {
 			if (isMissingRoute(error)) return null;
-			if (error instanceof CloudShareError && error.status === 400) return [];
+			if (error instanceof CloudShareError && error.status === 400) return { tokens: [], refusedVideos: [], tooLargeVideos: [] };
 			throw error;
 		}
-		return [];
+		return { tokens: [], refusedVideos: [], tooLargeVideos: [] };
 	}
 	const tokens: string[] = [];
+	const refusedVideos: string[] = [];
+	const tooLargeVideos: string[] = [];
 	for (const [index, file] of files.entries()) {
 		let start: UploadStart;
 		try {
@@ -776,6 +830,11 @@ async function uploadPageFiles(
 				{ uploadToken: pageToken, path: file.path, size: file.snapshot.size, sha256: file.snapshot.sha256 }, signal);
 		} catch (error) {
 			if (index === 0 && isMissingRoute(error)) return null;
+			if (isRefusedType(error) || isVideoTooLarge(error)) {
+				(isRefusedType(error) ? refusedVideos : tooLargeVideos).push(file.path);
+				onSent(file.snapshot.size);
+				continue;
+			}
 			throw error;
 		}
 		try {
@@ -788,7 +847,7 @@ async function uploadPageFiles(
 			throw error;
 		}
 	}
-	return tokens;
+	return { tokens, refusedVideos, tooLargeVideos };
 }
 
 /**
@@ -818,7 +877,8 @@ export async function uploadShare(
 		onProgress(sent);
 	};
 	try {
-		const fileTokens = input.page ? await uploadPageFiles(api, baseUrl, start.uploadToken, input.page.files, onSent, signal) : null;
+		const uploaded = input.page ? await uploadPageFiles(api, baseUrl, start.uploadToken, input.page.files, onSent, signal) : null;
+		const fileTokens = uploaded?.tokens ?? null;
 		const parts = await putSnapshotParts(api, baseUrl, start, snapshot, onSent, signal);
 		const result = await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize", {
 			uploadToken: start.uploadToken,
@@ -827,7 +887,7 @@ export async function uploadShare(
 			...(fileTokens ? { files: fileTokens.map((fileToken) => ({ fileToken })) } : {}),
 		}, signal, SHARE_TIMEOUTS.publish);
 		if (!input.page) return result;
-		return { ...result, pageFiles: { included: fileTokens?.length ?? 0, unsupported: fileTokens === null } };
+		return { ...result, pageFiles: { included: fileTokens?.length ?? 0, unsupported: uploaded === null, refusedVideos: uploaded?.refusedVideos ?? [], tooLargeVideos: uploaded?.tooLargeVideos ?? [] } };
 	} catch (error) {
 		// The upload was never finalized: discard its parts. Finalize itself
 		// failing leaves nothing to discard but aborting is harmless.

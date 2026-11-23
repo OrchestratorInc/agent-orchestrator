@@ -1868,9 +1868,9 @@ describe("SessionView", () => {
 			const invalidate = vi.spyOn(view.client, "invalidateQueries");
 			await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledTimes(1));
 			await act(async () => { finishView({ error: undefined }); });
-			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
-			const conversationReloads = invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
-			expect(conversationReloads, state).toHaveLength(reloads);
+			const conversationReloads = () => invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
+			await waitFor(() => expect(conversationReloads(), state).toHaveLength(reloads));
+			expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] });
 			view.unmount();
 			chatViewPostMock.mockClear();
 		}
@@ -2516,6 +2516,34 @@ describe("SessionView", () => {
 			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 			expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument();
 			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		});
+
+		it.each(["running", "failed"])("keeps a Freestyle Chat session first opened with a disconnected worker (%s) on its conversation", (observed) => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: observed };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		});
+
+		it("still raises the startup screen for a Coder Chat session with a disconnected worker", () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		});
+
+		it("shows no startup screen for a paused Freestyle Chat session", () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "paused", observedState: "stopped" };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 		});
 	});
 
@@ -5331,6 +5359,9 @@ describe("SessionView", () => {
 		});
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 		expect(screen.getByTestId("inspector-resize-handle")).toBeInTheDocument();
+		// Last in the rail, so its no-drag punches through the inspector header's
+		// macOS drag region (Electron applies regions in document order).
+		expect(screen.getByTestId("panel-inspector").lastElementChild).toBe(screen.getByTestId("inspector-resize-handle"));
 	});
 
 	it("keeps the inspector closed when a session opens, then opens it on Summary", () => {

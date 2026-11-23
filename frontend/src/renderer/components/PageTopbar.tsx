@@ -1,6 +1,7 @@
 import { createContext, useContext, useLayoutEffect, useRef, useState, type ComponentProps, type ComponentPropsWithoutRef, type CSSProperties, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { cn } from "../lib/utils";
 import { NotificationCenter } from "./NotificationCenter";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
@@ -80,7 +81,8 @@ function usePageTopbarPaddingLeft() {
 }
 
 function PageTopbarFrame({ className, ...props }: ComponentProps<"header">) {
-	return <header className={cn("flex h-toolbar w-full shrink-0 items-center", className)} style={dragStyle} {...props} />;
+	useTelemetrySurface("topbar");
+	return <header className={cn("flex h-toolbar w-full shrink-0 items-center", className)} data-telemetry-surface="topbar" style={dragStyle} {...props} />;
 }
 
 export const topbarTitleClass = "text-brand font-semibold tracking-tight leading-none text-foreground whitespace-nowrap";
@@ -128,13 +130,17 @@ export function PageTopbarTitle({
 	);
 }
 
-/** Right-aligned action cluster. Controls inside never start a window drag. */
+/**
+ * Right-aligned action cluster. Controls inside never start a window drag
+ * (styles.css punches them out of the header's drag region), but the cluster
+ * itself stays draggable: it is the band's full height, so a no-drag container
+ * would kill drag and double-click-to-zoom in every gap between its controls.
+ */
 export function PageTopbarActions({ className, children, ...props }: ComponentProps<"div">) {
 	return (
 		<div
 			className={cn("workspace-topbar-actions shrink-0", className)}
 			data-testid="workspace-topbar-actions"
-			style={noDragStyle}
 			{...props}
 		>
 			{children}

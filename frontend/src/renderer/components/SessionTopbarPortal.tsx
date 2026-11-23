@@ -1,5 +1,6 @@
-import { createContext, useContext, useLayoutEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { finishReplayedAnimationsBeforePaint } from "../lib/quiet-reveal";
 import { cn } from "../lib/utils";
 
 type SessionTopbarContextValue = {
@@ -68,10 +69,18 @@ export function SessionTopbarScope({ children }: { children: ReactNode }) {
 }
 
 function AttachTopbarScope({ container, host }: { container: HTMLDivElement; host: HTMLDivElement | null }) {
+	const attachedBefore = useRef(false);
 	useLayoutEffect(() => {
 		if (!host) return;
 		host.append(container);
-		return () => container.remove();
+		// Back in the bar after its view was hidden: the header's own entrance
+		// (sliding in on arrival from the new chat page) already played.
+		const cancelFinish = attachedBefore.current ? finishReplayedAnimationsBeforePaint(container) : undefined;
+		attachedBefore.current = true;
+		return () => {
+			cancelFinish?.();
+			container.remove();
+		};
 	}, [container, host]);
 	return null;
 }
