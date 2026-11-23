@@ -5596,6 +5596,50 @@ paths:
       summary: Start a worker task and refine its title in the background
       tags:
       - sessions
+  /api/v1/pr-preview:
+    get:
+      operationId: getPRPreview
+      parameters:
+      - description: A github.com pull request URL.
+        in: query
+        name: url
+        schema:
+          description: A github.com pull request URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PRPreviewResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Gateway
+      summary: Read the state and summary of a GitHub pull request a chat links to
+      tags:
+      - link-preview
   /api/v1/projects:
     get:
       operationId: listProjects
@@ -8874,6 +8918,46 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Found
       summary: Inspect native background work without waking the session
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/background-tasks/{taskId}/output:
+    get:
+      operationId: getBackgroundTaskOutput
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Provider-scoped background task identifier.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Provider-scoped background task identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackgroundTaskOutputResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Read one background task's recent output without waking the session
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop:
@@ -18126,8 +18210,42 @@ components:
       - paused
       - networkOutcome
       type: object
+    BackgroundTaskOutputResponse:
+      properties:
+        availability:
+          description: unavailable when this provider or session cannot report the
+            task's output; output is then empty.
+          enum:
+          - ready
+          - unavailable
+          type: string
+        output:
+          description: 'The most recent output: at most the last 200 lines and 64
+            KB, with terminal escapes and control characters removed.'
+          type: string
+        sessionId:
+          type: string
+        stale:
+          description: True when the provider stopped sending this task's output,
+            so anything it printed since is missing.
+          type: boolean
+        taskId:
+          type: string
+        truncated:
+          description: True when older output was left out or is missing.
+          type: boolean
+      required:
+      - sessionId
+      - taskId
+      - availability
+      - output
+      type: object
     BackgroundTaskResponse:
       properties:
+        command:
+          description: The shell command line, when the provider reports one. Credentials
+            in it are redacted.
+          type: string
         description:
           type: string
         endedAt:
@@ -23343,6 +23461,57 @@ components:
       - name
       - contentType
       - data
+      type: object
+    PRPreviewResponse:
+      properties:
+        additions:
+          type: integer
+        author:
+          type: string
+        changedFiles:
+          type: integer
+        checks:
+          enum:
+          - passing
+          - failing
+          - pending
+          type: string
+        deletions:
+          type: integer
+        number:
+          type: integer
+        repo:
+          description: owner/name
+          type: string
+        sourceBranch:
+          type: string
+        state:
+          enum:
+          - open
+          - draft
+          - merged
+          - closed
+          type: string
+        stateChangedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        targetBranch:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - url
+      - repo
+      - number
+      - title
+      - state
+      - additions
+      - deletions
+      - changedFiles
       type: object
     PRReviewState:
       properties:

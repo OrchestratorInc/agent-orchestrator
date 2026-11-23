@@ -1,13 +1,15 @@
 import { useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { aoBridge } from "../lib/bridge";
-import type { CloudCpSession } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpSession } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "./useCloudCp";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useContentExpiredSessionsStore } from "../stores/content-expired-sessions-store";
 import type { WorkspaceSummary } from "../types/workspace";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
@@ -46,6 +48,7 @@ function findCloudSession(
 
 export function useRestoreSession(): (sessionId: string, hostId?: string) => Promise<RestoreSessionResult> {
 	const queryClient = useQueryClient();
+	const { t } = useTranslation();
 
 	return useCallback(
 		async (sessionId: string, hostId?: string) => {
@@ -79,6 +82,12 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 					useTerminalResetStore.getState().bump(sessionId, baselineEpoch);
 					return { status: "success" };
 				} catch (err) {
+					// Past its creator's data retention: its content is being removed
+					// and it can never be restored, so Restore stops being offered.
+					if (err instanceof CloudCpError && err.code === "SESSION_CONTENT_EXPIRED") {
+						useContentExpiredSessionsStore.getState().mark(sessionId);
+						return { status: "error", message: t("restoreUnavailable.contentExpired") };
+					}
 					return {
 						status: "error",
 						message: err instanceof Error ? err.message : "Unable to restore session",
@@ -118,6 +127,6 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 				};
 			}
 		},
-		[queryClient],
+		[queryClient, t],
 	);
 }

@@ -30,6 +30,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
 import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { savedConversationQueryKey } from "../lib/local-chat-cache";
 import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -100,6 +101,7 @@ export interface ConversationSwitchDisplay {
 
 /** A send whose agent switch was refused or failed, so the message never left. */
 export class ProviderSwitchFailed extends Error {
+	readonly code: string = "PROVIDER_SWITCH_FAILED_ERROR";
 	constructor(readonly reason: unknown) {
 		super(apiErrorMessage(reason));
 	}
@@ -436,6 +438,7 @@ const PERMANENT_CODES = new Set([
 
 export interface ConversationQueryResult {
 	snapshot?: ConversationSnapshot;
+	savedSnapshot?: ConversationSnapshot;
 	isLoading: boolean;
 	/** Set when the session exists but has no chat conversation to show. */
 	unavailable?: { code: string; message: string };
@@ -856,6 +859,11 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		initialData: false,
 		enabled: false,
 	}).data;
+	const saved = useQuery({
+		queryKey: savedConversationQueryKey(sessionId ?? ""),
+		queryFn: async (): Promise<ConversationSnapshot | null> => null,
+		enabled: false,
+	}).data;
 	const query = useInfiniteQuery({
 		...conversationQueryOptions(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
@@ -902,6 +910,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 
 	return {
 		snapshot: query.data,
+		savedSnapshot: !hostId && query.isLoading && saved ? saved : undefined,
 		refreshError: hostId && (refreshError || query.error) ? "Could not load this remote conversation." : undefined,
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,

@@ -40,6 +40,9 @@ const (
 	providerStdinGrace   = time.Second
 	providerQuickGrace   = 300 * time.Millisecond
 	providerStopDeadline = 3 * time.Second
+	// After the provider exits, its output gets this long before the pipes are
+	// closed on a descendant that still holds them.
+	providerPipeDrainDelay = 2 * time.Second
 )
 
 // Protocol selects the provider-wire behavior owned by the host.
@@ -672,6 +675,12 @@ func Run(ctx context.Context, cfg Config) error {
 	child := aoprocess.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
 	child.Dir = cfg.Workdir
 	child.Env = cfg.Env
+	// A helper the provider starts in its own session (Codex's npx MCP servers)
+	// escapes the group signal and keeps the output pipes open, which held the
+	// final Wait, and the host, forever: the host kept Codex's thread writer, so
+	// a hibernated chat could not wake (#8632). Once the provider has exited,
+	// Wait gives its output this long, then closes the pipes.
+	child.WaitDelay = providerPipeDrainDelay
 	configureProviderProcess(child)
 	stdin, err := child.StdinPipe()
 	if err != nil {

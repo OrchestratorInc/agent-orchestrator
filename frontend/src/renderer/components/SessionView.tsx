@@ -1649,6 +1649,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button size="icon-sm"
+						data-telemetry-id="tab.new"
 						aria-label={t("shortcut.new-shell-terminal")}
 						data-terminal-focus-handoff="true"
 						onClick={addShellTerminal}
@@ -3276,6 +3277,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{session && !session.cloud ? prTabs.open.map((url) => (
 								<div className={cn("absolute inset-0 z-10", url !== activePRUrl && "invisible pointer-events-none [content-visibility:hidden]")} key={url}>
 									<PRTabPane
+										// Not on screen while a maximized Browser or Files covers the workspace.
+										active={url === activePRUrl && !browserPoppedOut && !filesPoppedOut}
 										hostId={hostId}
 										onViewInDiff={handleOpenReviewFile}
 										request={prTabs.request?.url === url ? prTabs.request : undefined}
@@ -3361,6 +3364,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
 						<Button type="button" size="icon-sm"
+							data-telemetry-id="topbar.inspector"
 							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {

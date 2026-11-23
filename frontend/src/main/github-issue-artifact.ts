@@ -1,3 +1,4 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { execFile } from "node:child_process";
 import { issueArtifactType, type GitHubIssueArtifact, type GitHubIssueArtifactResult, type GitHubIssueChoice } from "../shared/github-issue-artifact";
 
@@ -8,7 +9,9 @@ function issuePath(repo: string) {
 	return `repos/${repo}/issues`;
 }
 
-class UploadUnconfirmed extends Error {}
+class UploadUnconfirmed extends Error {
+	readonly code: string = "UPLOAD_UNCONFIRMED_ERROR";
+}
 
 const ambiguousUploadError = /\bHTTP (?:5\d\d|408)\b|\b(?:timeout|timed out|context deadline exceeded|unexpected EOF|connection reset by peer)\b/i;
 
@@ -19,7 +22,7 @@ function ghApi(endpoint: string, env: NodeJS.ProcessEnv, body?: object): Promise
 		const child = execFile("gh", args, { env, timeout: body ? 120_000 : 30_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
 			if (body && error && (error.killed || ambiguousUploadError.test(stderr))) {
 				reject(new UploadUnconfirmed());
-			} else if (error) reject(new Error(stderr.trim() || "GitHub request failed. Check your GitHub CLI sign-in and repository access."));
+			} else if (error) reject(new AoError("GITHUB_ARTIFACT_REQUEST_FAILED", stderr.trim() || "GitHub request failed. Check your GitHub CLI sign-in and repository access."));
 			else resolve(stdout);
 		});
 		child.stdin?.on("error", (error: NodeJS.ErrnoException) => {

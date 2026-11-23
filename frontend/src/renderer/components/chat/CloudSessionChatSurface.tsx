@@ -22,7 +22,7 @@ import { sessionArtifactPath } from "../../lib/session-links";
 import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
-import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
@@ -57,6 +57,10 @@ import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliver
 
 type EventPayload = {
 	attempt?: unknown;
+	/** chat.turn_started: the epoch of the worker that took the turn. */
+	workerEpoch?: unknown;
+	/** worker.connected and worker.ready: the epoch of the worker that connected. */
+	epoch?: unknown;
 	/**
 	 * chat.turn_interrupted: why a turn ended before it started (deleted,
 	 * interface_switch, steered); chat.turn_aborted: author_cannot_write for a message
@@ -442,6 +446,7 @@ export function ownMessageTurns(events: readonly CloudCpClientEvent[] | undefine
  * which leaves the queue with the steer.
  */
 export class AlreadyDeliveredError extends Error {
+	readonly code: string = "ALREADY_DELIVERED_ERROR";
 	constructor() {
 		super("Not deleted: the agent had already taken this message as a steer into its running turn, so it was delivered.");
 		this.name = "AlreadyDeliveredError";
@@ -1013,6 +1018,20 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// before the agent started on it from one that ran.
 	const promptedTurns = new Set<string>();
 	const startedTurns = new Set<string>();
+	// Which turns an agent has taken: the worker reports a turn's capabilities
+	// once its agent opened the turn, before the agent's first output. A worker
+	// can take a turn while it still checks out the project, so a start alone is
+	// not the agent working. capabilityTurns tells a worker that reports them
+	// from an older one that never does.
+	const agentTurns = new Set<string>();
+	const capabilityTurns = new Set<string>();
+	// Which worker (its epoch) took each turn, and the workers whose agent has
+	// opened a turn: a later turn on such a worker finds the project set up
+	// and the agent running, so it is the agent's from its start, as before.
+	// Only a worker's first turn (a new session, a restore, a wake) waits.
+	const turnEpochs = new Map<string, number>();
+	const agentEpochs = new Set<number>();
+	let currentEpoch: number | undefined;
 	// Queued messages the person deleted (turn_interrupted of reason deleted).
 	const withdrawnTurns = new Set<string>();
 	let usage: ConversationUsage | undefined;
@@ -1070,16 +1089,41 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 					: { id: turnID, state: "queued", requestedAt: event.createdAt }),
 				...(promptAbove ? { anchorSequence: windowStart - 1 + (event.sequence - windowStart + 1) / windowSpan } : {}),
 			});
+			// Its start is above the loaded events, and so is whatever its agent did.
+			if (startedEarlier) agentTurns.add(turnID);
 		}
 		if (turnID && event.type === "chat.user_message") promptedTurns.add(turnID);
+		if (event.type === "worker.connected" || event.type === "worker.ready") {
+			const epoch = eventPayload(event).epoch;
+			if (typeof epoch === "number") currentEpoch = epoch;
+		}
 		if (turnID && event.type === "chat.turn_started") {
 			const turn = turns.get(turnID)!;
 			turn.state = "running";
 			turn.startedAt = event.createdAt;
 			startedTurns.add(turnID);
+			// A new attempt (a retry, a new worker) waits for its own agent.
+			agentTurns.delete(turnID);
+			const epoch = eventPayload(event).workerEpoch;
+			if (typeof epoch === "number") {
+				turnEpochs.set(turnID, epoch);
+				// The worker that took a turn is connected, unless a newer one
+				// connected since: a page that begins after the connection still
+				// knows the current worker.
+				if (currentEpoch === undefined || epoch > currentEpoch) currentEpoch = epoch;
+			} else turnEpochs.delete(turnID);
 		}
-		if (turnID && event.type === "chat.turn_capabilities" && eventPayload(event).steering === true) {
-			steerableTurns.add(turnID);
+		if (turnID && event.type === "chat.turn_capabilities") {
+			agentTurns.add(turnID);
+			const epoch = turnEpochs.get(turnID);
+			if (epoch !== undefined) agentEpochs.add(epoch);
+			capabilityTurns.add(turnID);
+			if (eventPayload(event).steering === true) steerableTurns.add(turnID);
+		}
+		if (turnID && (event.type === "chat.assistant_delta" || event.type === "chat.activity" || event.type === "chat.approval_requested")) {
+			agentTurns.add(turnID);
+			const epoch = turnEpochs.get(turnID);
+			if (epoch !== undefined) agentEpochs.add(epoch);
 		}
 		if (turnID && (event.type === "chat.turn_completed" || event.type === "chat.turn_interrupted" || event.type === "chat.turn_aborted")) {
 			const turn = turns.get(turnID)!;
@@ -1387,6 +1431,29 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			if (setupEnd && Date.parse(setupEnd) > Date.parse(next.requestedAt)) next.startedAt = setupEnd;
 		}
 	}
+	// A running turn no agent has taken yet (sent while the session starts, or
+	// taken by a worker still checking out) reads as getting ready. A worker
+	// that never reports capabilities finished a turn without them; its turns
+	// read as running from their start, as before. That goes by worker: a newer
+	// one that reports them still shows its own start. A turn whose worker is
+	// not known (one too old to say) goes by every such turn.
+	const silentEpochs = new Set<number>();
+	let silentUnknownWorker = false;
+	for (const turn of orderedTurns) {
+		if (turn.state !== "completed" || !startedTurns.has(turn.id) || capabilityTurns.has(turn.id)) continue;
+		const epoch = turnEpochs.get(turn.id);
+		if (epoch === undefined) silentUnknownWorker = true;
+		else silentEpochs.add(epoch);
+	}
+	for (const turn of orderedTurns) {
+		if (turn.state !== "running" || agentTurns.has(turn.id)) continue;
+		// A turn a worker took goes by that worker; one no worker has taken
+		// yet, by the connected worker, if any (a paused session's worker is
+		// gone, so its turn waits for the next one).
+		const epoch = turnEpochs.get(turn.id) ?? (session.runtimeConnected ? currentEpoch : undefined);
+		if (epoch === undefined ? silentUnknownWorker : silentEpochs.has(epoch) || agentEpochs.has(epoch)) continue;
+		turn.agentPending = true;
+	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
 	return {
@@ -1692,6 +1759,14 @@ export function CloudSessionChatSurface({
 		// The newest page first, then only what came after the newest event held.
 		queryFn: async () => cloud ? loadCloudChatHistory(queryClient, client, cloud.orgId, session.id) : [] as CloudCpClientEvent[],
 	});
+	// An orchestrator still starting in place for the first time (no worker has
+	// ever connected, so it is not waking) has no history: it starts with no
+	// message. Decided as the session opens, so a worker that connects before
+	// the first read answers does not turn it into one being restored.
+	const opensNew = session.kind === "orchestrator" && cloudChatStartingInPlace(session) && !cloud?.workerEpoch;
+	const [opened, setOpened] = useState({ id: session.id, isNew: opensNew });
+	if (opened.id !== session.id) setOpened({ id: session.id, isNew: opensNew });
+	const openedNew = opened.id === session.id ? opened.isNew : opensNew;
 	// What the list holds of the history; older pages load on demand. Kept as
 	// long as the list is, so a kept list never reads as the whole history.
 	const historyKey = cloudChatHistoryKey(cloud?.orgId ?? "", session.id);
@@ -2381,7 +2456,11 @@ export function CloudSessionChatSurface({
 			snapshot={snapshot}
 			// Until the first read the chat's history is unknown, not empty: a Cloud
 			// session says nothing of its messages, so it opens as one that has some.
-			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError}
+			// A new orchestrator (openedNew) has none, so it opens as the new chat it
+			// is, not docked as one being restored for the moment the read takes. A
+			// worker may start with its task, and a woken session has history: both
+			// wait for the read.
+			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError && !openedNew}
 			hasOlder={history?.hasOlder}
 			loadingOlder={history?.loadingOlder}
 			onLoadOlder={onLoadOlder}
