@@ -1842,12 +1842,11 @@ export function useIndependentSideChats(
 		}
 		const settled = settleOptimisticRename(key, token, failure === undefined);
 		if (!settled?.latest) return;
-		if (!available()) {
-			// This tab bar is gone (the session closed or opened again). The next list
-			// poll shows the stored label; the failure still needs saying.
-			if (failure !== undefined) useUiStore.getState().showGlobalToast(appI18n.t("shell.renameFailed", { name: label }), failure, "error");
-			return;
-		}
+		// Said wherever the user is now: the inline error shows only on the active
+		// side, and this tab bar may be hidden or gone (the session closed or opened
+		// again, when the next list poll shows the stored label).
+		if (failure !== undefined) useUiStore.getState().showGlobalToast(appI18n.t("shell.renameFailed", { name: label }), failure, "error");
+		if (!available()) return;
 		if (failure !== undefined) {
 			setSides((current) => current.map((side) => (side.id === id ? { ...side, label: settled.title } : side)));
 			setSideError({ id, message: failure, kind: "rename" });

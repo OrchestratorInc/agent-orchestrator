@@ -6,6 +6,7 @@ import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import { resetOptimisticRenamesForTest } from "../../hooks/optimistic-renames";
+import { useUiStore } from "../../stores/ui-store";
 import { aoBridge } from "../../lib/bridge";
 import type { SideCloseRequest } from "../../../shared/side-close";
 
@@ -609,6 +610,7 @@ describe("side panel navigation and recovery", () => {
 		let heldLists: Array<() => void> = [];
 		const listNow = () => ({ data: { sides: panelSides.map((side) => ({ ...side, label: storedLabels[side.id] ?? side.label })) } });
 		beforeEach(() => {
+			useUiStore.getState().clearGlobalToast();
 			storedLabels = {};
 			holdLists = false;
 			heldLists = [];
@@ -662,7 +664,7 @@ describe("side panel navigation and recovery", () => {
 			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
 		});
 
-		it("rolls a failed rename back to the old label", async () => {
+		it("rolls a failed rename back to the old label and says so", async () => {
 			patch.mockResolvedValue({ error: { message: "nope" } });
 			render(<SidePanelHarness />);
 			await screen.findByRole("tab", { name: "First question" });
@@ -671,6 +673,10 @@ describe("side panel navigation and recovery", () => {
 			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
 			expect(await screen.findByRole("tab", { name: "First question" })).toBeInTheDocument();
 			expect(screen.queryByRole("tab", { name: "Pricing notes" })).not.toBeInTheDocument();
+			// Said in a toast too, which shows even after the user moves to another side.
+			expect(useUiStore.getState().globalToasts).toEqual([
+				expect.objectContaining({ title: "Couldn't rename to Pricing notes", tone: "error" }),
+			]);
 		});
 	});
 
