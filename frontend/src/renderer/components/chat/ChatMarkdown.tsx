@@ -84,7 +84,7 @@ import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
 import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
-import { ChatFileIcon } from "./ChatFileIcon";
+import { FileChip } from "./ChatFileIcon";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
 
@@ -834,15 +834,14 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 				aria-label={`Open ${file.filePath} in Files`}
 				className="group mx-0.5 inline rounded"
 			>
-				{/* The tint and its hover sit on one inline span, sized like a plain code chip
-				    (a button's box follows the line height and would grow it). */}
-				<span className="rounded bg-chat-file py-[2px] pr-[5px] pl-1 font-mono text-xs transition-colors group-hover:bg-chat-file-hover">
-					{/* Outside the code element, whose text alone carries the excerpt offsets. */}
-					<ChatFileIcon path={file.filePath} className="mr-[5px] align-[-2px]" />
+				{/* The tint sits on the chip's inline span, sized like a plain code chip (a
+				    button's box follows the line height and would grow it). Its icon stays
+				    outside the code element, whose text alone carries the excerpt offsets. */}
+				<FileChip path={file.filePath}>
 					<code {...positions} data-excerpt-kind="inline-code" className="text-chat-file-foreground">
 						{children}
 					</code>
-				</span>
+				</FileChip>
 			</Pressable>
 		</ChatPathMenu>
 	);

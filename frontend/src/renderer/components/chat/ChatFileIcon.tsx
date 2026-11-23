@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { createFileTreeIconResolver, getBuiltInSpriteSheet } from "@pierre/trees";
 import { cn } from "../../lib/utils";
 
@@ -61,5 +62,19 @@ export function ChatFileIcon({ path, className }: { path: string; className?: st
 			// Static markup from the icon package's own sprite sheet, never chat text.
 			dangerouslySetInnerHTML={{ __html: shape.body }}
 		/>
+	);
+}
+
+/**
+ * A workspace file's chip: its Files-tree icon on the accent tint, then `children`
+ * as the visible text. Sized like a plain inline-code chip; a `group` ancestor
+ * deepens the tint on hover.
+ */
+export function FileChip({ path, children }: { path: string; children: ReactNode }) {
+	return (
+		<span className="rounded bg-chat-file py-[2px] pr-[5px] pl-1 font-mono text-xs text-chat-file-foreground transition-colors group-hover:bg-chat-file-hover">
+			<ChatFileIcon path={path} className="mr-[5px] align-[-2px]" />
+			{children}
+		</span>
 	);
 }
