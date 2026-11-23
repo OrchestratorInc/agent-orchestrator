@@ -721,8 +721,30 @@ export class Executor {
 		return this.withPage(ctx, async (page) => {
 			await this.assertApprovalBinding(ctx, page, approvalBinding);
 			let input = {};
+			const approvedFocus = isRecord(approvalBinding) && typeof approvalBinding.focus === "string" && approvalBinding.focus ? approvalBinding.focus : undefined;
 			if (await this.useTrustedInput(ctx, page)) {
-				input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
+				if (!approvedFocus) {
+					input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
+				} else {
+					// Focus can move between the check above and Chrome delivering
+					// the key: the page-side guard cancels a key that lands elsewhere.
+					await this.content(page, ctx, { op: "arm-press", expectDocument: (approvalBinding as Record<string, unknown>).document, expectFocus: approvedFocus });
+					let mismatch = false;
+					try {
+						input = await this.deps.trusted.press(page.tabId, key, ctx.signal);
+					} finally {
+						// The guard already cancelled a stray key in the page. If the page
+						// is gone, the approved Enter most likely navigated it (a submit):
+						// reporting that as a failure would invite a second submit.
+						mismatch = ((await this.content(page, ctx, { op: "disarm-press" }).catch(() => ({ mismatch: false }))) as { mismatch?: boolean }).mismatch === true;
+					}
+					if (mismatch) {
+						throw new BridgeError(
+							"BROWSER_TARGET_CHANGED",
+							"Focus moved while the action waited for approval, so Enter would not reach what the user approved. Focus the field again and retry.",
+						);
+					}
+				}
 			} else {
 				// The page can move focus after the check above; the content script
 				// checks the approved document and focus again as it presses.
