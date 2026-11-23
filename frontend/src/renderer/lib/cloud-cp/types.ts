@@ -348,6 +348,63 @@ export interface CloudCpAside {
 	resolvedBy?: CloudCpAsidePerson;
 	sentToAgentAt?: string;
 	sentToAgentBy?: CloudCpAsidePerson;
+	/** The message the last send to the agent became, to jump to it. */
+	sentMessage?: CloudCpAsideSentMessage;
+	/** The newest comment the agent has received; later ones are new since the last send. */
+	lastSentReplyId?: string;
+	/** When the thread last changed (a comment, resolve, reopen or send). */
+	lastActivityAt?: string;
+	/** Its state changes, oldest first, shown as system rows among the comments by sequence. Absent from an older control plane. */
+	history?: CloudCpAsideHistoryEntry[];
+}
+
+/** One state change of a comment thread: "{Name} resolved this", "reopened this", "sent this thread to the agent". */
+export interface CloudCpAsideHistoryEntry {
+	kind: "resolved" | "reopened" | "sent_to_agent";
+	actor: CloudCpAsidePerson;
+	at: string;
+	/** Its session event; orders it among the comments (CloudCpAsideReply.sequence). */
+	sequence: number;
+	/** `sent_to_agent`: the comment sent as the request. */
+	replyId?: string;
+	/** `sent_to_agent`: the message the thread became. */
+	sentMessage?: CloudCpAsideSentMessage;
+}
+
+/** GET /me/comment-threads: one row of the threads view. */
+export interface CloudCpCommentThread {
+	orgId: string;
+	sessionId: string;
+	projectId: string;
+	sessionTitle: string;
+	projectName: string;
+	/** The session ended: the thread is read-only. */
+	sessionTerminated: boolean;
+	aside: CloudCpAside;
+	/** The newest comment; absent for a tagged message's thread with no reply yet. */
+	lastComment?: { replyId?: string; authorUserId?: string; authorName: string; preview: string; at: string };
+	/** Up to three people, whoever commented most recently first. */
+	participants: Array<{ userId: string; name: string; avatarUrl?: string }>;
+	participantCount: number;
+	commentCount: number;
+	unread: boolean;
+	muted: boolean;
+	sentToAgentAt?: string;
+	lastActivityAt: string;
+}
+
+/** GET /me/comment-threads: a page of the caller's threads. */
+export interface CloudCpCommentThreadPage {
+	items: CloudCpCommentThread[];
+	hasMore: boolean;
+	nextCursor?: string;
+}
+
+export interface CloudCpCommentThreadQuery {
+	status?: "open" | "resolved";
+	unread?: boolean;
+	cursor?: string;
+	limit?: number;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/asides: a new comment thread with its first comment; idempotent on clientMessageId. */
@@ -372,7 +429,16 @@ export interface CloudCpFromAside {
 	quote?: string;
 	anchorKind?: CloudCpAsideAnchorKind;
 	anchorExcerpt?: string;
-	comments: Array<{ authorUserId?: string; authorName: string; text: string }>;
+	/** The reply sent with the box ticked: what the agent was asked to do. Absent when it was empty ("Address this thread."). Not among comments. */
+	requestText?: string;
+	/** The thread was sent before; this carries only the comments written since (previouslySentAt). */
+	sinceSent?: boolean;
+	previouslySentAt?: string;
+	/** The comments the message covers, not counting the request: comments plus omittedComments. */
+	commentCount?: number;
+	/** Comments the limits left out of the middle. */
+	omittedComments?: number;
+	comments: Array<{ authorUserId?: string; authorName: string; text: string; createdAt?: string }>;
 }
 
 export interface CloudCpAsideListResponse {
@@ -401,6 +467,8 @@ export interface CloudCpAsideReply {
 	createdAt: string;
 	/** When its author last edited it. */
 	editedAt?: string;
+	/** Its chat.aside_reply event, which orders it among the thread's history entries. */
+	sequence?: number;
 }
 
 /** GET /orgs/{orgId}/sessions/{sessionId}/asides/{asideId}: the message and a page of replies, oldest first. */

@@ -399,8 +399,12 @@ describe("replying", () => {
 		openAside(session.id, "a-1");
 		renderSurface(undefined, { ...session, isTerminated: true });
 		const pane = await screen.findByTestId("aside-pane");
-		expect(within(pane).getByRole("button", { name: "Send comment" })).toBeDisabled();
+		// Read-only: no reply box at all, only why.
+		expect(within(pane).queryByRole("button", { name: "Send comment" })).toBeNull();
+		expect(within(pane).queryByRole("combobox", { name: "Reply to the comment" })).toBeNull();
+		expect(pane.querySelector("[data-comment-read-only]")).toHaveTextContent("This session ended. Comments are read-only.");
 		expect(within(pane).queryByRole("button", { name: "Resolve" })).toBeNull();
+		expect(within(pane).queryByRole("button", { name: "Reopen" })).toBeNull();
 		expect(pane.querySelector("[data-comment-send-to-agent]")).toBeNull();
 		expect(within(pane).queryByRole("button", { name: "Mention someone" })).toBeNull();
 	});
@@ -507,7 +511,7 @@ describe("comment threads", () => {
 		}));
 		// The server sent it: the client sends nothing to the agent itself.
 		expect(cloudMocks.sendSessionMessage).not.toHaveBeenCalled();
-		expect(await within(pane).findByText(/Resolved by Priya Shah · sent to the agent/)).toBeInTheDocument();
+		expect(await within(pane).findByText(/Sent to the agent · resolved by Priya Shah/)).toBeInTheDocument();
 		expect(pane.querySelector("[data-comment-send-to-agent]")).toBeNull();
 	});
 

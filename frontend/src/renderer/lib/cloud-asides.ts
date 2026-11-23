@@ -4,11 +4,14 @@ import type { CloudCpClient } from "./cloud-cp/client";
 import type {
 	CloudCpAside,
 	CloudCpAsideAnchorKind,
+	CloudCpAsideHistoryEntry,
 	CloudCpAsideListResponse,
 	CloudCpAsidePerson,
 	CloudCpAsideReply,
 	CloudCpAsideThread,
 	CloudCpClientEvent,
+	CloudCpCommentThread,
+	CloudCpCommentThreadPage,
 	CloudCpFromAside,
 } from "./cloud-cp/types";
 import { parseEventMentions } from "./cloud-mentions";
@@ -104,17 +107,25 @@ export function fromAsideOf(payload: Record<string, unknown> | null | undefined)
 	if (typeof raw.asideId !== "string" || !Array.isArray(raw.comments)) return undefined;
 	const comments = raw.comments.flatMap((comment) => {
 		if (!comment || typeof comment !== "object") return [];
-		const { authorUserId, authorName, text } = comment as Record<string, unknown>;
+		const { authorUserId, authorName, text, createdAt } = comment as Record<string, unknown>;
 		return typeof authorName === "string" && typeof text === "string"
-			? [{ ...(typeof authorUserId === "string" ? { authorUserId } : {}), authorName, text }]
+			? [{ ...(typeof authorUserId === "string" ? { authorUserId } : {}), authorName, text, ...(typeof createdAt === "string" ? { createdAt } : {}) }]
 			: [];
 	});
 	const kind = raw.anchorKind;
+	const count = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined);
+	const commentCount = count(raw.commentCount);
+	const omittedComments = count(raw.omittedComments);
 	return {
 		asideId: raw.asideId,
 		...(typeof raw.quote === "string" && raw.quote !== "" ? { quote: raw.quote } : {}),
 		...(kind === "user_message" || kind === "steer" || kind === "agent_message" ? { anchorKind: kind } : {}),
 		...(typeof raw.anchorExcerpt === "string" && raw.anchorExcerpt !== "" ? { anchorExcerpt: raw.anchorExcerpt } : {}),
+		...(typeof raw.requestText === "string" && raw.requestText !== "" ? { requestText: raw.requestText } : {}),
+		...(raw.sinceSent === true ? { sinceSent: true } : {}),
+		...(typeof raw.previouslySentAt === "string" ? { previouslySentAt: raw.previouslySentAt } : {}),
+		...(commentCount !== undefined ? { commentCount } : {}),
+		...(omittedComments ? { omittedComments } : {}),
 		comments,
 	};
 }
@@ -134,6 +145,48 @@ export const cloudAsidesKey = (orgId: string, sessionId: string) => ["cloud-asid
 /** One aside: its message and replies. */
 export const cloudAsideKey = (orgId: string, sessionId: string, asideId: string) => ["cloud-aside", orgId, sessionId, asideId] as const;
 
+/** Every page of the threads view, for invalidating them all. */
+export const cloudCommentThreadsRootKey = (baseUrl: string, userId: string) => ["cloud-comment-threads", baseUrl, userId] as const;
+
+/** One list of the threads view: its tab (open or resolved) and Unread only. */
+export const cloudCommentThreadsKey = (baseUrl: string, userId: string, status: "open" | "resolved", unread: boolean) =>
+	[...cloudCommentThreadsRootKey(baseUrl, userId), status, unread] as const;
+
+/** The Threads badge: open threads unread for this person. */
+export const cloudUnreadThreadsKey = (baseUrl: string, userId: string) => ["cloud-comment-threads-unread", baseUrl, userId] as const;
+
+/** The threads view's cached pages, as an infinite query keeps them. */
+export interface CommentThreadPages {
+	pages: CloudCpCommentThreadPage[];
+	pageParams: unknown[];
+}
+
+/** Changes one thread's row wherever the threads view has it cached (read, unread, muted). */
+export function patchCommentThreadRows(
+	queryClient: QueryClient,
+	baseUrl: string,
+	userId: string,
+	asideId: string,
+	patch: Partial<Pick<CloudCpCommentThread, "unread" | "muted">>,
+): void {
+	queryClient.setQueriesData<CommentThreadPages>({ queryKey: cloudCommentThreadsRootKey(baseUrl, userId) }, (data) => data && {
+		...data,
+		pages: data.pages.map((page) => ({
+			...page,
+			items: page.items.map((row) => row.aside.asideId === asideId ? { ...row, ...patch, aside: { ...row.aside, ...patch } } : row),
+		})),
+	});
+}
+
+/**
+ * A thread changed for this person (a comment, resolve, reopen, read or
+ * unread): the threads view and its badge read again.
+ */
+export function invalidateCommentThreads(queryClient: QueryClient, baseUrl: string, userId: string): void {
+	void queryClient.invalidateQueries({ queryKey: cloudCommentThreadsRootKey(baseUrl, userId) });
+	void queryClient.invalidateQueries({ queryKey: cloudUnreadThreadsKey(baseUrl, userId) });
+}
+
 /** Events of a message or steer: they name the aside it started. */
 const ASIDE_ANCHOR_EVENTS = new Set(["chat.user_message", "chat.turn_steered", "chat.turn_steer_requested"]);
 
@@ -145,7 +198,7 @@ export function asideIdOf(event: Pick<CloudCpClientEvent, "type" | "payload">): 
 }
 
 /** A chat.aside_reply event as the reply it carries; anything malformed is left out. */
-export function asideReplyOf(event: Pick<CloudCpClientEvent, "type" | "payload" | "createdAt">): CloudCpAsideReply | undefined {
+export function asideReplyOf(event: Pick<CloudCpClientEvent, "type" | "payload" | "createdAt"> & { sequence?: number }): CloudCpAsideReply | undefined {
 	if (event.type !== ASIDE_REPLY_EVENT) return undefined;
 	const payload = event.payload as Record<string, unknown> | null | undefined;
 	if (!payload || typeof payload !== "object") return undefined;
@@ -161,6 +214,8 @@ export function asideReplyOf(event: Pick<CloudCpClientEvent, "type" | "payload" 
 		authorUserId: text("authorUserId") ?? "",
 		authorName: text("authorName") ?? "",
 		createdAt: text("createdAt") ?? event.createdAt,
+		// Its event orders it among the thread's resolve, reopen and send rows.
+		...(typeof event.sequence === "number" ? { sequence: event.sequence } : {}),
 	};
 }
 
@@ -172,6 +227,49 @@ export function mergeAsideReplies(...lists: ReadonlyArray<readonly CloudCpAsideR
 		.map((reply, index) => ({ reply, index }))
 		.sort((a, b) => (Date.parse(a.reply.createdAt) || 0) - (Date.parse(b.reply.createdAt) || 0) || a.index - b.index)
 		.map(({ reply }) => reply);
+}
+
+/** One row of a thread in the pane: a comment, or a state change ("{Name} resolved this"). */
+export type ThreadRow<Reply> =
+	| { kind: "comment"; reply: Reply }
+	| { kind: "history"; entry: CloudCpAsideHistoryEntry };
+
+/**
+ * A thread's comments and its state changes in one order: by their session
+ * events (sequence) when both have one, else by time, a comment before the
+ * change it caused at the same time (a reply that reopened the thread, the
+ * request of a send). Comments keep their own order among themselves.
+ */
+export function threadTimeline<Reply extends { createdAt: string; sequence?: number }>(
+	replies: readonly Reply[],
+	history: readonly CloudCpAsideHistoryEntry[] | undefined,
+): Array<ThreadRow<Reply>> {
+	const rows: Array<ThreadRow<Reply>> = replies.map((reply) => ({ kind: "comment", reply }));
+	const entries = [...(history ?? [])].sort((a, b) => a.sequence - b.sequence || (Date.parse(a.at) || 0) - (Date.parse(b.at) || 0));
+	for (const entry of entries) {
+		// After every comment that comes before it.
+		const at = Date.parse(entry.at) || 0;
+		let index = rows.length;
+		for (let candidate = 0; candidate < rows.length; candidate += 1) {
+			const row = rows[candidate]!;
+			const before = row.kind === "comment"
+				? (row.reply.sequence !== undefined ? row.reply.sequence < entry.sequence : (Date.parse(row.reply.createdAt) || 0) <= at)
+				: row.entry.sequence < entry.sequence;
+			if (!before) {
+				index = candidate;
+				break;
+			}
+		}
+		rows.splice(index, 0, { kind: "history", entry });
+	}
+	return rows;
+}
+
+/** The message the thread's last send to the agent became, to jump to. */
+export function sentMessageSequence(aside: Pick<CloudCpAside, "sentMessage" | "history">): number | undefined {
+	if (aside.sentMessage) return aside.sentMessage.sequence;
+	const sent = [...(aside.history ?? [])].reverse().find((entry) => entry.kind === "sent_to_agent" && entry.sentMessage);
+	return sent?.sentMessage?.sequence;
 }
 
 /** Reads an aside with every reply (up to a bound), oldest first. */
@@ -316,4 +414,51 @@ function subscribe(listener: () => void): () => void {
 /** The aside open beside this session's conversation, if any. */
 export function useOpenAside(sessionId: string | undefined): OpenAside | undefined {
 	return useSyncExternalStore(subscribe, () => (sessionId ? openBySession.get(sessionId) : undefined));
+}
+
+// ---------------------------------------------------------------------------
+// The thread open in the threads view (the Threads page). One at a time; a
+// notification opens it before the page is drawn.
+// ---------------------------------------------------------------------------
+
+/** A thread the threads view shows beside its list. */
+export interface ThreadInView {
+	orgId: string;
+	sessionId: string;
+	asideId: string;
+	/** Its session's project, for "Open in session". */
+	projectId?: string;
+	sessionTitle?: string;
+	/** The session ended: the thread is read-only. */
+	ended?: boolean;
+	/** Changes on every open that should put the caret in the reply box. */
+	focusKey?: number;
+}
+
+let threadInView: ThreadInView | undefined;
+const threadListeners = new Set<() => void>();
+
+/** Opens a thread in the threads view; the page shows it beside the list. */
+export function openThreadInView(thread: Omit<ThreadInView, "focusKey">, options: { focusReply?: boolean } = {}): void {
+	focusKey += 1;
+	threadInView = { ...thread, ...(options.focusReply ? { focusKey } : {}) };
+	for (const listener of threadListeners) listener();
+}
+
+export function closeThreadInView(): void {
+	if (!threadInView) return;
+	threadInView = undefined;
+	for (const listener of threadListeners) listener();
+}
+
+export function peekThreadInView(): ThreadInView | undefined {
+	return threadInView;
+}
+
+/** The thread open in the threads view, if any. */
+export function useThreadInView(): ThreadInView | undefined {
+	return useSyncExternalStore((listener) => {
+		threadListeners.add(listener);
+		return () => { threadListeners.delete(listener); };
+	}, () => threadInView);
 }

@@ -262,6 +262,20 @@ export interface ConversationMessage {
 		asideId: string;
 		quote?: string;
 		anchorExcerpt?: string;
+		/** What the agent was asked to do (the reply sent with the box ticked); shown first. */
+		requestText?: string;
+		/**
+		 * The control plane framed the send (comments apart from the request).
+		 * Without it (an older control plane) the request is the last comment.
+		 */
+		framed?: boolean;
+		/** Only the comments since the thread was last sent (previouslySentAt). */
+		sinceSent?: boolean;
+		previouslySentAt?: string;
+		/** How many comments the message covers, omitted ones included. */
+		commentCount?: number;
+		/** Comments the size limits left out of the middle. */
+		omittedComments?: number;
 		comments: Array<{ authorName: string; text: string }>;
 	};
 	/** Set when origin is a worker or automation, for the attribution line. */

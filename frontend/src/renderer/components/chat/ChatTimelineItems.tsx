@@ -161,6 +161,7 @@ import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFa
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
+import { formatTimeCompact } from "../../lib/format-time";
 import { Pressable } from "../ui/pressable";
 import { ChatAnnotationSummary, type ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
 import {
@@ -1391,31 +1392,72 @@ export function HumanMessage({
 	);
 }
 
+/** How many comments a "From a comment thread" card shows before "Show all". */
+export const FROM_THREAD_COMMENTS_SHOWN = 3;
+
 /**
- * A message "Also send to agent" sent: the comment thread as it was sent (the
- * quoted passage, or what the thread was about, then every comment in order),
- * in the sender's bubble. The agent got the same as plain text.
+ * A message "Also send to agent" sent, in the sender's bubble: what the agent
+ * was asked to do first, then what the thread is about (the quoted passage,
+ * or the message), then the comments, the first few shown and the rest
+ * behind "Show all". The agent got the same as framed text; this is drawn
+ * from the event's fields, never from that text. A message from an older
+ * control plane has no separate request (it was the last comment), so it
+ * starts at the quote.
  */
 export function FromCommentThreadCard({ thread, className }: { thread: NonNullable<ConversationMessage["fromAside"]>; className?: string }) {
 	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const total = thread.commentCount ?? thread.comments.length + (thread.omittedComments ?? 0);
+	const hidden = Math.max(0, thread.comments.length - FROM_THREAD_COMMENTS_SHOWN);
+	const shown = expanded ? thread.comments : thread.comments.slice(0, FROM_THREAD_COMMENTS_SHOWN);
+	// The control plane keeps the first comment and the newest ones; the gap is after the first.
+	const omittedAt = thread.omittedComments ? 1 : -1;
 	return (
 		<div className={cn(humanBubbleClass(), "flex min-w-0 flex-col gap-1.5", className)} data-chat-message-body="" data-from-comment-thread={thread.asideId}>
 			<div className="flex items-center gap-1.5 text-caption text-muted-foreground">
 				<MessageSquare aria-hidden="true" className="size-3" />
 				<span>{t("comment.fromThread")}</span>
-				<span className="tabular-nums">· {t("comment.count", { count: thread.comments.length })}</span>
+				<span className="tabular-nums">· {t("comment.count", { count: total })}</span>
 			</div>
+			{thread.framed ? (
+				<p className={cn("whitespace-pre-wrap break-words text-sm leading-[1.5]", !thread.requestText && "text-muted-foreground")} data-from-comment-request="">
+					{thread.requestText ?? t("comment.card.sentThread")}
+				</p>
+			) : null}
 			{thread.quote || thread.anchorExcerpt ? (
 				<div className="border-l-2 border-[var(--comment-quote-edge)] pl-2 text-control text-foreground/85" data-from-comment-quote="">
 					{thread.quote ? `“${thread.quote}”` : thread.anchorExcerpt}
 				</div>
 			) : null}
-			{thread.comments.map((comment, index) => (
-				<p className="whitespace-pre-wrap break-words text-sm leading-[1.5]" key={`${index}:${comment.authorName}`}>
-					<span className="mr-1.5 font-medium">{comment.authorName}</span>
-					{comment.text}
+			{thread.sinceSent ? (
+				<p className="text-caption text-muted-foreground" data-from-comment-since="">
+					{thread.previouslySentAt ? t("comment.card.earlierSentAt", { time: formatTimeCompact(thread.previouslySentAt) }) : t("comment.card.earlierSent")}
 				</p>
+			) : null}
+			{shown.map((comment, index) => (
+				<Fragment key={`${index}:${comment.authorName}`}>
+					{index === omittedAt ? (
+						<p className="text-caption text-muted-foreground" data-from-comment-omitted="">{t("comment.card.omitted", { count: thread.omittedComments ?? 0 })}</p>
+					) : null}
+					<p className={cn("whitespace-pre-wrap break-words leading-[1.5]", thread.framed ? "text-control text-foreground/85" : "text-sm")} data-from-comment-entry="">
+						<span className="mr-1.5 font-medium text-foreground">{comment.authorName}</span>
+						{comment.text}
+					</p>
+				</Fragment>
 			))}
+			{hidden > 0 ? (
+				<Button
+					aria-expanded={expanded}
+					className="w-fit"
+					data-from-comment-toggle=""
+					onClick={() => setExpanded((value) => !value)}
+					size="xs"
+					type="button"
+					variant="link"
+				>
+					{expanded ? t("comment.card.showFewer") : t("comment.card.showAll", { count: thread.comments.length })}
+				</Button>
+			) : null}
 		</div>
 	);
 }

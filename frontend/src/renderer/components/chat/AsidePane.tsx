@@ -15,12 +15,18 @@ import {
 	loadAsideThread,
 	mergeAsideReplies,
 	openAside,
+	cloudUnreadThreadsKey,
+	invalidateCommentThreads,
 	patchCachedAside,
+	patchCommentThreadRows,
+	sentMessageSequence,
+	threadTimeline,
 	type CommentDraft,
 } from "../../lib/cloud-asides";
 import { CHAT_EVENTS_CACHE_MS } from "../../lib/cloud-chat-history";
 import type {
 	CloudCpAside,
+	CloudCpAsideHistoryEntry,
 	CloudCpAsideListResponse,
 	CloudCpAsideReply,
 	CloudCpAsideThread,
@@ -60,6 +66,8 @@ export interface AsideEntry {
 	edited?: boolean;
 	/** The reader wrote it, so it can be edited or deleted. */
 	own?: boolean;
+	/** Its session event, which orders it among the thread's state changes. */
+	sequence?: number;
 }
 
 /** Who the reply box's @ menu offers: people who can open the session, and the workspace's teams. */
@@ -82,6 +90,8 @@ export interface CommentAnchorView {
 	gone?: boolean;
 	/** Scrolls the conversation to the message. */
 	onJump?: () => void;
+	/** Names the jump ("Jump to message", or "Open in session" outside the session). */
+	jumpLabel?: string;
 }
 
 /** A thread in the list of one message's threads. */
@@ -94,12 +104,28 @@ export interface CommentThreadCard {
 	unread: boolean;
 }
 
+/** How a resolved thread reads in the pane, collapsed to one status line. */
+export interface ResolvedThreadView {
+	/** Who resolved it (or sent it to the agent, which resolves it). */
+	byName: string;
+	at?: string;
+	/** "Also send to agent" resolved it. */
+	sent: boolean;
+	/** Jumps to the message the send became. */
+	onJumpToSent?: () => void;
+	/** Names the jump ("Jump to the sent message", or "Open the sent message" outside the session). */
+	jumpLabel?: string;
+}
+
 /**
  * The comment pane beside the conversation, like the comment thread of a
- * shared document: its header (the session's title, Resolve or Reopen, Mute
- * thread, close), what the thread is about, the comments, and a
- * reply box with @ mentions and, for people who can prompt the agent, "Also
- * send to agent". Comments are between people; nothing here reaches the
+ * shared document: its header (the session's title, Resolve or Reopen, a
+ * menu with Mute thread and Mark unread, close), what the thread is about,
+ * the comments with its state changes among them ("Mohak resolved this"),
+ * and a reply box with @ mentions and, for people who can prompt the agent,
+ * "Also send to agent". A resolved thread collapses to one status line, with
+ * its comments behind "Show the N comments", and its send button reads
+ * "Reply and reopen". Comments are between people; nothing here reaches the
  * agent unless that box is ticked.
  */
 export function AsidePaneView({
@@ -108,9 +134,11 @@ export function AsidePaneView({
 	anchor,
 	message,
 	replies,
-	resolvedNote,
+	history,
+	resolved,
 	muted,
 	onMute,
+	onMarkUnread,
 	onResolve,
 	onReopen,
 	onClose,
@@ -131,10 +159,14 @@ export function AsidePaneView({
 	/** The tagged message that started the thread; a comment thread has none. */
 	message?: AsideEntry;
 	replies: readonly AsideEntry[];
-	/** "Resolved by Mohak · now", shown under the comments while resolved. */
-	resolvedNote?: string;
+	/** Its resolves, reopens and sends, drawn as system rows among the comments. */
+	history?: readonly CloudCpAsideHistoryEntry[];
+	/** Set while the thread is resolved: the pane collapses to its status line. */
+	resolved?: ResolvedThreadView;
 	muted: boolean;
 	onMute?: (muted: boolean) => void;
+	/** "Mark unread": the thread reads as unread again for this person. */
+	onMarkUnread?: () => void;
 	onResolve?: () => void;
 	onReopen?: () => void;
 	onClose: () => void;
@@ -156,17 +188,25 @@ export function AsidePaneView({
 }) {
 	const { t } = useTranslation();
 	const list = useRef<HTMLDivElement>(null);
+	// A resolved thread opens collapsed; reopening it shows everything again.
+	const [expanded, setExpanded] = useState(false);
+	const rows = useMemo(() => threadTimeline(replies, history), [history, replies]);
 	// The newest comment stays in view as comments arrive.
 	const newest = replies.at(-1)?.id;
 	useEffect(() => {
 		const node = list.current;
 		if (node) node.scrollTop = node.scrollHeight;
-	}, [newest, message?.id]);
+	}, [newest, message?.id, expanded]);
+	const commentRows = rows.map((row) => row.kind === "comment"
+		? <AsideEntryRow entry={row.reply} key={row.reply.id} onDelete={onDelete} onEdit={onEdit} />
+		: <AsideHistoryRow entry={row.entry} key={`history:${row.entry.sequence}:${row.entry.kind}`} />);
+	const menu = onMute || onMarkUnread;
 	return (
 		<aside
 			aria-label={label}
 			className="flex h-full min-h-0 w-[min(340px,45%)] shrink-0 flex-col border-l border-border bg-background"
 			data-testid="aside-pane"
+			data-comment-state={resolved ? "resolved" : "open"}
 		>
 			<header className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border pr-1.5 pl-3.5">
 				<span className="min-w-0 flex-1 truncate text-control font-medium text-foreground" data-comment-pane-title="" title={sessionTitle}>{sessionTitle}</span>
@@ -181,7 +221,7 @@ export function AsidePaneView({
 						{t("comment.reopen")}
 					</Button>
 				) : null}
-				{onMute ? (
+				{menu ? (
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
 							<Button aria-label={t("comment.more")} size="icon-sm" type="button" variant="quiet">
@@ -189,7 +229,8 @@ export function AsidePaneView({
 							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end" className="min-w-40">
-							<DropdownMenuItem onSelect={() => onMute(!muted)}>{muted ? t("comment.unmute") : t("comment.mute")}</DropdownMenuItem>
+							{onMarkUnread ? <DropdownMenuItem onSelect={onMarkUnread}>{t("comment.markUnread")}</DropdownMenuItem> : null}
+							{onMute ? <DropdownMenuItem onSelect={() => onMute(!muted)}>{muted ? t("comment.unmute") : t("comment.mute")}</DropdownMenuItem> : null}
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
@@ -200,27 +241,73 @@ export function AsidePaneView({
 					<div className="flex flex-col gap-3.5">
 						{anchor ? <CommentAnchorBlock anchor={anchor} /> : null}
 						{message ? <AsideEntryRow entry={message} /> : null}
-						{replies.map((reply) => <AsideEntryRow entry={reply} key={reply.id} onDelete={onDelete} onEdit={onEdit} />)}
-						{resolvedNote ? (
-							<div className="flex items-center gap-2 text-caption text-muted-foreground" data-comment-resolved="">
-								<span aria-hidden="true" className="h-px flex-1 bg-border" />
-								<span>{resolvedNote}</span>
-								<span aria-hidden="true" className="h-px flex-1 bg-border" />
-							</div>
-						) : null}
+						{resolved ? (
+							<>
+								<div className="flex flex-col gap-1" data-comment-resolved="">
+									<p className="flex items-start gap-1.5 text-caption text-muted-foreground">
+										<CircleCheck aria-hidden="true" className="mt-px size-3.5 shrink-0" />
+										<span>
+											{resolved.sent
+												? t("comment.sentResolved", { name: resolved.byName, time: resolved.at ? formatTimeCompact(resolved.at) : "" })
+												: t("comment.resolved", { name: resolved.byName, time: resolved.at ? formatTimeCompact(resolved.at) : "" })}
+										</span>
+									</p>
+									{resolved.sent && resolved.onJumpToSent ? (
+										<Button className="w-fit pl-5 text-caption text-status-working" data-comment-jump-sent="" onClick={resolved.onJumpToSent} size="xs" type="button" variant="link">
+											{resolved.jumpLabel ?? t("comment.jumpToSent")}
+										</Button>
+									) : null}
+								</div>
+								{replies.length > 0 ? (
+									<Button
+										aria-expanded={expanded}
+										className="w-fit text-caption text-muted-foreground"
+										data-comment-show-all=""
+										onClick={() => setExpanded((value) => !value)}
+										size="xs"
+										type="button"
+										variant="link"
+									>
+										{expanded ? t("comment.hideComments") : t("comment.showComments", { count: replies.length })}
+									</Button>
+								) : null}
+								{expanded ? commentRows : null}
+							</>
+						) : commentRows}
 					</div>
 				</div>
 			</MentionTintContext.Provider>
-			<AsideReplyBox
-				canSendToAgent={canSendToAgent && !resolvedNote}
-				disabled={replyDisabled}
-				firstComment={firstComment}
-				focusKey={focusKey}
-				initialText={initialText}
-				mentionSource={mentionSource}
-				onSend={onReply}
-			/>
+			{replyDisabled ? (
+				// Read-only (the session ended): no reply box, only why.
+				<p className="shrink-0 border-t border-border px-3.5 py-3 text-caption text-muted-foreground" data-comment-read-only="">{replyDisabled}</p>
+			) : (
+				<AsideReplyBox
+					canSendToAgent={canSendToAgent && !resolved}
+					firstComment={firstComment}
+					focusKey={focusKey}
+					initialText={initialText}
+					mentionSource={mentionSource}
+					onSend={onReply}
+					reopens={Boolean(resolved)}
+				/>
+			)}
 		</aside>
+	);
+}
+
+/** A state change among the comments: "Mohak resolved this", "Pritom sent this thread to the agent". */
+function AsideHistoryRow({ entry }: { entry: CloudCpAsideHistoryEntry }) {
+	const { t } = useTranslation();
+	const name = entry.actor.name || t("comment.someone");
+	// A send is one entry: it also resolved the thread (no separate resolved entry).
+	const text = entry.kind === "resolved" ? t("comment.history.resolved", { name })
+		: entry.kind === "reopened" ? t("comment.history.reopened", { name })
+			: t("comment.history.sentResolved", { name });
+	return (
+		<p className="flex items-baseline gap-1.5 pl-8.5 text-caption text-muted-foreground" data-aside-history={entry.kind}>
+			<span className="min-w-0">{text}</span>
+			<time className="shrink-0 tabular-nums" dateTime={entry.at}>{formatTimeCompact(entry.at)}</time>
+		</p>
 	);
 }
 
@@ -239,7 +326,7 @@ function CommentAnchorBlock({ anchor }: { anchor: CommentAnchorView }) {
 				</>
 			)}
 			{anchor.onJump && !anchor.gone ? (
-				<button className="w-fit text-caption text-status-working hover:underline" onClick={anchor.onJump} type="button">{t("comment.jump")}</button>
+				<Button className="w-fit text-caption text-status-working" data-comment-jump="" onClick={anchor.onJump} size="xs" type="button" variant="link">{anchor.jumpLabel ?? t("comment.jump")}</Button>
 			) : null}
 		</div>
 	);
@@ -347,6 +434,7 @@ function AsideReplyBox({
 	canSendToAgent,
 	firstComment,
 	initialText,
+	reopens = false,
 }: {
 	disabled?: string;
 	focusKey?: number;
@@ -355,6 +443,8 @@ function AsideReplyBox({
 	onSend: (text: string, mentions: ComposerMention[], sendToAgent: boolean) => Promise<void>;
 	canSendToAgent: boolean;
 	firstComment: boolean;
+	/** The thread is resolved: a reply reopens it, and the send button says so. */
+	reopens?: boolean;
 }) {
 	const { t } = useTranslation();
 	const editor = useRef<ComposerEditorHandle>(null);
@@ -507,17 +597,32 @@ function AsideReplyBox({
 						</Button>
 					) : null}
 					<span className="flex-1" />
-					<Button
-						aria-label={toAgent ? t("comment.sendWithAgent") : t("comment.send")}
-						disabled={Boolean(disabled) || (!hasText && !toAgent) || sending}
-						onClick={() => void submit()}
-						shape="pill"
-						size="icon-xs"
-						type="button"
-						variant="primary"
-					>
-						<ArrowUp aria-hidden="true" className="size-icon-sm" />
-					</Button>
+					{reopens ? (
+						// Replying reopens a resolved thread, so the button says it will.
+						<Button
+							data-comment-reply-reopen=""
+							disabled={Boolean(disabled) || !hasText || sending}
+							onClick={() => void submit()}
+							shape="pill"
+							size="xs"
+							type="button"
+							variant="primary"
+						>
+							{t("comment.replyAndReopen")}
+						</Button>
+					) : (
+						<Button
+							aria-label={toAgent ? t("comment.sendWithAgent") : t("comment.send")}
+							disabled={Boolean(disabled) || (!hasText && !toAgent) || sending}
+							onClick={() => void submit()}
+							shape="pill"
+							size="icon-xs"
+							type="button"
+							variant="primary"
+						>
+							<ArrowUp aria-hidden="true" className="size-icon-sm" />
+						</Button>
+					)}
 				</div>
 			</div>
 			{error ? <p className="mt-1.5 px-1 text-xs text-error" role="alert">{error}</p> : null}
@@ -648,6 +753,7 @@ export function CloudAsidePane({
 	fallback,
 	canPrompt = false,
 	anchorShown,
+	onOpenInSession,
 	onClose,
 }: {
 	orgId: string;
@@ -667,10 +773,19 @@ export function CloudAsidePane({
 	canPrompt?: boolean;
 	/** Whether the thread's message is on screen; false when it is gone (withdrawn, rolled back). */
 	anchorShown?: (aside: Pick<CloudCpAside, "asideId" | "anchor">) => boolean | undefined;
+	/**
+	 * Outside the session (the threads view): opens the session at a message,
+	 * with this thread open beside it. Without it, a jump scrolls the
+	 * conversation on screen.
+	 */
+	onOpenInSession?: (sequence: number) => void;
 	onClose: () => void;
 }) {
 	const { t } = useTranslation();
 	const { client, ready, baseUrl, userId } = useCloudCp();
+	// Jumps to a message: in the conversation on screen, or in its session from the threads view.
+	const jumpTo = useCallback((sequence: number) => (onOpenInSession ? onOpenInSession(sequence) : jumpToCommentAnchor(sequence)), [onOpenInSession]);
+	const jumpLabel = onOpenInSession ? t("comment.openInSession") : undefined;
 	const queryClient = useQueryClient();
 	const eventsLoaded = loadedEvents !== undefined;
 	const events = loadedEvents ?? EMPTY_EVENTS;
@@ -728,11 +843,11 @@ export function CloudAsidePane({
 		if (!comment || !aside) return undefined;
 		const shown = anchorEventText(events, aside.anchor.sequence);
 		const gone = anchorShown?.(aside) === false;
-		const onJump = () => jumpToCommentAnchor(aside.anchor.sequence);
-		if (aside.quote) return { quote: aside.quote, gone, onJump };
+		const onJump = () => jumpTo(aside.anchor.sequence);
+		if (aside.quote) return { quote: aside.quote, gone, onJump, jumpLabel };
 		const text = thread.data?.message.text ?? shown?.text ?? "";
-		return { label: anchorLabel(t as unknown as AnchorLabelT, aside.anchor.kind, thread.data?.message.authorName ?? shown?.authorName), excerpt: messageExcerpt(text), gone, onJump };
-	}, [anchorShown, aside, comment, events, t, thread.data?.message]);
+		return { label: anchorLabel(t as unknown as AnchorLabelT, aside.anchor.kind, thread.data?.message.authorName ?? shown?.authorName), excerpt: messageExcerpt(text), gone, onJump, jumpLabel };
+	}, [anchorShown, aside, comment, events, jumpLabel, jumpTo, t, thread.data?.message]);
 
 	const [sent, setSent] = useState<CloudCpAsideReply[]>([]);
 	const [pending, setPending] = useState<AsideEntry[]>([]);
@@ -770,6 +885,7 @@ export function CloudAsidePane({
 					createdAt: reply.createdAt,
 					edited: Boolean(edit || reply.editedAt),
 					own: Boolean(userId && reply.authorUserId === userId),
+					...(reply.sequence !== undefined ? { sequence: reply.sequence } : {}),
 				};
 			});
 		// With nothing loaded yet, the comment the notification named stands in.
@@ -813,13 +929,33 @@ export function CloudAsidePane({
 			});
 			return read === 0 ? page : { ...page, items, unreadCount: Math.max(0, page.unreadCount - read) };
 		});
+		patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: false });
 		void client.markSessionAsideRead(orgId, sessionId, asideId)
-			.then((next) => patchCachedAside(queryClient, orgId, sessionId, asideId, next))
+			.then((next) => {
+				patchCachedAside(queryClient, orgId, sessionId, asideId, next);
+				void queryClient.invalidateQueries({ queryKey: cloudUnreadThreadsKey(baseUrl, userId) });
+			})
 			.catch(() => {
 				// Asked again when the next comment arrives or the pane opens again.
 				markedKey.current = "";
 			});
 	}, [asideId, attentive, baseUrl, client, newestFromOthers, orgId, queryClient, ready, sessionId, userId]);
+
+	// "Mark unread": unread again for this person until they open it next.
+	const onMarkUnread = useCallback(() => {
+		patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: true });
+		patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: true });
+		void client.markSessionAsideUnread(orgId, sessionId, asideId)
+			.then((next) => {
+				patchCachedAside(queryClient, orgId, sessionId, asideId, next);
+				patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: next.unread });
+			})
+			.catch(() => {
+				patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: false });
+				patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { unread: false });
+			})
+			.finally(() => void queryClient.invalidateQueries({ queryKey: cloudUnreadThreadsKey(baseUrl, userId) }));
+	}, [asideId, baseUrl, client, orgId, queryClient, sessionId, userId]);
 
 	const muted = aside?.muted ?? false;
 	const onMute = useCallback((next: boolean) => {
@@ -835,9 +971,12 @@ export function CloudAsidePane({
 		patchCachedAside(queryClient, orgId, sessionId, asideId, next ? { resolvedAt: new Date().toISOString() } : { resolvedAt: undefined, resolvedBy: undefined });
 		const request = next ? client.resolveSessionAside(orgId, sessionId, asideId) : client.reopenSessionAside(orgId, sessionId, asideId);
 		void request
+			// The aside it answers carries its new history entry ("resolved this").
 			.then((changed) => patchCachedAside(queryClient, orgId, sessionId, asideId, changed))
-			.catch(() => { if (before) patchCachedAside(queryClient, orgId, sessionId, asideId, before); });
-	}, [aside, asideId, client, orgId, queryClient, sessionId]);
+			.catch(() => { if (before) patchCachedAside(queryClient, orgId, sessionId, asideId, before); })
+			// It moves between the threads view's Open and Resolved.
+			.finally(() => invalidateCommentThreads(queryClient, baseUrl, userId));
+	}, [aside, asideId, baseUrl, client, orgId, queryClient, sessionId, userId]);
 
 	const onReply = useCallback(async (text: string, mentions: ComposerMention[], sendToAgent: boolean) => {
 		const clientMessageId = crypto.randomUUID();
@@ -863,6 +1002,9 @@ export function CloudAsidePane({
 			patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: false, ...(reply ? { lastReplyAt: reply.createdAt } : {}), ...(result.aside ?? {}) });
 			// The comment resolved this person's mention and reply rows for the thread.
 			void queryClient.invalidateQueries({ queryKey: cloudInboxQueryKey(baseUrl, userId) });
+			// A reply can reopen the thread, or (sent to the agent) resolve it; the aside
+			// the server answers carries its history, and the threads view reads again.
+			invalidateCommentThreads(queryClient, baseUrl, userId);
 		} catch (error) {
 			throw new Error(t(replyRefusalKey(error)));
 		} finally {
@@ -905,12 +1047,20 @@ export function CloudAsidePane({
 	const [mentionQuery, setMentionQuery] = useState<string>();
 	const mentionSource = useMentionSource(orgId, sessionId, ended, mentionQuery, setMentionQuery, workspaceName);
 
-	const resolvedNote = resolved && aside
-		? t(aside.sentToAgentAt && aside.sentToAgentAt === aside.resolvedAt ? "comment.resolvedSent" : "comment.resolved", {
-			name: aside.resolvedBy?.name ?? t("comment.someone"),
-			time: formatTimeCompact(aside.resolvedAt),
-		})
-		: undefined;
+	// A resolved thread collapses to who resolved it (or sent it to the agent) and when.
+	const resolvedView = useMemo<ResolvedThreadView | undefined>(() => {
+		if (!resolved || !aside) return undefined;
+		const lastChange = aside.history?.at(-1);
+		const sent = lastChange ? lastChange.kind === "sent_to_agent" : Boolean(aside.sentToAgentAt && aside.sentToAgentAt === aside.resolvedAt);
+		const sentSequence = sent ? sentMessageSequence(aside) : undefined;
+		return {
+			byName: aside.resolvedBy?.name ?? (sent ? aside.sentToAgentBy?.name : undefined) ?? lastChange?.actor.name ?? t("comment.someone"),
+			...(aside.resolvedAt ? { at: aside.resolvedAt } : {}),
+			sent,
+			...(sentSequence !== undefined ? { onJumpToSent: () => jumpTo(sentSequence) } : {}),
+			...(onOpenInSession ? { jumpLabel: t("comment.openSentInSession") } : {}),
+		};
+	}, [aside, jumpTo, onOpenInSession, resolved, t]);
 
 	return (
 		<AsidePaneView
@@ -924,12 +1074,14 @@ export function CloudAsidePane({
 			onDelete={ended ? undefined : onDelete}
 			onEdit={ended ? undefined : onEdit}
 			onMute={aside ? onMute : undefined}
+			onMarkUnread={aside ? onMarkUnread : undefined}
 			onReopen={resolved && !ended ? () => setResolved(false) : undefined}
 			onReply={onReply}
 			onResolve={!resolved && !ended && aside ? () => setResolved(true) : undefined}
+			history={aside?.history}
 			replies={replies}
 			replyDisabled={ended ? t("comment.ended") : undefined}
-			resolvedNote={resolvedNote}
+			resolved={resolvedView}
 			sessionTitle={sessionTitle}
 			label={t("comment.title")}
 		/>

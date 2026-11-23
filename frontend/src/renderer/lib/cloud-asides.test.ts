@@ -5,14 +5,19 @@ import {
 	asideReplyOf,
 	closeAside,
 	cloudAsideKey,
+	cloudCommentThreadsKey,
+	fromAsideOf,
 	loadAsideThread,
 	mergeAsideReplies,
 	openAside,
+	patchCommentThreadRows,
 	peekOpenAside,
 	resetOpenAsides,
+	sentMessageSequence,
+	threadTimeline,
 	toggleAside,
 } from "./cloud-asides";
-import type { CloudCpAsideReply, CloudCpAsideThread, CloudCpClientEvent, CloudCpNotification, CloudCpNotificationEvent } from "./cloud-cp/types";
+import type { CloudCpAsideHistoryEntry, CloudCpAsideReply, CloudCpAsideThread, CloudCpClientEvent, CloudCpCommentThread, CloudCpNotification, CloudCpNotificationEvent } from "./cloud-cp/types";
 import { mentionFallbackEvents, mentionOpenTarget, prefetchMentionedSession } from "./cloud-mention-open";
 import { asideReplyMetadata, cloudSessionWatched, shouldAlertCloudNotification } from "./cloud-notifications";
 
@@ -62,6 +67,8 @@ describe("an aside on the session's events", () => {
 			asideId: "a-1", replyId: "r-1", text: "@Priya Nair can you review?",
 			mentions: [{ kind: "person", id: "u-nair", name: "Priya Nair" }],
 			authorUserId: "u-chen", authorName: "Chen Li", createdAt: at,
+			// Its event's sequence orders it among the thread's resolve, reopen and send rows.
+			sequence: 50,
 		});
 		expect(asideReplyOf({ ...event, payload: { text: "no ids" } })).toBeUndefined();
 		expect(asideReplyOf({ ...event, type: "chat.user_message" })).toBeUndefined();
@@ -165,5 +172,79 @@ describe("the alert policy", () => {
 		expect(cloudSessionWatched({ sessionId: "session-1" }, "session-1", { visible: false, focused: true })).toBe(false);
 		// A remote host's session of the same id is another session.
 		expect(cloudSessionWatched({ sessionId: "session-1", hostId: "h-1" }, "session-1", focused)).toBe(false);
+	});
+});
+
+describe("a thread's history", () => {
+	const priya = { userId: "u-priya", name: "Priya Shah" };
+	const entry = (kind: CloudCpAsideHistoryEntry["kind"], sequence: number, time: string, extra: Partial<CloudCpAsideHistoryEntry> = {}): CloudCpAsideHistoryEntry => ({ kind, actor: priya, at: time, sequence, ...extra });
+	const order = (rows: ReturnType<typeof threadTimeline<{ id: string; createdAt: string; sequence?: number }>>) =>
+		rows.map((row) => (row.kind === "comment" ? row.reply.id : row.entry.kind));
+
+	it("puts resolves, reopens and sends among the comments by their events", () => {
+		const replies = [
+			{ id: "c1", createdAt: "2026-11-24T10:00:00Z", sequence: 10 },
+			{ id: "c2", createdAt: "2026-11-24T10:05:00Z", sequence: 14 },
+			{ id: "c3", createdAt: "2026-11-24T10:05:00Z", sequence: 20 },
+		];
+		const history = [
+			// Given out of order: the timeline sorts them.
+			entry("reopened", 15, "2026-11-24T10:05:00Z"),
+			entry("resolved", 12, "2026-11-24T10:02:00Z"),
+			entry("sent_to_agent", 21, "2026-11-24T10:05:00Z"),
+		];
+		// The reply that reopened it (c2) comes before its reopened row; the request (c3) before its send.
+		expect(order(threadTimeline(replies, history))).toEqual(["c1", "resolved", "c2", "reopened", "c3", "sent_to_agent"]);
+	});
+
+	it("falls back to time for comments without an event, a comment first at the same time", () => {
+		const replies = [
+			{ id: "c1", createdAt: "2026-11-24T10:00:00Z" },
+			{ id: "c2", createdAt: "2026-11-24T10:05:00Z" },
+			// Still on its way: newer than anything recorded.
+			{ id: "pending", createdAt: "2026-11-24T11:00:00Z" },
+		];
+		expect(order(threadTimeline(replies, [entry("resolved", 30, "2026-11-24T10:05:00Z")]))).toEqual(["c1", "c2", "resolved", "pending"]);
+		// No history (an older control plane): only the comments.
+		expect(order(threadTimeline(replies, undefined))).toEqual(["c1", "c2", "pending"]);
+	});
+
+	it("finds the message the last send became", () => {
+		expect(sentMessageSequence({ sentMessage: { sequence: 61 } })).toBe(61);
+		expect(sentMessageSequence({ history: [
+			entry("sent_to_agent", 30, at, { sentMessage: { sequence: 31 } }),
+			entry("reopened", 40, at),
+			entry("sent_to_agent", 50, at, { sentMessage: { sequence: 51 } }),
+		] })).toBe(51);
+		expect(sentMessageSequence({ history: [entry("resolved", 30, at)] })).toBeUndefined();
+	});
+});
+
+describe("a thread sent to the agent", () => {
+	it("reads the request apart from the comments, and what the limits left out", () => {
+		expect(fromAsideOf({ fromAside: {
+			asideId: "c-1", quote: "real backoff", anchorKind: "agent_message",
+			requestText: "Add jitter to the retry.", sinceSent: true, previouslySentAt: at, commentCount: 7, omittedComments: 2,
+			comments: [{ authorName: "Mohak", text: "Budget it by repo size?", createdAt: at }, { authorName: "Pritom", text: "Against the clone cost." }],
+		} })).toEqual({
+			asideId: "c-1", quote: "real backoff", anchorKind: "agent_message",
+			requestText: "Add jitter to the retry.", sinceSent: true, previouslySentAt: at, commentCount: 7, omittedComments: 2,
+			comments: [{ authorName: "Mohak", text: "Budget it by repo size?", createdAt: at }, { authorName: "Pritom", text: "Against the clone cost." }],
+		});
+		// An older control plane's send has none of them.
+		expect(fromAsideOf({ fromAside: { asideId: "c-1", comments: [], commentCount: -1 } })).toEqual({ asideId: "c-1", comments: [] });
+	});
+});
+
+describe("the threads view's cache", () => {
+	it("marks a row read or unread wherever a page holds it", () => {
+		const queryClient = new QueryClient();
+		const row = { aside: { asideId: "c-1", anchor: { sequence: 41 }, replyCount: 1, unread: true, muted: false }, unread: true, muted: false } as unknown as CloudCpCommentThread;
+		const key = cloudCommentThreadsKey("https://cp.test", "u-priya", "open", false);
+		queryClient.setQueryData(key, { pages: [{ items: [row], hasMore: false }], pageParams: [undefined] });
+		patchCommentThreadRows(queryClient, "https://cp.test", "u-priya", "c-1", { unread: false });
+		const page = queryClient.getQueryData<{ pages: Array<{ items: CloudCpCommentThread[] }> }>(key)!.pages[0]!;
+		expect(page.items[0]!.unread).toBe(false);
+		expect(page.items[0]!.aside.unread).toBe(false);
 	});
 });

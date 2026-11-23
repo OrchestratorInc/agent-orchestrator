@@ -240,6 +240,49 @@ describe("a message Also send to agent sent", () => {
 		expect(rows[1]).toHaveTextContent("Against the clone cost.");
 	});
 
+	it("puts the request first, then the quote, then the comments", async () => {
+		const { FromCommentThreadCard } = await import("./ChatTimelineItems");
+		const { container } = render(
+			<FromCommentThreadCard thread={{
+				asideId: "c-1", framed: true, requestText: "Add jitter to the retry.", quote: "real backoff", commentCount: 2,
+				comments: [{ authorName: "Pritom", text: "Budget it by repo size?" }, { authorName: "Mohak", text: "Against the clone cost." }],
+			}} />,
+		);
+		const card = container.querySelector<HTMLElement>("[data-from-comment-thread='c-1']")!;
+		const order = Array.from(card.querySelectorAll("[data-from-comment-request], [data-from-comment-quote], [data-from-comment-entry]")).map((node) => node.textContent);
+		expect(order).toEqual(["Add jitter to the retry.", "“real backoff”", "PritomBudget it by repo size?", "MohakAgainst the clone cost."]);
+		// The count is the comments, not the request.
+		expect(card).toHaveTextContent("· 2 comments");
+	});
+
+	it("says the thread was sent as it was when the reply was empty", async () => {
+		const { FromCommentThreadCard } = await import("./ChatTimelineItems");
+		const { container } = render(<FromCommentThreadCard thread={{ asideId: "c-1", framed: true, quote: "real backoff", commentCount: 1, comments: [{ authorName: "Pritom", text: "Should this use jitter?" }] }} />);
+		expect(container.querySelector("[data-from-comment-request]")).toHaveTextContent("Sent the thread to the agent");
+	});
+
+	it("shows three comments, the rest behind Show all, and what the limits left out", async () => {
+		const { FromCommentThreadCard } = await import("./ChatTimelineItems");
+		const comments = ["one", "two", "three", "four", "five"].map((text, index) => ({ authorName: index % 2 ? "Mohak" : "Pritom", text }));
+		const { container } = render(<FromCommentThreadCard thread={{ asideId: "c-1", framed: true, requestText: "Go.", commentCount: 8, omittedComments: 3, comments }} />);
+		const card = container.querySelector<HTMLElement>("[data-from-comment-thread='c-1']")!;
+		const shown = () => Array.from(card.querySelectorAll("[data-from-comment-entry]")).map((node) => node.textContent?.replace(/^(Pritom|Mohak)/, ""));
+		expect(shown()).toEqual(["one", "two", "three"]);
+		// The control plane keeps the first comment and the newest: the gap is after the first.
+		expect(card.querySelector("[data-from-comment-entry] + [data-from-comment-omitted]")).toHaveTextContent("3 earlier comments omitted");
+		expect(card).toHaveTextContent("· 8 comments");
+		fireEvent.click(screen.getByRole("button", { name: "Show all 5 comments" }));
+		expect(shown()).toEqual(["one", "two", "three", "four", "five"]);
+		fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+		expect(shown()).toHaveLength(3);
+	});
+
+	it("says when the earlier comments were sent, for a thread sent again", async () => {
+		const { FromCommentThreadCard } = await import("./ChatTimelineItems");
+		const { container } = render(<FromCommentThreadCard thread={{ asideId: "c-1", framed: true, requestText: "And now the tests.", sinceSent: true, previouslySentAt: "2026-11-24T10:00:00Z", commentCount: 1, comments: [{ authorName: "Mohak", text: "Tests too." }] }} />);
+		expect(container.querySelector("[data-from-comment-since]")).toHaveTextContent(/^Earlier comments were sent at /);
+	});
+
 	it("replaces the message's text in its bubble", () => {
 		const message = tagged({ asideId: undefined, mentions: undefined, text: "Comment thread on: …", fromAside: { asideId: "c-1", comments: [{ authorName: "Pritom", text: "Do it" }] } });
 		const { container } = renderFor(<HumanMessage message={message} sessionId="s1" />, markers());

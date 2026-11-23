@@ -147,6 +147,19 @@ describe("opening a mention", () => {
 		await waitFor(() => expect(lastProps().focusMessage).toBeUndefined());
 	});
 
+	it("lands on an agent's answer by its first event (Open in session from the threads view)", () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(cloudChatEventsKey("org-1", session.id), events);
+		const request = requestMentionFocus({ notificationId: "thread:c-1:41", kind: "aside_reply", orgId: "org-1", projectId: "project-1", sessionId: session.id, sequence: 41, body: "", asideId: "c-1", createdAt: at });
+		renderSurface(queryClient);
+		const first = firstProps();
+		const answer = first.snapshot.items.find((item) => item.kind === "message" && item.role === "assistant");
+		expect(answer?.sequence).toBe(41);
+		expect(first.focusMessage).toEqual({ messageId: answer?.id, key: `${request.nonce}:loaded` });
+		// Not a user message's id: the answer is no user message.
+		expect(first.focusMessage?.messageId).not.toBe("cloud-event-41");
+	});
+
 	it("opens at once with nothing cached, showing the message from the notification's text until the rest loads", async () => {
 		let answer!: (page: unknown) => void;
 		cloudMocks.listChatEvents.mockReset().mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }))

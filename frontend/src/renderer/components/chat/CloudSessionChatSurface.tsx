@@ -925,6 +925,12 @@ function fromAsideItem(payload: EventPayload): Pick<ConversationMessage, "fromAs
 			asideId: thread.asideId,
 			...(thread.quote ? { quote: thread.quote } : {}),
 			...(thread.anchorExcerpt ? { anchorExcerpt: thread.anchorExcerpt } : {}),
+			...(thread.requestText ? { requestText: thread.requestText } : {}),
+			// A framed send says how many comments it covers; an older one doesn't.
+			...(thread.commentCount !== undefined || thread.requestText !== undefined || thread.sinceSent ? { framed: true } : {}),
+			...(thread.sinceSent ? { sinceSent: true, ...(thread.previouslySentAt ? { previouslySentAt: thread.previouslySentAt } : {}) } : {}),
+			...(thread.commentCount !== undefined ? { commentCount: thread.commentCount } : {}),
+			...(thread.omittedComments ? { omittedComments: thread.omittedComments } : {}),
 			comments: thread.comments.map(({ authorName, text }) => ({ authorName, text })),
 		},
 	};
@@ -2483,7 +2489,9 @@ export function CloudSessionChatSurface({
 		const steerKey = requested ? eventPayload(requested).clientMessageId : undefined;
 		const steerRow = snapshot.items.find((item) => item.kind === "activity" && item.detail?.event === "steer" &&
 			(typeof steerKey === "string" ? item.detail.clientMessageId === steerKey : item.sequence === sequence));
-		return steerRow?.id ?? mentionMessageId(sequence);
+		// An agent's answer (a thread opened from the threads view) is found by its first event.
+		const answer = steerRow ? undefined : snapshot.items.find((item) => item.kind === "message" && item.role === "assistant" && item.sequence === sequence);
+		return steerRow?.id ?? answer?.id ?? mentionMessageId(sequence);
 	}, [eventsQuery.data, mentionFocus, snapshot.items]);
 	const mentionFocusLoaded = eventsQuery.data !== undefined;
 	const chatMentionFocus = useMemo(
@@ -2595,7 +2603,7 @@ export function CloudSessionChatSurface({
 	}, [asides.data?.items, asides.isSuccess, asidesOn, session.id, session.isTerminated, shownAside?.asideId, shownAside?.messageSequence]);
 	const attentive = useWindowAttention();
 	// Opened from a notification with nothing cached: what it said shows until the thread loads.
-	const asideFallback = useMemo<AsideFallback | undefined>(() => mentionFocus && shownAside?.asideId && mentionFocus.asideId === shownAside.asideId
+	const asideFallback = useMemo<AsideFallback | undefined>(() => mentionFocus && shownAside?.asideId && mentionFocus.asideId === shownAside.asideId && mentionFocus.body.trim() !== ""
 		? { kind: mentionFocus.kind, body: mentionFocus.body, authorName: mentionFocus.authorName, createdAt: mentionFocus.createdAt }
 		: undefined, [mentionFocus, shownAside?.asideId]);
 	const paneWorkspace = cloud && activeOrg?.id === cloud.orgId ? activeOrg?.displayName : undefined;

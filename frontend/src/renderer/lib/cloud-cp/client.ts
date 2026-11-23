@@ -85,6 +85,8 @@ import type {
 	CloudCpMentionToken,
 	CloudCpAsideThread,
 	CloudCpAsideThreadQuery,
+	CloudCpCommentThreadPage,
+	CloudCpCommentThreadQuery,
 	CloudCpMyNotificationStateChange,
 	CloudCpNotificationPreferences,
 	CloudCpSendMessageResponse,
@@ -647,6 +649,12 @@ export interface CloudCpClient {
 	markSessionAsideRead(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
 	/** Mutes or unmutes the aside's replies for the caller. */
 	muteSessionAside(orgId: string, sessionId: string, asideId: string, muted: boolean, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
+	/** Marks the aside unread for the caller from the newest comment by someone else ("Mark unread"). */
+	markSessionAsideUnread(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
+	/** The threads view: the caller's comment threads across their organizations, unread first (GET /me/comment-threads). */
+	listMyCommentThreads(query?: CloudCpCommentThreadQuery, options?: CloudCpRequestOptions): Promise<CloudCpCommentThreadPage>;
+	/** How many open threads are unread for the caller, for the Threads badge. */
+	countMyUnreadCommentThreads(options?: CloudCpRequestOptions): Promise<{ count: number }>;
 
 	createTerminalTicket(
 		orgId: string,
@@ -1402,6 +1410,19 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { body, signal: o?.signal }),
 		deleteSessionAsideReply: (orgId, sessionId, asideId, replyId, o) =>
 			requestVoid("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { signal: o?.signal }),
+		markSessionAsideUnread: (orgId, sessionId, asideId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/unread`, { signal: o?.signal }),
+		listMyCommentThreads: (query, o) =>
+			requestJson("GET", "/me/comment-threads", {
+				query: {
+					...(query?.status ? { status: query.status } : {}),
+					...(query?.unread ? { unread: "true" } : {}),
+					...(query?.cursor ? { cursor: query.cursor } : {}),
+					...(query?.limit ? { limit: query.limit } : {}),
+				},
+				signal: o?.signal,
+			}),
+		countMyUnreadCommentThreads: (o) => requestJson("GET", "/me/comment-threads/unread-count", { signal: o?.signal }),
 
 		createTerminalTicket: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {
