@@ -1,3 +1,4 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { parseDaemonProbe } from "../shared/daemon-attach";
 import { DEVICE_TOKEN_PREFIX, type RemoteEntry } from "./remotes-store";
 
@@ -200,7 +201,7 @@ export async function checkHostUpdate(entry: RemoteEntry, fetchImpl: FetchImpl =
 	}).catch(() => null);
 	const body = (await response?.json().catch(() => null)) as { message?: unknown; version?: unknown } | null | undefined;
 	if (response?.ok && typeof body?.version === "string" && body.version) return body.version;
-	throw new Error(typeof body?.message === "string" && body.message ? body.message : "That computer didn't say which version it installs. Try again.");
+	throw new AoError("HOST_UPDATE_CHECK_FAILED", typeof body?.message === "string" && body.message ? body.message : "That computer didn't say which version it installs. Try again.");
 }
 
 export async function startHostUpdate(entry: RemoteEntry, version?: string, fetchImpl: FetchImpl = fetch, timeoutMs = 15_000): Promise<HostUpdateView | null> {
@@ -213,6 +214,6 @@ export async function startHostUpdate(entry: RemoteEntry, version?: string, fetc
 	}).catch(() => null);
 	if (!response || response.status >= 502) return null;
 	const body = (await response.json().catch(() => null)) as { message?: unknown } | null;
-	if (!response.ok) throw new Error(typeof body?.message === "string" && body.message ? body.message : `the host refused the update (${response.status})`);
+	if (!response.ok) throw new AoError("HOST_UPDATE_START_FAILED", typeof body?.message === "string" && body.message ? body.message : `the host refused the update (${response.status})`);
 	return parseHostUpdate(body);
 }
