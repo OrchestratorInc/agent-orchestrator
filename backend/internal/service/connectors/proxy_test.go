@@ -270,3 +270,27 @@ func TestSessionEntriesAndTheCallbackUseTheAddressTheDaemonBound(t *testing.T) {
 		t.Fatalf("callback = %s", got)
 	}
 }
+
+func TestACallIsCountedForASessionTheDaemonHasNotSeenStart(t *testing.T) {
+	fake := newFakeServer(t, false)
+	svc, daemon := newProxiedService(t)
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, Input{Name: "open", Transport: TransportHTTP, URL: fake.URL + "/mcp"}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := svc.sessionToken("ao-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := svc.SessionConnectors(ctx, "ao-9"); len(used) != 0 {
+		t.Fatalf("before a call = %+v", used)
+	}
+	status, body := proxyPost(t, daemon.URL+proxyPrefix+"ao-9/connectors/open", "Bearer "+token, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"text":"x"}}}`)
+	if status == http.StatusUnauthorized {
+		t.Fatalf("call = %d %s", status, body)
+	}
+	used, err := svc.SessionConnectors(ctx, "ao-9")
+	if err != nil || len(used) != 1 || used[0].Key != "open" || used[0].Calls != 1 || used[0].LastTool != "echo" {
+		t.Fatalf("after a call = %+v, %v", used, err)
+	}
+}

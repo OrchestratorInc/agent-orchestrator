@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -248,9 +249,16 @@ func (s *Service) admit(r *http.Request, sessionID, key string, transport Transp
 func (s *Service) count(sessionID, key, method, tool string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	use := s.sessions[sessionID]
-	if use == nil || method != "tools/call" {
+	if method != "tools/call" {
 		return
+	}
+	use := s.sessions[sessionID]
+	if use == nil {
+		use = &sessionUse{calls: map[string]int{}, last: map[string]string{}}
+		s.sessions[sessionID] = use
+	}
+	if !slices.Contains(use.keys, key) {
+		use.keys = append(use.keys, key)
 	}
 	use.calls[key]++
 	use.last[key] = tool
