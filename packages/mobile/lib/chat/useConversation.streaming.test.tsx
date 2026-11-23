@@ -21,6 +21,8 @@ vi.mock("./conversationEvents", () => ({
 	},
 }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
+// Saving the transcript for after a restart is not under test here.
+vi.mock("./savedConversations", () => ({ conversationSaver: { schedule: () => {}, flush: async () => {} }, loadSavedConversation: async () => null }));
 import { REFRESH_INTERVAL_MS, useMobileConversation, type MobileConversation } from "./useConversation";
 
 const lan = { hostId: "a", host: "192.168.1.20" } as ServerConfig;
