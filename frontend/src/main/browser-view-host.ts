@@ -1062,7 +1062,12 @@ export function createBrowserViewHost(
     // The panel was shown or hidden, or the phone started or stopped
     // watching: the agent tab in front streams only while someone can see it.
     for (const entry of session.tabs.values()) {
-      if (entry.remote) entry.driver().show(session.activeTabId === entry.tabId);
+      if (!entry.remote || !entry.view.webContents) continue;
+      try {
+        entry.driver().show(session.activeTabId === entry.tabId);
+      } catch {
+        // The viewer is being torn down; its stream no longer matters.
+      }
     }
   };
   const waitForBrowserIdle = (

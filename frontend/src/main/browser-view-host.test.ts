@@ -4516,6 +4516,16 @@ describe("agent browser runtime", () => {
 			expect(shows().at(-1)).toBe("window.__rbHost && window.__rbHost.show(true)");
 		});
 
+		it("keeps going when a torn-down viewer throws while its panel is shown or hidden", async () => {
+			const { emit, invoke, agent, viewId, views } = await openAgent();
+			agent.emitConsoleMessage(0, report());
+			await invoke("browser:selectTab", { viewId, tabId: "a1" });
+			agent.executeJavaScript.mockImplementation(() => { throw new TypeError("Object has been destroyed"); });
+			expect(() => emit("browser:setBounds", { viewId, revision: 101, rect: { x: 0, y: 0, width: 800, height: 600 }, visible: true })).not.toThrow();
+			// The throttling sync still finished: the person's tab is unthrottled.
+			expect(views[0].webContents.setBackgroundThrottling).toHaveBeenLastCalledWith(false);
+		});
+
 		it("believes reports only from AO's agent-browser viewer", async () => {
 			const { invoke, views } = setupTabHost();
 			const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
