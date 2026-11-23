@@ -17,6 +17,8 @@ final class MjpegPlayer: NSObject, URLSessionDataDelegate {
   private let onFrame: () -> Void
   private let onEnded: () -> Void
   private var session: URLSession?
+  /// Set before the task starts; cancelled from the delegate queue on bad framing.
+  private var task: URLSessionDataTask?
   private var buffer = Data()
   private var previous: Data?
   private let decodeQueue = DispatchQueue(label: "ao.device-stream.mjpeg-decode")
@@ -58,7 +60,9 @@ final class MjpegPlayer: NSObject, URLSessionDataDelegate {
     config.timeoutIntervalForResource = .greatestFiniteMagnitude
     let session = URLSession(configuration: config, delegate: self, delegateQueue: queue)
     self.session = session
-    session.dataTask(with: request).resume()
+    let task = session.dataTask(with: request)
+    self.task = task
+    task.resume()
   }
 
   func stop() {
@@ -135,6 +139,7 @@ final class MjpegPlayer: NSObject, URLSessionDataDelegate {
   }
 
   private static let blankLine = Data([13, 10, 13, 10])
+  private static let maxPart = 16 << 20
 
   private func parse() {
     while true {
@@ -147,6 +152,13 @@ final class MjpegPlayer: NSObject, URLSessionDataDelegate {
       guard let length = MjpegPlayer.contentLength(header) else {
         buffer = Data(buffer[bodyStart...])
         continue
+      }
+      // A part that cannot be a frame (negative, or past what Android also
+      // takes) is broken framing: end the stream and let the view reconnect.
+      guard length > 0, length <= MjpegPlayer.maxPart else {
+        buffer.removeAll()
+        task?.cancel()
+        return
       }
       let bodyEnd = bodyStart + length
       if buffer.endIndex < bodyEnd { return }

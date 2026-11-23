@@ -24,6 +24,8 @@ class MjpegPlayer(
   private val onEnded: () -> Unit,
 ) {
   private val lock = Object()
+  /** Held while drawing; [releaseSurface] takes it so no draw outlives the surface. */
+  private val drawLock = Any()
   private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
   private var latest: ByteArray? = null
   private var call: Call? = null
@@ -65,6 +67,14 @@ class MjpegPlayer(
     call = null
     reader = null
     decoder = null
+  }
+
+  /**
+   * Stops and waits for a draw in progress: called from surfaceDestroyed, after
+   * which the surface is gone and touching it throws on the decode thread.
+   */
+  fun releaseSurface() {
+    synchronized(drawLock) { stop() }
   }
 
   private fun current(gen: Long) = generation == gen
@@ -168,8 +178,7 @@ class MjpegPlayer(
         height = bitmap.height
         onSize(width, height)
       }
-      if (!current(gen)) return
-      draw(bitmap)
+      if (!draw(bitmap, gen)) return
       if (first) {
         first = false
         onFrame()
@@ -177,14 +186,26 @@ class MjpegPlayer(
     }
   }
 
-  private fun draw(bitmap: Bitmap) {
-    val surface = holder() ?: return
-    val canvas = surface.lockHardwareCanvas() ?: return
+  /**
+   * Draws a frame for the live connection; false once it is no longer live.
+   * Under [drawLock], so surfaceDestroyed waits for it. A surface that goes
+   * away anyway (the lock and canvas calls throw then) drops the frame: an
+   * uncaught throw on this thread would end the app.
+   */
+  private fun draw(bitmap: Bitmap, gen: Long): Boolean = synchronized(drawLock) {
+    if (!current(gen)) return false
+    val surface = holder() ?: return true
     try {
-      canvas.drawBitmap(bitmap, null, Rect(0, 0, canvas.width, canvas.height), paint)
-    } finally {
-      surface.unlockCanvasAndPost(canvas)
+      val canvas = surface.lockHardwareCanvas() ?: return true
+      try {
+        canvas.drawBitmap(bitmap, null, Rect(0, 0, canvas.width, canvas.height), paint)
+      } finally {
+        surface.unlockCanvasAndPost(canvas)
+      }
+    } catch (_: IllegalStateException) {
+    } catch (_: IllegalArgumentException) {
     }
+    true
   }
 
   private companion object {

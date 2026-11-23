@@ -41,13 +41,13 @@ class H264Decoder(
       running = false
       val thread = drain
       drain = null
-      thread?.let { runCatching { it.join(300) } }
-      codec?.let {
-        runCatching { it.stop() }
-        runCatching { it.release() }
-      }
+      val c = codec
       codec = null
       waitingForKey = true
+      // Stopping first ends the drain thread's wait at once, so the join is short.
+      c?.let { runCatching { it.stop() } }
+      thread?.let { runCatching { it.join(100) } }
+      c?.let { runCatching { it.release() } }
     }
   }
 
@@ -57,25 +57,40 @@ class H264Decoder(
    * thread, longer for a reader of its own that may simply slow down.
    */
   fun queue(data: ByteArray, offset: Int, length: Int, waitUs: Long = INPUT_TIMEOUT_US) {
-    synchronized(lock) {
+    val nals = AnnexB.split(data, offset, length)
+    val sps = nals.firstOrNull { it.type == AnnexB.NAL_SPS }
+    val pps = nals.firstOrNull { it.type == AnnexB.NAL_PPS }
+    val isKey = nals.any { it.type == AnnexB.NAL_IDR }
+    val c = synchronized(lock) {
       if (surface == null) return
-      val nals = AnnexB.split(data, offset, length)
-      val sps = nals.firstOrNull { it.type == AnnexB.NAL_SPS }
-      val pps = nals.firstOrNull { it.type == AnnexB.NAL_PPS }
-      val isKey = nals.any { it.type == AnnexB.NAL_IDR }
       if (sps != null && pps != null) {
         val size = AnnexB.parseSps(data, sps)
         if (size != null && (codec == null || size.width != width || size.height != height)) {
           start(data, sps, pps, size)
         }
       }
-      val c = codec
-      if (c == null || (waitingForKey && !isKey)) {
+      val current = codec
+      if (current == null || (waitingForKey && !isKey)) {
         needKeyFrame()
         return
       }
+      current
+    }
+    // Waiting for a free input buffer happens outside the lock: setSurface and
+    // release run on the main thread and must not wait behind a slow decoder.
+    val index = try {
+      c.dequeueInputBuffer(waitUs)
+    } catch (_: IllegalStateException) {
+      failed(c)
+      return
+    } catch (_: MediaCodec.CodecException) {
+      failed(c)
+      return
+    }
+    synchronized(lock) {
+      // Released or replaced while waiting: its buffer went with it.
+      if (codec !== c) return
       try {
-        val index = c.dequeueInputBuffer(waitUs)
         if (index < 0) {
           // The decoder is behind: drop to the next key frame instead of a broken picture.
           waitingForKey = true
@@ -102,6 +117,15 @@ class H264Decoder(
         needKeyFrame()
       }
     }
+  }
+
+  /** A codec that broke while dequeuing: start over at the next key frame, unless it was already replaced. */
+  private fun failed(c: MediaCodec) {
+    synchronized(lock) {
+      if (codec !== c) return
+      release()
+    }
+    needKeyFrame()
   }
 
   private fun start(data: ByteArray, sps: Nal, pps: Nal, size: SpsSize) {

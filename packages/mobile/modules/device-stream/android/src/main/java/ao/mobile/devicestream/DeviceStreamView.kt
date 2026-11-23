@@ -34,7 +34,7 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     client = CLIENT,
     holder = { if (surfaceReady) surfaceView.holder else null },
     onSize = { w, h -> main.post { onSize(mapOf("width" to w, "height" to h)) } },
-    onFrame = { emitState("streaming") },
+    onFrame = { gotFrame = true; failures = 0; emitState("streaming") },
     onEnded = { main.post { lost() } },
   )
   private val decoder = H264Decoder(
@@ -44,11 +44,11 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
   private val avcc = AvccPlayer(
     client = CLIENT,
     decoder = decoder,
-    onFrame = { emitState("streaming") },
+    onFrame = { gotFrame = true; failures = 0; emitState("streaming") },
     onEnded = { main.post { lost() } },
   )
 
-  private var surfaceReady = false
+  @Volatile private var surfaceReady = false
   private var socket: WebSocket? = null
   private var generation = 0
   private var lastKeyRequestMs = 0L
@@ -68,10 +68,17 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
   private var offsetMax = -Double.MAX_VALUE
   private val recentMins = ArrayDeque<Double>()
   private var lastArrivalMs = 0.0
-  // The hub sends something every half second even for a still screen, so a
-  // link silent for three reports (6 s) is dead, for instance one opened while
-  // the device was still booting: it is dropped and opened again.
+  // A link silent for three reports (6 s) before its first frame is dead, for
+  // instance one opened while the device was still booting: it is dropped and
+  // opened again. The emulator's socket also sends something every half second
+  // for a still screen, so the same holds after it streams. The simulator's
+  // streams send nothing while the screen stands still: once they have shown a
+  // frame, only a much longer silence counts, and the reconnect keeps the
+  // picture up instead of showing the spinner.
   private var silentReports = 0
+  @Volatile private var gotFrame = false
+  /** Connections lost in a row without a frame; each waits longer before retrying. */
+  @Volatile private var failures = 0
   private val statsTick = object : Runnable {
     override fun run() {
       val stats = when (mode) {
@@ -80,10 +87,15 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
         else -> takeStats()
       }
       silentReports = if (((stats["kbps"] as? Double) ?: 0.0) > 0.0) 0 else silentReports + 1
-      if (silentReports >= 3) {
+      val still = mode != "h264" && gotFrame
+      if (silentReports >= (if (still) STILL_SILENT_REPORTS else SILENT_REPORTS)) {
         silentReports = 0
-        disconnect()
-        lost()
+        if (still) {
+          connect(quiet = true)
+        } else {
+          disconnect()
+          lost()
+        }
         return
       }
       onStats(stats + ("mode" to mode))
@@ -126,6 +138,9 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
   override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
 
   override fun surfaceDestroyed(holder: SurfaceHolder) {
+    // Before returning: the surface is released after this, and a frame still
+    // being drawn on it would throw on the decode thread.
+    mjpeg.releaseSurface()
     surfaceReady = false
     disconnect()
     decoder.setSurface(null)
@@ -139,8 +154,9 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     mjpeg.stop()
   }
 
-  /** Url and headers arrive as separate props: connect once both have landed. */
+  /** Url and headers arrive as separate props: connect once both have landed. A new target starts the retry delay over. */
   private fun scheduleConnect() {
+    failures = 0
     if (connectPending) return
     connectPending = true
     main.post {
@@ -149,15 +165,17 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     }
   }
 
-  private fun connect() {
+  /** [quiet]: the last picture stays up meanwhile, without a "connecting" state. */
+  private fun connect(quiet: Boolean = false) {
     disconnect()
     silentReports = 0
+    gotFrame = false
     // An empty url is the screen saying "no stream for now" (a device that is off).
     val target = url?.takeIf { it.isNotBlank() } ?: return
     if (!surfaceReady) return
     val mine = ++generation
     firstFrame = true
-    emitState("connecting")
+    if (!quiet) emitState("connecting")
     when (mode) { // start the first window now
       "mjpeg" -> mjpeg.takeStats()
       "avcc" -> avcc.takeStats()
@@ -200,10 +218,15 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     socket = null
   }
 
+  /**
+   * Retries 1.5 s after a loss, doubling up to 30 s while connections keep
+   * failing before a frame (a daemon without the route, a refused token).
+   */
   private fun lost() {
     emitState("closed")
     main.removeCallbacks(retry)
-    main.postDelayed(retry, RETRY_MS)
+    main.postDelayed(retry, minOf(RETRY_MS shl minOf(failures, 5), MAX_RETRY_MS))
+    failures++
   }
 
   private fun handleFrame(bytes: ByteString) {
@@ -234,6 +257,8 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     decoder.queue(data, offset, data.size - offset)
     if (firstFrame) {
       firstFrame = false
+      gotFrame = true
+      failures = 0
       emitState("streaming")
     }
   }
@@ -288,7 +313,10 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
 
   private companion object {
     const val RETRY_MS = 1_500L
+    const val MAX_RETRY_MS = 30_000L
     const val STATS_MS = 2_000L
+    const val SILENT_REPORTS = 3
+    const val STILL_SILENT_REPORTS = 30
     const val AVCC_RECONNECT_GAP_MS = 3_000L
     const val KEY_REQUEST_GAP_MS = 1_000L
     val CLIENT: OkHttpClient = OkHttpClient.Builder()

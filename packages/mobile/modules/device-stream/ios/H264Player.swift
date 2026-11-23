@@ -14,13 +14,32 @@ final class H264Player: NSObject, URLSessionWebSocketDelegate {
   private let onFrame: () -> Void
   private let onEnded: () -> Void
   private var session: URLSession?
-  private var task: URLSessionWebSocketTask?
   private var format: CMVideoFormatDescription?
   private var parameterSets = Data()
-  private var waitingForKey = true
-  private var lastKeyRequest = Date.distantPast
-  private var stopped = false
   private var shownFirst = false
+  /// `task`, `stopped`, `waitingForKey` and the last key frame request are set
+  /// on the main thread and on the socket's delegate queue, so they live
+  /// behind this lock.
+  private let stateLock = NSLock()
+  private var lockedTask: URLSessionWebSocketTask?
+  private var lockedStopped = false
+  private var lockedWaitingForKey = true
+  private var lastKeyRequest = Date.distantPast
+  private var task: URLSessionWebSocketTask? {
+    get { locked { lockedTask } }
+    set { locked { lockedTask = newValue } }
+  }
+  private var stopped: Bool {
+    get { locked { lockedStopped } }
+    set { locked { lockedStopped = newValue } }
+  }
+  private var waitingForKey: Bool {
+    get { locked { lockedWaitingForKey } }
+    set { locked { lockedWaitingForKey = newValue } }
+  }
+  /// Main thread only: a frame was dropped, so frames already queued behind it
+  /// are skipped until the next key frame (they would smear without it).
+  private var skippingToKey = false
   /// The previous frame's capture time, microseconds.
   private var lastCapture: UInt64 = 0
   /// Main thread only.
@@ -60,10 +79,19 @@ final class H264Player: NSObject, URLSessionWebSocketDelegate {
     receive()
   }
 
+  private func locked<T>(_ body: () -> T) -> T {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return body()
+  }
+
   func stop() {
-    stopped = true
-    task?.cancel(with: .goingAway, reason: nil)
-    task = nil
+    let live: URLSessionWebSocketTask? = locked {
+      lockedStopped = true
+      defer { lockedTask = nil }
+      return lockedTask
+    }
+    live?.cancel(with: .goingAway, reason: nil)
     session?.invalidateAndCancel()
     session = nil
     let layer = self.layer
@@ -120,10 +148,13 @@ final class H264Player: NSObject, URLSessionWebSocketDelegate {
   }
 
   private func requestKeyFrame() {
-    let now = Date()
-    if now.timeIntervalSince(lastKeyRequest) < 1 { return }
-    lastKeyRequest = now
-    task?.send(.string("{\"type\":\"reset-video\"}")) { _ in }
+    let live: URLSessionWebSocketTask? = locked {
+      let now = Date()
+      if now.timeIntervalSince(lastKeyRequest) < 1 { return nil }
+      lastKeyRequest = now
+      return lockedTask
+    }
+    live?.send(.string("{\"type\":\"reset-video\"}")) { _ in }
   }
 
   private func handle(_ message: Data) {
@@ -207,20 +238,26 @@ final class H264Player: NSObject, URLSessionWebSocketDelegate {
   /// Hands a sample to the layer when its turn comes. Main thread.
   private func show(_ sample: CMSampleBuffer, isKey: Bool, first: Bool) {
     guard let layer, !stopped else { return }
+    if isKey { skippingToKey = false } else if skippingToKey { return }
     if layer.status == .failed {
       layer.flush()
-      waitingForKey = true
-      requestKeyFrame()
+      skipToKey()
       return
     }
     // Behind: drop to the next key frame instead of queueing late frames.
     if !isKey && !layer.isReadyForMoreMediaData {
-      waitingForKey = true
-      requestKeyFrame()
+      skipToKey()
       return
     }
     layer.enqueue(sample)
     if first { onFrame() }
+  }
+
+  /// Main thread.
+  private func skipToKey() {
+    skippingToKey = true
+    waitingForKey = true
+    requestKeyFrame()
   }
 
   private struct Nal {
