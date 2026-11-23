@@ -25,7 +25,7 @@ vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		Image: host("Image"), View: host("View"),
+		Image: host("Image"), Text: host("Text"), View: host("View"),
 		Platform: fixtures.platform,
 		StyleSheet: { create: (styles: unknown) => styles, absoluteFill: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 } },
 	};
@@ -450,5 +450,39 @@ describe("live browser gestures", () => {
 		await act(async () => gesture("tap").onEnd({ x: 195 + 97.5, y: 300 }, true));
 		expect(sent()[0]).toEqual({ type: "input", payload: { kind: "wheel", deltaX: 0, deltaY: -30 / (fitted * 2) } });
 		expect(sent()[1]).toEqual({ type: "input", payload: { kind: "pointer", phase: "down", x: 0.625, y: 0.5, button: "left" } });
+	});
+});
+
+describe("stream stats HUD", () => {
+	it("is absent from release builds", async () => {
+		vi.useFakeTimers();
+		try {
+			await render();
+			await open();
+			await showFrame();
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(nodes("Text")).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("shows debug builds the first frame, frame rate and input latency", async () => {
+		vi.stubGlobal("__DEV__", true);
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: DebugPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			await showFrame();
+			await act(async () => { gesture("tap").onEnd({ x: 195, y: 300 }, true); });
+			await act(async () => { vi.advanceTimersByTime(40); nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			const hud = nodes("Text").map((node) => node.props.children).join("");
+			expect(hud).toMatch(/^first \d+ms · 1fps · \d+KB\/s · decode \d+ms · input \d+ms$/);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
