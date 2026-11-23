@@ -82,6 +82,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/panes"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	prpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/prpreview"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
@@ -1112,6 +1113,12 @@ func Run(buildVersion string) (retErr error) {
 	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, reviewRefresher, log)
 	var prActions prsvc.ActionManager
 	prReader := newMultiSCMProvider(cfg.GitLab, log)
+	// A nil service leaves the route answering 501, so chat PR links fall
+	// back to their plain chip; an interface holding a nil pointer would not.
+	var prPreview controllers.PRPreviewService
+	if prReader != nil {
+		prPreview = prpreviewsvc.New(prReader)
+	}
 	prMerger := newMultiSCMMerger(cfg.GitLab, log)
 	if prReader != nil && prMerger != nil {
 		prActions = prsvc.NewActionService(prsvc.ActionDeps{
@@ -1369,6 +1376,7 @@ func Run(buildVersion string) (retErr error) {
 		BrowserChrome:            browserChrome,
 		Panes:                    paneBroker,
 		LinkPreview:              linkpreviewsvc.New(nil),
+		PRPreview:                prPreview,
 		SessionSearch:            sessionSearchSvc,
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,

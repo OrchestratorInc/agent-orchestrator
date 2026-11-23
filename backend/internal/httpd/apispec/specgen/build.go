@@ -711,6 +711,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersEndpointsResponse":                "EndpointsResponse",
 	"ControllersLinkPreviewQuery":                 "LinkPreviewQuery",
 	"ControllersLinkPreviewResponse":              "LinkPreviewResponse",
+	"ControllersPRPreviewQuery":                   "PRPreviewQuery",
+	"ControllersPRPreviewResponse":                "PRPreviewResponse",
 	"ControllersSessionSearchQuery":               "SessionSearchQuery",
 	"ControllersSessionSearchResponse":            "SessionSearchResponse",
 	"ControllersSessionSearchResult":              "SessionSearchResult",
@@ -889,6 +891,7 @@ func operations() []operation {
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	ops = append(ops, prPreviewOperations()...)
 	ops = append(ops, sessionSearchOperations()...)
 	return ops
 }
@@ -958,6 +961,26 @@ func linkPreviewOperations() []operation {
 			pathParams: []any{controllers.LinkPreviewQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.LinkPreviewResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusBadGateway, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+// prPreviewOperations declares the chat's pull request preview. Must stay 1:1
+// with the routes PRPreviewController.Register mounts (enforced by the parity
+// test).
+func prPreviewOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/pr-preview", id: "getPRPreview", tag: "link-preview",
+			summary:    "Read the state and summary of a GitHub pull request a chat links to",
+			pathParams: []any{controllers.PRPreviewQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PRPreviewResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusBadGateway, envelope.APIError{}},
