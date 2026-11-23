@@ -5352,6 +5352,7 @@
 	"settings.connectors.signInDialog.done": "Oturum açıldı.",
 	"settings.connectors.signInDialog.notNeeded": "Bu sunucu oturum açma gerektirmez.",
 	"settings.connectors.signInDialog.close": "Tamam",
+	"settings.connectors.signInDialog.again": "Yeniden başlat",
 	"chat.connectors.chip_one": "Bu sohbette {{count}} bağlayıcı",
 	"chat.connectors.chip_other": "Bu sohbette {{count}} bağlayıcı",
 	"chat.connectors.calls_one": "{{count}} çağrı",

@@ -191,7 +191,7 @@ func (c *ConnectorsController) declineProposal(w http.ResponseWriter, r *http.Re
 
 func proposalResponse(p *connectors.Proposal) ConnectorProposalResponse {
 	out := ConnectorProposalResponse{
-		ID: p.ID, SessionID: p.SessionID, Key: p.Key, Name: p.Name, Transport: string(p.Transport), URL: withoutQuery(p.URL),
+		ID: p.ID, SessionID: p.SessionID, Key: p.Key, Name: p.Name, Transport: string(p.Transport), URL: p.URL,
 		Command: p.Command, Args: nonNil(p.Args), EnvKeys: nonNil(p.EnvKeys), HeaderKeys: nonNil(p.HeaderKeys), Auth: string(p.Auth),
 		Reason: p.Reason, State: string(p.State), ConnectorKey: p.ConnectorKey, CreatedAt: p.CreatedAt,
 	}

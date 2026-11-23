@@ -5354,6 +5354,7 @@
 	"settings.connectors.signInDialog.done": "已登录。",
 	"settings.connectors.signInDialog.notNeeded": "此服务器无需登录。",
 	"settings.connectors.signInDialog.close": "完成",
+	"settings.connectors.signInDialog.again": "重新开始",
 	"chat.connectors.chip_one": "此聊天有 {{count}} 个连接器",
 	"chat.connectors.chip_other": "此聊天有 {{count}} 个连接器",
 	"chat.connectors.calls_one": "{{count}} 次调用",

@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,10 @@ import {
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 
+function refusal(connector: Connector | undefined): string | undefined {
+	return connector && !connector.signedIn && connector.statusDetail?.step === "sign-in" ? connector.statusDetail.error : undefined;
+}
+
 function openPage(url: string) {
 	void Promise.resolve().then(() => aoBridge.app.openExternal(url)).catch(() => undefined);
 }
@@ -28,9 +32,14 @@ export function ConnectorSignInDialog({ connector, onClose }: { connector: Conne
 	const [address, setAddress] = useState("");
 	const [copied, setCopied] = useState(false);
 	const started = useRef(false);
+	const queryClient = useQueryClient();
+	const liveKey = [...connectorsQueryKey, connector.id];
 
 	const start = useMutation({
 		mutationFn: () => connectorsApi.startSignIn(connector.id),
+		onMutate: () => {
+			void queryClient.resetQueries({ queryKey: liveKey });
+		},
 		onSuccess: (result) => {
 			if (result.authorizationUrl) openPage(result.authorizationUrl);
 		},
@@ -45,11 +54,12 @@ export function ConnectorSignInDialog({ connector, onClose }: { connector: Conne
 
 	const page = start.data?.authorizationUrl;
 	const live = useQuery({
-		queryKey: [...connectorsQueryKey, connector.id],
+		queryKey: liveKey,
 		queryFn: () => connectorsApi.get(connector.id),
 		enabled: Boolean(page) && !finish.isSuccess,
-		refetchInterval: (query) => (query.state.data?.signedIn ? false : 2000),
+		refetchInterval: (query) => (query.state.data?.signedIn || refusal(query.state.data) ? false : 2000),
 	});
+	const refused = refusal(live.data);
 	const done = finish.isSuccess || (start.isSuccess && (!page || Boolean(live.data?.signedIn)));
 	const error = start.error ?? finish.error;
 
@@ -78,6 +88,13 @@ export function ConnectorSignInDialog({ connector, onClose }: { connector: Conne
 								{t("settings.connectors.signInDialog.starting")}
 							</p>
 						) : null
+					) : refused ? (
+						<>
+							<p role="alert" className="text-caption leading-4 text-error">{refused}</p>
+							<Button type="button" variant="secondary" size="sm" className="self-start" onClick={() => startSignIn()}>
+								{t("settings.connectors.signInDialog.again")}
+							</Button>
+						</>
 					) : (
 						<>
 							<p className="flex items-center gap-2 text-sm text-settings-label" role="status">
@@ -122,7 +139,7 @@ export function ConnectorSignInDialog({ connector, onClose }: { connector: Conne
 							</form>
 						</>
 					)}
-					{error && !done ? <p role="alert" className="text-caption leading-4 text-error">{error.message}</p> : null}
+					{error && !done && !refused ? <p role="alert" className="text-caption leading-4 text-error">{error.message}</p> : null}
 				</div>
 			</DialogContent>
 		</Dialog>

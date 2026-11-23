@@ -5,8 +5,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -159,9 +161,15 @@ func TestTheProxyRefusesWhatTheSessionMayNotReach(t *testing.T) {
 		t.Fatalf("a session of another project = %d %s", status, body)
 	}
 	open["ao-12"] = false
+	if status, _ := proxyPost(t, mine.URL, token, call); status != http.StatusOK {
+		t.Fatalf("a session the daemon starts now = %d", status)
+	}
+	clock := svc.now
+	svc.now = func() time.Time { return clock().Add(startGrace + time.Second) }
 	if status, _ := proxyPost(t, mine.URL, token, call); status != http.StatusUnauthorized {
 		t.Fatalf("a closed session = %d", status)
 	}
+	svc.now = clock
 	open["ao-12"] = true
 
 	if _, err := svc.SetEnabled(ctx, "fake", false); err != nil {
@@ -249,6 +257,8 @@ func TestOnlyTheSessionGetsTheCommandAndValuesOfACommandConnector(t *testing.T) 
 		t.Fatal(err)
 	}
 	open = false
+	clock := svc.now
+	svc.now = func() time.Time { return clock().Add(startGrace + time.Second) }
 	if status, body := launchGet(t, launch, token); status != http.StatusUnauthorized || strings.Contains(body, "stored-value") {
 		t.Fatalf("closed session = %d %s", status, body)
 	}
@@ -309,5 +319,23 @@ func TestARefusedHeaderTellsTheAgentToHaveItEditedNotSignedIn(t *testing.T) {
 	}
 	if _, err := svc.StartSignIn(ctx, "docs"); err == nil {
 		t.Fatal("a header connector started a sign-in")
+	}
+}
+
+func TestClosedSessionsAreForgottenWhenManyAreTracked(t *testing.T) {
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	svc.SetSessionLookup(func(_ context.Context, id string) (string, bool) { return "demo", id == "ao-0" })
+	for i := range maxTrackedSessions {
+		svc.ForSession(ctx, SessionInput{SessionID: "ao-" + strconv.Itoa(i), ProjectID: "demo"})
+	}
+	if len(svc.sessions) != maxTrackedSessions {
+		t.Fatalf("tracked while they start = %d", len(svc.sessions))
+	}
+	clock := svc.now
+	svc.now = func() time.Time { return clock().Add(startGrace + time.Second) }
+	svc.ForSession(ctx, SessionInput{SessionID: "ao-new", ProjectID: "demo"})
+	if _, kept := svc.sessions["ao-0"]; !kept || len(svc.sessions) != 2 {
+		t.Fatalf("tracked after the closed ones aged = %d", len(svc.sessions))
 	}
 }

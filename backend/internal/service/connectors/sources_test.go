@@ -49,7 +49,7 @@ command = "ao"
 func TestNativeNamesReadTheAgentsOwnConfiguration(t *testing.T) {
 	home, project := sourceHome(t)
 	claude := NativeNames(domain.HarnessClaudeCode, filepath.ToSlash(project), nil)
-	for _, name := range []string{"Linear", "old", "files", "scoped", "repo"} {
+	for _, name := range []string{"Linear", "linear", "old", "files", "scoped", "repo"} {
 		if !claude[name] {
 			t.Errorf("claude names = %v, missing %q", claude, name)
 		}

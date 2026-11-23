@@ -36,6 +36,15 @@ type signIn struct {
 // CallbackURL is the address a sign-in server sends the browser back to.
 func (s *Service) CallbackURL() string { return s.base() + callbackPath }
 
+func errNotConnected(checked Connector) error {
+	return apierr.Unavailable("CONNECTOR_UNAVAILABLE", checked.Name+" did not connect: "+checked.StatusError)
+}
+
+func asksForSignIn(status int, header http.Header) bool {
+	return status == http.StatusUnauthorized ||
+		(status == http.StatusForbidden && strings.Contains(header.Get("WWW-Authenticate"), "insufficient_scope"))
+}
+
 // StartSignIn starts a sign-in and returns the page the user must open. It returns "" when the server asks for no sign-in.
 func (s *Service) StartSignIn(ctx context.Context, ref string) (string, error) {
 	rec, err := s.snapshot(ref)
@@ -47,8 +56,15 @@ func (s *Service) StartSignIn(ctx context.Context, ref string) (string, error) {
 	}
 	s.cancelSignIns(rec.ID)
 	if rec.OAuth != nil {
-		if checked, testErr := s.Test(ctx, rec.ID); testErr == nil && checked.Status != StatusNeedsSignIn {
+		checked, err := s.Test(ctx, rec.ID)
+		if err != nil {
+			return "", err
+		}
+		if checked.Status == StatusConnected {
 			return "", nil
+		}
+		if checked.Status != StatusNeedsSignIn {
+			return "", errNotConnected(checked)
 		}
 		if _, err := s.SignOut(ctx, rec.ID); err != nil {
 			return "", err
@@ -59,14 +75,15 @@ func (s *Service) StartSignIn(ctx context.Context, ref string) (string, error) {
 		_, _ = s.setStatus(rec.ID, StatusUnavailable, "reach", safeError(err, rec.URL), nil)
 		return "", apierr.Unavailable("CONNECTOR_UNREACHABLE", "The server did not answer: "+safeError(err, rec.URL))
 	}
-	asksForSignIn := status == http.StatusUnauthorized ||
-		(status == http.StatusForbidden && strings.Contains(header.Get("WWW-Authenticate"), "insufficient_scope"))
-	if status == http.StatusForbidden && !asksForSignIn {
+	if status == http.StatusForbidden && !asksForSignIn(status, header) {
 		_, _ = s.setStatus(rec.ID, StatusUnavailable, "initialize", "the server refused the request and asked for no sign-in", nil)
 		return "", apierr.Unavailable("CONNECTOR_REFUSED", "The server refused the request and asked for no sign-in")
 	}
-	if !asksForSignIn {
-		_, err := s.Test(ctx, rec.ID)
+	if !asksForSignIn(status, header) {
+		checked, err := s.Test(ctx, rec.ID)
+		if err == nil && checked.Status != StatusConnected {
+			err = errNotConnected(checked)
+		}
 		return "", err
 	}
 	if _, err := s.setStatus(rec.ID, StatusNeedsSignIn, "", "", nil); err != nil {
@@ -204,7 +221,7 @@ func (s *Service) handlerConfig(rec *record, pending *signIn, pageReady chan<- s
 			}
 		},
 		NewTokenSource: func(_ context.Context, cfg *oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
-			if err := s.saveToken(rec.ID, cfg, token); err != nil {
+			if err := s.saveToken(rec.ID, rec.URL, cfg, token); err != nil {
 				return nil, err
 			}
 			return s.tokenSource(rec.ID), nil
@@ -279,12 +296,15 @@ func (s *Service) cancelSignIns(connectorID string) {
 	}
 }
 
-func (s *Service) saveToken(id string, cfg *oauth2.Config, token *oauth2.Token) error {
+func (s *Service) saveToken(id, address string, cfg *oauth2.Config, token *oauth2.Token) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	i := s.index(id)
 	if i < 0 {
 		return errNotFound()
+	}
+	if s.records[i].URL != address {
+		return invalid("CONNECTOR_SIGNIN_STALE", "The connector's address changed during the sign-in")
 	}
 	next := slices.Clone(s.records)
 	next[i].OAuth = &oauthToken{

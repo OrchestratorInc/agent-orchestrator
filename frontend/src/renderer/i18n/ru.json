@@ -5672,6 +5672,7 @@
 	"settings.connectors.signInDialog.done": "Вход выполнен.",
 	"settings.connectors.signInDialog.notNeeded": "Этому серверу вход не нужен.",
 	"settings.connectors.signInDialog.close": "Готово",
+	"settings.connectors.signInDialog.again": "Начать заново",
 	"chat.connectors.chip_one": "{{count}} коннектор в этом чате",
 	"chat.connectors.chip_few": "{{count}} коннектора в этом чате",
 	"chat.connectors.chip_many": "{{count}} коннекторов в этом чате",

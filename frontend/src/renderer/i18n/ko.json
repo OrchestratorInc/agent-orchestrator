@@ -5372,6 +5372,7 @@
 	"settings.connectors.signInDialog.done": "로그인되었습니다.",
 	"settings.connectors.signInDialog.notNeeded": "이 서버는 로그인이 필요하지 않습니다.",
 	"settings.connectors.signInDialog.close": "완료",
+	"settings.connectors.signInDialog.again": "다시 시작",
 	"chat.connectors.chip_one": "이 채팅의 커넥터 {{count}}개",
 	"chat.connectors.chip_other": "이 채팅의 커넥터 {{count}}개",
 	"chat.connectors.calls_one": "호출 {{count}}회",

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -25,11 +27,13 @@ import (
 )
 
 const (
-	proxyPrefix    = "/mcp/s/"
-	launchSuffix   = "/launch"
-	keyFileName    = "mcp-connectors.key"
-	maxProxyBody   = 32 << 20
-	rpcServerError = -32001
+	startGrace         = 5 * time.Minute
+	maxTrackedSessions = 256
+	proxyPrefix        = "/mcp/s/"
+	launchSuffix       = "/launch"
+	keyFileName        = "mcp-connectors.key"
+	maxProxyBody       = 32 << 20
+	rpcServerError     = -32001
 )
 
 // SessionInput names the session that asks for its connectors.
@@ -51,9 +55,10 @@ type SessionConnector struct {
 }
 
 type sessionUse struct {
-	keys  []string
-	calls map[string]int
-	last  map[string]string
+	keys   []string
+	calls  map[string]int
+	last   map[string]string
+	issued time.Time
 }
 
 // SetSessionLookup sets how the proxy learns the project of a session and whether the session is open.
@@ -64,7 +69,8 @@ func (s *Service) SetSessionLookup(lookup func(ctx context.Context, sessionID st
 }
 
 // ForSession returns the tool servers a new or restored session gets, and records them for the session.
-func (s *Service) ForSession(_ context.Context, in SessionInput) []ports.ChatMCPServerConfig {
+func (s *Service) ForSession(ctx context.Context, in SessionInput) []ports.ChatMCPServerConfig {
+	s.forgetClosed(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if in.SessionID == "" || s.load() != nil {
@@ -80,7 +86,7 @@ func (s *Service) ForSession(_ context.Context, in SessionInput) []ports.ChatMCP
 		use = &sessionUse{calls: map[string]int{}, last: map[string]string{}}
 		s.sessions[in.SessionID] = use
 	}
-	use.keys = use.keys[:0]
+	use.keys, use.issued = use.keys[:0], s.now()
 	for i := range s.records {
 		rec := &s.records[i]
 		if !rec.Enabled || (rec.ProjectID != "" && rec.ProjectID != in.ProjectID) || in.Native[rec.Key] {
@@ -241,7 +247,7 @@ func (s *Service) admit(r *http.Request, sessionID, key string, transport Transp
 	projectID := ""
 	if lookup != nil {
 		var open bool
-		if projectID, open = lookup(r.Context(), sessionID); !open {
+		if projectID, open = lookup(r.Context(), sessionID); !open && !s.starting(sessionID) {
 			return nil, "unknown session"
 		}
 	}
@@ -252,6 +258,30 @@ func (s *Service) admit(r *http.Request, sessionID, key string, transport Transp
 		return rec, rec.Name + " is turned off. Ask the user to open Settings, Connectors, and turn it on."
 	}
 	return rec, ""
+}
+
+func (s *Service) starting(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	use := s.sessions[sessionID]
+	return use != nil && !use.issued.IsZero() && s.now().Sub(use.issued) < startGrace
+}
+
+func (s *Service) forgetClosed(ctx context.Context) {
+	s.mu.Lock()
+	lookup := s.sessionLookup
+	ids := slices.Collect(maps.Keys(s.sessions))
+	s.mu.Unlock()
+	if lookup == nil || len(ids) < maxTrackedSessions {
+		return
+	}
+	for _, id := range ids {
+		if _, open := lookup(ctx, id); !open && !s.starting(id) {
+			s.mu.Lock()
+			delete(s.sessions, id)
+			s.mu.Unlock()
+		}
+	}
 }
 
 func (s *Service) count(sessionID, key, method, tool string) {

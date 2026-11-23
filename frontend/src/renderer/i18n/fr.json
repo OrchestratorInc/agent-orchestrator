@@ -5526,6 +5526,7 @@
 	"settings.connectors.signInDialog.done": "Connecté.",
 	"settings.connectors.signInDialog.notNeeded": "Ce serveur ne demande pas de connexion.",
 	"settings.connectors.signInDialog.close": "Terminé",
+	"settings.connectors.signInDialog.again": "Recommencer",
 	"chat.connectors.chip_one": "{{count}} connecteur dans ce chat",
 	"chat.connectors.chip_other": "{{count}} connecteurs dans ce chat",
 	"chat.connectors.chip_many": "{{count}} connecteurs dans ce chat",

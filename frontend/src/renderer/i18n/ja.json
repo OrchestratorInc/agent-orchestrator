@@ -5372,6 +5372,7 @@
 	"settings.connectors.signInDialog.done": "サインインしました。",
 	"settings.connectors.signInDialog.notNeeded": "このサーバーはサインイン不要です。",
 	"settings.connectors.signInDialog.close": "完了",
+	"settings.connectors.signInDialog.again": "やり直す",
 	"chat.connectors.chip_one": "このチャットのコネクタ {{count}} 個",
 	"chat.connectors.chip_other": "このチャットのコネクタ {{count}} 個",
 	"chat.connectors.calls_one": "{{count}} 回の呼び出し",

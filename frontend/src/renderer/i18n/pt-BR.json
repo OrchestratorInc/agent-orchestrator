@@ -5526,6 +5526,7 @@
 	"settings.connectors.signInDialog.done": "Login concluído.",
 	"settings.connectors.signInDialog.notNeeded": "Este servidor não precisa de login.",
 	"settings.connectors.signInDialog.close": "Concluído",
+	"settings.connectors.signInDialog.again": "Começar de novo",
 	"chat.connectors.chip_one": "{{count}} conector neste chat",
 	"chat.connectors.chip_other": "{{count}} conectores neste chat",
 	"chat.connectors.chip_many": "{{count}} conectores neste chat",

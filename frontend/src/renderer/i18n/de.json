@@ -5372,6 +5372,7 @@
 	"settings.connectors.signInDialog.done": "Angemeldet.",
 	"settings.connectors.signInDialog.notNeeded": "Dieser Server braucht keine Anmeldung.",
 	"settings.connectors.signInDialog.close": "Fertig",
+	"settings.connectors.signInDialog.again": "Neu starten",
 	"chat.connectors.chip_one": "{{count}} Konnektor in diesem Chat",
 	"chat.connectors.chip_other": "{{count}} Konnektoren in diesem Chat",
 	"chat.connectors.calls_one": "{{count}} Aufruf",

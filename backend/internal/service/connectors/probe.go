@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/oauth2"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -101,11 +102,14 @@ type probeTransport struct {
 func (t *probeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 	if err := t.service.authorize(req, t.rec); err != nil {
-		t.refused.Store(true)
+		var renewal *oauth2.RetrieveError
+		if errors.As(err, &renewal) && renewal.ErrorCode == "invalid_grant" {
+			t.refused.Store(true)
+		}
 		return nil, err
 	}
 	resp, err := t.base.RoundTrip(req)
-	if err == nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+	if err == nil && asksForSignIn(resp.StatusCode, resp.Header) {
 		t.refused.Store(true)
 	}
 	return resp, err

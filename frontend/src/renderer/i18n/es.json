@@ -5526,6 +5526,7 @@
 	"settings.connectors.signInDialog.done": "Sesión iniciada.",
 	"settings.connectors.signInDialog.notNeeded": "Este servidor no requiere iniciar sesión.",
 	"settings.connectors.signInDialog.close": "Listo",
+	"settings.connectors.signInDialog.again": "Empezar de nuevo",
 	"chat.connectors.chip_one": "{{count}} conector en este chat",
 	"chat.connectors.chip_other": "{{count}} conectores en este chat",
 	"chat.connectors.chip_many": "{{count}} conectores en este chat",

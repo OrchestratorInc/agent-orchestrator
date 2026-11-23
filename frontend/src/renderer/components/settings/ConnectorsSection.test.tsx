@@ -114,6 +114,24 @@ describe("ConnectorsSection", () => {
 		expect(await screen.findByText("Signed in.", undefined, { timeout: 5000 })).toBeInTheDocument();
 	});
 
+	it("stops waiting and offers a new start when the sign-in fails in the browser", async () => {
+		const sentry = list[1] as Connector;
+		let failed = true;
+		mockList(list, () => (failed ? { ...sentry, statusDetail: { step: "sign-in", error: "access_denied" } } : sentry));
+		vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined as never);
+		const post = vi.spyOn(apiClient, "POST").mockResolvedValue({
+			data: { authorizationUrl: "https://auth.example/authorize", callbackUrl: "http://127.0.0.1:3011/oauth/mcp/callback", connector: sentry },
+		} as never);
+		renderSection();
+		fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("access_denied");
+		expect(screen.queryByText("Approve the sign-in in your browser.")).not.toBeInTheDocument();
+		failed = false;
+		fireEvent.click(screen.getByRole("button", { name: "Start again" }));
+		expect(await screen.findByText("Approve the sign-in in your browser.")).toBeInTheDocument();
+		expect(post).toHaveBeenCalledTimes(2);
+	});
+
 	it("adds a server from the catalog and starts its sign-in", async () => {
 		mockList([]);
 		vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined as never);

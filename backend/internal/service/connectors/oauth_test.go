@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/oauth2"
 )
 
 const testBaseURL = "http://127.0.0.1:3001"
@@ -28,6 +29,8 @@ type fakeServer struct {
 	needToken   bool
 	minToken    atomic.Int32
 	tokenCalls  atomic.Int32
+	tokenError  atomic.Value
+	down        atomic.Bool
 	registered  atomic.Int32
 	lastRefresh atomic.Value
 }
@@ -48,6 +51,10 @@ func newFakeServer(t *testing.T, needToken bool) *fakeServer {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		if fake.down.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		number, _ := strconv.Atoi(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer access-"))
 		if fake.needToken && (!strings.HasPrefix(r.Header.Get("Authorization"), "Bearer access-") || int32(number) < fake.minToken.Load()) {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+fake.URL+`/.well-known/oauth-protected-resource"`)
@@ -77,6 +84,10 @@ func newFakeServer(t *testing.T, needToken bool) *fakeServer {
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		fake.lastRefresh.Store(r.Form.Get("refresh_token"))
+		if code, _ := fake.tokenError.Load().(string); code != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": code})
+			return
+		}
 		n := fake.tokenCalls.Add(1)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"access_token": "access-" + strconv.Itoa(int(n)), "token_type": "Bearer", "refresh_token": "refresh-" + strconv.Itoa(int(n)), "expires_in": 3600,
@@ -357,5 +368,71 @@ func TestARefusalWithoutASignInChallengeIsNotReportedAsNoSignInNeeded(t *testing
 	}
 	if got, _ := svc.Get(ctx, created.ID); got.Status != StatusUnavailable || got.SignedIn {
 		t.Fatalf("after the refusal = %+v", got)
+	}
+}
+
+func TestAServerThatDoesNotAnswerKeepsItsSignIn(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "fake", Transport: TransportHTTP, URL: fake.URL + "/mcp", Auth: AuthOAuth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.StartSignIn(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CompleteSignIn(ctx, signInState(t, page), "code-1", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	expire := func() {
+		svc.mu.Lock()
+		svc.records[0].OAuth.Expiry = svc.now().Add(-time.Hour)
+		delete(svc.sources, created.ID)
+		svc.mu.Unlock()
+	}
+	kept := func(when string) {
+		t.Helper()
+		page, err := svc.StartSignIn(ctx, created.ID)
+		if page != "" || errCode(err) != "CONNECTOR_UNAVAILABLE" {
+			t.Fatalf("%s: start = %q, %v", when, page, err)
+		}
+		if got, _ := svc.Get(ctx, created.ID); !got.SignedIn || got.Status != StatusUnavailable {
+			t.Fatalf("%s: connector = %+v", when, got)
+		}
+	}
+
+	fake.down.Store(true)
+	kept("server down")
+	fake.down.Store(false)
+
+	expire()
+	fake.tokenError.Store("temporarily_unavailable")
+	kept("renewal not possible now")
+
+	fake.tokenError.Store("invalid_grant")
+	if tested, err := svc.Test(ctx, created.ID); err != nil || tested.Status != StatusNeedsSignIn || tested.SignedIn {
+		t.Fatalf("a refused renewal = %+v, %v", tested, err)
+	}
+	fake.tokenError.Store("")
+	if page, err := svc.StartSignIn(ctx, created.ID); err != nil || page == "" {
+		t.Fatalf("a start after a refused renewal = %q, %v", page, err)
+	}
+}
+
+func TestATokenIsNotSavedOnAnAddressTheSignInDidNotStartFor(t *testing.T) {
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, httpInput("fake"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = svc.saveToken(created.ID, "https://old.example.com/mcp", &oauth2.Config{ClientID: "client-1"}, &oauth2.Token{AccessToken: "access-1"})
+	if errCode(err) != "CONNECTOR_SIGNIN_STALE" {
+		t.Fatalf("save on a changed address = %v", err)
+	}
+	if got, _ := svc.Get(ctx, created.ID); got.SignedIn {
+		t.Fatalf("connector = %+v", got)
 	}
 }

@@ -111,6 +111,9 @@ func NativeNames(harness domain.AgentHarness, workspace string, env map[string]s
 			names[name] = true
 		}
 	}
+	for name := range maps.Clone(names) {
+		names[importKey(name)] = true
+	}
 	return names
 }
 
@@ -227,16 +230,21 @@ func (s *Service) foundServers(ctx context.Context) []sourceServer {
 	return out
 }
 
+func importKey(name string) string {
+	key := strings.Trim(slugRun.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	if len(key) > 32 {
+		key = strings.Trim(key[:32], "-")
+	}
+	return key
+}
+
 func (f sourceServer) id() string {
 	sum := sha256.Sum256([]byte(f.agent + "\x00" + f.path + "\x00" + f.projectID + "\x00" + f.name))
 	return hex.EncodeToString(sum[:8])
 }
 
 func (f sourceServer) input(typed map[string]string) (in Input, needs []string, ok bool) {
-	key := strings.Trim(slugRun.ReplaceAllString(strings.ToLower(f.name), "-"), "-")
-	if len(key) > 32 {
-		key = strings.Trim(key[:32], "-")
-	}
+	key := importKey(f.name)
 	if key == "" || reservedKeys[key] {
 		return Input{}, nil, false
 	}

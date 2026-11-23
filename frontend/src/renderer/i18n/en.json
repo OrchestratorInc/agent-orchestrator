@@ -5352,6 +5352,7 @@
 	"settings.connectors.signInDialog.done": "Signed in.",
 	"settings.connectors.signInDialog.notNeeded": "This server needs no sign-in.",
 	"settings.connectors.signInDialog.close": "Done",
+	"settings.connectors.signInDialog.again": "Start again",
 	"chat.connectors.chip_one": "{{count}} connector in this chat",
 	"chat.connectors.chip_other": "{{count}} connectors in this chat",
 	"chat.connectors.calls_one": "{{count}} call",
