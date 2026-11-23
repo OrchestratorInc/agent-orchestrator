@@ -1420,12 +1420,13 @@ export function FromCommentThreadCard({ thread, className }: { thread: NonNullab
 				<span className="tabular-nums">· {t("comment.count", { count: total })}</span>
 			</div>
 			{thread.framed ? (
-				<p className={cn("whitespace-pre-wrap break-words text-sm leading-[1.5]", !thread.requestText && "text-muted-foreground")} data-from-comment-request="">
+				<p className={cn("whitespace-pre-wrap break-words text-sm leading-[1.5]", thread.requestText ? "font-medium" : "text-muted-foreground")} data-from-comment-request="">
 					{thread.requestText ?? t("comment.card.sentThread")}
 				</p>
 			) : null}
 			{thread.quote || thread.anchorExcerpt ? (
-				<div className="border-l-2 border-[var(--comment-quote-edge)] pl-2 text-control text-foreground/85" data-from-comment-quote="">
+				// Under a request, the quote is context: a few lines of it (the message is in the conversation).
+				<div className={cn("border-l-2 border-[var(--comment-quote-edge)] pl-2 text-control text-foreground/85", thread.framed && "line-clamp-3")} data-from-comment-quote="">
 					{thread.quote ? `“${thread.quote}”` : thread.anchorExcerpt}
 				</div>
 			) : null}
@@ -1565,6 +1566,8 @@ export function AssistantMessage({
 		<div
 			className="group/message relative"
 			data-chat-streaming-output={renderingStreaming ? "" : undefined}
+			// Opening a comment thread on the answer from the threads view lands here.
+			data-chat-focus-id={message.id}
 			data-find-message-id={message.origin !== "automation" && message.origin !== "daemon" ? message.id : undefined}
 			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
 			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}

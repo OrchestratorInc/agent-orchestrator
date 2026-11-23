@@ -304,9 +304,10 @@ function AsideHistoryRow({ entry }: { entry: CloudCpAsideHistoryEntry }) {
 		: entry.kind === "reopened" ? t("comment.history.reopened", { name })
 			: t("comment.history.sentResolved", { name });
 	return (
-		<p className="flex items-baseline gap-1.5 pl-8.5 text-caption text-muted-foreground" data-aside-history={entry.kind}>
-			<span className="min-w-0">{text}</span>
-			<time className="shrink-0 tabular-nums" dateTime={entry.at}>{formatTimeCompact(entry.at)}</time>
+		<p className="pl-8.5 text-caption text-muted-foreground" data-aside-history={entry.kind}>
+			{text}
+			{" · "}
+			<time className="tabular-nums" dateTime={entry.at}>{formatTimeCompact(entry.at)}</time>
 		</p>
 	);
 }

@@ -152,6 +152,8 @@ describe("the margin icon", () => {
 	it("is absent for a message with no open thread", () => {
 		const { container } = renderFor(target(answer, <AssistantMessage message={answer} />), markers());
 		expect(container.querySelector("[data-comment-marker]")).toBeNull();
+		// "Open in session" from the threads view can still land on the answer.
+		expect(container.querySelector(`[data-chat-focus-id="${answer.id}"]`)).not.toBeNull();
 	});
 
 	it("turns blue for unseen replies and lights while its thread is open", () => {

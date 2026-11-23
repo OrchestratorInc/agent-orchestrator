@@ -29,7 +29,9 @@ export function useUnreadCommentThreads(): { count: number; supported: boolean }
 		retry: (failures, error) => !(error instanceof CloudCpError && error.status === 404) && failures < 1,
 		queryFn: ({ signal }) => client.countMyUnreadCommentThreads({ signal }),
 	});
-	return { count: query.data?.count ?? 0, supported: query.isSuccess };
+	// Once it answered, a passing failure (offline, a 500) keeps the item; only a 404 says there is no view.
+	const missing = query.error instanceof CloudCpError && query.error.status === 404;
+	return { count: query.data?.count ?? 0, supported: query.data !== undefined && !missing };
 }
 
 /** One tab of the threads view, read 50 at a time. Rows are keyed by asideId: one that moved between pages shows once. */
