@@ -7078,6 +7078,46 @@ describe("browser live typing", () => {
 		expect(JSON.stringify(sink.state.mock.calls.slice(afterNavigation))).not.toContain("old page");
 	});
 
+	// A poll that read the field before the agent's last write may still be in
+	// flight when control returns: its answer must not become the handoff.
+	it("returns control with a value read after the agent finished, not an older poll's", async () => {
+		const { debuggerSendCommand, host } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		page.focus = JSON.stringify({ kind: "text", value: "old", field: 1 });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+
+		// The next read answers with what the page held when it was read, and
+		// is held until released.
+		let release!: () => void;
+		let asked = false;
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		const answer = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			const result = await answer(method, params);
+			if (method === "Runtime.evaluate" && !asked) {
+				asked = true;
+				await held;
+			}
+			return result;
+		});
+		const polling = host.handleRemoteInput("sess-1", { kind: "text", value: "y" });
+		await vi.waitFor(() => expect(asked).toBe(true));
+
+		page.focus = JSON.stringify({ kind: "text", value: "agent wrote", field: 1 });
+		sink.state.mockClear();
+		const agent = host.execute("sess-1", "tabs");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		release();
+		await Promise.all([polling, agent]);
+		await vi.waitFor(() => expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human", focusedEditable: expect.objectContaining({ value: "agent wrote" }) })));
+		const handoff = sink.state.mock.calls
+			.map(([state]) => state as { control: string; focusedEditable: { value?: string } | null })
+			.find((state) => state.control === "human");
+		expect(handoff?.focusedEditable?.value).toBe("agent wrote");
+	});
+
 	it("notices focus the phone did not move while it watches", async () => {
 		vi.useFakeTimers();
 		try {

@@ -1110,7 +1110,7 @@ export function createBrowserViewHost(
       if (session.agentBrowserCommands > 0 || !shown) emitShownLiveState(session);
       else {
         const live = session.live;
-        void queryFocus(shown).finally(() => {
+        void queryFreshFocus(shown).finally(() => {
           if (session.live === live) emitShownLiveState(session);
         });
       }
@@ -6366,6 +6366,13 @@ function queryFocus(entry: BrowserEntry): Promise<void> {
   if (entry.agentTab !== undefined) return Promise.resolve();
   entry.focusQuery ??= runFocusQuery(entry).finally(() => { entry.focusQuery = undefined; });
   return entry.focusQuery;
+}
+
+// A query started from now: one already in flight may have read the page
+// before whatever just happened, such as the agent's last write.
+async function queryFreshFocus(entry: BrowserEntry): Promise<void> {
+  while (entry.focusQuery) await entry.focusQuery;
+  await queryFocus(entry);
 }
 
 async function runFocusQuery(entry: BrowserEntry): Promise<void> {
