@@ -134,6 +134,7 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 			continue
 		}
 		task.Description = domain.SanitizeTaskDescription(task.Description)
+		task.Command = domain.SanitizeTaskCommand(task.Command)
 		out.Tasks = append(out.Tasks, task)
 	}
 	sort.SliceStable(out.Tasks, func(i, j int) bool {
@@ -148,18 +149,11 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 // StopBackgroundTask stops one provider-owned background task. Like a reading,
 // it never starts a controller or wakes a hibernated session.
 func (s *Service) StopBackgroundTask(ctx context.Context, id domain.SessionID, taskID string) error {
-	rec, found, err := s.sessions.GetSession(ctx, id)
+	controller, err := s.attachedChatController(ctx, id)
 	if err != nil {
 		return err
 	}
-	if !found {
-		return ports.ErrSessionNotFound
-	}
-	if rec.IsTerminated || rec.Mode != domain.SessionModeChat || rec.HibernatedAt != nil {
-		return ports.ErrBackgroundTaskNotStoppable
-	}
-	controller, err := s.Controller(id)
-	if err != nil || controller.State() == ports.ChatControllerStopped || controller.generation != rec.Metadata.ControllerGeneration {
+	if controller == nil {
 		return ports.ErrBackgroundTaskNotStoppable
 	}
 	stopper, ok := controller.conv.(ports.ChatBackgroundTaskStopper)
@@ -178,6 +172,65 @@ func (s *Service) StopBackgroundTask(ctx context.Context, id domain.SessionID, t
 	controller.backgroundSampledAt = time.Time{}
 	controller.backgroundMu.Unlock()
 	return nil
+}
+
+// BackgroundTaskOutput reads one task's recent output. Like a reading, it
+// never starts a controller or wakes a hibernated session; output that cannot
+// be read without one, or that the provider failed to return, is unavailable.
+func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID, taskID string) (ports.ChatBackgroundTaskOutput, error) {
+	controller, err := s.attachedChatController(ctx, id)
+	if err != nil && ctx.Err() != nil {
+		// The panel cancelled its poll; that is not a server failure.
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	if err != nil {
+		return ports.ChatBackgroundTaskOutput{}, err
+	}
+	if controller == nil {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	reader, ok := controller.conv.(ports.ChatBackgroundTaskOutputReader)
+	if !ok {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	output, err := reader.BackgroundTaskOutput(readCtx, taskID)
+	if err != nil || ctx.Err() != nil {
+		// A panel polls this: a poll it cancelled, a controller closing
+		// mid-read, a timeout or a provider error is a moment without output,
+		// not a server failure.
+		if !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+			s.log.Debug("background task output unavailable", "session", id, "task", taskID, "error", err)
+		}
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	// The read can cross termination, a handoff, or a provider replacement.
+	if current, err := s.attachedChatController(ctx, id); err != nil || current != controller {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	return output, nil
+}
+
+// attachedChatController returns the session's live controller for its
+// current generation, never starting or waking one. It returns nil without an
+// error when the session has none, and ErrSessionNotFound for an unknown session.
+func (s *Service) attachedChatController(ctx context.Context, id domain.SessionID) (*Controller, error) {
+	rec, found, err := s.sessions.GetSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ports.ErrSessionNotFound
+	}
+	if rec.IsTerminated || rec.Mode != domain.SessionModeChat || rec.HibernatedAt != nil {
+		return nil, nil
+	}
+	controller, err := s.Controller(id)
+	if err != nil || controller.State() == ports.ChatControllerStopped || controller.generation != rec.Metadata.ControllerGeneration {
+		return nil, nil //nolint:nilerr // No attached controller is an answer, not a failure.
+	}
+	return controller, nil
 }
 
 // ListBackgroundTasks inspects only already attached controllers. Sessions
