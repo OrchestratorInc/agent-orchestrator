@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -22,7 +23,7 @@ const (
 	callbackPath     = "/oauth/mcp/callback"
 	clientName       = "Orchestrator"
 	signInLifetime   = 10 * time.Minute
-	signInFinishWait = 45 * time.Second
+	signInFinishWait = 55 * time.Second
 	maxAddressBytes  = 16 << 10
 	initializeBody   = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"orchestrator","version":"1"}}}`
 )
@@ -85,10 +86,13 @@ func (s *Service) StartSignIn(ctx context.Context, ref string) (string, error) {
 	}
 	if !asksForSignIn(status, header) {
 		checked, err := s.Test(ctx, rec.ID)
-		if err == nil && checked.Status != StatusConnected {
-			err = errNotConnected(checked)
+		if err != nil || checked.Status == StatusConnected {
+			return "", err
 		}
-		return "", err
+		if checked.Status != StatusNeedsSignIn {
+			return "", errNotConnected(checked)
+		}
+		status, header = http.StatusUnauthorized, http.Header{}
 	}
 	if _, err := s.setStatus(rec.ID, StatusNeedsSignIn, "", ""); err != nil {
 		return "", err
@@ -130,8 +134,9 @@ func (s *Service) CompleteSignIn(ctx context.Context, state, code, iss, refusal 
 		return Connector{}, apierr.NotFound("CONNECTOR_SIGNIN_NOT_FOUND", "This sign-in is not open on this machine")
 	}
 	if refusal != "" || code == "" {
+		refusal = cmp.Or(refusal, "no code")
 		s.mu.Lock()
-		pending.refusal = cmp.Or(refusal, "no code")
+		pending.refusal = refusal
 		s.mu.Unlock()
 		pending.cancel()
 		<-pending.done
@@ -334,7 +339,7 @@ func (s *Service) saveToken(started *record, cfg *oauth2.Config, token *oauth2.T
 	return s.save(next)
 }
 
-func (s *Service) tokenSource(id string) oauth2.TokenSource {
+func (s *Service) tokenSource(id string) *savingSource {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if source, ok := s.sources[id]; ok {
@@ -352,9 +357,14 @@ func (s *Service) tokenSource(id string) oauth2.TokenSource {
 		ClientID: saved.ClientID, ClientSecret: saved.ClientSecret,
 		Endpoint: oauth2.Endpoint{TokenURL: saved.TokenURL, AuthStyle: oauth2.AuthStyle(saved.AuthStyle)},
 	}
-	base := cfg.TokenSource(context.WithValue(context.Background(), oauth2.HTTPClient, s.http),
-		&oauth2.Token{AccessToken: saved.AccessToken, TokenType: saved.TokenType, RefreshToken: saved.RefreshToken, Expiry: saved.Expiry})
-	source := &savingSource{service: s, id: id, base: base, last: saved.AccessToken}
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, s.http)
+	source := &savingSource{
+		service: s, id: id,
+		token: oauth2.Token{AccessToken: saved.AccessToken, TokenType: saved.TokenType, RefreshToken: saved.RefreshToken, Expiry: saved.Expiry},
+		refresh: func(refreshToken string) (*oauth2.Token, error) {
+			return cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken}).Token()
+		},
+	}
 	s.sources[id] = source
 	return source
 }
@@ -362,43 +372,67 @@ func (s *Service) tokenSource(id string) oauth2.TokenSource {
 type savingSource struct {
 	service *Service
 	id      string
-	base    oauth2.TokenSource
-	last    string
+	refresh func(refreshToken string) (*oauth2.Token, error)
+	mu      sync.Mutex
+	token   oauth2.Token
 }
 
 func (t *savingSource) Token() (*oauth2.Token, error) {
-	token, err := t.base.Token()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.token.Valid() || t.token.RefreshToken == "" {
+		current := t.token
+		return &current, nil
+	}
+	next, err := t.refresh(t.token.RefreshToken)
 	if err != nil {
 		var refused *oauth2.RetrieveError
-		t.service.mu.Lock()
-		current := t.service.sources[t.id] == oauth2.TokenSource(t)
-		t.service.mu.Unlock()
-		if current && errors.As(err, &refused) && refused.ErrorCode == "invalid_grant" {
+		if errors.As(err, &refused) && refused.ErrorCode == "invalid_grant" && t.service.current(t) {
 			_, _ = t.service.SignOut(context.Background(), t.id)
 		}
 		return nil, err
 	}
-	t.service.mu.Lock()
-	defer t.service.mu.Unlock()
-	if token.AccessToken == t.last {
-		return token, nil
+	if next.RefreshToken == "" {
+		next.RefreshToken = t.token.RefreshToken
 	}
-	i := t.service.index(t.id)
-	if i < 0 || t.service.records[i].OAuth == nil || t.service.sources[t.id] != oauth2.TokenSource(t) {
-		return token, nil
-	}
-	next := slices.Clone(t.service.records)
-	renewed := *next[i].OAuth
-	renewed.AccessToken, renewed.TokenType, renewed.Expiry = token.AccessToken, token.TokenType, token.Expiry
-	if token.RefreshToken != "" {
-		renewed.RefreshToken = token.RefreshToken
-	}
-	next[i].OAuth = &renewed
-	if err := t.service.save(next); err != nil {
+	if err := t.service.keepToken(t, next); err != nil {
 		return nil, err
 	}
-	t.last = token.AccessToken
-	return token, nil
+	t.token = *next
+	return next, nil
+}
+
+func (t *savingSource) expire(refused string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !strings.HasSuffix(refused, " "+t.token.AccessToken) {
+		return true
+	}
+	if t.token.RefreshToken == "" {
+		return false
+	}
+	t.token.Expiry = time.Unix(1, 0)
+	return true
+}
+
+func (s *Service) current(source *savingSource) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sources[source.id] == source
+}
+
+func (s *Service) keepToken(source *savingSource, token *oauth2.Token) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(source.id)
+	if i < 0 || s.records[i].OAuth == nil || s.sources[source.id] != source {
+		return nil
+	}
+	next := slices.Clone(s.records)
+	renewed := *next[i].OAuth
+	renewed.AccessToken, renewed.TokenType, renewed.RefreshToken, renewed.Expiry = token.AccessToken, token.TokenType, token.RefreshToken, token.Expiry
+	next[i].OAuth = &renewed
+	return s.save(next)
 }
 
 func (s *Service) authorize(req *http.Request, rec *record) error {
@@ -421,31 +455,8 @@ func (s *Service) authorize(req *http.Request, rec *record) error {
 }
 
 func (s *Service) renew(id, refused string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	i := s.index(id)
-	if i < 0 || s.records[i].OAuth == nil || refused == "" {
-		return false
-	}
-	saved := s.records[i].OAuth
-	if !strings.HasSuffix(refused, " "+saved.AccessToken) {
-		return true
-	}
-	if saved.RefreshToken == "" {
-		return false
-	}
-	if !saved.Expiry.IsZero() && !saved.Expiry.After(s.now()) {
-		return true
-	}
-	next := slices.Clone(s.records)
-	expired := *saved
-	expired.Expiry = s.now().Add(-time.Minute)
-	next[i].OAuth = &expired
-	if s.save(next) != nil {
-		return false
-	}
-	delete(s.sources, id)
-	return true
+	source := s.tokenSource(id)
+	return source != nil && refused != "" && source.expire(refused)
 }
 
 func (s *Service) send(base http.RoundTripper, rec *record, req *http.Request, body func() (io.ReadCloser, error)) (*http.Response, error) {

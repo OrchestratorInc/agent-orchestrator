@@ -17,7 +17,7 @@ ao connector remove <key>
 ao connector import [id...] [--value NAME=value]... [--json]
 ```
 
-The key starts each tool name. It has 1 to 32 lowercase letters, digits, hyphens or underscores. `ao` and `import` are not available. A server URL must be `https`, or `http` on this computer.
+The key starts each tool name. It has 1 to 32 lowercase letters, digits, hyphens or underscores. `ao`, `import` and `proposals` are not available. A server URL must be `https`, or `http` on this computer.
 
 ## Sign-in
 

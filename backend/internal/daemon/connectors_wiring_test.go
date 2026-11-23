@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -14,11 +15,12 @@ import (
 type fakeConnectorStore struct {
 	sessions map[domain.SessionID]domain.SessionRecord
 	projects []domain.ProjectRecord
+	fail     error
 }
 
 func (f fakeConnectorStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	rec, ok := f.sessions[id]
-	return rec, ok, nil
+	return rec, ok, f.fail
 }
 
 func (f fakeConnectorStore) ListProjects(context.Context) ([]domain.ProjectRecord, error) {
@@ -59,5 +61,20 @@ func TestWireConnectorsGivesASessionTheConnectorsOfItsProject(t *testing.T) {
 	used, err := svc.SessionConnectors(ctx, "mer-1")
 	if err != nil || len(used) != 1 || used[0].Key != "everywhere" {
 		t.Fatalf("session connectors = %+v, %v", used, err)
+	}
+}
+
+func TestASessionReadThatFailsDoesNotCloseTheSessionForItsConnectors(t *testing.T) {
+	ctx := context.Background()
+	ask := connectors.ProposalInput{SessionID: "mer-1", Name: "docs", Transport: connectors.TransportHTTP, URL: "https://docs.example.com/mcp"}
+	busy := connectors.New(t.TempDir(), "http://127.0.0.1:3011")
+	wireConnectors(busy, fakeConnectorStore{fail: errors.New("database is locked")}, &fakeConnectorSessions{})
+	if _, err := busy.Propose(ctx, ask); err != nil {
+		t.Fatalf("a session whose read failed = %v", err)
+	}
+	gone := connectors.New(t.TempDir(), "http://127.0.0.1:3011")
+	wireConnectors(gone, fakeConnectorStore{}, &fakeConnectorSessions{})
+	if _, err := gone.Propose(ctx, ask); err == nil {
+		t.Fatal("a session that does not exist was accepted")
 	}
 }

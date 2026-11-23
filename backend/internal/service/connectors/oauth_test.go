@@ -1,8 +1,10 @@
 package connectors
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,6 +34,7 @@ type fakeServer struct {
 	tokenCalls  atomic.Int32
 	tokenError  atomic.Value
 	down        atomic.Bool
+	lateSignIn  atomic.Bool
 	registered  atomic.Int32
 	lastRefresh atomic.Value
 }
@@ -54,6 +58,14 @@ func newFakeServer(t *testing.T, needToken bool) *fakeServer {
 		if fake.down.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
+		}
+		if fake.lateSignIn.Load() && r.Header.Get("Authorization") == "" {
+			body, _ := io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			if strings.Contains(string(body), `"initialize"`) || strings.Contains(string(body), `"notifications/initialized"`) || r.Method != http.MethodPost {
+				streamable.ServeHTTP(w, r)
+				return
+			}
 		}
 		number, _ := strconv.Atoi(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer access-"))
 		if fake.needToken && (!strings.HasPrefix(r.Header.Get("Authorization"), "Bearer access-") || int32(number) < fake.minToken.Load()) {
@@ -571,5 +583,54 @@ func TestARefusedSignInSaysWhyAndAPastedAddressNeedsNoScheme(t *testing.T) {
 	pasted := strings.TrimPrefix(testBaseURL, "http://") + callbackPath + "?code=code-1&state=" + signInState(t, page) + "&iss=" + fake.URL
 	if done, err := svc.FinishFromAddress(ctx, created.ID, pasted); err != nil || !done.SignedIn {
 		t.Fatalf("a pasted address without a scheme = %+v, %v", done, err)
+	}
+}
+
+func TestAServerThatAsksForSignInAfterInitializeGetsASignIn(t *testing.T) {
+	fake := newFakeServer(t, true)
+	fake.lateSignIn.Store(true)
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, Input{Name: "fake", Transport: TransportHTTP, URL: fake.URL + "/mcp", Auth: AuthOAuth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := svc.StartSignIn(ctx, created.ID)
+	if err != nil || page == "" {
+		t.Fatalf("start = %q, %v", page, err)
+	}
+	done, err := svc.CompleteSignIn(ctx, signInState(t, page), "code-1", "", "")
+	if err != nil || !done.SignedIn || done.Status != StatusConnected {
+		t.Fatalf("after the sign-in = %+v, %v", done, err)
+	}
+}
+
+func TestCallsAtTheSameTimeRenewAnExpiredTokenOnce(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	created := signInFake(t, svc, fake, Input{Name: "fake"})
+	if !svc.renew(created.ID, "Bearer access-1") {
+		t.Fatal("no renewal was started")
+	}
+	var calls sync.WaitGroup
+	tokens := make([]string, 8)
+	for i := range tokens {
+		calls.Go(func() {
+			if i%2 == 0 {
+				svc.renew(created.ID, "Bearer access-1")
+			}
+			if token, err := svc.tokenSource(created.ID).Token(); err == nil {
+				tokens[i] = token.AccessToken
+			}
+		})
+	}
+	calls.Wait()
+	for _, token := range tokens {
+		if token != "access-2" {
+			t.Fatalf("tokens = %v", tokens)
+		}
+	}
+	if got := svc.records[0].OAuth; fake.tokenCalls.Load() != 2 || got.AccessToken != "access-2" || got.RefreshToken != "refresh-2" {
+		t.Fatalf("token calls %d, saved %+v", fake.tokenCalls.Load(), got)
 	}
 }

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/oauth2"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
@@ -48,7 +47,7 @@ type Service struct {
 	loaded  bool
 	records []record
 	signIns map[string]*signIn
-	sources map[string]oauth2.TokenSource
+	sources map[string]*savingSource
 
 	sessions       map[string]*sessionUse
 	sessionLookup  func(ctx context.Context, sessionID string) (projectID string, open bool)
@@ -62,7 +61,7 @@ func New(dataDir, baseURL string) *Service {
 	s := &Service{
 		path: filepath.Join(dataDir, fileName),
 		http: &http.Client{Timeout: 30 * time.Second}, now: time.Now,
-		signIns: map[string]*signIn{}, sources: map[string]oauth2.TokenSource{}, sessions: map[string]*sessionUse{},
+		signIns: map[string]*signIn{}, sources: map[string]*savingSource{}, sessions: map[string]*sessionUse{},
 	}
 	s.SetBaseURL(baseURL)
 	return s
