@@ -738,6 +738,9 @@ type SpawnSessionRequest struct {
 	// DisplayNameExplicit says displayName was deliberately chosen, so it wins
 	// over a terminal program's title. Omit it for a name derived from the prompt.
 	DisplayNameExplicit bool `json:"displayNameExplicit,omitempty"`
+	// TerminateOnPRMerge explicitly sets whether this session auto-terminates
+	// when its PR is merged. Nil falls back to project/global defaults.
+	TerminateOnPRMerge *bool `json:"terminateOnPrMerge,omitempty"`
 	// Attachments are files pasted or dropped into the task brief. Each carries
 	// its bytes as standard base64 (no data: URL prefix). The daemon writes them
 	// into the session worktree and appends path references to the prompt.
@@ -3342,6 +3345,32 @@ type LinkPreviewResponse struct {
 	FaviconURL  string `json:"faviconUrl,omitempty"`
 	// FaviconDarkURL is the page's icon for a dark color scheme, when it names one.
 	FaviconDarkURL string `json:"faviconDarkUrl,omitempty"`
+}
+
+// PRPreviewQuery selects the GitHub pull request to preview.
+type PRPreviewQuery struct {
+	URL string `query:"url" description:"A github.com pull request URL."`
+}
+
+// PRPreviewResponse is the body of GET /api/v1/pr-preview (200): the state and
+// summary of any GitHub pull request a chat links to, read through the
+// daemon's GitHub account.
+type PRPreviewResponse struct {
+	URL    string `json:"url"`
+	Repo   string `json:"repo" description:"owner/name"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	State  string `json:"state" enum:"open,draft,merged,closed"`
+	// Checks is omitted when the pull request has no checks.
+	Checks       string `json:"checks,omitempty" enum:"passing,failing,pending"`
+	Author       string `json:"author,omitempty"`
+	SourceBranch string `json:"sourceBranch,omitempty"`
+	TargetBranch string `json:"targetBranch,omitempty"`
+	Additions    int    `json:"additions"`
+	Deletions    int    `json:"deletions"`
+	ChangedFiles int    `json:"changedFiles"`
+	// StateChangedAt is when it merged or closed, else when it was opened.
+	StateChangedAt *time.Time `json:"stateChangedAt,omitempty"`
 }
 
 // MobileStatusResponse is the body of the Connect Mobile status/enable/disable/
