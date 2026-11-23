@@ -38,6 +38,8 @@ func settledState(session sessionDTO) string {
 			return "failed"
 		}
 		return ""
+	case session.StatusReadiness != "" && session.StatusReadiness != "ready":
+		return ""
 	case session.Activity.State == "active":
 		return ""
 	case session.Activity.State == "waiting_input" || session.Activity.State == "blocked":

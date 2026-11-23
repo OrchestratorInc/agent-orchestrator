@@ -156,7 +156,7 @@ func TestActionRequestSplitsInput(t *testing.T) {
 func TestSessionWaitExitCodes(t *testing.T) {
 	cfg := setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "")
-	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "fresh": {"idle"}, "broken": {"idle"}}
+	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}}
 	polls := map[string]int{}
 	created := time.Date(2026, 11, 23, 11, 59, 50, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -177,8 +177,15 @@ func TestSessionWaitExitCodes(t *testing.T) {
 		state := sequence[min(polls[id], len(sequence)-1)]
 		polls[id]++
 		session := map[string]any{"id": id, "status": "working", "createdAt": created, "activity": map[string]any{"state": state}}
-		if id == "broken" {
+		switch {
+		case id == "broken":
 			session["provisionState"] = "failed"
+		case id == "recovering" && polls[id] <= 2:
+			session["statusReadiness"] = "checking"
+		case id == "recovering":
+			session["statusReadiness"] = "ready"
+		case id == "gone":
+			session["statusReadiness"], session["isTerminated"] = "unavailable", true
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"session": session})
 	}))
@@ -215,6 +222,12 @@ func TestSessionWaitExitCodes(t *testing.T) {
 	}
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "broken"); ExitCode(err) != 1 || !strings.Contains(out, "broken: failed") {
 		t.Errorf("a session that failed to start: exit %d, out %q, want exit 1", ExitCode(err), out)
+	}
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "recovering", "--json"); err != nil || json.Unmarshal([]byte(out), &result) != nil || result.State != "idle" || result.WaitedSeconds != 4 {
+		t.Errorf("an activity the daemon has not verified after a restart must not settle the wait: %s %v", out, err)
+	}
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "gone"); err != nil || !strings.Contains(out, "gone: terminated after 0s") {
+		t.Errorf("a terminated session settles whatever its readiness: %q %v", out, err)
 	}
 	if _, _, err = executeCLI(t, deps(), "session", "wait"); ExitCode(err) != 2 {
 		t.Errorf("no session id: exit %d, want 2", ExitCode(err))

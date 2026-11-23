@@ -45,7 +45,7 @@ trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing exis
 - When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
-- To wait for another session, run `ao session wait <id>` once after `ao spawn`, not a loop of `ao session get`. To message a session and wait for its reply, run `ao send --wait`. Exit 5 means the session waits for an answer.
+- To wait for another session, run `ao session wait <id>` once after `ao spawn`, not a loop of `ao session get`. To message a session and wait for its reply, run `ao send --wait` on a session that is idle: if the session is in the middle of a turn, the message is queued and `--wait` returns when that turn ends, before the message is answered. Exit 5 means the session waits for an answer.
 - Exit 4 with `GRANT_REFUSED` means your grant does not allow the call. Do not retry it and do not look for another route: tell the user what was refused. `ao whoami` shows the grant.
 - `-p / --project` scopes session subcommand lookups to one project.
 - Session and project ids are shown by `ao session ls` and `ao project ls`.

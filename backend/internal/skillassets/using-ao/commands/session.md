@@ -197,6 +197,9 @@ ao session wait <id>... [--timeout 10m] [--interval 2s] [--json]
 
 `--json` prints `{"sessionId","state","status","waitedSeconds"}`.
 
+After a daemon restart, a session's activity is not trusted until the daemon
+has verified it; `wait` keeps waiting until then.
+
 A session that was just spawned reads as idle until its agent starts. For the
 first minute after creation, `wait` therefore accepts idle only once the
 session has completed a turn.
