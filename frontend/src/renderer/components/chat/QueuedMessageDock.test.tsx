@@ -309,3 +309,118 @@ describe("ChatWorkspace queue reorder", () => {
 		});
 	});
 });
+
+describe("QueuedMessageDock action errors", () => {
+	it("shows the daemon's reason when steering a queued message is refused", async () => {
+		// The typed client throws the API error envelope, not an Error instance.
+		const onPromoteQueuedTurn = vi.fn().mockRejectedValue({
+			error: {
+				code: "CHAT_TURN_NOT_STEERABLE",
+				message: "the running turn cannot take guidance: it collects between tool calls",
+			},
+		});
+		render(
+			<QueuedMessageDock
+				messages={queuedMessages(["use staging instead"])}
+				canSteer
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+			/>,
+		);
+
+		await userEvent.click(
+			screen.getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId("queued-message-dock")).toHaveTextContent(
+				"the running turn cannot take guidance: it collects between tool calls",
+			);
+		});
+		expect(screen.getByTestId("queued-message-dock")).not.toHaveTextContent("That action failed.");
+		expect(screen.getByTestId("queued-message-queued-1")).toBeInTheDocument();
+	});
+});
+
+describe("QueuedMessageDock excerpt rows", () => {
+	const placeholder = (count: number, kind = "chat excerpt") => `Use the attached ${count} ${kind}(s) as context`;
+	function withContent(text: string, content: NonNullable<QueuedMessage["message"]["content"]>): QueuedMessage[] {
+		const [queued] = queuedMessages([text]);
+		return [{ ...queued!, message: { ...queued!.message, content } }];
+	}
+	const excerpt = (text: string, order: number, comment?: string) => ({
+		type: "excerpt", text, comment, annotationId: `ex-${order}`, annotationOrder: order, sourceMessageId: "m-1",
+	});
+	const rowText = () => screen.getByTestId("queued-message-queued-1").querySelector(".queue-dock-row-text");
+
+	it("shows the selected text instead of the stand-in an excerpt-only message carries", () => {
+		render(<QueuedMessageDock messages={withContent(placeholder(1), [excerpt("10.1 GB sits in\n  live sessions", 1)])} />);
+
+		expect(rowText()).toHaveTextContent("“10.1 GB sits in live sessions”");
+		expect(screen.getByTestId("queued-message-dock")).not.toHaveTextContent("Use the attached");
+		expect(rowText()).toHaveAttribute("title", "1. “10.1 GB sits in live sessions”");
+	});
+
+	it("leads with the comment written on the excerpt", () => {
+		render(<QueuedMessageDock messages={withContent(placeholder(1), [excerpt("prune build cache", 1, "Keep volumes")])} />);
+
+		expect(rowText()).toHaveTextContent("Keep volumes · “prune build cache”");
+	});
+
+	it("shows the first excerpt and the count when there are several, and lists each in the tooltip", () => {
+		render(<QueuedMessageDock messages={withContent(placeholder(2), [excerpt("second", 2), excerpt("first", 1)])} />);
+
+		// The count sits beside the text, so truncating a long quote never hides it.
+		expect(rowText()).toHaveTextContent(/^“first”$/);
+		expect(rowText()?.nextElementSibling).toHaveTextContent("2 annotations");
+		expect(rowText()).toHaveAttribute("title", "1. “first”\n2. “second”");
+	});
+
+	it("names a file reference by its file and lines", () => {
+		render(<QueuedMessageDock messages={withContent(placeholder(1, "annotation"), [{
+			type: "file_reference",
+			annotationId: "file-1",
+			annotationOrder: 1,
+			fileReference: {
+				id: "file-1", order: 1, sessionId: "s-1", path: "src/app/main.ts", side: "file", line: 4, endLine: 6,
+				lines: [{ kind: "context", oldNo: 4, newNo: 4, text: "a" }], source: { kind: "workspace" }, truncated: false,
+			},
+		}])} />);
+
+		expect(rowText()).toHaveTextContent("main.ts#L4-L6");
+	});
+
+	it("keeps what the user typed, and lists the excerpts under it in the tooltip", () => {
+		render(<QueuedMessageDock messages={withContent("shorten this", [excerpt("a long paragraph", 1)])} />);
+
+		expect(rowText()).toHaveTextContent("shorten this");
+		expect(rowText()).toHaveAttribute("title", "shorten this\n1. “a long paragraph”");
+	});
+
+	it("keeps the stand-in when the message carries no excerpt to show", () => {
+		render(<QueuedMessageDock messages={queuedMessages([placeholder(1)])} />);
+
+		expect(rowText()).toHaveTextContent(placeholder(1));
+	});
+});
+
+describe("ChatWorkspace queued excerpts", () => {
+	it("shows the selected text on a queued excerpt the daemon has not confirmed yet", () => {
+		renderChat(
+			<ChatWorkspace
+				snapshot={chatFixture}
+				onSteer={vi.fn()}
+				localEchos={[{
+					clientMessageId: "echo-excerpt",
+					text: "Use the attached 1 chat excerpt(s) as context",
+					createdAt: "2026-08-11T10:05:00Z",
+					queued: true,
+					excerpts: [{ id: "ex-1", order: 1, text: "Volumes stay, since they hold data.", comment: "Delete them too", messageId: "m-1", revision: 1 }],
+				}]}
+			/>,
+		);
+
+		const dock = screen.getByTestId("queued-message-dock");
+		expect(dock).toHaveTextContent("Delete them too · “Volumes stay, since they hold data.”");
+		expect(dock).not.toHaveTextContent("Use the attached");
+	});
+});

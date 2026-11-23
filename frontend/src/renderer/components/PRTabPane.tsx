@@ -1,4 +1,5 @@
-import { ArrowRight, ArrowUpRight, Circle, CircleAlert, CircleCheck, CircleDashed, CircleMinus, CircleX, Contrast, FileText, MessageSquare, X, type LucideIcon } from "lucide-react";
+import { CheckStateGlyph, type PRCheckState } from "@aoagents/product-ui";
+import { ArrowRight, ArrowUpRight, Circle, CircleAlert, FileDiff, FileText, MessageSquare, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
@@ -6,13 +7,13 @@ import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { usePRStack } from "../hooks/usePRStack";
 import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { formatTimeCompact } from "../lib/format-time";
-import { prBrowserUrl, prCanMerge, prChecksUrl, prHasNoChecks, prReviewers, prSummaryBlockReason, sessionPRDisplaySummaries, type PRReviewer } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prChecksUrl, prHasNoChecks, prMergeQueueEntry, prReviewers, prSummaryBlockReason, sessionPRDisplaySummaries, type PRReviewer } from "../lib/pr-display";
 import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
 import type { PRTabSection } from "../lib/pr-tabs";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
 import { GitHubIcon } from "./GitHubIcon";
-import { blockReasonLabel, PRActionButton, PRStateMenu } from "./PRActions";
+import { blockReasonLabel, PRActionButton, PRStateMenu, stackBlockReasonLabel } from "./PRActions";
 import { AppLink } from "./AppLink";
 import { checkTone, sortedChecks } from "./PRCardDetails";
 import { PRAvatar, PRComments, prCommentCount } from "./PRComments";
@@ -20,8 +21,7 @@ import { PRDescriptionBody } from "./PRDescriptionBody";
 import { prStateIcon } from "./PRPills";
 import { PRStackSection, usePRStackSection } from "./PRStack";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
-import { Pressable } from "./ui/pressable";
+import { TabCloseButton, TerminalTabFrame } from "./TerminalTabFrame";
 import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
@@ -45,23 +45,9 @@ export function PRTabChip({ active, hostId, onActivate, onClose, session, url }:
 	const pr = useSessionPR(session, url, hostId);
 	const state = prStateIcon[pr?.state ?? "open"];
 	const name = pr ? `#${pr.number} ${pr.title}` : t("pr.tab.loading");
-	// The close button takes the state icon's slot on hover, like a file tab's.
-	const closeAction = (
-		<Pressable
-			aria-label={t("files.closeTab", { name })}
-			className={terminalTabActionClassName}
-			onClick={(event) => {
-				event.stopPropagation();
-				onClose();
-			}}
-			type="button"
-		>
-			<X aria-hidden="true" className="size-icon-sm" />
-		</Pressable>
-	);
 	return (
 		<TerminalTabFrame
-			action={closeAction}
+			action={<TabCloseButton label={t("files.closeTab", { name })} onClose={onClose} />}
 			active={active}
 			buttonProps={{
 				"aria-label": name,
@@ -74,6 +60,7 @@ export function PRTabChip({ active, hostId, onActivate, onClose, session, url }:
 			}}
 			icon={<state.icon aria-hidden="true" className={cn("size-icon-base shrink-0", state.className)} />}
 			label={name}
+			onClose={onClose}
 		/>
 	);
 }
@@ -81,26 +68,36 @@ export function PRTabChip({ active, hostId, onActivate, onClose, session, url }:
 // Underlined tabs: the word carries the state, and the line sits on the strip's rule.
 const tabClass = "relative h-9 flex-none rounded-none border-0 px-0.5 py-0 text-control text-muted-foreground after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:rounded-full focus-visible:ring-2 focus-visible:ring-ring/60 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:after:bg-foreground dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-transparent";
 
-// A filled mark is a result: its colour fills the disc and the glyph is cut out in
-// the page's colour. A hollow one means nothing has been decided yet.
-const resultMark = (fill: string) => cn("text-background", fill);
+// Marks are the PR card's glyphs: an outline in the state's colour, so the tab and
+// the card say a state the same way.
 const markClass = "size-icon-sm shrink-0";
 const sideRowClass = "flex min-h-6 min-w-0 max-w-full items-center gap-2 text-control text-foreground";
 const sideLinkClass = "min-w-0 truncate underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
-const reviewerMark: Record<PRReviewer["status"], { icon: LucideIcon; className: string; label: "pr.review.approved" | "pr.review.changesRequested" | "pr.review.pending" | "pr.tab.reviewerCommented" }> = {
-	approved: { icon: CircleCheck, className: resultMark("fill-success"), label: "pr.review.approved" },
-	changes_requested: { icon: CircleAlert, className: resultMark("fill-status-in-review"), label: "pr.review.changesRequested" },
-	commented: { icon: Circle, className: "text-passive", label: "pr.tab.reviewerCommented" },
-	pending: { icon: Contrast, className: "text-warning", label: "pr.review.pending" },
+const reviewerMark: Record<PRReviewer["status"], { state?: PRCheckState; icon?: LucideIcon; className?: string; label: "pr.review.approved" | "pr.review.changesRequested" | "pr.review.pending" | "pr.tab.reviewerCommented" }> = {
+	approved: { state: "passed", label: "pr.review.approved" },
+	// Changes requested reads as a diff to make, not a failure.
+	changes_requested: { icon: FileDiff, className: "text-error", label: "pr.review.changesRequested" },
+	commented: { className: "text-passive", label: "pr.tab.reviewerCommented" },
+	pending: { state: "pending", className: "text-warning", label: "pr.review.pending" },
 };
 
-const checkMark: Record<"failed" | "running" | "passed" | "skipped", { icon: LucideIcon; className: string }> = {
-	failed: { icon: CircleX, className: resultMark("fill-error") },
-	passed: { icon: CircleCheck, className: resultMark("fill-success") },
-	running: { icon: CircleDashed, className: "text-muted-foreground" },
-	skipped: { icon: CircleMinus, className: "text-passive" },
+/** What blocks the merge takes the mark its row has on the PR card; a reason with no row there keeps the alert. */
+const blockMark: Partial<Record<NonNullable<ReturnType<typeof prSummaryBlockReason>>, { state?: PRCheckState; icon?: LucideIcon; className?: string }>> = {
+	review: { state: "pending", className: "text-status-in-review" },
+	changes: { icon: FileDiff, className: "text-error" },
+	checks: { state: "failed" },
+	checking: { state: "running" },
+	cancelled: { state: "skipped" },
 };
+
+/** A mark of the side column: the card's glyph for a state, a hollow ring where there is none. */
+function SideMark({ className, icon: Icon, state }: { className?: string; icon?: LucideIcon; state?: PRCheckState }) {
+	if (Icon) return <Icon aria-hidden="true" className={cn(markClass, className)} />;
+	return state
+		? <CheckStateGlyph className={className} size="sm" state={state} />
+		: <Circle aria-hidden="true" className={cn(markClass, className)} />;
+}
 
 /** Checks named in the side column; the rest are a link to the provider's checks page. */
 const PR_TAB_CHECKS_SHOWN = 6;
@@ -154,12 +151,14 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 	const landing = stackLayersToLand(stack?.stack, pr.number);
 	const lowerBlock = landing ? stackBlocker(landing, pr.number) : undefined;
 	const blockReason = prSummaryBlockReason(pr);
-	const merge = pr.state !== "open" && pr.state !== "draft" ? undefined
-		: pr.mergeability.state === "conflicting" ? { icon: CircleX, className: resultMark("fill-error"), label: t("pr.card.mergeConflict") }
+	const merge: { state?: PRCheckState; icon?: LucideIcon; className?: string; label: string } | undefined = pr.state !== "open" && pr.state !== "draft" ? undefined
+		// Queued is on its way to merging, not blocked, whatever the provider says of a direct merge.
+		: prMergeQueueEntry(pr) ? { state: "pending", label: t("pr.queue.card") }
+		: pr.mergeability.state === "conflicting" ? { state: "failed", label: t("pr.card.mergeConflict") }
 			: pr.state === "draft" || pr.mergeability.state === "unknown" ? undefined
-				: lowerBlock ? { icon: CircleAlert, className: resultMark("fill-warning"), label: t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) }) }
-					: prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) ? { icon: CircleCheck, className: resultMark("fill-success"), label: t("pr.card.readyToMerge") }
-						: { icon: CircleAlert, className: resultMark("fill-warning"), label: blockReason === "checks" && failedChecks(checks) > 0 ? t("pr.blocker.checksFailing", { count: failedChecks(checks) }) : t(blockReason ? blockReasonLabel[blockReason] : "pr.card.mergeBlocked") };
+				: lowerBlock ? { ...(lowerBlock.reason === "rebase" ? undefined : blockMark[lowerBlock.reason]), label: t("pr.stack.blocked", { number: lowerBlock.number, reason: t(stackBlockReasonLabel[lowerBlock.reason]) }) }
+					: prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) ? { state: "passed", label: t("pr.card.readyToMerge") }
+						: { ...(blockReason ? blockMark[blockReason] : undefined), label: blockReason === "checks" && failedChecks(checks) > 0 ? t("pr.blocker.checksFailing", { count: failedChecks(checks) }) : t(blockReason ? blockReasonLabel[blockReason] : "pr.card.mergeBlocked") };
 	const stackGroup = stackSection ? (
 		<SideGroup label={stackSection.label}>
 			<PRStackSection hostId={hostId} pr={pr} section={stackSection} session={session} />
@@ -175,7 +174,7 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 							const mark = reviewerMark[reviewer.status];
 							return (
 								<li className={sideRowClass} key={reviewer.login} title={t(mark.label)}>
-									<mark.icon aria-hidden="true" className={cn(markClass, mark.className)} />
+									<SideMark className={mark.className} icon={mark.icon} state={mark.state} />
 									<PRAvatar bot={reviewer.bot} name={reviewer.login} size="sm" />
 									<span className="min-w-0 truncate">{reviewer.login}</span>
 									<span className="sr-only">{t(mark.label)}</span>
@@ -190,10 +189,9 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 					<ul aria-label={t("pr.tab.checks")} className={sideListClass}>
 						{checks.slice(0, PR_TAB_CHECKS_SHOWN).map((check) => {
 							const tone = checkTone[check.status];
-							const mark = checkMark[tone.key];
 							return (
 								<li className={sideRowClass} key={check.name}>
-									<mark.icon aria-hidden="true" className={cn(markClass, mark.className, tone.breathe && "animate-status-pulse")} />
+									<CheckStateGlyph size="sm" state={tone.key} />
 									{check.url ? <AppLink className={sideLinkClass} href={check.url} noHoverPreview rel="noopener noreferrer" target="_blank">{check.name}</AppLink> : <span className="min-w-0 truncate">{check.name}</span>}
 									<span className="sr-only">{t(`pr.checks.status.${tone.key}`)}</span>
 								</li>
@@ -210,7 +208,7 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 			{merge ? (
 				<SideGroup>
 					<span className={sideRowClass}>
-						<merge.icon aria-hidden="true" className={cn(markClass, merge.className)} />
+						{merge.state || merge.icon ? <SideMark className={merge.className} icon={merge.icon} state={merge.state} /> : <CircleAlert aria-hidden="true" className={cn(markClass, "text-warning")} />}
 						<span className="min-w-0 truncate" title={merge.label}>{merge.label}</span>
 					</span>
 				</SideGroup>

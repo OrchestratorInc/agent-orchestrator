@@ -127,6 +127,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := InstallUsingAOSkill(cfg.WorkspacePath); err != nil {
 		return fmt.Errorf("opencode.GetAgentHooks: %w", err)
 	}
+	if err := hookutil.InstallBugTriageSkill(SkillsDir(cfg.WorkspacePath)); err != nil {
+		return fmt.Errorf("opencode.GetAgentHooks: %w", err)
+	}
 	if err := seedPluginDependencyStub(cfg.WorkspacePath); err != nil {
 		return fmt.Errorf("opencode.GetAgentHooks: %w", err)
 	}
@@ -232,6 +235,9 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	if err := UninstallUsingAOSkill(workspacePath); err != nil {
 		return fmt.Errorf("opencode.UninstallHooks: %w", err)
 	}
+	if err := hookutil.UninstallBugTriageSkill(SkillsDir(workspacePath)); err != nil {
+		return fmt.Errorf("opencode.UninstallHooks: %w", err)
+	}
 	return nil
 }
 
@@ -260,12 +266,13 @@ func opencodeSkillDir(workspacePath string) string {
 	return filepath.Join(workspacePath, opencodePluginDirName, opencodeSkillSubDir, skillassets.SkillName)
 }
 
-func opencodeSkillsDir(workspacePath string) string {
+// SkillsDir returns the workspace folder opencode discovers skills in.
+func SkillsDir(workspacePath string) string {
 	return filepath.Join(workspacePath, opencodePluginDirName, opencodeSkillSubDir)
 }
 
 func opencodeSkillMarkerPath(workspacePath string) string {
-	return filepath.Join(opencodeSkillsDir(workspacePath), opencodeSkillMarkerFile)
+	return filepath.Join(SkillsDir(workspacePath), opencodeSkillMarkerFile)
 }
 
 // InstallUsingAOSkill materializes the embedded shared using-ao skill into
@@ -288,7 +295,7 @@ func InstallUsingAOSkill(workspacePath string) error {
 		return fmt.Errorf("stat skill dir: %w", err)
 	}
 
-	skillsParent := opencodeSkillsDir(workspacePath)
+	skillsParent := SkillsDir(workspacePath)
 	if err := os.MkdirAll(skillsParent, 0o750); err != nil {
 		return fmt.Errorf("create skills dir: %w", err)
 	}

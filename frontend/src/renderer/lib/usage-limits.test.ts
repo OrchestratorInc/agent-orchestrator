@@ -3,7 +3,7 @@ import type { AgentAccount } from "../hooks/useAgentAccounts";
 import { formatCountdown, groupAccounts, limitWindowPace, spanPace, usedPercent, type UsageLimitSpan } from "./usage-limits";
 
 function account(overrides: Partial<AgentAccount>): AgentAccount {
-	return { id: "a", provider: "codex", default: false, device: false, signedIn: true, loggedIn: true, ...overrides };
+	return { id: "a", provider: "codex", kind: "subscription", default: false, device: false, signedIn: true, loggedIn: true, ...overrides };
 }
 
 describe("groupAccounts", () => {
@@ -21,6 +21,31 @@ describe("groupAccounts", () => {
 
 	it("skips providers without accounts", () => {
 		expect(groupAccounts([])).toEqual([]);
+	});
+
+	it("leaves out API key accounts, which have no limits", () => {
+		const grouped = groupAccounts([
+			account({ id: "claude-a", provider: "claude", default: true }),
+			account({ id: "claude-key", provider: "claude", kind: "api_key", signedIn: false }),
+		]);
+		expect(grouped.map((entry) => entry.accounts.map((a) => a.id))).toEqual([["claude-a"]]);
+	});
+
+	it("lists the CLI's login once when a saved account is signed in as the same login", () => {
+		const grouped = groupAccounts([
+			account({ id: "device-claude", provider: "claude", device: true, email: "a@example.com", sameLoginAs: "claude-a" }),
+			account({ id: "claude-a", provider: "claude", default: true, email: "a@example.com" }),
+			account({ id: "claude-b", provider: "claude", email: "b@example.com" }),
+		]);
+		expect(grouped[0].accounts.map((entry) => entry.id)).toEqual(["claude-a", "claude-b"]);
+	});
+
+	it("keeps the CLI's login and its saved twin while the CLI's login is the default", () => {
+		const grouped = groupAccounts([
+			account({ id: "device-claude", provider: "claude", device: true, default: true, email: "a@example.com", sameLoginAs: "claude-a" }),
+			account({ id: "claude-a", provider: "claude", email: "a@example.com" }),
+		]);
+		expect(grouped[0].accounts.map((entry) => entry.id)).toEqual(["device-claude", "claude-a"]);
 	});
 });
 

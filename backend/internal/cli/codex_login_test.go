@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
@@ -40,7 +41,7 @@ func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
 				ReadSecret: func(io.Reader) ([]byte, error) {
 					return []byte(tt.secret), nil
 				},
-				RunInteractiveCommand: func(_ context.Context, name string, args []string, stdin io.Reader, _, _ io.Writer) error {
+				RunInteractiveCommand: func(_ context.Context, name, dir string, args []string, stdin io.Reader, _, _ io.Writer) error {
 					gotName = name
 					gotArgs = append([]string(nil), args...)
 					if stdin != nil {
@@ -90,7 +91,7 @@ func TestCodexLoginUsesExplicitResolvedExecutable(t *testing.T) {
 		LookPath: func(string) (string, error) {
 			return "", errors.New("not on PATH")
 		},
-		RunInteractiveCommand: func(_ context.Context, name string, args []string, _ io.Reader, _, _ io.Writer) error {
+		RunInteractiveCommand: func(_ context.Context, name, dir string, args []string, _ io.Reader, _, _ io.Writer) error {
 			gotName = name
 			gotArgs = append([]string(nil), args...)
 			return nil
@@ -145,11 +146,28 @@ func TestCodexLoginReportsMissingBinaryAndNativeFailure(t *testing.T) {
 			deps: Deps{
 				In:       strings.NewReader("1\n"),
 				LookPath: func(string) (string, error) { return "/codex", nil },
-				RunInteractiveCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+				RunInteractiveCommand: func(_ context.Context, _, _ string, args []string, _ io.Reader, _, _ io.Writer) error {
+					if slices.Equal(args, []string{"--version"}) {
+						return nil // Codex starts; the sign-in itself failed
+					}
 					return errors.New("exit status 1")
 				},
 			},
 			want: "codex login failed",
+		},
+		{
+			// An npm launcher whose native binary is gone fails every run with a
+			// raw spawn error (#7579).
+			name: "codex cannot start",
+			deps: Deps{
+				In:       strings.NewReader("1\n"),
+				LookPath: func(string) (string, error) { return "/nvm/bin/codex", nil },
+				RunInteractiveCommand: func(_ context.Context, _, _ string, _ []string, _ io.Reader, stdout, _ io.Writer) error {
+					_, _ = io.WriteString(stdout, "Error: spawn /nvm/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT\n")
+					return errors.New("exit status 1")
+				},
+			},
+			want: "the Codex CLI at /nvm/bin/codex could not start (Error: spawn /nvm/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT). Reinstall or update Codex, then try again",
 		},
 	}
 	for _, tt := range tests {
@@ -192,10 +210,25 @@ func TestRunInteractiveCommandFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	var out bytes.Buffer
-	if err := runInteractiveCommand(context.Background(), launcher, []string{"--device-auth"}, strings.NewReader(""), &out, &out); err != nil {
+	if err := runInteractiveCommand(context.Background(), launcher, "", []string{"--device-auth"}, strings.NewReader(""), &out, &out); err != nil {
 		t.Fatalf("runInteractiveCommand: %v\n%s", err, out.String())
 	}
 	if got := strings.TrimSpace(out.String()); got != "login --device-auth" {
 		t.Fatalf("output = %q, want npm launcher to run under node", got)
+	}
+}
+
+func TestLastLineKeepsTheLauncherErrorWhole(t *testing.T) {
+	long := strings.Repeat("a", 299) + "é" + "tail"
+	for _, tt := range []struct{ name, in, want string }{
+		{name: "last non-blank line", in: "starting\nError: spawn codex ENOENT\n\n", want: "Error: spawn codex ENOENT"},
+		{name: "cut by character", in: long, want: strings.Repeat("a", 299) + "é..."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := lastLine(tt.in)
+			if got != tt.want || !utf8.ValidString(got) {
+				t.Fatalf("lastLine = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

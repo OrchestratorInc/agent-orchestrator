@@ -347,7 +347,7 @@ func (s *Store) commitSessionControllerEpoch(
 		return false, fmt.Errorf("begin controller epoch for %s: %w", id, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	var rows int64
 	if restore {
 		rows, err = q.RestoreSessionControllerEpoch(ctx, gen.RestoreSessionControllerEpochParams{
@@ -466,7 +466,7 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	return s.inTx(ctx, "queue interface transition message", func(q *gen.Queries) error {
+	return s.inTxDB(ctx, "queue interface transition message", func(q *gen.Queries, db gen.DBTX) error {
 		if err := q.EnqueueSessionInterfaceTransitionMessage(ctx, gen.EnqueueSessionInterfaceTransitionMessageParams{
 			SenderSessionID: opts.SenderSessionID, AuthoredByUser: opts.AuthoredByUser,
 			TransitionID: transitionID, ClientMessageID: clientMessageID, Message: message, CreatedAt: now,
@@ -480,7 +480,7 @@ func (s *Store) EnqueueSessionInterfaceTransitionMessage(
 		if err != nil {
 			return err
 		}
-		return recordSessionInteraction(ctx, q, transition.SessionID, opts.SenderSessionID, now)
+		return s.recordSessionInteraction(ctx, q, db, transition.SessionID, opts.SenderSessionID, now)
 	})
 }
 

@@ -83,6 +83,27 @@ export function useAddTextToChat(sessionId: string, hostId?: string): ((text: st
 	return useMemo(() => (available ? (text: string) => sendTextToChat(key, text) : undefined), [available, key]);
 }
 
+/**
+ * A follow-up typed on the new chat page while its session was being created.
+ * `send` when Enter was pressed on exactly this text there: the session's
+ * composer then sends it as soon as it can, into the queue behind the brief.
+ */
+export type ComposerHandoff = { text: string; send: boolean };
+
+const handoffs = new Map<string, ComposerHandoff>();
+
+/** Leaves a draft for the session's Chat composer, which takes it when it mounts. */
+export function handOffComposerDraft(sessionId: string, handoff: ComposerHandoff): void {
+	handoffs.set(sessionId, handoff);
+}
+
+/** The draft left for this session's composer, once: taking it removes it. */
+export function takeComposerHandoff(sessionId: string): ComposerHandoff | undefined {
+	const handoff = handoffs.get(sessionId);
+	handoffs.delete(sessionId);
+	return handoff;
+}
+
 /** Registers a callback that brings the session's Chat surface on screen. */
 export function subscribeChatReveal(sessionId: string, listener: RevealListener): () => void {
 	return add(revealers, sessionId, listener);

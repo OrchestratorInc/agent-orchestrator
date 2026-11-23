@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SideComposer } from "./IndependentSideChats";
+import { SideComposer, appendReference } from "./IndependentSideChats";
 import { emptySideChatDraft } from "./sideChatDraft";
 import { typeInLexicalEditor } from "../../test/lexical";
 
@@ -67,7 +67,7 @@ describe("side composer slash menu", () => {
 	it("preserves provider commands when a new side cannot open", async () => {
 		const { onSend, onFocusSide, field } = renderSideComposer(emptySideChatDraft(), {}, false);
 		await typeInLexicalEditor(field, "/btw");
-		expect(screen.queryByRole("option", { name: /\/btw/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("option", { name: /^BTW/ })).not.toBeInTheDocument();
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("/btw"));
 		expect(onFocusSide).not.toHaveBeenCalled();
@@ -75,15 +75,15 @@ describe("side composer slash menu", () => {
 	it("keeps a provider's side command alongside description-matched /btw", async () => {
 		const {field} = renderSideComposer(emptySideChatDraft(), {}, true, [{name:"side",displayName:"side",source:"provider"}]);
 		await typeInLexicalEditor(field, "/side");
-		expect(screen.getByRole("option", {name:/\/side/})).toBeInTheDocument();
-		expect(screen.getByRole("option", {name:/\/btw/})).toBeInTheDocument();
+		expect(screen.getByRole("option", {name: /^Side/})).toBeInTheDocument();
+		expect(screen.getByRole("option", {name: /^BTW/})).toBeInTheDocument();
 	});
 	it("shows provider skills and inserts /btw without creating or sending", async () => {
 		const { onSend, onFocusSide, field } = renderSideComposer();
 		await typeInLexicalEditor(field, "/");
-		expect(screen.getByRole("option", { name: /\/review/ })).toBeInTheDocument();
-		expect(screen.getByRole("option", { name: /\/compact/ })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("option", { name: /\/btw/ }));
+		expect(screen.getByRole("option", { name: /^Review/ })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: /^Compact/ })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("option", { name: /^BTW/ }));
 		await waitFor(() => expect(field).toHaveTextContent("/btw"));
 		expect(onFocusSide).not.toHaveBeenCalled();
 		expect(onSend).not.toHaveBeenCalled();
@@ -91,8 +91,8 @@ describe("side composer slash menu", () => {
 	it("discovers /btw through /side and inserts it on Enter before writing a prompt", async () => {
 		const { onSend, onFocusSide, field } = renderSideComposer();
 		await typeInLexicalEditor(field, "/side");
-		expect(screen.getByRole("option", { name: /\/btw/ })).toBeInTheDocument();
-		expect(screen.queryByRole("option", { name: /^\/side\b/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("option", { name: /^BTW/ })).toBeInTheDocument();
+		expect(screen.queryByRole("option", { name: /^Side/ })).not.toBeInTheDocument();
 		fireEvent.keyDown(field, { key:"Enter" });
 		await waitFor(() => expect(field).toHaveTextContent("/btw"));
 		expect(onSend).not.toHaveBeenCalled(); expect(onFocusSide).not.toHaveBeenCalled();
@@ -196,6 +196,16 @@ describe("side composer slash menu", () => {
 	it("insets its draft and send button the same from both sides as the main composer", () => {
 		const { field } = renderSideComposer();
 		expect(field).toHaveClass("px-[7px]", "[scrollbar-gutter:stable_both-edges]");
-		expect(screen.getByRole("button", { name: "Send message" })).toHaveClass("me-2.5");
+		expect(screen.getByRole("button", { name: "Send message" }).className).not.toMatch(/(^|\s)(me|mr|pe|pr)-/);
+	});
+});
+
+describe("side chat references", () => {
+	it("keeps a new comment when the same selection is added again", () => {
+		const selection = { id: "a", conversationId: "c", messageId: "m", revision: 1, role: "assistant" as const, text: "quoted", order: 1 };
+		const first = appendReference(emptySideChatDraft(), { ...selection, comment: "first" }).draft;
+		const again = appendReference(first, { ...selection, id: "b", comment: "second" }).draft;
+		expect(again.references).toEqual([{ ...selection, comment: "second" }]);
+		expect(appendReference(again, { ...selection, id: "c" }).draft).toBe(again);
 	});
 });

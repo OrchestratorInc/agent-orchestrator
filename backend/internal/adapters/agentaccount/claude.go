@@ -11,12 +11,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 // claudeShared are the parts of the computer's own Claude folder every account
@@ -51,7 +55,7 @@ type Claude struct {
 	// DeviceEnv returns the credential AO adds to sessions that run on the
 	// computer's own login (a setup token saved through AO's login menu), so
 	// checks of that account see what its sessions use. Nil adds nothing.
-	DeviceEnv func() map[string]string
+	DeviceEnv func(context.Context) map[string]string
 }
 
 var _ ports.AgentAccountProviderCLI = (*Claude)(nil)
@@ -59,15 +63,68 @@ var _ ports.AgentAccountProviderCLI = (*Claude)(nil)
 // Provider names Claude.
 func (*Claude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
 
+// claudeTokenFile holds a setup token account's `claude setup-token` token in
+// its own folder, readable by the user only. It never leaves the folder except
+// as the launch environment of that account's CLI.
+const claudeTokenFile = ".ao-oauth-token" //nolint:gosec // a file name, not a credential
+
+// claudeSetupToken matches a token from `claude setup-token`.
+var claudeSetupToken = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
+
 // LaunchEnv points Claude Code at home. Claude keys the folder's Keychain login
-// on the exact path text, so both variables carry the same string.
+// on the exact path text, so both variables carry the same string. A setup
+// token account's CLI signs in with its saved token.
 func (*Claude) LaunchEnv(home string) map[string]string {
 	if home == "" {
 		return nil
 	}
 	env := map[string]string{"CLAUDE_CONFIG_DIR": home, "CLAUDE_SECURESTORAGE_CONFIG_DIR": home}
 	neutralize(env, claudeCredentialEnv...)
+	if token, err := readSetupToken(home); err == nil {
+		env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+	}
 	return env
+}
+
+// SaveSetupToken saves a `claude setup-token` token as home's sign-in.
+func (*Claude) SaveSetupToken(home, token string) error {
+	token = strings.TrimSpace(token)
+	if strings.TrimSpace(home) == "" || !claudeSetupToken.MatchString(token) {
+		return ports.ErrAgentAccountKeyRejected
+	}
+	// CreateTemp makes the file readable by the user only (0600).
+	tmp, err := os.CreateTemp(home, claudeTokenFile+".*")
+	if err != nil {
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	// Gone after the rename; removed here only when saving failed.
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(token); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), filepath.Join(home, claudeTokenFile)); err != nil {
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	return nil
+}
+
+// SetupTokenOf is the setup token home signs in with, if it has one.
+func (*Claude) SetupTokenOf(home string) (string, error) { return readSetupToken(home) }
+
+func readSetupToken(home string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(home, claudeTokenFile))
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(data))
+	if !claudeSetupToken.MatchString(token) {
+		return "", errors.New("the saved setup token is invalid")
+	}
+	return token, nil
 }
 
 // LoginArgv is Claude Code's own sign-in.
@@ -89,8 +146,46 @@ func (c *Claude) Logout(ctx context.Context, home string) error {
 	return err
 }
 
+// errClaudeRenewalPending skips a check of a stored login whose access token
+// expired. The service keeps the last reading it had, so the account does not
+// read as signed out while its next session renews the token.
+var errClaudeRenewalPending = fmt.Errorf("%w; Claude Code renews it the next time it runs", ports.ErrAgentAccountRenewalPending)
+
+// claudeNow is the clock renewal checks read, replaced in tests.
+var claudeNow = time.Now
+
+// renewalPending reports whether home's stored login has an expired access
+// token that Claude Code can still renew. Any Claude Code process that finds it
+// so tries the renewal, and a refused one wipes the login. The refresh token is
+// single-use, so a check that races the account's sessions can sign it out
+// about eight hours after sign-in (#8724). Checks therefore leave such a login
+// to the next session, which renews it once.
+func (c *Claude) renewalPending(ctx context.Context, home string) bool {
+	env := map[string]string{}
+	for _, entry := range os.Environ() {
+		if key, value, ok := strings.Cut(entry, "="); ok {
+			env[key] = value
+		}
+	}
+	for key, value := range c.LaunchEnv(home) {
+		env[key] = value
+	}
+	if home == "" && c.DeviceEnv != nil {
+		for key, value := range c.DeviceEnv(ctx) {
+			env[key] = value
+		}
+	}
+	credential, found := agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, agentcreds.ResolveOptions{
+		ConfigDir: home, AllowKeychain: true, Env: func(key string) string { return env[key] },
+	})
+	return found && credential.ExpiredButRenewable(claudeNow())
+}
+
 // Identity asks `claude auth status --json` who home is signed in to.
 func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
+	if c.renewalPending(ctx, home) {
+		return domain.AgentAccountIdentityCheck{}, errClaudeRenewalPending
+	}
 	bin, err := c.Binary(ctx)
 	if err != nil {
 		return domain.AgentAccountIdentityCheck{}, err
@@ -102,6 +197,8 @@ func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccount
 		AuthMethod       string `json:"authMethod"`
 		Email            string `json:"email"`
 		SubscriptionType string `json:"subscriptionType"`
+		OrgID            string `json:"orgId"`
+		OrgName          string `json:"orgName"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out), &report); err != nil {
 		if runErr != nil {
@@ -118,12 +215,17 @@ func (c *Claude) Identity(ctx context.Context, home string) (domain.AgentAccount
 		LoggedIn: report.LoggedIn,
 		Email:    report.Email,
 		Plan:     report.SubscriptionType,
+		OrgID:    report.OrgID,
+		OrgName:  report.OrgName,
 	}, nil
 }
 
 // Limits sends Claude Code's own `get_usage` control request over stream-json.
 // The CLI reads the limits with its own login; AO only sees the answer.
 func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLimits, error) {
+	if c.renewalPending(ctx, home) {
+		return domain.AgentAccountLimits{}, errClaudeRenewalPending
+	}
 	bin, err := c.Binary(ctx)
 	if err != nil {
 		return domain.AgentAccountLimits{}, err
@@ -227,11 +329,11 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 	if r == nil {
 		return out
 	}
-	add := func(id, label string, w *claudeUsageWindow) {
+	add := func(id, label, scope string, w *claudeUsageWindow) {
 		if w == nil || w.Utilization == nil {
 			return
 		}
-		window := domain.AgentAccountLimitWindow{ID: id, Label: label, UsedPercent: min(max(*w.Utilization, 0), 100), DurationMinutes: 7 * 24 * 60}
+		window := domain.AgentAccountLimitWindow{ID: id, Label: label, UsedPercent: min(max(*w.Utilization, 0), 100), DurationMinutes: 7 * 24 * 60, Scope: scope}
 		if id == "five_hour" {
 			window.DurationMinutes = 5 * 60
 		}
@@ -242,13 +344,13 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 		}
 		out.Windows = append(out.Windows, window)
 	}
-	add("five_hour", "Session (5h)", r.FiveHour)
-	add("seven_day", "Weekly", r.SevenDay)
-	add("seven_day_opus", "Weekly · Opus", r.Opus)
-	add("seven_day_sonnet", "Weekly · Sonnet", r.Sonnet)
+	add("five_hour", "Session (5h)", "", r.FiveHour)
+	add("seven_day", "Weekly", "", r.SevenDay)
+	add("seven_day_opus", "Weekly · Opus", "opus", r.Opus)
+	add("seven_day_sonnet", "Weekly · Sonnet", "sonnet", r.Sonnet)
 	for _, scoped := range r.ModelScoped {
 		w := scoped.claudeUsageWindow
-		add("model:"+scoped.DisplayName, "Weekly · "+scoped.DisplayName, &w)
+		add("model:"+scoped.DisplayName, "Weekly · "+scoped.DisplayName, scoped.DisplayName, &w)
 	}
 	out.AutoResumeResetsAt = b.autoResumeResetAt(now)
 	if e := r.Spend; e != nil {
@@ -383,10 +485,17 @@ func dropLoginKeys(settings map[string]json.RawMessage) bool {
 	return dropped
 }
 
+// claudeConfigMu serializes AO's read-modify-write of an account's .claude.json,
+// so a launch sharing the user's config never writes back a copy read before a
+// key approval and drops it.
+var claudeConfigMu sync.Mutex
+
 // shareGlobalConfig shares the user's MCP servers, one by one, and theme into
 // home's .claude.json, the file that also holds the account's own sign-in, so
 // no other key is touched.
 func (c *Claude) shareGlobalConfig(home string, l *ledger) error {
+	claudeConfigMu.Lock()
+	defer claudeConfigMu.Unlock()
 	path := filepath.Join(home, ".claude.json")
 	account, err := readObject(path)
 	if err != nil {
@@ -414,6 +523,49 @@ func (c *Claude) shareGlobalConfig(home string, l *ledger) error {
 	return writeObject(path, account)
 }
 
+// claudeApprovedKeyChars is how much of a key Claude Code keeps to remember
+// that the user accepted it: the last 20 characters.
+const claudeApprovedKeyChars = 20
+
+// ApproveAPIKey records in home's .claude.json that the user accepted key, the
+// way Claude Code does when asked about a key in its environment, so a session
+// of an API key account starts without stopping at that question. Only the
+// key's last characters are written, as Claude Code itself writes them.
+func (c *Claude) ApproveAPIKey(home, key string) error {
+	if strings.TrimSpace(home) == "" || key == "" {
+		return errors.New("approve api key: no account folder or key")
+	}
+	suffix := key
+	if len(suffix) > claudeApprovedKeyChars {
+		suffix = suffix[len(suffix)-claudeApprovedKeyChars:]
+	}
+	path := filepath.Join(home, ".claude.json")
+	claudeConfigMu.Lock()
+	defer claudeConfigMu.Unlock()
+	account, err := readObject(path)
+	if err != nil {
+		return err // Claude's to repair; never overwrite it
+	}
+	var responses struct {
+		Approved []string `json:"approved"`
+		Rejected []string `json:"rejected"`
+	}
+	_ = json.Unmarshal(account["customApiKeyResponses"], &responses)
+	responses.Rejected = slices.DeleteFunc(responses.Rejected, func(s string) bool { return s == suffix })
+	if !slices.Contains(responses.Approved, suffix) {
+		responses.Approved = append(responses.Approved, suffix)
+	}
+	if responses.Rejected == nil {
+		responses.Rejected = []string{}
+	}
+	raw, err := json.Marshal(responses)
+	if err != nil {
+		return err
+	}
+	account["customApiKeyResponses"] = raw
+	return writeObject(path, account)
+}
+
 func (c *Claude) command(ctx context.Context, bin, home string, args ...string) *exec.Cmd {
 	cmd := aoprocess.CommandContext(ctx, bin, args...)
 	// A timeout or kill stops the CLI's whole process tree, not only its leader.
@@ -423,7 +575,7 @@ func (c *Claude) command(ctx context.Context, bin, home string, args ...string) 
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
 	if home == "" && c.DeviceEnv != nil {
-		for key, value := range c.DeviceEnv() {
+		for key, value := range c.DeviceEnv(ctx) {
 			cmd.Env = append(cmd.Env, key+"="+value)
 		}
 	}
@@ -439,5 +591,10 @@ func (c *Claude) run(ctx context.Context, bin, home string, stdin []byte, args .
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
-	return cmd.Output()
+	out, err := cmd.Output()
+	if err != nil && ctx.Err() != nil {
+		// A killed CLI reports "signal: killed"; the reason is the deadline.
+		return out, ctx.Err()
+	}
+	return out, err
 }

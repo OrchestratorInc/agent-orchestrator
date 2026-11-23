@@ -6,6 +6,7 @@ import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from ".
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
 import { captureMobileApiError, httpCategory } from "./sentry";
+import { noteRequestAnswered } from "./answeredRequests";
 import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
 import type { ApprovalMode } from "./spawnApproval";
@@ -162,9 +163,9 @@ export type ProjectInfo = {
 export type ProjectDetail = ProjectInfo & {
 	agent?: string;
 	config?: {
-		agentConfig?: { model?: string; permissions?: string };
-		worker?: { agent?: string; agentConfig?: { model?: string; permissions?: string } };
-		reviewers?: { harness?: string }[];
+		agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string };
+		worker?: { agent?: string; agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string } };
+		reviewers?: { harness?: string; agentConfig?: { model?: string; mode?: string; effort?: string } }[];
 	};
 };
 
@@ -457,6 +458,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 	let bodyText = "";
 	try {
 		const installId = cachedInstallId();
+		const startedAt = Date.now();
 		await Promise.race([aborted, (async () => {
 			received = await fetch(url, {
 				...init,
@@ -468,6 +470,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 					...(init?.headers ?? {}),
 				},
 			});
+			noteRequestAnswered(startedAt);
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
@@ -644,6 +647,45 @@ export async function getArchivedSessions(
 		// live by the time it lands can never be drawn as archived.
 		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
 		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
+	};
+}
+
+/** The PR states an ended session's pull requests are read back in. */
+export type ArchivedPRState = "merged" | "closed";
+
+/** Archived workers owning a pull request in one state, a page at a time. */
+export type PRStatePage = ArchivePage & {
+	/** How many archived workers match, across every page. */
+	total: number;
+	/** Names the whole filtered list; equal versions mean the same list. Null from a daemon that sends none. */
+	version: string | null;
+};
+
+/** Pages of archived workers by PR state are larger than the archive's: they are read to the end. */
+export const PR_STATE_PAGE_SIZE = 100;
+
+/**
+ * One page of a machine's archived workers that own a PR in `prState`, newest
+ * state change first. Null from a daemon that predates the filter: it ignores
+ * the parameter and so does not echo it, and its page is the plain archive.
+ */
+export async function getArchivedPRSessions(
+	cfg: ServerConfig,
+	options: { prState: ArchivedPRState; cursor?: string | null; projectId?: string },
+	init?: Pick<RequestInit, "signal">,
+): Promise<PRStatePage | null> {
+	const query = new URLSearchParams({ active: "false", kind: "worker", prState: options.prState, limit: String(PR_STATE_PAGE_SIZE) });
+	if (options.cursor) query.set("cursor", options.cursor);
+	if (options.projectId) query.set("project", options.projectId);
+	const res = await req(cfg, `${API}/sessions?${query}`, init);
+	const data = await res.json();
+	if (data?.prState !== options.prState) return null;
+	const raw: WireSession[] = Array.isArray(data?.sessions) ? data.sessions : [];
+	return {
+		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
+		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
+		total: typeof data?.total === "number" ? data.total : raw.length,
+		version: typeof data?.version === "string" && data.version ? data.version : null,
 	};
 }
 
@@ -1436,7 +1478,7 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
+	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string; accountId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
@@ -1450,6 +1492,7 @@ export async function spawnSession(
 			harness: opts.harness || undefined,
 			model: opts.model || undefined,
 			effort: opts.effort || undefined,
+			accountId: opts.accountId || undefined,
 			// Omitted keeps the project's policy (Auto when it names none).
 			approvalMode: opts.approvalMode || undefined,
 			// Mobile is Chat-first. Callers may deliberately request TUI for a harness
@@ -1478,7 +1521,7 @@ export async function getSession(cfg: ServerConfig, id: string): Promise<Dashboa
 
 export async function delegateTask(
 	cfg: ServerConfig,
-	opts: { projectId: string; brief: string; agent?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
+	opts: { projectId: string; brief: string; agent?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string; accountId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/orchestrators/delegate`, {
 		method: "POST",
@@ -1489,6 +1532,7 @@ export async function delegateTask(
 			agent: opts.agent || undefined,
 			model: opts.model || undefined,
 			effort: opts.effort || undefined,
+			accountId: opts.accountId || undefined,
 			approvalMode: opts.approvalMode || undefined,
 			mode: opts.mode,
 			attachments: opts.attachments?.length ? opts.attachments : undefined,

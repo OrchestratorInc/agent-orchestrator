@@ -1,5 +1,11 @@
-import { SideCloseRecovery } from "./main/side-close";
+import { parseSharedArtifactLink } from "../../packages/shared/artifacts/shared-artifact-link";
+import { openSharedArtifact, SHARED_ARTIFACT_VIEWER_ORIGINS } from "./main/shared-artifact-window";
+import type { SideCloseRequest, SideCloseState } from "./shared/side-close";
+import { SideCloseRecovery, type SideSnapshotCoverage } from "./main/side-close";
+import { SideCloseController } from "./main/side-close-controller";
 import { SideLaunchRecovery } from "./main/side-launch-recovery";
+import { launchTriageInTerminal } from "./main/triage-launch";
+import { initializeDesktopLog } from "./main/desktop-log";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
@@ -11,6 +17,7 @@ import {
 	BrowserWindow,
 	clipboard,
 	ClipboardItem,
+	desktopCapturer,
 	dialog,
 	ipcMain,
 	Menu,
@@ -24,6 +31,7 @@ import {
 	screen,
 	shell,
 	session,
+	systemPreferences,
 	WebContentsView,
 	webContents,
 	type WebContents,
@@ -62,6 +70,9 @@ import { createCliShadowShellPath } from "./main/cli-shadow-shell-path";
 import { cliShadowEnabled } from "./shared/cli-shadow";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
+import { createLaunchTiming } from "./main/launch-timing";
+import { createResourceSampler } from "./main/resource-sampler";
+import type { LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import { readNativeAppIcon } from "./main/native-app-icon";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -78,6 +89,8 @@ import {
 	writeUiSettings,
 	type UiSettings,
 } from "./main/ui-settings";
+import { findArtifactIssues, publishIssueArtifact } from "./main/github-issue-artifact";
+import type { GitHubIssueArtifact } from "./shared/github-issue-artifact";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -96,6 +109,8 @@ import {
 } from "./shared/daemon-startup-status";
 import { reloadAppView, toggleAppDevTools } from "./main/app-devtools";
 import { acceptLanguages, applyBrowserIdentity, applyUserAgentFallback } from "./main/browser-identity";
+import { purgeRootCachesOnce, sweepTemporaryBrowserPartitions } from "./main/browser-storage-cleanup";
+import { createUserBrowser } from "./main/user-browser";
 import { openChromeExtensionsPage } from "./main/chrome-extensions-page";
 import { appShortcutDelivery, attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
@@ -118,6 +133,7 @@ import {
 	type AppShortcutId,
 	type KeybindingOverrides,
 } from "./shared/shortcuts";
+import { OPEN_SESSION_DEEP_LINK_CHANNEL, normalizeSessionDeepLink } from "./shared/deep-links";
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
@@ -172,7 +188,9 @@ import {
 	resolveCloudAuthDir,
 	showCloudSignInFailure,
 	protectedStorageAvailable,
+	isSavedSignInHidden,
 	readAuthStore,
+	recheckSavedSignIn,
 } from "./main/cloud-auth";
 import { createPendingCloudSignIn } from "./main/pending-cloud-sign-in";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
@@ -251,7 +269,8 @@ import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-au
 import { readProcessStartMs } from "./main/process-start";
 import { claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
-import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyPane } from "./main/privacy-guide";
+import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, isPrivacyGuideTarget, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyGuideApp, type PrivacyPane } from "./main/privacy-guide";
+import { appBundlePath, readAppPrivacy, requestAppPrivacy, type AppPrivacyGrants } from "./main/app-privacy";
 import { watchSettingsWindow } from "./main/settings-window-watch";
 import {
 	dockBounceType,
@@ -352,7 +371,10 @@ app.setPath(
 // Resolve once against the launch cwd, before the daemon can chdir. The exact
 // absolute value is shared by policy bootstrap and every daemon spawn.
 const desktopLaunchWorkingDirectory = process.cwd();
+const processStartedAt = process.getCreationTime() ?? performance.timeOrigin;
+const launchTiming = createLaunchTiming(processStartedAt);
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
+initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
 // daemon) and the loopback hand-off of the signed-in AO Cloud user ID.
@@ -367,6 +389,19 @@ const telemetryIdentity = new TelemetryIdentityController(
 	},
 );
 const trustedShellWebContents = new Map<number, WebContents>();
+// Launch start per shell page for ao.launches.timed, handed out once so a reload
+// does not report a launch. The first shell window is a cold launch; later
+// ones (reopened from the Dock) start when the window was requested.
+const shellLaunchStarts = new Map<number, LaunchTimingStart>();
+let shellWindowsCreated = 0;
+let windowRequestedAt = 0;
+const resourceSampler = createResourceSampler(
+	() => app.getAppMetrics(),
+	() => {
+		const contents = getShellWebContents();
+		return contents && !contents.isDestroyed() ? contents.getOSProcessId() : undefined;
+	},
+);
 const pendingRendererQueuePurges = new Map<string, {
 	senderId: number;
 	contents: WebContents;
@@ -418,6 +453,13 @@ const OPEN_FOLDER_PATH_CHANNEL = "app:openFolderPath";
 // whose renderer isn't mounted yet. Flushed once the shell signals readiness
 // via TRAY_RENDERER_READY_CHANNEL — see the OPEN_FOLDER_PATH_CHANNEL handler.
 let pendingFolderPath: string | null = null;
+// Session deep link (ao-app://sessions/…) that arrived before the shell was
+// mounted (cold-start argv or early open-url). Flushed on the same
+// TRAY_RENDERER_READY_CHANNEL handshake as pendingFolderPath.
+let pendingSessionDeepLink: string | null = null;
+// Billing return (ao-app://billing) that arrived with no shell to take it —
+// flushed on the TRAY_RENDERER_READY handshake like pendingSessionDeepLink.
+let pendingBillingSection: string | null = null;
 let daemonProcess: ChildProcess | null = null;
 // Set once this instance owns the single-instance lock; a no-op before that.
 let lifecycleLog: LifecycleRecord = () => undefined;
@@ -777,11 +819,16 @@ function applyRuntimeAppIcon(): void {
 // sooner (focusMainWindow, deep links, the dock) can still show it directly.
 const WINDOW_SHOW_FALLBACK_MS = 2_500;
 
+/** Windows created hidden whose showWhenRendererLoaded has not shown them yet. */
+const windowsAwaitingFirstShow = new WeakSet<BaseWindow>();
+
 function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void {
 	let shown = false;
+	windowsAwaitingFirstShow.add(window);
 	const show = () => {
 		if (shown) return;
 		shown = true;
+		windowsAwaitingFirstShow.delete(window);
 		clearTimeout(fallback);
 		if (window.isDestroyed() || window.isVisible()) return;
 		window.show();
@@ -810,29 +857,43 @@ let sideLaunchState: { appRunId: string; sides: unknown[]; numbers?: Record<stri
 const SIDE_STATE_BACKSTOP_MS = 5_000;
 let sideStateTimer: ReturnType<typeof setInterval> | undefined;
 const sideCloseRecovery = new SideCloseRecovery();
-function publishPendingSideCloses(): void {
-	getShellWebContents()?.send("sideChats:pendingClosesChanged");
-}
-function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> }): void {
-	sideCloseRecovery.remember(state);
+const sideCloseController = new SideCloseController({
+	ledger: sideCloseRecovery,
+	attachment: () => sideLaunchRecovery.attachment,
+	ensureClaimed: () => sideLaunchRecovery.ensureClaimed(),
+	capture: () => sideLaunchRecovery.captureForClose(),
+	onOwnershipChange: () => { sideLaunchState = sideCloseRecovery.state; },
+	onChange: (state: SideCloseState) => { getShellWebContents()?.send("sideChats:closeStateChanged", state); },
+});
+function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> }, coverage: SideSnapshotCoverage): void {
+	sideCloseRecovery.remember(state, coverage);
 	sideLaunchState = sideCloseRecovery.state;
-	publishPendingSideCloses();
+	sideCloseController.reconcile(coverage);
+}
+
+function armSideStateBackstop(): void {
+	if (sideStateTimer) return;
+	sideStateTimer = setInterval(() => {
+		if (sideLaunchRecovery.status === "ready" || sideCloseController.hasPending()) sideLaunchRecovery.captureCloseInBackground();
+	}, SIDE_STATE_BACKSTOP_MS);
 }
 
 const sideLaunchRecovery = new SideLaunchRecovery({
 	snapshot: () => sideLaunchState,
-	onRestore: () => sideCloseRecovery.markRestoreAttempt(),
+	onRestore: (snapshot) => sideCloseRecovery.markRestoreAttempt(snapshot),
+	onRestoreAccepted: (snapshot) => { sideCloseRecovery.markRestoreAccepted(snapshot); sideLaunchState = sideCloseRecovery.state; sideCloseController.reconcile(); },
 	onSnapshot: rememberSideLaunchState,
 	onError: error => console.warn("AO: side chat recovery or capture failed", error),
+	onClaimed: () => { sideCloseController.setRecovery("restoring"); armSideStateBackstop(); },
 	onReady: () => {
-		const capture = () => sideLaunchRecovery.captureInBackground();
-		capture();
-		if (sideStateTimer) clearInterval(sideStateTimer);
-		sideStateTimer = setInterval(capture, SIDE_STATE_BACKSTOP_MS);
+		sideCloseController.setRecovery("ready"); // gated until a post-ready capture is applied
+		sideLaunchRecovery.captureCloseInBackground();
+		armSideStateBackstop();
 	},
 });
 app.once("will-quit", () => {
 	sideLaunchRecovery.setAttachment(undefined);
+	sideCloseController.setAttachment(undefined, "unavailable");
 	if (sideStateTimer) clearInterval(sideStateTimer);
 	sideStateTimer = undefined;
 });
@@ -847,6 +908,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
+	if (nextStatus.state === "ready") launchTiming.mark("daemonReady");
 	if (nextStatus.state === "ready") void telemetryIdentity.flush();
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
@@ -861,6 +923,8 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		if (sideStateTimer) clearInterval(sideStateTimer);
 		sideStateTimer = undefined;
 	}
+	// The daemon status/URL event above precedes the new close epoch/projection.
+	sideCloseController.setAttachment(sideLaunchRecovery.attachment, sideLaunchRecovery.status);
 }
 
 const MAX_DAEMON_OUTPUT_CHARS = 12_000;
@@ -974,9 +1038,17 @@ function browserProfileStateDir(): string {
 	return path.dirname(runFile ?? path.join(os.homedir(), ".ao", "running.json"));
 }
 
+// The person's own browser, for pages that refuse AO's Browser panel.
+const userBrowser = createUserBrowser({
+	platform: process.platform,
+	openExternal: (url) => shell.openExternal(url),
+	defaultBrowserName: () => app.getApplicationNameForProtocol("https://"),
+});
+
 async function clearElectronBrowserProfileData(partition: string): Promise<void> {
 	const browserSession = session.fromPartition(partition);
-	await Promise.all([browserSession.clearStorageData(), browserSession.clearCache()]);
+	// clearCache leaves V8's code cache, which is most of what a cleared partition still holds.
+	await Promise.all([browserSession.clearStorageData(), browserSession.clearCache(), browserSession.clearCodeCaches({})]);
 }
 
 async function disposeAllBrowserViewHosts(): Promise<void> {
@@ -1075,9 +1147,20 @@ async function createWindowInternal(): Promise<void> {
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("Orchestrator shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
+	shellLaunchStarts.set(
+		shellWebContents.id,
+		shellWindowsCreated++ === 0 ? { kind: "cold", startedAtMs: processStartedAt } : { kind: "warm", startedAtMs: windowRequestedAt },
+	);
+	// The start belongs to the first document. A reload that lands before that
+	// page read it must not report a launch, so later documents get none.
+	let shellDocuments = 0;
+	shellWebContents.on("did-navigate", () => {
+		if (++shellDocuments > 1) shellLaunchStarts.delete(shellWebContents.id);
+	});
 	relayScrollPhases(shellWebContents);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
+		shellLaunchStarts.delete(shellWebContents.id);
 		quitConfirm.reset();
 		applyAppMenuAvailability({});
 	});
@@ -1126,7 +1209,7 @@ async function createWindowInternal(): Promise<void> {
 		// artifact's inline origin) is not the page navigating away.
 		const app = shellWebContents.mainFrame;
 		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
-		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+		if (blocksRenderFrameNavigation(event.frame.url, event.url, (url) => remoteRegistry.isRenderUrl(url))) event.preventDefault();
 	});
 
 	// A cloud artifact frame's page can open another file of its session; the
@@ -1151,11 +1234,11 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.session.webRequest.onBeforeRequest((details, callback) => {
 		// Loading an agent page into a frame is always allowed: the page's own
 		// CSP sandboxes it, and it is judged by its own rule from then on.
-		if (details.resourceType === "subFrame" && isAgentPageUrl(details.url)) return callback({});
+		if (details.resourceType === "subFrame" && (isAgentPageUrl(details.url) || remoteRegistry.isRenderUrl(details.url))) return callback({});
 		let pageUrl: string | undefined;
 		try {
 			for (let frame = details.frame; frame && !pageUrl; frame = frame.parent) {
-				if (isAgentPageUrl(frame.url)) pageUrl = frame.url;
+				if (isAgentPageUrl(frame.url) || remoteRegistry.isRenderUrl(frame.url)) pageUrl = frame.url;
 			}
 		} catch {
 			// The frame went away mid-request; nothing of its page is left to load.
@@ -1265,6 +1348,8 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
+		openInUserBrowser: (url) => userBrowser.open(url),
+		describeUserBrowser: () => userBrowser.describe(),
 		prepareBrowserPartition: (partition) =>
 			applyBrowserIdentity(session.fromPartition(partition), {
 				chromeVersion: process.versions.chrome,
@@ -1312,6 +1397,7 @@ async function createWindowInternal(): Promise<void> {
 		establishBrowserStreamLink();
 	}
 
+	mainWindow.once("show", () => launchTiming.mark("windowShown"));
 	showWhenRendererLoaded(mainWindow, shellWebContents);
 	void shellWebContents.loadURL(rendererUrl());
 
@@ -1407,6 +1493,7 @@ function createWindow(): Promise<void> {
 	if (createWindowPromise) return createWindowPromise;
 	// A background quit hid the Dock icon; bring it back with the window.
 	void app.dock?.show();
+	windowRequestedAt = Date.now();
 	const pending = createWindowInternal();
 	createWindowPromise = pending;
 	void pending.then(
@@ -3147,54 +3234,30 @@ ipcMain.handle("daemon:restart", async () => {
 		return reportDaemonRestartFailure(error);
 	}
 });
-async function captureSideChatState(closedSideId?: string, cancelClose = false, alreadyClosedId?: string): Promise<void> {
-	// Pin known ownership immediately, even while an older restore is in flight.
-	// A second daemon crash must not lose this close intent while capture waits.
-	if (closedSideId && !cancelClose && sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) {
-		sideCloseRecovery.begin(closedSideId);
-		sideLaunchState = sideCloseRecovery.state;
-		publishPendingSideCloses();
-	}
-	await sideLaunchRecovery.ensureReady();
-	if (closedSideId) {
-		if (cancelClose) sideCloseRecovery.cancel(closedSideId);
-		else {
-			// Capture missing ownership before allowing DELETE. Once pinned, later
-			// snapshot failures must retain the cleanup record.
-			if (!sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) await captureSideChatState();
-			sideCloseRecovery.begin(closedSideId);
-		}
-		sideLaunchState = sideCloseRecovery.state;
-		publishPendingSideCloses();
-	}
-	const { attachment, state } = await sideLaunchRecovery.capture();
-	if (!sideLaunchRecovery.matches(attachment)) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
-	if (alreadyClosedId) {
-		sideCloseRecovery.reconcileMissing(alreadyClosedId, state);
-		sideLaunchState = sideCloseRecovery.state;
-		publishPendingSideCloses();
-	}
+async function captureSideChatState(): Promise<void> {
+	const generation = daemonAttachmentGeneration;
+	// A verified OPEN side can accept a draft/receipt while an unrelated
+	// restore is rejected. Its capture must share the coverage-aware queue
+	// with close operations rather than wait for full-launch readiness.
+	const { attachment } = await sideLaunchRecovery.captureForClose();
+	if (generation !== daemonAttachmentGeneration || !sideLaunchRecovery.matches(attachment)) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
 }
 
-ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelClose = false) => {
+ipcMain.handle("sideChats:capture", async (event, ...legacyCloseArguments: unknown[]) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted side chat capture request.");
-	if (closedSideId !== undefined && (typeof closedSideId !== "string" || closedSideId.length > 255)) {
-		throw new Error("Invalid side chat identity.");
-	}
-	if (typeof cancelClose !== "boolean") throw new Error("Invalid close cancellation.");
-	return captureSideChatState(closedSideId, cancelClose);
+	if (legacyCloseArguments.length) throw new Error("Side chat close protocol changed. Reload the desktop app.");
+	return captureSideChatState();
 });
-ipcMain.handle("sideChats:confirmClose", async (event, sideId: string, alreadyClosed = false) => {
-	if (event.sender !== getShellWebContents() || typeof sideId !== "string" || !sideId || sideId.length > 255 || typeof alreadyClosed !== "boolean") throw new Error("Invalid side close confirmation.");
-	if (alreadyClosed) { await captureSideChatState(undefined, false, sideId); return; }
-	sideCloseRecovery.confirm(sideId);
-	publishPendingSideCloses();
-	// DELETE already established success. Keep cleanup in RAM while refreshing.
-	sideLaunchRecovery.captureInBackground();
+ipcMain.handle("sideChats:confirmClose", () => {
+	throw new Error("Side chat close protocol changed. Reload the desktop app.");
 });
-ipcMain.handle("sideChats:pendingCloses", (event, sessionId: string) => {
-	if (event.sender !== getShellWebContents() || typeof sessionId !== "string" || sessionId.length > 255) throw new Error("Invalid side close query.");
-	return sideCloseRecovery.pending(sessionId);
+ipcMain.handle("sideChats:requestClose", (event, input: SideCloseRequest) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted side chat close request.");
+	return sideCloseController.requestClose(input);
+});
+ipcMain.handle("sideChats:closeState", (event, sessionId: string) => {
+	if (event.sender !== getShellWebContents() || typeof sessionId !== "string" || !sessionId || sessionId.length > 255) throw new Error("Invalid side close query.");
+	return sideCloseController.summary(sessionId);
 });
 
 ipcMain.handle("editorHandoff:pathAction", (event, input) => {
@@ -3231,6 +3294,20 @@ ipcMain.handle("editorHandoff:copyWorkspacePath", (event, sessionId: string) => 
 	return editorHandoff.copyWorkspacePath(typeof sessionId === "string" ? sessionId : "");
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
+async function triageEnv(): Promise<NodeJS.ProcessEnv> {
+	await ensureShellEnv();
+	const env = process.platform === "win32"
+		? { ...process.env, ...(cachedShellEnv ?? {}) }
+		: buildDaemonEnv(process.env, cachedShellEnv, {}, configuredLoginShell);
+	return {
+		...env,
+		AO_DEV_DAEMON_BINARY: daemonLaunchEnv().AO_DEV_DAEMON_BINARY,
+		AO_DATA_DIR: path.resolve(desktopDataDir),
+		AO_RUN_FILE: path.resolve(runFilePath() ?? path.join(desktopDataDir, "running.json")),
+	};
+}
+ipcMain.handle("triage.launch", async () => launchTriageInTerminal(await triageEnv()));
+
 const dictation = registerDictationIpc(
 	path.join(
 		app.isPackaged ? process.resourcesPath : app.getAppPath(),
@@ -3245,12 +3322,18 @@ ipcMain.handle("app:openChromeExtensions", () =>
 	openChromeExtensionsPage(process.platform, (file, args) => promisify(execFile)(file, args)),
 );
 
-// Docks under System Settings while Cua Driver's permissions are missing. It is
-// a non-activating, always-on-top panel so System Settings keeps focus; its only
-// script is a preload that turns a drag of the CuaDriver tile into a native file
-// drag, and its links are intercepted here.
+// Docks under System Settings while Cua Driver's or Orchestrator's own
+// permissions are missing. It is a non-activating, always-on-top panel so
+// System Settings keeps focus; its only script is a preload that turns a drag
+// of the app tile into a native file drag, and its links are intercepted here.
 let privacyGuideContents: WebContents | undefined;
-let privacyGuideIcon: Electron.NativeImage | undefined;
+const privacyGuideIcons = new Map<string, Electron.NativeImage>();
+// Orchestrator's own bundle; a dev build runs from Electron.app, which macOS
+// then charges for its sessions instead.
+function orchestratorApp(): PrivacyGuideApp | undefined {
+	const bundle = appBundlePath(process.execPath);
+	return bundle ? { name: app.getName(), path: bundle } : undefined;
+}
 const privacyGuide = new PrivacyGuide({
 	createWindow: () => {
 		const window = new BrowserWindow({
@@ -3272,8 +3355,10 @@ const privacyGuide = new PrivacyGuide({
 		});
 		window.setAlwaysOnTop(true, "floating");
 		window.setVisibleOnAllWorkspaces(true);
-		window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-		privacyGuideContents = window.webContents;
+		// Kept from here: a closed window's webContents getter throws.
+		const contents = window.webContents;
+		contents.setWindowOpenHandler(() => ({ action: "deny" }));
+		privacyGuideContents = contents;
 		return {
 			loadURL: (url) => window.loadURL(url),
 			setBounds: (bounds) => window.setBounds(bounds),
@@ -3283,23 +3368,24 @@ const privacyGuide = new PrivacyGuide({
 			isFocused: () => window.isFocused(),
 			close: () => window.close(),
 			isDestroyed: () => window.isDestroyed(),
-			onNavigate: (handler) => window.webContents.on("will-navigate", (event, url) => {
+			onNavigate: (handler) => contents.on("will-navigate", (event, url) => {
 				event.preventDefault();
 				handler(url);
 			}),
 			onClosed: (handler) => window.on("closed", () => {
-				if (privacyGuideContents === window.webContents) privacyGuideContents = undefined;
+				if (privacyGuideContents === contents) privacyGuideContents = undefined;
 				handler();
 			}),
 		};
 	},
 	openExternal: (url) => openAllowedAppExternalURL(url, shell),
+	appFor: (target) => (target === "orchestrator" ? orchestratorApp() : { name: "CuaDriver", path: CUA_DRIVER_APP_PATH }),
 	// Quick Look renders the app's real icon at a crisp size; getFileIcon only
 	// offers a 32px generic placeholder for it on macOS.
 	readIcon: async (appPath) => {
 		const icon = await nativeImage.createThumbnailFromPath(appPath, { width: 128, height: 128 }).catch(() => undefined);
 		const image = icon && !icon.isEmpty() ? icon : await app.getFileIcon(appPath, { size: "normal" });
-		privacyGuideIcon = image.resize({ width: 64, height: 64 });
+		privacyGuideIcons.set(appPath, image.resize({ width: 64, height: 64 }));
 		return image.toDataURL();
 	},
 	watchSettings: watchSettingsWindow,
@@ -3311,10 +3397,33 @@ const privacyGuide = new PrivacyGuide({
 	},
 	ownPid: process.pid,
 });
-// Dropping CuaDriver.app on a System Settings privacy list adds it there.
+// Dropping the app on a System Settings privacy list adds it there.
 ipcMain.on("privacyGuide:startDrag", (event) => {
-	if (!privacyGuideContents || event.sender !== privacyGuideContents || !privacyGuideIcon || privacyGuideIcon.isEmpty()) return;
-	event.sender.startDrag({ file: CUA_DRIVER_APP_PATH, icon: privacyGuideIcon });
+	const target = privacyGuide.currentApp();
+	const icon = target && privacyGuideIcons.get(target.path);
+	if (!privacyGuideContents || event.sender !== privacyGuideContents || !target || !icon || icon.isEmpty()) return;
+	event.sender.startDrag({ file: target.path, icon });
+});
+// Orchestrator's own Accessibility and Screen Recording grants, which Claude
+// Code's built-in computer use in a terminal session needs. Undefined off
+// macOS, or when they cannot be read.
+const readOrchestratorPrivacy = () => readAppPrivacy(execFileAsync);
+ipcMain.handle("app:getAppPrivacy", async (event): Promise<AppPrivacyGrants | undefined> => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted app privacy request.");
+	if (process.platform !== "darwin") return undefined;
+	return readOrchestratorPrivacy();
+});
+ipcMain.handle("app:requestAppPrivacy", async (event): Promise<AppPrivacyGrants | undefined> => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted app privacy request.");
+	if (process.platform !== "darwin") return undefined;
+	const granted = await readOrchestratorPrivacy();
+	if (!granted) return undefined;
+	await requestAppPrivacy(granted, {
+		accessibility: () => { systemPreferences.isTrustedAccessibilityClient(true); },
+		// Listing the screens is a screen capture: macOS prompts and lists Orchestrator.
+		screenRecording: async () => { await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 0, height: 0 } }).catch(() => undefined); },
+	});
+	return readOrchestratorPrivacy();
 });
 ipcMain.handle("app:showPrivacyGuide", async (event, input: unknown) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
@@ -3323,9 +3432,10 @@ ipcMain.handle("app:showPrivacyGuide", async (event, input: unknown) => {
 	if (!request) throw new Error("Invalid privacy guide request.");
 	await privacyGuide.show(request);
 });
-ipcMain.handle("app:updatePrivacyGuide", async (event, granted: Partial<Record<PrivacyPane, unknown>>) => {
+ipcMain.handle("app:updatePrivacyGuide", async (event, target: unknown, granted: Partial<Record<PrivacyPane, unknown>>) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
-	return privacyGuide.update({ accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
+	if (!isPrivacyGuideTarget(target)) throw new Error("Invalid privacy guide request.");
+	return privacyGuide.update(target, { accessibility: granted?.accessibility === true, screenRecording: granted?.screenRecording === true });
 });
 ipcMain.handle("app:closePrivacyGuide", (event) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted privacy guide request.");
@@ -3349,6 +3459,20 @@ ipcMain.handle("theme:set", (_event, preference: "light" | "dark" | "system") =>
 		nativeTheme.themeSource = preference;
 		syncNativeWindowBackground();
 	}
+});
+
+// The OS appearance, for resolving "System". The renderer's prefers-color-scheme
+// follows themeSource, so while Light or Dark is forced it reports that mode,
+// not the OS. macOS reads the appearance without touching themeSource, so the
+// window material still flips with the new frame (theme:set on reveal).
+// Elsewhere there is no reading independent of themeSource; dropping the
+// forced mode first is safe there because no material sits under the page.
+ipcMain.handle("theme:system-appearance", (): "light" | "dark" => {
+	if (process.platform === "darwin") {
+		return systemPreferences.getUserDefault("AppleInterfaceStyle", "string") === "Dark" ? "dark" : "light";
+	}
+	nativeTheme.themeSource = "system";
+	return nativeTheme.shouldUseDarkColors ? "dark" : "light";
 });
 
 ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
@@ -3543,7 +3667,8 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 	const cloudUserId = stored?.session?.authProvider === "workos" ? stored.session.user.id : null;
 	// No stored sign-in but a binding left behind: a sign-out the daemon never
 	// heard (it was down, then the app quit). Retire it before anything exports.
-	if (stored && !stored.session) await telemetryIdentity.retireSignedOutBinding();
+	// A sign-in hidden by a secure storage outage is not a sign-out.
+	if (stored && !stored.session && !isSavedSignInHidden(cloudDataDir())) await telemetryIdentity.retireSignedOutBinding();
 	if (cloudUserId && cloudUserId === await boundCloudUserId(desktopDataDir)) bootstrap.cloudUserId = cloudUserId;
 	return bootstrap;
 });
@@ -3561,7 +3686,10 @@ ipcMain.handle("telemetry:setAnalyticsOptOut", async (event, optedOut: unknown) 
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
 	if (trustedSender !== event.sender || typeof optedOut !== "boolean") throw new Error("invalid analytics opt-out request");
 	const result = await telemetryIdentity.setOptedOut(optedOut);
-	if (optedOut) void flushDaemonUsage();
+	if (optedOut) {
+		void flushDaemonUsage();
+		resourceSampler.clear();
+	}
 	return result;
 });
 ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
@@ -3571,6 +3699,18 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 });
 ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
 ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
+// Performance telemetry: the launch start (once per shell page) and the
+// resource use since the previous read. Neither carries an identifier.
+ipcMain.handle("telemetry:takeLaunchStart", (event): LaunchTimingStart | null => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;
+	const start = shellLaunchStarts.get(event.sender.id) ?? null;
+	shellLaunchStarts.delete(event.sender.id);
+	return start;
+});
+ipcMain.handle("telemetry:takeResourceSummary", (event): ResourceSummary | null => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;
+	return resourceSampler.take();
+});
 // The renderer claims ao.app.first_opened only when it is about to send it,
 // so an opt-out or a kill-switch entry never spends the one-time marker.
 ipcMain.handle("telemetry:claimFirstOpen", async () => {
@@ -3792,6 +3932,14 @@ async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
 	}
 }
 
+ipcMain.handle("app:findArtifactIssues", async (_event, repo: string, query: string) => {
+	await ensureShellEnv();
+	return findArtifactIssues(repo, query, daemonEnv());
+});
+ipcMain.handle("app:publishIssueArtifact", async (_event, input: GitHubIssueArtifact) => {
+	await ensureShellEnv();
+	return publishIssueArtifact(input, daemonEnv());
+});
 ipcMain.handle("app:listGitHubRepos", (_event, query: unknown) => listGitHubRepos(typeof query === "string" ? query : ""));
 ipcMain.handle("app:getCachedGitHubOwners", () => cachedGitHubOwners);
 ipcMain.handle("app:refreshGitHubOwners", () => refreshGitHubOwners());
@@ -3873,6 +4021,10 @@ registerCloudShareIpc({
 	getToken: () => getCloudAccessToken(cloudDataDir()),
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
+	// A remote host's file is read through its loopback proxy, which adds the
+	// host's credential; Node's fetch sends no Origin, as the proxy requires.
+	hostApiBase: (hostId) => remoteRegistry.apiBase(hostId),
+	fetchHost: (url, init) => fetch(url, init),
 });
 // Session and project share links this device made, so Copy link works again
 // later; only the signed-in account's, which the file names.
@@ -4110,6 +4262,16 @@ ipcMain.handle(
 
 // The renderer could not decode or start the bundled sound. Beep so the
 // notification still makes a sound where the OS beep works at all.
+// The shell reports the first frame that shows the workspace, which ends the
+// launch. Logged once: a reload reports the frame again.
+let launchTimingLogged = false;
+ipcMain.on("app:sessionsShown", (event) => {
+	if (event.sender !== getShellWebContents() || launchTimingLogged) return;
+	launchTimingLogged = true;
+	launchTiming.mark("sessionsShown");
+	console.info(launchTiming.line());
+});
+
 ipcMain.on("notifications:soundFailed", (event) => {
 	if (event.sender !== getShellWebContents()) return;
 	shell.beep();
@@ -4187,6 +4349,16 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 		event.sender.send(OPEN_FOLDER_PATH_CHANNEL, pendingFolderPath);
 		pendingFolderPath = null;
 	}
+
+	if (pendingSessionDeepLink && event.sender === getShellWebContents()) {
+		event.sender.send(OPEN_SESSION_DEEP_LINK_CHANNEL, pendingSessionDeepLink);
+		pendingSessionDeepLink = null;
+	}
+
+	if (pendingBillingSection && event.sender === getShellWebContents()) {
+		event.sender.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, pendingBillingSection);
+		pendingBillingSection = null;
+	}
 });
 
 // Cloud auth IPC — cloud:getSession, cloud:signIn, cloud:signOut.
@@ -4219,7 +4391,11 @@ ipcMain.handle("cloud:takePendingSignIn", () => pendingCloudSignIn.take());
 // The account this run last told the renderer about, to notice another one signing in.
 let notifiedCloudUserId: string | undefined;
 
+// Whether anything has bound the Cloud artifact previews to an account yet this run.
+let artifactSnapshotsBound = false;
+
 function bindArtifactSnapshotsToCloudAccount(userId: string | null): void {
+	artifactSnapshotsBound = true;
 	artifactSnapshotStore.bindCloudAccount(userId).catch((error) => {
 		// The old files stay on record as another account's, so the next sign-in, or the next launch, tries again.
 		console.warn("AO: could not delete the cached Cloud artifact previews", error);
@@ -4313,6 +4489,21 @@ ipcMain.handle("cloud:takePendingShareLink", () => {
 	return link ?? null;
 });
 
+// Published artifacts' viewer URLs from ao-app://shared-artifact, already
+// checked by parseSharedArtifactLink, kept in arrival order until the renderer
+// takes them one by one. Bounded, so a flood of links cannot grow it forever.
+const MAX_PENDING_SHARED_ARTIFACTS = 20;
+const pendingSharedArtifacts: string[] = [];
+
+ipcMain.handle("cloud:takePendingSharedArtifact", () => pendingSharedArtifacts.shift() ?? null);
+
+// The renderer's fallback: openSharedArtifact accepts only a published
+// artifact's page on a known viewer origin, and its window has no preload or
+// credentials.
+ipcMain.handle("cloud:openSharedArtifactWindow", (_event, viewerUrl: unknown) => {
+	if (typeof viewerUrl === "string") openSharedArtifact(viewerUrl);
+});
+
 function isShareDeepLink(raw: string): boolean {
 	try {
 		const url = new URL(raw);
@@ -4323,6 +4514,51 @@ function isShareDeepLink(raw: string): boolean {
 }
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
+	// A published artifact's "Open on orchestrator": the Artifacts page opens it,
+	// or hands it back to openSharedArtifact's isolated window when it cannot.
+	// Only a page on a known viewer: any other site is not an Orchestrator artifact.
+	const artifact = parseSharedArtifactLink(url, SHARED_ARTIFACT_VIEWER_ORIGINS);
+	if (artifact) {
+		await app.whenReady();
+		if (getShellWebContents()) {
+			// Focused by name: a shared-artifact window left open would otherwise
+			// be the first window and take focus. A shell still loading shows
+			// itself once ready, so it is left hidden until then.
+			if (!mainWindow || !windowsAwaitingFirstShow.has(mainWindow)) focusMainWindow();
+		} else {
+			// A replacement shell shows itself, and so takes focus, once its
+			// renderer has loaded (showWhenRendererLoaded).
+			try {
+				await createWindow();
+			} catch (error) {
+				// With no shell to take it, the link opens in its own window.
+				console.error("AO: could not reopen the window for a shared artifact", error);
+				openSharedArtifact(artifact);
+				return;
+			}
+		}
+		// Held until the renderer takes it: a page that has loaded may not have
+		// subscribed yet, so the send only tells a listening host to take it now.
+		if (!pendingSharedArtifacts.includes(artifact)) {
+			// Past the bound, a new link opens in its own window rather than being lost.
+			if (pendingSharedArtifacts.length >= MAX_PENDING_SHARED_ARTIFACTS) {
+				openSharedArtifact(artifact);
+				return;
+			}
+			pendingSharedArtifacts.push(artifact);
+		}
+		const contents = getShellWebContents();
+		if (contents && !contents.isDestroyed() && !contents.isLoading()) contents.send("cloud:openSharedArtifact", artifact);
+		return;
+	}
+	// macOS keeps the app (and tray) alive after the close button —
+	// window-all-closed does not quit — and a link clicked then fires open-url
+	// without activate, so nothing else recreates the shell. Hidden utility
+	// windows can linger, so the window list is not the test: recreate when
+	// there is no shell to deliver to. The queued links below flush once its
+	// fresh shell mounts. Windows/Linux quit on the last window closing, so
+	// this never fires there.
+	if (!getShellWebContents()) void createWindow();
 	focusCloudWindow();
 	// A shared cloud session: the renderer redeems it and opens the session.
 	if (isShareDeepLink(url)) {
@@ -4333,9 +4569,38 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	}
 	// Stripe Checkout and the Customer Portal return here (via the control
 	// plane's /billing/return page): open Settings on Billing, which re-reads
-	// the plan when it mounts.
+	// the plan when it mounts. Queue while the shell is missing or still
+	// loading — flushed on renderer ready like the other pending links.
 	if (isBillingDeepLink(url)) {
-		getShellWebContents()?.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, "billing");
+		const contents = getShellWebContents();
+		if (contents && !contents.isDestroyed() && !contents.isLoading()) {
+			contents.send(OPEN_SETTINGS_SHORTCUT_CHANNEL, "billing");
+		} else {
+			pendingBillingSection = "billing";
+		}
+		return;
+	}
+	// ao-app://sessions/… from external tools: forward the canonical URL to the
+	// shell, which re-reads it as its in-app ao:// form and resolves it against
+	// its workspace lists with the same session-links path as ao:// links
+	// (navigate, toast when the session is gone). The canonical form lowercases
+	// the scheme and strips query/hash/trailing slashes the ao:// parser would
+	// reject. Queue it while the renderer is still mounting (cold start) —
+	// flushed on renderer ready, same handshake as pendingFolderPath below.
+	const normalized = normalizeSessionDeepLink(url);
+	if (normalized) {
+		const contents = getShellWebContents()?.isDestroyed() ? null : getShellWebContents();
+		// The newest link wins: one queued for the readiness handshake is stale
+		// once a newer link arrives, so clear it here either way. Dropping it on
+		// the direct-send path keeps the handshake from navigating the stale
+		// link after this one; replacing it on the queue path keeps the newest
+		// click last.
+		pendingSessionDeepLink = null;
+		if (contents && !contents.isLoading()) {
+			contents.send(OPEN_SESSION_DEEP_LINK_CHANNEL, normalized);
+		} else {
+			pendingSessionDeepLink = normalized;
+		}
 		return;
 	}
 	try {
@@ -4471,8 +4736,30 @@ async function writeAppStateOnLaunch(): Promise<void> {
 
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
+	launchTiming.mark("appReady");
+	// Memory and CPU for ao.usage.ui_performance. getAppMetrics is cheap; the
+	// renderer reads the kept peaks and average when its window flushes. Nothing
+	// is kept during an analytics opt-out; the first sample after it only sets
+	// the CPU baseline, so the average leaves the opt-out out.
+	const sampleResources = () => {
+		if (telemetryIdentity.isOptedOut()) resourceSampler.clear();
+		else resourceSampler.sample();
+	};
+	sampleResources();
+	setInterval(sampleResources, 10 * 60_000).unref();
+	// Before any browser partition exists; both run in the background.
+	void sweepTemporaryBrowserPartitions(app.getPath("userData")).then(({ removed, failed }) => {
+		if (removed || failed) console.info(`browser storage: removed ${removed} leftover temporary profiles${failed ? `, ${failed} failed` : ""}`);
+	});
+	void purgeRootCachesOnce(session.defaultSession, app.getPath("userData")).catch((error: unknown) => {
+		console.warn("browser storage: root cache purge failed; retrying next launch:", error);
+	});
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
+	// Nothing says when secure storage comes back (a keychain unlocked, say), so
+	// a Cloud sign-in waiting on it is checked again when the person returns.
+	powerMonitor.on("unlock-screen", () => recheckSavedSignIn(cloudDataDir()));
+	app.on("browser-window-focus", () => recheckSavedSignIn(cloudDataDir()));
 	void refreshGitHubOwners();
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
@@ -4595,10 +4882,25 @@ app.whenReady().then(async () => {
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
 	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
 	// even if the app quit before it could.
-	void getCloudSessionCached(cloudDataDir()).then(
-		(account) => bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null),
-		() => bindArtifactSnapshotsToCloudAccount(null),
-	);
+	// A sign-in hidden by a secure storage outage is not a lost one: leave the previews, and let the
+	// session notice that shows it again bind them. Nor is a login file that could not be read: that read
+	// is tried again, backing off, until one answers or something else (a session notice, a sign-in) binds
+	// them first. Until then the previews stay on disk, unbound, and cards render live.
+	const bindArtifactSnapshotsAtStartup = (attempt: number): void => {
+		void getCloudSessionCached(cloudDataDir()).then(
+			(account) => {
+				if (artifactSnapshotsBound) return;
+				if (account || !isSavedSignInHidden(cloudDataDir())) bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
+			},
+			() => {
+				if (artifactSnapshotsBound) return;
+				setTimeout(() => {
+					if (!artifactSnapshotsBound) bindArtifactSnapshotsAtStartup(attempt + 1);
+				}, Math.min(1_000 * 2 ** attempt, 30_000)).unref();
+			},
+		);
+	};
+	bindArtifactSnapshotsAtStartup(0);
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))
@@ -4619,6 +4921,11 @@ app.whenReady().then(async () => {
 			baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
 			request: (url, init) => fetch(url, init),
 			setState: (active) => trayController?.setAwakeState(active),
+			// Every shell window shows Stay Awake in its sidebar and gets each change.
+			// The shell is a WebContentsView, so BrowserWindow.getAllWindows() misses it.
+			onAwakeState: (state) => {
+				for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send("awake:state", state);
+			},
 		});
 		app.once("will-quit", () => awakeTray.dispose());
 	}

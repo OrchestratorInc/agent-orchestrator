@@ -1,5 +1,5 @@
 import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "@/components/app-icons";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountProviderFor } from "../../../hooks/useAgentAccounts";
 import { advisoryInUse, isWaitingForIdleJob, versionLabel, type HarnessInUse, type InstallJob } from "../../../hooks/useHarnessUpdates";
@@ -16,18 +16,22 @@ import { installStage, showsInstallProgress, type HarnessDetails } from "./descr
 import { HarnessAuthTerminalPanel } from "./HarnessAuthTerminalPanel";
 import { HarnessCloudLine, type HarnessCloudState } from "./HarnessCloudLine";
 import { HarnessInstallProgress, useInstallJustFinished } from "./HarnessInstallProgress";
-import { HarnessDetailGroup, HarnessDetailRow, HarnessTimestamp } from "./harness-ui";
+import { HarnessDetailGroup, HarnessDetailRow, HarnessStatusDot, HarnessTimestamp } from "./harness-ui";
 
 /** Install, update and login each own one row. While a job or login runs,
 	* the row that started it shows progress instead. */
-export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, loginPanel, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onCloudUpdate, onCloudReset, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
+export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, signedIn, loginPanel, savedKeys, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onCloudUpdate, onCloudReset, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
 	details: HarnessDetails;
 	hostId?: string;
 	/** AO Cloud's side of this harness, when AO Cloud runs it: a second line of the installation row. */
 	cloud?: HarnessCloudState;
 	/** A login or logout terminal is open for any harness. */
 	authWorkflowActive: boolean;
+	/** A verified sign-in just closed the login panel. */
+	signedIn?: boolean;
 	loginPanel?: ReactNode;
+	/** Keys AO saved for this harness while it is not installed, so they can still be removed. */
+	savedKeys?: ReactNode;
 	copied: boolean;
 	diagnosticsExpanded: boolean;
 	onToggleDiagnostics: () => void;
@@ -52,11 +56,20 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 }) {
 	const { t } = useTranslation();
 	const { plan, job, isInstalled, authPlan, rowAuthWorkflow, authBusy, installMethod, availableMethods, failed } = details;
+	// The login panel held focus and its status line. Once it closes on a
+	// verified sign-in, say so here and hand focus to the account's login
+	// action, unless the user has already moved focus somewhere else.
+	const rootRef = useRef<HTMLDivElement>(null);
+	const showSignedIn = Boolean(signedIn && !loginPanel);
+	useEffect(() => {
+		if (!showSignedIn || (document.activeElement && document.activeElement !== document.body)) return;
+		rootRef.current?.querySelector<HTMLElement>("[data-terminal-focus-handoff]:not(:disabled)")?.focus();
+	}, [showSignedIn]);
 	// Sessions that must end first turn Update into a way to find them.
 	const blockedBy = advisoryInUse(details.advisory);
 	const updateBlocked = Boolean(blockedBy);
 	// Subscription accounts are for local Claude Code and Codex.
-	const accountProvider = !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
+	const accountProvider = isInstalled ? agentAccountProviderFor(details.agentId) : null;
 	// The running job's steps stay in the Installation card until it finishes on Done.
 	const justFinished = useInstallJustFinished(job);
 	const stage = justFinished ? "done" : installStage(job);
@@ -106,15 +119,19 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 		: localUpdate ? updateButton
 		: details.showUpdate && !details.needsLogin && plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="default" variant="secondary" className="min-w-20" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button>
 		: null;
+	const canStartUnknownLogin = Boolean(authPlan?.available && authPlan.action !== "instructions" && details.authStatus === "unknown");
 	const accountAction = authBusy ? authBusyAction
 		: details.busy ? null
 		: details.needsLogin || details.showSetup ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="default" className="min-w-20" disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.setup" : details.authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
 		</Button>
-		: details.canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="default" variant="secondary" className="min-w-20" disabled={authWorkflowActive} onClick={onLogin}>
-			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.openSetup" : "settings.harness.loginAgain")}
+		: details.canRelogin || canStartUnknownLogin ? <Button type="button" data-terminal-focus-handoff="true" size="default" variant="secondary" className="min-w-20" disabled={authWorkflowActive} onClick={onLogin}>
+			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? details.canRelogin ? "settings.harness.openSetup" : "settings.harness.setup" : details.canRelogin ? "settings.harness.loginAgain" : "settings.harness.login")}
 		</Button> : null;
-	return <div className="flex flex-col gap-6">
+	return <div ref={rootRef} className="flex flex-col gap-6">
+		{/* Always mounted, so the change is announced. A bare live region, not
+		    role="status": the tab's own progress statuses stay the only ones. */}
+		<p aria-live="polite" data-signed-in-announcer="" className="sr-only">{showSignedIn ? t("settings.harness.loginUi.connected") : ""}</p>
 		<HarnessDetailGroup title={t("settings.harness.installation")}>
 			<HarnessDetailRow
 				label={isInstalled ? t(details.versionUnverified ? "settings.harness.lastObservedVersion" : "settings.harness.installedVersion")
@@ -141,21 +158,25 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 		{/* With accounts listed, the CLI's own login is a row there, not a card of its own. */}
 		{(isInstalled || rowAuthWorkflow) && !accountProvider ? <HarnessDetailGroup title={t("settings.harness.account")}>
 			{!loginPanel && <HarnessDetailRow
-				label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress") : details.authSummary}
+				label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress")
+					: !authBusy && details.authTone === "ok" ? <span className="inline-flex items-center gap-2"><HarnessStatusDot tone="ok" />{details.authSummary}</span>
+					: details.authSummary}
 				description={authBusy ? undefined : details.accountDescription}
 			>
 				{accountAction}
-				{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="secondary" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
+				{isInstalled && authPlan?.logoutCommand && authPlan.available && (details.authStatus === "authorized" || details.authStatus === "configured") ? <Button type="button" size="sm" variant="secondary" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 			</HarnessDetailRow>}
 			{loginPanel}
 		</HarnessDetailGroup> : null}
-		{accountProvider ? <AgentAccountsPanel provider={accountProvider} cliLogin={{
+		{savedKeys}
+		{accountProvider ? <AgentAccountsPanel provider={accountProvider} hostId={hostId} loginMethods={authPlan?.methods} cliLogin={{
 			disabled: authBusy || authWorkflowActive || details.busy || !authPlan?.available || authPlan.action === "instructions",
 			canLogout: Boolean(authPlan?.logoutCommand),
 			onSignIn: onLogin,
 			onLogout,
 		}} /> : null}
 		{accountProvider && loginPanel ? <HarnessDetailGroup title={t("settings.harness.account")}>{loginPanel}</HarnessDetailGroup> : null}
+		{details.loginUnconfirmed && !authBusy ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.loginUnconfirmedHint")}</p> : null}
 		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="secondary" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
 		{rowAuthWorkflow ? <HarnessAuthTerminalPanel
 			workflow={rowAuthWorkflow}
@@ -177,7 +198,9 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 				{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
 				{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
 				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
-				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="secondary" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
+				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="secondary" onClick={() => job && onCopyDiagnostics(job)}>
+					{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copied ? "settings.harness.copied" : "settings.harness.copyDiagnostics")}
+				</Button>
 			</div> : null}
 		</div> : null}
 	</div>;

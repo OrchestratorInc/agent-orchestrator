@@ -107,6 +107,14 @@ const appShortcutMatch = (
 	return null;
 };
 
+// JIS puts + on the shifted semicolon key and ^ in the US = position.
+// On macOS the shifted semicolon key can be reported as ; or : with Command.
+function isMacTerminalZoomInAlias(chord: ShortcutChord): boolean {
+	if (!chord.meta || chord.ctrl || chord.alt) return false;
+	if (chord.shift) return chord.code === "Semicolon" && (chord.key === ";" || chord.key === ":");
+	return chord.code === "Equal" && chord.key === "^";
+}
+
 // Handle application-owned shortcuts in the main process so they work no
 // matter which web contents holds focus, including xterm's helper textarea and
 // the native Browser-preview WebContentsView.
@@ -139,12 +147,22 @@ export function attachAppShortcuts(
 			shift: input.shift,
 			alt: input.alt,
 		};
-		const fontSizeDelta = terminalFontSizeDelta(chord, isMac);
-		if (fontSizeDelta !== 0 && isTerminalFontSizeFocused()) {
-			event.preventDefault();
-			if (focusTarget) target.focus();
-			target.send(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, fontSizeDelta);
-			return;
+		let fontSizeDelta = terminalFontSizeDelta(chord, isMac);
+		const zoomChord = fontSizeDelta !== 0 || (isMac && isMacTerminalZoomInAlias(chord));
+		if (zoomChord && isTerminalFontSizeFocused()) {
+			// The JIS aliases can overlap user bindings on other keyboard layouts.
+			if (fontSizeDelta === 0 && !isRecording()) {
+				const overrides = getOverrides();
+				if (!APP_SHORTCUTS.some(({ id }) => matchesAppShortcut(id, chord, isMac, overrides))) {
+					fontSizeDelta = 1;
+				}
+			}
+			if (fontSizeDelta !== 0) {
+				event.preventDefault();
+				if (focusTarget) target.focus();
+				target.send(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, fontSizeDelta);
+				return;
+			}
 		}
 		const artifactZoom = artifactZoomAction(chord, isMac);
 		if (artifactZoom && isArtifactZoomEngaged()) {
@@ -169,9 +187,9 @@ export function attachAppShortcuts(
 		const match = appShortcutMatch(chord, isMac, getOverrides());
 		if (!match) return;
 		const { id, channel, payload } = match;
-		// Find is owned by the focused surface, on every platform. Let the
-		// renderer route it after inspecting dialogs, editors and chat focus.
-		if (id === "find-in-chat") return;
+		// Contextual actions are owned by the focused surface. Let the renderer
+		// inspect dialogs, editors, focus and the live selection before claiming them.
+		if (id === "find-in-chat" || id === "add-selection-to-chat") return;
 		if (!isMac && shortcutYieldsToTerminal(id, chord) && isTerminalFocused()) return;
 		if (!shouldHandle(id, chord)) {
 			// Browser context owns these chords. Consume them so a racing shell

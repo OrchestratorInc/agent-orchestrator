@@ -275,8 +275,13 @@ export default function CloudAgentScreen() {
 			}
 			// Left or cancelled while the listener started: it stops, and nothing opens.
 			if (!owns(mine)) { session.cancel(); return; }
+			// Ending the attempt makes run() leave busy alone once its step
+			// settles, so cancelling clears it here, as cancelCodex does.
 			const cancel = () => {
-				if (owns(mine)) endAttempt();
+				if (owns(mine)) {
+					endAttempt();
+					setBusy(false);
+				}
 				session.cancel();
 			};
 			// Cancelled before the browser opened, or while the credential was

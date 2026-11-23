@@ -28,6 +28,9 @@ const {
 	workspaceQueryMock,
 	cloudProjectsMock,
 	spawnCloudOrchestratorMock,
+	offeringMock,
+	participantsMock,
+	shareDialogMock,
 	routerListeners,
 	fakeRouter,
 } = vi.hoisted(() => {
@@ -52,12 +55,25 @@ const {
 		workspaceQueryMock: vi.fn(),
 		cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
 		spawnCloudOrchestratorMock: vi.fn(),
+		offeringMock: vi.fn((): Record<string, unknown> => ({ defaultProvider: "coder" })),
+		participantsMock: vi.fn((): ReadonlyMap<string, unknown[]> => new Map()),
+		shareDialogMock: vi.fn(),
 	};
 });
 
 vi.mock("../lib/cloud-orchestrator", () => ({ spawnCloudOrchestrator: spawnCloudOrchestratorMock }));
 
-vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder" }) }));
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => offeringMock() }));
+vi.mock("../hooks/useSessionParticipants", () => ({ useSessionParticipants: () => participantsMock() }));
+vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => true }));
+vi.mock("./ShareSessionDialog", () => ({
+	ShareSessionDialog: (props: { open: boolean; sessionId?: string; sessionName?: string; projectName?: string; orgId: string; projectId: string }) => {
+		shareDialogMock(props);
+		return props.open ? (
+			<div role="dialog" aria-label="Share dialog" data-session={props.sessionId ?? ""} data-session-name={props.sessionName ?? ""} data-project-name={props.projectName ?? ""} data-org={props.orgId} data-project={props.projectId} />
+		) : null;
+	},
+}));
 
 
 vi.mock("@tanstack/react-router", () => ({
@@ -188,6 +204,9 @@ beforeEach(() => {
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
+	offeringMock.mockReset().mockReturnValue({ defaultProvider: "coder" });
+	participantsMock.mockReset().mockReturnValue(new Map());
+	shareDialogMock.mockReset();
 });
 
 describe("SessionsBoard", () => {
@@ -312,6 +331,51 @@ describe("SessionsBoard", () => {
 			body: { displayName: "Fix login redirect" },
 		}));
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	describe("sharing from a card", () => {
+		const shareName = (title: string) => `Share “${title}”`;
+		function cloudBoard(sessions: WorkspaceSession[], project: Partial<WorkspaceSummary> = {}) {
+			offeringMock.mockReturnValue({ defaultProvider: "coder", features: ["share"], org: { id: "org-mine" } });
+			workspaceQueryMock.mockReturnValue({
+				data: [{ ...workspaceWithSessions(sessions), name: "acme/web", kind: "cloud", cloudOrgId: "org-mine", ...project }],
+				isSuccess: true, isError: false,
+			});
+		}
+
+		it("opens the session's share dialog from its card, without opening the session", async () => {
+			cloudBoard([boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } })]);
+			renderBoard("p1");
+			expect(screen.queryByRole("dialog", { name: "Share dialog" })).toBeNull();
+			await userEvent.click(await screen.findByRole("button", { name: shareName("Fix login") }));
+			const dialog = await screen.findByRole("dialog", { name: "Share dialog" });
+			expect(dialog.dataset).toMatchObject({ session: "s1", sessionName: "Fix login", projectName: "acme/web", org: "org-mine", project: "p1" });
+			expect(navigateMock).not.toHaveBeenCalled();
+		});
+
+		it("opens the same dialog from the people circles on an already shared session", async () => {
+			cloudBoard([boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } })]);
+			participantsMock.mockReturnValue(new Map([["s1", [{ userId: "v", name: "Vaanya", present: true, state: "idle" }]]]));
+			renderBoard("p1");
+			const circles = await screen.findByRole("button", { name: /Vaanya/ });
+			await userEvent.click(circles);
+			expect((await screen.findByRole("dialog", { name: "Share dialog" })).dataset.session).toBe("s1");
+			expect(navigateMock).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			["a local session", boardSession({ id: "s1", title: "Fix login", status: "working" }), {}, { features: ["share"], org: { id: "org-mine" } }],
+			["a session shared from another organization", boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-elsewhere", shared: true } }), {}, { features: ["share"], org: { id: "org-mine" } }],
+			["an organization without sharing", boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } }), {}, { features: [], org: { id: "org-mine" } }],
+			["a terminated session", boardSession({ id: "s1", title: "Fix login", status: "working", isTerminated: true, cloud: { orgId: "org-mine" } }), {}, { features: ["share"], org: { id: "org-mine" } }],
+		])("offers no Share on %s", async (_name, session, project, offering) => {
+			cloudBoard([session, boardSession({ id: "s2", title: "Other task", status: "working" })], project);
+			offeringMock.mockReturnValue({ defaultProvider: "coder", ...offering });
+			renderBoard("p1");
+			await screen.findByText("Other task");
+			expect(screen.queryByRole("button", { name: shareName("Fix login") })).toBeNull();
+			expect(document.querySelector("[data-board-share-session]")).toBeNull();
+		});
 	});
 
 	it("says a session's status could not be verified, without offering a retry", () => {
@@ -1838,7 +1902,7 @@ describe("SessionsBoard", () => {
 		]);
 	});
 
-	it("uses the shared minimal scrollbar styling for every Kanban lane", () => {
+	it("hides the scrollbar on every Kanban lane", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				workspaceWithSessions([
@@ -1861,7 +1925,7 @@ describe("SessionsBoard", () => {
 			.flatMap((column) => Array.from(column.querySelectorAll<HTMLElement>(".overflow-y-auto")));
 		expect(laneScrollers).toHaveLength(4);
 		for (const scroller of laneScrollers) {
-			expect(scroller).toHaveClass("board-scrollbar", "overflow-y-auto");
+			expect(scroller).toHaveClass("scrollbar-none", "overflow-y-auto");
 		}
 	});
 
@@ -2216,6 +2280,140 @@ describe("SessionsBoard artifacts", () => {
 
 		await screen.findByText("Fix the bug");
 		expect(screen.queryByTestId("board-session-artifacts")).not.toBeInTheDocument();
+	});
+});
+
+describe("SessionsBoard search", () => {
+	function searchableBoard() {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({ id: "ao-12", title: "Fix login redirect", status: "working", branch: "ao/login-fix" }),
+					boardSession({
+						id: "ao-13",
+						title: "Theme picker",
+						status: "review_pending",
+						prs: [{ url: "https://github.com/example/radic/pull/812", number: 812, state: "open", ci: "passing", review: "pending" } as WorkspaceSession["prs"][number]],
+					}),
+					boardSession({ id: "ao-14", title: "Board search", status: "mergeable" }),
+					terminatedSession(),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+	}
+
+	const searchField = () => screen.getByRole("searchbox", { name: "Search through board" });
+
+	async function search(query: string) {
+		await userEvent.type(searchField(), query);
+	}
+
+	it("narrows the cards in place by title, session id, branch and PR number", async () => {
+		searchableBoard();
+		renderBoard("p1");
+		expect(screen.getAllByTestId("board-session-card")).toHaveLength(3);
+
+		await search("login");
+		await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(1));
+		const lane = screen.getByText("Fix login redirect").closest('[data-testid="board-column"]') as HTMLElement;
+		expect(lane).toHaveAttribute("data-column", toKanbanColumn(undefined, "working"));
+		// Lanes stay, with counts for what is shown; the archive stays reachable.
+		expect(screen.getAllByTestId("board-column")).toHaveLength(4);
+		expect(screen.getByRole("button", { name: /^Archived sessions, 1$/ })).toBeInTheDocument();
+
+		const field = searchField();
+		for (const [query, title] of [["ao-14", "Board search"], ["#812", "Theme picker"], ["ao/login-fix", "Fix login redirect"]] as const) {
+			await userEvent.clear(field);
+			await userEvent.type(field, query);
+			await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(1));
+			expect(screen.getByText(title)).toBeInTheDocument();
+		}
+	});
+
+	it("shows a no-match state whose Clear search restores the board", async () => {
+		searchableBoard();
+		renderBoard("p1");
+
+		await search("nothing-like-this");
+		expect(await screen.findByText("No sessions match “nothing-like-this”")).toBeInTheDocument();
+		expect(screen.queryAllByTestId("board-session-card")).toHaveLength(0);
+
+		await userEvent.click(screen.getByRole("button", { name: "Clear search" }));
+		await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(3));
+		expect(screen.queryByTestId("board-search-empty")).not.toBeInTheDocument();
+		await waitFor(() => expect(searchField()).toHaveFocus());
+	});
+
+	it("keeps the field on screen, unfocused, before any search", () => {
+		searchableBoard();
+		renderBoard("p1");
+
+		expect(searchField()).toHaveAttribute("placeholder", "Search through board");
+		expect(searchField()).not.toHaveFocus();
+	});
+
+	it("focuses the field on Cmd/Ctrl+F", async () => {
+		searchableBoard();
+		renderBoard("p1");
+		const mac = isMacPlatform();
+		// jsdom lays nothing out; the board only claims the chord for a field on screen.
+		Object.defineProperty(searchField(), "getClientRects", { configurable: true, value: () => [{ top: 0, bottom: 30 }] });
+
+		fireEvent.keyDown(window, { key: "f", code: "KeyF", metaKey: mac, ctrlKey: !mac });
+		await waitFor(() => expect(searchField()).toHaveFocus());
+
+		// Another text field keeps the chord for its own editing.
+		const other = document.createElement("textarea");
+		document.body.append(other);
+		other.focus();
+		fireEvent.keyDown(other, { key: "f", code: "KeyF", metaKey: mac, ctrlKey: !mac });
+		expect(other).toHaveFocus();
+		other.remove();
+	});
+
+	it("clears on Escape", async () => {
+		searchableBoard();
+		renderBoard("p1");
+
+		await search("theme");
+		await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(1));
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(3));
+		expect(searchField()).toHaveValue("");
+		expect(searchField()).toHaveFocus();
+		await userEvent.keyboard("{Escape}");
+		expect(searchField()).not.toHaveFocus();
+	});
+
+	it("starts each project's board unfiltered", async () => {
+		const [p1] = twoProjectsWithArchives();
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				{ ...p1, sessions: [boardSession({ id: "ao-12", title: "Fix login redirect", status: "working" })] },
+				{ id: "p2", name: "other", path: "/tmp/other", kind: "single_repo", sessions: [boardSession({ id: "ao-20", title: "Other work", status: "working", workspaceId: "p2", workspaceName: "other" })] },
+			],
+			isError: false,
+			isSuccess: true,
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = renderBoardWithClient(queryClient, "p1");
+
+		await search("nothing-like-this");
+		await screen.findByTestId("board-search-empty");
+
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<SessionsBoard projectId="p2" />
+					<ArchiveModalHost />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(1));
+		expect(screen.getByText("Other work")).toBeInTheDocument();
+		expect(searchField()).toHaveValue("");
 	});
 });
 

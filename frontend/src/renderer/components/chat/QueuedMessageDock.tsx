@@ -14,13 +14,16 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "@/components/app-icons";
+import { apiErrorMessage } from "../../lib/api-client";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import type { ConversationMessage } from "../../types/conversation";
+import type { ConversationContentSummary, ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
 import { labelInlineImages } from "./messageAttachments";
+import { withoutAnnotationPlaceholder } from "./ChatTimelineItems";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from "../../../shared/browser-annotations";
+import { formatFileChatReference } from "../../../shared/file-annotations";
 
 export type QueuedMessage = {
 	turnId: string;
@@ -31,6 +34,22 @@ export type QueuedMessage = {
 
 const QUEUE_DOCK_VISIBLE_ROWS = 5;
 const REORDER_ACTIVATION_DISTANCE = 4;
+/** How much of a quoted excerpt the row and its tooltip keep; the row truncates further. */
+const ROW_QUOTE_LENGTH = 120;
+const TOOLTIP_QUOTE_LENGTH = 300;
+
+/** The chat excerpts and file references a message carries, in the order they were added. */
+function messageReferences(message: ConversationMessage): ConversationContentSummary[] {
+	return (message.content ?? [])
+		.filter((item) => (item.type === "excerpt" && (Boolean(item.text) || item.snapshot?.badgeOnly === true)) || Boolean(item.fileReference))
+		.sort((a, b) => (a.annotationOrder ?? 0) - (b.annotationOrder ?? 0));
+}
+
+/** Text on one line, cut to max characters. */
+function oneLine(text: string, max: number): string {
+	const chars = Array.from(text.replace(/\s+/g, " ").trim());
+	return chars.length > max ? `${chars.slice(0, max).join("").trimEnd()}…` : chars.join("");
+}
 
 /** Keep queue drags inside the scroll list, matching sidebar session rows. */
 const restrictToQueueDockBounds: Modifier = ({ activeNodeRect, containerNodeRect, transform }) => {
@@ -86,7 +105,9 @@ function QueuedMessageRowContent({
 	suppressHoverSteer,
 	onPromoteQueuedTurn,
 	onBeginQueuedEdit,
+	canEditMessage,
 	onCancelQueuedTurn,
+	canCancelMessage,
 	turnId,
 	busy,
 	steady = false,
@@ -105,7 +126,9 @@ function QueuedMessageRowContent({
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	canCancelMessage?: (message: ConversationMessage) => boolean;
 	turnId: string;
 	busy?: boolean;
 	/** Busy only while the composer sends: the actions wait without dimming. */
@@ -123,16 +146,39 @@ function QueuedMessageRowContent({
 	// batches from the same page indistinguishable.
 	const annotationLabel = (item: ParsedBrowserAnnotationItem) =>
 		item.comment || (item.changes.length > 0 ? t("chat.automation.visualChanges", { count: item.changes.length }) : item.target);
+	// A message of only chat excerpts or file references carries a stand-in
+	// text for the agent; the row shows what was selected, and the comment on
+	// it, instead.
+	const references = annotations ? [] : messageReferences(message);
+	const referenceLabel = (item: ConversationContentSummary, max: number) => {
+		if (item.fileReference) return formatFileChatReference(item.fileReference).display;
+		const quote = item.text && !item.snapshot?.badgeOnly
+			? t("chat.excerpt.quoted", { text: oneLine(item.text, max) })
+			: t("chat.excerpt.flowchartAttached");
+		return item.comment?.trim() ? `${oneLine(item.comment, max)} · ${quote}` : quote;
+	};
+	const typed = labelInlineImages(
+		withoutAnnotationPlaceholder(message.text, references.length),
+		(index) => t("chat.image.numbered", { index }),
+	);
+	const showReferences = !typed.trim() && references.length > 0;
+	// Several excerpts show the first, with a count kept clear of its truncation.
+	const referenceCount = showReferences && references.length > 1
+		? t("browser.annotationCount", { count: references.length })
+		: undefined;
 	const text = annotations
 		? [annotations.items[0] ? annotationLabel(annotations.items[0]) : annotations.pageTitle,
 			t("browser.annotationCount", { count: annotations.items.length })].join(" · ")
-		: labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+		: showReferences ? referenceLabel(references[0]!, ROW_QUOTE_LENGTH) : typed;
 	const tooltip = annotations
 		? [annotations.pageTitle, ...annotations.items.map((item) => `${item.number}. ${annotationLabel(item)}`)].join("\n")
-		: text;
+		: references.length > 0
+			? [...(typed.trim() ? [typed] : []),
+				...references.map((item, index) => `${index + 1}. ${referenceLabel(item, TOOLTIP_QUOTE_LENGTH)}`)].join("\n")
+			: text;
 	// Relayed user-authored text is generated, so it can be steered or cancelled
-	// but not edited.
-	const editable = message.origin === "human";
+	// but not edited; the chat may narrow which human messages it can edit.
+	const editable = message.origin === "human" && (canEditMessage?.(message) ?? true);
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
@@ -147,13 +193,16 @@ function QueuedMessageRowContent({
 				aria-hidden="true"
 				className="size-3 shrink-0 text-muted-foreground/60"
 			/>
-			<div className="min-w-0 flex-1 overflow-hidden">
+			<div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
 				<p
-					className="queue-dock-row-text truncate text-xs leading-relaxed text-foreground"
+					className="queue-dock-row-text min-w-0 truncate text-xs leading-relaxed text-foreground"
 					title={tooltip}
 				>
 					{text}
 				</p>
+				{referenceCount ? (
+					<span className="shrink-0 text-xs leading-relaxed text-muted-foreground">{referenceCount}</span>
+				) : null}
 			</div>
 			<div className="queue-dock-actions flex shrink-0 items-center gap-0.5 whitespace-nowrap">
 				{showHoverSteerButton ? (
@@ -219,7 +268,7 @@ function QueuedMessageRowContent({
 						<Pencil aria-hidden="true" className="size-3.5 shrink-0" />
 					</Button>
 				) : null}
-				{onCancelQueuedTurn ? (
+				{onCancelQueuedTurn && (canCancelMessage?.(message) ?? true) ? (
 					<Button
 						type="button"
 						variant="destructive-ghost"
@@ -262,10 +311,13 @@ function SortableQueuedMessageRow({
 	suppressHoverSteer,
 	onPromoteQueuedTurn,
 	onBeginQueuedEdit,
+	canEditMessage,
 	onCancelQueuedTurn,
+	canCancelMessage,
 	busy,
 	steady,
 	error,
+	status,
 	onRunAction,
 	showGrip,
 	reorderEnabled,
@@ -282,10 +334,14 @@ function SortableQueuedMessageRow({
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	canCancelMessage?: (message: ConversationMessage) => boolean;
 	busy?: boolean;
 	steady?: boolean;
 	error?: string;
+	/** What is happening to the row now (steering, deleting), shown under it. */
+	status?: string;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
 	showGrip?: boolean;
 	reorderEnabled?: boolean;
@@ -334,7 +390,9 @@ function SortableQueuedMessageRow({
 				enterSteers={enterSteers}
 				message={message}
 				onBeginQueuedEdit={onBeginQueuedEdit}
+				canEditMessage={canEditMessage}
 				onCancelQueuedTurn={onCancelQueuedTurn}
+				canCancelMessage={canCancelMessage}
 				onPromoteQueuedTurn={onPromoteQueuedTurn}
 				onRunAction={onRunAction}
 				showGrip={showGrip}
@@ -344,6 +402,11 @@ function SortableQueuedMessageRow({
 				suppressHoverSteer={suppressHoverSteer && !isDragging}
 				turnId={turnId}
 			/>
+			{status && !error ? (
+				<p role="status" className="px-3 pb-2 text-xs text-muted-foreground" data-testid={`queued-message-status-${turnId}`}>
+					{status}
+				</p>
+			) : null}
 			{error ? (
 				<p role="status" className="px-3 pb-2 text-xs text-warning">
 					{error}
@@ -363,10 +426,13 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	steerNextRequest,
 	onPromoteQueuedTurn,
 	onBeginQueuedEdit,
+	canEditMessage,
 	onCancelQueuedTurn,
+	canCancelMessage,
 	onReorderQueuedTurns,
 	promotePendingTurnId,
 	cancelPendingTurnId,
+	steeringTurnIds,
 	steerErrors,
 }: {
 	messages: QueuedMessage[];
@@ -379,10 +445,19 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	steerNextRequest?: number;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	/** Which human messages Edit is offered on; every one when absent. */
+	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
+	/** Which messages Delete is offered on; every one when absent. */
+	canCancelMessage?: (message: ConversationMessage) => boolean;
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promotePendingTurnId?: string;
 	cancelPendingTurnId?: string;
+	/**
+	 * Queued messages being steered into the running turn. They stay in the queue, in their
+	 * place, until the agent takes them, with their Delete still offered and no second Steer.
+	 */
+	steeringTurnIds?: ReadonlySet<string>;
 	steerErrors?: Readonly<Record<string, string>>;
 }) {
 	const [expanded, setExpanded] = useState(true);
@@ -417,7 +492,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			} catch (error) {
 				setErrors((current) => ({
 					...current,
-					[turnId]: error instanceof Error ? error.message : "That action failed.",
+					[turnId]: apiErrorMessage(error, "That action failed."),
 				}));
 			}
 		},
@@ -573,7 +648,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			void onReorderQueuedTurns(nextDisplay).catch((error) => {
 				setDisplayOrder(null);
 				setReorderError(
-					error instanceof Error ? error.message : "Could not reorder queued messages.",
+					apiErrorMessage(error, "Could not reorder queued messages."),
 				);
 			});
 		},
@@ -584,7 +659,9 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		canSteer,
 		onPromoteQueuedTurn,
 		onBeginQueuedEdit,
+		canEditMessage,
 		onCancelQueuedTurn,
+		canCancelMessage,
 		onRunAction: runAction,
 		suppressHoverSteer: hoverSteerSuppressed || isReordering,
 	};
@@ -661,8 +738,11 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 								)}
 							>
 								{displayMessages.map(({ turnId, message, pending }, index) => {
+									const steering = steeringTurnIds?.has(turnId) ?? false;
+									const deleting = cancelPendingTurnId === turnId;
+									// A steering row keeps its Delete: deleting it withdraws the steer.
 									const rowBusy =
-										disabled || promotePendingTurnId === turnId || cancelPendingTurnId === turnId;
+										disabled || (promotePendingTurnId === turnId && !steering) || deleting;
 									const busy = rowBusy || Boolean(sending);
 									const isNextQueuedTurn = turnId === nextQueuedTurnId;
 									return (
@@ -682,11 +762,13 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											steady={busy && !rowBusy}
 											dragSnapshot={dragSnapshot}
 											error={errors[turnId] ?? steerErrors?.[turnId]}
+											status={deleting ? "Deleting…" : steering ? "Steering into the running turn…" : undefined}
 											isReordering={isReordering}
 											onRowHoverChange={setHoveredTurnId}
 											showGrip={showGrip}
 											reorderEnabled={reorderEnabled && !busy && !pending}
 											{...rowProps}
+											{...(steering ? { onPromoteQueuedTurn: undefined, showPersistentSteer: false, enterSteers: false } : null)}
 											// A send the daemon has not confirmed yet shows the same actions,
 											// held until it has a turn, so confirming it shifts nothing.
 											{...(pending ? { busy: true, steady: true } : null)}

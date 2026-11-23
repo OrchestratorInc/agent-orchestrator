@@ -26,6 +26,22 @@ export const SHARE_FEATURE = "share";
 export const STANDALONE_AGENTS_FEATURE = "standalone_agents";
 /** Offering feature the control plane sends while its session attachment routes are on. */
 export const ATTACHMENTS_FEATURE = "attachments";
+/** Offering feature the control plane sends when a queued chat message can be edited (editQueuedMessage). */
+export const QUEUED_EDIT_FEATURE = "queued-edit";
+/** Offering feature the control plane sends when a queued message can be deleted without stopping a started turn (deleteQueuedMessage). */
+export const QUEUED_DELETE_FEATURE = "queued-delete";
+/**
+ * Offering feature the control plane sends when a queued message can be steered into the
+ * running turn (steerQueuedMessage), with the outcome recorded on the queued turn's events.
+ */
+export const QUEUED_STEER_FEATURE = "queued-steer";
+/**
+ * Offering feature the control plane sends when a project whose sessions run on
+ * Coder may run its orchestrator on Coder too (config.orchestratorSandboxProvider
+ * "coder") instead of the instant VM it gets by default: the deployment offers
+ * Coder and Freestyle, and the org may run Coder as its own.
+ */
+export const ORCHESTRATOR_ON_CODER_FEATURE = "orchestrator-on-coder";
 /** The largest Cloud attachment when the control plane takes files but names no limit. */
 export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 

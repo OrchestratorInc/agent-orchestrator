@@ -327,7 +327,7 @@ describe("optimistic message delivery", () => {
 		await typeInLexicalEditor(field, "/");
 		fireEvent.keyDown(field, { key: menuState === "selected" ? "ArrowDown" : "Escape" });
 		if (menuState === "selected") {
-			expect(screen.getByRole("option", { name: /\/beta/ })).toHaveAttribute("aria-selected", "true");
+			expect(screen.getByRole("option", { name: /^Beta/ })).toHaveAttribute("aria-selected", "true");
 		} else {
 			expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
 		}
@@ -335,7 +335,7 @@ describe("optimistic message delivery", () => {
 		await act(async () => pending.resolve());
 
 		if (menuState === "selected") {
-			expect.soft(screen.getByRole("option", { name: /\/beta/ })).toHaveAttribute("aria-selected", "true");
+			expect.soft(screen.getByRole("option", { name: /^Beta/ })).toHaveAttribute("aria-selected", "true");
 			await userEvent.keyboard("{Enter}");
 			expect(field.querySelector('[data-composer-token="skill"]')).toHaveTextContent("/beta");
 			expect(pending.onSend).toHaveBeenCalledOnce();

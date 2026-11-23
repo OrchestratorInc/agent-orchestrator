@@ -114,8 +114,6 @@ const cloudMocks = vi.hoisted(() => ({
 	sessionStatus: "unauthenticated",
 	createProject: vi.fn(),
 	listUserProviderConnections: vi.fn(),
-	putGitHubPAT: vi.fn(),
-	validateSavedRepositoryAccess: vi.fn(),
 	startGitHubInstallation: vi.fn(),
 	getGitHubUser: vi.fn(),
 	listGitHubInstallations: vi.fn(),
@@ -172,8 +170,6 @@ vi.mock("../hooks/useCloudCp", () => ({
 		client: {
 			createProject: cloudMocks.createProject,
 			listUserProviderConnections: cloudMocks.listUserProviderConnections,
-			putGitHubPAT: cloudMocks.putGitHubPAT,
-			validateSavedRepositoryAccess: cloudMocks.validateSavedRepositoryAccess,
 			startGitHubInstallation: cloudMocks.startGitHubInstallation,
 			getGitHubUser: cloudMocks.getGitHubUser,
 			listGitHubInstallations: cloudMocks.listGitHubInstallations,
@@ -279,7 +275,7 @@ vi.mock("./CreateProjectAgentSheet", async (importOriginal) => ({
 // These tests only care whether the clone flow is on screen and that the
 // droppedPath guard leaves it alone, so a thin stub keeps the suite focused.
 vi.mock("./CloneRepositoryDialog", () => ({
-	default: ({ disabled, error, firstRun, open, onBack, onChange, onClose, onContinue, onOpenLocalFolder, onStartStandaloneAgent, onUseExisting, progress, value }: {
+	default: ({ disabled, error, firstRun, open, onBack, onChange, onClose, onContinue, onOpenLocalFolder, onStartStandaloneAgent, onChatsImported, onUseExisting, progress, value }: {
 		disabled?: boolean;
 		error?: string | null;
 		firstRun?: boolean;
@@ -289,6 +285,7 @@ vi.mock("./CloneRepositoryDialog", () => ({
 		onContinue?: (selection: { remoteUrl: string; destinationParent: string; targetPath: string }) => void;
 		onOpenLocalFolder?: () => void;
 		onStartStandaloneAgent?: () => void;
+		onChatsImported?: () => void;
 		onUseExisting?: (path: string) => void;
 		open: boolean;
 		progress?: { phase: string } | null;
@@ -306,6 +303,7 @@ vi.mock("./CloneRepositoryDialog", () => ({
 				<button type="button" onClick={onClose}>Close clone</button>
 				{firstRun ? <button type="button" onClick={onOpenLocalFolder}>Open a local folder</button> : null}
 				{firstRun ? <button type="button" onClick={onStartStandaloneAgent}>Start a standalone agent</button> : null}
+				{onChatsImported ? <button type="button" onClick={onChatsImported}>Chats imported</button> : null}
 				<button type="button" disabled={disabled} onClick={() => onUseExisting?.("/repo/existing")}>Use existing checkout</button>
 				<button type="button" onClick={() => onContinue?.({ remoteUrl: "file:///source/empty-repository.git", destinationParent: "/repo", targetPath: "/repo/empty-repository" })}>
 					Continue clone
@@ -449,10 +447,6 @@ beforeEach(() => {
 			},
 		],
 	});
-	cloudMocks.putGitHubPAT.mockReset().mockResolvedValue({
-		providerConnection: { id: "gh-1", provider: "github", label: "default", config: {}, validationState: "valid", createdAt: "", updatedAt: "" },
-	});
-	cloudMocks.validateSavedRepositoryAccess.mockReset().mockResolvedValue({ writeAccess: true });
 	// Default: no GitHub App installation, so the connect button shows.
 	cloudMocks.startGitHubInstallation.mockReset().mockResolvedValue({ installationUrl: "https://github.com/apps/ao/installations/new", expiresAt: "" });
 	cloudMocks.getGitHubUser.mockReset().mockResolvedValue({ connected: false, installations: [] });
@@ -518,6 +512,17 @@ describe("first run project actions", () => {
 		fireEvent.click(await screen.findByRole("button", { name: "Start a standalone agent" }));
 		expect(onCreateStandaloneAgent).toHaveBeenCalledOnce();
 		expect(onFirstRunDismiss).toHaveBeenCalledExactlyOnceWith("standalone");
+		expect(apiMocks.POST).not.toHaveBeenCalled();
+	});
+
+	it("ends the first run prompt once earlier chats were imported, and reports it", async () => {
+		const onFirstRunDismiss = vi.fn();
+		const props = { ...noop, mode: "choose" as const, firstRunClone: true, onFirstRunDismiss };
+		const { rerender } = render(<CreateProjectFlow {...props} sourceSignal={null} />);
+		rerender(<CreateProjectFlow {...props} sourceSignal={{ source: "clone", nonce: 1 }} />);
+		fireEvent.click(await screen.findByRole("button", { name: "Chats imported" }));
+		expect(onFirstRunDismiss).toHaveBeenCalledExactlyOnceWith("import");
+		await waitFor(() => expect(screen.queryByTestId("clone-dialog")).not.toBeInTheDocument());
 		expect(apiMocks.POST).not.toHaveBeenCalled();
 	});
 
@@ -1542,6 +1547,36 @@ describe("CreateProjectFlow project import validation", () => {
 			expect(screen.getByRole("button", { name: "Create repository and continue" })).toBeDisabled();
 	});
 
+	it("shows a long repository name error in full below the field", async () => {
+		const user = userEvent.setup();
+		const message = "Could not check this repository name. Confirm GitHub CLI is signed in.";
+		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+		bridgeMocks.checkGitHubRepositoryAvailability.mockResolvedValue({ available: false, message });
+		apiMocks.POST.mockResolvedValueOnce({
+			data: projectValidation("/repo/project", {
+				nextStep: "prepare_git",
+				root: {
+					hasOrigin: false,
+					requiredActions: ["create_remote_repository"],
+				},
+			}),
+		});
+
+		renderChooseFlow();
+
+		await openSource(user, "Open a local folder");
+
+		const error = await screen.findByRole("alert");
+		expect(error).toHaveTextContent(message);
+		// Nothing forces it onto one clipped line.
+		for (const clipping of ["truncate", "whitespace-nowrap", "absolute"]) expect(error).not.toHaveClass(clipping);
+		expect(error.className).not.toMatch(/max-w-/);
+		// It sits under the field it describes, which still names it.
+		const input = screen.getByLabelText("Repository name");
+		expect(input.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(input).toHaveAccessibleDescription(expect.stringContaining(message));
+	});
+
 	it("checks repository availability again when the repository name changes", async () => {
 		const user = userEvent.setup();
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
@@ -2334,7 +2369,7 @@ describe("CreateProjectFlow project import validation", () => {
 		await user.click(await screen.findByLabelText("Worker agent"));
 		expect(screen.getByRole("option", { name: /Claude Code/ })).toBeInTheDocument();
 		expect(screen.queryByRole("option", { name: /Codex/ })).not.toBeInTheDocument();
-		expect(screen.getByRole("option", { name: "Manage harness connections…" })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: "Manage agent connections…" })).toBeInTheDocument();
 		expect(screen.queryByRole("option", { name: "Manage agents…" })).not.toBeInTheDocument();
 		await user.keyboard("{Escape}");
 		await user.click(await screen.findByRole("button", { name: "Create" }));
@@ -2351,7 +2386,6 @@ describe("CreateProjectFlow project import validation", () => {
 				},
 			}),
 		);
-		expect(cloudMocks.validateSavedRepositoryAccess).not.toHaveBeenCalled();
 		// Like a local project, the new cloud project opens onto its board.
 		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-app-1"));
 		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["cp-app-1", "existing-b", "existing-a"]);
@@ -3394,7 +3428,7 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(cloudMocks.startGitHubInstallation).not.toHaveBeenCalled();
 	});
 
-	it("points to Harness settings when no cloud harness is logged in", async () => {
+	it("points to Agents settings when no cloud harness is logged in", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [] });
@@ -3424,7 +3458,7 @@ describe("CreateProjectFlow project import validation", () => {
 
 		expect(await screen.findByText(/No harness is logged in for cloud yet/)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
-		await user.click(screen.getByRole("button", { name: "Go to Harness settings" }));
+		await user.click(screen.getByRole("button", { name: "Go to Agents settings" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("harness", { harnessView: "cloud", preserveProject: true });
 	});
 

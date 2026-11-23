@@ -29,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agentaccount"
 	chatdriveracp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/dockeragentacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/cuadriver"
@@ -49,6 +50,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecyclelog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -59,6 +61,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/push"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
@@ -76,6 +79,7 @@ import (
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	linkpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/panes"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
@@ -98,11 +102,22 @@ import (
 // are healed on this cadence even when no event or hook fires.
 const usageReconcileTick = 3 * time.Minute
 
+// previewIdlePollInterval is how often the preview poller re-lists sessions
+// while it watches no preview. A session change brings it back to its 250 ms
+// interval at once, so this only backs that up.
+const previewIdlePollInterval = 5 * time.Second
+
 const chatHibernateSweepTick = 30 * time.Second
 
 // workspaceCleanupSweepTick paces the terminated-session cleanup reconcile.
 // Its work is retry and bookkeeping, not anything a user waits on.
 const workspaceCleanupSweepTick = 10 * time.Minute
+
+// usageLimitIdleRescan is how often the usage-limit loop scans while no turn is
+// armed or resuming, no account handoff is in flight, and handoff is off.
+// Arming a turn or turning handoff on wakes the loop at once, so this only
+// backs those up.
+const usageLimitIdleRescan = 30 * time.Second
 
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
@@ -142,6 +157,7 @@ var _ interface {
 	sessionmanager.TerminalInputGate
 	sessionmanager.TerminalInputObserver
 	sessionmanager.TerminalInputFencer
+	sessionmanager.TerminalInputForgetter
 } = (*terminal.Manager)(nil)
 
 // daemonShutdownContext separates worker cancellation from signal cleanup.
@@ -206,7 +222,7 @@ func Run(buildVersion string) (retErr error) {
 		lifecycle.Record("daemon_exit", fields)
 	}()
 
-	log := newLogger()
+	log, openLogFile := newDaemonLogger()
 	var browserRuntimeToken string
 	if os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1" {
 		browserRuntimeToken, err = browserruntime.ReadRuntimeToken(os.Stdin)
@@ -270,6 +286,7 @@ func Run(buildVersion string) (retErr error) {
 	if err != nil {
 		return err
 	}
+	openLogFile(cfg.DataDir)
 	defer func() { _ = dataDirLock.Release() }()
 
 	// Open the durable store and bring up the CDC substrate: DB triggers capture
@@ -287,7 +304,7 @@ func Run(buildVersion string) (retErr error) {
 	// in any project can read the ao CLI catalog from a stable absolute path.
 	// Non-fatal: the skill is an enhancement over `ao --help`, not required.
 	if err := skillassets.Install(cfg.DataDir); err != nil {
-		log.Warn("install using-ao skill", "err", err)
+		log.Warn("install AO skills", "err", err)
 	}
 	// Before any session starts: an AppImage remounts under a new path on every
 	// launch, so sessions get a link under the data dir that follows it.
@@ -362,6 +379,10 @@ func Run(buildVersion string) (retErr error) {
 	runtimeAdapter := runtimeselect.New(log, cfg.RunFilePath)
 	managedPreview := previewserver.New(log, cfg.DataDir)
 	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
+	// Agents split the desktop window's panes through this relay; the window
+	// links to it over the terminal mux (ch "panes").
+	paneBroker := panes.NewBroker()
+	termMgr.SetPanes(paneSource{paneBroker})
 	defer termMgr.Close()
 
 	// The agent messenger sends validated user input to the session's live
@@ -402,7 +423,7 @@ func Run(buildVersion string) (retErr error) {
 	}
 	messenger := newSessionMessenger(store, runtimeAdapter, log, agents)
 
-	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log)
+	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log, cdcPipe.sessionChanges())
 	// ao.sessions.ended joins the usage summaries through the same grouping IDs,
 	// which are scoped to the install and only minted while export is on.
 	lcStack.LCM.DeliveryTelemetry().SetInstallID(func() string {
@@ -429,8 +450,9 @@ func Run(buildVersion string) (retErr error) {
 	// Daemon-owned preferences. The store's type is field-compatible with the
 	// service's, adapted here so neither package imports the other. Offering
 	// gates ride along: they are boot-time config, not stored preferences.
+	accountHandoffChanged := make(chan struct{}, 1)
 	settingsSvc := settingssvc.New(
-		settingsStore{store: store},
+		settingsStore{store: store, accountHandoffChanged: accountHandoffChanged},
 		chatDrivers,
 		settingssvc.OfferingFromConfig(cfg),
 		func() time.Time { return time.Now().UTC() },
@@ -575,6 +597,9 @@ func Run(buildVersion string) (retErr error) {
 					Env:     request.Env,
 				}, request.WorkingDir, log)
 			},
+			"docker-agent": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return dockeragentacp.DiscoverConfigOptions(listCtx, request.Binary, cfg.DataDir, request.Env, log)
+			},
 			"devin": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
@@ -622,7 +647,7 @@ func Run(buildVersion string) (retErr error) {
 	codexOperationGate := codexops.NewGate()
 	agentDeps := agentsvc.Deps{
 		DataDir: cfg.DataDir,
-		Cache:   store, Discoverer: modelDiscoverer, Sessions: store, Context: ctx, Logger: log,
+		Cache:   store, Discoverer: modelDiscoverer, Sessions: store, Context: ports.WithAgentAuthDataDir(ctx, cfg.DataDir), Logger: log,
 		ModelDiscoveryDir:      filepath.Join(cfg.DataDir, "model-discovery"),
 		CodexAccountRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "accounts"),
 		CodexPendingRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "pending-accounts"),
@@ -639,6 +664,8 @@ func Run(buildVersion string) (retErr error) {
 	// across restarts so a model stays marked unavailable until the CLI updates.
 	claudecodeagent.ConfigureModelVersionRequirements(
 		filepath.Join(cfg.StateDir, "harnesses", "claude-code", "model-versions.json"))
+	codexagent.ConfigureUnavailableModels(
+		filepath.Join(cfg.StateDir, "harnesses", "codex", "unavailable-models.json"))
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
 
 	persistentHostsReconciled := make(chan struct{})
@@ -661,6 +688,13 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("wire session service: %w", err)
 	}
+	lcStack.StartActivityObserver(wiredSessMgr.SessionRuntimeEnv)
+	// The runtime reaper also observes reviewers serving an in-progress review
+	// run; the review engine reduces each pass into run transitions. Its first
+	// pass (ReconcileRuntime, after Chat reviewer recovery) settles runs a
+	// previous daemon left in progress.
+	lcStack.runtimeReaper.BindReviewers(reviewSvc.ReviewerObserver())
+
 	if usage != nil {
 		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
@@ -694,7 +728,12 @@ func Run(buildVersion string) (retErr error) {
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
+	// The mode-aware messenger, so a Chat original is told as a chat message.
+	sessionForkSvc := wireSessionFork(store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
+	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
+		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
+	}
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
 	}); ok {
@@ -766,6 +805,19 @@ func Run(buildVersion string) (retErr error) {
 			return wake.WakeHibernatedChat(wakeCtx, id)
 		})
 	}
+	if check, ok := sessMgr.(interface {
+		ImportedChatWrittenElsewhere(context.Context, domain.SessionRecord, time.Time) (bool, bool)
+	}); ok {
+		chatSvc.SetOtherWriterCheck(check.ImportedChatWrittenElsewhere)
+	}
+	if resume, ok := sessMgr.(interface {
+		ResumeAgentWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
+	}); ok {
+		chatSvc.SetResumeAgentCallback(func(ctx context.Context, id domain.SessionID) error {
+			_, err := resume.ResumeAgentWithMode(ctx, id)
+			return err
+		})
+	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
@@ -808,8 +860,9 @@ func Run(buildVersion string) (retErr error) {
 		Delivery: reportSemanticDelivery{chat: chatSvc, sessions: reportSessions, store: store},
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
-	reportDeliveryDone := reportCoordinator.Start(ctx)
+	reportDeliveryDone, unsubscribeReportActivity := startReportCoordinator(ctx, cdcPipe.Broadcaster, reportCoordinator)
 	defer func() {
+		unsubscribeReportActivity()
 		stop()
 		<-reportDeliveryDone
 	}()
@@ -908,6 +961,10 @@ func Run(buildVersion string) (retErr error) {
 	}
 	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
+	// Session search: a local, read-only index over past sessions. It starts
+	// its own bounded backfill and sweep, so a slow transcript read can never
+	// delay the daemon's first response.
+	sessionSearchSvc := startSessionSearch(ctx, store, cfg.StateDir, log)
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
 	var browserChrome controllers.BrowserChromeService
 	if chrome != nil {
@@ -924,11 +981,13 @@ func Run(buildVersion string) (retErr error) {
 	// behind them. They reuse the same runtime adapter (and therefore the same
 	// terminal mux) as session panes, but keep their own ids, storage, and
 	// lifetime — see internal/service/shellterm.
-	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
+	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, termMgr, log)
 	var shellTrackers []shelltermsvc.TerminalTracker
 	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
 		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
+		shellAgents.SetHarnessRecorder(shellTermSvc.RecordShellAgent)
+		shellTermSvc.SetForegroundReader(shellAgents)
 		shellTrackers = append(shellTrackers, shellAgents)
 		termMgr.SetShellAgents(shellAgents)
 	}
@@ -944,12 +1003,14 @@ func Run(buildVersion string) (retErr error) {
 	defer agentAuthSvc.Close()
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	agentAccountSvc.SetTerminals(shellTermSvc)
+	agentAccountSvc.SetUILogin(accountUILogin{auth: agentAuthSvc})
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
 	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
 	// SetShellTerminalCloser).
 	sessMgr.SetShellTerminalCloser(shellTermSvc)
 	var (
 		usageCollector *usagesvc.Collector
+		usageHookQueue *usagesvc.HookQueue
 		usagePipeline  *usagepipeline.Pipeline
 		usagePricing   *usagePricingRuntime
 	)
@@ -1028,7 +1089,15 @@ func Run(buildVersion string) (retErr error) {
 				}
 			}
 		}()
-		lcStack.LCM.SetUsageFinalizer(usageCollector)
+		// The agent waits for every hook, and a usage scan can hold the
+		// collector for seconds, so hooks only queue their usage signal.
+		// Termination finalizes through the queue to record those signals first.
+		usageHookQueue = usagesvc.NewHookQueue(usageCollector, log)
+		go func() {
+			defer sentryobs.RecoverBackground()
+			usageHookQueue.Run(ctx)
+		}()
+		lcStack.LCM.SetUsageFinalizer(usageHookQueue)
 		if wired, ok := sessMgr.(interface {
 			SetBackgroundTaskUsage(sessionmanager.BackgroundTaskUsage)
 		}); ok {
@@ -1061,6 +1130,7 @@ func Run(buildVersion string) (retErr error) {
 			Attachments:   prReader,
 			Stacker:       prReader,
 			HeadChecks:    prReader,
+			Queuer:        prReader,
 			Details:       store,
 			Lifecycle:     lcStack.LCM,
 			Logger:        log,
@@ -1094,6 +1164,7 @@ func Run(buildVersion string) (retErr error) {
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
+	lcStack.reviewDoneDone = lcStack.LCM.StartReviewDoneSweep(ctx, 0)
 	// Push-device registry: persisted phones that receive OS push notifications.
 	// A load failure must not block boot — degrade to no push rather than refusing
 	// to start the daemon. pushRegistry (interface) is assigned only when load
@@ -1220,7 +1291,12 @@ func Run(buildVersion string) (retErr error) {
 	// Terminal hooks pass the hook process gate: a Claude process other than
 	// the session's own must not replace its activity or transcript.
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
+	var usageHooks controllers.UsageHookRecorder = usageCollector
+	if usageHookQueue != nil {
+		usageHooks = usageHookQueue
+	}
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
 		Projects:           projectSvc,
 		ArtifactVersions:   lcStack.ArtifactVersions,
@@ -1251,10 +1327,11 @@ func Run(buildVersion string) (retErr error) {
 		SessionImport:      sessionImportSvc,
 		Directories:        fsbrowsersvc.New(),
 		ShellTerminals:     shellTermSvc,
+		PaneTerminals:      shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
-		Conversations:      chatSvc,
+		Conversations:      sessionConversationService{Service: chatSvc, sessions: sessMgr},
 		ConversationSearch: store,
 		Settings:           settingsSvc,
 		CDC:                store,
@@ -1262,10 +1339,11 @@ func Run(buildVersion string) (retErr error) {
 		Activity:           hookActivity,
 		PRRefresh:          reviewRefresher,
 		NativeSessions:     nativeSessions,
-		UsageHooks:         usageCollector,
+		TerminalReplies:    agents,
+		UsageHooks:         usageHooks,
 		UsageSummary:       freshUsageSummary{usagesvc.NewSummaryReader(store), usagePipeline},
 		UsageReport:        freshUsageReport{usageReportReader(store, usagePricing), usagePipeline},
-		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store),
+		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store, agentAccountSvc),
 		UsageLimitSetting:  store,
 		UsagePrices:        usagePrices(usagePricing),
 		SessionMemory:      memoryReader,
@@ -1289,7 +1367,9 @@ func Run(buildVersion string) (retErr error) {
 		}),
 		Browser:                  browserService,
 		BrowserChrome:            browserChrome,
+		Panes:                    paneBroker,
 		LinkPreview:              linkpreviewsvc.New(nil),
+		SessionSearch:            sessionSearchSvc,
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
@@ -1303,7 +1383,11 @@ func Run(buildVersion string) (retErr error) {
 		return err
 	}
 	browserLive.SetLoopbackBaseURL("http://" + srv.Addr().String())
-	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{Logger: log}).Start(ctx)
+	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{
+		Logger:       log,
+		Wake:         cdcPipe.sessionChanges(),
+		IdleInterval: previewIdlePollInterval,
+	}).Start(ctx)
 	_ = os.Unsetenv(browserruntime.RuntimeAddressEnv)
 	if ln, addr, err := browserruntime.Listen(cfg.RunFilePath); err != nil {
 		log.Warn("browser runtime: listener unavailable; agent browser control disabled", "err", err)
@@ -1466,6 +1550,7 @@ func Run(buildVersion string) (retErr error) {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
+				reapForkSeeds(ctx, store, log)
 				if settings, err := settingsSvc.Get(ctx); err != nil {
 					log.Warn("read session retention", "err", err)
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
@@ -1492,8 +1577,12 @@ func Run(buildVersion string) (retErr error) {
 			case <-ctx.Done():
 				return
 			}
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
+			// Every second while a turn is armed or resuming, an account handoff
+			// is in flight, or handoff is on; otherwise every usageLimitIdleRescan.
+			// Arming a turn or turning handoff on wakes the loop at once.
+			timer := time.NewTimer(time.Second)
+			defer timer.Stop()
+			armed := chatSvc.AutoResumeArmed()
 			for {
 				if ctx.Err() != nil {
 					return
@@ -1506,10 +1595,23 @@ func Run(buildVersion string) (retErr error) {
 						log.Warn("usage-limit auto-resume failed", "err", err)
 					}
 				})
+				sweeps.Go(func() {
+					defer sentryobs.RecoverBackground()
+					if err := chatSvc.HandoffUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("usage-limit account handoff failed", "err", err)
+					}
+				})
+				wait := time.Second
+				if chatSvc.AutoResumeIdle() && chatSvc.AccountHandoffIdle() && !settingsSvc.AccountHandoffEnabled(ctx) {
+					wait = usageLimitIdleRescan
+				}
+				timer.Reset(wait)
 				select {
 				case <-ctx.Done():
 					return
-				case <-ticker.C:
+				case <-timer.C:
+				case <-armed:
+				case <-accountHandoffChanged:
 				}
 			}
 		}()
@@ -1638,6 +1740,37 @@ type reportSemanticSession interface {
 	InterruptTUI(context.Context, domain.SessionID) error
 }
 
+// sessionConversationService adds an explicit Stop turn endpoint. The existing
+// conversation interrupt keeps its Chat-only contract.
+type sessionConversationService struct {
+	*chatsvc.Service
+	sessions sessionLifecycle
+}
+
+func (s sessionConversationService) StopTurn(ctx context.Context, id domain.SessionID) error {
+	err := s.Interrupt(ctx, id)
+	if errors.Is(err, chatsvc.ErrNotChatMode) {
+		err = s.sessions.StopTUITurn(ctx, id)
+		switch {
+		case errors.Is(err, sessionmanager.ErrNotFound):
+			return apierr.NotFound("SESSION_NOT_FOUND", "session not found")
+		case errors.Is(err, sessionmanager.ErrTerminated):
+			return apierr.Conflict("SESSION_TERMINATED", "session is terminated", nil)
+		case errors.Is(err, sessionmanager.ErrNoActiveTurn):
+			return apierr.Conflict("SESSION_NO_ACTIVE_TURN", "there is no turn in flight to interrupt", nil)
+		case errors.Is(err, sessionmanager.ErrInterruptUnsupported):
+			return apierr.Conflict("SESSION_INTERRUPT_UNAVAILABLE", "Stop turn is unavailable for this harness; use its terminal controls", nil)
+		case errors.Is(err, sessionmanager.ErrComposerBusy):
+			return apierr.Conflict("SESSION_COMPOSER_BUSY", "Clear or submit the draft in the terminal before stopping the turn", nil)
+		case errors.Is(err, sessionmanager.ErrTurnStopPending):
+			return apierr.Conflict("SESSION_TURN_STOP_PENDING", "a stop was already sent for this turn", nil)
+		case errors.Is(err, sessionmanager.ErrOperationInProgress):
+			return apierr.Conflict("SESSION_OPERATION_IN_PROGRESS", "Another operation is already running on this session", nil)
+		}
+	}
+	return err
+}
+
 type reportSemanticDelivery struct {
 	chat     *chatsvc.Service
 	sessions reportSemanticSession
@@ -1653,6 +1786,9 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
 	if errors.Is(err, sessionmanager.ErrComposerBusy) {
 		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
+	}
+	if errors.Is(err, sessionmanager.ErrPromptSubmissionUnobserved) || (err != nil && strings.Contains(err.Error(), "prompt submission was not observed")) {
+		return fmt.Errorf("%w: %w", reportsvc.ErrUnacknowledgedDelivery, err)
 	}
 	return err
 }
@@ -1756,10 +1892,22 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	}
 }
 
-// newLogger returns the daemon's slog logger. It writes to stderr so supervisors
-// can capture it separately from any structured stdout protocol added later.
-func newLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// newDaemonLogger returns the daemon's slog logger. It writes to stderr so
+// supervisors can capture it separately from any structured stdout protocol
+// added later, and, from when openFile is called, to $AO_DATA_DIR/daemon.log so
+// the log outlives the process that read it. Run opens the file only after it
+// holds the data-dir lock (see deferredLogFile).
+func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
+	file := &deferredLogFile{}
+	log := slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return log, func(dataDir string) {
+		rotating, err := openRotatingLogFile(filepath.Join(dataDir, daemonLogName), maxDaemonLogBytes)
+		if err != nil {
+			log.Warn("daemon log file unavailable; logging to stderr only", "error", err)
+			return
+		}
+		file.attach(rotating)
+	}
 }
 
 // dataDirTakeoverWait covers the capped shutdown stages plus one ordinary
@@ -1809,6 +1957,21 @@ func stabilizeWorkingDirectory(dataDir string) error {
 	return nil
 }
 
+// accountUILogin runs an account folder's sign-in through the harness's
+// in-app sign-in, so adding an account shows the same link, device code and
+// code field as signing the CLI in, instead of a terminal.
+type accountUILogin struct{ auth *agentauth.Service }
+
+func (l accountUILogin) StartAccountLogin(ctx context.Context, harness domain.AgentHarness, method, secret string, env map[string]string) (string, error) {
+	snapshot, err := l.auth.StartAccountLogin(ctx, string(harness), method, secret, env)
+	return snapshot.ID, err
+}
+
+func (l accountUILogin) CancelAccountLogin(ctx context.Context, harness domain.AgentHarness, id string) error {
+	_, err := l.auth.CancelLogin(ctx, string(harness), id)
+	return err
+}
+
 // newAgentAccounts builds the Claude Code and Codex account catalog. Each
 // account is a config folder under the state dir; "This computer" is the CLI's
 // own folder, which AO never changes the login of.
@@ -1823,11 +1986,34 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 	providers := []ports.AgentAccountProviderCLI{
 		&agentaccount.Claude{
 			Binary: claudePlugin.ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig,
-			DeviceEnv: func() map[string]string { return claudePlugin.RuntimeCredentialEnv(cfg.DataDir) },
+			// The daemon exports AO's saved keys to itself; the account check
+			// must not see one Claude Code's sessions never get.
+			DeviceEnv: func(ctx context.Context) map[string]string {
+				return claudePlugin.RuntimeCredentialEnv(cfg.DataDir, providerkeys.HoldBack(ctx, nil, cfg.DataDir, "claude-code"))
+			},
 		},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
-	return agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+	accounts := agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+	// An account's API key is checked with its provider before it is saved.
+	accounts.SetKeyCheck(func(ctx context.Context, p domain.AgentAccountProvider, key string) error {
+		name := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "ANTHROPIC_API_KEY", domain.AgentAccountProviderCodex: "OPENAI_API_KEY"}[p]
+		if name == "" {
+			return ports.ErrAgentAccountProviderMismatch
+		}
+		result, err := providerkeys.Check(ctx, name, key)
+		switch {
+		case err != nil:
+			return err
+		case result.Status == providerkeys.CheckValid:
+			return nil
+		case result.Status == providerkeys.CheckInvalid:
+			return ports.ErrAgentAccountKeyRejected
+		default:
+			return fmt.Errorf("%s check: %s", name, result.Status)
+		}
+	})
+	return accounts
 }
 
 // claudeModelGate marks Claude models the installed Claude Code is too old to

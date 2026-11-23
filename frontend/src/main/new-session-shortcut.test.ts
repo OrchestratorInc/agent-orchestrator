@@ -43,6 +43,15 @@ function fakeTarget() {
 }
 
 describe("attachAppShortcuts", () => {
+	it.each([false, true])("leaves default and custom selection shortcuts to the renderer (Mac: %s)", isMac => {
+		const source = fakeSource(), target = fakeTarget();
+		attachAppShortcuts(source, isMac, target);
+		expect(source.emit({ key: "l", control: !isMac, meta: isMac }).preventDefault).not.toHaveBeenCalled();
+		attachAppShortcuts(source, isMac, target, false, () => ({ "add-selection-to-chat": [{ key: "j", ctrl: !isMac, meta: isMac, shift: true, alt: true }] }));
+		expect(source.emit({ key: "j", control: !isMac, meta: isMac, shift: true, alt: true }).preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+		expect(target.focus).not.toHaveBeenCalled();
+	});
 	it("routes Ctrl+Shift+I to shell DevTools when no Browser view is available", async () => {
 		const source = fakeSource();
 		const target = { ...fakeTarget(), toggleDevTools: vi.fn() };
@@ -440,6 +449,36 @@ describe("attachAppShortcuts", () => {
 
 		expect(appZoomEvent.preventDefault).not.toHaveBeenCalled();
 		expect(target.send).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ key: ";", code: "Semicolon", shift: true },
+		{ key: ":", code: "Semicolon", shift: true },
+		{ key: "^", code: "Equal", shift: false },
+	])("routes the macOS JIS zoom-in alias $key/$code to the focused terminal", (input) => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		let terminalFocused = true;
+		attachAppShortcuts(source, true, target, false, () => ({}), () => false, () => true, undefined, () => terminalFocused);
+
+		expect(source.emit({ key: ";", code: "Semicolon", meta: true }).preventDefault).not.toHaveBeenCalled();
+		expect(source.emit({ ...input, meta: true }).preventDefault).toHaveBeenCalledOnce();
+		expect(target.send).toHaveBeenCalledExactlyOnceWith(TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, 1);
+
+		terminalFocused = false;
+		expect(source.emit({ ...input, meta: true }).preventDefault).not.toHaveBeenCalled();
+		expect(target.send).toHaveBeenCalledTimes(1);
+	});
+
+	it("honors custom app bindings before the JIS terminal alias", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(source, true, target, false, () => ({
+			"open-settings": [{ key: ":", ctrl: false, meta: true, shift: true, alt: false }],
+		}), () => false, () => true, undefined, () => true);
+
+		expect(source.emit({ key: ":", code: "Semicolon", meta: true, shift: true }).preventDefault).toHaveBeenCalledOnce();
+		expect(target.send).toHaveBeenCalledExactlyOnceWith(OPEN_SETTINGS_SHORTCUT_CHANNEL);
 	});
 
 	it.each([

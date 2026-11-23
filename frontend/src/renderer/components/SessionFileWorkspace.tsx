@@ -109,6 +109,7 @@ export function SessionFileWorkspace({
 			<div
 				className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
 				data-testid="session-file-scroll"
+				data-code-selection-keyboard-scope=""
 				role="region"
 				aria-label={path}
 				tabIndex={-1}

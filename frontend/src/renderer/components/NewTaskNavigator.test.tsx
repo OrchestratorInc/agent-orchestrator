@@ -21,7 +21,7 @@ function cloudList<T>(data: T) {
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
-	useMatchRoute: () => ({ to }: { to: string }) => to === "/new" && route.onNewChat,
+	useRouter: () => ({ matchRoute: ({ to }: { to: string }) => to === "/new" && route.onNewChat }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => ({ data: [
@@ -87,6 +87,13 @@ describe("NewTaskNavigator", () => {
 			{ to: "/new", search: { project: "proj-2", host: "box-a" }, replace: false },
 			{ to: "/new", search: { project: undefined, host: undefined }, replace: false },
 		]);
+	});
+
+	it("marks the page only for a report, so the next new chat is a normal one", () => {
+		renderNavigator();
+		act(() => useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID, undefined, { report: true }));
+		act(() => useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID));
+		expect(navigateMock.mock.calls.map(([target]) => target.search.report)).toEqual([true, undefined]);
 	});
 
 	it("replaces the new chat page rather than stacking another one", () => {

@@ -35,8 +35,9 @@ export type PRState = "open" | "draft" | "merged" | "closed";
 /**
  * One attributed pull request, mirroring the daemon's SessionPRFacts wire shape.
  * A session can own many (e.g. a stack), so {@link WorkspaceSession.prs} is a
- * list. The wire carries no source/target branch or parent pointer, so the UI
- * renders a flat list of PRs, not a stack tree.
+ * list. The wire carries no source/target branch, so the UI renders a flat
+ * list of PRs, not a stack tree; `stackParent` only says which open PR a
+ * stacked PR waits on.
  */
 export type PullRequestFacts = {
 	url: string;
@@ -53,6 +54,8 @@ export type PullRequestFacts = {
 	}>;
 	reviewComments: boolean;
 	updatedAt: string;
+	/** The open PR whose branch this PR targets; absent when its base has no open PR. */
+	stackParent?: number;
 };
 
 /** What kind of durable output a session has produced, when known. */
@@ -91,6 +94,10 @@ export type SessionArtifact = {
 	previousPaths?: string[];
 	/** The file's public link while it is published from this computer. */
 	shareUrl?: string;
+	/** A cloud file's SHA-256, from its listing: the Publish button compares it with the published one. */
+	sha256?: string;
+	/** Who shareUrl opens for, as this computer last recorded it; the link list has the final say. */
+	shareAccess?: "restricted" | "anyone";
 };
 
 /** The daemon-committed controller currently responsible for the session. */
@@ -148,6 +155,7 @@ export type WorkspaceSession = {
 	reviewerConfig?: {
 		model?: string;
 		mode?: string;
+		effort?: string;
 		permissions?: string;
 	};
 	/** Whether the daemon may automatically review this session after it becomes idle. */
@@ -471,6 +479,16 @@ export function sessionWorkspaceReady(session: Pick<WorkspaceSession, "workspace
 
 export function sessionIsActive(session: WorkspaceSession): boolean {
 	return session.isTerminated !== true && session.status !== "terminated";
+}
+
+/**
+ * Whether a live worker can be archived from its own tab, topbar shortcut, or
+ * inspector: local, remote, or Cloud alike. The orchestrator goes with its
+ * project, and a Cloud session shared from another organization is the
+ * sharer's to archive.
+ */
+export function canArchiveWorkerSession(session: WorkspaceSession): boolean {
+	return !isOrchestratorSession(session) && session.cloud?.shared !== true && sessionIsActive(session);
 }
 
 /**

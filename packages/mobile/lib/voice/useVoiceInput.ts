@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState } from "react-native";
+import { AppState, Linking } from "react-native";
 import { haptics } from "../haptics";
 import { getDeviceVoiceProvider } from "./deviceProvider";
 import type { VoiceMode, VoiceProvider, VoiceState } from "./types";
@@ -18,6 +18,10 @@ const DOUBLE_TAP_MS = 300;
 // one, so the native recogniser isn't still tearing down and reporting "busy".
 // Only ever paid on the double-tap path, which is not latency-sensitive.
 const RESTART_DELAY_MS = 120;
+// How long the "microphone is off" notice stays up. It says so once and then
+// gets out of the way; the crossed-out mic keeps saying it after that.
+export const DENIED_NOTICE_MS = 5000;
+export const DENIED_MESSAGE = "Microphone access is off. Tap the mic to turn it on in Settings.";
 
 export type UseVoiceInput = {
 	state: VoiceState;
@@ -25,15 +29,19 @@ export type UseVoiceInput = {
 	mode: VoiceMode;
 	/** Live text while recording. Empty otherwise. */
 	partial: string;
-	/** Last failure, or null. Cleared on the next recording. */
+	/**
+	 * Last failure, or null. Cleared on the next recording. The denied-permission
+	 * notice also clears itself after `DENIED_NOTICE_MS`.
+	 */
 	error: string | null;
-	/** Finger down on the mic key. */
+	/** Finger down on the mic key. While denied, opens Settings instead. */
 	pressIn(): void;
 	/** Finger up off the mic key. */
 	pressOut(): void;
 	/**
 	 * Starts hands-free dictation, or finishes it when it is already running:
-	 * what a tap on the mic does, and a screen reader's activation.
+	 * what a tap on the mic does, and a screen reader's activation. While
+	 * permission is denied it opens the app's page in Settings instead.
 	 */
 	toggleLatched(): void;
 	/**
@@ -69,6 +77,10 @@ export function useVoiceInput({
 	// True for the single press that switched us into latched mode, so its own
 	// release doesn't immediately stop the recording it just started.
 	const startedLatchedRef = useRef(false);
+	const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Set when a tap on the denied mic sent the user to Settings, so the return
+	// to the app can tell them if access is still off. Any other return stays quiet.
+	const settingsOpenedRef = useRef(false);
 
 	// The ref is the authoritative phase, not a mirror of `state`. Press-in →
 	// permission dialog → press-out all resolve faster than React re-renders, so
@@ -90,6 +102,25 @@ export function useVoiceInput({
 	// Guards against a permission dialog resolving after the component unmounted.
 	const mountedRef = useRef(true);
 
+	const clearNotice = useCallback(() => {
+		if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+		noticeTimerRef.current = null;
+		setError((current) => (current === DENIED_MESSAGE ? null : current));
+	}, []);
+	const showDeniedNotice = useCallback(() => {
+		if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+		setError(DENIED_MESSAGE);
+		noticeTimerRef.current = setTimeout(clearNotice, DENIED_NOTICE_MS);
+	}, [clearNotice]);
+	const openSettings = useCallback(() => {
+		settingsOpenedRef.current = true;
+		clearNotice();
+		Linking.openSettings().catch(() => {
+			settingsOpenedRef.current = false;
+			if (mountedRef.current) showDeniedNotice();
+		});
+	}, [clearNotice, showDeniedNotice]);
+
 	// Availability is a device fact, not a permission — check it once so the mic
 	// key can hide entirely rather than failing on press.
 	useEffect(() => {
@@ -104,6 +135,7 @@ export function useVoiceInput({
 			// guarantee that a latched recording cannot outlive the terminal screen.
 			if (tapWindowRef.current) clearTimeout(tapWindowRef.current);
 			if (restartRef.current) clearTimeout(restartRef.current);
+			if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
 			modeRef.current = "push";
 			device.abort();
 		};
@@ -112,9 +144,26 @@ export function useVoiceInput({
 	// Backgrounding the app must also close the mic: iOS will interrupt the audio
 	// session anyway, and leaving the UI stuck in `recording` is worse than
 	// dropping a phrase the user walked away from.
+	//
+	// Coming back is when a denied mic may have been turned on in Settings, so it
+	// checks again (without prompting) and returns to idle if it was.
 	useEffect(() => {
 		const sub = AppState.addEventListener("change", (next) => {
-			if (next === "active") return;
+			if (next === "active") {
+				if (stateRef.current !== "denied") return;
+				const fromSettings = settingsOpenedRef.current;
+				settingsOpenedRef.current = false;
+				void device.checkPermission().then((granted) => {
+					if (!mountedRef.current || stateRef.current !== "denied") return;
+					if (granted) {
+						clearNotice();
+						setPhase("idle");
+					} else if (fromSettings) {
+						showDeniedNotice();
+					}
+				});
+				return;
+			}
 			if (stateRef.current !== "recording" && stateRef.current !== "starting") return;
 			device.abort();
 			modeRef.current = "push";
@@ -123,7 +172,7 @@ export function useVoiceInput({
 			setPhase("idle");
 		});
 		return () => sub.remove();
-	}, [device, setPhase]);
+	}, [device, setPhase, clearNotice, showDeniedNotice]);
 
 	const beginRecording = useCallback(
 		(mode: VoiceMode) => {
@@ -132,6 +181,8 @@ export function useVoiceInput({
 
 		modeRef.current = mode;
 		setMode(mode);
+		if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+		noticeTimerRef.current = null;
 		setError(null);
 		setPartial("");
 		setPhase("starting");
@@ -151,7 +202,7 @@ export function useVoiceInput({
 			if (!mountedRef.current) return;
 			if (!granted) {
 				setPhase("denied");
-				setError("Microphone access is off. Enable it in Settings to dictate.");
+				showDeniedNotice();
 				return;
 			}
 
@@ -215,7 +266,7 @@ export function useVoiceInput({
 			// words - the UI invited the user to talk before anything was capturing.
 		})();
 		},
-		[device, emitLevel, setPhase],
+		[device, emitLevel, setPhase, showDeniedNotice],
 	);
 
 	// Ends whatever is running, keeping the transcript.
@@ -235,6 +286,10 @@ export function useVoiceInput({
 	}, [device, setPhase]);
 
 	const pressIn = useCallback(() => {
+		if (stateRef.current === "denied") {
+			openSettings();
+			return;
+		}
 		// While latched the key is a stop button — the finger is not holding
 		// anything, so a press means "I'm done talking".
 		if (modeRef.current === "latched" && stateRef.current !== "idle") {
@@ -264,9 +319,11 @@ export function useVoiceInput({
 		startedLatchedRef.current = false;
 		pressStartRef.current = Date.now();
 		beginRecording("push");
-	}, [beginRecording, finish]);
+	}, [beginRecording, finish, openSettings]);
 
 	const pressOut = useCallback(() => {
+		// The press went to Settings; there is no recording to end.
+		if (stateRef.current === "denied") return;
 		// The press that armed latched mode; releasing it must not stop anything.
 		if (startedLatchedRef.current) return;
 		// Latched recording ignores the finger entirely.
@@ -288,6 +345,10 @@ export function useVoiceInput({
 	}, [device, finish, setPhase]);
 
 	const toggleLatched = useCallback(() => {
+		if (stateRef.current === "denied") {
+			openSettings();
+			return;
+		}
 		if (modeRef.current === "latched" && stateRef.current !== "idle") {
 			finish();
 			return;
@@ -298,7 +359,7 @@ export function useVoiceInput({
 		}
 		startedLatchedRef.current = false;
 		beginRecording("latched");
-	}, [beginRecording, finish]);
+	}, [beginRecording, finish, openSettings]);
 
 	return { state, mode, partial, error, pressIn, pressOut, toggleLatched, subscribeLevel };
 }

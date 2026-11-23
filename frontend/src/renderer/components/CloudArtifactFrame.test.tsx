@@ -28,6 +28,38 @@ describe("CloudArtifactFrame", () => {
 		);
 	}
 
+	it("frames a remote host's page after a plain GET to its proxy, and shows a refusal as an error, not a link to renew", async () => {
+		const proxied = "http://ao-preview-abc123.localhost:4100/page.html?raw=true";
+		// The host's file route is GET-only, as on a real host: a HEAD is refused.
+		const head = vi.fn(async (_url: string, init?: RequestInit) => new Response(null, { status: init?.method === "HEAD" ? 405 : 200 }));
+		vi.stubGlobal("fetch", head);
+		try {
+			const onAccessRefused = vi.fn();
+			const ok = render(
+				<QueryClientProvider client={new QueryClient()}>
+					<CloudArtifactFrame onAccessRefused={onAccessRefused} source="host" title="page.html" url={proxied} />
+				</QueryClientProvider>,
+			);
+			const frame = await screen.findByTitle("page.html");
+			expect(frame).toHaveAttribute("src", proxied);
+			expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-forms");
+			expect(head).toHaveBeenCalledWith(proxied, expect.objectContaining({ cache: "no-store" }));
+			expect(head.mock.calls.some(([, init]) => init?.method === "HEAD")).toBe(false);
+			ok.unmount();
+			head.mockImplementation(async () => new Response(null, { status: 403 }));
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					<CloudArtifactFrame onAccessRefused={onAccessRefused} source="host" title="page.html" url={proxied} />
+				</QueryClientProvider>,
+			);
+			expect(await screen.findByRole("button", { name: /retry/i })).toBeInTheDocument();
+			expect(onAccessRefused).not.toHaveBeenCalled();
+			expect(document.querySelector("iframe")).toBeNull();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
 	it("reports another file of its session that the page opened", async () => {
 		const onNavigate = vi.fn();
 		renderFrame({ onNavigate });

@@ -15,13 +15,17 @@ import {
 	resolveReviewerApproval,
 	resolveInput,
 	resolveReviewerInput,
+	retryConversationTurn,
 	rollbackConversation,
 	sendConversationMessage,
+	switchProviderAndSend,
+	type ProviderSwitchInput,
 	requireConversationExcerptSupport,
 	sendReviewerConversationMessage,
 	setConversationConfigOption,
 	setConversationSettings,
 	setConversationTitle,
+	setConversationTurnAutoResume,
 	stageConversationAttachments,
 	steerConversation,
 	interruptConversation,
@@ -37,6 +41,7 @@ import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
+import { createRefreshScheduler } from "./refreshScheduler";
 import { withAttachmentReferences } from "./messageAttachments";
 import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
@@ -44,7 +49,7 @@ import { NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionE
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
-const REFRESH_DEBOUNCE_MS = 120;
+const REFRESH_WINDOW_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
@@ -61,6 +66,8 @@ export type PendingSend = {
 	excerpts?: ChatExcerpt[];
 	hasAttachments: boolean;
 	restored?: boolean;
+	/** A send that also switches the chat's agent; see switchProviderAndSend. */
+	providerSwitch?: ProviderSwitchInput;
 };
 
 export type ConversationAction =
@@ -71,6 +78,8 @@ export type ConversationAction =
 	| "input"
 	| "compact"
 	| "rollback"
+	| "retry"
+	| "autoResume"
 	| "edit"
 	| "settings"
 	| "config"
@@ -101,7 +110,8 @@ export type MobileConversation = {
 	 */
 	loadTurnOptions(options?: { refresh?: boolean; ifMissing?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
 	loadSkills(): Promise<ChatSkill[]>;
-	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
+	/** With `providerSwitch`, the chat switches to that agent and sends to it in one request. */
+	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], providerSwitch?: ProviderSwitchInput): Promise<string>;
 	retrySend(id: string): Promise<void>;
 	discardSend(id: string): Promise<void>;
 	acknowledgeSend(id: string): Promise<void>;
@@ -113,6 +123,10 @@ export type MobileConversation = {
 	resolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	compact(): Promise<void>;
 	rollback(turnId: string): Promise<number>;
+	/** Sends a failed turn's prompt again now. */
+	retryTurn(turnId: string): Promise<void>;
+	/** Asks the daemon to send a usage-limited prompt again at the reset, or stops it. */
+	setTurnAutoResume(turnId: string, enabled: boolean): Promise<void>;
 	/** Retry an uncertain edit with the same `clientMessageId`; the daemon will not branch it twice. */
 	editMessage(turnId: string, text: string, clientMessageId: string): Promise<void>;
 	chooseSettings(settings: TurnSettings): Promise<void>;
@@ -152,8 +166,11 @@ export function useMobileConversation(
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [unavailable, setUnavailable] = useState<{ code?: string; message: string }>();
-	const [models, setModels] = useState<ChatModel[]>(() => rememberedTurnOptions(cacheKey)?.models ?? []);
-	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => rememberedTurnOptions(cacheKey)?.configOptions ?? []);
+	// The remembered catalog of the agent this chat last ran, never another's: a
+	// chat that switched agents keeps the outgoing agent's catalog remembered.
+	const [initialCatalog] = useState(() => rememberedTurnOptions(cacheKey, initialState.pages.length ? mergeConversationPages(initialState.pages)?.harness : undefined));
+	const [models, setModels] = useState<ChatModel[]>(() => initialCatalog?.models ?? []);
+	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => initialCatalog?.configOptions ?? []);
 	const [skills, setSkills] = useState<ChatSkill[]>([]);
 	const [pendingSends, setPendingSends] = useState<PendingSend[]>([]);
 	const [completedRetry, setCompletedRetry] = useState<{ id: string; draftText: string }>();
@@ -168,11 +185,39 @@ export function useMobileConversation(
 	// lands late must not undo it. `ifMissing` waits on the one in flight.
 	const turnOptionsRequest = useRef(0);
 	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
-	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const refreshGate = useRef(createRequestGate()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
+	// The agent the chat runs, for a retried switch's send (see deliver).
+	const harnessRef = useRef(snapshot?.harness);
+	harnessRef.current = snapshot?.harness;
 	const hasConversation = Boolean(snapshot);
+	// A new agent's catalog starts empty: the outgoing agent's models and
+	// options are never offered for it, even when its first load fails. Loads
+	// started for the outgoing agent no longer count (desktop's
+	// clearConversationProviderCatalogs).
+	const harnessShown = useRef<{ cacheKey: string; harness: string } | undefined>(undefined);
+	const snapshotHarness = snapshot?.harness;
+	useEffect(() => {
+		if (!snapshotHarness) return;
+		const previous = harnessShown.current;
+		harnessShown.current = { cacheKey, harness: snapshotHarness };
+		if (previous?.cacheKey !== cacheKey) {
+			// The first snapshot names the agent: a remembered catalog shown before
+			// it (no cached snapshot to check against) must be that agent's.
+			if (!turnOptionsLoaded.current && !rememberedTurnOptions(cacheKey, snapshotHarness)) {
+				setModels([]);
+				setConfigOptions([]);
+			}
+			return;
+		}
+		if (previous.harness === snapshotHarness) return;
+		turnOptionsRequest.current++;
+		turnOptionsLoaded.current = false;
+		turnOptionsCache.delete(cacheKey);
+		setModels([]);
+		setConfigOptions([]);
+	}, [cacheKey, snapshotHarness]);
 
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
@@ -203,10 +248,11 @@ export function useMobileConversation(
 		}
 	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
 
-	const scheduleRefresh = useCallback(() => {
-		if (refreshTimer.current) clearTimeout(refreshTimer.current);
-		refreshTimer.current = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
-	}, [refresh]);
+	// Event-driven reads always run the current refresh (connection, chat).
+	const refreshRef = useRef(refresh);
+	refreshRef.current = refresh;
+	const [refreshScheduler] = useState(() => createRefreshScheduler(() => refreshRef.current(), REFRESH_WINDOW_MS));
+	const scheduleRefresh = useCallback(() => refreshScheduler.request(), [refreshScheduler]);
 
 	const loadOlder = useCallback(async () => {
 		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
@@ -242,9 +288,9 @@ export function useMobileConversation(
 		return () => {
 			mounted.current = false;
 			refreshGate.invalidate();
-			if (refreshTimer.current) clearTimeout(refreshTimer.current);
+			refreshScheduler.cancel();
 		};
-	}, [refresh, refreshGate]);
+	}, [refresh, refreshGate, refreshScheduler]);
 
 	useEffect(() => {
 		setPendingSends([]);
@@ -266,9 +312,11 @@ export function useMobileConversation(
 		if (!cfg || unavailable || !hasConversation) return { models, configOptions };
 		if (options?.ifMissing) {
 			await turnOptionsInFlight.current?.catch(() => {});
-			if (turnOptionsLoaded.current) return rememberedTurnOptions(cacheKey) ?? { models, configOptions };
+			if (turnOptionsLoaded.current) return rememberedTurnOptions(cacheKey, harnessRef.current) ?? { models, configOptions };
 		}
 		const request = ++turnOptionsRequest.current;
+		// The agent this load is for: its answer is applied and remembered for it alone.
+		const harness = harnessRef.current;
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
 		// An empty catalog is usually a provider that is not up yet: it is not
 		// cached, so the next load asks again, and what it offered before stays.
@@ -289,10 +337,12 @@ export function useMobileConversation(
 			if (turnOptionsInFlight.current === loading) turnOptionsInFlight.current = undefined;
 		}
 		const empty = isEmptyTurnOptionCatalog(catalog);
-		const shown = empty ? rememberedTurnOptions(cacheKey) ?? catalog : catalog;
-		if (request !== turnOptionsRequest.current) return shown;
+		// Only the same agent's: after an agent switch the outgoing agent's
+		// models would be wrong, so an empty catalog then shows empty.
+		const shown = empty ? rememberedTurnOptions(cacheKey, harness) ?? catalog : catalog;
+		if (request !== turnOptionsRequest.current || harnessRef.current !== harness) return shown;
 		turnOptionsLoaded.current = !empty;
-		if (!empty) rememberTurnOptions(cacheKey, catalog);
+		if (!empty) rememberTurnOptions(cacheKey, catalog, harness);
 		if (mounted.current) {
 			setModels(shown.models);
 			setConfigOptions(shown.configOptions);
@@ -376,14 +426,20 @@ export function useMobileConversation(
 				} else if (pending.kind === "steer") {
 					await steerConversation(cfg, sessionId, pending.text, pending.id);
 				} else {
-					const sendMessage = options?.reviewId ? sendReviewerConversationMessage : sendConversationMessage;
-					await sendMessage(cfg, options?.reviewId ?? sessionId, {
+					const message = {
 						text: pending.text,
 						clientMessageId: pending.id,
 						attachments: pending.attachments,
 						resources: pending.resources,
 						excerpts: pending.excerpts,
-					});
+					};
+					// A retry after the chat already took the new agent is an ordinary
+					// send, as on desktop: the switch went through and only the send did not.
+					const providerSwitch = !options?.reviewId && pending.providerSwitch?.targetHarness !== harnessRef.current
+						? pending.providerSwitch
+						: undefined;
+					if (providerSwitch) await switchProviderAndSend(cfg, sessionId, providerSwitch, message);
+					else await (options?.reviewId ? sendReviewerConversationMessage : sendConversationMessage)(cfg, options?.reviewId ?? sessionId, message);
 				}
 				setPendingSends((old) => old.filter((item) => item.id !== pending.id));
 				await refresh();
@@ -398,7 +454,7 @@ export function useMobileConversation(
 	);
 
 	const send = useCallback(
-		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]) => {
+		async (text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[], providerSwitch?: ProviderSwitchInput) => {
 			if (!pendingKey) throw new Error(NOT_PAIRED_ACTION_COPY);
 			// Before anything is reserved: a record written here that never reaches
 			// `pendingSends` would block the next send with nothing to resolve.
@@ -417,6 +473,7 @@ export function useMobileConversation(
 			}
 			const saved = await reservePendingSend(pendingKey, {
 				id, draftText: excerptDraftText(text, excerpts), text: message, excerpts, hasAttachments: Boolean(attachments?.length || resources?.length), kind: "send",
+				...(providerSwitch ? { providerSwitch } : {}),
 			});
 			await deliver({
 				...saved, text: attachments?.length || resources?.length ? message : saved.text,
@@ -492,6 +549,16 @@ export function useMobileConversation(
 		(turnId: string) => runAction("rollback", () => requireConfig(cfg, offline, (c) => rollbackConversation(c, sessionId, turnId)), true),
 		[cfg, offline, runAction, sessionId],
 	);
+	// The usage-limit notice shows these failures in place, not in the banner.
+	const retryTurn = useCallback(
+		(turnId: string) => runAction("retry", () => requireConfig(cfg, offline, (c) => retryConversationTurn(c, sessionId, turnId)), false, false),
+		[cfg, offline, runAction, sessionId],
+	);
+	const setTurnAutoResume = useCallback(
+		(turnId: string, enabled: boolean) =>
+			runAction("autoResume", () => requireConfig(cfg, offline, (c) => setConversationTurnAutoResume(c, sessionId, turnId, enabled)), false, false),
+		[cfg, offline, runAction, sessionId],
+	);
 	const editMessage = useCallback(
 		(turnId: string, text: string, clientMessageId: string) =>
 			runAction("edit", () => requireConfig(cfg, offline, (c) => editConversationMessage(c, sessionId, turnId, text, clientMessageId)), true, false),
@@ -504,12 +571,16 @@ export function useMobileConversation(
 	const setConfigOption = useCallback(
 		(optionId: string, value: { value: string } | { enabled: boolean }) =>
 			runAction("config", async () => {
+				const harness = harnessRef.current;
 				const options = await requireConfig(cfg, offline, (c) => setConversationConfigOption(c, sessionId, optionId, value));
+				// An agent switch during the request leaves these options the previous
+				// agent's: neither shown nor remembered for the new one.
+				if (harnessRef.current !== harness) return options;
 				// The provider's own post-change catalog: a load still in flight is older.
 				turnOptionsRequest.current++;
 				setConfigOptions(options);
 				turnOptionsCache.set(cacheKey, { models, configOptions: options });
-				rememberTurnOptions(cacheKey, { models, configOptions: options });
+				rememberTurnOptions(cacheKey, { models, configOptions: options }, harnessRef.current);
 				if (options.length) turnOptionsLoaded.current = true;
 				return options;
 			}),
@@ -560,6 +631,8 @@ export function useMobileConversation(
 		resolveInput: resolveInputAction,
 		compact,
 		rollback,
+		retryTurn,
+		setTurnAutoResume,
 		editMessage,
 		chooseSettings,
 		setConfigOption,

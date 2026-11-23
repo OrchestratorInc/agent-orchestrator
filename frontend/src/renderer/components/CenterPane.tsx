@@ -1,4 +1,4 @@
-import { isSettingsPageOpen } from "../hooks/useAppShortcut";
+import { isSettingsPageOpen, onDedicatedShortcut } from "../hooks/useAppShortcut";
 import { motion, Reorder, useDragControls, useMotionValue } from "motion/react";
 import {
 	useCallback,
@@ -9,7 +9,6 @@ import {
 	useState,
 	type PointerEvent,
 	type ReactNode,
-	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -31,7 +30,7 @@ import { handleTerminalTabListKeyDown } from "../lib/terminal-tabs";
 import { cn } from "../lib/utils";
 import { sidebarOccupiesLayout, useUiStore, type Theme } from "../stores/ui-store";
 import type { TerminalTarget } from "../types/terminal";
-import { isOrchestratorSession, sessionIsActive, type WorkspaceSession } from "../types/workspace";
+import { canArchiveWorkerSession, isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame, terminalTabRenameInputClassName } from "./TerminalTabFrame";
@@ -66,8 +65,6 @@ type CenterPaneProps = {
 	topbarActions?: ReactNode;
 	/** Agent-session actions (interface switch, handoff) on the primary session tab. */
 	sessionTabAction?: ReactNode;
-	/** Keep the primary tab's action showing while an interface switch runs. */
-	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	workspaceTabs?: CenterPaneWorkspaceTab[];
@@ -101,8 +98,6 @@ type AuxiliaryTab =
 	| { key: string; kind: "shell"; terminal: ShellTerminal }
 	| { key: string; kind: "workspace"; tab: CenterPaneWorkspaceTab };
 
-const WHEEL_ZOOM_THRESHOLD = 80;
-const WHEEL_ZOOM_RESET_MS = 250;
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
@@ -237,7 +232,6 @@ export function CenterPane({
 	onRenameShellTerminal,
 	topbarActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -252,8 +246,6 @@ export function CenterPane({
 	const { t } = useTranslation();
 	const paneRef = useRef<HTMLDivElement | null>(null);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
-	const wheelZoomRemainderRef = useRef(0);
-	const lastWheelZoomAtRef = useRef(0);
 	const [fontSize, setFontSize] = useState(initialTerminalFontSize);
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	const [terminalBounds, setTerminalBounds] = useState({ leftInset: 0, rightInset: 0, width: 0 });
@@ -292,7 +284,6 @@ export function CenterPane({
 		[reviewerChat, reviewerTerminal, shellTerminals, splitHiddenTabKeys, workspaceTabs],
 	);
 	const availableAuxiliaryKeys = useMemo(() => auxiliaryTabs.map((tab) => tab.key), [auxiliaryTabs]);
-	const stripShellHandleIds = useMemo(() => shellTerminals.map((terminal) => terminal.handleId), [shellTerminals]);
 	const orderedAuxiliaryTabs = useMemo(() => {
 		const preferred = auxiliaryTabOrder ?? (sessionId ? (tabOrderBySession[sessionId] ?? []) : []);
 		const byKey = new Map(auxiliaryTabs.map((tab) => [tab.key, tab]));
@@ -414,7 +405,7 @@ export function CenterPane({
 
 	useEffect(
 		() =>
-			aoBridge.app.onCloseShellTerminalShortcut(() => {
+			onDedicatedShortcut("close-shell-terminal", (handler) => aoBridge.app.onCloseShellTerminalShortcut(handler), () => {
 				if (closeFocusedSplitPane) closeFocusedSplitPane();
 				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (target.kind === "shell") onCloseShellTerminal?.(target.handleId);
@@ -423,8 +414,12 @@ export function CenterPane({
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
+		const disposePrevious = onDedicatedShortcut("previous-tab", (handler) => aoBridge.app.onPreviousTabShortcut(handler), () => {
+			if (!isSettingsPageOpen()) selectAdjacentTab(-1);
+		});
+		const disposeNext = onDedicatedShortcut("next-tab", (handler) => aoBridge.app.onNextTabShortcut(handler), () => {
+			if (!isSettingsPageOpen()) selectAdjacentTab(1);
+		});
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -523,28 +518,6 @@ export function CenterPane({
 		}
 	}, []);
 
-	const handleWheelZoom = useCallback(
-		(event: ReactWheelEvent<HTMLDivElement>) => {
-			if (!event.ctrlKey && !event.metaKey) return;
-			event.preventDefault();
-			event.stopPropagation();
-
-			if (event.timeStamp - lastWheelZoomAtRef.current > WHEEL_ZOOM_RESET_MS) {
-				wheelZoomRemainderRef.current = 0;
-			}
-			lastWheelZoomAtRef.current = event.timeStamp;
-			wheelZoomRemainderRef.current += event.deltaY;
-
-			const steps = Math.floor(Math.abs(wheelZoomRemainderRef.current) / WHEEL_ZOOM_THRESHOLD);
-			if (steps === 0) return;
-
-			const direction = wheelZoomRemainderRef.current > 0 ? -1 : 1;
-			updateFontSize(direction * steps);
-			wheelZoomRemainderRef.current -= Math.sign(wheelZoomRemainderRef.current) * steps * WHEEL_ZOOM_THRESHOLD;
-		},
-		[updateFontSize],
-	);
-
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
 	const terminalTopbar = (
 		<SessionTabsTopbar
@@ -587,7 +560,6 @@ export function CenterPane({
 												onRenamed={refreshWorkspaces}
 												session={session}
 												tabAction={sessionTabAction}
-												tabActionPinned={sessionTabActionPinned}
 											/>
 										) : (
 											<SessionPaneTab isActive={target.kind === "worker"} label={sessionTabLabel} />
@@ -634,7 +606,7 @@ export function CenterPane({
 														}
 														onSelect={() => onSelectShellTerminal?.(tab.terminal.handleId)}
 														shell={tab.terminal}
-														stripShellHandleIds={stripShellHandleIds}
+														stripShells={shellTerminals}
 													/>
 												) : (
 													tab.tab.menu ? (
@@ -659,7 +631,6 @@ export function CenterPane({
 		<div
 			ref={paneRef}
 			className="terminal-pane-frame flex h-full min-h-0 min-w-flex-min flex-col"
-			onWheelCapture={handleWheelZoom}
 		>
 			{isFullscreen ? terminalTopbar : <SessionTopbarPortal>{terminalTopbar}</SessionTopbarPortal>}
 			<div
@@ -725,8 +696,6 @@ type SessionPaneTabProps = {
 	title?: string;
 	/** The control after the tab's title: the session's ⋮ menu, or a running interface switch's status. */
 	tabAction?: ReactNode;
-	/** Keep the action showing at rest (the session tab's ⋮ always shows). */
-	tabActionPinned?: boolean;
 	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
 	tabMenu?: boolean;
 	/** The tab's strip key, for split actions in its menu. */
@@ -745,7 +714,6 @@ export function SessionPaneTab({
 	icon,
 	title,
 	tabAction,
-	tabActionPinned = false,
 	tabMenu = false,
 	tabKey = SESSION_TAB_KEY,
 }: SessionPaneTabProps) {
@@ -783,10 +751,10 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			// Renaming hides the ⋮ but keeps its slot, so the tab keeps its width.
-			action={tabAction ? <span className={cn(sessionTabActionClassName, rename.isEditing && "invisible")} data-testid="session-tab-action">{tabAction}</span> : undefined}
-			actionPosition="end"
-			actionPinned={tabActionPinned}
+			// Renaming hides the ⋮ but keeps its slot (the frame's rule), so the tab keeps its width.
+			action={tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
+			// The session tab's ⋮ always shows, in its own room after the title.
+			actionInline
 			wide={session ? "session" : undefined}
 			active={isActive}
 			buttonProps={{
@@ -825,14 +793,14 @@ export function SessionPaneTab({
 	);
 	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;
 	// Archive only where the ⇧⌘A confirmation is mounted (SessionTopbarActions):
-	// an active local or remote worker. The orchestrator goes with its project.
+	// an active local, remote, or Cloud worker. The orchestrator goes with its project.
 	const menu: TabMenuSpec = session
 		? {
 				kind: "session",
 				tabKey,
 				session,
 				onRename: renameSession ? rename.begin : undefined,
-				canArchive: !isOrchestratorSession(session) && !session.cloud && sessionIsActive(session),
+				canArchive: canArchiveWorkerSession(session),
 			}
 		: { kind: "plain", tabKey };
 	// The ⋮ button in the action slot opens this same spec.

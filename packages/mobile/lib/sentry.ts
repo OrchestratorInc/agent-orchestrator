@@ -1,5 +1,6 @@
 import type { ErrorEvent, StackFrame } from "@sentry/react-native";
 import { classifyError, type ClassifyInput } from "./observability";
+import { safeSentryExceptionType, scrubSentryMessage, sentryExceptionValue, sentryMessageFingerprint } from "../../shared/telemetry/sentry-message";
 import { DEFAULT_SENTRY_DSN } from "./sentry-config";
 
 const SAFE_CATEGORIES = new Set(["native_crash", "render_crash", "http_5xx", "http_4xx", "offline", "timeout"]);
@@ -40,11 +41,19 @@ export function sanitizeMobileSentryEvent(event: ErrorEvent): ErrorEvent | null 
 	const severity = typeof event.tags?.["ao.severity"] === "string" && /^P[0-3]$/.test(event.tags["ao.severity"])
 		? event.tags["ao.severity"] : undefined;
 	const title = event.message === "Mobile API error" ? "Mobile API error" : "Mobile error";
-	const values = event.exception?.values?.map((value) => ({
-		type: "MobileError",
-		value: "Mobile error",
-		stacktrace: value.stacktrace?.frames ? { frames: value.stacktrace.frames.map(safeFrame) } : undefined,
-	}));
+	const exceptions = event.exception?.values ?? [];
+	const messages = exceptions.map((value) => scrubSentryMessage(value.value));
+	const values = exceptions.map((value, index) => {
+		const frames = value.stacktrace?.frames?.map(safeFrame);
+		const top = frames?.at(-1);
+		const location = top?.lineno ? `mobile:${top.lineno}` : "mobile";
+		return {
+			type: safeSentryExceptionType(value.type),
+			value: sentryExceptionValue(messages[index], title, location, category),
+			stacktrace: frames ? { frames } : undefined,
+		};
+	});
+	const primary = values.at(-1);
 	const clean: ErrorEvent = {
 		type: undefined,
 		event_id: event.event_id,
@@ -61,7 +70,7 @@ export function sanitizeMobileSentryEvent(event: ErrorEvent): ErrorEvent | null 
 			...(severity ? { "ao.severity": severity } : {}),
 			...(daemonVersion && /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/.test(daemonVersion) ? { "ao.daemon_version": daemonVersion } : {}),
 		},
-		fingerprint: ["mobile", title, category],
+		fingerprint: ["mobile", title, category, ...(primary ? [primary.type] : []), ...sentryMessageFingerprint(messages.at(-1) ?? "")],
 		user: pairedInstallId ? { id: pairedInstallId } : undefined,
 	};
 	if (clean.event_id) allowedEventIds.add(clean.event_id);

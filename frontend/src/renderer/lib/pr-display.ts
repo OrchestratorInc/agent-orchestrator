@@ -231,11 +231,16 @@ export function prStatusRows(pr: SessionPRSummary): PRStatusRow[] {
 export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: boolean } = {}): PRCardPresentation {
 	// CI "unknown" means checks are still being read, unless the PR has none.
 	const awaitingChecks = pr.ci.state === "unknown" && !options.noChecks;
+	const queued = prMergeQueueEntry(pr);
 	let primary: PRCardStatus;
 	if (pr.state === "merged") {
 		primary = cardStatus("lifecycle", "pr.card.merged", "success");
 	} else if (pr.state === "closed") {
 		primary = cardStatus("lifecycle", "pr.card.closed", "passive");
+	} else if (queued) {
+		// In the queue the PR is on its way to merging, whatever the provider
+		// says of a direct merge; the queue's own state is the one to show.
+		primary = cardStatus("merge", "pr.queue.card", queued.state === "unmergeable" ? "warning" : "neutral", prMergeQueueDetail(queued));
 	} else if (pr.ci.state === "failing") {
 		primary = cardStatus("ci", "pr.card.checksFailing", "error", ciSummary(pr), ciLinks(pr));
 	} else if (pr.mergeability.state === "conflicting") {
@@ -299,6 +304,13 @@ export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: b
 		statusRows.push(cardStatus("review", "pr.card.reviewStatus", reviewTone(pr.review.decision, pr.review.hasUnresolvedHumanComments), reviewStatusDetail(pr)));
 		const readinessRows = mergeReadinessRows(pr, options);
 		const mergeable = prCanMerge(pr, options);
+		if (queued) {
+			return { primary, supporting, statusRows, readinessRows, readinessExplained: true, readiness: {
+				label: appI18n.t("pr.queue.card"),
+				detail: prMergeQueueDetail(queued),
+				tone: queued.state === "unmergeable" ? "warning" : "neutral",
+			} };
+		}
 		if (mergeReasons(pr).includes("github_checks_unavailable")) {
 			return { primary, supporting, statusRows, readinessRows, readiness: {
 				label: appI18n.t("pr.merge.accessLost"),
@@ -342,10 +354,12 @@ export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: b
 function mergeReadinessRows(pr: SessionPRSummary, options: { noChecks?: boolean }): PRCardStatus[] {
 	const merge = pr.mergeability.state;
 	const conflictsKnown = merge !== "unknown";
+	const conflicts = (value: "pr.merge.conflictsWithBase" | "pr.fact.none" | "pr.fact.unknown", state: PRCheckState) =>
+		({ title: appI18n.t("pr.fact.conflicts"), value: appI18n.t(value), state });
 	const rows: PRCardStatus[] = [
 		merge === "conflicting"
-			? cardStatus("merge", "pr.card.mergeConflict", "error", undefined, mergeLinks(pr))
-			: cardStatus("merge", conflictsKnown ? "pr.merge.noConflicts" : "pr.merge.conflictsUnknown", conflictsKnown ? "success" : "passive"),
+			? { ...cardStatus("merge", "pr.card.mergeConflict", "error", undefined, mergeLinks(pr)), fact: conflicts("pr.merge.conflictsWithBase", "failed") }
+			: { ...cardStatus("merge", conflictsKnown ? "pr.merge.noConflicts" : "pr.merge.conflictsUnknown", conflictsKnown ? "success" : "passive"), fact: conflicts(conflictsKnown ? "pr.fact.none" : "pr.fact.unknown", conflictsKnown ? "passed" : "pending") },
 	];
 	// The row opens to the checks, each with its own link, so it carries no
 	// link of its own; it says the counts at each state in place of its label.
@@ -408,28 +422,32 @@ function reviewReadinessRow(pr: SessionPRSummary): PRCardStatus {
 	const unresolved = pr.review.hasUnresolvedHumanComments
 		? appI18n.t("inspector.unresolvedCount", { count: pr.review.unresolvedBy.reduce((sum, reviewer) => sum + reviewer.count, 0) })
 		: undefined;
-	const row = (label: string, tone: PRDisplayTone, detail?: string): PRCardStatus => ({ key: "review", label, detail, links: [], tone });
+	// The label is the whole fact in words; `value` is what follows "Review" on a row that splits it.
+	const row = (label: string, tone: PRDisplayTone, detail: string | undefined, state: PRCheckState, value = label): PRCardStatus =>
+		({ key: "review", label, detail, links: [], tone, fact: { title: appI18n.t("pr.fact.review"), value, state } });
 	const decision = pr.review.decision;
 	if (decision === "changes_requested" || (decision === "none" && changesRequestedBy.length > 0)) {
 		return row(
 			changesRequestedBy.length > 0 ? appI18n.t("pr.review.changesRequestedBy", { names: changesRequestedBy.join(", ") }) : appI18n.t("pr.review.changesRequested"),
 			"warning",
 			unresolved,
+			"failed",
 		);
 	}
 	if (decision === "review_required") {
 		// A partial approval still counts for something when more reviews are needed.
-		return row(appI18n.t("pr.card.reviewRequired"), "review", approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : unresolved);
+		return row(appI18n.t("pr.card.reviewRequired"), "review", approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : unresolved, "pending", appI18n.t("pr.fact.required"));
 	}
 	if (decision === "approved" || approvedBy.length > 0) {
 		return row(
 			approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : appI18n.t("pr.review.approved"),
 			unresolved ? "warning" : "success",
 			unresolved,
+			"passed",
 		);
 	}
 	// No rule and no verdict: unresolved comments still block the merge.
-	return unresolved ? row(unresolved, "warning") : row(appI18n.t("pr.review.noReviewsYet"), "passive");
+	return unresolved ? row(unresolved, "warning", undefined, "pending") : row(appI18n.t("pr.review.noReviewsYet"), "passive", undefined, "skipped");
 }
 
 /** Who currently approves or blocks the PR: each reviewer's newest verdict, a later comment-only review not counting. */
@@ -468,7 +486,8 @@ function cardStatus(
 		| "pr.card.reviewApproved"
 		| "pr.card.open"
 		| "pr.card.checksPassing"
-		| "pr.card.reviewStatus",
+		| "pr.card.reviewStatus"
+		| "pr.queue.card",
 	tone: PRDisplayTone,
 	detail?: string,
 	links: PRSummaryLink[] = [],
@@ -571,11 +590,37 @@ function ciCancelled(pr: SessionPRSummary): boolean {
 export function prCanMerge(pr: SessionPRSummary, options: { noChecks?: boolean } = {}): boolean {
 	return (
 		pr.state === "open" &&
+		// A queued PR is already on its way; merging it again can only be refused.
+		!pr.mergeQueue &&
 		(pr.ci.state === "passing" || (pr.ci.state === "unknown" && options.noChecks === true)) &&
 		pr.mergeability.state === "mergeable" &&
 		reviewAllowsMerge(pr.review.decision) &&
 		!pr.review.hasUnresolvedHumanComments
 	);
+}
+
+export type PRMergeQueueEntry = NonNullable<SessionPRSummary["mergeQueue"]>;
+
+/** The PR's place in its base branch's merge queue; only an open PR has one. */
+export function prMergeQueueEntry(pr: SessionPRSummary): PRMergeQueueEntry | undefined {
+	return pr.state === "open" ? pr.mergeQueue ?? undefined : undefined;
+}
+
+const queueStateLabel = {
+	queued: "pr.queue.state.queued",
+	awaiting_checks: "pr.queue.state.awaiting_checks",
+	mergeable: "pr.queue.state.mergeable",
+	unmergeable: "pr.queue.state.unmergeable",
+	locked: "pr.queue.state.locked",
+} as const;
+
+/** What a queued PR is doing, with its position and the provider's estimate when it gives them. */
+export function prMergeQueueDetail(entry: PRMergeQueueEntry): string {
+	const parts = [appI18n.t(queueStateLabel[entry.state] ?? "pr.queue.state.queued")];
+	if (entry.position > 0) parts.push(appI18n.t("pr.queue.position", { position: entry.position }));
+	const seconds = entry.estimatedSecondsToMerge ?? 0;
+	if (seconds > 0) parts.push(appI18n.t("pr.queue.eta", { minutes: Math.max(1, Math.round(seconds / 60)) }));
+	return parts.join(" · ");
 }
 
 function reviewAllowsMerge(decision: SessionPRSummary["review"]["decision"]): boolean {
@@ -607,6 +652,7 @@ function providerBlockedDetail(pr: SessionPRSummary): string {
 }
 
 export function prSummaryParts(pr: SessionPRSummary): PRSummaryPart[] {
+	const queued = prMergeQueueEntry(pr);
 	return [
 		{
 			key: "ci",
@@ -624,13 +670,24 @@ export function prSummaryParts(pr: SessionPRSummary): PRSummaryPart[] {
 		{
 			key: "merge",
 			label: appI18n.t("pr.section.merge"),
-			status: hasLostGitHubAccess(pr) ? appI18n.t("pr.merge.accessLost") : mergeabilityLabel(pr.mergeability.state),
-			summary: hasLostGitHubAccess(pr) ? appI18n.t("pr.merge.accessLostDetail") : mergeSummary(pr),
-			links: mergeLinks(pr),
-			linkTotal: mergeLinkTotal(pr),
-			overflowLabel: mergeOverflowLabel(pr),
-			overflowNoun: mergeOverflowNoun(pr),
-			tone: hasLostGitHubAccess(pr) ? "warning" : mergeabilityTone(pr.mergeability.state),
+			...(queued ? {
+				// Queued, not blocked: the queue's state stands in for the provider's verdict on a direct merge.
+				status: appI18n.t("pr.queue.card"),
+				summary: prMergeQueueDetail(queued),
+				links: [],
+				linkTotal: 0,
+				overflowLabel: undefined,
+				overflowNoun: mergeOverflowNoun(pr),
+				tone: queued.state === "unmergeable" ? "warning" as const : "neutral" as const,
+			} : {
+				status: hasLostGitHubAccess(pr) ? appI18n.t("pr.merge.accessLost") : mergeabilityLabel(pr.mergeability.state),
+				summary: hasLostGitHubAccess(pr) ? appI18n.t("pr.merge.accessLostDetail") : mergeSummary(pr),
+				links: mergeLinks(pr),
+				linkTotal: mergeLinkTotal(pr),
+				overflowLabel: mergeOverflowLabel(pr),
+				overflowNoun: mergeOverflowNoun(pr),
+				tone: hasLostGitHubAccess(pr) ? "warning" as const : mergeabilityTone(pr.mergeability.state),
+			}),
 		},
 		{
 			key: "review",
@@ -1073,6 +1130,29 @@ export function prRepositoryFromUrl(raw: string | undefined): string | undefined
  * multi-repository cloud session can open one per repository), in which case
  * each one is labelled with its repository.
  */
+/** A repository's name without its owner: "acme/app" is "app". */
+export function prRepositoryShortName(repository: string): string {
+	return repository.slice(repository.lastIndexOf("/") + 1) || repository;
+}
+
+/**
+ * What to call each repository beside a PR number when a session's PRs span
+ * several: its short name, or its full name when two owners share that name
+ * (a fork and its upstream), keyed by the full name.
+ */
+export function prRepositoryLabels(prs: ReadonlyArray<{ url?: string; htmlUrl?: string; repo?: string }>): Map<string, string> {
+	const owners = new Map<string, Set<string>>();
+	const repositories = prs.map((pr) => pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) || "").filter(Boolean);
+	for (const repository of repositories) {
+		const short = prRepositoryShortName(repository).toLowerCase();
+		owners.set(short, (owners.get(short) ?? new Set()).add(repository.toLowerCase()));
+	}
+	return new Map(repositories.map((repository) => {
+		const short = prRepositoryShortName(repository);
+		return [repository, (owners.get(short.toLowerCase())?.size ?? 0) > 1 ? repository : short];
+	}));
+}
+
 export function prsSpanRepositories(prs: ReadonlyArray<{ url?: string; htmlUrl?: string; repo?: string }>): boolean {
 	const repositories = new Set(prs.map((pr) => (pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) || "").toLowerCase()).filter(Boolean));
 	return repositories.size > 1;
