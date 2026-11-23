@@ -482,7 +482,7 @@ func TestDeriveKanbanPresentationAOChangesRequestedNeedsActiveWorker(t *testing.
 		{name: "idle worker after delivered feedback requests changes", activity: contract.ActivityIdle, autoFix: true, want: contract.DisplayChangesRequested},
 		{name: "idle worker without auto fix requests changes", activity: contract.ActivityIdle, want: contract.DisplayChangesRequested},
 		{name: "active worker with auto fix addresses comments", activity: contract.ActivityActive, autoFix: true, want: contract.DisplayAddressingComments},
-		{name: "active worker without auto fix is working", activity: contract.ActivityActive, want: contract.DisplayWorking},
+		{name: "active worker without auto fix addresses comments", activity: contract.ActivityActive, want: contract.DisplayAddressingComments},
 		{name: "a running reviewer outranks the idle changes request", activity: contract.ActivityIdle, autoFix: true, running: true, want: contract.DisplayReviewing},
 		{name: "failing CI keeps its precedence", activity: contract.ActivityIdle, autoFix: true, ci: contract.CIFailing, want: contract.DisplayCIFailing},
 		{name: "blocked worker still needs attention", activity: contract.ActivityBlocked, autoFix: true, want: contract.DisplayBlocked},
@@ -820,6 +820,25 @@ func TestDeriveKanbanPresentationSinglePR(t *testing.T) {
 			pr: contract.KanbanPRFacts{
 				URL:            "pr/1",
 				Review:         contract.ReviewChangesRequest,
+				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
+			name:    "external changes request stays in review despite auto review",
+			session: contract.KanbanSessionFacts{AutoReview: true},
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Review: contract.ReviewChangesRequest,
+				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
+			},
+			wantColumn: contract.KanbanNeedsReview,
+			want:       contract.DisplayChangesRequested,
+		},
+		{
+			name: "external changes request stays in review despite mergeable snapshot",
+			pr: contract.KanbanPRFacts{
+				URL: "pr/1", Review: contract.ReviewChangesRequest, Mergeability: contract.MergeMergeable,
 				ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
 			},
 			wantColumn: contract.KanbanNeedsReview,

@@ -118,7 +118,7 @@ func openCodeLaunchDetail(harness domain.AgentHarness, tool *toolState, detail m
 		// The launch settles as soon as the child starts, so only the child's
 		// hand-back says it finished.
 		detail["background"] = true
-		if agent := stringField(tool.rawInput, "agent"); agent != "" {
+		if agent := trimmedStringField(tool.rawInput, "agent"); agent != "" {
 			detail["subagentType"] = agent
 		}
 	case domain.HarnessOpenCode:
@@ -133,13 +133,13 @@ func openCodeLaunchDetail(harness domain.AgentHarness, tool *toolState, detail m
 // name, so it is recognised by its kind and input: an agent and a prompt.
 func isOpenCodeSubagentLaunch(tool *toolState) bool {
 	return tool.kind == acpsdk.ToolKindThink &&
-		stringField(tool.rawInput, "agent") != "" && stringField(tool.rawInput, "prompt") != ""
+		trimmedStringField(tool.rawInput, "agent") != "" && trimmedStringField(tool.rawInput, "prompt") != ""
 }
 
 // isOpenCodeTask reports OpenCode 1's task call, which the renderer already
 // recognises by its subagent_type.
 func isOpenCodeTask(tool *toolState) bool {
-	return tool.kind == acpsdk.ToolKindThink && stringField(tool.rawInput, "subagent_type") != ""
+	return tool.kind == acpsdk.ToolKindThink && trimmedStringField(tool.rawInput, "subagent_type") != ""
 }
 
 var (
@@ -184,7 +184,7 @@ func (c *conversation) observeSubagentLaunch(turnID string, tool *toolState, emi
 		// its child in the input too, but the child stays with the launch it has.
 		child := ""
 		if tool.status == acpsdk.ToolCallStatusCompleted {
-			child = stringField(nestedMap(asMap(tool.rawOutput), "metadata"), "sessionID")
+			child = trimmedStringField(nestedMap(asMap(tool.rawOutput), "metadata"), "sessionID")
 		}
 		switch {
 		case child != "":
@@ -489,7 +489,7 @@ func asMap(value any) map[string]any {
 	return m
 }
 
-func stringField(value any, key string) string {
+func trimmedStringField(value any, key string) string {
 	s, _ := asMap(value)[key].(string)
 	return strings.TrimSpace(s)
 }

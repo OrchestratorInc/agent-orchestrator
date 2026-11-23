@@ -1,11 +1,14 @@
--- Subscription accounts AO launches Claude Code and Codex with.
+-- Subscription and API key accounts AO launches Claude Code and Codex with.
 
 -- name: ListAgentAccounts :many
 SELECT * FROM agent_accounts ORDER BY provider, created_at, id;
 
 -- name: CreateAgentAccount :exec
-INSERT INTO agent_accounts (id, provider, home, email, plan, created_at)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hint, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: UpdateAgentAccountKeyHint :execrows
+UPDATE agent_accounts SET key_hint = ? WHERE id = ? AND kind IN ('api_key', 'setup_token');
 
 -- name: DeleteAgentAccount :exec
 DELETE FROM agent_accounts WHERE id = ?;

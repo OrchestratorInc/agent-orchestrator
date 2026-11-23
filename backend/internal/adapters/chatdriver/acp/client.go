@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -607,6 +608,11 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 	var err error
 	switch method {
 	case acpsdk.ClientMethodSessionUpdate:
+		// Decode for an async task only when its discriminator can be present,
+		// so ordinary frames are not decoded twice on the frame reader.
+		if bytes.Contains(params, []byte("async_task")) && c.observeAsyncTaskNotification(params) {
+			return true
+		}
 		var update acpsdk.SessionNotification
 		if err = json.Unmarshal(params, &update); err == nil {
 			err = update.Validate()
@@ -782,6 +788,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		c.mu.Lock()
 		c.tools[tool.id] = tool
 		c.mu.Unlock()
+		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 		c.observeSubagentLaunch(turnID, tool, emit)
@@ -791,6 +798,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			emit(ports.ChatEvent{Kind: ports.ChatEventCommandOutputDelta, ProviderTurnID: turnID,
 				ProviderItemID: c.providerItemID(tool.id), Delta: delta})
 		}
+		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 		c.observeSubagentLaunch(turnID, tool, emit)
@@ -800,7 +808,9 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
 	case update.SessionInfoUpdate != nil:
 		if update.SessionInfoUpdate.Title != nil {
-			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})
+			if title, ok := providerTitle(*update.SessionInfoUpdate.Title); ok {
+				emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: title})
+			}
 		}
 		if turnID != "" {
 			// A retry or limit notice is live status. The live run already stored

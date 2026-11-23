@@ -322,8 +322,11 @@ type CurrentHeadReviewRun struct {
 	PRURL     string
 	Status    ReviewRunStatus
 	Verdict   ReviewVerdict
-	ID        string
-	CreatedAt time.Time
+	// LastVerdictChangesRequested keeps a posted changes request effective while
+	// a later pass on the same head has not returned a verdict yet.
+	LastVerdictChangesRequested bool
+	ID                          string
+	CreatedAt                   time.Time
 	// FailedAutoRuns counts every failed auto review pass on this PR head.
 	FailedAutoRuns int
 	// AutoRetryBlocked reports a cancelled pass or a verdict on this PR head for
