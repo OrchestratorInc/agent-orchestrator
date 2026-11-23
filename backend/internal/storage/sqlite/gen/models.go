@@ -193,6 +193,11 @@ type AppSetting struct {
 	LimitHistory         bool
 }
 
+type AppThemeLibrary struct {
+	ID      int64
+	Library string
+}
+
 type Automation struct {
 	ID          domain.AutomationID
 	ProjectID   domain.ProjectID
