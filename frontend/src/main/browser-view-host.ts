@@ -6362,7 +6362,10 @@ async function runFocusQuery(entry: BrowserEntry): Promise<void> {
         returnByValue: true,
       }) as { result?: { value?: unknown } } | undefined;
       const value = reply?.result?.value;
-      if (typeof value !== "string") throw new Error("Focus query returned no value");
+      if (typeof value !== "string") {
+        entry.focusWorld = undefined;
+        continue;
+      }
       const focused = parseFocusPayload(value);
       if (focused === undefined) return;
       // The page numbers fields per document; the tab and document make it unique.
