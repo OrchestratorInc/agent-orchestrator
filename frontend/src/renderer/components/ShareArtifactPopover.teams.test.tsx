@@ -187,6 +187,28 @@ describe("ShareArtifactButton on a team workspace", () => {
 		expect(screen.queryByRole("menuitemradio", { name: /Everyone at/ })).toBeNull();
 	});
 
+	it("drops a workspace picked before Publish when the org leaves its Cloud plan", async () => {
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue(inspection);
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue(links);
+		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
+		const publish = vi.spyOn(aoBridge.cloudShare, "publish").mockResolvedValue({ status: "published", replaced: false, share });
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ ...none, teams: [design] });
+		const { rerender } = render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" /></TooltipProvider></QueryClientProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Publish: report.html" }));
+		await screen.findByRole("combobox", { name: "Add people by email or team" });
+		await pickDesign();
+		await userEvent.click(screen.getByRole("button", { name: /Only people invited/ }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: /Everyone at Acme/ }));
+		expect(screen.getByRole("button", { name: /Everyone at Acme/ })).toBeTruthy();
+		// The plan lapses to Free before Publish.
+		mocks.billing = { enabled: true, entitled: true, exempt: false, plan: "free" };
+		rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" /></TooltipProvider></QueryClientProvider>);
+		expect(await screen.findByRole("button", { name: /Only people invited/ })).toBeTruthy();
+		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+		expect(publish).toHaveBeenCalledOnce();
+		await waitFor(() => expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { orgId: ORG_ID, teamIds: [TEAM_ID] }));
+	});
+
 	it("shares with a typed email on Enter", async () => {
 		mocks.candidates = [];
 		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });

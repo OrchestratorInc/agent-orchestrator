@@ -1169,7 +1169,11 @@ function SharePanel({
 				setStagedTeams([...stagedTeams, ...added.map((team) => ({ teamId: team.teamId, name: team.name, memberCount: team.memberCount, pending: true }))]);
 				return true;
 			};
-			const stagedAudience: ArtifactAudience = stagedWorkspace ? "workspace" : stagedAccess;
+			// A workspace picked before Publish counts only while the org is on a
+			// Cloud plan: losing it falls back to people invited, and Publish does
+			// not send it. Only a published link keeps a workspace it already has.
+			const stagesWorkspace = stagedWorkspace && Boolean(teamWorkspace) && cloudPlan;
+			const stagedAudience: ArtifactAudience = stagesWorkspace ? "workspace" : stagedAccess;
 			return (
 				<>
 					{titled(t("artifacts.share.title.publish"))}
@@ -1203,7 +1207,7 @@ function SharePanel({
 									setStagedWorkspace(next === "workspace");
 									setStagedAccess(next === "workspace" ? "restricted" : next);
 								}}
-								workspace={workspaceChoice(stagedAudience)}
+								workspace={teamWorkspace && cloudPlan ? { name: workspaceName } : undefined}
 							/>
 						</div>
 					) : null}
@@ -1214,7 +1218,7 @@ function SharePanel({
 								access: stagedAccess,
 								emails: staged,
 								teamIds: stagedTeams.map((team) => team.teamId),
-								workspace: stagedWorkspace,
+								workspace: stagesWorkspace,
 							})}
 							size="sm"
 							type="button"
