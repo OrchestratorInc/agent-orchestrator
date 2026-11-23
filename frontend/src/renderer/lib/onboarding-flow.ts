@@ -1,6 +1,6 @@
 import type { OnboardingStep } from "./onboarding-steps";
 
-// Whether onboarding is showing now: the first-run window or a guided tour
+// Whether onboarding is showing now: the first-run window or a first-task funnel
 // step. Kept apart from the funnel (onboarding-telemetry.ts) so Sentry reads
 // it directly on each capture. Nothing registers on import, so a reloaded
 // copy of the funnel module (hot reload, tests) can't leave Sentry reading
@@ -19,7 +19,7 @@ export function onboardingWindowOpen(): boolean {
 	return windowOpen;
 }
 
-/** The tour step showing now, or undefined; set by GuidedTour. */
+/** The first-task funnel step running now, or undefined; set by FirstTaskFunnel. */
 export function setOnboardingTourStep(step: OnboardingStep | undefined): void {
 	tourStep = step;
 }

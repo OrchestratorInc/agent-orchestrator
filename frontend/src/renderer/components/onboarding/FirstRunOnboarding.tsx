@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Cloud, LoaderCircle, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
+import { ArrowLeft, ChevronDown, ChevronUp, Cloud, LoaderCircle, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -12,11 +12,10 @@ import {
 	useMemo,
 	useRef,
 	useState,
-	type ComponentProps,
 	type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { Trans, useTranslation } from "react-i18next";
+import { useTranslation } from "react-i18next";
 import type { MessageKey } from "../../i18n";
 import { useAgentAuthPlans, useStartAgentAuth } from "../../hooks/useAgentAuth";
 import {
@@ -73,18 +72,20 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { GitHubLoginActions, GitHubLoginTerminal, useGitHubLogin } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
 import { HarnessAuthTerminalPanel } from "../settings/harness/HarnessAuthTerminalPanel";
-import { Button } from "../ui/button";
+import { Button, type ButtonProps } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import { startGuidedTour } from "./GuidedTour";
+import { startFirstTaskFunnel } from "./FirstTaskFunnel";
 import { agentRowState, closeLoginWorkflow, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useLoginLifetime, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
+import { useWelcomeCopy, useWelcomeVariant, WelcomeVariantPicker } from "./WelcomeVariants";
 
 // Three pages: what Orchestrator is (with its three-part story playing in the
 // preview), the optional account, and the tools a worker needs (GitHub CLI and
 // a coding agent). Log in and Your tools are skipped when there is nothing to
-// do on them. The first project and task follow in the real app, as a guided
-// tour (GuidedTour).
+// do on them. Then the real app takes over with Add Project open: no tour, the
+// app has to make the first project and task obvious on its own
+// (FirstTaskFunnel only measures whether it does).
 const STEPS = ["welcome", "signin", "tools"] as const;
 type Step = (typeof STEPS)[number];
 // Where a step stored by the earlier seven-page flow resumes.
@@ -110,20 +111,12 @@ const FADE = { duration: 0.15, ease: [0.23, 1, 0.32, 1] } as const;
 /** The copy column's width beside the stage. */
 const COPY_WIDTH = 520;
 
-/** "How Orchestrator works": the three parts the welcome preview plays. */
-const ORCH_POINTS = [
-	{ title: "firstRun.orchPoint1Title", body: "firstRun.orchPoint1Body" },
-	{ title: "firstRun.orchPoint2Title", body: "firstRun.orchPoint2Body" },
-	{ title: "firstRun.orchPointCiTitle", body: "firstRun.orchPointCiBody" },
-] as const;
+/** How long each part of the welcome's story holds before the next plays: the
+ * request, the workers at it, then CI and code review (WelcomeVariants). */
+const POINT_HOLD_MS = [4200, 3800, 10200] as const;
+const STORY_POINTS = POINT_HOLD_MS.length;
 /** The part where pull requests go through CI and code review on GitHub. */
 const CI_POINT = 2;
-/** How far the welcome's other story points recede while one plays. */
-const INACTIVE_POINT_OPACITY = 0.35;
-/** The welcome's story points come up and recede on this curve. */
-const CAPTION_EASE = [0.23, 1, 0.32, 1] as const;
-/** How long each part of the story holds before the next plays. */
-const POINT_HOLD_MS = [4200, 3800, 10200] as const;
 /** The order the example work settles (task indexes), a beat apart, in the CI
  * part: first the three with pull requests, each beat long enough for its
  * round trip to GitHub (OnboardingSchematic), then the one waiting on you, the
@@ -235,8 +228,8 @@ export function FirstRunOnboarding() {
 	return (
 		<OnboardingFlow
 			runKind={runKind.current}
-			onFinish={({ tour = true } = {}) => {
-				completeOnboardingRun(tour ? "finished" : "skipped_setup");
+			onFinish={({ skipped = false } = {}) => {
+				completeOnboardingRun(skipped ? "skipped_setup" : "finished");
 				setOpen(false);
 				markSeen();
 				if (replaySimulated.current) {
@@ -244,22 +237,22 @@ export function FirstRunOnboarding() {
 					setFreshMachineSim(false);
 					resetToolChecks();
 				}
-				// The tour starts on Home, where projects are added, once it's
-				// showing (not on whatever page was behind the onboarding). A
-				// skipped setup has no harness to show it with, so it goes without.
+				// Setup done: Home, with Add Project open over it (not whatever page
+				// was behind the onboarding). A skipped setup has no harness to run a
+				// project's agents with, so it lands on Home without it.
 				const replay = runKind.current === "replay";
-				if (tour) void navigate({ to: "/" }).then(() => startGuidedTour({ replay }));
+				if (!skipped) {
+					void navigate({ to: "/" }).then(() => {
+						startFirstTaskFunnel({ replay });
+						useUiStore.getState().requestCreateProject();
+					});
+				}
 			}}
 		/>
 	);
 }
 
-// The person asked for a calmer press here than the app-wide shrink: buttons
-// darken briefly and stay put while the next step fades in.
-const PRESS_CLASS =
-	"[&_button:active]:!scale-100 [&_button:active]:!translate-y-0 [&_button:not(:disabled):active]:brightness-[0.85]";
-
-function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onFinish: (options?: { tour?: boolean }) => void }) {
+function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onFinish: (options?: { skipped?: boolean }) => void }) {
 	const { t } = useTranslation();
 	// Settings open over the app (a harness's installers, from Your tools).
 	const settingsAside = useUiStore((state) => state.settingsModal?.scope === "global");
@@ -301,8 +294,8 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		: candidate === "tools" ? ghReady && agentReady
 		: false;
 	// Past the last page with something to do, setup is over: the app takes
-	// over with the guided tour. `skipped`: the person moved on without doing
-	// the page (Sign in's "do it later").
+	// over with Add Project open. `skipped`: the person moved on without doing
+	// the page (Skip on Sign in).
 	const goNext = ({ skipped = false }: { skipped?: boolean } = {}) => {
 		// Tools reports its view once its checks answer; leaving sooner still reads viewed, then completed.
 		if (step === "tools") ensureOnboardingStepViewed("tools", toolsViewed());
@@ -372,8 +365,8 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	useEffect(() => {
 		if (step !== "welcome") return;
 		const timer = window.setTimeout(() => {
-			if (point === ORCH_POINTS.length - 1) setCycle((current) => current + 1);
-			setPoint((point + 1) % ORCH_POINTS.length);
+			if (point === STORY_POINTS - 1) setCycle((current) => current + 1);
+			setPoint((point + 1) % STORY_POINTS);
 		}, POINT_HOLD_MS[point]);
 		return () => window.clearTimeout(timer);
 	}, [step, point]);
@@ -398,7 +391,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	const githubShown = sorting;
 	// What the funnel records about a page as it's finished.
 	function pageCompletion(): Record<string, unknown> {
-		if (step === "welcome") return { story_points_seen: cycle > 0 ? ORCH_POINTS.length : point + 1, story_completed: cycle > 0 };
+		if (step === "welcome") return { story_points_seen: cycle > 0 ? STORY_POINTS : point + 1, story_completed: cycle > 0 };
 		if (step === "tools") return { agents_ready: readyAgentCount, gh_ready: ghReady };
 		return {};
 	}
@@ -424,7 +417,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		    see _shell.tsx), except while Settings has it step aside. */}
 		<FocusScope asChild loop trapped={!settingsAside}>
 		<div
-			className={cn("first-run-onboarding onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", PRESS_CLASS, settingsAside && "hidden")}
+			className={cn("first-run-onboarding onboarding-backdrop fixed inset-0 z-[calc(var(--z-overlay)-1)] flex flex-col bg-background text-foreground", settingsAside && "hidden")}
 			data-testid="first-run-onboarding"
 			// Settings opened from here (a harness's installers): step aside, keeping the page.
 			data-aside={settingsAside ? "" : undefined}
@@ -457,7 +450,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 									onNext={() => goNext()}
 									onSkip={() => {
 										skipOnboardingStep("tools", "user");
-										onFinish({ tour: false });
+										onFinish({ skipped: true });
 									}}
 									login={harnessLogin}
 								/>
@@ -520,33 +513,33 @@ function StepAction({ children }: { children: ReactNode }) {
 /** Back, owned by the flow but drawn in each step's action row. */
 const BackContext = createContext<(() => void) | undefined>(undefined);
 
-/** The step's actions, just under its content and flush right: Back, then the
- * step's own, its primary last. On a step taller than the window they stay in
- * view at the column's foot while the content scrolls under them. */
+/** The step's actions, one row just under its content, in the shared Button
+ * sizes: Back at the start, the step's own at the end (a way past the step,
+ * then its primary last). On a step taller than the window they stay in view
+ * at the column's foot while the content scrolls under them. */
 function StepActions({ setSlot }: { setSlot: (slot: HTMLDivElement | null) => void }) {
 	const { t } = useTranslation();
 	const onBack = useContext(BackContext);
 	return (
-		<div className="sticky bottom-0 z-10 flex flex-wrap items-start justify-end gap-2 bg-background pb-14 pt-8 [&_button]:h-11 [&_button]:rounded-xl [&_button]:px-5 [&_button]:text-base">
+		<div className="sticky bottom-0 z-10 flex items-center gap-2 bg-background pb-14 pt-8" data-testid="first-run-actions">
 			{onBack ? (
-				<Button type="button" variant="ghost" className="!w-11 !px-0" aria-label={t("firstRun.back")} title={t("firstRun.back")} onClick={onBack}>
-					<ArrowLeft className="!size-5" aria-hidden="true" />
+				<Button type="button" variant="quiet" className="-ms-2" onClick={onBack}>
+					<ArrowLeft aria-hidden="true" />
+					{t("firstRun.back")}
 				</Button>
 			) : null}
-			<div ref={setSlot} className="contents" />
+			<div ref={setSlot} className="ms-auto flex flex-wrap items-center justify-end gap-2" />
 		</div>
 	);
 }
 
-/** A step's primary action: the label, then an arrow in its own rounded
- * square at the right end (a spinner there while it's busy). */
-function NextButton({ busy = false, children, ...props }: ComponentProps<typeof Button> & { busy?: boolean }) {
+/** A step's primary action: the shared primary Button, with a spinner before
+ * the label while it waits. */
+function NextButton({ busy = false, children, ...props }: Omit<ButtonProps, "variant"> & { busy?: boolean }) {
 	return (
-		<Button variant="primary" {...props} className="!pl-5 !pr-1.5 gap-3">
+		<Button type="button" variant="primary" aria-busy={busy || undefined} {...props}>
+			{busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
 			{children}
-			<span aria-hidden="true" className="flex size-8 items-center justify-center rounded-lg bg-primary-foreground text-primary">
-				{busy ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowRight className="size-4" strokeWidth={2} />}
-			</span>
 		</Button>
 	);
 }
@@ -840,32 +833,15 @@ function ExamplePhone() {
 
 function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 	const { t } = useTranslation();
-	const reduceMotion = useReducedMotion();
+	// Dev builds can switch between the copy directions under discussion.
+	const [variant, setVariant] = useWelcomeVariant();
+	const copy = useWelcomeCopy(variant, point);
 	return (
-		<StepSplit
-			title={t("firstRun.welcomeTitle")}
-			body={t("firstRun.welcomeBody")}
-		>
+		<StepSplit title={copy.title} body={copy.body}>
 			{/* Narrates the preview: the whole story at once, the part playing
 			    brought up and the rest dimmed. */}
-			<ol className="flex flex-col gap-4 pt-6 pb-8">
-				{ORCH_POINTS.map(({ title, body }, i) => {
-					const active = i === point;
-					return (
-						<motion.li
-							key={title}
-							className="flex flex-col gap-1"
-							aria-current={active ? "step" : undefined}
-							initial={false}
-							animate={{ opacity: active ? 1 : INACTIVE_POINT_OPACITY }}
-							transition={reduceMotion ? { duration: 0 } : { duration: 0.4, ease: CAPTION_EASE }}
-						>
-							<span className="text-sm font-medium text-foreground">{t(title)}</span>
-							<span className="max-w-sm text-pretty text-sm leading-relaxed text-muted-foreground">{t(body)}</span>
-						</motion.li>
-					);
-				})}
-			</ol>
+			{copy.story}
+			<WelcomeVariantPicker value={variant} onChange={setVariant} />
 			<StepAction>
 				<NextButton onClick={onNext} autoFocus>{t("firstRun.getStarted")}</NextButton>
 			</StepAction>
@@ -946,7 +922,7 @@ function SignInStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
 				{browserWaiting ? (
 					<div className="flex flex-wrap items-center gap-3">
 						<Waiting>{t("firstRun.signInWaiting")}</Waiting>
-						<Button variant="ghost" className="text-muted-foreground" onClick={() => cloud.signIn()}>
+						<Button type="button" variant="quiet" onClick={() => cloud.signIn()}>
 							{t("firstRun.signInReopen")}
 						</Button>
 					</div>
@@ -955,37 +931,28 @@ function SignInStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
 			)}
 			{/* The local email/password dialog is only mounted by the cloud gate. */}
 			{localAuth.available && !cloudEnabled ? <CloudLocalSignInDialog /> : null}
-			{/* Continue once logged in, else Create account with a way to continue without one under it. */}
+			{/* Continue once logged in, else Skip beside Create account: one row with
+			    Back, the way past the step quieter than the primary. */}
 			<StepAction>
 				{account ? (
 					<NextButton onClick={onNext}>{t("firstRun.continue")}</NextButton>
 				) : cloud.status === "loading" ? null : (
-					<div className="flex flex-col items-center gap-2">
+					<>
+						<Button
+							type="button"
+							variant="ghost"
+							onClick={() => {
+								// Moving on while the browser still has the sign-in page.
+								finishOnboardingAction("cloud_sign_in", "cancelled");
+								onSkip();
+							}}
+						>
+							{t("firstRun.skip")}
+						</Button>
 						<NextButton onClick={signIn} disabled={browserWaiting} busy={browserWaiting}>
 							{t("firstRun.signInBrowser")}
 						</NextButton>
-						{/* A sentence, not a button, with the way out underlined and in the
-						    body colour so it's plainly there without competing. */}
-						<p className="text-sm text-muted-foreground">
-							<Trans
-								t={t}
-								i18nKey="firstRun.doLater"
-								components={{
-									skip: (
-										<button
-											type="button"
-											className="!h-auto !rounded-sm !px-0 !text-sm text-foreground underline decoration-foreground/40 underline-offset-4 transition-colors hover:decoration-foreground"
-											onClick={() => {
-												// Moving on while the browser still has the sign-in page.
-												finishOnboardingAction("cloud_sign_in", "cancelled");
-												onSkip();
-											}}
-										/>
-									),
-								}}
-							/>
-						</p>
-					</div>
+					</>
 				)}
 			</StepAction>
 		</StepSplit>

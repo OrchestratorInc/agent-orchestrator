@@ -970,8 +970,10 @@ users move through first-run onboarding, so we can see where they stop and
 why. The flow is: the startup dependency dialog (only when git, tmux or a
 coding agent is missing, before onboarding), the welcome page and its three-part story (the last
 part shows CI and code review on GitHub), the optional AO Cloud sign-in, Your
-tools (the GitHub CLI and coding agents), then a guided tour of the real app
-(add a project, open its orchestrator, send the first message).
+tools (the GitHub CLI and coding agents), then the real app with Add Project
+open: adding a project lands on its orchestrator's chat, where the person
+sends the first message. There is no guided tour; the last three steps only
+measure whether the app gets people there on its own.
 
 The onboarding properties below are only the closed values listed here,
 counts, buckets and durations: never a path, repository name or URL, project
@@ -982,16 +984,19 @@ GitHub CLI is signed in and `ao_cloud_user_id` when signed in to AO Cloud.
 
 ### Steps
 
-The funnel to read is the pages and then the tour: `welcome` → `sign_in` →
-`tools` → `tour_project` → `tour_orchestrator` → `first_task` → `finish`.
+The funnel to read is the pages and then the app: `welcome` → `sign_in` →
+`tools` → `tour_project` → `tour_orchestrator` → `first_task`. The `tour_*`
+names are from the guided tour that used to cover those steps; they are kept so
+the funnel reads across versions.
 Three steps are conditional sub-steps, not stages every run passes through,
 so `step_index` is an order, not a dense funnel:
 
 - `dependencies` shows only when git, tmux or a coding agent is missing, and
   before `started`. It counts only while onboarding has not been seen yet; the
   same dialog after onboarding (a tool removed months later) sends nothing.
-- `github_auth` shows inside Your tools, or in the clone dialog opened from
-  the tour, only while the GitHub CLI needs installing or signing in. It has
+- `github_auth` shows inside Your tools, or in the clone dialog opened while
+  the first project is being added, only while the GitHub CLI needs
+  installing or signing in. It has
   no `already_done` skip when Your tools itself is skipped. The clone dialog
   outside onboarding sends nothing.
 - `import_chats` is not reachable today.
@@ -1007,16 +1012,16 @@ Every step is identified by `step` and its position in the flow,
 | 3 | `tools` | Your tools: the GitHub CLI and coding agents |
 | 4 | `github_auth` | Signing the GitHub CLI in, on Your tools |
 | 5 | `import_chats` | Importing earlier chats. Not shown since the first-run prompt on Home was removed; recorded if it returns |
-| 6 | `tour_project` | Tour: open or add a project |
-| 7 | `tour_orchestrator` | Tour: open the project's orchestrator |
-| 8 | `first_task` | Tour: send the first message |
-| 9 | `finish` | Tour: the closing note |
+| 6 | `tour_project` | A project is added (Add Project opens as onboarding closes), or an existing one opened |
+| 7 | `tour_orchestrator` | A chat is showing; adding a project lands on its orchestrator's |
+| 8 | `first_task` | The first message is sent, from any chat |
+| 9 | `finish` | The guided tour's closing note. Not sent since the tour was removed |
 
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.step_viewed` | A step is shown | `step`, `step_index`, `run_kind`, `missing` (dependencies, tools), `agents_ready` (tools), `chats_found_bucket` (import_chats) |
-| `ao.onboarding.step_completed` | A step is done: Continue on a page, the tour moving on, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `project_source` (tour_project) |
-| `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Sign in's "do it later", Skip setup, Skip on the import step), or by closing the tour | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
+| `ao.onboarding.step_completed` | A step is done: Continue on a page, the app reaching the next step, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `project_source` (tour_project) |
+| `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Skip on Sign in, Skip setup, Skip on the import step), or, in versions with the tour, by closing it | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
 | `ao.onboarding.step_abandoned` | The window closes while the step is showing. Sent at once with `sendBeacon` | `step`, `step_index`, `run_kind`, `time_on_step_ms` |
 | `ao.onboarding.back_clicked` | Back is clicked | `step`, `step_index`, `to_step`, `run_kind` |
 
@@ -1049,7 +1054,7 @@ visible: the run has `started` without `completed`, and a later launch sends
 ### Actions
 
 Installs and sign-ins started during onboarding report how each attempt
-ended. The tour's project step sends no action: its add or clone is already
+ended. The `tour_project` step sends no action: its add or clone is already
 `ao.projects.added`, `ao.projects.add_failed` or `ao.projects.clone_failed`,
 and `project_source` on its `step_completed` says which it was.
 
@@ -1098,10 +1103,10 @@ sampling.
   `left`), so a later failure is not filed as an onboarding issue. The API
   error code stays in PostHog's `action_finished`.
 - Every other renderer Sentry event (a render crash, a failed query, an API
-  error) sent while the first-run window shows, or a tour step in the launch
-  whose onboarding pages finished, carries `flow:onboarding`. A tour restored
-  on a later launch stays until it is dismissed, so it does not tag those
-  launches' errors. The tag does not change how the event is grouped.
+  error) sent while the first-run window shows, or a `tour_*` or `first_task`
+  step in the launch whose onboarding pages finished, carries
+  `flow:onboarding`. Those steps are restored on later launches until the
+  first message is sent, so they do not tag those launches' errors. The tag does not change how the event is grouped.
   Electron main's own events (process crashes, handled update or IPC
   failures) do not carry it: main does not track which screen the renderer
   shows.
@@ -1138,7 +1143,8 @@ sampling.
   the run has spanned. Durations are capped at 30 days.
 - `time_bucket` on `activated` is `lt_5m`, `5m_15m`, `15m_1h`, `1h_1d` or
   `1d_7d`. `milestone` is `first_message`. `during_tour` is true when the
-  message was the tour's task step.
+  message was sent on the `first_task` step (the name predates the tour's
+  removal).
 - `action` is `dependency_install`, `gh_install`, `gh_sign_in`,
   `agent_install`, `agent_sign_in` or `cloud_sign_in`. `target` is the install target or agent id from AO's own
   registry, such as `gh`, `tmux` or `claude-code`.
@@ -1146,10 +1152,10 @@ sampling.
   person closed the login or moved on), `timed_out` (a login left open 15
   minutes), `handed_off` (the agent signs in outside AO, so its guide
   opened) or `left` (onboarding ended, or the window closed, while it was
-  still running: Skip setup, onboarding closed for the person, the tour ending
-  or closing, or quitting mid-onboarding). An install or sign-in from the
-  onboarding pages keeps running into the tour, so its `left` comes when the
-  tour ends and its `duration_ms` includes the tour.
+  still running: Skip setup, onboarding closed for the person, the first
+  message being sent, or quitting mid-onboarding). An install or sign-in from
+  the onboarding pages keeps running past them, so its `left` comes with the
+  first message and its `duration_ms` includes the time until then.
 - `reason` on `action_finished` is `start_failed`, `install_failed`,
   `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
   `cleanup_failed`, `request_failed`, `documentation` or `other`.

@@ -10,7 +10,10 @@
  * - tools: Your tools, the GitHub CLI and the coding agents
  * - github_auth: signing the GitHub CLI in, on Your tools
  * - import_chats: importing earlier chats (not reachable since #7767)
- * - tour_project, tour_orchestrator, first_task, finish: the guided tour
+ * - tour_project, tour_orchestrator, first_task: after the pages, the first
+ *   project, its orchestrator chat and the first message (FirstTaskFunnel;
+ *   named for the guided tour that used to walk through them)
+ * - finish: the guided tour's closing note (not sent since the tour was removed)
  */
 export const ONBOARDING_STEPS = [
 	"dependencies",

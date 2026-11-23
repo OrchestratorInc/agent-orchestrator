@@ -56,7 +56,8 @@ import type { Theme } from "../../stores/ui-store";
 import { activeTurn, can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, sessionIsActive, workerSessions, type WorkspaceSession, type WorkspaceSummary } from "../../types/workspace";
+import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { SessionBackgroundTasks } from "../BackgroundTasks";
@@ -216,6 +217,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	useTranscriptTiming(session.id, Boolean(snapshot), hostId);
 	const currentTurn = snapshot ? activeTurn(snapshot) : undefined;
 	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(currentTurn), currentTurn?.id);
+	// An orchestrator's empty chat asks for the project's first task while the
+	// project has had no worker yet (a project just added lands here). Read from
+	// the shell's cache; this never fetches the list itself.
+	const { data: localProjects } = useQuery<WorkspaceSummary[]>({ queryKey: workspaceQueryKey, enabled: false });
+	const orchestratorProject = session.kind === "orchestrator" && !hostId
+		? localProjects?.find((project) => project.id === session.workspaceId)
+		: undefined;
+	const orchestratorHeading = orchestratorProject && workerSessions(orchestratorProject.sessions).length === 0
+		? t("chat.welcome.orchestratorFirstHeading")
+		: undefined;
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
@@ -742,6 +753,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
+				welcomeHeading={orchestratorHeading}
 				sessionRole={session.kind}
 				session={session}
 				onSessionRenamed={onSessionRenamed}

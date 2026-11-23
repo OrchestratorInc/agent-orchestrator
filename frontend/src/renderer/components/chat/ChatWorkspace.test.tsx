@@ -3856,14 +3856,14 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByLabelText("Message the agent").closest("form")).toHaveAttribute("data-starting", "true");
 		expect(screen.queryByTestId("orchestrator-startup-status")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
-		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
+		expect(screen.getByText("What should your agents work on?")).toBeInTheDocument();
 		const composer = screen.getByLabelText("Message the agent");
 		expect(screen.getByText("Starting your orchestrator")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 		view.rerender(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={{ ...chatSession, kind: "orchestrator", provisionState: "ready" }} />);
 		expect(screen.getByLabelText("Message the agent")).toBe(composer);
 		expect(composer.closest("form")).not.toHaveAttribute("data-starting");
-		expect(await screen.findByText("Ask anything about this project")).toBeInTheDocument();
+		expect(await screen.findByText("Describe a task, or several at once")).toBeInTheDocument();
 	});
 
 	it("shimmers the composer and queues messages while a Freestyle Chat session starts or wakes", () => {
@@ -3971,17 +3971,35 @@ describe("ChatWorkspace timeline", () => {
 		await waitFor(() => expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument());
 	});
 
-	it("keeps the sample requests on screen but disabled while the orchestrator starts", () => {
+	it("keeps the sample tasks on screen but disabled while the orchestrator starts", () => {
 		const view = render(<ChatWorkspace sessionRole="orchestrator" snapshot={{ ...chatFixtureEmpty, controller: { state: "connecting" } }} newWorkDisabled />);
 
-		const prompts = within(screen.getByRole("list", { name: "Sample requests" })).getAllByRole("button");
-		expect(prompts).toHaveLength(4);
+		const prompts = within(screen.getByRole("list", { name: "Sample tasks" })).getAllByRole("button");
+		expect(prompts).toHaveLength(3);
 		for (const prompt of prompts) expect(prompt).toBeDisabled();
 		view.unmount();
 
 		// Other fenced chats (an unreachable host, leaving for the terminal) keep them hidden.
 		render(<ChatWorkspace snapshot={chatFixtureEmpty} newWorkDisabled />);
 		expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument();
+	});
+
+	it("asks an empty orchestrator chat for work in orchestration terms, with tasks that start workers", async () => {
+		const user = userEvent.setup();
+		render(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={{ ...chatSession, kind: "orchestrator" }} />);
+
+		expect(screen.getByRole("heading", { name: "What should your agents work on?" })).toBeInTheDocument();
+		expect(screen.queryByRole("list", { name: "Sample requests" })).not.toBeInTheDocument();
+		const tasks = within(screen.getByRole("list", { name: "Sample tasks" })).getAllByRole("button");
+		expect(tasks.map((task) => task.textContent)).toEqual(["Suggest improvements", "Fix a bug", "Add tests"]);
+		await user.click(tasks[0]!);
+		await waitFor(() => expect(screen.getByLabelText("Message the agent")).toHaveTextContent("Look around this project and suggest three small improvements. Start a worker on each one."));
+	});
+
+	it("lets the orchestrator's surface ask for the project's first task instead", () => {
+		render(<ChatWorkspace sessionRole="orchestrator" welcomeHeading="Give your orchestrator its first task" snapshot={chatFixtureEmpty} session={{ ...chatSession, kind: "orchestrator" }} />);
+
+		expect(screen.getByRole("heading", { name: "Give your orchestrator its first task" })).toBeInTheDocument();
 	});
 
 	it("offers sample artifact requests to artifact sessions outside Scratchpad too", () => {
@@ -4073,7 +4091,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.getByRole("alert")).toHaveTextContent("Session setup failed");
 		expect(screen.getByTestId("orchestrator-startup-status")).toHaveTextContent("branch already checked out in another worktree");
-		expect(screen.getByText("What do you want to work on?")).toBeInTheDocument();
+		expect(screen.getByText("What should your agents work on?")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Retry start" }));
 		expect(resume).toHaveBeenCalledOnce();
 	});

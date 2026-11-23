@@ -365,7 +365,7 @@ export function beginOnboardingRun(kind: OnboardingRunKind, step: OnboardingStep
 
 /** The run ended: the last page's Continue (`finished`), Skip setup, or closed for the person (`superseded`). */
 export function completeOnboardingRun(outcome: OnboardingOutcome): void {
-	// Only a finished run goes on into the tour, which ends what is still running (GuidedTour).
+	// Only a finished run goes on into the first-task funnel, which ends what is still running (FirstTaskFunnel).
 	if (outcome !== "finished") leaveOnboardingActions();
 	else noteOnboardingPagesFinished();
 	if (!tracking()) {
@@ -522,7 +522,7 @@ export function apiErrorCode(error: unknown): string | undefined {
 	return typeof code === "string" ? code : undefined;
 }
 
-// ── The guided tour's project step ──────────────────────────────────────────
+// ── The first-task funnel's project step ────────────────────────────────────
 
 let projectNote: { source: "clone" | "local_folder"; projectId: string; at: number } | undefined;
 
@@ -563,7 +563,7 @@ export function recordOnboardingActivation(duringTour: boolean, now = Date.now()
 	});
 }
 
-/** Listens for the first delivered chat message for activation. Mounted once, by GuidedTour. */
+/** Listens for the first delivered chat message for activation. Mounted once, by FirstTaskFunnel. */
 export function useOnboardingActivation(duringTour: () => boolean): void {
 	const duringTourRef = useRef(duringTour);
 	duringTourRef.current = duringTour;

@@ -1,4 +1,4 @@
-// Moments the guided tour (GuidedTour) waits for that the page doesn't show
+// Moments the onboarding funnel (FirstTaskFunnel) waits for that the page doesn't show
 // reliably: a chat's composer delivering a message. Any chat counts.
 
 const sentListeners = new Set<() => void>();

@@ -24,7 +24,7 @@ import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
-import { GuidedTour } from "../components/onboarding/GuidedTour";
+import { FirstTaskFunnel } from "../components/onboarding/FirstTaskFunnel";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
@@ -1634,7 +1634,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				) : null}
 				<NewTaskNavigator />
 				<FirstRunOnboarding />
-				<GuidedTour />
+				<FirstTaskFunnel />
 				<ArchiveModalHost />
 				<GlobalToast />
 				<RestartToUpdateDialog />
