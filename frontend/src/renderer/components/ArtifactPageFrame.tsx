@@ -1,5 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { useArtifactZoomTarget, wheelZoomFactor, ZOOM_CONTROLS_REVEAL_PX } from "../lib/artifact-zoom";
+import { readRenderLinkRequest } from "../lib/render-frame";
+import { AppBrowserLinkContext } from "./AppLink";
 
 type ZoomRequest = { action?: unknown; deltaMode?: unknown; deltaY?: unknown; reveal?: unknown; x?: unknown; y?: unknown };
 
@@ -16,10 +18,31 @@ function readZoomRequest(data: unknown): ZoomRequest | undefined {
  * (render_bootstrap.js), and the viewer's zoom goes back to it to apply as
  * browser zoom, around the pinch point. The page also reports the pointer
  * nearing its bottom edge, where the zoom controls float, to bring them back.
+ * A link the reader clicks in the page is cancelled there and handed to the
+ * viewer, which opens it in the session's Browser tab, as other links in a
+ * session do, or in the OS browser where no session is in view.
  */
-export function ArtifactPageFrame({ src, title }: { src: string; title: string }) {
+export function ArtifactPageFrame({ src, title, className = "absolute inset-0 h-full w-full border-0 bg-background" }: { src: string; title: string; className?: string }) {
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	const { controller } = useArtifactZoomTarget();
+	const openInAppBrowser = useContext(AppBrowserLinkContext);
+	const openInAppBrowserRef = useRef(openInAppBrowser);
+	openInAppBrowserRef.current = openInAppBrowser;
+
+	useEffect(() => {
+		const onMessage = (event: MessageEvent) => {
+			const frame = frameRef.current;
+			if (!frame || event.source !== frame.contentWindow) return;
+			const url = readRenderLinkRequest(event.data);
+			if (!url) return;
+			// Only while the reader is using this frame: a page can post on load.
+			if (document.activeElement !== frame || navigator.userActivation?.isActive === false) return;
+			if (openInAppBrowserRef.current) openInAppBrowserRef.current(url);
+			else window.open(url, "_blank", "noopener,noreferrer");
+		};
+		window.addEventListener("message", onMessage);
+		return () => window.removeEventListener("message", onMessage);
+	}, []);
 
 	useEffect(() => {
 		const frame = frameRef.current;
@@ -67,7 +90,7 @@ export function ArtifactPageFrame({ src, title }: { src: string; title: string }
 
 	return (
 		<iframe
-			className="absolute inset-0 h-full w-full border-0 bg-background"
+			className={className}
 			ref={frameRef}
 			sandbox="allow-scripts allow-same-origin"
 			src={src}

@@ -6,7 +6,7 @@ import { contentSecurityPolicy } from "./vite.renderer.config";
 describe("packaged renderer CSP", () => {
 	it.each(["build", "serve"] as const)("allows media from the app, loopback preview and control-plane origins in %s", (mode) => {
 		expect(contentSecurityPolicy(mode).split("; ").filter((directive) => directive.startsWith("media-src")))
-			.toEqual(["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:* https://staging-api.aoagents.dev https://api.aoagents.dev"]);
+			.toEqual(["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:* https://staging-api.aoagents.dev https://api.aoagents.dev https://*.orchestratorusercontent-staging.com https://*.orchestratorusercontent.com"]);
 	});
 
 	// A just-sent attachment's tile draws from the composer's object URL. Without
@@ -36,7 +36,7 @@ describe("packaged renderer CSP", () => {
 			.split("; ")
 			.filter((directive) => directive.startsWith("frame-src"));
 		expect(frameSrc).toEqual([
-			"frame-src 'self' http://127.0.0.1:* http://*.localhost:* https://staging-api.aoagents.dev https://api.aoagents.dev",
+			"frame-src 'self' http://127.0.0.1:* http://*.localhost:* https://staging-api.aoagents.dev https://api.aoagents.dev https://*.orchestratorusercontent-staging.com https://*.orchestratorusercontent.com",
 		]);
 	});
 

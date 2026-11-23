@@ -5,7 +5,8 @@ AO account sign-in is required for desktop remote hosts; Cloud sandbox execution
 
 ## Set up a VM
 
-You need a fresh Ubuntu 24.04 x64 machine with outbound internet and a
+You need a fresh Ubuntu 24.04 machine, x64 or arm64 (for example an AWS
+Graviton instance), with outbound internet and a
 non-root user with `sudo`. No inbound ports: devices reach the VM through a
 Cloudflare tunnel.
 
@@ -25,6 +26,14 @@ Cloudflare tunnel.
    keeps running after you log out, and the tunnel. For the newest nightly
    instead, end the command with `bash -s -- --nightly`. On an image without
    curl, run `sudo apt-get install -y curl` first.
+
+   On arm64, if the installer stops with `No verified release asset:
+   ao-host-linux-arm64.tar.gz`, that release predates arm64 support. Build
+   from the main branch instead (this takes several minutes):
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash -s -- --source-ref main
+   ```
 
 3. Sign in. The installer ends with a sign-in link and a QR code. Open the link
    on any device, or scan the QR code with your phone, check that the page

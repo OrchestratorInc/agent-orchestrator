@@ -8,6 +8,7 @@ import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
 import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
+import { useRestoreSession } from "../../hooks/useRestoreSession";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
 import { sessionUiKey } from "../../lib/hosts";
@@ -1536,6 +1537,10 @@ export function CloudSessionChatSurface({
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser);
 	const { client, ready, userId, baseUrl } = useCloudCp();
+	const restoreSession = useRestoreSession();
+	// The archived session a sent message is restoring, so the composer shows the
+	// restore. Kept by id: this surface outlives the session it shows.
+	const [restoringId, setRestoringId] = useState<string>();
 	// A shared session's live state: who else has it open, who holds its
 	// composer (the lock on talking to the agent), and the model and settings
 	// its owner chose.
@@ -1853,13 +1858,24 @@ export function CloudSessionChatSurface({
 				name: attachment.name || "attachment", data: attachment.data,
 			}, { signal }))));
 	}, [attachmentSource, cloudAttachments, readOnly, session.isTerminated]);
+	// The newest accepted send's event per session, so a later send that fails
+	// cannot hide an earlier one still waiting for its turn. Sequences only grow,
+	// so a record stops mattering once the chat has read that far.
+	const [acceptedThrough, setAcceptedThrough] = useState<Readonly<Record<string, number>>>({});
 	const send = useMutation({
-		mutationFn: async ({ text, attachmentIds, clientMessageId, display, afterSwitch }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; afterSwitch?: boolean }) => {
-			if (!cloud) throw new Error("Cloud session context is unavailable.");
+		// `sessionId` and `orgId` name the session the send went to: this surface
+		// outlives it, and a send that first restored an archived session can run
+		// after another session was opened here.
+		mutationFn: async ({ text, attachmentIds, clientMessageId, display, afterSwitch, sessionId, orgId }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; afterSwitch?: boolean; sessionId: string; orgId?: string }) => {
+			if (!cloud || !orgId) throw new Error("Cloud session context is unavailable.");
+			// The picks, mode and composer lease below are the shown session's. A
+			// message to a session no longer shown goes without them, and its worker
+			// derives them from that session.
+			const shown = sessionId === session.id && orgId === cloud.orgId;
 			// A message sent with an agent switch goes to the new agent, which
 			// starts on the model and effort the switch named: the old agent's
 			// picks are not its.
-			const selectedSettings: CloudTurnSettings = !afterSwitch && settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
+			const selectedSettings: CloudTurnSettings = shown && !afterSwitch && settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			// Without the user's pick the turn carries no approval mode: the
 			// worker derives it from the session's mode. A pick the turn's model
 			// cannot run is sent as the mode the composer shows in its place.
@@ -1867,9 +1883,9 @@ export function CloudSessionChatSurface({
 				? selectedSettings.approvalMode : undefined;
 			const turnModel = listedModels.find((model) => model.id === (selectedSettings.model ?? pendingModel)) ?? listedModels.find((model) => model.default);
 			const approvalMode = picked && (effectiveApprovalMode(session.provider, picked, modelApprovalModes(sessionApprovalModes, turnModel)) ?? picked);
-			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
+			const mode = !shown ? undefined : selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
-			const composerEpoch = leaseRef.current.epoch;
+			const composerEpoch = shown ? leaseRef.current.epoch : undefined;
 			const request = {
 				text,
 				...(attachmentIds?.length ? { attachmentIds } : {}),
@@ -1880,21 +1896,25 @@ export function CloudSessionChatSurface({
 				...(composerEpoch !== undefined ? { composerEpoch } : {}),
 			};
 			const message = cloudMessageBody(text, display);
-			if (!message.content) return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
+			if (!message.content) return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
 			try {
-				return await client.sendSessionMessage(cloud.orgId, session.id, { ...request, ...message }, { idempotencyKey: clientMessageId });
+				return await client.sendSessionMessage(orgId, sessionId, { ...request, ...message }, { idempotencyKey: clientMessageId });
 			} catch (error) {
 				// A control plane from before message displays refuses the fields,
 				// and one that finds the display text missing from the text refuses
 				// it (both 400). The text already carries the quotes and captures,
 				// so it goes as text alone, with the same key.
 				if (!(error instanceof CloudCpError) || error.status !== 400) throw error;
-				return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
+				return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
 			}
 		},
-		onSuccess: () => {
+		onSuccess: (data, { sessionId }) => {
 			// The send released the lease to whoever is next in line.
-			leaseRef.current.sent();
+			if (sessionId === session.id) leaseRef.current.sent();
+			const sequence = data?.event?.sequence;
+			if (typeof sequence === "number") {
+				setAcceptedThrough((current) => (current[sessionId] ?? 0) >= sequence ? current : { ...current, [sessionId]: sequence });
+			}
 			void invalidate();
 		},
 	});
@@ -2131,10 +2151,17 @@ export function CloudSessionChatSurface({
 		navigateToMessage({ id: target.id, text: target.text, messageId: reply?.id ?? target.messageId });
 	}, [navigateToMessage]);
 	useChatMessageFocus(sessionUiKey(session.id), undefined, eventsQuery.isSuccess, focusMessage);
+	// A message the control plane accepted whose event this chat has not read yet.
+	// Its turn is not in the snapshot until then, but a next message would wait
+	// behind it all the same. A refused send records nothing, and another
+	// session's send is not this chat's.
+	const acceptedSequence = acceptedThrough[session.id];
+	const sendAwaitingTurn = acceptedSequence !== undefined &&
+		(eventsQuery.data?.at(-1)?.sequence ?? 0) < acceptedSequence;
 	// A next-message suggestion once a turn settles, as a local chat offers, only
 	// while this person can send and the chat is in front.
 	const promptSuggestion = useCloudPromptSuggestion(session, snapshot,
-		chatInFront && !send.isPending && !activeTurn && !startStopped && !readOnly && !lease.locked && !newWorkDisabled && !controllerTransitioning);
+		chatInFront && !send.isPending && !sendAwaitingTurn && !activeTurn && !startStopped && !readOnly && !lease.locked && !newWorkDisabled && !controllerTransitioning);
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
 		onConversationWorkChange?.({
@@ -2359,6 +2386,7 @@ export function CloudSessionChatSurface({
 			loadingOlder={history?.loadingOlder}
 			onLoadOlder={onLoadOlder}
 			localEchos={openingEchos}
+			sendAwaitingTurn={sendAwaitingTurn}
 			openingStartedAt={opening?.createdAt}
 			onLinkOpen={openLinkInBrowser}
 			onSessionLinkOpen={openSessionLink}
@@ -2441,7 +2469,11 @@ export function CloudSessionChatSurface({
 					{live && <SharedComposerNotice live={live} lease={lease} userId={me} />}
 				</>
 			) : undefined}
-			composerLockedPlaceholder={readOnly
+			// Only the sharer's organization can restore it, and a message to an archived
+			// session would wait unanswered, so a guest cannot send one whatever their role.
+			composerLockedPlaceholder={session.isTerminated === true && cloud?.shared
+				? appI18n.t("chat.shared.archived")
+				: readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
 				// The attached notice already names the writer and the place in line.
 				// An empty placeholder keeps the input locked without repeating it.
@@ -2489,6 +2521,8 @@ export function CloudSessionChatSurface({
 				const content = cloudAnnotationContent(excerpts, fileReferences);
 				const agentText = numbered ? message.text + formatNumberedAnnotations(excerpts ?? [], fileReferences) : excerpts?.length ? message.text + cloudExcerptText(excerpts, snapshot) : message.text;
 				const sendMessage = (afterSwitch?: boolean) => send.mutateAsync({
+					sessionId: session.id,
+					orgId: cloud?.orgId,
 					// A message of only files and captures or quotes starts with them.
 					text: message.displayText === "" ? agentText.replace(/^\s+/, "") : agentText,
 					attachmentIds: message.attachmentIds,
@@ -2498,33 +2532,47 @@ export function CloudSessionChatSurface({
 				});
 				// A new message replaces an earlier switch's failure.
 				setSwitchError(undefined);
-				if (!pendingSwitch) return sendMessage();
-				// The switch starts first; the message, sent while it runs, waits for
-				// the new agent. Nothing was sent if the switch is refused, so the
-				// draft stays and the pick is dropped.
-				return cloudSwitch.start(pendingSwitch).then(
-					() => {
-						setChosenSwitch(undefined);
-						if (cloud) {
-							const targetKey = `cloud-chat-settings:${cloud.orgId}:${session.id}:${pendingSwitch.harness}`;
-							rememberAgentSwitchPick(targetKey, pendingSwitch);
-							// Settings held from an earlier spell on that agent (a switch back) are
-							// stale now: drop them, so the agent's saved choice is read once it runs.
-							setSelected((current) => current.key === targetKey ? { key: "", settings: {} } : current);
-						}
-						return sendMessage(true);
-					},
-					(error: unknown) => {
-						setChosenSwitch(undefined);
-						setSwitchError(error);
-						throw Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
-					},
-				);
+				const deliver = () => {
+					if (!pendingSwitch) return sendMessage();
+					// The switch starts first; the message, sent while it runs, waits for
+					// the new agent. Nothing was sent if the switch is refused, so the
+					// draft stays and the pick is dropped.
+					return cloudSwitch.start(pendingSwitch).then(
+						() => {
+							setChosenSwitch(undefined);
+							if (cloud) {
+								const targetKey = `cloud-chat-settings:${cloud.orgId}:${session.id}:${pendingSwitch.harness}`;
+								rememberAgentSwitchPick(targetKey, pendingSwitch);
+								// Settings held from an earlier spell on that agent (a switch back) are
+								// stale now: drop them, so the agent's saved choice is read once it runs.
+								setSelected((current) => current.key === targetKey ? { key: "", settings: {} } : current);
+							}
+							return sendMessage(true);
+						},
+						(error: unknown) => {
+							setChosenSwitch(undefined);
+							setSwitchError(error);
+							throw Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
+						},
+					);
+				};
+				// An archived session is restored by sending to it, as a local one is: the
+				// message goes once the control plane took the restore, and none goes if it
+				// refused. One shared from another organization is the sharer's to restore.
+				if (session.isTerminated !== true || readOnly || cloud?.shared) return deliver();
+				const restoring = session.id;
+				setRestoringId(restoring);
+				return restoreSession(restoring).then((restored) => {
+					if (restored.status !== "success") {
+						throw Object.assign(new Error(restored.message), { code: "SESSION_RESTORE_FAILED" });
+					}
+					return deliver();
+				}).finally(() => setRestoringId((current) => current === restoring ? undefined : current));
 			}}
 			session={chatSession}
 			settingsReady={!startStopped}
 			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
-			resumingAgent={retryStart.isPending}
+			resumingAgent={retryStart.isPending || restoringId === session.id}
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}

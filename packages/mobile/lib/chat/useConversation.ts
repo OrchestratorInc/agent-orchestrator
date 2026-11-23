@@ -15,6 +15,7 @@ import {
 	resolveReviewerApproval,
 	resolveInput,
 	resolveReviewerInput,
+	retryConversationTurn,
 	rollbackConversation,
 	sendConversationMessage,
 	switchProviderAndSend,
@@ -24,6 +25,7 @@ import {
 	setConversationConfigOption,
 	setConversationSettings,
 	setConversationTitle,
+	setConversationTurnAutoResume,
 	stageConversationAttachments,
 	steerConversation,
 	interruptConversation,
@@ -39,6 +41,7 @@ import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
+import { createRefreshScheduler } from "./refreshScheduler";
 import { withAttachmentReferences } from "./messageAttachments";
 import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
@@ -46,7 +49,7 @@ import { NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionE
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
-const REFRESH_DEBOUNCE_MS = 120;
+const REFRESH_WINDOW_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
@@ -75,6 +78,8 @@ export type ConversationAction =
 	| "input"
 	| "compact"
 	| "rollback"
+	| "retry"
+	| "autoResume"
 	| "edit"
 	| "settings"
 	| "config"
@@ -118,6 +123,10 @@ export type MobileConversation = {
 	resolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	compact(): Promise<void>;
 	rollback(turnId: string): Promise<number>;
+	/** Sends a failed turn's prompt again now. */
+	retryTurn(turnId: string): Promise<void>;
+	/** Asks the daemon to send a usage-limited prompt again at the reset, or stops it. */
+	setTurnAutoResume(turnId: string, enabled: boolean): Promise<void>;
 	/** Retry an uncertain edit with the same `clientMessageId`; the daemon will not branch it twice. */
 	editMessage(turnId: string, text: string, clientMessageId: string): Promise<void>;
 	chooseSettings(settings: TurnSettings): Promise<void>;
@@ -176,7 +185,6 @@ export function useMobileConversation(
 	// lands late must not undo it. `ifMissing` waits on the one in flight.
 	const turnOptionsRequest = useRef(0);
 	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
-	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const refreshGate = useRef(createRequestGate()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
@@ -240,10 +248,11 @@ export function useMobileConversation(
 		}
 	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
 
-	const scheduleRefresh = useCallback(() => {
-		if (refreshTimer.current) clearTimeout(refreshTimer.current);
-		refreshTimer.current = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
-	}, [refresh]);
+	// Event-driven reads always run the current refresh (connection, chat).
+	const refreshRef = useRef(refresh);
+	refreshRef.current = refresh;
+	const [refreshScheduler] = useState(() => createRefreshScheduler(() => refreshRef.current(), REFRESH_WINDOW_MS));
+	const scheduleRefresh = useCallback(() => refreshScheduler.request(), [refreshScheduler]);
 
 	const loadOlder = useCallback(async () => {
 		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
@@ -279,9 +288,9 @@ export function useMobileConversation(
 		return () => {
 			mounted.current = false;
 			refreshGate.invalidate();
-			if (refreshTimer.current) clearTimeout(refreshTimer.current);
+			refreshScheduler.cancel();
 		};
-	}, [refresh, refreshGate]);
+	}, [refresh, refreshGate, refreshScheduler]);
 
 	useEffect(() => {
 		setPendingSends([]);
@@ -540,6 +549,16 @@ export function useMobileConversation(
 		(turnId: string) => runAction("rollback", () => requireConfig(cfg, offline, (c) => rollbackConversation(c, sessionId, turnId)), true),
 		[cfg, offline, runAction, sessionId],
 	);
+	// The usage-limit notice shows these failures in place, not in the banner.
+	const retryTurn = useCallback(
+		(turnId: string) => runAction("retry", () => requireConfig(cfg, offline, (c) => retryConversationTurn(c, sessionId, turnId)), false, false),
+		[cfg, offline, runAction, sessionId],
+	);
+	const setTurnAutoResume = useCallback(
+		(turnId: string, enabled: boolean) =>
+			runAction("autoResume", () => requireConfig(cfg, offline, (c) => setConversationTurnAutoResume(c, sessionId, turnId, enabled)), false, false),
+		[cfg, offline, runAction, sessionId],
+	);
 	const editMessage = useCallback(
 		(turnId: string, text: string, clientMessageId: string) =>
 			runAction("edit", () => requireConfig(cfg, offline, (c) => editConversationMessage(c, sessionId, turnId, text, clientMessageId)), true, false),
@@ -612,6 +631,8 @@ export function useMobileConversation(
 		resolveInput: resolveInputAction,
 		compact,
 		rollback,
+		retryTurn,
+		setTurnAutoResume,
 		editMessage,
 		chooseSettings,
 		setConfigOption,

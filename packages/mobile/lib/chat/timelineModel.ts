@@ -150,13 +150,42 @@ function rendersNothing(item: ConversationItem): boolean {
 }
 
 /**
- * The one reply that draws the typing cursor: the newest item, while it is
- * still streaming. ACP providers settle a turn's text blocks only when the turn
- * ends, so earlier blocks stay marked streaming after a tool call follows them.
+ * A finished turn's items as the timeline draws them. Older daemons store the
+ * provider's failure notice ("You've hit your 5-hour limit…") again as a running
+ * row each time the agent restarts and replays its history, after the turn has
+ * long ended, so it would spin forever and repeat. On a finished turn nothing
+ * runs: a leftover running row shows the status the daemon gives such rows when
+ * the turn settles, a notice that restates the turn's own error is dropped (the
+ * turn's outcome already says it), and replayed copies of a notice show once.
  */
-export function streamingCursorMessageId(items: ConversationItem[]): string | undefined {
-	const last = items.at(-1);
-	return last?.kind === "message" && last.role === "assistant" && last.streaming ? last.id : undefined;
+export function settledTurnItems(items: ConversationItem[], turn: ConversationTurn | undefined): ConversationItem[] {
+	if (!turn || turn.state === "running" || turn.state === "queued") return items;
+	const turnError = turn.state === "failed" ? turn.errorMessage?.trim() : undefined;
+	const notices = new Set<string>();
+	const settled: ConversationItem[] = [];
+	for (const item of items) {
+		if (item.kind !== "activity") {
+			settled.push(item);
+			continue;
+		}
+		if (item.detail?.event === "provider.failure") {
+			const summary = String(item.summary ?? "").trim();
+			if (turnError && summary === turnError) continue;
+			// A replay repeats the whole notice; one that shares only the title is new.
+			const key = [summary, item.detail.category ?? "", item.detail.severity ?? "", item.detail.text ?? ""].join("\u0000");
+			if (notices.has(key)) continue;
+			notices.add(key);
+		}
+		settled.push(item.status === "running" ? { ...item, status: settledActivityStatus(turn.state) } : item);
+	}
+	return settled;
+}
+
+/** The daemon's terminalActivityStatus: what a settling turn writes over a running row. */
+function settledActivityStatus(state: ConversationTurn["state"]): ConversationActivity["status"] {
+	if (state === "completed" || state === "recovered") return "completed";
+	if (state === "interrupted") return "cancelled";
+	return "failed";
 }
 
 /**

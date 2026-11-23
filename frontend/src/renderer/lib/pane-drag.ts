@@ -194,9 +194,9 @@ function detach(drag: ActiveDrag): void {
 	}
 	const ghost = document.createElement("div");
 	ghost.className = "pane-drag-ghost";
-	// Tabs in the floating top bar are styled by that bar; carry it over so
+	// macOS tabs (floating bar or native fullscreen) are pills; carry that over so
 	// the ghost looks like the tab it lifted.
-	if (drag.source.closest(".center-panel-shell--floating-topbar")) ghost.classList.add("center-panel-shell--floating-topbar");
+	if (drag.source.closest(".center-panel-shell--tab-pills")) ghost.classList.add("center-panel-shell--tab-pills");
 	ghost.setAttribute("aria-hidden", "true");
 	ghost.style.width = `${box.width}px`;
 	ghost.style.height = `${box.height}px`;

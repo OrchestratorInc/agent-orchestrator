@@ -153,13 +153,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	createFileRoute: () => (options: unknown) => ({ options }),
 	Outlet: () => <input aria-label="Page draft" defaultValue="" />,
 	useMatch: () => undefined,
-	useMatchRoute: () => (options: { to: string }) => shellMocks.state.matchRouteTarget === options.to,
 	useNavigate: () => shellMocks.navigate,
 	useRouter: () => shellMocks.router,
 	useParams: () => shellMocks.state.routeParams,
 	useSearch: () => shellMocks.state.routeSearch,
-	useRouterState: ({ select }: { select: (state: { location: { search: unknown } }) => unknown }) =>
-		select({ location: { search: shellMocks.state.routeSearch ?? {} } }),
+	useRouterState: ({ select }: { select: (state: { location: { search: unknown; pathname: string } }) => unknown }) =>
+		select({ location: { search: shellMocks.state.routeSearch ?? {}, pathname: shellMocks.state.matchRouteTarget ?? "" } }),
 }));
 
 vi.mock("../lib/bridge", () => ({
@@ -239,7 +238,7 @@ vi.mock("../lib/cloud-session", () => ({
 		session: shellMocks.state.cloudSessionStatus === "authenticated" ? { user: { id: "test-user" } } : null,
 	}),
 }));
-vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
+vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }), useSettingsPolling: () => undefined }));
 
 vi.mock("../hooks/useDaemonStatus", () => ({
 	useDaemonStatus: () => shellMocks.state.daemonStatus,
@@ -307,6 +306,7 @@ vi.mock("../components/DaemonStartupLoader", () => ({
 vi.mock("../components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("../components/OrchestratorReplacementDialog", () => ({ OrchestratorReplacementDialog: () => null }));
 vi.mock("../components/OpenShareLinkDialog", () => ({ ShareLinkHost: () => null }));
+vi.mock("../components/SharedArtifactLinkHost", () => ({ SharedArtifactLinkHost: () => null }));
 vi.mock("../components/TitlebarNav", async () => {
 	const { sidebarIsVisible, useUiStore: useStore } = await vi.importActual<
 		typeof import("../stores/ui-store")
@@ -349,6 +349,10 @@ vi.mock("../lib/shell-context", () => ({
 		return children;
 	},
 }));
+// First-run onboarding and the guided tour after it load their own queries;
+// this harness has no query provider and doesn't exercise them.
+vi.mock("../components/onboarding/FirstRunOnboarding", () => ({ FirstRunOnboarding: () => null }));
+vi.mock("../components/onboarding/GuidedTour", () => ({ GuidedTour: () => null }));
 vi.mock("../components/ui/sidebar", () => ({
 	SidebarProvider: ({ children, open }: PropsWithChildren<{ open?: boolean }>) => (
 		<div data-open={open ? "true" : "false"} data-testid="sidebar-provider">
@@ -1193,9 +1197,9 @@ describe("shell new-session shortcut subscription", () => {
 		expect(screen.queryByTestId("create-project-flow")).not.toBeInTheDocument();
 	});
 
-	it("stays with the project the new chat page shows, not the last one opened", async () => {
+	it.each(["/new", "/NEW"])("stays with the project the new chat page shows at %s, not the last one opened", async (path) => {
 		window.localStorage.setItem("ao.newTask.lastProject", "proj-1");
-		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.matchRouteTarget = path;
 		shellMocks.state.routeSearch = { project: "proj-2" };
 		await renderShell();
 

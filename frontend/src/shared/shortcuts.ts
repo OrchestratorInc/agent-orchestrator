@@ -113,7 +113,7 @@ export function isSplitPaneShortcut(id: AppShortcutId): boolean {
 // The user-facing shortcut catalog. Bindings live exclusively in
 // defaultShortcutBindings so runtime matching and displayed labels cannot drift.
 export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
-	{ id: "find-in-chat", label: "Find in chat", category: "Session" },
+	{ id: "find-in-chat", label: "Find in chat or board", category: "Session" },
 	{ id: "add-selection-to-chat", label: "Add selection to chat", category: "Session" },
 	{ id: "new-session", label: "New session", category: "General" },
 	{ id: "command-palette", label: "Open command palette", category: "General" },

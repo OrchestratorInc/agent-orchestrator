@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -137,9 +138,20 @@ func (o *Observer) Poll(ctx context.Context) error {
 	}
 	now := o.clock()
 	for _, session := range sessions {
-		o.reconcile(ctx, session, now)
+		o.reconcileSession(ctx, session, now)
 	}
 	return nil
+}
+
+// reconcileSession turns a panic while reading one session's pane into a
+// skipped tick for that session, instead of stopping the observer.
+func (o *Observer) reconcileSession(ctx context.Context, session domain.SessionRecord, now time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			o.logger.Error("activity observer: reconciliation panicked", "session", session.ID, "panic", r)
+		}
+	}()
+	o.reconcile(ctx, session, now)
 }
 
 func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, now time.Time) {
@@ -186,16 +198,18 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	var output string
 	var err error
-	if requiresRendered {
-		reader, ok := o.runtime.(interface {
-			GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
-		})
-		if !ok {
-			return
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	reader, available := o.runtime.(ports.StyledTerminalOutputReader)
+	_, requiresViewport := agent.(ports.TerminalMessageInputGuard)
+	if (requiresViewport || requiresRendered) && !available {
+		return
+	}
+	if available && (requiresViewport || requiresRendered || options.PreferStyledOutput) {
+		output, err = reader.GetStyledOutput(ctx, handle, o.outputLines)
+		if err != nil && options.RawOutputFallback && !requiresViewport && !requiresRendered &&
+			errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+			output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
 		}
-		output, err = reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
-	} else if rendered, ok := o.runtime.(ports.StyledTerminalOutputReader); options.PreferStyledOutput && ok {
-		output, err = rendered.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	} else {
 		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	}

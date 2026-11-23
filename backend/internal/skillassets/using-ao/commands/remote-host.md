@@ -44,8 +44,8 @@ ao remote-host require-device-credentials on|off
 
 ## Set up a fresh VM over SSH
 
-The VM needs Ubuntu 24.04 x64, outbound internet, and a non-root user with
-`sudo`. No inbound ports.
+The VM needs Ubuntu 24.04 on x64 or arm64, outbound internet, and a non-root
+user with `sudo`. No inbound ports.
 
 1. Install Orchestrator and its service. With no terminal the installer skips sign-in and
    prints pairing details; do not repeat its `Pairing code:` line. `pipefail` makes
@@ -55,7 +55,10 @@ The VM needs Ubuntu 24.04 x64, outbound internet, and a non-root user with
    ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
    ```
 
-   This installs stable. For nightly, end it with `bash -s -- --nightly`.
+   This installs stable. For nightly, end it with `bash -s -- --nightly`. On
+   arm64, if it stops with `No verified release asset: ao-host-linux-arm64.tar.gz`,
+   that release predates arm64 support: end it with `bash -s -- --source-ref main`
+   to build from the main branch (several minutes).
 
 2. Start the sign-in in the background, then read the link:
 

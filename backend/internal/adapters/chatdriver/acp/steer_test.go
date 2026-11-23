@@ -804,6 +804,31 @@ func TestACPSteerAfterAFailedStopIsAccepted(t *testing.T) {
 	}
 }
 
+// A Stop aimed at a turn that already ended withdraws nothing from the turn
+// that replaced it; aimed at the running turn it withdraws as usual.
+func TestACPTargetedWithdrawLeavesALaterTurnAlone(t *testing.T) {
+	agent := &fakeAgent{promptBlock: true}
+	conv, turn := startDrainConversation(t, agent, testDrain(50*time.Millisecond))
+	var withdrawer ports.ChatTurnSteerWithdrawer = conv
+	conv.mu.Lock()
+	conv.activeTurn = "next-turn" // the Stop's turn ends and the next starts
+	conv.mu.Unlock()
+	if restore := withdrawer.WithdrawPendingSteersFor(turn); restore != nil {
+		t.Fatal("a withdraw for the ended turn withdrew from the next one")
+	}
+	if _, err := conv.Steer(context.Background(), "next-turn", ports.ChatUserMessage{Text: "steers"}); err == nil || errors.Is(err, errSteerTurnStopping) {
+		t.Fatalf("Steer on the next turn = %v, want it parked, not refused", err)
+	}
+	restore := withdrawer.WithdrawPendingSteersFor("next-turn")
+	if restore == nil {
+		t.Fatal("a withdraw for the running turn withdrew nothing")
+	}
+	defer restore()
+	if _, err := conv.Steer(context.Background(), "next-turn", ports.ChatUserMessage{Text: "refused"}); !errors.Is(err, errSteerTurnStopping) {
+		t.Fatalf("Steer while its turn is being stopped = %v, want it refused", err)
+	}
+}
+
 // Only one nudge is in flight. Steers that time out behind a stalled write do
 // not each leave another blocked request behind.
 func TestACPSteerDrainNudgesOneAtATime(t *testing.T) {
