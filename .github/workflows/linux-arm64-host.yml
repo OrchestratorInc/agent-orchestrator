@@ -1,21 +1,8 @@
-# .github/workflows/linux-arm64-host.yml
 name: Linux arm64 host package
 
-# Linux arm64 machines (cloud VMs such as AWS Graviton) are usually headless,
-# and there is no arm64 Linux desktop app. They run Orchestrator as a
-# self-hosted remote host instead: setup-self-hosted.sh installs this package,
-# which holds the daemon, the bundled Node ACP runtime and tmux, and nothing
-# from Electron.
-#
-# build-artifacts.yml calls this for every release build, with the pinned ref
-# and version; the conductor reads the package and its digest from that run.
-# Pull requests that touch the package's inputs (daemon source, build scripts,
-# ACP runtime, installer) build and smoke-test it too, so a break shows up
-# before a release depends on it.
-#
-# Built on arm64 hardware, not cross-built: tmux is compiled from source and
-# the Node runtime is per-architecture. ubuntu-22.04 matches the x64 build's
-# glibc baseline.
+# There is no arm64 Linux desktop app, so arm64 hosts install this headless
+# package (daemon, Node ACP runtime, tmux) with setup-self-hosted.sh. Pull
+# requests that touch its inputs build it too, so a break shows before a release.
 
 on:
   workflow_call:
@@ -26,10 +13,6 @@ on:
       version:
         type: string
         required: true
-  # The daemon is built from backend/ (a Go change can break only on arm64, for
-  # example through per-architecture syscall types), and frontend/package.json
-  # holds the stamped version and the build:* commands. Test-only Go changes
-  # cannot change the package.
   pull_request:
     paths:
       - ".github/workflows/linux-arm64-host.yml"
@@ -48,8 +31,7 @@ on:
 permissions:
   contents: read
 
-# Only pull request runs share a group; a release build (run_id) never cancels
-# or waits on another.
+# run_id keeps release builds out of the cancel group; only PR runs share one.
 concurrency:
   group: linux-arm64-host-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
@@ -57,11 +39,13 @@ concurrency:
 jobs:
   build:
     name: Build linux-arm64 host package
+    # Native, not cross-built: tmux compiles from source and Node is per-arch.
+    # 22.04 matches the x64 build's glibc baseline.
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 30
     env:
-      # `ao remote-host link` signs in with the same WorkOS client as the
-      # desktop build (build-daemon.mjs bakes it in).
+      # build-daemon.mjs bakes it in, so `ao remote-host link` signs in with the
+      # desktop's WorkOS client.
       VITE_WORKOS_CLIENT_ID: ${{ vars.VITE_WORKOS_CLIENT_ID }}
     defaults:
       run:
@@ -85,7 +69,6 @@ jobs:
             echo "::error::Repository variable VITE_WORKOS_CLIENT_ID is required for release artifacts." >&2
             exit 1
           fi
-      # Same stamp as build-artifacts.yml, so `ao version` names the release.
       - name: Stamp version
         if: inputs.version != ''
         env:
@@ -96,8 +79,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential file pkg-config
-      # No frontend `npm ci`: these scripts use only Node built-ins, and the ACP
-      # runtime installs from its own lockfile.
+      # No frontend `npm ci`: these scripts need only Node built-ins.
       - name: Build host package
         run: |
           npm run build:daemon
@@ -120,7 +102,6 @@ jobs:
             echo "::error::ao version reports $actual, expected $expected" >&2
             exit 1
           fi
-          # setup-self-hosted.sh refuses a package without these.
           "$resources/daemon/ao" remote-host --help >/dev/null
           "$resources/acp-runtime/node/bin/node" --version
           "$resources/tmux/bin/tmux" -V
@@ -131,8 +112,6 @@ jobs:
           mkdir -p dist-artifact
           cp "dist-host/$name" "dist-artifact/$name"
           hash="$(openssl dgst -sha256 "dist-artifact/$name" | awk '{print $NF}')"
-          # Same flat filename -> sha256 fragment as build-artifacts.yml; its
-          # digests job merges every digest-* artifact into digests.json.
           jq -n --arg f "$name" --arg h "$hash" '{($f): $h}' > dist-artifact/linux-arm64-host.digest.json
           echo "linux-arm64-host: $name sha256=$hash" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload artifact
@@ -140,13 +119,13 @@ jobs:
         with:
           name: linux-arm64-host
           path: frontend/dist-artifact/ao-host-linux-arm64.tar.gz
-          # Release builds hand off within the hour; a pull request's package
-          # stays a week so someone can try it on an arm64 machine.
+          # A week for PR builds, so someone can try one on an arm64 machine.
           retention-days: ${{ inputs.version != '' && 1 || 7 }}
           if-no-files-found: error
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
+          # build-artifacts.yml's digests job merges every digest-* artifact.
           name: digest-linux-arm64-host
           path: frontend/dist-artifact/linux-arm64-host.digest.json
           retention-days: 1

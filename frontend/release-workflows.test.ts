@@ -185,7 +185,6 @@ run: |
     const builder = await readFile(artifactBuilder, "utf8");
     const host = await readFile(path.join(workflowsDirectory, "linux-arm64-host.yml"), "utf8");
 
-    // The conductor reads digests.json once every package, arm64 included, is built.
     expect(builder).toContain("uses: ./.github/workflows/linux-arm64-host.yml");
     expect(builder).toContain("needs: [build, host-linux-arm64]");
     expect(host).toContain("workflow_call:");
@@ -195,7 +194,6 @@ run: |
     // setup-self-hosted.sh downloads this exact asset name.
     expect(host).toContain("name: linux-arm64-host\n          path: frontend/dist-artifact/ao-host-linux-arm64.tar.gz");
     expect(host).toContain("name: digest-linux-arm64-host");
-    // A release run must never cancel, or be cancelled by, another run.
     expect(host).toContain("github.event.pull_request.number || github.run_id");
   });
 

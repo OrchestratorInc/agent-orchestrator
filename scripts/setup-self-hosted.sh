@@ -80,15 +80,12 @@ case "$platform:$arch" in
 	Darwin:arm64) asset='agent-orchestrator-darwin-arm64.zip' ;;
 	Darwin:x86_64) asset='agent-orchestrator-darwin-x64.zip' ;;
 	Linux:x86_64) asset='agent-orchestrator-linux-x64.AppImage' ;;
-	# There is no arm64 Linux desktop app; releases carry the headless host
-	# package (frontend/scripts/build-host-bundle.mjs) instead.
+	# No arm64 Linux desktop app: releases carry the headless host package instead.
 	Linux:aarch64|Linux:arm64) asset='ao-host-linux-arm64.tar.gz' ;;
 	*) printf 'Unsupported host platform: %s/%s\n' "$platform" "$arch" >&2; exit 1 ;;
 esac
 command -v git >/dev/null || { printf '%s\n' 'git is required for Orchestrator projects and worktrees.' >&2; exit 1; }
 
-# Unpack a host package into $stage/resources, refusing any entry that could
-# land outside it.
 extract_host_package() {
 	python3 - "$1" <<'PY'
 import posixpath, sys, tarfile
@@ -128,7 +125,6 @@ if sys.argv[3] == 'true':
     release = max(candidates, key=lambda r: r['published_at'])
 item = next((a for a in release.get('assets', []) if a['name'] == sys.argv[2]), None)
 if not item or not re.fullmatch(r'sha256:[0-9a-f]{64}', item.get('digest') or ''):
-    # Releases from before Linux arm64 support carry no host package.
     hint = ('; this release predates Linux arm64 support: build from source with'
             ' bootstrap-self-hosted.sh --source-ref main, or pass --bundle') if sys.argv[2].startswith('ao-host-') else ''
     raise SystemExit(f'No verified release asset: {sys.argv[2]}{hint}')

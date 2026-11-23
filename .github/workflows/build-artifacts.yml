@@ -260,9 +260,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # Linux arm64 ships no desktop app, only the headless package that
-  # setup-self-hosted.sh installs on a remote host. The called workflow uploads
-  # it as the `linux-arm64-host` artifact plus a digest-* fragment.
+  # Not in the matrix: Linux arm64 has no desktop app, only the headless host package.
   host-linux-arm64:
     uses: ./.github/workflows/linux-arm64-host.yml
     with:

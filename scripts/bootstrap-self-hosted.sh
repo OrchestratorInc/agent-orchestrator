@@ -28,7 +28,6 @@ if "$nightly" && [[ -n "$source_ref" ]]; then
 fi
 
 [[ "$(id -u)" != 0 ]] || { printf '%s\n' 'Run as the host user, not root.' >&2; exit 1; }
-# Branch builds fetch this Go and Node 22.23.5 for the machine's architecture.
 # go_sha256 is go.dev's official checksum of go${go_version}.linux-${go_arch}.tar.gz.
 go_version=1.27.4
 case "$(uname -s):$(uname -m)" in

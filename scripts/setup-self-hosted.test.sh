@@ -151,7 +151,6 @@ PY
 		done
 		;;
 	release-arm64)
-		# Linux arm64 installs the release's headless host package, not an AppImage.
 		for tool in awk find shasum; do
 			ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
 		done
