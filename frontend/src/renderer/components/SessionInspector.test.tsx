@@ -7346,6 +7346,45 @@ describe("SessionInspector branch summary", () => {
     expect(sendCalls()[0][1].body.message).toBe("Push branch `feat/my-fix` to `origin/feat/my-fix`.");
   });
 
+  it("keeps uncommitted work on a new branch out of an open PR card sharing the same tip commit", async () => {
+    // Two branches share the same tip SHA: PR #7 on feat/base (headSha: abc123),
+    // and a new stacked checkout on feat/stacked (head: abc123) with uncommitted edits.
+    const prOpen = prSummary(7, "open", { sourceBranch: "feat/base", headSha: "abc123" });
+    mockGitState({
+      uncommitted: [changedFile("src/feature.ts", 4, 0)],
+      prs: [prOpen],
+    });
+    renderWithQuery(
+      <SessionInspector
+        session={session([pr(7, "open")], {
+          branch: "feat/stacked",
+          branchState: { branch: "feat/stacked", head: "abc123", behind: 0, commits: 0, unpushed: 0 },
+        })}
+      />,
+      undefined,
+      (client) => seedPRSummaries(client, [prOpen]),
+    );
+
+    // PR #7 card renders without uncommitted work or the Commit & push to #7 action
+    const card = () => within(screen.getByTestId("pr-card"));
+    expect(await card().findByText("PR #7")).toBeInTheDocument();
+    expect(card().queryByText("1 uncommitted file")).not.toBeInTheDocument();
+    expect(card().queryByRole("button", { name: /Commit & push to #7/ })).not.toBeInTheDocument();
+
+    // Working tree is in its own section labeled with the checked-out branch
+    expect(screen.getByRole("button", { name: /Working tree: feat\/stacked/ })).toBeInTheDocument();
+    const workingTree = within(screen.getByTestId("inspector-working-tree"));
+    expect(await workingTree.findByText("1 uncommitted file")).toBeInTheDocument();
+
+    // Commit & push button targets the new branch, not PR #7
+    const commitPushBtn = workingTree.getByRole("button", { name: "Commit & push feat/stacked to origin" });
+    expect(commitPushBtn).toBeInTheDocument();
+
+    await userEvent.click(commitPushBtn);
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toBe("Commit all uncommitted changes with a clear message and push branch `feat/stacked` to remote `origin`.");
+  });
+
   it("shows the PR's labels and the people asked to review it on the card", async () => {
     const labelled = prSummary(7, "open", {
       labels: [{ name: "bug", color: "d73a4a" }, { name: "docs" }],

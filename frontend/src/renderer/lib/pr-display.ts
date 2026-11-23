@@ -148,17 +148,20 @@ export function sessionPRDisplaySummaries(
 /**
  * The open PR the worktree's checked-out branch belongs to, which is where new
  * commits and pushes land. A session can list PRs from other branches, so it is
- * matched by the pushed branch name, then by the tip commit. The first open PR
- * stands in only while the daemon has not reported the branch.
+ * matched by the observed branch name when available, reserving the tip commit
+ * fallback for when branch identity is unavailable. The first open PR stands in
+ * only while the daemon has not reported the branch.
  */
 export function sessionBranchPR(session: WorkspaceSession, prs: SessionPRSummary[]): SessionPRSummary | undefined {
 	const open = prs.filter((pr) => pr.state === "open" || pr.state === "draft");
 	const state = session.branchState;
 	if (!state) return open[0];
 	// remoteBranch names the remote first: "origin/feat/x".
-	const pushed = state.remoteBranch?.slice(state.remoteBranch.indexOf("/") + 1);
-	return (pushed ? open.find((pr) => pr.sourceBranch === pushed) : undefined)
-		?? (state.head ? open.find((pr) => pr.headSha === state.head) : undefined);
+	const branchName = state.branch || (state.remoteBranch ? state.remoteBranch.slice(state.remoteBranch.indexOf("/") + 1) : undefined);
+	if (branchName) {
+		return open.find((pr) => pr.sourceBranch === branchName);
+	}
+	return state.head ? open.find((pr) => pr.headSha === state.head) : undefined;
 }
 
 // The view-only PR fields (labels, requested reviewers, commits) for a summary

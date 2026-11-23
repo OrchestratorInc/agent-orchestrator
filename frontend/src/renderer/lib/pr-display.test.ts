@@ -207,6 +207,26 @@ describe("sessionBranchPR", () => {
 		expect(sessionBranchPR(branch({ remoteBranch: "origin/ao/faq-questions" }), [quickNav, { ...faq, state: "merged" }])).toBeUndefined();
 	});
 
+	it("does not match an open PR sharing the tip commit when the checked-out branch is different", () => {
+		// A new branch created at the head of an open PR shares its tip SHA before new commits.
+		// If branch identity is observed, it must not fall back to SHA and match the original PR.
+		expect(
+			sessionBranchPR(
+				branch({ branch: "ao/stacked-fix", head: "614aaa3", unpushed: 0 }),
+				[quickNav, faq],
+			),
+		).toBeUndefined();
+	});
+
+	it("matches the open PR when the observed branch name matches even if unpushed", () => {
+		expect(
+			sessionBranchPR(
+				branch({ branch: "ao/faq-questions", head: "new0001", unpushed: 1 }),
+				[quickNav, faq],
+			)?.number,
+		).toBe(5);
+	});
+
 	it("falls back to the first open PR before the daemon reports the branch", () => {
 		expect(sessionBranchPR(sessionWith(), [quickNav, faq])?.number).toBe(4);
 	});
