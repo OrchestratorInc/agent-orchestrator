@@ -11,7 +11,7 @@ import { useUiStore } from "../stores/ui-store";
 import {
 	beginOptimisticRename,
 	hasOptimisticRenames,
-	isOptimisticRenameTracked,
+	hasLiveOptimisticRename,
 	queueRenameWrite,
 	renamedTitle,
 	renameReadStarted,
@@ -642,7 +642,7 @@ export function useReopenShellTerminal(hostId?: HostId) {
 
 export type RenameShellTerminalInput = { handleId: string; title: string };
 
-/** Each shell's tab as it was before the first rename still in flight, for a full rollback. */
+/** Each shell's tab as it was when its first rename still in flight started, for an exact rollback. */
 const shellsBeforeRename = new Map<string, ShellTerminal>();
 
 function writeShell(queryClient: QueryClient, queryKey: ReturnType<typeof shellTerminalsQueryKeyForHost>, handleId: string, update: (shell: ShellTerminal) => ShellTerminal) {
@@ -691,10 +691,10 @@ export function useRenameShellTerminal(hostId?: HostId) {
 		onSuccess: (shell, { handleId, token }) => {
 			const key = shellRenameKey(handleId, hostId);
 			const settled = settleOptimisticRename(key, token, true, shell.title);
+			// Stored: a later failure rolls back to this name, never to the snapshot.
+			if (settled) shellsBeforeRename.delete(key);
 			// An older rename's answer must not replace a newer title.
 			if (!settled?.latest) return;
-			// Stored: a later failure rolls back to this name, never to the snapshot.
-			shellsBeforeRename.delete(key);
 			writeShell(queryClient, queryKey, handleId, () => shell);
 			if (!shell.cloud) void queryClient.invalidateQueries({ queryKey });
 		},
@@ -702,12 +702,13 @@ export function useRenameShellTerminal(hostId?: HostId) {
 			const key = shellRenameKey(handleId, hostId);
 			const settled = settleOptimisticRename(key, token, false);
 			if (!settled?.latest) return;
-			const before = shellsBeforeRename.get(key);
-			// Nothing else in flight or stored: the tab goes back to exactly what it
-			// showed, and the snapshot has served its purpose.
-			const restore = !isOptimisticRenameTracked(key);
-			if (restore) shellsBeforeRename.delete(key);
-			if (restore && before) writeShell(queryClient, queryKey, handleId, (shell) => ({ ...shell, title: before.title, terminalTitle: before.terminalTitle }));
+			// Nothing else in flight: the tab goes back to exactly what it held before
+			// (a program's title stays a program's title), and the snapshot has served
+			// its purpose. Without a snapshot, the last stored name is a given name.
+			const live = hasLiveOptimisticRename(key);
+			const before = live ? undefined : shellsBeforeRename.get(key);
+			if (!live) shellsBeforeRename.delete(key);
+			if (before) writeShell(queryClient, queryKey, handleId, (shell) => ({ ...shell, title: before.title, terminalTitle: before.terminalTitle }));
 			else writeShell(queryClient, queryKey, handleId, (shell) => withShellTitle(shell, settled.title));
 			void queryClient.invalidateQueries({ queryKey });
 			useUiStore.getState().showGlobalToast(
@@ -723,7 +724,8 @@ export function useRenameShellTerminal(hostId?: HostId) {
 	const start = useCallback(({ handleId, title }: RenameShellTerminalInput): RenameShellTerminalRequest => {
 		const key = shellRenameKey(handleId, hostId);
 		const shell = queryClient.getQueryData<ShellTerminal[]>(queryKey)?.find((candidate) => candidate.handleId === handleId);
-		if (!isOptimisticRenameTracked(key)) {
+		// The first rename in flight records the tab as it is, program title and all.
+		if (!hasLiveOptimisticRename(key)) {
 			if (shell) shellsBeforeRename.set(key, shell);
 			else shellsBeforeRename.delete(key);
 		}

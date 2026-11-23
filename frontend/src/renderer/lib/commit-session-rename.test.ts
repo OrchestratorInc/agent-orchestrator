@@ -102,6 +102,21 @@ describe("renaming a session on a remote host", () => {
 		expect(useUiStore.getState().globalToasts).toHaveLength(0);
 	});
 
+	it("rolls a failure back to the program's title, not a given name made from it", async () => {
+		h.renameSession.mockRejectedValue(new Error("boom"));
+		const queryClient = new QueryClient();
+		// The tab shows the program's title ("vim"); the given name is still "Old".
+		queryClient.setQueryData(remoteWorkspaceQueryKey("box"), workspaces("vim"));
+		queryClient.setQueryData(remoteSessionsQueryKey("box"), views);
+		vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+
+		await expect(commitSessionRename(queryClient, { ...target, title: "vim" }, "New")).resolves.toBe(false);
+
+		const shown = shownIn(queryClient);
+		expect(shown.list).toBe("vim");
+		expect(shown.view).toMatchObject({ displayName: "Old", terminalTitle: "vim" });
+	});
+
 	it("shows its rename over a host read that began before the answer", async () => {
 		const answer = deferred<void>();
 		h.renameSession.mockReturnValue(answer.promise);
@@ -179,6 +194,17 @@ describe("renaming a Cloud session", () => {
 		expect(useUiStore.getState().globalToasts).toEqual([
 			expect.objectContaining({ title: "Couldn't rename to New", body: "Forbidden", tone: "error" }),
 		]);
+	});
+
+	it("rolls a failure back to no given name when the title was the session id", async () => {
+		h.renameCloudSession.mockRejectedValue(new Error("Forbidden"));
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(listKey, [{ id: "c-1", displayName: "" }] as CloudCpSession[]);
+		vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+
+		await expect(commitSessionRename(queryClient, { ...target, title: "c-1" }, "New")).resolves.toBe(false);
+
+		expect(queryClient.getQueryData<CloudCpSession[]>(listKey)?.[0]?.displayName).toBe("");
 	});
 
 	it("shows an in-flight rename over a control-plane read", () => {

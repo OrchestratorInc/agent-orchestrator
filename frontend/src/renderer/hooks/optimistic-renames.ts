@@ -83,6 +83,11 @@ export function isOptimisticRenameTracked(key: string): boolean {
 	return entries.has(key);
 }
 
+/** Whether `key` has a request in flight. */
+export function hasLiveOptimisticRename(key: string): boolean {
+	return (entries.get(key)?.attempts.length ?? 0) > 0;
+}
+
 /**
  * The title to show for `key` instead of what was read, or undefined to keep
  * what was read. Without `readStartedAt`, only an in-flight title counts (what
