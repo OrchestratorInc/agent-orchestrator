@@ -62,7 +62,9 @@ import type { ActCandidate } from "./browser-act-matcher";
 import { BrowserScreencast } from "./browser-screencast";
 import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
 import type { UserBrowser } from "./user-browser";
+import { FOCUS_BINDING, FOCUS_PROBE_SOURCE, FOCUS_WORLD, parseFocusPayload } from "./browser-focus-probe";
 import type {
+	BrowserFocusedEditable,
 	BrowserLiveSink,
 	BrowserLiveState,
 	BrowserRemoteInput,
@@ -635,6 +637,12 @@ type BrowserEntry = {
   // Compared by identity: an older, aborted load of the same URL must not clear
   // a newer one.
   pendingNavigation?: { url: string };
+  // The focus probe is installed in this tab's page (installFocusProbe).
+  focusProbe?: boolean;
+  // The page's focused text field as the probe last reported it.
+  focusedEditable?: BrowserFocusedEditable | null;
+  // Tells a phone watching this tab that its focused field changed.
+  onFocusChange?: () => void;
   findState: BrowserFindState & { requestId?: number };
   annotationEnabled: boolean;
   annotationSessions: Map<
@@ -1093,6 +1101,8 @@ export function createBrowserViewHost(
     );
     syncBackgroundThrottling(session);
     if (!active) wakeIfIdle(session);
+    // A phone stops typing the moment the agent starts acting.
+    if (session.live) emitLiveState(session);
     shellWebContents.send("browser:agentActivity", {
       viewId: session.viewId,
       active: session.agentBrowserCommands > 0,
@@ -1469,6 +1479,9 @@ export function createBrowserViewHost(
       }, 0);
     };
     wireAutomationEvents(view.webContents, entry);
+    entry.onFocusChange = () => {
+      if (isCurrentEntry() && session.live && session.activeTabId === entry.tabId) emitLiveState(session);
+    };
     // The preview is a separate WebContentsView, so renderer-window keydown
     // listeners never see keys typed here. Forward application shortcuts to the
     // shell renderer so they still work with the panel focused.
@@ -3318,6 +3331,7 @@ export function createBrowserViewHost(
     }
 
     session.profileSwitching = true;
+    if (session.live) emitLiveState(session);
     session.profileSwitchTargetId = normalizedRequestedProfileId;
     const previousProfileId = session.profileId;
     const previousPartition = session.profilePartition;
@@ -3447,6 +3461,7 @@ export function createBrowserViewHost(
       throw error;
     } finally {
       session.profileSwitching = false;
+      if (session.live) emitLiveState(session);
       session.profileReplacing = false;
       session.profileSwitchTargetId = null;
     }
@@ -4189,6 +4204,8 @@ export function createBrowserViewHost(
 			}),
 			width: bounds.width,
 			height: bounds.height,
+			control: session.agentBrowserCommands > 0 || session.profileSwitching ? "agent" : "human",
+			focusedEditable: current.focusedEditable ?? null,
 		};
 	}
 
@@ -4221,6 +4238,7 @@ export function createBrowserViewHost(
 		if (session.live !== live) return;
 		const entry = activeEntry(session);
 		await ensureDebugger(entry);
+		await installFocusProbe(entry);
 		if (session.live !== live || activeEntry(session) !== entry) return;
 		applySessionBounds(session, entry);
 		const cast = new BrowserScreencast(
@@ -4362,11 +4380,10 @@ export function createBrowserViewHost(
 			if (modifiers.length !== (input.modifiers ?? []).length || (modifiers.includes("meta") && ["q", "w"].includes(input.key.toLowerCase()))) {
 				throw browserError("INVALID_ARGUMENT", "Key combination is not allowed");
 			}
-			entry.view.webContents.sendInputEvent({
-				type: input.phase === "down" ? "keyDown" : "keyUp",
-				keyCode: input.key,
-				modifiers,
-			} as never);
+			// Through CDP, like text: native key events need a focused window,
+			// and a page the phone types into is usually parked.
+			await ensureDebugger(entry);
+			await entry.view.webContents.debugger!.sendCommand("Input.dispatchKeyEvent", remoteKeyEvent(input, modifiers));
 		});
 	}
 
@@ -5900,6 +5917,7 @@ function wireNavEvents(
   };
   contents.on("did-navigate", (_event, url) => {
     resetFind();
+    entry.focusedEditable = null;
     entry.documentGeneration += 1;
     entry.navigationGeneration += 1;
     clearStaleFavicon(entry, url);
@@ -6255,11 +6273,78 @@ function hostOf(url: string): string {
   }
 }
 
+const REMOTE_KEYS: Record<string, { keyCode: number; text?: string }> = {
+  Enter: { keyCode: 13, text: "\r" },
+  Tab: { keyCode: 9 },
+  Backspace: { keyCode: 8 },
+  Delete: { keyCode: 46 },
+  Escape: { keyCode: 27 },
+  ArrowLeft: { keyCode: 37 },
+  ArrowUp: { keyCode: 38 },
+  ArrowRight: { keyCode: 39 },
+  ArrowDown: { keyCode: 40 },
+  Home: { keyCode: 36 },
+  End: { keyCode: 35 },
+};
+const CDP_MODIFIERS: Record<string, number> = { alt: 1, control: 2, meta: 4, shift: 8 };
+
+function remoteKeyEvent(
+  input: Extract<BrowserRemoteInput, { kind: "key" }>,
+  modifiers: string[],
+): Record<string, unknown> {
+  const named = REMOTE_KEYS[input.key];
+  const printable = !named && [...input.key].length === 1 ? input.key : undefined;
+  const keyCode = named?.keyCode ?? (printable && /^[a-z0-9]$/i.test(printable) ? printable.toUpperCase().charCodeAt(0) : 0);
+  // Text makes a key down type its character; a shortcut types nothing.
+  const text = modifiers.some((value) => value !== "shift") ? undefined : named?.text ?? printable;
+  return {
+    type: input.phase === "down" ? (text ? "keyDown" : "rawKeyDown") : "keyUp",
+    key: input.key,
+    code: input.code,
+    windowsVirtualKeyCode: keyCode,
+    modifiers: modifiers.reduce((mask, value) => mask | (CDP_MODIFIERS[value] ?? 0), 0),
+    ...(input.phase === "down" && text ? { text, unmodifiedText: text } : {}),
+  };
+}
+
+function handleFocusDebuggerEvent(
+  entry: BrowserEntry,
+  method: string,
+  params: Record<string, unknown>,
+): void {
+  if (method !== "Runtime.bindingCalled" || params?.name !== FOCUS_BINDING || typeof params.payload !== "string") return;
+  const focused = parseFocusPayload(params.payload);
+  if (focused === undefined) return;
+  entry.focusedEditable = focused;
+  entry.onFocusChange?.();
+}
+
+// The binding is added before the script so the probe finds it in the world
+// the script creates, in the current document and every later one.
+async function installFocusProbe(entry: BrowserEntry): Promise<void> {
+  // An agent tab shows AO's viewer page, whose fields are not the agent's page.
+  if (entry.focusProbe || entry.agentTab !== undefined) return;
+  entry.focusProbe = true;
+  const debug = entry.view.webContents.debugger;
+  try {
+    await debug.sendCommand("Runtime.addBinding", { name: FOCUS_BINDING, executionContextName: FOCUS_WORLD });
+    await debug.sendCommand("Page.addScriptToEvaluateOnNewDocument", {
+      source: FOCUS_PROBE_SOURCE,
+      worldName: FOCUS_WORLD,
+      runImmediately: true,
+    });
+  } catch (error) {
+    // The phone then sees no focused field and offers no keyboard.
+    console.warn("Unable to install the browser focus probe", error);
+  }
+}
+
 function wireAutomationEvents(
   contents: BrowserWebContents,
   entry: BrowserEntry,
 ): void {
   contents.debugger?.on("message", (_event, method, params) => {
+    handleFocusDebuggerEvent(entry, method, params as Record<string, unknown>);
     handleNetworkDebuggerEvent(
       entry,
       method,

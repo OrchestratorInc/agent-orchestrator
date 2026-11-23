@@ -1,6 +1,7 @@
 import { ApiError, apiRequest } from "./api";
 import { authHeaders, type ServerConfig } from "./config";
 import { browserLiveURL, decodeBrowserFrame, type BrowserLiveFrame } from "./browserLiveProtocol";
+import type { FocusedEditable } from "./browserTransport";
 
 export { browserLiveURL, decodeBrowserFrame, type BrowserLiveFrame } from "./browserLiveProtocol";
 
@@ -14,6 +15,9 @@ export type BrowserLiveState = {
 	tabs: Array<{ id: string; title: string; url: string; active: boolean }>;
 	width: number;
 	height: number;
+	// Older desktops send neither; the phone then offers no keyboard.
+	control?: "agent" | "human";
+	focusedEditable?: FocusedEditable;
 };
 
 export type BrowserLiveCommand =

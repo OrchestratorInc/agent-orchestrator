@@ -24,11 +24,19 @@ const fixtures = vi.hoisted(() => ({
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	const TextInput = React.forwardRef((props: object, ref) => {
+		React.useImperativeHandle(ref, () => ({ focus: () => undefined, blur: () => undefined }));
+		return React.createElement("TextInput", props);
+	});
 	return {
-		Image: host("Image"), View: host("View"),
+		Image: host("Image"), View: host("View"), Text: host("Text"), TextInput,
 		Platform: fixtures.platform,
-		StyleSheet: { create: (styles: unknown) => styles, absoluteFill: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 } },
+		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1, absoluteFill: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 } },
 	};
+});
+vi.mock("react-native-keyboard-controller", async () => {
+	const React = await import("react");
+	return { KeyboardStickyView: ({ children }: { children?: React.ReactNode }) => React.createElement("KeyboardStickyView", null, children) };
 });
 vi.mock("react-native-gesture-handler", async () => {
 	const React = await import("react");
@@ -450,5 +458,60 @@ describe("live browser gestures", () => {
 		await act(async () => gesture("tap").onEnd({ x: 195 + 97.5, y: 300 }, true));
 		expect(sent()[0]).toEqual({ type: "input", payload: { kind: "wheel", deltaX: 0, deltaY: -30 / (fitted * 2) } });
 		expect(sent()[1]).toEqual({ type: "input", payload: { kind: "pointer", phase: "down", x: 0.625, y: 0.5, button: "left" } });
+	});
+});
+
+describe("live browser typing", () => {
+	const focusedPage = (control: "agent" | "human", value = ""): BrowserLiveState => ({ ...page, control, focusedEditable: { kind: "text", value } });
+	const field = () => nodes("TextInput")[0];
+	const typed = () => sent().filter((command) => (command as { payload: { kind: string } }).payload.kind === "text");
+
+	it("types into the page's focused field", async () => {
+		await render();
+		await open(focusedPage("human"));
+		await showFrame();
+		await act(async () => field()!.props.onChangeText("hi"));
+		expect(typed()).toEqual([{ type: "input", payload: { kind: "text", value: "hi" } }]);
+	});
+
+	it("offers no keyboard to an older desktop or while the agent acts", async () => {
+		await render();
+		await open();
+		await showFrame();
+		expect(field()).toBeUndefined();
+		await open(focusedPage("agent"));
+		expect(field()).toBeUndefined();
+	});
+
+	it("text dropped when control is agent", async () => {
+		await render();
+		await open(focusedPage("human", "q"));
+		await showFrame();
+		const change = field()!.props.onChangeText as (text: string) => void;
+		// The agent takes over between the keystroke and its delivery.
+		await open(focusedPage("agent", "q"));
+		await act(async () => change("qx"));
+		expect(typed()).toEqual([]);
+	});
+
+	it("textDiff resets after reconnect", async () => {
+		await render();
+		await open(focusedPage("human"));
+		await showFrame();
+		await act(async () => field()!.props.onChangeText("ab"));
+		const change = field()!.props.onChangeText as (text: string) => void;
+		fixtures.config = null;
+		await act(async () => { screen.update(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} />); });
+		// Typed while there is no stream: dropped, never replayed later.
+		await act(async () => change("abX"));
+		fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+		await act(async () => { screen.update(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} />); });
+		await open(focusedPage("human", "ab"));
+		await showFrame();
+		expect(field()!.props.value).toBe("ab");
+		await act(async () => field()!.props.onChangeText("abc"));
+		expect(typed()).toEqual([{ type: "input", payload: { kind: "text", value: "c" } }]);
+		expect(fixtures.clients[0]!.sent.filter((command) => (command as { payload: { kind: string } }).payload.kind === "text"))
+			.toEqual([{ type: "input", payload: { kind: "text", value: "ab" } }]);
 	});
 });

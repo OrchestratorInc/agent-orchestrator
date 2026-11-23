@@ -20,6 +20,8 @@ import { bottomToolbarHeight, browserMenu, browserToolbar, hasBottomToolbar, typ
 import { FRAME_ZOOM_SNAP, pinchZoom, unzoomed, unzoomPoint, type FramePoint, type FrameSize, type FrameZoom } from "./frameZoom";
 import { LoadingBar } from "./LoadingBar";
 import { OpenURLPrompt } from "./OpenURLPrompt";
+import { PageKeyboard } from "./PageKeyboard";
+import { PageTyping } from "./pageTyping";
 
 type BrowserStatus = "connecting" | "open" | "error";
 type NavigateAction = "back" | "forward" | "reload" | "stop";
@@ -68,6 +70,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const toast = useToast();
 	const showNotice = toast.show;
 	const client = useRef<BrowserLiveClient | null>(null);
+	// Typing goes to whichever stream is open; until M1's transport it sends only input.
+	const typing = useMemo(() => new PageTyping((command) => client.current?.send(command as BrowserLiveCommand)), []);
+	// Counts streams, so the keyboard starts again from the page on each one.
+	const [connection, setConnection] = useState(0);
+	const [openRequest, setOpenRequest] = useState(0);
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState<BrowserStatus>("connecting");
 	const [error, setError] = useState<string>();
@@ -94,6 +101,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	useEffect(() => {
 		setPage(null);
 		setFrameIsLive(false);
+		typing.disconnect();
 		if (!config) {
 			if (away === "reconnecting") {
 				setStatus("connecting");
@@ -115,6 +123,8 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		const live = new BrowserLiveClient(config, sessionID, {
 			onStatus: (next, message) => {
 				if (disposed || next === "closed") return;
+				// Keystrokes go nowhere until the next stream reports the page again.
+				if (next !== "open") typing.disconnect();
 				setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
 				if (next === "open") {
 					setError(undefined);
@@ -143,14 +153,16 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			},
 		});
 		client.current = live;
+		setConnection((value) => value + 1);
 		live.connect();
 
 		return () => {
 			disposed = true;
+			typing.disconnect();
 			live?.close();
 			if (client.current === live) client.current = null;
 		};
-	}, [attempt, away, config, onDisabled, rejection, sessionID, showNotice]);
+	}, [attempt, away, config, onDisabled, rejection, sessionID, showNotice, typing]);
 
 	// The bar is titled with the desktop's page while one is showing.
 	const pageTitle = status === "open" && page?.url ? page.title.trim() || undefined : undefined;
@@ -207,9 +219,12 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const tapAt = useCallback((x: number, y: number) => {
 		const point = normalizedFramePoint(frameRectRef.current, { x, y });
 		if (!point) return;
+		// The tap may focus a field: the keyboard opens, from that field's text.
+		typing.tapped();
+		setOpenRequest((value) => value + 1);
 		send({ type: "input", payload: { kind: "pointer", phase: "down", ...point, button: "left" } });
 		send({ type: "input", payload: { kind: "pointer", phase: "up", ...point, button: "left" } });
-	}, [send]);
+	}, [send, typing]);
 	const scrollBy = useCallback((deltaX: number, deltaY: number, zoom: number) => {
 		// A magnified frame shows fewer desktop pixels per point, so the drag is
 		// scaled by the zoom too and the page keeps pace with the finger.
@@ -335,6 +350,13 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			<LoadingBar loading={status === "open" && loading} accessibilityLabel="Loading page" />
 		</View>
 		{bottomBar}
+		{interactive && page ? <PageKeyboard
+			typing={typing}
+			focused={page.focusedEditable ?? null}
+			control={page.control ?? "none"}
+			connection={connection}
+			openRequest={openRequest}
+		/> : null}
 		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} />
 		<ToastHost toast={toast} bottomOffset={toolbarShown ? toolbarClearance + space.md : undefined} />
 	</View>;

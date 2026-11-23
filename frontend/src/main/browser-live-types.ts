@@ -18,6 +18,16 @@ export type BrowserLiveState = {
 	tabs: BrowserLiveTab[];
 	width: number;
 	height: number;
+	/** Who may type into the page: the agent while it acts, else a person. */
+	control: "agent" | "human";
+	/** The page's focused text field, or null. */
+	focusedEditable: BrowserFocusedEditable | null;
+};
+
+export type BrowserFocusedEditable = {
+	kind: "text" | "password" | "email" | "number" | "url" | "search" | "tel" | "textarea" | "contenteditable";
+	/** The field's text. Never sent for a password field. */
+	value?: string;
 };
 
 export type BrowserLiveSink = {

@@ -213,7 +213,7 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 				debuggerAttached = false;
 			}),
 			isAttached: () => debuggerAttached,
-			on: (event: string, listener: (...args: never[]) => void) => debuggerListeners.set(event, listener),
+			on: (event: string, listener: (...args: never[]) => void) => addListener(debuggerListeners, event, listener),
 			sendCommand: debuggerSendCommand,
 		},
 		clearHistory: () => undefined,
@@ -6913,5 +6913,83 @@ describe("sites that refuse the Browser panel", () => {
 		await invoke("browser:clear", viewId);
 		await expect(invoke("browser:openInUserBrowser", viewId)).rejects.toMatchObject({ code: "BROWSER_URL_FORBIDDEN" });
 		expect(openInUserBrowser).toHaveBeenCalledOnce();
+	});
+});
+
+describe("browser live typing", () => {
+	const liveSink = () => ({ frame: vi.fn(), state: vi.fn(), error: vi.fn() });
+
+	it("focusin emits focusedEditable", async () => {
+		const { debuggerListeners, debuggerSendCommand, host, webContentsListeners } = setupHost();
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Runtime.addBinding", { name: "__aoFocus", executionContextName: "ao-focus" });
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.addScriptToEvaluateOnNewDocument", expect.objectContaining({ worldName: "ao-focus", runImmediately: true }));
+		expect(debuggerSendCommand).not.toHaveBeenCalledWith("Runtime.enable", expect.anything());
+		expect(debuggerSendCommand).not.toHaveBeenCalledWith("Runtime.enable");
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human", focusedEditable: null }));
+
+		const message = debuggerListeners.get("message") as unknown as (event: unknown, method: string, params: unknown) => void;
+		message({}, "Runtime.bindingCalled", { name: "__aoFocus", payload: JSON.stringify({ kind: "text", value: "hi" }) });
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "text", value: "hi" } }));
+
+		// Only the probe's own binding is believed, and a password never carries its value.
+		message({}, "Runtime.bindingCalled", { name: "somethingElse", payload: "null" });
+		message({}, "Runtime.bindingCalled", { name: "__aoFocus", payload: "{" });
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "text", value: "hi" } }));
+		message({}, "Runtime.bindingCalled", { name: "__aoFocus", payload: JSON.stringify({ kind: "password", value: "hunter2" }) });
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: { kind: "password" } }));
+
+		// A new document has nothing focused until its probe reports.
+		const navigated = webContentsListeners.get("did-navigate") as unknown as (event: unknown, url: string) => void;
+		navigated({}, "https://example.com/next");
+		await host.execute("sess-1", "tabs");
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: null }));
+		await host.stopLiveStream("sess-1", 7);
+	});
+
+	it("installs the focus probe once per tab", async () => {
+		const { debuggerSendCommand, host } = setupHost();
+		await host.startLiveStream("sess-1", 7, liveSink());
+		await host.startLiveStream("sess-1", 8, liveSink());
+		expect(debuggerSendCommand.mock.calls.filter(([method]) => method === "Runtime.addBinding")).toHaveLength(1);
+	});
+
+	it("reports agent control while an agent command runs", async () => {
+		const { host } = setupHost();
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		sink.state.mockClear();
+
+		await host.execute("sess-1", "tabs");
+
+		const controls = sink.state.mock.calls.map(([state]) => (state as { control: string }).control);
+		expect(controls).toEqual(["agent", "human"]);
+	});
+
+	it("types keys through CDP so a parked page receives them", async () => {
+		const { debuggerSendCommand, host, webContents } = setupHost();
+		await host.startLiveStream("sess-1", 7, liveSink());
+
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "Enter", code: "Enter" });
+		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchKeyEvent", {
+			type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 0, text: "\r", unmodifiedText: "\r",
+		});
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "up", key: "Enter", code: "Enter" });
+		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchKeyEvent", {
+			type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 0,
+		});
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "Backspace", code: "Backspace" });
+		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchKeyEvent", {
+			type: "rawKeyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8, modifiers: 0,
+		});
+		await host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "a", code: "KeyA", modifiers: ["control"] });
+		expect(debuggerSendCommand).toHaveBeenLastCalledWith("Input.dispatchKeyEvent", {
+			type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2,
+		});
+		await expect(host.handleRemoteInput("sess-1", { kind: "key", phase: "down", key: "q", code: "KeyQ", modifiers: ["meta"] }))
+			.rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+		expect(webContents.sendInputEvent).not.toHaveBeenCalled();
 	});
 });
