@@ -193,6 +193,34 @@ it("shows why a computer running the desktop app named no version, and asks agai
 	useHostUpdateStore.setState({ byUrl: {} });
 });
 
+it("asks one computer at a time, so an answer cannot change an open confirmation", async () => {
+	saved.entries = [{ hostId: "studio", label: "Studio Mac", url: "http://studio:3011" }, { hostId: "office", label: "Office Mac", url: "http://office:3011" }];
+	const app = { version: "0.14.10", supported: true, method: "app" as const, state: "idle" as const };
+	useHostUpdateStore.setState({ localVersion: "0.15.4", byUrl: { "http://studio:3011": { view: app }, "http://office:3011": { view: app } } });
+	let answerStudio: (version: string) => void = () => {};
+	remotes.checkHostUpdate.mockImplementationOnce(() => new Promise<string>((resolve) => { answerStudio = resolve; }));
+	renderSettings();
+	fireEvent.click(await screen.findByRole("button", { name: "Update Studio Mac" }));
+	const office = screen.getByRole("button", { name: "Update Office Mac" });
+	expect(office).toBeDisabled();
+	fireEvent.click(office);
+	expect(remotes.checkHostUpdate).toHaveBeenCalledTimes(1);
+	await act(async () => answerStudio("0.15.3"));
+	expect(await screen.findByText("Update Orchestrator on Studio Mac to v0.15.3?")).toBeVisible();
+	useHostUpdateStore.setState({ byUrl: {} });
+});
+
+it("labels the comparison with the version this computer runs, not one it has only downloaded", async () => {
+	saved.entries = [{ hostId: "studio", label: "Studio Mac", url: "http://studio:3011" }];
+	useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { "http://studio:3011": { view: { version: "0.14.10", supported: true, method: "app", state: "idle" } } } });
+	localUpdate.status = { state: "downloaded", version: "0.15.1" };
+	renderSettings();
+	expect(await screen.findByText("· v0.14.10 · this computer v0.15.0", { exact: false })).toBeVisible();
+	expect(screen.queryByText(/0\.15\.1/)).toBeNull();
+	localUpdate.status = { state: "idle" };
+	useHostUpdateStore.setState({ byUrl: {} });
+});
+
 it("names the newer release this computer has downloaded as a self-hosted host's target", async () => {
 	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
 	useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { "http://box-a:3001": { view: { version: "0.14.10", supported: true, method: "service", state: "idle" } } } });

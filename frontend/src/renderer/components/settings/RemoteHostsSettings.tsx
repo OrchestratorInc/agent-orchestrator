@@ -73,10 +73,12 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	}, [status]);
 
 	const askAppHost = async (host: SavedHost) => {
+		if (askingUpdate) return;
 		setAskingUpdate(host.url);
 		useHostUpdateStore.getState().patch(host.url, { error: undefined, unconfirmed: undefined });
 		try {
-			setConfirmingUpdate({ ...host, version: (await aoBridge.remotes.checkHostUpdate(host.url)).replace(/^v/i, "") });
+			const version = (await aoBridge.remotes.checkHostUpdate(host.url)).replace(/^v/i, "");
+			setConfirmingUpdate((open) => open ?? { ...host, version });
 		} catch (cause) {
 			useHostUpdateStore.getState().patch(host.url, { error: hostUpdateError(cause) });
 		} finally {
@@ -185,7 +187,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 					description={host.hostId ? (
 						<>
 							{host.url}
-							{version ? <span className="tabular-nums">{` · v${version.replace(/^v/i, "")}`}{target && appHost ? ` · ${t("remote.thisComputerVersion", { version: target })}` : null}{target && !appHost ? <>{" → "}<span className="text-foreground">{`v${target}`}</span></> : null}</span> : null}
+							{version ? <span className="tabular-nums">{` · v${version.replace(/^v/i, "")}`}{target && appHost ? ` · ${t("remote.thisComputerVersion", { version: localVersion?.replace(/^v/i, "") })}` : null}{target && !appHost ? <>{" → "}<span className="text-foreground">{`v${target}`}</span></> : null}</span> : null}
 							{update?.kind === "manual" ? <span className="mt-0.5 block text-warning">{t("shell.updateOnThatComputer")}</span> : null}
 							{update?.kind === "failed" ? <span className="mt-0.5 block text-error" role="alert">{update.error || (update.unconfirmed ? t("remote.updateUnconfirmed") : t("shell.updateFailed"))}</span> : null}
 						</>
@@ -200,7 +202,7 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 						{update?.kind === "updating" ? <span className="flex items-center gap-1.5 px-2 text-xs text-settings-muted" role="status"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{t("shell.updating")}</span> : null}
 						{askingUpdate === host.url ? <span className="flex items-center gap-1.5 px-2 text-xs text-settings-muted" role="status"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{t("session.statusChecking")}</span> : null}
 						{askingUpdate !== host.url && (update?.kind === "update" || update?.kind === "failed") ? (
-							<Button aria-label={t("shell.updateMachine", { name: host.label })} onClick={() => { if (appHost) void askAppHost(host); else void startHostUpdate(host.url); }} size="sm" type="button" variant="quiet">
+							<Button aria-label={t("shell.updateMachine", { name: host.label })} disabled={appHost && askingUpdate !== ""} onClick={() => { if (appHost) void askAppHost(host); else void startHostUpdate(host.url); }} size="sm" type="button" variant="quiet">
 								{update.kind === "failed" ? t("notify.retry") : t("shell.update")}
 							</Button>
 						) : null}
