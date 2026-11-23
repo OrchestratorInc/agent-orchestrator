@@ -618,6 +618,8 @@ type BrowserEntry = {
   agentTab?: string;
   // The agent browser page this tab shows, as its viewer last reported it.
   remote?: RemoteTabReport;
+  // Whether main last told its viewer to stream (show()); its reports lag.
+  streaming?: boolean;
   // An agent tab not shown yet: the viewer it loads when first shown
   // (openAgentTab). Until then it has no viewer, so no socket or CDP session
   // on the agent's host.
@@ -1046,13 +1048,21 @@ export function createBrowserViewHost(
       const contents = entry.view.webContents;
       if (!contents?.setBackgroundThrottling) continue;
       try {
-        const allowed = throttle && contents.isCurrentlyAudible?.() !== true;
+        // Never an agent tab's viewer: Chromium reports a throttled page as
+        // hidden, and the viewer streams only while visible (a panel that
+        // stayed empty). Whether it streams is main's call, through show().
+        const allowed = throttle && entry.agentTab === undefined && contents.isCurrentlyAudible?.() !== true;
         if ((entry.backgroundThrottled ?? false) === allowed) continue;
         contents.setBackgroundThrottling(allowed);
         entry.backgroundThrottled = allowed;
       } catch {
         // The page is being torn down; its throttling no longer matters.
       }
+    }
+    // The panel was shown or hidden, or the phone started or stopped
+    // watching: the agent tab in front streams only while someone can see it.
+    for (const entry of session.tabs.values()) {
+      if (entry.remote) entry.driver().show(session.activeTabId === entry.tabId);
     }
   };
   const waitForBrowserIdle = (
@@ -2174,9 +2184,16 @@ export function createBrowserViewHost(
       // paints only its front page: the viewer streams, and brings its page to
       // the front, only while its tab is the one shown. Shown for the first
       // time, the tab loads its viewer (openAgentTab).
+      // It streams only while the panel is on screen or the phone watches it
+      // (session.live); syncBackgroundThrottling re-runs this when either
+      // changes. A viewer that reloaded reports shown: false again.
       show: (shown) => {
         if (shown) loadViewer(session, entry);
-        if (entry.remote && entry.remote.shown !== shown) void runInRemoteViewer(entry, `show(${shown})`);
+        const streaming = shown && (session.visible || session.live !== undefined);
+        if (entry.remote && (entry.remote.shown !== streaming || entry.streaming !== streaming)) {
+          entry.streaming = streaming;
+          void runInRemoteViewer(entry, `show(${streaming})`);
+        }
       },
       // Never through agent-browser, which never sees agent tabs: the page
       // closes in the agent browser too.
