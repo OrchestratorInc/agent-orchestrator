@@ -135,4 +135,29 @@ describe("PageTyping", () => {
 			{ type: "input", payload: { kind: "key", phase: "up", key: "Backspace", code: "Backspace" } },
 		]);
 	});
+
+	it("starts again for another field of the same kind, such as a confirm-password field", () => {
+		const { page, sent, typed } = typing();
+		page.observe({ kind: "password", field: "t1:1:1" }, 1, "human");
+		page.change("secret");
+		// The page focuses the confirmation field: same kind, no value, another field.
+		expect(page.observe({ kind: "password", field: "t1:1:2" }, 1, "human")).toBe("");
+		sent.length = 0;
+		page.change("secret");
+		expect(typed()).toBe("secret");
+	});
+
+	it("starts again when another tab's field of the same kind has focus", () => {
+		const { page } = typing();
+		page.observe({ kind: "text", value: "one", field: "t1:1:1" }, 1, "human");
+		page.change("one!");
+		expect(page.observe({ kind: "text", value: "two", field: "t2:1:1" }, 1, "human")).toBe("two");
+	});
+
+	it("keeps the phone's text when the same field echoes its value", () => {
+		const { page } = typing();
+		page.observe({ kind: "text", value: "", field: "t1:1:1" }, 1, "human");
+		page.change("ab");
+		expect(page.observe({ kind: "text", value: "a", field: "t1:1:1" }, 1, "human")).toBeNull();
+	});
 });

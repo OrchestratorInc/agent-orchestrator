@@ -57,9 +57,9 @@ export function PageKeyboard({ typing, focused, control, connection, openRequest
 	const field = FIELD_NAMES[focused.kind];
 	return <>
 		<TextInput
-			// iOS keeps a focused field's keyboard as it was, so a field of
-			// another kind is a new input: a password then gets a secure one.
-			key={focused.kind}
+			// iOS keeps a focused field's keyboard as it was, so another field is
+			// a new input: a password then gets a secure one, starting empty.
+			key={`${focused.kind}:${focused.field ?? ""}`}
 			ref={input}
 			autoFocus
 			value={text}

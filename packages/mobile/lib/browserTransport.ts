@@ -5,7 +5,9 @@ import type { BrowserLiveCommand, BrowserLiveState } from "./browserLive";
 import type { BrowserLiveFrame } from "./browserLiveProtocol";
 
 export type BrowserControl = "agent" | "human" | "none";
-export type FocusedEditable = { kind: "text"|"password"|"email"|"number"|"url"|"search"|"tel"|"textarea"|"contenteditable"; value?: string } | null;
+// M5 adds `field`: an opaque name for the focused field, the same only while
+// the same field keeps focus (two password fields are otherwise identical).
+export type FocusedEditable = { kind: "text"|"password"|"email"|"number"|"url"|"search"|"tel"|"textarea"|"contenteditable"; value?: string; field?: string } | null;
 export type BrowserViewState = BrowserLiveState & { control: BrowserControl; focusedEditable: FocusedEditable };
 export type BrowserFrame = BrowserLiveFrame;
 export type BrowserCommand =

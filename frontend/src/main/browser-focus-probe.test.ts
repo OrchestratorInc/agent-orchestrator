@@ -3,6 +3,13 @@ import { describe, expect, it } from "vitest";
 import { FOCUS_QUERY_SOURCE, FOCUS_VALUE_MAX, parseFocusPayload } from "./browser-focus-probe";
 
 describe("parseFocusPayload", () => {
+	it("keeps a field number, and drops one that is not a small whole number", () => {
+		expect(parseFocusPayload(JSON.stringify({ kind: "text", value: "", field: 3 }))).toEqual({ kind: "text", value: "", field: "3" });
+		expect(parseFocusPayload(JSON.stringify({ kind: "password", field: 4 }))).toEqual({ kind: "password", field: "4" });
+		expect(parseFocusPayload(JSON.stringify({ kind: "text", field: "x" }))).toEqual({ kind: "text" });
+		expect(parseFocusPayload(JSON.stringify({ kind: "text", field: 1.5 }))).toEqual({ kind: "text" });
+	});
+
 	it("accepts each editable kind with its value", () => {
 		for (const kind of ["text", "email", "number", "url", "search", "tel", "textarea", "contenteditable"]) {
 			expect(parseFocusPayload(JSON.stringify({ kind, value: "hi" }))).toEqual({ kind, value: "hi" });
@@ -32,8 +39,18 @@ describe("parseFocusPayload", () => {
 
 type FakeElement = Record<string, unknown> & { tagName: string };
 
-const query = (active: FakeElement | null): unknown =>
-	JSON.parse(runInNewContext(FOCUS_QUERY_SOURCE, { document: { activeElement: active } }) as string);
+// The page's isolated world outlives each query, so its field numbers do too.
+const world = (): Record<string, unknown> => ({ WeakMap, document: { activeElement: null } });
+const query = (active: FakeElement | null, context = world()): Record<string, unknown> | null => {
+	(context.document as { activeElement: unknown }).activeElement = active;
+	const focused = JSON.parse(runInNewContext(FOCUS_QUERY_SOURCE, context) as string) as Record<string, unknown> | null;
+	if (focused) delete focused.field;
+	return focused;
+};
+const fieldOf = (active: FakeElement, context: Record<string, unknown>): unknown => {
+	(context.document as { activeElement: unknown }).activeElement = active;
+	return (JSON.parse(runInNewContext(FOCUS_QUERY_SOURCE, context) as string) as { field?: unknown }).field;
+};
 
 describe("focus query", () => {
 	it("reports the focused field's kind and value, and never a password's value", () => {
@@ -52,6 +69,19 @@ describe("focus query", () => {
 
 	it("leaves out a value over the cap", () => {
 		expect(query({ tagName: "INPUT", type: "text", value: "x".repeat(FOCUS_VALUE_MAX + 1) })).toEqual({ kind: "text" });
+	});
+
+	// Two password fields report the same kind and no value: only this tells
+	// the phone that focus moved from one to the other.
+	it("numbers each field, and keeps its number while it stays focused", () => {
+		const context = world();
+		const password = { tagName: "INPUT", type: "password", value: "a" };
+		const confirm = { tagName: "INPUT", type: "password", value: "" };
+		const first = fieldOf(password, context);
+		expect(typeof first).toBe("number");
+		expect(fieldOf(password, context)).toBe(first);
+		expect(fieldOf(confirm, context)).not.toBe(first);
+		expect(fieldOf(password, context)).toBe(first);
 	});
 
 	it("follows focus into shadow roots and same-origin frames, not other origins", () => {

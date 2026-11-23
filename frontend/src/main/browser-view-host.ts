@@ -6365,6 +6365,8 @@ async function runFocusQuery(entry: BrowserEntry): Promise<void> {
       if (typeof value !== "string") throw new Error("Focus query returned no value");
       const focused = parseFocusPayload(value);
       if (focused === undefined) return;
+      // The page numbers fields per document; the tab and document make it unique.
+      if (focused?.field) focused.field = `${entry.tabId}:${entry.documentGeneration}:${focused.field}`;
       if (JSON.stringify(focused) === JSON.stringify(entry.focusedEditable ?? null)) return;
       entry.focusedEditable = focused;
       entry.onFocusChange?.();

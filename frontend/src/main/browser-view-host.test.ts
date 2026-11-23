@@ -6972,6 +6972,26 @@ describe("browser live typing", () => {
 		await host.stopLiveStream("sess-1", 7);
 	});
 
+	it("names the focused field by tab and document as well as the page's number", async () => {
+		const { debuggerSendCommand, host, webContentsListeners } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		page.focus = JSON.stringify({ kind: "password", field: 1 });
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+		const first = (sink.state.mock.lastCall![0] as { focusedEditable: { field: string } }).focusedEditable.field;
+		expect(first).toMatch(/^.+:\d+:1$/);
+
+		// The next document numbers its fields from 1 again: still another field.
+		const navigated = webContentsListeners.get("did-navigate") as unknown as (event: unknown, url: string) => void;
+		navigated({}, "https://example.com/next");
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+		const second = (sink.state.mock.lastCall![0] as { focusedEditable: { field: string } }).focusedEditable.field;
+		expect(second).toMatch(/:1$/);
+		expect(second).not.toBe(first);
+		await host.stopLiveStream("sess-1", 7);
+	});
+
 	it("notices focus the phone did not move while it watches", async () => {
 		vi.useFakeTimers();
 		try {

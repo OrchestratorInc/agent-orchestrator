@@ -28,6 +28,8 @@ export type BrowserFocusedEditable = {
 	kind: "text" | "password" | "email" | "number" | "url" | "search" | "tel" | "textarea" | "contenteditable";
 	/** The field's text. Never sent for a password field. */
 	value?: string;
+	/** Opaque, and the same only while the same field keeps focus. */
+	field?: string;
 };
 
 export type BrowserLiveSink = {

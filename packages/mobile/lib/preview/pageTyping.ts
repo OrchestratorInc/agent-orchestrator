@@ -62,8 +62,8 @@ export function canType(focused: FocusedEditable, control: BrowserControl): bool
  * Turns what the person types into page input. Edits are relative to what the
  * phone already typed, with the page's caret at their end, so an echo of the
  * page's value never duplicates or drops a character. The field starts again
- * from the page's value whenever its field may have changed: a new stream, a
- * field of another kind, a tap that moves focus, or control coming back.
+ * from the page's value whenever its field may have changed: a new stream,
+ * another field, a tap that moves focus, or control coming back.
  */
 export class PageTyping {
 	private baseline = "";
@@ -82,6 +82,8 @@ export class PageTyping {
 		const reset = !this.connected ||
 			connection !== this.connection ||
 			(focused?.kind ?? null) !== (this.focused?.kind ?? null) ||
+			// Another field of the same kind: a confirm-password field, another tab's.
+			(focused?.field ?? null) !== (this.focused?.field ?? null) ||
 			(this.tapPending && reported !== this.reported) ||
 			(control === "human" && this.control !== "human");
 		if (reset && reported !== this.reported) this.tapPending = false;

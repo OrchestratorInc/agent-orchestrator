@@ -33,6 +33,14 @@ export const FOCUS_QUERY_SOURCE = `(() => {
 		if (inputKinds.has(kind)) focused = kind === "password" ? { kind } : { kind, value: String(element.value) };
 	} else if (element.isContentEditable) focused = { kind: "contenteditable", value: String(element.innerText) };
 	if (focused && focused.value !== undefined && focused.value.length > ${FOCUS_VALUE_MAX}) delete focused.value;
+	// Numbers each field in this world's own map, which the page cannot see, so
+	// the phone can tell two fields of one kind apart.
+	if (focused) {
+		const fields = globalThis.__aoFocusFields || (globalThis.__aoFocusFields = { map: new WeakMap(), next: 0 });
+		let field = fields.map.get(element);
+		if (field === undefined) fields.map.set(element, field = ++fields.next);
+		focused.field = field;
+	}
 	return JSON.stringify(focused);
 })()`;
 
@@ -49,9 +57,10 @@ export function parseFocusPayload(payload: string): BrowserFocusedEditable | nul
 	}
 	if (parsed === null) return null;
 	if (typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-	const { kind, value } = parsed as { kind?: unknown; value?: unknown };
+	const { kind, value, field } = parsed as { kind?: unknown; value?: unknown; field?: unknown };
 	if (typeof kind !== "string" || !KINDS.has(kind as BrowserFocusedEditable["kind"])) return undefined;
 	const focused: BrowserFocusedEditable = { kind: kind as BrowserFocusedEditable["kind"] };
 	if (kind !== "password" && typeof value === "string" && value.length <= FOCUS_VALUE_MAX) focused.value = value;
+	if (Number.isSafeInteger(field) && (field as number) > 0) focused.field = String(field);
 	return focused;
 }
