@@ -496,12 +496,13 @@ let browserQuitRequested = false;
 let preserveAgentsOnQuit = false;
 let agentQuitCleanupComplete = false;
 let agentQuitCleanupPromise: Promise<void> | null = null;
+let desktopQuitCommitted = false;
 let desktopAgentShutdownAccepted = false;
 let createWindowPromise: Promise<void> | null = null;
 let windowsSessionEnding = false;
 
 function isDesktopExiting(): boolean {
-	return windowsSessionEnding || browserQuitRequested || agentQuitCleanupPromise !== null || agentQuitCleanupComplete;
+	return windowsSessionEnding || desktopQuitCommitted || browserQuitRequested || agentQuitCleanupPromise !== null || agentQuitCleanupComplete;
 }
 
 const desktopQuit = createDesktopQuitController({
@@ -1274,7 +1275,7 @@ async function createWindowInternal(): Promise<void> {
 
 	shellWebContents.on("will-prevent-unload", (event) => {
 		if (
-			windowsSessionEnding ||
+			windowsSessionEnding || desktopQuitCommitted ||
 			(chatDraftRisks.length > 0 &&
 				(chatDraftQuitConfirmed ||
 					chatDraftWindowCloseConfirmed ||
@@ -1291,7 +1292,7 @@ async function createWindowInternal(): Promise<void> {
 	});
 
 	mainWindow.on("close", (event) => {
-		if (windowsSessionEnding) return;
+		if (windowsSessionEnding || desktopQuitCommitted) return;
 		const preventClose = shouldPreventUnsafeChatDraftClose(
 			chatDraftRisks,
 			chatDraftQuitConfirmed || chatDraftWindowCloseConfirmed,
@@ -3093,12 +3094,14 @@ function scheduleDaemonAutoRestart(
 	}, plan.delayMs);
 }
 
-async function shutdownDaemonForDesktopQuit(): Promise<void> {
+// False means the user canceled before any shutdown request was sent.
+async function shutdownDaemonForDesktopQuit(): Promise<boolean> {
 	const accepted = await requestDesktopShutdown({
 		keepAlive: keepDaemonAlive(process.env),
 		appRunId,
 		status: daemonStatus,
 		preserveAgents: () => preserveAgentsOnQuit || isUpdateRestartRequested(),
+		beforeShutdown: commitDesktopQuit,
 		readRunInfo: async () => {
 			const handshakePath = runFilePath();
 			if (!handshakePath) throw new Error("Daemon ownership record is unavailable");
@@ -3111,10 +3114,13 @@ async function shutdownDaemonForDesktopQuit(): Promise<void> {
 			signal: AbortSignal.timeout(3000),
 		}),
 	});
+	if (accepted === null) return false;
 	lifecycleLog("daemon_quit_shutdown", { accepted, daemonPid: daemonProcess?.pid ?? daemonStatus.pid ?? null, updateRestart: isUpdateRestartRequested() });
-	if (!accepted) return;
-	desktopAgentShutdownAccepted = true;
-	if (daemonProcess) daemonStoppingProcess = daemonProcess;
+	if (accepted) {
+		desktopAgentShutdownAccepted = true;
+		if (daemonProcess) daemonStoppingProcess = daemonProcess;
+	}
+	return true;
 }
 
 function stopDaemon(): DaemonStatus {
@@ -5001,22 +5007,40 @@ setUpdateRestartFailureHandler(() => {
 });
 
 let updateQuitDeadlineArmed = false;
-app.on("before-quit", (event) => {
-	if (desktopQuit.handleBeforeQuit(event)) return;
-	if (!windowsSessionEnding && chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
-		event.preventDefault();
+function confirmDesktopQuit(): boolean {
+	if (!desktopQuitCommitted && !windowsSessionEnding && chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		if (confirmUnsafeChatDraftLeave(
 			chatDraftRisks,
 			(options) => dialog.showMessageBoxSync(options),
 			chatDraftDialog,
 		)) {
 			chatDraftQuitConfirmed = true;
-			app.quit();
 		} else {
 			preserveAgentsOnQuit = false;
 			clearUpdateRestartRequest();
 			desktopQuit.cancelQuit();
+			return false;
 		}
+	}
+	return true;
+}
+
+function commitDesktopQuit(): boolean {
+	if (!confirmDesktopQuit()) return false;
+	// POST /shutdown may already stop agents before its response reaches us.
+	// Never offer Stay after that point, including on later draft IPC reports.
+	desktopQuitCommitted = true;
+	return true;
+}
+
+app.on("before-quit", (event) => {
+	if (desktopQuit.handleBeforeQuit(event)) return;
+	if (agentQuitCleanupPromise) {
+		event.preventDefault();
+		return;
+	}
+	if (!confirmDesktopQuit()) {
+		event.preventDefault();
 		return;
 	}
 	if (!agentQuitCleanupComplete) {
@@ -5031,10 +5055,14 @@ app.on("before-quit", (event) => {
 			agentQuitCleanupPromise = shutdownDaemonForDesktopQuit()
 				.catch((error) => {
 					console.error("AO: daemon shutdown on desktop quit failed; quitting anyway", error);
+					return true;
 				})
-				.then(() => {
-					agentQuitCleanupComplete = true;
+				.then((proceed) => {
 					agentQuitCleanupPromise = null;
+					// Unowned/keep-alive/unavailable daemons have no shutdown POST.
+					// Resolve any late draft decision before committing local teardown.
+					if (!proceed || !commitDesktopQuit()) return;
+					agentQuitCleanupComplete = true;
 					app.quit();
 				});
 		}

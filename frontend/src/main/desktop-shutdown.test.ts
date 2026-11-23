@@ -7,12 +7,29 @@ function setup() {
 		appRunId: "run-1",
 		status: { state: "ready" as const, pid: 123, port: 3002 },
 		preserveAgents: vi.fn(() => false),
+		beforeShutdown: vi.fn(() => true),
 		readRunInfo: vi.fn(async () => ({ pid: 123, port: 3002, startedAtMs: 0, owner: "app", appRunId: "run-1" })),
 		requestShutdown: vi.fn(async () => ({ ok: true, status: 202 })),
 	};
 }
 
 describe("desktop daemon shutdown", () => {
+	it("checks cancellation after ownership preparation and before sending shutdown", async () => {
+		const options = setup();
+		let prepared!: () => void;
+		options.readRunInfo.mockImplementationOnce(() => new Promise((resolve) => {
+			prepared = () => resolve({ pid: 123, port: 3002, startedAtMs: 0, owner: "app", appRunId: "run-1" });
+		}));
+		const pending = requestDesktopShutdown(options);
+		expect(options.beforeShutdown).not.toHaveBeenCalled();
+		options.beforeShutdown.mockReturnValue(false);
+		prepared();
+		expect(await pending).toBeNull();
+		expect(options.beforeShutdown).toHaveBeenCalledOnce();
+		expect(options.requestShutdown).not.toHaveBeenCalled();
+		expect(options.preserveAgents).not.toHaveBeenCalled();
+	});
+
 	it("requests agent shutdown for full desktop exit", async () => {
 		const options = setup();
 		expect(await requestDesktopShutdown(options)).toBe(true);

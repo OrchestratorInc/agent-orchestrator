@@ -9,11 +9,12 @@ import { requestDesktopShutdown } from "./desktop-shutdown";
 import { isTrayEnabled } from "./tray-lifecycle";
 import { TRAY_RENDERER_READY_CHANNEL } from "../shared/tray";
 import { parseSharedArtifactLink } from "../../../packages/shared/artifacts/shared-artifact-link";
+import { SET_CHAT_DRAFT_RISK_CHANNEL, parseChatDraftBoundaryKinds, parseChatDraftDialogCopy } from "../shared/chat-draft-risk";
 
 // Execute the production handlers, following daemon-auto-restart's VM harness.
 // This catches wiring mistakes that isolated controller tests cannot observe.
 const source = ts.createSourceFile("main.ts", readFileSync(new URL("../main.ts", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true);
-const functions = new Set(["focusMainWindow", "createWindow", "isDesktopExiting", "shutdownDaemonForDesktopQuit"]);
+const functions = new Set(["focusMainWindow", "createWindow", "isDesktopExiting", "shutdownDaemonForDesktopQuit", "confirmDesktopQuit", "commitDesktopQuit"]);
 const handlers = new Set(["before-quit", "window-all-closed", "second-instance"]);
 const statements = source.statements.filter((node) => {
 	if (ts.isFunctionDeclaration(node)) return functions.has(node.name?.text ?? "");
@@ -22,13 +23,14 @@ const statements = source.statements.filter((node) => {
 	const call = node.expression;
 	const target = call.expression.getText(source);
 	return (target === "app.on" && ts.isStringLiteral(call.arguments[0]) && handlers.has(call.arguments[0].text)) ||
-		(target === "ipcMain.on" && call.arguments[0]?.getText(source) === "TRAY_RENDERER_READY_CHANNEL");
+		(target === "ipcMain.on" && ["TRAY_RENDERER_READY_CHANNEL", "SET_CHAT_DRAFT_RISK_CHANNEL"].includes(call.arguments[0]?.getText(source)));
 }).map((node) => node.getText(source));
 const windowStatements: string[] = [];
 function collectWindowHandlers(node: ts.Node): void {
 	if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)) {
 		const call = node.expression;
-		if (call.expression.getText(source) === "mainWindow.on" && ts.isStringLiteral(call.arguments[0]) && ["close", "session-end"].includes(call.arguments[0].text)) {
+		if ((call.expression.getText(source) === "mainWindow.on" && ts.isStringLiteral(call.arguments[0]) && ["close", "query-session-end", "session-end"].includes(call.arguments[0].text)) ||
+			(call.expression.getText(source) === "shellWebContents.on" && ts.isStringLiteral(call.arguments[0]) && call.arguments[0].text === "will-prevent-unload")) {
 			windowStatements.push(node.getText(source));
 		}
 	}
@@ -67,7 +69,7 @@ function setup(platform: NodeJS.Platform = "win32", withTray = true) {
 	const context = vm.createContext({
 		process: { platform, env: {} }, app, ipcMain, console, Promise, AbortSignal,
 		createDesktopQuitController, requestDesktopShutdown, isTrayEnabled,
-		browserQuitRequested: false, windowsSessionEnding: false,
+		browserQuitRequested: false, windowsSessionEnding: false, desktopQuitCommitted: false,
 		agentQuitCleanupPromise: null as Promise<unknown> | null, agentQuitCleanupComplete: false,
 		browserCleanupComplete: false, browserQuitCleanupPromise: null,
 		preserveAgentsOnQuit: false, desktopAgentShutdownAccepted: false,
@@ -75,6 +77,8 @@ function setup(platform: NodeJS.Platform = "win32", withTray = true) {
 		createWindowInternal, trayController: withTray ? {} : null, trayLifecycle,
 		chatDraftRisks: [] as string[], chatDraftQuitConfirmed: false, chatDraftWindowCloseConfirmed: false,
 		chatDraftDialog: undefined, confirmUnsafeChatDraftLeave: confirmLeave,
+		SET_CHAT_DRAFT_RISK_CHANNEL, parseChatDraftBoundaryKinds, parseChatDraftDialogCopy,
+		shellWebContents: new EventEmitter(),
 		shouldPreventUnsafeChatDraftClose: guard, dialog: { showMessageBoxSync: vi.fn() },
 		isUpdateRestartRequested: () => context.restarting,
 		clearUpdateRestartRequest: () => { context.restarting = false; }, restarting: false,
@@ -105,8 +109,182 @@ function setup(platform: NodeJS.Platform = "win32", withTray = true) {
 	const focus = () => vm.runInContext("focusMainWindow()", context);
 	const settled = async () => { for (let turn = 0; turn < 30; turn++) await Promise.resolve(); };
 	const rendererReady = (sender = context.getShellWebContents()) => ipcMain.emit(TRAY_RENDERER_READY_CHANNEL, { sender });
-	return { app, context, controller, fetch, trayLifecycle, confirmLeave, guard, createWindowInternal, focus, settled, navigated, rendererReady };
+	const draftContents = { isLoading: () => false, isDestroyed: () => false, send: vi.fn() };
+	const reportDraftRisk = (risky = true) => {
+		context.getShellWebContents = () => context.mainWindow ? draftContents : null;
+		ipcMain.emit(SET_CHAT_DRAFT_RISK_CHANNEL, { sender: draftContents }, risky ? ["persistence-failed"] : [],
+			{ title: "Unsaved draft", message: "Leave?", detail: "Copy your draft first.", stay: "Stay", leave: "Leave" });
+	};
+	return { app, context, controller, fetch, trayLifecycle, confirmLeave, guard, createWindowInternal, focus, settled, navigated, rendererReady, reportDraftRisk };
 }
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+	return { promise, resolve, reject };
+}
+
+describe("full quit commitment", () => {
+	const handshake = JSON.stringify({ owner: "app", appRunId: "desktop-1", port: 3002 });
+
+	it.each(["win32", "darwin"] as const)("keeps %s usable after Stay during preparation, then allows a later full quit", async (platform) => {
+		const h = setup(platform);
+		const read = deferred<string>();
+		h.context.readFile = vi.fn().mockReturnValueOnce(read.promise).mockResolvedValue(handshake);
+		h.controller.quitCompletely();
+		h.reportDraftRisk();
+		h.controller.quitCompletely();
+		read.resolve(handshake);
+		await h.settled();
+		expect(h.confirmLeave).toHaveBeenCalledOnce();
+		expect(h.fetch).not.toHaveBeenCalled();
+		expect(h.trayLifecycle.dispose).not.toHaveBeenCalled();
+		expect(h.context.agentQuitCleanupPromise).toBeNull();
+		expect(h.context.agentQuitCleanupComplete).toBe(false);
+		h.focus();
+		h.app.emit("second-instance", {}, ["ao.exe"]);
+		expect(h.context.mainWindow!.focus).toHaveBeenCalledTimes(2);
+		h.reportDraftRisk(false);
+		h.context.mainWindow!.close();
+		h.focus();
+		await h.settled();
+		expect(h.createWindowInternal).toHaveBeenCalledOnce();
+		h.controller.quitCompletely();
+		await h.settled();
+		expect(h.fetch.mock.calls.filter(([url]) => url.endsWith("/shutdown"))).toHaveLength(1);
+		expect(JSON.parse(h.fetch.mock.calls[0][1].body as string).stopAgents).toBe(true);
+		expect(h.context.browserQuitRequested).toBe(true);
+	});
+
+	it("allows Leave for a draft reported during preparation before sending shutdown", async () => {
+		const h = setup();
+		const read = deferred<string>();
+		h.context.readFile = () => read.promise;
+		h.controller.quitCompletely();
+		h.reportDraftRisk();
+		h.confirmLeave.mockReturnValue(true);
+		read.resolve(handshake);
+		await h.settled();
+		expect(h.confirmLeave).toHaveBeenCalledOnce();
+		expect(h.fetch).toHaveBeenCalled();
+		expect(h.context.browserQuitRequested).toBe(true);
+	});
+
+	it.each(["request", "browser cleanup"])("ignores late cancellation while %s is pending after shutdown was sent", async (phase) => {
+		const h = setup();
+		const pending = deferred<{ ok: boolean; status: number }>();
+		const retired = deferred<void>();
+		if (phase === "request") h.fetch.mockReturnValueOnce(pending.promise);
+		else h.context.remoteRegistry.closeAll = () => retired.promise;
+		const quit = vi.fn();
+		h.app.on("quit", quit);
+		h.controller.quitCompletely();
+		await h.settled();
+		expect(h.fetch.mock.calls[0][0]).toContain("/shutdown");
+		h.reportDraftRisk();
+		h.controller.quitCompletely();
+		const close = { preventDefault: vi.fn() };
+		h.context.mainWindow!.emit("close", close);
+		const unload = { preventDefault: vi.fn() };
+		h.context.shellWebContents.emit("will-prevent-unload", unload);
+		expect(close.preventDefault).not.toHaveBeenCalled();
+		expect(unload.preventDefault).toHaveBeenCalled();
+		expect(h.guard).not.toHaveBeenCalled();
+		pending.resolve({ ok: true, status: 202 });
+		retired.resolve();
+		await h.settled();
+		expect(h.confirmLeave).not.toHaveBeenCalled();
+		expect(h.fetch.mock.calls.filter(([url]) => url.endsWith("/shutdown"))).toHaveLength(1);
+		expect(h.trayLifecycle.dispose).toHaveBeenCalled();
+		expect(quit).toHaveBeenCalled();
+	});
+
+	it("finishes Ronish's pending-shutdown reproduction without offering a late Stay", async () => {
+		const h = setup();
+		const pending = deferred<{ ok: boolean; status: number }>();
+		h.fetch.mockReturnValueOnce(pending.promise);
+		const quit = vi.fn();
+		h.app.on("quit", quit);
+		h.controller.quitCompletely();
+		await h.settled();
+		h.reportDraftRisk();
+		pending.resolve({ ok: true, status: 202 });
+		await h.settled();
+		expect(h.confirmLeave).not.toHaveBeenCalled();
+		expect(quit).toHaveBeenCalled();
+		expect(h.context.browserQuitRequested).toBe(true);
+	});
+
+	it.each(["unowned", "read failure"])("allows a late Stay before local teardown when ownership preparation yields %s", async (outcome) => {
+		const h = setup();
+		const read = deferred<string>();
+		const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		try {
+			h.context.readFile = () => read.promise;
+			h.controller.quitCompletely();
+			h.reportDraftRisk();
+			if (outcome === "read failure") read.reject(new Error("unreadable ownership record"));
+			else read.resolve(JSON.stringify({ owner: "persistent", port: 3002 }));
+			await h.settled();
+			expect(h.confirmLeave).toHaveBeenCalledOnce();
+			expect(h.fetch).not.toHaveBeenCalled();
+			expect(h.trayLifecycle.dispose).not.toHaveBeenCalled();
+			h.focus();
+			expect(h.context.mainWindow!.focus).toHaveBeenCalledOnce();
+		} finally { error.mockRestore(); }
+	});
+
+	it("finishes a committed quit even if the shutdown request fails after a late draft report", async () => {
+		const h = setup();
+		const pending = deferred<{ ok: boolean; status: number }>();
+		const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		try {
+			h.fetch.mockReturnValueOnce(pending.promise);
+			const quit = vi.fn();
+			h.app.on("quit", quit);
+			h.controller.quitCompletely();
+			await h.settled();
+			h.reportDraftRisk();
+			pending.reject(new Error("shutdown response timed out"));
+			await h.settled();
+			expect(h.confirmLeave).not.toHaveBeenCalled();
+			expect(quit).toHaveBeenCalled();
+		} finally { error.mockRestore(); }
+	});
+
+	it("clears update preservation after Stay during preparation", async () => {
+		const h = setup();
+		const read = deferred<string>();
+		h.context.readFile = () => read.promise;
+		h.context.restarting = true;
+		h.context.preserveAgentsOnQuit = true;
+		h.controller.quitCompletely();
+		h.reportDraftRisk();
+		read.resolve(handshake);
+		await h.settled();
+		expect(h.fetch).not.toHaveBeenCalled();
+		expect(h.context.restarting).toBe(false);
+		expect(h.context.preserveAgentsOnQuit).toBe(false);
+		h.reportDraftRisk(false);
+		h.controller.quitCompletely();
+		await h.settled();
+		expect(JSON.parse(h.fetch.mock.calls[0][1].body as string).stopAgents).toBe(true);
+	});
+
+	it("honors committed Windows session end while preparation is pending", async () => {
+		const h = setup();
+		const read = deferred<string>();
+		h.context.readFile = () => read.promise;
+		h.controller.quitCompletely();
+		h.reportDraftRisk();
+		h.context.mainWindow!.emit("session-end");
+		read.resolve(handshake);
+		await h.settled();
+		expect(h.confirmLeave).not.toHaveBeenCalled();
+		expect(h.context.browserQuitRequested).toBe(true);
+	});
+});
 
 function setupDeepLinks() {
 	const h = setup();
