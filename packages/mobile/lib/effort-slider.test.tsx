@@ -18,6 +18,7 @@ vi.mock("expo-router", () => ({ useNavigation: () => ({ setOptions: fixtures.set
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
 vi.mock("./haptics", () => ({ haptics: { detent: fixtures.detent } }));
 vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
+vi.mock("./effort-slider-veil", () => ({ EffortSliderVeil: "EffortSliderVeil" }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => fixtures.reduceMotion }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
@@ -163,8 +164,9 @@ describe("effort slider", () => {
 		await act(async () => { renderer = create(<EffortSliderOverlay choices={levels("high")} onChoose={() => {}} bottom="100%" />); });
 		const overlay = renderer!.root.findAll((node) => hostType(node) === "AnimatedView")[0];
 		expect(overlay.props.onTouchStart).toBe(markTouchInside);
-		// A touch on the chat beside the card is outside it.
+		// A touch on the chat beside the card, or through the veil, is outside it.
 		expect(overlay.props.pointerEvents).toBe("box-none");
+		expect(overlay.findAll((node) => hostType(node) === "EffortSliderVeil")).toHaveLength(1);
 	});
 
 	it("holds the screen's back swipe while it is up, so a drag to the right stays on the slider", async () => {

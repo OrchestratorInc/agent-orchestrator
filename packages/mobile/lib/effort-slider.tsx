@@ -4,6 +4,7 @@ import { Platform, StyleSheet, Text, View, type DimensionValue, type LayoutChang
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { AppSymbol } from "./AppSymbol";
+import { EffortSliderVeil } from "./effort-slider-veil";
 import { haptics } from "./haptics";
 import { magneticOffset, nearestStop } from "./modelEffort";
 import type { Theme } from "./theme";
@@ -62,6 +63,7 @@ export function EffortSliderOverlay({ bottom, ...props }: EffortSliderProps & { 
 	// and a touch beside the card must still count as one outside it.
 	return (
 		<Animated.View entering={FadeIn.duration(duration.base)} exiting={FadeOut.duration(duration.fast)} pointerEvents="box-none" onTouchStart={markTouchInside} style={[styles.overlay, { bottom }]}>
+			<EffortSliderVeil />
 			<EffortSlider {...props} />
 		</Animated.View>
 	);
@@ -130,8 +132,9 @@ export function EffortSlider({ choices, onChoose, onRelease }: EffortSliderProps
 	return (
 		<View style={styles.stack}>
 			{/* What the track sets, then the level it is on, centred above the
-			    card rather than inside it. Hidden from screen readers: the track
-			    itself is "Effort", adjustable, valued the level. */}
+			    card rather than inside it; the overlay's veil keeps it readable
+			    over the chat. Hidden from screen readers: the track itself is
+			    "Effort", adjustable, valued the level. */}
 			<View style={styles.heading} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
 				<Text style={styles.title} numberOfLines={1}>Effort</Text>
 				<AppSymbol name="chevronForward" size={iconSize.xs} color={t.textTertiary} weight="semibold" />
