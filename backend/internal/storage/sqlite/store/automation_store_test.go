@@ -364,7 +364,7 @@ func TestAutomationDueScanSkipsArchivedProjects(t *testing.T) {
 	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	for _, projectID := range []domain.ProjectID{"live", "removed"} {
 		if _, err := store.CreateAutomation(ctx, domain.Automation{
-			ID: "automation-" + string(projectID), ProjectID: projectID, DisplayName: "Triage", Prompt: "Review",
+			ID: domain.AutomationID("automation-" + string(projectID)), ProjectID: projectID, DisplayName: "Triage", Prompt: "Review",
 			Kind: domain.KindWorker, RRuleText: "FREQ=DAILY", Timezone: "UTC", Enabled: true,
 			NextRunAt: base, CreatedAt: base, UpdatedAt: base,
 		}); err != nil {
