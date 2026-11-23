@@ -29,11 +29,11 @@ function openDatabase(): Promise<IDBDatabase> {
 	return database;
 }
 
-function listedCreatedAt(queryClient: QueryClient, sessionId: string): string | undefined {
+function savableCreatedAt(queryClient: QueryClient, sessionId: string): string | undefined {
 	const session = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)
 		?.flatMap((workspace) => workspace.sessions)
 		.find((candidate) => candidate.id === sessionId);
-	return session?.createdAt;
+	return session?.kind === "orchestrator" ? undefined : session?.createdAt;
 }
 
 const localChat = (key: QueryKey) => (key[0] === "conversation" && key.length === 2 && typeof key[1] === "string" ? key[1] : undefined);
@@ -78,7 +78,7 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 				.then((entry: Entry | undefined) => {
 					const { state } = event.query;
 					if (!entry || entry.build !== DEV_BUILD_INFO.commit || state.data !== undefined || state.fetchStatus !== "fetching") return;
-					if (entry.createdAt !== listedCreatedAt(queryClient, sessionId)) return;
+					if (entry.createdAt !== savableCreatedAt(queryClient, sessionId)) return;
 					queryClient.setQueryData(savedConversationQueryKey(sessionId), entry.page);
 				})
 				.catch(() => undefined);
@@ -90,7 +90,7 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 		timers.set(sessionId, setTimeout(() => {
 			timers.delete(sessionId);
 			const page = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(event.query.queryKey)?.pages[0];
-			const createdAt = listedCreatedAt(queryClient, sessionId);
+			const createdAt = savableCreatedAt(queryClient, sessionId);
 			if (!page || page.controller.state === "busy" || createdAt === undefined || written.has(page)) return;
 			written.add(page);
 			const entry: Entry = { sessionId, createdAt, build: DEV_BUILD_INFO.commit, savedAt: Date.now(), page };
