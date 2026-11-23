@@ -418,6 +418,7 @@
 	"cloud.startupError.workspaceSetupNotReadyTitle": "ワークスペースのセットアップが完了しませんでした",
 	"cloud.startupError.projectSetupFailedTitle": "プロジェクトのセットアップスクリプトが失敗しました",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "リポジトリのチェックアウトに失敗しました",
+	"cloud.startupError.conversationRestoreFailedTitle": "会話を復元できませんでした",
 	"cloud.startupError.workingDirectoryUnusableTitle": "作業ディレクトリを使用できません",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "作業フォルダーはすでに使用されています",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "作業フォルダーは再起動後に保持されません",

@@ -380,6 +380,7 @@
 	"cloud.startupError.workspaceSetupNotReadyTitle": "The workspace setup didn't finish",
 	"cloud.startupError.projectSetupFailedTitle": "The project's Setup script failed",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "The repository checkout failed",
+	"cloud.startupError.conversationRestoreFailedTitle": "The conversation could not be restored",
 	"cloud.startupError.workingDirectoryUnusableTitle": "The working directory can't be used",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "The working folder is already in use",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "The working folder isn't kept across restarts",

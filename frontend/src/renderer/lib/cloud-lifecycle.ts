@@ -109,6 +109,7 @@ export const WORKSPACE_STARTUP_ERROR_CODES: ReadonlySet<string> = new Set([
 	"working_directory_occupied",
 	"project_setup_failed",
 	"agent_start_failed",
+	"conversation_restore_failed",
 ]);
 
 export function isWorkspaceStartupError(code?: string): boolean {

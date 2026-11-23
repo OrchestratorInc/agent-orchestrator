@@ -74,6 +74,7 @@ const FAILED_STARTUP_TITLES: Partial<Record<string, MessageKey>> = {
 	working_directory_unusable: "cloud.startupError.workingDirectoryUnusableTitle",
 	working_directory_occupied: "cloud.startupError.workingDirectoryOccupiedTitle",
 	working_directory_not_durable: "cloud.startupError.workingDirectoryNotDurableTitle",
+	conversation_restore_failed: "cloud.startupError.conversationRestoreFailedTitle",
 	// A session that ran and whose compute then stopped responding did not
 	// fail to start: say what happened instead.
 	sandbox_unresponsive: "cloud.startupError.sandboxUnresponsiveTitle",

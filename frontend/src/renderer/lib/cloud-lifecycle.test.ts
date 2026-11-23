@@ -148,6 +148,18 @@ describe("cloudStartupProblem", () => {
 		});
 	});
 
+	it("reports a conversation a woken session could not restore even though the worker is connected", () => {
+		const restore = {
+			code: "conversation_restore_failed",
+			message: "AO couldn't restore this session's conversation, so the agent did not start without it. Reopen this session to try again.",
+			at: "2026-11-24T10:00:00Z",
+			detail: "fetch captured checkpoint: 502",
+		};
+		expect(cloudStartupProblem(withRuntime("running", { startupError: restore }, true))).toEqual({
+			phase: "failed", message: restore.message, code: "conversation_restore_failed", detail: restore.detail, at: restore.at,
+		});
+	});
+
 	it("reports a final startup failure once AO gives up", () => {
 		expect(cloudStartupProblem(withRuntime("terminated", { startupError }))).toEqual({
 			phase: "failed",
