@@ -297,3 +297,40 @@ func TestRemoteTypedLineBreakAsks(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestRemoteSummaryNeverCarriesTypedText(t *testing.T) {
+	// Discovery fails, so the prompt falls back to describing the command.
+	// The summary goes to the prompt, the audit log and push notifications,
+	// so typed values must never appear in it.
+	const secret = "4111111111111111"
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"type", "@e1", secret + "\n"}, `Type a line break into @e1`},
+		{[]string{"keyboard", "type", secret + "\n"}, `Type a line break into the focused element`},
+		{[]string{"find", "label", "Card", "type", secret + "\n"}, `Type a line break into "Card"`},
+		{[]string{"batch", `[["fill","@e1","` + secret + `"],["click","@e2"]]`}, `Run "batch"`},
+		{[]string{"frobnicate", secret}, `Run "frobnicate"`},
+	} {
+		remote := &fakeRemote{failAll: true}
+		svc, gate, token := remoteService(t, remote)
+		asked := answer(t, gate, approval.DecisionDeny)
+		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, tc.args, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+			t.Fatalf("%q: err = %v", tc.args, err)
+		}
+		p := <-asked
+		if strings.Contains(p.Action, secret) || strings.Contains(p.Reason, secret) {
+			t.Fatalf("%q: prompt carries the typed value: %+v", tc.args, p)
+		}
+		if p.Action != tc.want {
+			t.Fatalf("%q: summary = %q, want %q", tc.args, p.Action, tc.want)
+		}
+		entries, _ := gate.Audit(10)
+		for _, entry := range entries {
+			if strings.Contains(entry.Action, secret) || strings.Contains(entry.Reason, secret) {
+				t.Fatalf("%q: audit carries the typed value: %+v", tc.args, entry)
+			}
+		}
+	}
+}

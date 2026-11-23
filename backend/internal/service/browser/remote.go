@@ -192,10 +192,7 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 		return nil
 	}
 	pageURL, pageTitle := s.remotePage(ctx)
-	command := strings.Join(args, " ")
-	if len(command) > 160 {
-		command = command[:160] + "…"
-	}
+	summary := onSite(remoteSummary(gate, args), pageURL)
 	var verdict approval.Verdict
 	if gate.kind == remoteDescribe {
 		target, identified, partial := s.remoteTarget(ctx, gate)
@@ -205,11 +202,11 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 		}
 		if identified && partial && !verdict.NeedsApproval {
 			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
-				Summary: onSite(fmt.Sprintf("Run %q", command), pageURL),
+				Summary: summary,
 				Reason:  "Orchestrator could not read the form this element belongs to, so it asks first."}
 		} else if !identified {
 			verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
-				Summary: onSite(fmt.Sprintf("Run %q", command), pageURL),
+				Summary: summary,
 				Reason:  "Orchestrator could not identify the element this acts on, so it asks first."}
 		}
 	} else {
@@ -218,7 +215,7 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 			reason = "Orchestrator cannot tell in advance what this command does on the page, so it asks first."
 		}
 		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
-			Summary: onSite(fmt.Sprintf("Run %q", command), pageURL), Reason: reason}
+			Summary: summary, Reason: reason}
 	}
 	if !verdict.NeedsApproval {
 		return nil
@@ -235,6 +232,52 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 		return nil
 	}
 	return approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
+}
+
+// remoteSummary says what a gated command does from its verb and target
+// only. It goes to the prompt, the audit log and push notifications, so it
+// never carries typed text or other argument values; eval and js keep their
+// script, which is the action being approved.
+func remoteSummary(gate remoteGate, args []string) string {
+	if gate.kind == remoteAsk {
+		if gate.action == "eval" || gate.action == "js" {
+			script := strings.Join(remoteCommandArgs(args, gate.action), " ")
+			if len(script) > 160 {
+				script = script[:160] + "…"
+			}
+			return fmt.Sprintf("Run %q", strings.TrimSpace(gate.action+" "+script))
+		}
+		return fmt.Sprintf("Run %q", gate.action)
+	}
+	target := "the focused element"
+	switch {
+	case gate.name != "":
+		target = fmt.Sprintf("%q", gate.name)
+	case gate.selector != "":
+		target = gate.selector
+		if len(target) > 80 {
+			target = target[:80] + "…"
+		}
+	}
+	switch {
+	case gate.typed:
+		return "Type a line break into " + target
+	case gate.action == "press":
+		return fmt.Sprintf("Press %s on %s", strings.TrimSpace(gate.key), target)
+	case gate.action == "dblclick":
+		return "Double-click " + target
+	}
+	return "Click " + target
+}
+
+// remoteCommandArgs returns what follows the command verb in args.
+func remoteCommandArgs(args []string, verb string) []string {
+	for i, word := range args {
+		if strings.EqualFold(word, verb) {
+			return args[i+1:]
+		}
+	}
+	return nil
 }
 
 func onSite(text, pageURL string) string {
@@ -382,6 +425,14 @@ const nameOf = (el) => {
   const tag = el.tagName.toLowerCase(), type = (el.type || "").toLowerCase();
   let name = clean(el.getAttribute("aria-label")) || (tag === "input" && ["submit", "button"].includes(type) ? clean(el.value) : "");
   if (!name && el.id) { const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]'); if (l) name = clean(l.textContent); }
+  // An editable field's content is what the agent typed: name it only by its
+  // label or hint, never by its text, so typed values stay out of the prompt.
+  const editable = tag === "textarea" || el.isContentEditable || (tag === "input" && !["submit", "button", "image", "reset", "checkbox", "radio"].includes(type));
+  if (editable) {
+    const wrap = name ? null : el.closest("label");
+    if (wrap) name = clean([...wrap.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" "));
+    return name || clean(el.placeholder || el.getAttribute("aria-placeholder") || el.getAttribute("data-placeholder") || el.title);
+  }
   return name || clean(el.innerText || el.textContent || el.placeholder);
 };
 let el;
