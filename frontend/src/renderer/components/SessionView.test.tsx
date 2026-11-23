@@ -666,13 +666,14 @@ vi.mock("./SessionFileExplorer", () => ({
 	},
 }));
 vi.mock("./SessionFileWorkspace", () => ({
-	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, previousPath, scope, split }: {
+	SessionFileWorkspace: ({ active, annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, previousPath, scope, split }: {
 		annotation: {
 			begin: (target: { path: string; scope: string; side: string; surface: string }) => void;
 			draftFor: (target: { path: string }) => string;
 			setDraft: (target: { path: string }, draft: string) => void;
 			targets: Array<{ path: string }>;
 		};
+		active: boolean;
 		initialEditing?: boolean;
 		initialLine?: number;
 		initialMode?: string;
@@ -684,7 +685,7 @@ vi.mock("./SessionFileWorkspace", () => ({
 		split: boolean;
 	}) => {
 		return (
-			<div data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
+			<div data-active={String(active)} data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
 				{path}
 				{initialLine != null ? <button onClick={() => onInitialLineConsumed?.(path, initialRequestKey ?? 0)} type="button">consume initial line</button> : null}
 				<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
@@ -6300,6 +6301,22 @@ describe("SessionView", () => {
 		} finally {
 			rect.mockRestore();
 		}
+	});
+
+	it("marks the center file inactive while the maximized Browser covers it", async () => {
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+		const workspace = await screen.findByTestId("session-file-workspace");
+		expect(workspace).toHaveAttribute("data-active", "true");
+
+		fireEvent.click(screen.getByRole("button", { name: "pop browser" }));
+		expect(document.querySelector(".browser-popout-overlay")).toBeInTheDocument();
+		expect(workspace).toHaveAttribute("data-active", "false");
+
+		fireEvent.click(screen.getByRole("button", { name: "browser center" }));
+		expect(document.querySelector(".browser-popout-overlay")).not.toBeInTheDocument();
+		expect(workspace).toHaveAttribute("data-active", "true");
 	});
 
 	it("does not reserve the traffic-light band during native macOS fullscreen", () => {

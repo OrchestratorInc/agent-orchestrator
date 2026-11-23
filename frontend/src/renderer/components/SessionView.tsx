@@ -3178,7 +3178,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											>
 												{session?.cloud ? (
 													<CloudFileContentPane
-														active={visible && !filesPoppedOut}
+														active={visible && !filesPoppedOut && !browserPopOutMounted}
 														annotation={fileAnnotation}
 														commitSha={request?.commitSha}
 														initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
@@ -3194,7 +3194,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 													/>
 												) : (
 													<SessionFileWorkspace
-														active={visible && !filesPoppedOut}
+														active={visible && !filesPoppedOut && !browserPopOutMounted}
 														focusRequest={paneFocusRequests[paneKey] ?? 0}
 														fileKey={fileKey}
 														hostId={hostId}
