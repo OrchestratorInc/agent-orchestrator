@@ -8,14 +8,15 @@ import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { RetryButton } from "../WorkspaceDiffView";
 import {
-	MAX_ARTIFACT_COMMENT_BODY,
+	ARTIFACT_COMMENT_MAX_BODY_LENGTH,
 	type ArtifactComment,
 	type ArtifactCommentAnchor,
 	type ArtifactCommentGroup,
 	type ArtifactCommentGroups,
-	type ArtifactCommentPosition,
+	type BridgeAnchorPosition,
 	type ArtifactCommentThread,
-} from "./contract";
+} from "../../../shared/artifact-comments";
+import { useArtifactCommentAuthorLabel } from "./author-label";
 import { SendThreadToAgentDialog, type ArtifactCommentsSendTarget } from "./SendThreadToAgentDialog";
 import { isPendingId, type ArtifactCommentsState } from "./useArtifactComments";
 import type { CommentBridgeStatus } from "./useCommentBridge";
@@ -29,9 +30,10 @@ function initials(name: string): string {
 
 function useAuthorName() {
 	const { t } = useTranslation();
+	const label = useArtifactCommentAuthorLabel();
+	// Your own comment shows as You until it has your display name (an instant copy has none).
 	return (comment: ArtifactComment, viewer: Viewer) =>
-		comment.author?.id === viewer.userId && !comment.author.name ? t("artifactComments.you")
-			: comment.author?.name || t("artifactComments.formerUser");
+		comment.author?.id === viewer.userId && !comment.author.name.trim() ? t("artifactComments.you") : label(comment.author);
 }
 
 function useRelative() {
@@ -96,7 +98,7 @@ function CommentComposer({ autoFocus, onCancel, onSubmit, placeholder, variant }
 					aria-label={placeholder}
 					autoFocus={autoFocus}
 					className="board-scrollbar max-h-32 min-h-7 w-full resize-none border-0 bg-transparent py-1 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
-					maxLength={MAX_ARTIFACT_COMMENT_BODY}
+					maxLength={ARTIFACT_COMMENT_MAX_BODY_LENGTH}
 					onChange={(event) => setText(event.target.value)}
 					onKeyDown={onKeyDown}
 					placeholder={placeholder}
@@ -187,7 +189,7 @@ function CommentItem({ comment, comments, reply, viewer }: {
 						aria-label={t("artifactComments.edit")}
 						autoFocus
 						className="board-scrollbar min-h-12 w-full resize-none rounded-md bg-input/50 px-2 py-1 text-sm text-foreground outline-none"
-						maxLength={MAX_ARTIFACT_COMMENT_BODY}
+						maxLength={ARTIFACT_COMMENT_MAX_BODY_LENGTH}
 						onChange={(event) => setDraft(event.target.value)}
 						value={draft}
 					/>
@@ -223,6 +225,7 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 	version: number;
 }) {
 	const { t, i18n } = useTranslation();
+	const authorLabel = useArtifactCommentAuthorLabel();
 	const [sendOpen, setSendOpen] = useState(false);
 	const [statusError, setStatusError] = useState(false);
 	const pending = isPendingId(thread.id);
@@ -238,8 +241,8 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 		: null;
 	return (
 		<div className="flex flex-col gap-2 py-2 first:pt-0 last:pb-0" data-thread-id={thread.id}>
-			{resolved && thread.resolvedBy ? (
-				<p className="text-caption text-muted-foreground">{t("artifactComments.resolvedBy", { name: thread.resolvedBy.name || t("artifactComments.formerUser") })}</p>
+			{resolved ? (
+				<p className="text-caption text-muted-foreground">{t("artifactComments.resolvedBy", { name: authorLabel(thread.resolvedBy) })}</p>
 			) : null}
 			{sentTime ? <p className="text-caption text-muted-foreground">{t("artifactComments.sentAt", { time: sentTime })}</p> : null}
 			{thread.comments.map((comment, index) => (
@@ -337,7 +340,7 @@ export type ArtifactCommentsPanelProps = {
 	onExpand: (path: string | null) => void;
 	onCancelPick: () => void;
 	picked: ArtifactCommentAnchor | null;
-	positions: readonly ArtifactCommentPosition[];
+	positions: readonly BridgeAnchorPosition[];
 	/** The session that made the file, when the app knows it: offers Send to agent to the owner. */
 	sendTarget?: ArtifactCommentsSendTarget;
 };
@@ -478,7 +481,7 @@ export function ArtifactCommentsPanel({
 							onClick={() => setShowResolved((current) => !current)}
 							type="button"
 						>
-							{t("artifactComments.resolvedSection", { n: groups.resolved.reduce((sum, group) => sum + group.threads.length, 0) })}
+							{t("artifactComments.resolvedSection", { n: groups.resolvedCount })}
 							{showResolved ? <ChevronDown aria-hidden="true" className="size-3.5" /> : <ChevronRight aria-hidden="true" className="size-3.5" />}
 						</button>
 						{showResolved ? groups.resolved.map((group) => (
@@ -491,7 +494,7 @@ export function ArtifactCommentsPanel({
 				{groups.unanchored.length > 0 ? (
 					<div className="flex flex-col gap-2">
 						<p className="text-xs text-muted-foreground">{t("artifactComments.unanchored")}</p>
-						<section className="flex flex-col divide-y divide-border rounded-lg border border-border bg-card p-2.5">{threadViews(groups.unanchored)}</section>
+						<section className="flex flex-col divide-y divide-border rounded-lg border border-border bg-card p-2.5">{threadViews(groups.unanchored.flatMap((group) => group.threads))}</section>
 					</div>
 				) : null}
 			</div>

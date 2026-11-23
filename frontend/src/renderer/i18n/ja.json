@@ -5526,5 +5526,6 @@
 	"artifactComments.openChat": "チャットを開く",
 	"artifactComments.sending": "送信中…",
 	"artifactComments.replies_other": "返信 {{count}} 件",
-	"artifactComments.replies_one": "返信 {{count}} 件"
+	"artifactComments.replies_one": "返信 {{count}} 件",
+	"artifactComments.orchestratorUser": "Orchestrator ユーザー"
 }

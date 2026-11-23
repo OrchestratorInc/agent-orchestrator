@@ -5526,5 +5526,6 @@
 	"artifactComments.openChat": "채팅 열기",
 	"artifactComments.sending": "보내는 중…",
 	"artifactComments.replies_other": "답글 {{count}}개",
-	"artifactComments.replies_one": "답글 {{count}}개"
+	"artifactComments.replies_one": "답글 {{count}}개",
+	"artifactComments.orchestratorUser": "Orchestrator 사용자"
 }

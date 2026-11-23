@@ -2,17 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { CloudCpError } from "../../lib/cloud-cp";
-import { useArtifactCommentsClient } from "./client";
-import type {
-	ArtifactComment,
-	ArtifactCommentAnchor,
-	ArtifactCommentsSnapshot,
-	ArtifactCommentThread,
-	ArtifactCommentThreadStatus,
-} from "./contract";
+import {
+	ARTIFACT_COMMENTS_POLL_INTERVAL_MS,
+	type ArtifactComment,
+	type ArtifactCommentAnchor,
+	type ArtifactCommentsSnapshot,
+	type ArtifactCommentThread,
+	type ArtifactCommentThreadStatus,
+} from "../../../shared/artifact-comments";
 
 /** How often an open panel asks whether anything changed. */
-export const ARTIFACT_COMMENTS_POLL_MS = 30_000;
+export const ARTIFACT_COMMENTS_POLL_MS = ARTIFACT_COMMENTS_POLL_INTERVAL_MS;
 
 type Cached = { snapshot: ArtifactCommentsSnapshot; etag: string | null };
 
@@ -38,13 +38,14 @@ function withPending(snapshot: ArtifactCommentsSnapshot, pending: readonly Pendi
 	let threads = snapshot.threads;
 	for (const write of pending) {
 		if (write.kind === "thread") {
-			const comment: ArtifactComment = { id: PENDING_ID_PREFIX + write.clientId, author: you, body: write.body, createdAt: write.at, editedAt: null, deleted: false };
+			const threadId = PENDING_ID_PREFIX + write.clientId;
+			const comment: ArtifactComment = { id: threadId, threadId, author: you, clientId: write.clientId, body: write.body, createdAt: write.at, editedAt: null, deleted: false };
 			threads = [...threads, {
-				id: PENDING_ID_PREFIX + write.clientId, version: snapshot.version, status: "open", anchor: write.anchor, createdAt: write.at,
-				resolvedBy: null, resolvedAt: null, sentToAgentAt: null, comments: [comment],
+				id: threadId, version: snapshot.version, status: "open", anchor: write.anchor, createdAt: write.at,
+				resolvedBy: null, resolvedAt: null, sentToAgentAt: null, sentToAgentCount: 0, comments: [comment],
 			}];
 		} else if (write.kind === "reply") {
-			const comment: ArtifactComment = { id: PENDING_ID_PREFIX + write.clientId, author: you, body: write.body, createdAt: write.at, editedAt: null, deleted: false };
+			const comment: ArtifactComment = { id: PENDING_ID_PREFIX + write.clientId, threadId: write.threadId, author: you, clientId: write.clientId, body: write.body, createdAt: write.at, editedAt: null, deleted: false };
 			threads = threads.map((thread) => thread.id === write.threadId ? { ...thread, comments: [...thread.comments, comment] } : thread);
 		} else {
 			threads = threads.map((thread) => thread.id === write.threadId ? { ...thread, status: write.status } : thread);
@@ -72,8 +73,7 @@ export function isLostAccess(error: unknown): boolean {
  * Nothing streams. Writes show at once and are replaced by the saved row.
  */
 export function useArtifactComments(slug: string | null, { panelOpen = false, enabled = true }: { panelOpen?: boolean; enabled?: boolean } = {}) {
-	const client = useArtifactCommentsClient();
-	const { ready, baseUrl, userId } = useCloudCp();
+	const { client, ready, baseUrl, userId } = useCloudCp();
 	const queryClient = useQueryClient();
 	const key = useMemo(() => artifactCommentsQueryKey(baseUrl, userId, slug ?? ""), [baseUrl, slug, userId]);
 	const query = useQuery({
@@ -83,15 +83,15 @@ export function useArtifactComments(slug: string | null, { panelOpen = false, en
 		refetchOnWindowFocus: true,
 		refetchInterval: panelOpen ? ARTIFACT_COMMENTS_POLL_MS : false,
 		refetchIntervalInBackground: false,
-		retry: (count, error) => !isLostAccess(error) && !(error instanceof CloudCpError && error.code === "comments_unavailable") && count < 1,
+		retry: (count, error) => !isLostAccess(error) && count < 1,
 		queryFn: async ({ signal }): Promise<Cached> => {
 			const previous = queryClient.getQueryData<Cached>(key);
-			const result = await client.list(slug!, { signal, etag: previous?.etag ?? null });
-			if (result.kind === "unchanged") {
+			const result = await client.listArtifactShareComments(slug!, { signal, ...(previous?.etag ? { etag: previous.etag } : {}) });
+			if (result.notModified) {
 				// Same object: nothing downstream redraws.
 				if (previous) return previous;
-				const fresh = await client.list(slug!, { signal });
-				if (fresh.kind === "unchanged") throw new CloudCpError("The control plane answered 304 to a first read.", { status: 304 });
+				const fresh = await client.listArtifactShareComments(slug!, { signal });
+				if (fresh.notModified) throw new CloudCpError("The control plane answered 304 to a first read.", { status: 304 });
 				return { snapshot: fresh.snapshot, etag: fresh.etag };
 			}
 			return { snapshot: result.snapshot, etag: result.etag };
@@ -132,37 +132,37 @@ export function useArtifactComments(slug: string | null, { panelOpen = false, en
 			const version = query.data?.snapshot.version ?? 1;
 			return write(
 				{ kind: "thread", clientId, anchor, body, at: new Date().toISOString() },
-				() => client.createThread(slug!, { version, anchor, body, clientId }),
+				() => client.createArtifactShareThread(slug!, { version, anchor, body, clientId }),
 				(thread) => patch((current) => replaceThread(current, thread)),
 			);
 		},
 		reply: (threadId: string, body: string, clientId: string) => write(
 			{ kind: "reply", clientId, threadId, body, at: new Date().toISOString() },
-			() => client.reply(slug!, threadId, { body, clientId }),
+			() => client.replyArtifactShareThread(slug!, threadId, { body, clientId }),
 			(comment) => patch((current) => ({
 				...current,
-				threads: current.threads.map((thread) => thread.id === threadId && !thread.comments.some((item) => item.id === comment.id)
+				threads: current.threads.map((thread) => thread.id === threadId && !thread.comments.some((item) => item.id === comment.id || item.clientId === comment.clientId)
 					? { ...thread, comments: [...thread.comments, comment] }
 					: thread),
 			})),
 		),
 		setStatus: (threadId: string, status: ArtifactCommentThreadStatus) => write(
 			{ kind: "status", clientId: crypto.randomUUID(), threadId, status },
-			() => client.setStatus(slug!, threadId, status),
+			() => client.setArtifactShareThreadStatus(slug!, threadId, status),
 			(thread) => patch((current) => replaceThread(current, thread)),
 		),
 		edit: (commentId: string, body: string) => write(
 			null,
-			() => client.edit(slug!, commentId, body),
+			() => client.editArtifactShareComment(slug!, commentId, { body }),
 			(comment) => patch((current) => ({
 				...current,
 				threads: current.threads.map((thread) => ({ ...thread, comments: thread.comments.map((item) => item.id === comment.id ? comment : item) })),
 			})),
 		),
-		remove: (commentId: string) => write(null, () => client.remove(slug!, commentId), () => undefined),
+		remove: (commentId: string) => write(null, () => client.deleteArtifactShareComment(slug!, commentId), () => undefined),
 		markSent: (threadId: string) => write(
 			null,
-			() => client.markSent(slug!, threadId),
+			() => client.markArtifactShareThreadSent(slug!, threadId),
 			(thread) => patch((current) => replaceThread(current, thread)),
 		),
 	}), [client, patch, query.data?.snapshot.version, slug, write]);

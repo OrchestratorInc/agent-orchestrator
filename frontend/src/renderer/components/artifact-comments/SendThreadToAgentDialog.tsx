@@ -6,7 +6,8 @@ import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Label } from "../ui/label";
-import { formatArtifactCommentMessage, MAX_ARTIFACT_COMMENT_NOTE, type ArtifactCommentThread } from "./contract";
+import { formatArtifactCommentMessage, MAX_ARTIFACT_COMMENT_NOTE_LENGTH, type ArtifactCommentThread } from "../../../shared/artifact-comments";
+import { useArtifactCommentAuthorLabel } from "./author-label";
 
 /** Where Send to agent goes: the session that made the file. Present only when the app knows it. */
 export type ArtifactCommentsSendTarget = {
@@ -45,6 +46,7 @@ export function SendThreadToAgentDialog({ markSent, onOpenChange, open, target, 
 		}
 	}, [open]);
 	const sessionName = target.session.title || target.session.id;
+	const authorLabel = useArtifactCommentAuthorLabel();
 
 	const confirm = async () => {
 		setBusy(true);
@@ -90,7 +92,7 @@ export function SendThreadToAgentDialog({ markSent, onOpenChange, open, target, 
 			<ul aria-label={t("artifactComments.title")} className="board-scrollbar flex max-h-40 flex-col gap-1.5 overflow-y-auto rounded-md border border-border p-2 text-xs">
 				{thread.comments.map((comment) => (
 					<li className="whitespace-pre-wrap break-words text-foreground" key={comment.id}>
-						<span className="font-medium">{comment.author?.name || t("artifactComments.formerUser")}: </span>
+						<span className="font-medium">{authorLabel(comment.author)}: </span>
 						{comment.deleted ? <span className="text-muted-foreground">{t("artifactComments.deleted")}</span> : comment.body}
 					</li>
 				))}
@@ -101,7 +103,7 @@ export function SendThreadToAgentDialog({ markSent, onOpenChange, open, target, 
 					className="board-scrollbar min-h-16 w-full resize-none rounded-md border border-transparent bg-input/50 px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
 					disabled={busy}
 					id={`send-note-${thread.id}`}
-					maxLength={MAX_ARTIFACT_COMMENT_NOTE}
+					maxLength={MAX_ARTIFACT_COMMENT_NOTE_LENGTH}
 					onChange={(event) => setNote(event.target.value)}
 					rows={3}
 					value={note}

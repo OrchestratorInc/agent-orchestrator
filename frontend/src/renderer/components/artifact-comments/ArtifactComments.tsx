@@ -11,15 +11,15 @@ import {
 	artifactCommentMarkers,
 	groupArtifactCommentThreads,
 	type ArtifactCommentAnchor,
-	type ArtifactCommentPosition,
-	type ArtifactCommentsBridgeKind,
-} from "./contract";
+	type ArtifactCommentsPickKind,
+	type BridgeAnchorPosition,
+} from "../../../shared/artifact-comments";
 import type { ArtifactCommentsSendTarget } from "./SendThreadToAgentDialog";
 import { useArtifactComments } from "./useArtifactComments";
 import { useCommentBridge } from "./useCommentBridge";
 
 /** Files whose published page takes comments: Markdown and HTML. */
-export function artifactCommentsKind(path: string): ArtifactCommentsBridgeKind | null {
+export function artifactCommentsKind(path: string): ArtifactCommentsPickKind | null {
 	if (/\.(md|markdown)$/i.test(path)) return "markdown";
 	if (/\.html?$/i.test(path)) return "html";
 	return null;
@@ -70,7 +70,7 @@ export function ArtifactCommentsButton({ onToggle, open, slug }: { onToggle: () 
  * local file has changed since publishing.
  */
 export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget, slug, title }: {
-	kind: ArtifactCommentsBridgeKind;
+	kind: ArtifactCommentsPickKind;
 	onClose: () => void;
 	/** The local file changed since it was published (the amber dot on Publish). */
 	outdated: boolean;
@@ -81,7 +81,7 @@ export function ArtifactCommentsWorkspace({ kind, onClose, outdated, sendTarget,
 	const { t } = useTranslation();
 	const comments = useArtifactComments(slug, { panelOpen: true });
 	const [frame, setFrame] = useState<HTMLIFrameElement | null>(null);
-	const [positions, setPositions] = useState<ArtifactCommentPosition[]>([]);
+	const [positions, setPositions] = useState<BridgeAnchorPosition[]>([]);
 	const [picked, setPicked] = useState<ArtifactCommentAnchor | null>(null);
 	const [expandedPath, setExpandedPath] = useState<string | null>(null);
 	const bridge = useCommentBridge(frame, {

@@ -14,7 +14,6 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
-import { ArtifactCommentsClientContext, type ArtifactCommentsClient } from "./artifact-comments/client";
 
 // The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
 vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
@@ -31,6 +30,7 @@ vi.mock("../hooks/useSettings", async (importOriginal) => {
 	};
 });
 
+const listCommentsMock = vi.hoisted(() => vi.fn());
 const { artifactFileChangesMock, capturedSave, cloudAccessMock, createArtifactAccessMock, deleteArtifactMock, deleteCloudArtifactMock, listArtifactsMock, openPreviewMock, saveCloudArtifactMock, sendSessionMessageMock } = vi.hoisted(() => ({
 	artifactFileChangesMock: vi.fn(),
 	capturedSave: { current: undefined as ((input: { content: string; expectedFileFingerprint: string; path: string }) => Promise<unknown>) | undefined },
@@ -67,6 +67,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 			saveSessionArtifact: saveCloudArtifactMock,
 			listSessionArtifacts: listArtifactsMock,
 			createSessionArtifactAccess: createArtifactAccessMock,
+			listArtifactShareComments: listCommentsMock,
 		},
 		ready: true,
 		baseUrl: "https://cp.test",
@@ -1226,28 +1227,23 @@ describe("SessionArtifactsView", () => {
 
 describe("SessionArtifactsView comments", () => {
 	const published = (files: SessionArtifact[] = artifacts) => files.map((file) => ({ ...file, shareUrl: `https://viewer.test/artifact/${file.name.replace(/\W/g, "-")}` }));
-	const commentsClient = (): ArtifactCommentsClient => ({
-		list: vi.fn().mockResolvedValue({
-			kind: "snapshot",
-			etag: "\"r1-v2\"",
-			snapshot: {
-				version: 2, currentVersion: 2, revision: 1, you: { userId: "me-1", isOwner: true },
-				threads: [
-					{ id: "t1", version: 2, status: "open", anchor: { path: "body>h1:1", tag: "h1", textHash: "a" }, createdAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, comments: [{ id: "c1", author: { id: "sam", name: "Sam" }, body: "Title?", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
-					{ id: "t2", version: 2, status: "open", anchor: { path: "body>p:1", tag: "p", textHash: "b" }, createdAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, comments: [{ id: "c2", author: { id: "sam", name: "Sam" }, body: "Typo", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
-					{ id: "t3", version: 2, status: "resolved", anchor: { path: "body>p:2", tag: "p", textHash: "c" }, createdAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, comments: [{ id: "c3", author: { id: "sam", name: "Sam" }, body: "Done", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
-				],
-			},
-		}),
-		createThread: vi.fn(), reply: vi.fn(), setStatus: vi.fn(), edit: vi.fn(), remove: vi.fn(), markSent: vi.fn(),
+	const snapshotResult = () => ({
+		notModified: false,
+		etag: "\"r1-v2\"",
+		snapshot: {
+			version: 2, currentVersion: 2, revision: 1, you: { userId: "me-1", isOwner: true },
+			threads: [
+				{ id: "t1", version: 2, status: "open", anchor: { path: "body>h1:1", tag: "p", textHash: "000000000000000a", excerpt: "" }, createdAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, sentToAgentCount: 0, comments: [{ id: "c-t1", threadId: "t1", clientId: "k-t1", author: { id: "sam", name: "Sam" }, body: "Note t1", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
+				{ id: "t2", version: 2, status: "open", anchor: { path: "body>p:1", tag: "p", textHash: "000000000000000b", excerpt: "" }, createdAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, sentToAgentCount: 0, comments: [{ id: "c-t2", threadId: "t2", clientId: "k-t2", author: { id: "sam", name: "Sam" }, body: "Note t2", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
+				{ id: "t3", version: 2, status: "resolved", anchor: { path: "body>p:2", tag: "p", textHash: "000000000000000c", excerpt: "" }, createdAt: "2026-11-23T00:00:00Z", resolvedBy: null, resolvedAt: null, sentToAgentAt: null, sentToAgentCount: 0, comments: [{ id: "c-t3", threadId: "t3", clientId: "k-t3", author: { id: "sam", name: "Sam" }, body: "Note t3", createdAt: "2026-11-23T00:00:00Z", editedAt: null, deleted: false }] },
+			],
+		},
 	});
-	const renderWithComments = (node: ReactNode, client = commentsClient()) => ({
-		...renderView(<ArtifactCommentsClientContext.Provider value={client}>{node}</ArtifactCommentsClientContext.Provider>),
-		commentsClient: client,
-	});
+	const renderWithComments = (node: ReactNode) => ({ ...renderView(node), commentsClient: { list: listCommentsMock } });
 
 	beforeEach(() => {
 		cloudAccessMock.mockReset().mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
+		listCommentsMock.mockReset().mockResolvedValue(snapshotResult());
 	});
 
 	it("puts Comments between Publish and Full screen with the open-thread count", async () => {

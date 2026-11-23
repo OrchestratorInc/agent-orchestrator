@@ -5867,5 +5867,6 @@
 	"artifactComments.replies_one": "{{count}} ответ",
 	"artifactComments.replies_few": "{{count}} ответа",
 	"artifactComments.replies_many": "{{count}} ответов",
-	"artifactComments.replies_other": "{{count}} ответа"
+	"artifactComments.replies_other": "{{count}} ответа",
+	"artifactComments.orchestratorUser": "Пользователь Orchestrator"
 }

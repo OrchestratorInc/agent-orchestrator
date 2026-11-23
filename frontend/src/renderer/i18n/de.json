@@ -5526,5 +5526,6 @@
 	"artifactComments.openChat": "Chat öffnen",
 	"artifactComments.sending": "Wird gesendet…",
 	"artifactComments.replies_one": "{{count}} Antwort",
-	"artifactComments.replies_other": "{{count}} Antworten"
+	"artifactComments.replies_other": "{{count}} Antworten",
+	"artifactComments.orchestratorUser": "Orchestrator-Nutzer"
 }

@@ -5508,5 +5508,6 @@
 	"artifactComments.openChat": "打开聊天",
 	"artifactComments.sending": "正在发送…",
 	"artifactComments.replies_other": "{{count}} 条回复",
-	"artifactComments.replies_one": "{{count}} 条回复"
+	"artifactComments.replies_one": "{{count}} 条回复",
+	"artifactComments.orchestratorUser": "Orchestrator 用户"
 }

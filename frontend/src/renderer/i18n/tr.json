@@ -5506,5 +5506,6 @@
 	"artifactComments.openChat": "Sohbeti aç",
 	"artifactComments.sending": "Gönderiliyor…",
 	"artifactComments.replies_one": "{{count}} yanıt",
-	"artifactComments.replies_other": "{{count}} yanıt"
+	"artifactComments.replies_other": "{{count}} yanıt",
+	"artifactComments.orchestratorUser": "Orchestrator kullanıcısı"
 }
