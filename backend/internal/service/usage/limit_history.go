@@ -66,25 +66,85 @@ func (r *LimitHistoryReader) History(ctx context.Context, days int) (domain.Usag
 	if r.logins != nil {
 		confirmed = r.logins.ConfirmedLogins()
 	}
+	readings = withOrgs(readings)
 	out.Logins = limitLogins(readings, heldLogins(readings, saved, confirmed), until)
 	return out, nil
 }
 
+// loginKey is one login: two logins can share an email address and differ
+// only in the organization they belong to (#8891).
 type loginKey struct {
 	provider domain.AgentAccountProvider
 	who      string
+	org      string
 }
 
-func loginOf(provider domain.AgentAccountProvider, email, accountID string) loginKey {
+func loginOf(provider domain.AgentAccountProvider, email, org, accountID string) loginKey {
 	who := strings.ToLower(strings.TrimSpace(email))
 	if who == "" {
 		who = "account:" + accountID
 	}
-	return loginKey{provider, who}
+	return loginKey{provider, who, strings.TrimSpace(org)}
 }
 
 func readingLogin(reading domain.AgentLimitReading) loginKey {
-	return loginOf(reading.Provider, reading.Email, reading.AccountID)
+	return loginOf(reading.Provider, reading.Email, reading.OrgID, reading.AccountID)
+}
+
+// withOrgs gives a reading that recorded no organization, one taken before
+// readings kept it, the organization its account later read for the same
+// login, or else that login's only organization. With neither it stays
+// without one.
+func withOrgs(readings []domain.AgentLimitReading) []domain.AgentLimitReading {
+	type accountLogin struct {
+		account string
+		login   loginKey
+	}
+	byAccount := map[accountLogin]domain.AgentLimitReading{}
+	orgs := map[loginKey]map[string]bool{}
+	for _, reading := range readings {
+		key := readingLogin(reading)
+		if key.org == "" {
+			continue
+		}
+		org := key.org
+		key.org = ""
+		if last, seen := byAccount[accountLogin{reading.AccountID, key}]; !seen || reading.ReadAt.After(last.ReadAt) {
+			byAccount[accountLogin{reading.AccountID, key}] = reading
+		}
+		if orgs[key] == nil {
+			orgs[key] = map[string]bool{}
+		}
+		orgs[key][org] = true
+	}
+	out := make([]domain.AgentLimitReading, len(readings))
+	for i, reading := range readings {
+		out[i] = reading
+		if strings.TrimSpace(reading.OrgID) != "" {
+			continue
+		}
+		key := readingLogin(reading)
+		if last, seen := byAccount[accountLogin{reading.AccountID, key}]; seen {
+			out[i].OrgID = last.OrgID
+		} else if len(orgs[key]) == 1 {
+			for org := range orgs[key] {
+				out[i].OrgID = org
+			}
+		}
+	}
+	return out
+}
+
+// holds reports whether a held login is the given one. A login whose
+// organization is unknown on either side matches the same email address in
+// any organization.
+func holds(held map[loginKey]bool, key loginKey) bool {
+	for h := range held {
+		if h.provider == key.provider && h.who == key.who && (h.org == key.org || h.org == "" || key.org == "") {
+			return true
+		}
+	}
+	return false
 }
 
 func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount, confirmed map[string]domain.AgentAccountIdentityCheck) map[loginKey]bool {
@@ -105,7 +165,7 @@ func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount
 		if email == "" {
 			email = account.Email
 		}
-		held[loginOf(account.Provider, email, id)] = true
+		held[loginOf(account.Provider, email, identity.OrgID, id)] = true
 	}
 	latest := map[string]domain.AgentLimitReading{}
 	for _, reading := range readings {
@@ -128,7 +188,7 @@ func limitLogins(readings []domain.AgentLimitReading, held map[loginKey]bool, no
 			continue
 		}
 		key := readingLogin(reading)
-		if !held[key] {
+		if !holds(held, key) {
 			continue
 		}
 		byLogin[key] = append(byLogin[key], reading)
@@ -159,7 +219,10 @@ func limitLogins(readings []domain.AgentLimitReading, held map[loginKey]bool, no
 		if logins[i].Provider != logins[j].Provider {
 			return logins[i].Provider < logins[j].Provider
 		}
-		return logins[i].Email < logins[j].Email
+		if logins[i].Email != logins[j].Email {
+			return logins[i].Email < logins[j].Email
+		}
+		return logins[i].AccountID < logins[j].AccountID
 	})
 	return logins
 }

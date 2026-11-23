@@ -223,7 +223,7 @@ func (s *Service) keepingLimits(ctx context.Context) bool {
 	return log != nil && log.LimitHistoryEnabled(ctx)
 }
 
-func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, plan string, limits domain.AgentAccountLimits) {
+func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, orgID, plan string, limits domain.AgentAccountLimits) {
 	if len(limits.Windows) == 0 || !s.keepingLimits(ctx) {
 		return
 	}
@@ -237,7 +237,7 @@ func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount,
 	readings := make([]domain.AgentLimitReading, 0, len(limits.Windows))
 	for _, w := range limits.Windows {
 		readings = append(readings, domain.AgentLimitReading{
-			AccountID: account.ID, Provider: account.Provider, Email: email, Plan: plan, WindowID: w.ID, Label: w.Label,
+			AccountID: account.ID, Provider: account.Provider, Email: email, OrgID: orgID, Plan: plan, WindowID: w.ID, Label: w.Label,
 			DurationMinutes: w.DurationMinutes, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, ReadAt: at,
 		})
 	}
@@ -439,14 +439,17 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 			s.mu.Unlock()
 		} else {
 			r.limits = &limits
-			email, plan := identity.Email, identity.Plan
+			email, orgID, plan := identity.Email, identity.OrgID, identity.Plan
 			if email == "" {
 				email = account.Email
+			}
+			if orgID == "" && !account.Device() {
+				orgID = known.id
 			}
 			if plan == "" {
 				plan = account.Plan
 			}
-			s.recordLimits(ctx, account, email, plan, limits)
+			s.recordLimits(ctx, account, email, orgID, plan, limits)
 		}
 	}
 	if err == nil {
