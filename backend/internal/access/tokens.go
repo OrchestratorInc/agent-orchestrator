@@ -157,6 +157,9 @@ func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, strin
 	if name == "" || utf8.RuneCountInString(name) > maxNameLength {
 		return Token{}, "", fmt.Errorf("a token name is required, up to %d characters", maxNameLength)
 	}
+	if strings.HasPrefix(name, "tok_") {
+		return Token{}, "", errors.New("a token name cannot start with tok_, which marks a token id")
+	}
 	if !grant.ExpiresAt.IsZero() && !now.Before(grant.ExpiresAt) {
 		return Token{}, "", errors.New("the expiry is in the past")
 	}
@@ -231,17 +234,14 @@ func (r *Registry) Touch(id string, now time.Time) {
 	_ = r.persistLocked()
 }
 
-// Revoke removes a token, found by ID, else by name. Sessions bound to it keep
-// their binding, so they are refused from then on.
+// Revoke removes a token, found by ID or by name. A name never looks like an
+// ID. Sessions bound to the token keep their binding, so they are refused from
+// then on.
 func (r *Registry) Revoke(idOrName string) (Token, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	matches := func(token Token) bool { return token.ID == idOrName }
-	if _, isID := r.tokens[idOrName]; !isID {
-		matches = func(token Token) bool { return strings.EqualFold(token.Name, idOrName) }
-	}
 	for _, token := range r.tokens {
-		if !matches(token) {
+		if token.ID != idOrName && !strings.EqualFold(token.Name, idOrName) {
 			continue
 		}
 		delete(r.tokens, token.ID)

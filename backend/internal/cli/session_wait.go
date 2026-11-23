@@ -113,17 +113,20 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 		}
 		return exitError{code: exitTimedOut, err: fmt.Errorf("no session settled within %s", opts.timeout)}
 	}
-	get := func(path string, out any) error {
-		err := c.getJSON(waitCtx, path, out)
+	get := func(id, path string, out any) error {
+		err := c.getJSON(waitCtx, "sessions/"+url.PathEscape(id)+path, out)
 		if err != nil && waitCtx.Err() != nil && cmd.Context().Err() == nil {
 			return timedOut()
+		}
+		if err != nil && len(ids) > 1 {
+			return fmt.Errorf("%s: %w", id, err)
 		}
 		return err
 	}
 	for {
 		for _, id := range ids {
 			var res sessionResponse
-			if err := get("sessions/"+url.PathEscape(id), &res); err != nil {
+			if err := get(id, "", &res); err != nil {
 				return err
 			}
 			state := settledState(res.Session)
@@ -132,7 +135,7 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 			}
 			if state == "idle" && c.deps.Now().Sub(idleSince[id]) < startupGrace {
 				var history sessionHistoryResponse
-				if err := get("sessions/"+url.PathEscape(id)+"/history?limit=1", &history); err != nil {
+				if err := get(id, "/history?limit=1", &history); err != nil {
 					return err
 				}
 				if history.Total == 0 {

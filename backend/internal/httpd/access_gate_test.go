@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/access"
 	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
@@ -91,6 +92,9 @@ func newGateFixture(t *testing.T) *gateFixture {
 	r.Get("/api/v1/access/whoami", ok)
 	r.Get("/api/v1/mobile/status", ok)
 	r.Post("/api/v1/sessions/{sessionId}/activity", ok)
+	r.Post("/api/v1/sessions/{sessionId}/conversation/messages", ok)
+	r.Patch("/api/v1/sessions/{sessionId}/merge-policy", ok)
+	r.Get("/api/v1/sessions/{sessionId}/workspace/tree", ok)
 	r.Post("/api/v1/browser/commands", ok)
 	f.router = r
 	return f
@@ -224,13 +228,22 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 		t.Errorf("the session must not make tokens: %d %q", status, reason)
 	}
 	ownTooling := func(when string) {
-		for _, path := range []string{"/api/v1/sessions/api-9/activity", "/api/v1/browser/commands"} {
-			if status, _, _ := asSession(http.MethodPost, path); status != 200 {
-				t.Errorf("%s: the session's own tooling %s: status %d, want 200", when, path, status)
-			}
+		if status, _, _ := asSession(http.MethodPost, "/api/v1/sessions/api-9/activity"); status != 200 {
+			t.Errorf("%s: the session's status hook: status %d, want 200", when, status)
+		}
+		if status, _, _ := asSession(http.MethodGet, "/api/v1/sessions/api-9/workspace/tree"); status != 200 {
+			t.Errorf("%s: a read of the session's own files: status %d, want 200", when, status)
 		}
 	}
 	ownTooling("under the grant")
+	if status, _, _ := asSession(http.MethodPost, "/api/v1/browser/commands"); status != 200 {
+		t.Errorf("the session's browser tool under the grant: status %d, want 200", status)
+	}
+	for _, route := range [][2]string{{http.MethodPost, "/api/v1/sessions/api-9/conversation/messages"}, {http.MethodPatch, "/api/v1/sessions/api-9/merge-policy"}} {
+		if status, _, reason := asSession(route[0], route[1]); status != 403 || reason != access.ReasonCatalog {
+			t.Errorf("%s %s is neither a catalog action nor the session's own tooling: %d %q", route[0], route[1], status, reason)
+		}
+	}
 	if status, _, reason := asSession(http.MethodDelete, "/api/v1/sessions/api-9"); status != 403 || reason != access.ReasonGroup {
 		t.Errorf("the session must not run an action on itself that its grant lacks: %d %q", status, reason)
 	}
@@ -260,6 +273,9 @@ func TestSessionStartedUnderAGrantKeepsIt(t *testing.T) {
 		t.Errorf("a session of a revoked token: %d %q", status, reason)
 	}
 	ownTooling("after the grant ended")
+	if status, _, reason := asSession(http.MethodPost, "/api/v1/browser/commands"); status != 403 || reason != access.ReasonEnded {
+		t.Errorf("the browser tool after the grant ended: %d %q", status, reason)
+	}
 	if status, _, reason := asSession(http.MethodPost, "/api/v1/sessions/api-9/send"); status != 403 || reason != access.ReasonEnded {
 		t.Errorf("an action on itself after the grant ended: %d %q", status, reason)
 	}
@@ -419,6 +435,17 @@ func TestRealRouterGatesTokensAndServesWhoami(t *testing.T) {
 	properties, _ := detail.Action.Body["properties"].(map[string]any)
 	if _, ok := properties["projectId"]; !ok {
 		t.Errorf("session.spawn body schema has no projectId: %v", detail.Action.Body)
+	}
+}
+
+func TestOwnSessionRoutesExistInTheAPISpec(t *testing.T) {
+	for _, routes := range []map[string]bool{ownSessionRoutes, sessionToolRoutes, grantOpenRoutes} {
+		for route := range routes {
+			method, path, _ := strings.Cut(route, " ")
+			if strings.HasPrefix(path, "/api/v1/") && apispec.Default().Operation(method, path) == nil {
+				t.Errorf("%s is open to a caller with a grant, but the API spec has no such route", route)
+			}
+		}
 	}
 }
 

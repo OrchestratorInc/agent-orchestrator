@@ -42,8 +42,9 @@ asks for an answer or an approval, 124 timed out. Read the reply with
 `ao session get mer-3 --transcript 5`.
 
 Send to a session that is idle. If it is in the middle of a turn, a plain
-message is queued behind that turn and `--wait` returns when the turn in
-progress ends, before the queued message is answered.
+message would be queued behind that turn and the wait would end with the wrong
+turn, so `--wait` refuses with exit 1 and sends nothing: run
+`ao session wait <id>` first, or add `--steer`.
 
 Exit 2 means nothing was sent. If the wait itself fails after delivery, the
 error starts with "the message was sent": do not send it again; check the

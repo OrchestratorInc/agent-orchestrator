@@ -40,11 +40,23 @@ var sessionToolRoutes = map[string]bool{
 	"POST /api/v1/computer-use/call":       true,
 }
 
+var ownSessionRoutes = map[string]bool{
+	"POST /api/v1/sessions/{sessionId}/activity":                    true,
+	"POST /api/v1/sessions/{sessionId}/activity/codewhale":          true,
+	"POST /api/v1/sessions/{sessionId}/artifact-registrations":      true,
+	"POST /api/v1/sessions/{sessionId}/renders":                     true,
+	"POST /api/v1/sessions/{sessionId}/renders/check":               true,
+	"POST /api/v1/sessions/{sessionId}/renders/{renderId}/artifact": true,
+	"POST /api/v1/sessions/{sessionId}/preview":                     true,
+	"DELETE /api/v1/sessions/{sessionId}/preview":                   true,
+	"POST /api/v1/sessions/{sessionId}/preview/server":              true,
+	"DELETE /api/v1/sessions/{sessionId}/preview/server":            true,
+	"POST /api/v1/sessions/{sessionId}/panes":                       true,
+	"POST /api/v1/sessions/{sessionId}/panes/input":                 true,
+}
+
 func ownSessionRoute(r *http.Request, rctx *chi.Context, pattern, sessionID string) bool {
-	if sessionToolRoutes[r.Method+" "+pattern] {
-		return true
-	}
-	if r.Method == http.MethodPost && strings.HasSuffix(pattern, "/fork") {
+	if r.Method != http.MethodGet && !ownSessionRoutes[r.Method+" "+pattern] {
 		return false
 	}
 	target, err := url.PathUnescape(rctx.URLParam("sessionId"))
@@ -100,12 +112,17 @@ func (g *accessGate) middleware(next http.Handler) http.Handler {
 			return
 		}
 		pattern := rctx.RoutePattern()
-		action, found := access.ActionForRoute(r.Method, pattern)
-		own := who.Kind == access.CallerSession && ownSessionRoute(r, rctx, pattern, who.ID) && (!found || r.Method == http.MethodGet)
-		if grantOpenRoutes[r.Method+" "+pattern] || own {
+		route := r.Method + " " + pattern
+		if who.Kind == access.CallerSession && sessionToolRoutes[route] && who.Grant.Over(g.now()) {
+			writeGrantRefused(w, r, &access.Refusal{Reason: access.ReasonEnded, Message: "this grant has ended"})
+			return
+		}
+		own := who.Kind == access.CallerSession && (sessionToolRoutes[route] || ownSessionRoute(r, rctx, pattern, who.ID))
+		if grantOpenRoutes[route] || own {
 			next.ServeHTTP(w, r)
 			return
 		}
+		action, found := access.ActionForRoute(r.Method, pattern)
 		if !found {
 			writeGrantRefused(w, r, &access.Refusal{Reason: access.ReasonCatalog,
 				Message: fmt.Sprintf("the action catalog has no entry for %s %s; a caller with a grant can run only catalog actions", r.Method, pattern)})

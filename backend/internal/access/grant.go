@@ -124,10 +124,15 @@ const (
 	ReasonEnded   = "grant_ended"
 )
 
+// Over reports whether the grant has ended or expired.
+func (g Grant) Over(now time.Time) bool {
+	return g.Ended || (!g.ExpiresAt.IsZero() && !now.Before(g.ExpiresAt))
+}
+
 // Check reports whether the grant allows action on project. known is false
 // when the caller named no project.
 func (g Grant) Check(action Action, project string, known bool, now time.Time) *Refusal {
-	if g.Ended || (!g.ExpiresAt.IsZero() && !now.Before(g.ExpiresAt)) {
+	if g.Over(now) {
 		return &Refusal{Action: action.ID, Reason: ReasonEnded, Message: "this grant has ended"}
 	}
 	if !slices.Contains(g.Groups, action.Group) {

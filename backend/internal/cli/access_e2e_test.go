@@ -243,6 +243,9 @@ func TestSessionWaitExitCodes(t *testing.T) {
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "stuck"); ExitCode(err) != 1 || !strings.Contains(out, "stuck: unverified after 0s") {
 		t.Errorf("a session the daemon could not verify must fail at once: exit %d, out %q", ExitCode(err), out)
 	}
+	if _, _, err = executeCLI(t, deps(), "session", "wait", "api-3", "nope"); ExitCode(err) != 1 || !strings.Contains(err.Error(), "nope: ") {
+		t.Errorf("a failed read while waiting on two sessions must name the session: exit %d, err %v", ExitCode(err), err)
+	}
 	if _, _, err = executeCLI(t, deps(), "session", "wait"); ExitCode(err) != 2 {
 		t.Errorf("no session id: exit %d, want 2", ExitCode(err))
 	}
@@ -258,7 +261,7 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 		at    time.Time
 	}
 	afterSend := []observed{{"idle", idleSince}, {"idle", idleSince}, {"active", picksUp}, {"idle", finishes}}
-	sent, polls, daemonFails, unverified := false, 0, false, false
+	sent, polls, daemonFails, unverified, busy := false, 0, false, false, false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "POST /api/v1/sessions/api-1/send":
@@ -272,6 +275,9 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 				return
 			}
 			now := observed{"idle", idleSince}
+			if busy {
+				now.state = "active"
+			}
 			if sent {
 				now = afterSend[min(polls, len(afterSend)-1)]
 				polls++
@@ -322,7 +328,11 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 		!strings.Contains(err.Error(), "the message was sent") || !strings.Contains(err.Error(), "STORAGE_BUSY") {
 		t.Errorf("a failure after delivery must say the message was sent: sent %v, exit %d, err %v", sent, ExitCode(err), err)
 	}
-	sent = false
+	sent, daemonFails, busy = false, false, true
+	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait"); ExitCode(err) != 1 || sent || !strings.Contains(err.Error(), "was not sent") {
+		t.Errorf("--wait on a session that is mid-turn must be refused before sending: exit %d, sent %v, err %v", ExitCode(err), sent, err)
+	}
+	sent, busy = false, false
 	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--timeout", "30s"); ExitCode(err) != 2 || sent {
 		t.Errorf("--timeout without --wait: exit %d, sent %v, want a usage error before sending", ExitCode(err), sent)
 	}

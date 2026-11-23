@@ -98,6 +98,10 @@ func (c *commandContext) sendAndWait(cmd *cobra.Command, opts sendOptions) error
 	if err := c.getJSON(cmd.Context(), "sessions/"+url.PathEscape(session), &before); err != nil {
 		return err
 	}
+	if before.Session.Activity.State == "active" && !opts.steer {
+		return fmt.Errorf("%[1]s is in the middle of a turn, so --wait would return when that turn ends, before this message is answered; "+
+			"run `ao session wait %[1]s` first, or add --steer. The message was not sent", session)
+	}
 	if err := c.sendMessage(cmd.Context(), opts); err != nil {
 		return err
 	}

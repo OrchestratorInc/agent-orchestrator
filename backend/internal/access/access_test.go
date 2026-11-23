@@ -204,8 +204,15 @@ func TestRegistryLifecycle(t *testing.T) {
 	if _, found, _ := reloaded.Revoke(token.ID); found {
 		t.Error("revoking twice must report not found")
 	}
+	renewed, _, err := reloaded.Create("grok-bot", grant, testNow)
+	if err != nil {
+		t.Fatalf("the name of a revoked token must be free again: %v", err)
+	}
+	if revoked, found, err := reloaded.Revoke(renewed.ID); err != nil || !found || revoked.Name != "grok-bot" {
+		t.Errorf("Revoke by id = %+v, %v, %v", revoked, found, err)
+	}
 	if _, _, err := reloaded.Create("grok-bot", grant, testNow); err != nil {
-		t.Errorf("the name of a revoked token must be free again: %v", err)
+		t.Fatal(err)
 	}
 	again, err := LoadRegistry(path)
 	if err != nil {
@@ -338,38 +345,6 @@ func TestSessionCreatedBindsOrClears(t *testing.T) {
 	}
 }
 
-func TestRevokePrefersAnExactID(t *testing.T) {
-	registry, err := LoadRegistry(TokensPath(t.TempDir()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	grant := mustGrant(t, PresetRead, nil, nil, time.Time{})
-	first, _, err := registry.Create("first", grant, testNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range 20 {
-		registry, err = LoadRegistry(registry.path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		impostor, _, err := registry.Create(first.ID, grant, testNow)
-		if err != nil {
-			t.Fatal(err)
-		}
-		revoked, found, err := registry.Revoke(first.ID)
-		if err != nil || !found || revoked.ID != first.ID {
-			t.Fatalf("round %d: Revoke(%s) removed %s (%q), want the token with that ID", i, first.ID, revoked.ID, revoked.Name)
-		}
-		if revoked, found, err = registry.Revoke(first.ID); err != nil || !found || revoked.ID != impostor.ID {
-			t.Fatalf("round %d: the name must still revoke once no token has that ID: %s %v %v", i, revoked.ID, found, err)
-		}
-		if first, _, err = registry.Create("first", grant, testNow); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func TestLoadRegistryMovesDamagedFileAside(t *testing.T) {
 	path := TokensPath(t.TempDir())
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -430,6 +405,9 @@ func TestCreateCountsNameCharactersAndMarksAFailedSave(t *testing.T) {
 	}
 	if _, _, err := registry.Create(strings.Repeat("ब", 65), grant, testNow); err == nil || errors.Is(err, ErrNotSaved) {
 		t.Errorf("a 65-character name must be refused as bad input: %v", err)
+	}
+	if _, _, err := registry.Create("tok_0123456789abcdef", grant, testNow); err == nil {
+		t.Error("a name that looks like a token id must be refused: revoke takes an id or a name")
 	}
 	if err := os.RemoveAll(filepath.Dir(path)); err != nil {
 		t.Fatal(err)

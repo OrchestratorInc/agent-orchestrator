@@ -78,14 +78,17 @@ ao token ls [--json]
 ao token revoke <id-or-name>
 ```
 
+- A name cannot start with `tok_`: that prefix marks a token id, and `revoke`
+  takes either.
 - `create` prints the secret once. Give it to the other agent as `AO_TOKEN`.
   Never write it into a file in the repository, a commit, a PR or a chat message
   that leaves the machine.
 - A session that a token starts carries the token's grant, and revoking the
   token refuses that session's calls too. Commands about the session itself
-  (`ao artifact`, `ao render`, `ao preview`, `ao browser`) and reading the
-  session keep working. A catalog action that changes the session, such as
-  `ao send` to itself or `ao session delete`, needs the grant like any other call.
+  (`ao artifact`, `ao render`, `ao preview`, `ao pane`) and reading the
+  session keep working. `ao browser` and computer use work while the grant is
+  live. Anything else on itself is judged like any other call: `ao send` to
+  itself or `ao session delete` needs the grant.
   `ao report` reaches the orchestrator, so it is refused once the grant has ended.
 - A caller with a grant cannot create or change automations: the sessions an
   automation starts would carry no grant. It can list and delete them.
