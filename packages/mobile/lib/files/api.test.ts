@@ -53,6 +53,26 @@ describe("sending review feedback", () => {
 		expect(delivered[0]).toBeGreaterThan(0);
 		expect(delivered[0]).toBeLessThan(4);
 	});
+
+	// A message cut off mid-send may still reach the agent, so cancelling only
+	// stops the ones not started.
+	it("stops before the next message once cancelled, keeping what was delivered", async () => {
+		const long = "x".repeat(1700);
+		const comments = Array.from({ length: 4 }, (_, index) => ({ target: { path: `f${index}.ts`, side: "new" as const, line: 1 }, feedback: long }));
+		const cancel = new AbortController();
+		const delivered: number[] = [];
+		const failure = await sendFileFeedback(cfg, "s", comments, (count) => { delivered.push(count); cancel.abort(); }, cancel.signal).catch((error: Error) => error);
+		expect(failure).toMatchObject({ name: "AbortError" });
+		expect(sent.bodies).toHaveLength(1);
+		expect(delivered).toHaveLength(1);
+	});
+
+	it("sends nothing when cancelled before it starts", async () => {
+		const cancel = new AbortController();
+		cancel.abort();
+		await expect(sendFileFeedback(cfg, "s", [{ target: { path: "a.ts", side: "new", line: 1 }, feedback: "x" }], undefined, cancel.signal)).rejects.toMatchObject({ name: "AbortError" });
+		expect(sent.bodies).toHaveLength(0);
+	});
 });
 
 describe("image sources", () => {

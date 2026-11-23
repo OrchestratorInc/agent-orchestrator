@@ -3,14 +3,17 @@ package controllers_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 )
 
@@ -84,5 +87,70 @@ func TestAgentAccountsListCarriesTheProblemKind(t *testing.T) {
 		if got := out.Accounts[i]; got["problem"] != want.problem || got["problemKind"] != want.kind {
 			t.Errorf("%s: problem %v kind %v, want %v %v", got["id"], got["problem"], got["problemKind"], want.problem, want.kind)
 		}
+	}
+}
+
+type apiKeyAgentAccounts struct {
+	listOnlyAgentAccounts
+	added, replaced []string
+	err             error
+}
+
+func (s *apiKeyAgentAccounts) AddAPIKeyAccount(_ context.Context, p domain.AgentAccountProvider, name, key string) (agentaccounts.AccountView, error) {
+	s.added = append(s.added, string(p)+"|"+name+"|"+key)
+	return agentaccounts.AccountView{}, s.err
+}
+
+func (s *apiKeyAgentAccounts) ReplaceAPIKey(_ context.Context, id, key string) (agentaccounts.AccountView, error) {
+	s.replaced = append(s.replaced, id+"|"+key)
+	return agentaccounts.AccountView{}, s.err
+}
+
+// Adding or replacing a key answers with the account list, which names the
+// account's kind and key hint but never the key; a refused or unchecked key is
+// a client or availability error, not a server failure.
+func TestAgentAccountsAPIKeyRoutes(t *testing.T) {
+	const key = "sk-ant-api03-secret-0123456789abcdef"
+	account := domain.AgentAccount{ID: "acct-key", Provider: domain.AgentAccountProviderClaude, Home: "/ao/claude/acct-key",
+		Kind: domain.AgentAccountKindAPIKey, Name: "Work", KeyHint: "cdef"}
+	svc := &apiKeyAgentAccounts{listOnlyAgentAccounts: listOnlyAgentAccounts{views: []agentaccounts.AccountView{{Account: account, LoggedIn: true}}}}
+	r := chi.NewRouter()
+	(&controllers.AgentAccountsController{Svc: svc}).Register(r)
+	send := func(method, path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rec
+	}
+
+	rec := send(http.MethodPost, "/agents/accounts/api-keys", `{"provider":"claude","name":"Work","apiKey":"`+key+`"}`)
+	if rec.Code != http.StatusOK || len(svc.added) != 1 || svc.added[0] != "claude|Work|"+key {
+		t.Fatalf("add: status %d, calls %v, body %s", rec.Code, svc.added, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("the response carries the key: %s", rec.Body)
+	}
+	var out struct {
+		Accounts []map[string]any `json:"accounts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Accounts) != 1 || out.Accounts[0]["kind"] != "api_key" || out.Accounts[0]["name"] != "Work" || out.Accounts[0]["keyHint"] != "cdef" {
+		t.Fatalf("accounts = %v", out.Accounts)
+	}
+
+	if rec := send(http.MethodPut, "/agents/accounts/acct-key/api-key", `{"apiKey":"`+key+`"}`); rec.Code != http.StatusOK || len(svc.replaced) != 1 || svc.replaced[0] != "acct-key|"+key {
+		t.Fatalf("replace: status %d, calls %v", rec.Code, svc.replaced)
+	}
+	if rec := send(http.MethodPost, "/agents/accounts/api-keys", `{"provider":"claude","apiKey":"  "}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty key: status %d", rec.Code)
+	}
+	svc.err = ports.ErrAgentAccountKeyRejected
+	if rec := send(http.MethodPost, "/agents/accounts/api-keys", `{"provider":"claude","apiKey":"bad"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "AGENT_ACCOUNT_KEY_REJECTED") {
+		t.Fatalf("rejected key: status %d body %s", rec.Code, rec.Body)
+	}
+	svc.err = fmt.Errorf("%w: dial tcp: timeout", ports.ErrAgentAccountKeyUnchecked)
+	if rec := send(http.MethodPut, "/agents/accounts/acct-key/api-key", `{"apiKey":"`+key+`"}`); rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "AGENT_ACCOUNT_KEY_UNCHECKED") {
+		t.Fatalf("unchecked key: status %d body %s", rec.Code, rec.Body)
 	}
 }

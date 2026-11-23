@@ -29,9 +29,13 @@ vi.mock("./themeStore", () => ({ loadThemeSettings: async () => ({ preference: "
 vi.mock("./store", () => ({ AppProvider: "AppProvider" }));
 vi.mock("./cloud/CloudProvider", () => ({ CloudProvider: "CloudProvider" }));
 vi.mock("./OnboardingGate", () => ({ OnboardingGate: () => null }));
+vi.mock("./RouteRestorer", () => ({ RouteRestorer: () => null }));
+vi.mock("./files/reviewPersistence", () => ({ startReviewPersistence: async () => {} }));
 vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
+vi.mock("./UpdateScreen", () => ({ UpdateScreen: () => null }));
+vi.mock("./UpdateRouteKeeper", () => ({ UpdateRouteKeeper: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
 
 import RootLayout, { unstable_settings } from "../app/_layout";

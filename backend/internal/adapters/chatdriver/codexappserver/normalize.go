@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -726,6 +727,11 @@ func codexProviderFailure(turnErr codexproto.TurnError) error {
 	}
 	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && errors.Is(cause, errCodexUsageLimitExceeded) {
 		return ports.NewChatProviderFailure("Usage limit exceeded", "", cause)
+	}
+	// A model the ChatGPT account cannot use: say what to do now. The
+	// conversation records the refusal for its account.
+	if _, unavailable := codexagent.ParseUnavailableModel(turnErr.Message); unavailable && strings.TrimSpace(detail) == "" {
+		detail = codexagent.UnavailableModelHint
 	}
 	failure := ports.NewChatProviderFailure(turnErr.Message, detail, cause)
 	if errors.Is(cause, errCodexUsageLimitExceeded) && domain.ParseConversationUsageLimit(failure.Error(), nil) == nil {

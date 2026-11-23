@@ -107,9 +107,26 @@ describe("mobile Sentry consent and payload", () => {
 			] } }] },
 		});
 		expect(clean).toMatchObject({ message: "Mobile error", user: { id }, exception: { values: [{
-			type: "MobileError", value: "Mobile error", stacktrace: { frames: [{ function: "mobile_frame", lineno: 42 }, { function: "mobile_frame" }] },
+			type: "Error", value: "Mobile error", stacktrace: { frames: [{ function: "mobile_frame", lineno: 42 }, { function: "mobile_frame" }] },
 		}] } });
 		expect(JSON.stringify(clean)).not.toMatch(/private|secret|raw-account|repo/);
+	});
+
+	it("keeps the scrubbed message and groups normalized variants", async () => {
+		const sentry = await import("./sentry");
+		sentry.setMobileSentryConsent(true);
+		await sentry.initMobileSentry();
+		sentry.captureMobileException(new TypeError("Invalid array length"), { category: "render_crash" });
+		const clean = (value: string) => sentry.sanitizeMobileSentryEvent({
+			type: undefined,
+			tags: sdk.captureException.mock.calls[0]?.[1]?.tags,
+			exception: { values: [{ type: "TypeError", value }] },
+		});
+		const first = clean("HTTP error 500: /etc/private http://localhost:8080/x alice@example.test");
+		expect(first?.exception?.values).toMatchObject([{ type: "TypeError", value: "HTTP error 500 (in mobile, render_crash)" }]);
+		expect(clean("HTTP error 502: '12345678-1234-1234-1234-123456789abc'")?.fingerprint).toEqual(first?.fingerprint);
+		expect(clean("Invalid array length")?.fingerprint).not.toEqual(first?.fingerprint);
+		expect(clean("/home/alice/private")?.exception?.values?.[0]?.value).toBe("Mobile error");
 	});
 
 	it("does not initialize after opt-out wins an in-flight SDK import", async () => {
