@@ -28,7 +28,7 @@ function failure(status: UpdateStatus, fallback: string): Error | undefined {
 	return undefined;
 }
 
-export async function runRemoteAppUpdate(deps: RemoteAppUpdateDeps, args: Record<string, unknown>): Promise<{ version: string } | { current: true }> {
+export async function runRemoteAppUpdate(deps: RemoteAppUpdateDeps, args: Record<string, unknown>): Promise<{ version: string }> {
 	refuseUnsafe(deps);
 	if (args.step === "install") {
 		if (typeof args.version !== "string" || !args.version) throw new Error("No update version to install.");
@@ -47,7 +47,6 @@ export async function runRemoteAppUpdate(deps: RemoteAppUpdateDeps, args: Record
 		if (downloadFailure) throw downloadFailure;
 	}
 	const version = stagedVersion(status);
-	if (!version && status.state === "not-available") return { current: true };
 	if (!version) throw new Error("No newer version is available for that computer.");
 	if (version === args.notApplied) throw new Error(`The update to ${version} didn't apply on that computer. Update Orchestrator there.`);
 	refuseUnsafe(deps);

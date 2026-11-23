@@ -15,7 +15,6 @@ ao remote-host pair
 ao remote-host devices
 ao remote-host devices revoke <ID> | --all
 ao remote-host require-device-credentials on|off
-ao remote-host update
 ```
 
 ## Commands
@@ -31,7 +30,6 @@ ao remote-host update
 | `devices` | List what can reach this machine: devices with their own token, phones still on the pairing password, and the linked account's devices as one shared row. |
 | `devices revoke` | Revoke one device by its ID, or with `--all` every device, the pairing password and the account link. |
 | `require-device-credentials` | `on` stops accepting the pairing password, so only device tokens and the account token work. |
-| `update` | Install the newest release of this machine's channel, restart it, and wait until it reports the new version or why the update failed. Works on a machine set up with the self-hosted installer or running the desktop app, which closes and relaunches; sessions keep running. |
 
 ## Rules
 

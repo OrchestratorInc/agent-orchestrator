@@ -69,17 +69,11 @@ describe("runRemoteAppUpdate", () => {
 	});
 
 	it.each([
-		[[{ state: "idle" }], "No newer version is available for that computer."],
+		[[{ state: "not-available" }], "No newer version is available for that computer."],
 		[[{ state: "error", message: "Couldn't reach the update server." }], "Couldn't reach the update server."],
 		[[{ state: "available", version: "0.16.0" }, { state: "error", message: "Download stopped responding. Try again." }], "Download stopped responding. Try again."],
 	] as [UpdateStatus[], string][])("reports what the updater found", async (statuses, message) => {
 		await expect(runRemoteAppUpdate(deps({ statuses }), { step: "prepare" })).rejects.toThrow(message);
-	});
-
-	it("reports a computer that is already on the newest release", async () => {
-		const d = deps({ statuses: [{ state: "not-available" }] });
-		await expect(runRemoteAppUpdate(d, { step: "prepare" })).resolves.toEqual({ current: true });
-		expect(d.download).not.toHaveBeenCalled();
 	});
 
 	it("won't reinstall a version that already failed to apply", async () => {

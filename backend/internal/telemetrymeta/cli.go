@@ -183,7 +183,6 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao remote-host devices":                    {},
 	"ao remote-host devices revoke":             {},
 	"ao remote-host require-device-credentials": {},
-	"ao remote-host update":                     {},
 	"ao render":                                 {},
 	"ao review":                                 {},
 	"ao review cancel":                          {},
