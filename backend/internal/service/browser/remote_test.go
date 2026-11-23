@@ -57,9 +57,15 @@ type fakeRemote struct {
 	refs      string
 	focused   string
 	failAll   bool
+	// hang makes every describe call block until its context ends.
+	hang bool
 }
 
-func (f *fakeRemote) Forward(_ context.Context, args []string, _ map[string]string) (RemoteResponse, error) {
+func (f *fakeRemote) Forward(ctx context.Context, args []string, _ map[string]string) (RemoteResponse, error) {
+	if f.hang && len(args) > 0 && (args[len(args)-1] == "--json") {
+		<-ctx.Done()
+		return RemoteResponse{}, ctx.Err()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failAll {
@@ -332,5 +338,50 @@ func TestRemoteSummaryNeverCarriesTypedText(t *testing.T) {
 				t.Fatalf("%q: audit carries the typed value: %+v", tc.args, entry)
 			}
 		}
+	}
+}
+
+func TestRemoteDialogAcceptAsks(t *testing.T) {
+	for _, args := range [][]string{{"dialog", "accept"}, {"dialog", "accept", "my answer"}} {
+		remote := &fakeRemote{}
+		svc, gate, token := remoteService(t, remote)
+		asked := answer(t, gate, approval.DecisionDeny)
+		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, args, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" || len(remote.sent()) != 0 {
+			t.Fatalf("%q: err=%v forwarded=%v", args, err, remote.sent())
+		}
+		if p := <-asked; strings.Contains(p.Action, "my answer") || p.Action != "Accept the page's dialog on shop.example" {
+			t.Fatalf("%q: summary = %q", args, p.Action)
+		}
+	}
+	// Reading or dismissing a dialog never asks.
+	remote := &fakeRemote{}
+	svc, gate, token := remoteService(t, remote)
+	for _, args := range [][]string{{"dialog", "status"}, {"dialog", "dismiss"}} {
+		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, args, nil); err != nil {
+			t.Fatalf("%q: %v", args, err)
+		}
+	}
+	if len(gate.Pending()) != 0 || len(remote.sent()) != 2 {
+		t.Fatalf("pending=%d forwarded=%v", len(gate.Pending()), remote.sent())
+	}
+}
+
+func TestRemoteStuckDiscoveryStillLeavesTimeToDecide(t *testing.T) {
+	// The page never answers describe calls. Discovery gives up on its own
+	// short deadline and the user still gets the whole approval wait.
+	remote := &fakeRemote{hang: true}
+	svc, gate, token := remoteService(t, remote)
+	svc.describeTimeout = 50 * time.Millisecond
+	started := time.Now()
+	asked := answer(t, gate, approval.DecisionDeny)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
+	}
+	p := <-asked
+	if waited := p.CreatedAt.Sub(started); waited > time.Second {
+		t.Fatalf("prompt appeared after %s", waited)
+	}
+	if p.Category != approval.CategoryScript || p.Action != "Click @e2" {
+		t.Fatalf("prompt = %+v", p)
 	}
 }

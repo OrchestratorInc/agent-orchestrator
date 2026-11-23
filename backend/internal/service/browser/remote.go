@@ -134,6 +134,13 @@ func classifyRemoteArgs(args []string) remoteGate {
 		return remoteGate{}
 	case "find":
 		return classifyFind(rest)
+	case "dialog":
+		// Accepting a confirm or prompt lets the page carry on with what it
+		// asked about; reading or dismissing it does not.
+		if len(rest) > 0 && strings.EqualFold(rest[0], "accept") {
+			return remoteGate{kind: remoteAsk, action: "dialog"}
+		}
+		return remoteGate{}
 	case "eval", "js", "mouse", "batch", "run":
 		return remoteGate{kind: remoteAsk, action: command}
 	}
@@ -191,11 +198,19 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 	if mode == approval.ModeOff {
 		return nil
 	}
-	pageURL, pageTitle := s.remotePage(ctx)
+	// Discovery gets its own short deadline: a stalled page must not use up
+	// the request's budget before the user is even asked.
+	limit := s.describeTimeout
+	if limit <= 0 {
+		limit = DefaultDescribeTimeout
+	}
+	discoverCtx, cancelDiscover := context.WithTimeout(ctx, limit)
+	defer cancelDiscover()
+	pageURL, pageTitle := s.remotePage(discoverCtx)
 	summary := onSite(remoteSummary(gate, args), pageURL)
 	var verdict approval.Verdict
 	if gate.kind == remoteDescribe {
-		target, identified, partial := s.remoteTarget(ctx, gate)
+		target, identified, partial := s.remoteTarget(discoverCtx, gate)
 		target.PageURL, target.PageTitle = pageURL, pageTitle
 		if identified {
 			verdict = approval.Classify(target, mode)
@@ -211,7 +226,10 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 		}
 	} else {
 		reason := "This runs JavaScript in the page, which can do anything the page can, including pay or send."
-		if gate.action != "eval" && gate.action != "js" {
+		switch {
+		case gate.action == "dialog":
+			reason = "Accepting the page's dialog lets the page carry on with what it asked to confirm."
+		case gate.action != "eval" && gate.action != "js":
 			reason = "Orchestrator cannot tell in advance what this command does on the page, so it asks first."
 		}
 		verdict = approval.Verdict{NeedsApproval: true, Category: approval.CategoryScript,
@@ -239,6 +257,9 @@ func (s *Service) remotePreflight(ctx context.Context, sessionID domain.SessionI
 // never carries typed text or other argument values; eval and js keep their
 // script, which is the action being approved.
 func remoteSummary(gate remoteGate, args []string) string {
+	if gate.kind == remoteAsk && gate.action == "dialog" {
+		return "Accept the page's dialog"
+	}
 	if gate.kind == remoteAsk {
 		if gate.action == "eval" || gate.action == "js" {
 			script := strings.Join(remoteCommandArgs(args, gate.action), " ")
