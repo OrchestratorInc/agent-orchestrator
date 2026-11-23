@@ -126,7 +126,7 @@ function renderView(ui: ReactNode) {
 		</QueryClientProvider>
 	);
 	const view = render(wrap(ui));
-	return { ...view, rerender: (next: ReactNode) => view.rerender(wrap(next)) };
+	return { ...view, client, rerender: (next: ReactNode) => view.rerender(wrap(next)) };
 }
 
 const CLOUD_ROOT = "https://cp.test/api/cloud/v1/artifact-files/token/";
@@ -788,9 +788,27 @@ describe("SessionArtifactsView", () => {
 		const view = renderView(<SessionArtifactsView request={request} session={session()} />);
 		expect(screen.getByText("notes/fresh.md isn't in this session's artifacts yet. It opens here once the session lists it.")).toBeInTheDocument();
 		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+		// The pending view must listen for the daemon's ready/change events so the
+		// workspace query can discover a file written before this tab opened.
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
 
 		view.rerender(<SessionArtifactsView request={request} session={session([...artifacts, { kind: "markdown", name: "fresh.md", path: "notes/fresh.md", size: 5, updatedAt: "2026-09-24T00:00:00Z" }])} />);
 		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes/fresh.md");
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+	});
+
+	it("stops following an absent file on Back and follows it again on a new request", async () => {
+		const view = renderView(<SessionArtifactsView request={{ key: 1, path: "missing.html" }} session={session()} />);
+		expect(screen.getByText(/missing\.html isn't in this session's artifacts yet/)).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
+
+		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
+		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
+
+		view.rerender(<SessionArtifactsView request={{ key: 2, path: "missing.html" }} session={session()} />);
+		expect(screen.getByText(/missing\.html isn't in this session's artifacts yet/)).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), true);
 	});
 
 	it("opens a requested file listed under a new name, not the not-listed-yet note", () => {
@@ -822,6 +840,7 @@ describe("SessionArtifactsView", () => {
 		view.rerender(<SessionArtifactsView request={request} session={session(remaining)} />);
 		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^plan\.md/ })).toBeInTheDocument();
+		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
 	});
 
 	it("returns to the gallery from a requested file that is not listed", async () => {
@@ -960,6 +979,34 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByRole("list")).toBeInTheDocument();
 	});
 
+	it("identifies the latest version in both the menu and confirmation when viewing an older revision", async () => {
+		const { client } = renderView(<SessionArtifactsView request={{ key: 1, path: "reports/plan.md" }} session={session()} />);
+		const key = ["session-artifact-versions", "", "sess-1", "reports/plan.md"];
+		const versions = [2, 1].map(version => ({ version, source: "agent", harness: "codex", createdAt: new Date(version * 60000).toISOString(), size: 10, fileFingerprint: String(version) }));
+		client.setQueryDefaults(key, { staleTime: Infinity });
+		client.setQueryData(key, versions);
+		client.setQueryData([...key, 1], { ...versions[1], content: "# Older revision" });
+		const filename = screen.getByRole("button", { name: "plan.md" });
+		await userEvent.click(filename);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Version history" }));
+		const history = await screen.findByRole("menu", { name: "Version history" });
+		await userEvent.click(within(history).getAllByRole("menuitem")[1]!);
+		await userEvent.click(filename);
+		const label = "Add latest version to GitHub issue";
+		await userEvent.click(screen.getByRole("menuitem", { name: label }));
+		expect(screen.getByRole("dialog", { name: label })).toBeVisible();
+	});
+
+	it("returns keyboard focus to the filename after closing the GitHub issue dialog", async () => {
+		renderView(<SessionArtifactsView request={{ key: 1, path: "reports/plan.md" }} session={session()} />);
+		const filename = screen.getByRole("button", { name: "plan.md" });
+		await userEvent.click(filename);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Add to GitHub issue" }));
+		expect(screen.getByRole("dialog", { name: "Add to GitHub issue" })).toBeVisible();
+		await userEvent.keyboard("{Escape}");
+		await vi.waitFor(() => expect(filename).toHaveFocus());
+	});
+
 	it("names the open artifact once, as a menu that reveals it in the file manager and the terminal", async () => {
 		const openArtifacts = vi.spyOn(aoBridge.editorHandoff, "openArtifacts");
 		renderView(<SessionArtifactsView request={{ key: 1, path: "reports/plan.md" }} session={session()} />);
@@ -968,7 +1015,7 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getAllByText("plan.md")).toHaveLength(1);
 		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
 		const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
-		expect(items).toEqual(["Version history", expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"]);
+		expect(items).toEqual(["Version history", "Add to GitHub issue", expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"]);
 		await userEvent.click(screen.getByRole("menuitem", { name: /^Show in (?!Terminal)/ }));
 		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "Show in Terminal" }));
@@ -1013,11 +1060,11 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByRole("button", { name: "Publish: notes.md" })).toBeInTheDocument();
 	});
 
-	it("disables Publish for a video and says why", async () => {
-		const video: SessionArtifact = { kind: "file", name: "clip.mp4", path: "clip.mp4", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
-		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mp4" }} session={session([video])} />);
+	it("disables Publish for a video browsers cannot play and says why", async () => {
+		const video: SessionArtifact = { kind: "file", name: "clip.mkv", path: "clip.mkv", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		renderView(<SessionArtifactsView request={{ key: 1, path: "clip.mkv" }} session={session([video])} />);
 
-		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publish: clip.mkv" })).toBeDisabled();
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {
@@ -1035,9 +1082,9 @@ describe("SessionArtifactsView", () => {
 		{ location: "local", hostId: undefined, cloud: false, path: "chart.png", separators: 1, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Open in browser", "Delete artifact"] },
 		{ location: "remote", hostId: "remote-1", cloud: false, path: "chart.png", separators: 0, actions: ["Delete artifact"] },
 		{ location: "cloud", hostId: undefined, cloud: true, path: "chart.png", separators: 2, actions: [expect.stringMatching(/^Show in /), "Open in browser", "Download", "Delete artifact"] },
-		{ location: "local", hostId: undefined, cloud: false, path: "notes.md", separators: 2, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"] },
-		{ location: "remote", hostId: "remote-1", cloud: false, path: "notes.md", separators: 1, actions: ["Copy as Markdown", "Delete artifact"] },
-		{ location: "cloud", hostId: undefined, cloud: true, path: "notes.md", separators: 2, actions: [expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"] },
+		{ location: "local", hostId: undefined, cloud: false, path: "notes.md", separators: 3, actions: ["Add to GitHub issue", expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"] },
+		{ location: "remote", hostId: "remote-1", cloud: false, path: "notes.md", separators: 2, actions: ["Add to GitHub issue", "Copy as Markdown", "Delete artifact"] },
+		{ location: "cloud", hostId: undefined, cloud: true, path: "notes.md", separators: 3, actions: ["Add to GitHub issue", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"] },
 	])("separates only populated action groups for $location $path", async ({ hostId, cloud, path, separators, actions }) => {
 		const artifact: SessionArtifact = { kind: "file", name: path, path, size: 2, updatedAt: "2026-09-24T00:00:00Z" };
 		const currentSession = { ...session([artifact]), ...(cloud ? { cloud: { orgId: "org-1" } } : {}) } as WorkspaceSession;
@@ -1128,7 +1175,7 @@ describe("SessionArtifactsView", () => {
 		expect(viewer).toHaveAttribute("data-read-only", "false");
 		expect(viewer).toHaveAttribute("data-saves", "true");
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", "Add to GitHub issue", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
 		expect(screen.queryByText(/^View only\./)).toBeNull();
 	});
 
@@ -1159,7 +1206,7 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
 
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", "Add to GitHub issue", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
 	});
 
 	it("opens a requested artifact and passes its feedback request through", () => {

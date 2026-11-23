@@ -86,6 +86,7 @@ const (
 	TargetDeepSeek        Target = "deepseek-harness"
 	TargetOpenHands       Target = "openhands"
 	TargetCommandCode     Target = "command-code"
+	TargetMastraCode      Target = "mastra-code"
 	TargetDockerAgent     Target = "docker-agent"
 	TargetMemcode         Target = "memcode"
 	TargetHermes          Target = "hermes"
@@ -108,7 +109,7 @@ var agentTargets = []Target{
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
 	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetMiniMaxCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode, TargetDockerAgent, TargetMemcode, TargetHermes, TargetStakpak, TargetOpenInterpreter, TargetTau,
+	TargetCommandCode, TargetMastraCode, TargetDockerAgent, TargetMemcode, TargetHermes, TargetStakpak, TargetOpenInterpreter, TargetTau,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -347,7 +348,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,mastra-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status    `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string    `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string    `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -1500,6 +1501,12 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		if plan.Target == TargetCursor && strings.Contains(out.String(), "[unauthenticated]") {
 			message = fmt.Sprintf("Cursor's update service rejected the CLI's saved login. Log out of Cursor, update, then log in again. (%v)", runErr)
 		}
+		// winget reports "no package found" for an ID its catalog dropped, and
+		// also when its local source data is stale. Suggest refreshing the
+		// sources first; if it still fails, the package is gone from the catalog.
+		if plan.Method == "winget" && wingetPackageNotFound(runErr) {
+			message = fmt.Sprintf("winget could not find package %s. Run `winget source update` and retry. If it still fails, the package is no longer in the winget catalog, so install it another way, then choose Verify again. (%v)", plan.Package, runErr)
+		}
 		s.finishAgentJob(job, StatusFailed, out.String(), message, "")
 		return
 	}
@@ -1516,6 +1523,18 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		updaterReport = lastOutputLine(out.String())
 	}
 	s.runAgentVerification(s.backgroundContext, job, baseline, updaterReport)
+}
+
+// wingetNoApplicationsFound is APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND,
+// winget's exit code for an ID its catalog does not have. Matching the code,
+// not winget's "No package found" text, keeps this working in every locale.
+const wingetNoApplicationsFound uint32 = 0x8A150014
+
+func wingetPackageNotFound(err error) bool {
+	var exited interface{ ExitCode() int }
+	// Go reports Windows exit codes unsigned; compare the low 32 bits so a
+	// signed report of the same code matches too.
+	return errors.As(err, &exited) && uint32(exited.ExitCode()) == wingetNoApplicationsFound //nolint:gosec // exit codes are 32-bit
 }
 
 // maxUpdaterReportRunes keeps the updater line quoted in a failed update

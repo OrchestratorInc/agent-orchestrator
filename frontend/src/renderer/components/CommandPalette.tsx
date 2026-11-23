@@ -70,7 +70,11 @@ import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { LOCAL_HOST } from "../lib/hosts";
 import { isMacPlatform } from "../lib/platform";
 import { revealSessionSearchMatch } from "../lib/session-search-reveal";
-import { usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
+import { PALETTE_SESSION_SEARCH_LIMIT, usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
+import { useConnectedHosts } from "../hooks/useHostConnection";
+import { useMachineSearchRows } from "../hooks/useMachineSearchRows";
+import { useRemoteMachineSearch } from "../hooks/useRemoteMachineSearch";
+import { machinesNotSearched } from "../lib/session-search-machines";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
@@ -96,6 +100,7 @@ import { useSessionImportStore } from "../stores/session-import-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { CommandDialog, CommandEmpty, CommandFooter, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "./ui/command";
 import { Switch } from "./ui/switch";
@@ -103,6 +108,11 @@ import { Switch } from "./ui/switch";
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
 const PALETTE_REVIEW_DEFER_MS = 120;
 const PALETTE_FILE_SEARCH_DEBOUNCE_MS = 150;
+// With other AO machines connected, session-text search waits for a longer
+// pause: each search goes to every machine, and at 150 ms a steady typist (about
+// 200 ms between keys) sends one per keystroke to each of them. At 250 ms only
+// the word they stop on is searched; this machine alone keeps the quicker one.
+const PALETTE_MACHINE_SEARCH_DEBOUNCE_MS = 250;
 /** Rows the file view lists; beside commands each search group shows a few. */
 const PALETTE_FILE_VIEW_ROWS = 50;
 const isMac = isMacPlatform();
@@ -160,8 +170,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, removeProject } = useShell();
-	const resolvedTheme = useUiStore((s) => s.resolvedTheme);
-	const setThemePreference = useUiStore((s) => s.setThemePreference);
+	const toggleThemePreference = useUiStore((s) => s.toggleThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
 	const setOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
@@ -176,6 +185,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const [view, setView] = useState<PaletteView>({ mode: "root" });
 	const [query, setQuery] = useState("");
 	const [debouncedQuery, setDebouncedQuery] = useState("");
+	const [debouncedSessionQuery, setDebouncedSessionQuery] = useState("");
 	const [selectedValue, setSelectedValue] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [pendingId, setPendingId] = useState<string | null>(null);
@@ -264,6 +274,16 @@ export const CommandPalette = memo(function CommandPalette() {
 		const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), PALETTE_FILE_SEARCH_DEBOUNCE_MS);
 		return () => window.clearTimeout(timer);
 	}, [isOpen, query, view.mode]);
+	const otherMachinesConnected = useConnectedHosts().length > 0;
+	useEffect(() => {
+		if (!isOpen) {
+			setDebouncedSessionQuery("");
+			return;
+		}
+		const delay = otherMachinesConnected ? PALETTE_MACHINE_SEARCH_DEBOUNCE_MS : PALETTE_FILE_SEARCH_DEBOUNCE_MS;
+		const timer = window.setTimeout(() => setDebouncedSessionQuery(query.trim()), delay);
+		return () => window.clearTimeout(timer);
+	}, [isOpen, otherMachinesConnected, query, view.mode]);
 
 	const activeFileTarget = view.mode === "file-search"
 		? view.target
@@ -271,7 +291,7 @@ export const CommandPalette = memo(function CommandPalette() {
 			? currentFileTarget
 			: undefined;
 	const normalizedFileQuery = debouncedQuery.trim();
-	const normalizedSessionQuery = debouncedQuery.trim();
+	const normalizedSessionQuery = debouncedSessionQuery.trim();
 	const fileSearchEnabled = isOpen
 		&& normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS
 		&& commandPaletteFileSearchAvailable(activeFileTarget, cloud.ready);
@@ -333,7 +353,35 @@ export const CommandPalette = memo(function CommandPalette() {
 			|| normalizedSessionQuery.length >= PALETTE_SESSION_SEARCH_MIN_CHARS);
 	const sessionSearchQuery = usePaletteSessionSearch(normalizedSessionQuery, LOCAL_HOST, sessionSearchEnabled);
 	const sessionSearchIndexStatus = useSessionSearchIndexStatus(LOCAL_HOST, isOpen && sessionSearchEnabled);
-	const sessionSearchHits = sessionSearchQuery.data?.results ?? [];
+	// The same words on every connected remote AO machine, merged with this
+	// machine's answer as the machines answer (see useMachineSearchRows). Recents
+	// (no words) stay this machine's.
+	const remoteSessionSearch = useRemoteMachineSearch(
+		{ query: normalizedSessionQuery, limit: PALETTE_SESSION_SEARCH_LIMIT },
+		sessionSearchEnabled,
+	);
+	// This machine's search finished and failed (its index is off or could not
+	// be opened). That is one machine not answering, not a pending answer: the
+	// machines that did answer still show, beside the local error notice.
+	const localSessionSearchFailed = sessionSearchQuery.isError && !sessionSearchQuery.isFetching;
+	const sessionSearchRows = useMachineSearchRows({
+		query: normalizedSessionQuery,
+		local: sessionSearchQuery.isPlaceholderData ? undefined : sessionSearchQuery.data,
+		localFailed: localSessionSearchFailed,
+		remote: remoteSessionSearch,
+		limit: PALETTE_SESSION_SEARCH_LIMIT,
+	});
+	const sessionSearchHits = sessionSearchRows.rows;
+	// Machines are named as soon as their reason is known: one that is offline
+	// does not wait for a slow one to time out.
+	const sessionSearchMachinesNotSearched = useMemo(
+		() => (remoteSessionSearch.query === normalizedSessionQuery ? machinesNotSearched(remoteSessionSearch.answers, t) : []),
+		[normalizedSessionQuery, remoteSessionSearch, t],
+	);
+	const sessionSearchPending = sessionSearchQuery.isFetching
+		|| !sessionSearchRows.current
+		|| remoteSessionSearch.query !== normalizedSessionQuery
+		|| !remoteSessionSearch.settled;
 
 	const sessionsWithOpenPRs = useMemo(
 		() =>
@@ -407,7 +455,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	const renderMath = useUiStore((s) => s.renderMath);
 	const navigationGestures = useUiStore((s) => s.navigationGestures);
 	const terminalCopyOnSelect = useUiStore((s) => s.terminalCopyOnSelect);
-	const sideChats = useUiStore((s) => s.sideChats);
 	const soundNotifications = useSoundNotificationsStore((s) => s.enabled);
 	// Stay Awake, as the sidebar's switch: polled only while the palette is open.
 	const stayAwake = useStayAwake(isOpen && isMac);
@@ -445,10 +492,9 @@ export const CommandPalette = memo(function CommandPalette() {
 			"copy-on-select": terminalCopyOnSelect,
 			sound: soundNotifications,
 			"developer-mode": developerMode,
-			"side-chats": sideChats,
 			"split-panes": splitPanes,
 		},
-	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, sideChats, splitPanes]);
+	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, splitPanes]);
 
 	const rootItems = useMemo(
 		() => [
@@ -636,10 +682,15 @@ export const CommandPalette = memo(function CommandPalette() {
 	// Session-text rows are only shown once the query has settled, so a row the
 	// person is about to press cannot be replaced by a later response.
 	const sessionSearchSettled = normalizedSessionQuery === query.trim();
-	const sessionSearchItems = useMemo(
-		() => (sessionSearchSettled ? buildSessionSearchCommands(sessionSearchHits, query.trim(), t) : []),
-		[sessionSearchHits, query, sessionSearchSettled, t],
-	);
+	// Past-session rows kept from the previous query while this one answers are
+	// shown but disabled: they may not match what is typed now, so neither a
+	// click, the arrow keys nor Enter can pick one until this query's rows land.
+	const sessionRowsStale = !sessionSearchRows.current;
+	const sessionSearchItems = useMemo(() => {
+		if (!sessionSearchSettled) return [];
+		const items = buildSessionSearchCommands(sessionSearchHits, query.trim(), t);
+		return sessionRowsStale ? items.map((item) => ({ ...item, disabled: true })) : items;
+	}, [sessionSearchHits, query, sessionSearchSettled, sessionRowsStale, t]);
 
 	const groups = useMemo(() => {
 		if (view.mode === "session-actions") {
@@ -830,9 +881,7 @@ export const CommandPalette = memo(function CommandPalette() {
 		}
 	}, [view, scoped, t]);
 
-	const toggleTheme = useCallback(() => {
-		setThemePreference(resolvedTheme === "dark" ? "light" : "dark");
-	}, [resolvedTheme, setThemePreference]);
+	const toggleTheme = useCallback(() => toggleThemePreference(), [toggleThemePreference]);
 
 	const navigateToTarget = useCallback(
 		(target: NavigateTarget) => {
@@ -876,17 +925,23 @@ export const CommandPalette = memo(function CommandPalette() {
 		[],
 	);
 
-	const fileSessionRoute = useCallback((target: WorkspaceFileSearchTarget): NavigateTarget => {
-		if (target.hostId) {
-			return target.projectId === STANDALONE_WORKSPACE_ID
-				? { to: "/host/$hostId/session/$sessionId", params: { hostId: target.hostId, sessionId: target.sessionId } }
+	// A session on another machine opens on that machine's route.
+	const hostSessionRoute = useCallback((hostId: string | undefined, projectId: string, sessionId: string): NavigateTarget => {
+		if (hostId) {
+			return !projectId || projectId === STANDALONE_WORKSPACE_ID
+				? { to: "/host/$hostId/session/$sessionId", params: { hostId, sessionId } }
 				: {
 					to: "/host/$hostId/project/$projectId/session/$sessionId",
-					params: { hostId: target.hostId, projectId: target.projectId, sessionId: target.sessionId },
+					params: { hostId, projectId, sessionId },
 				};
 		}
-		return sessionRoute(target.projectId, target.sessionId);
+		return sessionRoute(projectId, sessionId);
 	}, [sessionRoute]);
+
+	const fileSessionRoute = useCallback(
+		(target: WorkspaceFileSearchTarget): NavigateTarget => hostSessionRoute(target.hostId, target.projectId, target.sessionId),
+		[hostSessionRoute],
+	);
 
 	const blockedByRestart = useCallback((projectId: string) => {
 		if (!useUiStore.getState().restartingProjectIds.has(projectId)) return false;
@@ -1086,9 +1141,10 @@ export const CommandPalette = memo(function CommandPalette() {
 					case "open-search-result": {
 						// Hand the match to the session before navigating: the Chat
 						// timeline is mounted by the shell, so it picks the target up
-						// when it renders rather than from route state.
+						// when it renders rather than from route state. A session on
+						// another machine opens on that machine's route.
 						revealSessionSearchMatch(action);
-						navigateToTarget(sessionRoute(action.projectId, action.sessionId));
+						navigateToTarget(hostSessionRoute(action.hostId, action.projectId, action.sessionId));
 						closePalette();
 						break;
 					}
@@ -1132,7 +1188,7 @@ export const CommandPalette = memo(function CommandPalette() {
 				}
 			}
 		},
-		[daemonStatus.state, findChatWorkspace, sessionMenuEntries, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[daemonStatus.state, findChatWorkspace, sessionMenuEntries, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, hostSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -1417,12 +1473,17 @@ export const CommandPalette = memo(function CommandPalette() {
 									))}
 								</CommandGroup>
 							))}
-							{sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.isFetching && (
+							{sessionSearchEnabled && sessionSearchSettled && sessionSearchMachinesNotSearched.length > 0 && (
+								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground" data-testid="palette-machines-not-searched">
+									{t("command.machinesNotSearched", { machines: sessionSearchMachinesNotSearched.join(", ") })}
+								</div>
+							)}
+							{sessionSearchEnabled && sessionSearchSettled && sessionSearchPending && (
 								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchingSessions")}</div>
 							)}
 							{/* An empty session-text result over an incomplete index is not the
 							    same answer as one over a complete index. */}
-							{sessionSearchEnabled && sessionSearchSettled && !sessionSearchQuery.error && sessionSearchItems.length === 0 && !sessionSearchQuery.isFetching && (
+							{sessionSearchEnabled && sessionSearchSettled && !sessionSearchQuery.error && sessionSearchItems.length === 0 && !sessionSearchPending && (
 								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">
 									{sessionSearchIndexStatus.data?.state === "backfilling"
 										? t("command.searchSessionsBackfilling", { count: sessionSearchIndexStatus.data.pendingSources })
@@ -1569,7 +1630,7 @@ function PaletteRow({
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className="flex min-w-0 items-baseline gap-2">
-					<span className="max-w-full shrink-0 truncate" data-slot="command-item-title">
+					<span className={cn("truncate", item.machine ? "min-w-0" : "max-w-full shrink-0")} data-slot="command-item-title">
 						{item.group === "content" && item.title.includes(":") ? (
 							<>
 								{item.title.slice(0, item.title.lastIndexOf(":"))}
@@ -1579,6 +1640,13 @@ function PaletteRow({
 							<Highlighted text={item.title} spans={item.contentMatch ? [] : titleHighlights(query, item.title)} />
 						)}
 					</span>
+					{/* The other machine's name, drawn as the sidebar draws it beside a
+					    remote project: it may shorten, but a long title never hides it. */}
+					{item.machine ? (
+						<Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink-0 justify-start self-center px-1.5 text-2xs" data-slot="command-item-machine">
+							<span className="truncate">{item.machine}</span>
+						</Badge>
+					) : null}
 					{item.subtitle ? (
 						pathSubtitle ? (
 							// Right-to-left layout puts the ellipsis at the start of a long
@@ -1662,7 +1730,9 @@ const SNIPPET_LEAD = 16;
  */
 function HighlightedSnippet({ snippet }: { snippet: NonNullable<CommandItemModel["snippet"]> }) {
 	const parts: { text: string; hit: boolean }[] = [];
-	const firstMatch = snippet.highlights[0]?.start ?? 0;
+	// The lead-in is measured from the first span that fits the text; a span
+	// past its end would otherwise cut the whole line away.
+	const firstMatch = snippet.highlights.find((span) => span.start >= 0 && span.start < span.end && span.end <= snippet.text.length)?.start ?? 0;
 	const offset = firstMatch > SNIPPET_LEAD * 2 ? firstMatch - SNIPPET_LEAD : 0;
 	if (offset > 0) parts.push({ text: "…", hit: false });
 	let cursor = offset;

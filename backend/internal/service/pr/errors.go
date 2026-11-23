@@ -8,8 +8,12 @@ var (
 	ErrPRNotFound     = errors.New("pr: not found")
 	ErrPRNotMergeable = errors.New("pr: not mergeable")
 	// ErrPRStacked is a plain merge of a layer with unmerged layers below it.
-	ErrPRStacked        = errors.New("pr: unmerged layers below it in its stack")
-	ErrPRHeadChanged    = errors.New("pr: head changed")
+	ErrPRStacked     = errors.New("pr: unmerged layers below it in its stack")
+	ErrPRHeadChanged = errors.New("pr: head changed")
+	// ErrPRQueued is a merge of a PR already waiting in its merge queue.
+	ErrPRQueued = errors.New("pr: already in the merge queue")
+	// ErrPRNotQueued is a dequeue of a PR that isn't in a merge queue.
+	ErrPRNotQueued      = errors.New("pr: not in a merge queue")
 	ErrPRPreconditions  = errors.New("pr: merge preconditions unmet")
 	ErrNothingToResolve = errors.New("pr: nothing to resolve")
 	// ErrInvalidAction is an unknown merge method or state action.

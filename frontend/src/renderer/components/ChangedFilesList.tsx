@@ -25,9 +25,23 @@ export function ChangeCounts({ additions, deletions, className }: { additions: n
 	);
 }
 
+/** Keep the first path segment and filename readable while middle folders give way. */
+export function WorkspacePathSegments({ path, nameClassName }: { path: string; nameClassName?: string }) {
+	const slash = path.lastIndexOf("/");
+	const firstSlash = path.indexOf("/");
+	const name = path.slice(slash + 1);
+	const prefix = firstSlash < 0 ? "" : path.slice(0, firstSlash + 1);
+	const dir = slash > firstSlash ? path.slice(firstSlash + 1, slash + 1) : "";
+	return <>
+		{prefix ? <span className="shrink-0 text-passive">{prefix}</span> : null}
+		{dir ? <span className="min-w-0 shrink-[100] truncate text-passive">{dir}</span> : null}
+		<span className={cn("min-w-0 flex-auto truncate text-foreground", nameClassName)}>{name}</span>
+	</>;
+}
+
 /**
  * A branch row's files, opened in place under it: one flat line per file
- * (name, its folder dimmed, +/−, change letter), each opening its own diff.
+ * (workspace-relative path, +/−, change letter), each opening its own diff.
  * "View all changes" opens the full changes view.
  */
 export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
@@ -46,9 +60,7 @@ export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
 		<ul aria-label={t("inspector.git.changedFiles")} className="m-0 flex min-w-0 list-none flex-col p-0 pb-1" data-testid="changed-files-list" id={id}>
 			{shown.map((file) => {
 				const mark = statusMark[file.status] ?? statusMark.modified;
-				const slash = file.path.lastIndexOf("/");
-				const name = file.path.slice(slash + 1);
-				const dir = slash < 0 ? "" : file.path.slice(0, slash);
+				const name = file.path.slice(file.path.lastIndexOf("/") + 1);
 				return (
 					<li className="min-w-0" key={file.path}>
 						<button
@@ -58,10 +70,8 @@ export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
 							type="button"
 						>
 							<WorkspaceEntryIcon className="size-icon-2xs" kind="file" name={name} />
-							<span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-								<span className="min-w-0 truncate text-foreground">{name}</span>
-								{/* The folder gives way first when the line is tight. */}
-								{dir ? <span className="min-w-0 shrink-[100] truncate text-passive">{dir}</span> : null}
+							<span className="flex min-w-0 flex-1">
+								<WorkspacePathSegments path={file.path} />
 							</span>
 							<ChangeCounts additions={file.additions ?? 0} deletions={file.deletions ?? 0} className="text-micro" />
 							<span aria-hidden="true" className={cn("w-3 shrink-0 text-center font-mono text-micro font-semibold", mark.className)}>{mark.letter}</span>

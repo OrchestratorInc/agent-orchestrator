@@ -13,6 +13,7 @@ import {
 } from "../hooks/useReviewerConversation";
 import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
+import { backgroundTasksQueryRoot } from "../hooks/useBackgroundTasks";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
@@ -73,6 +74,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
 			let workspaceInvalidationPending = false;
+			let backgroundMembershipInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
 			// Reviews, interface transitions and model catalogs are otherwise only
@@ -320,6 +322,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(reviewerConversationQueryRoot);
 					allConversationsInvalidationPending = false;
 				}
+				if (backgroundMembershipInvalidationPending) {
+					invalidate(backgroundTasksQueryRoot);
+					backgroundMembershipInvalidationPending = false;
+				}
 				if (workspaceInvalidationPending) {
 					invalidate(workspaceQueryKey);
 					// A deleted session or removed project changes what is kept.
@@ -413,6 +419,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
 				let idOnlySessionUpdate = false;
+				if (event === undefined || event.type === "session_created" || event.type === "session_deleted") backgroundMembershipInvalidationPending = true;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
@@ -431,6 +438,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							type?: unknown;
 							payload?: unknown;
 						};
+						if (decoded.type === "session_created" || decoded.type === "session_deleted") backgroundMembershipInvalidationPending = true;
 						// The SSE endpoint sends the complete durable CDC event. Routing
 						// fields such as sessionId live on that envelope, while trigger-built
 						// details such as conversationId live inside its payload. Do not

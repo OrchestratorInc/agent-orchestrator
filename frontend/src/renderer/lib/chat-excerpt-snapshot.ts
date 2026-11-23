@@ -4,14 +4,15 @@ import type { ChatDraftExcerptReference } from "./chat-drafts";
 import { codeSourceOffsets, excerptSourceOffsets } from "./rehype-excerpt-source";
 
 const BLOCKS = new Set(["P", "PRE", "LI", "TR", "H1", "H2", "H3", "H4", "H5", "H6", "BLOCKQUOTE"]);
-const EXCLUDED = 'button:not([data-excerpt-include]), input, select, textarea, [hidden], .katex-mathml, [data-excerpt-exclude]';
+const EXCLUDED = 'button:not([data-excerpt-include]), input, select, textarea, [hidden], .katex-mathml, [data-excerpt-exclude], [data-markdown="code-header"]';
 type TextEntry = { node: Text; start: number; end: number };
 
 /** One projection for capture and navigation, independent of browser whitespace rules. */
 export function excerptRenderedText(root: HTMLElement): { text: string; entries: TextEntry[] } {
 	let text = "";
 	const entries: TextEntry[] = [];
-	const markdown = root.querySelector(".chat-md");
+	const chatMarkdown = root.querySelector(".chat-md");
+	const markdown = chatMarkdown?.querySelector(':scope > [data-markdown="root"]') ?? chatMarkdown;
 	const newline = () => { if (text && !text.endsWith("\n")) text += "\n"; };
 	function walk(node: Node) {
 		if (node instanceof Text) {

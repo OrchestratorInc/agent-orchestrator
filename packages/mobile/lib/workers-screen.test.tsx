@@ -111,9 +111,16 @@ vi.mock("./worker-board-list", async () => {
 vi.mock("./workers-idle-state", () => ({ WorkersIdleState: "WorkersIdleState" }));
 vi.mock("./archive/useLatestArchivedAt", () => ({ useLatestArchivedAt: () => undefined }));
 vi.mock("./frost", () => ({ useTabBarFrost: () => ({ inset: 0, frost: null }) }));
-vi.mock("./largeTitle", () => ({
-	useLargeTitle: (_title: string, onScroll?: unknown) => ({ header: null, edge: null, onScroll, topInset: 0 }),
-}));
+// As the real hook places the title's accessory: back to the page on iOS,
+// pinned under the bar (inside the edge) on Android.
+vi.mock("./largeTitle", async () => {
+	const React = await import("react");
+	return {
+		useLargeTitle: (_title: string, onScroll?: unknown, options?: { accessory?: React.ReactNode; backdrop?: string }) => fixtures.platform === "android"
+			? { header: null, edge: React.createElement("LargeTitleEdge", { backdrop: options?.backdrop }, options?.accessory), onScroll, topInset: 0, accessory: null }
+			: { header: null, edge: null, onScroll, topInset: 0, accessory: options?.accessory ?? null },
+	};
+});
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import { startNewTask } from "./newTaskAction";
@@ -324,16 +331,30 @@ describe("Workers filter menu", () => {
 
 	// Android's title is in the bar, whose frost dimmed a line placed right under
 	// it; the chips draw above the frost, so there the line goes beneath them.
-	it("puts the freshness line under the chips on Android and above them on iOS", () => {
-		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac" }), snapshot({ hostId: "windows", name: "Windows" })];
-		const order = () => renderer.root.findAll((node) => node.type === ("FreshnessLine" as never) || node.type === WorkerEnvironmentFilter, { deep: true })
-			.map((node) => (node.type === WorkerEnvironmentFilter ? "chips" : "line"));
+	// Android's bar frost washed out a line placed in the page whenever nothing
+	// (the machine chips) came first: there it is the title's accessory, pinned
+	// under the bar. On iOS it sits under the large title, above the chips.
+	it("pins the freshness line under the Android bar and puts it above the chips on iOS", () => {
+		const pinned = () => renderer.root.findAllByType("LargeTitleEdge" as never).flatMap((edge) => edge.findAllByType("FreshnessLine" as never));
+		const inList = () => renderer.root.findByType(WorkerBoardList).findAllByType("FreshnessLine" as never);
+		for (const machines of [[snapshot({ hostId: "mac", name: "Mac" })], [snapshot({ hostId: "mac", name: "Mac" }), snapshot({ hostId: "windows", name: "Windows" })]]) {
+			fixtures.hostStates = machines;
+			fixtures.platform = "ios";
+			act(() => { renderer = create(<FleetScreen />); });
+			const order = renderer.root.findByType(WorkerBoardList).findAll((node) => node.type === ("FreshnessLine" as never) || node.type === WorkerEnvironmentFilter)
+				.map((node) => (node.type === WorkerEnvironmentFilter ? "chips" : "line"));
+			expect(order).toEqual(machines.length > 1 ? ["line", "chips"] : ["line"]);
+			expect(pinned()).toHaveLength(0);
+			act(() => renderer.unmount());
+			fixtures.platform = "android";
+			act(() => { renderer = create(<FleetScreen />); });
+			expect(pinned()).toHaveLength(1);
+			expect(inList()).toHaveLength(0);
+			// A solid bar: the frost's tail lay over the chips and dimmed them at rest.
+			expect(renderer.root.findByType("LargeTitleEdge" as never).props.backdrop).toBe("solid");
+			act(() => renderer.unmount());
+		}
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(order()).toEqual(["line", "chips"]);
-		act(() => renderer.unmount());
-		fixtures.platform = "android";
-		act(() => { renderer = create(<FleetScreen />); });
-		expect(order()).toEqual(["chips", "line"]);
 	});
 
 	// An empty board explains itself, but a project or idle empty state would not

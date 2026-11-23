@@ -21,6 +21,7 @@ import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { aoBridge } from "../lib/bridge";
 import { withQueryFields } from "../lib/query-result";
+import { refetchWhenOlderThan } from "../lib/refetch-when-older-than";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostCheck } from "./useRemoteHosts";
@@ -432,7 +433,14 @@ export const workspaceQueryOptions = {
 	// /projects + /sessions about 0.75s past "daemon listening" on cold launch.
 	// Fail fast instead; the daemon status change refetches.
 	retry: (failureCount: number, error: Error) => !(error instanceof DaemonNotReadyError) && failureCount < 1,
-	staleTime: 10_000,
+	// The poll below and event invalidations keep this fresh. A finite staleTime
+	// (10 s, under the 15 s poll) made every subscriber arm a timer after each
+	// fetch that fired before the next one, for data that had not changed. With
+	// Infinity TanStack arms none; a mount or a return to the window still
+	// refetches data older than 10 s, as the finite staleTime did on mount.
+	staleTime: Number.POSITIVE_INFINITY,
+	refetchOnMount: refetchWhenOlderThan(10_000),
+	refetchOnWindowFocus: refetchWhenOlderThan(10_000),
 };
 
 export const workspaceRefetchInterval = (query: Query<WorkspaceSummary[]>) =>
@@ -998,6 +1006,24 @@ export function useRemoteProjectQuery(hostId: string, projectId: string) {
 		enabled: Boolean(hostId && projectId),
 		retry: 1,
 	});
+}
+
+/** Whether the project list already loaded for this host (the local daemon's,
+ * or a remote host's) has this project. It reads the cache only and never
+ * fetches, so it is false until something else has loaded that list. Cloud
+ * projects are never in these lists. */
+export function useCachedProjectListed(projectId?: string, hostId?: string): boolean {
+	const select = useCallback(
+		(projects: { id: string }[]) => projects.some((project) => project.id === projectId),
+		[projectId],
+	);
+	// Same options as the queries that own these lists: TanStack copies the
+	// options of whichever observer rendered last onto the shared query, so a
+	// bare observer here would drop their retry rules for the next refetch.
+	const listed = useQuery<{ id: string }[], Error, boolean>(hostId
+		? { queryKey: remoteProjectsQueryKey(hostId), queryFn: () => fetchRemoteProjects(hostId), retry: 1, select, enabled: false }
+		: { ...workspaceQueryOptions, select, enabled: false });
+	return Boolean(projectId) && listed.data === true;
 }
 
 /** Every project on one remote host, from the same cache as the board's
