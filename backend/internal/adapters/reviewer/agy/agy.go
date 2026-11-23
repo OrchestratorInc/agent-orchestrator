@@ -180,7 +180,8 @@ func seedOnboardingComplete(configRoot string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	// Best-effort cleanup; after a successful rename the temp name is gone.
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(raw); err != nil {
 		_ = tmp.Close()
 		return err
