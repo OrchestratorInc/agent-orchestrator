@@ -6992,6 +6992,30 @@ describe("browser live typing", () => {
 		await host.stopLiveStream("sess-1", 7);
 	});
 
+	// The agent may type into the field just before its command ends: control
+	// must come back with the page's value, never the cached one.
+	it("returns control with the page's current value of the focused field", async () => {
+		const { debuggerSendCommand, host } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		page.focus = JSON.stringify({ kind: "text", value: "old", field: 1 });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ focusedEditable: expect.objectContaining({ value: "old" }) }));
+		page.focus = JSON.stringify({ kind: "text", value: "agent wrote", field: 1 });
+		sink.state.mockClear();
+
+		await host.execute("sess-1", "tabs");
+		await vi.waitFor(() => expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human" })));
+
+		const returned = sink.state.mock.calls
+			.map(([state]) => state as { control: string; focusedEditable: { value?: string } | null })
+			.filter((state) => state.control === "human");
+		expect(returned.length).toBeGreaterThan(0);
+		for (const state of returned) expect(state.focusedEditable?.value).toBe("agent wrote");
+		await host.stopLiveStream("sess-1", 7);
+	});
+
 	it("notices focus the phone did not move while it watches", async () => {
 		vi.useFakeTimers();
 		try {
@@ -7018,8 +7042,11 @@ describe("browser live typing", () => {
 
 		await host.execute("sess-1", "tabs");
 
-		const controls = sink.state.mock.calls.map(([state]) => (state as { control: string }).control);
-		expect(controls).toEqual(["agent", "human"]);
+		// Control comes back once the page has been asked about its focused field.
+		await vi.waitFor(() => {
+			const controls = sink.state.mock.calls.map(([state]) => (state as { control: string }).control);
+			expect(controls).toEqual(["agent", "human"]);
+		});
 	});
 
 	it("types keys through CDP so a parked page receives them", async () => {

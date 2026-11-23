@@ -1102,8 +1102,18 @@ export function createBrowserViewHost(
     );
     syncBackgroundThrottling(session);
     if (!active) wakeIfIdle(session);
-    // A phone stops typing the moment the agent starts acting.
-    if (session.live) emitLiveState(session);
+    // A phone stops typing the moment the agent starts acting. Control comes
+    // back only once the page has said what its focused field now holds: the
+    // agent may have typed into it, and the phone starts again from that value.
+    if (session.live) {
+      if (session.agentBrowserCommands > 0) emitLiveState(session);
+      else {
+        const live = session.live;
+        void queryFocus(activeEntry(session)).finally(() => {
+          if (session.live === live) emitLiveState(session);
+        });
+      }
+    }
     shellWebContents.send("browser:agentActivity", {
       viewId: session.viewId,
       active: session.agentBrowserCommands > 0,
