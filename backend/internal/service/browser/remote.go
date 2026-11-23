@@ -542,14 +542,17 @@ const form = el.form || el.closest("form");
 const out = { documentOrigin: performance.timeOrigin, role, name, tag, inputType: type || undefined, isSubmit: false, formHasPayment: false, formHasPassword: false };
 if (form) {
   const pay = (f) => /cc-(number|csc|exp)/.test(f.getAttribute("autocomplete") || "") || /card.?num|cc.?num|\bcvc\b|\bcvv\b|security.?code/i.test((f.name || "") + " " + (f.id || "") + " " + (f.placeholder || ""));
-  const submit = form.querySelector("button:not([type]),button[type=submit],input[type=submit],input[type=image]");
+  // Controls are collected by their own form owner, so fields outside the
+  // form tag that join it with form="id" count, as the panel's describer does.
+  const controls = [...document.querySelectorAll("input,select,textarea,button")].filter((c) => c.form === form);
+  const submit = controls.find((c) => (c.tagName === "BUTTON" && (c.type || "submit") === "submit") || (c.tagName === "INPUT" && ["submit", "image"].includes(c.type)));
   out.formMethod = (form.getAttribute("method") || "get").toLowerCase();
   out.formAction = clean(form.action);
-  out.formHasPayment = [...form.querySelectorAll("input,select")].some(pay);
-  const passwords = [...form.querySelectorAll("input[type=password]")];
+  out.formHasPayment = controls.filter((c) => c.tagName === "INPUT" || c.tagName === "SELECT").some(pay);
+  const passwords = controls.filter((c) => c.tagName === "INPUT" && c.type === "password");
   out.formHasPassword = passwords.length > 0;
   out.formHasNewPassword = passwords.length > 1 || passwords.some((f) => /\bnew-password\b/i.test(f.getAttribute("autocomplete") || ""));
-  out.submitName = submit ? clean(submit.getAttribute("aria-label") || submit.innerText || submit.value) : undefined;
+  out.submitName = submit ? clean(submit.getAttribute("aria-label") || submit.innerText || submit.textContent || submit.value) : undefined;
   const textField = tag === "input" && !["checkbox", "radio", "submit", "button", "reset", "image", "file"].includes(type);
   out.isSubmit = (tag === "button" && (type || "submit") === "submit") || ["submit", "image"].includes(type) || (req.mode === "focused" && textField);
 }

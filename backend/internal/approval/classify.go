@@ -424,6 +424,39 @@ func IsActivationKey(key string) bool {
 	return last == "space" || last == "spacebar"
 }
 
+// ClassifyDialog judges accepting a page dialog. Accepting a confirm, prompt
+// or leave-page dialog lets the page carry on with what it asked about, so it
+// always asks; the dialog's wording names the category when it reads like one
+// ("Delete account?"). An alert only closes. kind is the dialog type, empty
+// when it could not be read; a prompt's answer is never part of the summary.
+func ClassifyDialog(kind, message string, mode Mode) Verdict {
+	if mode == ModeOff || strings.EqualFold(kind, "alert") {
+		return Verdict{}
+	}
+	verdict := Verdict{NeedsApproval: true, Category: CategoryScript,
+		Reason: "Accepting the page's dialog lets the page carry on with what it asked to confirm."}
+	if name := normalize(message); name != "" {
+		for _, set := range phraseSets {
+			if matchPhrase(name, set.phrases, false) != "" {
+				verdict.Category = set.category
+				verdict.Reason = fmt.Sprintf("Accepting it lets the page carry on, and the dialog reads like %s.", categoryNouns[set.category])
+				break
+			}
+		}
+	}
+	verdict.Summary = "Accept the page's dialog"
+	if kind != "" {
+		verdict.Summary = fmt.Sprintf("Accept the page's %s dialog", strings.ToLower(kind))
+	}
+	if text := strings.TrimSpace(message); text != "" {
+		if len(text) > 120 {
+			text = text[:120] + "…"
+		}
+		verdict.Summary += fmt.Sprintf(" %q", text)
+	}
+	return verdict
+}
+
 // HasLineBreak reports whether typed text contains a line break. Runtimes
 // that type key by key turn it into a real Enter keypress.
 func HasLineBreak(text string) bool {

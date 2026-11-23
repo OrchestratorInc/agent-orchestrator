@@ -65,6 +65,9 @@ func (s *Service) Preflight(ctx context.Context, sessionID domain.SessionID, act
 // reported (tab, document, and act's element), so the runtime refuses it if
 // the page changed while the user was deciding.
 func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt runtime, action string, args map[string]interface{}) (map[string]interface{}, error) {
+	if action == "dialog" {
+		return s.preflightDialog(ctx, sessionID, rt, args)
+	}
 	if !mayActConsequentially(action, args) {
 		return args, nil
 	}
@@ -126,6 +129,75 @@ func (s *Service) preflight(ctx context.Context, sessionID domain.SessionID, rt 
 	}
 	bound["approvalBinding"] = described.binding
 	return bound, nil
+}
+
+// preflightDialog asks before accepting a page dialog: a benign click can
+// open confirm("Delete account?"), and accepting it is the destructive step.
+// The page is blocked while the dialog is open, so the dialog's own type and
+// message describe it. Reading it and dismissing it never ask.
+func (s *Service) preflightDialog(ctx context.Context, sessionID domain.SessionID, rt runtime, args map[string]interface{}) (map[string]interface{}, error) {
+	operation, _ := args["operation"].(string)
+	if !strings.EqualFold(strings.TrimSpace(operation), "accept") {
+		return args, nil
+	}
+	if s.approvals == nil {
+		if s.approvalsErr != nil {
+			return nil, apierr.Unavailable("BROWSER_APPROVAL_UNAVAILABLE",
+				"This action may need the user's approval, and approvals could not load on this machine, so it was not run")
+		}
+		return args, nil
+	}
+	mode := s.approvals.SessionMode(string(sessionID))
+	if mode == approval.ModeOff {
+		return args, nil
+	}
+	// An unread dialog has no type, so it is never taken for an alert: ask.
+	kind, message, read := s.readDialog(ctx, sessionID, rt)
+	verdict := approval.ClassifyDialog(kind, message, mode)
+	if !verdict.NeedsApproval {
+		return args, nil
+	}
+	outcome, err := s.approvals.Request(ctx, approval.Request{
+		Kind: approval.KindBrowserAction, SessionID: string(sessionID),
+		Action: verdict.Summary, Category: verdict.Category, Reason: verdict.Reason, Timeout: s.approvalTimeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !outcome.Allowed() {
+		return nil, approvalRefusal(outcome.Decision, verdict.Summary, s.approvalTimeout)
+	}
+	// The dialog the user approved must be the one still open.
+	if nowKind, nowMessage, nowRead := s.readDialog(ctx, sessionID, rt); read && (!nowRead || nowKind != kind || nowMessage != message) {
+		return nil, apierr.Conflict("BROWSER_TARGET_CHANGED",
+			"The page's dialog changed while the action waited for approval, so it is not the one the user approved. Check the dialog and try again.", nil)
+	}
+	return args, nil
+}
+
+// readDialog returns the open dialog's type and message; read is false when
+// the runtime could not say, or no dialog is open.
+func (s *Service) readDialog(ctx context.Context, sessionID domain.SessionID, rt runtime) (kind, message string, read bool) {
+	limit := s.describeTimeout
+	if limit <= 0 {
+		limit = DefaultDescribeTimeout
+	}
+	readCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	result, err := rt.Execute(readCtx, sessionID, "dialog", map[string]interface{}{"operation": "status"})
+	if err != nil {
+		return "", "", false
+	}
+	status, _ := result.Value.(map[string]interface{})
+	if nested, ok := status["dialog"].(map[string]interface{}); ok {
+		status = nested
+	}
+	if open, ok := status["open"].(bool); ok && !open {
+		return "", "", false
+	}
+	kind, _ = status["type"].(string)
+	message, _ = status["message"].(string)
+	return kind, message, kind != "" || message != ""
 }
 
 // unidentifiedSummary says what will happen when the target is unknown.
