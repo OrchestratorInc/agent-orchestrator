@@ -3572,6 +3572,8 @@
 	"chat.render.remoteHost": "Open this session on its host to see the page.",
 	"chat.artifact.openInPanel": "Open in Artifacts tab",
 	"chat.artifact.label": "Artifact",
+	"chat.artifact.unavailable": "This page is no longer in the session's artifacts.",
+	"chat.artifact.notInline": "This file can't be shown here. Open it in the Artifacts tab.",
 	"chat.image.numbered": "Image {{index}}",
 	"chat.edit.cancel": "Cancel edit",
 	"chat.edit.cancelAction": "Cancel",
