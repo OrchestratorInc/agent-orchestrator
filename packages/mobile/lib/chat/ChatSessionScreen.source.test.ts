@@ -95,7 +95,7 @@ describe("active turn controls", () => {
 		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, currentHostId)");
 		expect(screenSource).toContain("reviewRouteForSession(session, currentHostId)");
 		expect(screenSource).toContain("reviewSummaries.summaryFor(summaryConfig, session.id, reviewPromptPR.number)");
-		expect(screenSource).toContain("<ChatComposer");
+		expect(screenSource).toContain("<StableChatComposer");
 	});
 
 });
@@ -135,7 +135,7 @@ describe("the composer and the keyboard", () => {
 		const follower = screenSource.indexOf("<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>");
 		expect(root).toBeGreaterThan(-1);
 		expect(follower).toBeGreaterThan(root);
-		expect(screenSource.indexOf("<ChatComposer")).toBeGreaterThan(follower);
+		expect(screenSource.indexOf("<StableChatComposer")).toBeGreaterThan(follower);
 	});
 	// The root padded for the keyboard shrank the list, which then chased its end
 	// from JS a frame or more behind the keys: the text lagged, then jumped up.
