@@ -2,6 +2,7 @@
 // registration/unregistration with the daemon. Delivery + routing of taps lives
 // in PushManager.tsx; this module owns the "get a token and tell the daemon"
 // half. See docs/adr/0001-mobile-push-notifications.md (D1, D4, D7, D9).
+import { BROWSER_APPROVAL_CATEGORY, browserApprovalCategoryActions } from "./approvals/approvalPush";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
@@ -181,6 +182,14 @@ export function configurePushHandler(): void {
 			shouldSetBadge: false,
 		}),
 	});
+}
+
+// The approval notification's buttons: Deny acts from the notification, the
+// other opens the app to the card (approvals/approvalPush.ts). Safe to repeat.
+export async function ensureApprovalCategory(): Promise<void> {
+	await Notifications.setNotificationCategoryAsync(BROWSER_APPROVAL_CATEGORY, browserApprovalCategoryActions.map((action) => ({
+		identifier: action.identifier, buttonTitle: action.buttonTitle, options: { ...action.options },
+	})));
 }
 
 // One high-importance Android channel so `needs_input` actually buzzes (D5).

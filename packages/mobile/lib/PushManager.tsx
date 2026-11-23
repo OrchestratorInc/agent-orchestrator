@@ -9,12 +9,15 @@ import { useOpenPage } from "./pageNavigation";
 import { useEffect, useRef } from "react";
 import { Alert, AppState, Platform } from "react-native";
 import { markNotificationRead } from "./api";
+import { approvalPushAction } from "./approvals/approvalPush";
+import { decideCloudApproval } from "./approvals/cloudApprovals";
+import { decideApproval } from "./approvals/localApprovals";
 import { shouldPoll } from "./appStatePoll";
 import { getInstallId } from "./installId";
 import { launchNotificationResponse, markNotificationResponseHandled } from "./launchNotification";
 import { findHost } from "./hosts";
 import { notificationTarget } from "./notificationView";
-import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
+import { announcePairedDevice, configurePushHandler, ensureAndroidChannel, ensureApprovalCategory, onManualPushRegistration, registerForPush, retryPendingUnpairs } from "./push";
 import { useApp } from "./store";
 import { useCloud } from "./cloud/CloudProvider";
 import { cloudPushTarget, foreignCloudPushOrganization } from "./cloud/pushTarget";
@@ -31,6 +34,8 @@ type PushData = {
 	projectId?: string;
 	prUrl?: string;
 	notificationId?: string;
+	/** A browser approval's id (type "browser_approval"). */
+	approvalId?: string;
 	/** "cloud" for a notification Orchestrator Cloud sent rather than a paired machine. */
 	source?: string;
 	orgId?: string;
@@ -60,6 +65,7 @@ export function PushManager(): null {
 	// Create the Android channel once at startup.
 	useEffect(() => {
 		void ensureAndroidChannel();
+		void ensureApprovalCategory().catch(() => {});
 	}, []);
 
 	// Runs even with zero paired hosts, including onboarding after forgetting
@@ -106,7 +112,12 @@ export function PushManager(): null {
 
 		const handle = (resp: Notifications.NotificationResponse | null, coldStart: boolean) => {
 			if (!resp) return;
-			void route((resp.notification.request.content.data ?? {}) as PushData, coldStart);
+			const data = (resp.notification.request.content.data ?? {}) as PushData;
+			if (approvalPushAction(data, resp.actionIdentifier)?.kind === "deny") {
+				void denyFromNotification(data);
+				return;
+			}
+			void route(data, coldStart);
 		};
 
 		// The launch's own tap only: one handled before (an earlier launch, or the
@@ -123,6 +134,25 @@ export function PushManager(): null {
 		// route() reads the latest host snapshots through hostsRef.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [navState?.key]);
+
+	// Deny from the notification, without opening a screen. If it can't send,
+	// the approval times out, which also refuses the action.
+	async function denyFromNotification(data: PushData) {
+		const action = approvalPushAction(data, "deny");
+		if (action?.kind !== "deny") return;
+		try {
+			if (data.source === "cloud") {
+				const { client, org } = cloudRef.current;
+				if (!org || (action.orgId && action.orgId !== org.id)) return;
+				await decideCloudApproval(client, org.id, action.sessionId, action.approvalId, "deny");
+				return;
+			}
+			const source = hostsRef.current.find(({ hostId }) => hostId === data.hostId);
+			if (source?.config) await decideApproval(source.config, action.approvalId, "deny");
+		} catch (e) {
+			console.warn("[push] deny from notification failed", e);
+		}
+	}
 
 	async function route(data: PushData, coldStart = false) {
 		const cloudTarget = cloudPushTarget(data);
@@ -144,7 +174,7 @@ export function PushManager(): null {
 		// saved pairing is the authority for whether this host may be opened.
 		const paired = data.hostId ? await findHost(data.hostId).catch(() => null) : null;
 		const hosts = hostsRef.current;
-		const destination = notificationTarget({ type: data.type ?? "", sessionId: data.sessionId, prUrl: data.prUrl, hostId: data.hostId }, paired?.id);
+		const destination = notificationTarget({ type: data.type ?? "", sessionId: data.sessionId, prUrl: data.prUrl, hostId: data.hostId, approvalId: data.approvalId }, paired?.id);
 		if (destination === "/") {
 			// Legacy or forgotten-machine push has no safe destination here.
 			router.navigate("/");
@@ -153,7 +183,7 @@ export function PushManager(): null {
 		const source = hosts.find(({ hostId }) => hostId === data.hostId);
 		const target = destination.startsWith("/review")
 			? "review"
-			: destination.startsWith("/session") ? "session" : "prs";
+			: destination.startsWith("/session") ? "session" : destination.startsWith("/preview") ? "preview" : "prs";
 		mobileTelemetry()?.capture(MOBILE_EVENTS.notificationOpened, { target, cold_start: coldStart });
 		// Best-effort mark-read so unread counts stay consistent with the dashboard.
 		if (source?.config && source.connection === "open" && data.notificationId) {

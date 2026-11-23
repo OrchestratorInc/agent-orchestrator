@@ -65,7 +65,7 @@ export const MOBILE_ALLOWLIST: Record<string, Readonly<Record<string, PropRule>>
 	[MOBILE_EVENTS.onboardingSkipped]: {},
 	[MOBILE_EVENTS.notificationOpened]: {
 		// notificationView already maps a push to a small set of destinations.
-		target: { oneOf: ["session", "prs"] },
+		target: { oneOf: ["session", "prs", "preview"] },
 		cold_start: { flag: true },
 	},
 	[MOBILE_EVENTS.featureUsed]: {
