@@ -2,7 +2,7 @@
 // the latest main-owned generation before forwarding to Electron main.
 import { classifyError, type ClassifyInput, type Triage } from "../../shared/observability";
 import { SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName } from "../../shared/sentry-config";
-import { sentryErrorCode } from "../../../../packages/shared/telemetry/ao-error";
+import { isExpectedSentryError, sentryErrorCode } from "../../../../packages/shared/telemetry/ao-error";
 import { onboardingFailureCode, ONBOARDING_SENTRY_REASONS, type OnboardingAction, type OnboardingFailureReason } from "../../shared/onboarding-failures";
 import { aoBridge } from "./bridge";
 import { onboardingSentryFlow } from "./onboarding-flow";
@@ -82,6 +82,7 @@ function safeRendererFrames(error: unknown, event?: ErrorEvent): RendererFrame[]
 }
 
 export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {}, event?: ErrorEvent): void {
+	if (isExpectedSentryError(error)) return;
 	const triage = classifyError(meta);
 	const errorCode = sentryErrorCode(error);
 	const isError = error instanceof Error || error instanceof DOMException;

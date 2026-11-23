@@ -81,11 +81,11 @@ export function installRendererErrorHandlers(capture?: Handler): void {
 			let candidate = error;
 			for (let depth = 0; depth < 16 && candidate !== null && typeof candidate === "object"; depth++) {
 				try {
-					const value = candidate as { code?: unknown; cause?: unknown; telemetryCode?: unknown };
+					const value = candidate as { code?: unknown; cause?: unknown; telemetryCode?: unknown; expected?: unknown };
+					if (value.expected === true) return;
 					const { code, telemetryCode } = value;
-					if (typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)) {
+					if (!errorCode && typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)) {
 						errorCode = code;
-						break;
 					}
 					if (!fallbackCode && typeof telemetryCode === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(telemetryCode)) fallbackCode = telemetryCode;
 					candidate = value.cause;

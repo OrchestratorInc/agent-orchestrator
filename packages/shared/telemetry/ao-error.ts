@@ -25,3 +25,16 @@ export function sentryErrorCode(error: unknown): string | undefined {
 	}
 	return fallback;
 }
+
+export function isExpectedSentryError(error: unknown): boolean {
+	for (let depth = 0; depth < 16 && error !== null && typeof error === "object"; depth++) {
+		try {
+			const candidate = error as { expected?: unknown; cause?: unknown };
+			if (candidate.expected === true) return true;
+			error = candidate.cause;
+		} catch {
+			break;
+		}
+	}
+	return false;
+}

@@ -90,6 +90,7 @@ const TAG_KEYS = new Set([
 	"error_code",
 	"flow",
 	"http_status",
+	"ipc_channel",
 	"operation",
 	"owner",
 	"platform",
@@ -229,6 +230,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const identity = sentryMessageIdentity(
 		kind === "process_exit" ? undefined : event.exception?.values?.[0]?.value ?? event.message,
 		event.tags?.["ao.error_code"] ?? sentryErrorCode(originalException) ?? (renderer && !sourceLabel ? safeCode : undefined),
+		exceptionType,
 	);
 	const frames = event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? [])
 		.filter((frame) => frame.in_app !== false && typeof frame.function === "string" && frame.function.length <= 128 && SAFE_FUNCTION.test(frame.function))
@@ -248,8 +250,10 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		: topFrame?.function === "main_frame" ? mainLocation ?? "main_frame" : topFrame?.function ?? "unknown";
 	const rendererLabel = safeCode !== "unknown" ? safeCode : safeCategory;
 	const debugImages = frames?.length ? safeDebugImages(event, renderer) : [];
+	const ipcChannel = renderer ? identity.channel : undefined;
+	const titleLocation = ipcChannel ?? topFunction;
 	const title = renderer
-		? kind === "message" ? `Renderer API error${safeOperation ? " in " + safeOperation : ""} (${rendererLabel})` : `Renderer ${exceptionType} in ${topFunction} (${rendererLabel})`
+		? kind === "message" ? `Renderer API error${safeOperation ? " in " + safeOperation : ""} (${rendererLabel})` : `Renderer ${exceptionType} in ${titleLocation} (${rendererLabel})`
 		: processReason ? "Electron process failure" : `Electron main ${exceptionType} in ${topFunction}`;
 	return {
 		type: undefined,
@@ -259,9 +263,9 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		event_id: event.event_id,
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
-		message: sentryIdentityTitle(identity, title),
+		message: ipcChannel && identity.text ? title + ": " + identity.text : sentryIdentityTitle(identity, title),
 		fingerprint: errorFingerprint(identity, ["electron", kind, renderer ? rendererLabel : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main", ...(safeOperation ? [safeOperation] : [])]),
-		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}), ...(safeFlow ? { flow: safeFlow } : {}) } : {}), ...(processReason ? { reason: processReason } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
+		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode, ...(safeOperation ? { operation: safeOperation } : {}), ...(safeFlow ? { flow: safeFlow } : {}), ...(ipcChannel ? { ipc_channel: ipcChannel } : {}) } : {}), ...(processReason ? { reason: processReason } : {}), ...(identity.code ? { error_code: identity.code } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,
@@ -278,7 +282,7 @@ function scrubMainHandledEvent(event: Sentry.ErrorEvent, installId: string, vers
 	const detail = event.tags?.["ao.detail"];
 	const title = `Electron main ${category} failure (${reason})`;
 	const exceptionType = safeSentryExceptionType(event.exception?.values?.[0]?.type);
-	const identity = sentryMessageIdentity(event.exception?.values?.[0]?.value, event.tags?.["ao.error_code"]);
+	const identity = sentryMessageIdentity(event.exception?.values?.[0]?.value, event.tags?.["ao.error_code"], exceptionType);
 	const channel = category === "ipc" && isSafeMainErrorDetail(detail) && detail.startsWith("channel:") ? detail.slice(8) : undefined;
 	if (channel) identity.channel = channel;
 	return {

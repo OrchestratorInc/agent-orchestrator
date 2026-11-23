@@ -115,10 +115,10 @@ describe("Electron main Sentry configuration", () => {
 		expect(sdk.captureEvent).toHaveBeenCalledTimes(2);
 		const first = beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent);
 		expect(first).toMatchObject({
-			message: "Electron main daemon failure (exited)",
+			message: "spawn <path>",
 			fingerprint: ["electron", "handled", "daemon", "exited", "electron-main", ...hashParts("spawn <path>")],
 			tags: { surface: "electron-main", kind: "handled", category: "daemon", reason: "exited", detail: "signal:SIGKILL" },
-			exception: { values: [{ type: "TypeError", value: "Electron main daemon failure (exited)" }] },
+			exception: { values: [{ type: "TypeError", value: "spawn <path> (in electron-main, daemon/exited)" }] },
 		});
 		const second = beforeSend(sdk.captureEvent.mock.calls[1]?.[0] as ErrorEvent);
 		expect(second?.tags).not.toHaveProperty("detail");
@@ -130,7 +130,7 @@ describe("Electron main Sentry configuration", () => {
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		transport.captureMain?.({ category: "side_chat", reason: "recovery", error: new TypeError("Could not restore session-123 from /Users/private token=secret"), detail: "private-project" });
 		const event = beforeSend(sdk.captureEvent.mock.calls[0][0]);
-		expect(event).toMatchObject({ message: "Electron main side_chat failure (recovery)", tags: { category: "side_chat", reason: "recovery" }, exception: { values: [{ type: "TypeError", value: "Electron main side_chat failure (recovery)" }] } });
+		expect(event).toMatchObject({ message: "Could not restore <id> from <path> <credential>", tags: { category: "side_chat", reason: "recovery" }, exception: { values: [{ type: "TypeError", value: "Could not restore <id> from <path> <credential> (in electron-main, side_chat/recovery)" }] } });
 		expect(JSON.stringify(event)).not.toMatch(/private|Users|secret/);
 	});
 
@@ -691,11 +691,13 @@ it("uses scrubbed renderer exception text for titles and grouping", async () => 
 	const first = send("HTTP error 500: /etc/private http://localhost:8080/token alice@example.test '0xdeadbeef'");
 	const same = send("HTTP error 503: ~/private http://127.0.0.1/x bob@example.test '12345678-1234-1234-1234-123456789abc'");
 	const other = send("Cannot read properties of undefined (reading 'id')");
-	expect(first?.exception?.values?.[0]?.value).toBe("Renderer TypeError in unknown (render_crash)");
+	expect(first?.exception?.values?.[0]?.value).toBe("HTTP error <n>: <path> <url> <email> '?' (in unknown, render_crash)");
 	expect(same?.fingerprint).toEqual(first?.fingerprint);
 	expect(other?.fingerprint).not.toEqual(first?.fingerprint);
-	expect(other?.exception?.values?.[0]?.value).toBe("Renderer TypeError in unknown (render_crash)");
-	expect(send("/home/alice/private.txt")?.exception?.values?.[0]?.value).toBe("Renderer TypeError in unknown (render_crash)");
+	expect(other?.message).toBe("Cannot read properties of undefined (reading '?')");
+	expect(other?.exception?.values?.[0]?.value).toBe("Cannot read properties of undefined (reading '?') (in unknown, render_crash)");
+	expect(other?.fingerprint?.slice(-2)).toEqual(hashParts("cannot read properties of undefined (reading '?')"));
+	expect(send("/home/alice/private.txt")?.message).toBe("<path>");
 });
 
 it("uses scrubbed messages for handled and SDK-originated main errors", async () => {
@@ -723,14 +725,13 @@ it("uses the IPC channel and cause code, or the normalized IPC message without o
 		return beforeSend(sdk.captureEvent.mock.calls.at(-1)![0], {});
 	};
 	const first = await send("remotes:list", "Internal server error", "REMOTES_READ_FAILED");
-	expect(first).toMatchObject({ message: "Renderer Error in unknown (unknown) (REMOTES_READ_FAILED)", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], "code", "REMOTES_READ_FAILED"] });
+	expect(first).toMatchObject({ message: "Renderer Error in remotes:list (unknown) (REMOTES_READ_FAILED)", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], "code", "REMOTES_READ_FAILED"] });
 	expect((await send("remotes:list", "Erreur interne", "REMOTES_READ_FAILED"))?.fingerprint).toEqual(first?.fingerprint);
 	expect((await send("remotes:sync", "Internal server error", "REMOTES_READ_FAILED"))?.fingerprint).not.toEqual(first?.fingerprint);
 	const uncoded = await send("remotes:list", "Cannot read /home/alice/private");
-	expect(uncoded).toMatchObject({ message: "Renderer Error in unknown (unknown)", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], ...hashParts("cannot read <path>")] });
+	expect(uncoded).toMatchObject({ message: "Renderer Error in remotes:list (unknown)", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], ...hashParts("cannot read <path>")] });
 
-	const privateChannel = await send("private-project", "Cannot read a file");
-	expect(JSON.stringify(privateChannel)).not.toContain("private-project");
+	expect(uncoded?.tags?.ipc_channel).toBe("remotes:list");
 
 	const cause = new AoError("WORKSPACE_NO_READY_REPOS", "Workspace project must contain at least one fully resolved git repository");
 	const sdkError = await beforeSend({ type: undefined, message: "Wrapped" }, { originalException: new Error("Wrapped", { cause }) });
@@ -739,9 +740,9 @@ it("uses the IPC channel and cause code, or the normalized IPC message without o
 
 it.each(["private ".repeat(26).trim(), "x".repeat(301)])("hashes unsafe text and uses the computed title", async (message) => {
 	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
-	transport.capture({ consentGeneration: "g", kind: "exception", message, exception: { type: "Error", frames: [] } });
+	transport.capture({ consentGeneration: "g", kind: "exception", message, exception: { type: "TypeError", frames: [] } });
 	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
-	expect(event?.message).toBe("Renderer Error in unknown (unknown)");
+	expect(event?.message).toBe("Renderer TypeError in unknown (unknown)");
 	expect(event?.fingerprint?.slice(-2)).toEqual(["sha256", createHash("sha256").update(message).digest("hex").slice(0, 10)]);
 	expect(JSON.stringify(event)).not.toContain(message);
 });
@@ -750,12 +751,12 @@ it("omits quoted prompts, email addresses, home paths and remote URLs from the f
 	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 	transport.capture({
 		consentGeneration: "g", kind: "exception",
-		message: "Could not send 'my private prompt' to alice@example.test from /home/alice/prompt.txt via https://host.test/upload",
-		exception: { type: "Error", frames: [] },
+		message: "Could not send 'my private prompt' to alice@example.test from /home/alice/prompt.txt via https://host.test/upload on comic-12",
+		exception: { type: "TypeError", frames: [] },
 	});
 	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
-	expect(event?.message).toBe("Renderer Error in unknown (unknown)");
-	expect(JSON.stringify(event)).not.toMatch(/my private prompt|alice|host\.test/);
+	expect(event?.message).toBe("Could not send '?' to <email> from <path> via <url> on <id>");
+	expect(JSON.stringify(event)).not.toMatch(/my private prompt|alice|host\.test|comic-12/);
 });
 
 it.each([
@@ -793,4 +794,29 @@ it("keeps application codes scoped by source and preserves renderer source tags"
 	expect(renderer?.message).toContain("READ_FAILED");
 	expect(handled?.tags).toMatchObject({ error_code: "READ_FAILED" });
 	expect(renderer?.fingerprint).not.toEqual(handled?.fingerprint);
+});
+
+it("shows an IPC engine message and channel while keeping the hashed fingerprint", async () => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	const message = "Error invoking remote method 'browser:ensure': TypeError: Cannot read properties of undefined (reading 'x')";
+	transport.capture({
+		consentGeneration: "g", kind: "exception", message,
+		tags: { code: "UNHANDLED_REJECTION" },
+		exception: { type: "Error", frames: [] },
+	});
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.tags?.ipc_channel).toBe("browser:ensure");
+	expect(event?.message).toBe("Renderer Error in browser:ensure (UNHANDLED_REJECTION): Cannot read properties of undefined (reading '?')");
+	expect(event?.fingerprint).toEqual(["electron", "ipc", hashParts("browser:ensure")[1], ...hashParts("cannot read properties of undefined (reading '?')")]);
+	expect(JSON.stringify(event)).not.toContain("reading 'x'");
+});
+
+it.each([["Error", undefined], ["TypeError", "READ_FAILED"]] as const)("keeps uncoded plain and coded engine errors private", async (type, code) => {
+	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+	const message = "Cannot read properties of undefined (reading 'id')";
+	transport.capture({ consentGeneration: "g", kind: "exception", message, tags: code ? { error_code: code } : undefined, exception: { type, frames: [] } });
+	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
+	expect(event?.message).toBe(code ? "Renderer TypeError in unknown (unknown) (READ_FAILED)" : "Renderer Error in unknown (unknown)");
+	expect(event?.fingerprint?.slice(-2)).toEqual(code ? ["code", code] : hashParts("cannot read properties of undefined (reading '?')"));
+	expect(JSON.stringify(event)).not.toContain("Cannot read properties");
 });

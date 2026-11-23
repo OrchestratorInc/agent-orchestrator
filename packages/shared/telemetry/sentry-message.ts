@@ -2,16 +2,20 @@ import { safeSentryCode } from "./ao-error";
 
 const ERROR_PREFIX = /^(?:Uncaught(?: \(in promise\))? )?(?:[A-Za-z_$][\w$]*)?Error:\s+|^Uncaught(?: \(in promise\))? /;
 const IPC_WRAPPER = /^Error invoking remote method '([a-z][\w:-]{0,63})':\s*/;
+const ENGINE_TYPES = new Set(["TypeError", "ReferenceError", "RangeError", "SyntaxError", "EvalError", "URIError", "DOMException"]);
+const INNER_TYPE = /^(\w+):\s+/;
 // An unquoted path may span words. Keep consuming a segment if a later word
 // contains a separator, stopping at the start of another absolute path.
 const ABSOLUTE_PATH = /(?:[A-Za-z]:[\\/]|\\\\|~\/|(?<![\w/])\/)(?:\\[ \t]|[^\s"'‘’“”<>\x60])+(?:(?:[ \t]+[^\s\\/:"'‘’“”<>\x60]+)*[ \t]+(?![\\/~]|[A-Za-z]:)[^\s\\/:"'‘’“”<>\x60]+[\\/](?:\\[ \t]|[^\s"'‘’“”<>\x60])+)*/g;
 
-function normalizeSentryMessage(value: unknown): { text: string; unsafe: boolean; channel?: string } {
+function normalizeSentryMessage(value: unknown): { text: string; unsafe: boolean; channel?: string; innerType?: string } {
 	if (typeof value !== "string" || !value || value.length > 4096) return { text: "", unsafe: false };
 	const line = value.split(/[\r\n\u2028\u2029]/, 1)[0];
 	let message = line.trim().replace(ERROR_PREFIX, "");
 	const ipc = IPC_WRAPPER.exec(message);
-	if (ipc) message = message.slice(ipc[0].length).replace(ERROR_PREFIX, "");
+	if (ipc) message = message.slice(ipc[0].length);
+	const innerType = ipc ? INNER_TYPE.exec(message)?.[1] : undefined;
+	if (ipc) message = message.replace(ERROR_PREFIX, "");
 	const text = message
 		.replace(/\b(?:(?:https?|app|wss?):\/\/|file:\/)[^\s"'‘’“”<>\x60]+/gi, "<url>")
 		.replace(/[\w.!#$%&*+/=?^{}|~-]+@[\w-]+(?:\.[\w-]+)+/g, "<email>")
@@ -27,32 +31,24 @@ function normalizeSentryMessage(value: unknown): { text: string; unsafe: boolean
 		.replace(/(?:<id>|<n>|[\w-]+)(?:<n>[\w-]*)*-<n>(?![\w-])/g, "<id>")
 		.replace(/\s+/g, " ")
 		.trim();
-	return { text, unsafe: line.length > 300 || text.split(" ").length > 25, channel: ipc?.[1] };
+	return { text, unsafe: line.length > 300 || text.split(" ").length > 25, channel: ipc?.[1], innerType };
 }
 
-export function scrubSentryMessage(value: unknown): string {
-	const { text, unsafe } = normalizeSentryMessage(value);
-	return unsafe ? "" : text.slice(0, 120);
-}
-
-export function sentryMessageFingerprint(message: string): string[] {
-	return message ? [message.toLowerCase()] : [];
-}
-
-export function sentryMessageIdentity(value: unknown, errorCode?: unknown) {
-	const { text, channel } = normalizeSentryMessage(value);
+export function sentryMessageIdentity(value: unknown, errorCode?: unknown, exceptionType?: string) {
+	const { text, unsafe, channel, innerType } = normalizeSentryMessage(value);
 	const stableCode = safeSentryCode(errorCode);
 	return {
 		code: stableCode,
 		channel,
 		label: stableCode ?? "",
-		// Normalization stabilizes grouping. Arbitrary error text stays local.
+		text: !stableCode && !unsafe && text && ENGINE_TYPES.has((channel ? innerType : exceptionType) ?? "") ? text.slice(0, 120) : undefined,
+		// Display eligibility does not affect grouping.
 		hashInput: !stableCode && text ? text.toLowerCase() : undefined,
 	};
 }
 
 export function sentryIdentityTitle(identity: ReturnType<typeof sentryMessageIdentity>, fallback: string): string {
-	if (!identity.label) return fallback;
+	if (!identity.label) return identity.text ?? fallback;
 	if (!fallback) return identity.label;
 	return fallback.endsWith(" (" + identity.label + ")") ? fallback : fallback + " (" + identity.label + ")";
 }

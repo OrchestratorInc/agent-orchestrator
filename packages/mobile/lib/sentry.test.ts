@@ -129,10 +129,10 @@ describe("mobile Sentry consent and payload", () => {
 			exception: { values: [{ type: "TypeError", value }] },
 		});
 		const first = await clean("HTTP error 500: /etc/private http://localhost:8080/x alice@example.test");
-		expect(first?.exception?.values).toMatchObject([{ type: "TypeError", value: "Mobile error" }]);
+		expect(first?.exception?.values).toMatchObject([{ type: "TypeError", value: "HTTP error <n>: <path> <url> <email> (in mobile, render_crash)" }]);
 		expect((await clean("HTTP error 502: ~/private wss://host bob@example.test"))?.fingerprint).toEqual(first?.fingerprint);
 		expect((await clean("Invalid array length"))?.fingerprint).not.toEqual(first?.fingerprint);
-		expect((await clean("/home/alice/private"))?.message).toBe("Mobile error");
+		expect((await clean("/home/alice/private"))?.message).toBe("<path>");
 		const unsafe = await clean("private ".repeat(40));
 		expect(unsafe?.message).toBe("Mobile error");
 		expect(unsafe?.fingerprint?.slice(-2)).toEqual(["sha256", createHash("sha256").update("private ".repeat(40).trim()).digest("hex").slice(0, 10)]);
@@ -231,4 +231,28 @@ it.each([
 	expect(event?.message).toBe("Mobile error");
 	expect(event?.fingerprint?.at(-1)).toBe(createHash("sha256").update(normalized).digest("hex").slice(0, 10));
 	expect(JSON.stringify(event)).not.toMatch(privateText);
+});
+
+it.each([
+	["TypeError", undefined, "Cannot read properties of undefined (reading 'id')", "Cannot read properties of undefined (reading '?')"],
+	["Error", undefined, "Cannot read properties of undefined (reading 'id')", "Mobile error"],
+	["TypeError", "READ_FAILED", "Cannot read properties of undefined (reading 'id')", "Mobile error (READ_FAILED)"],
+	["TypeError", undefined, "x".repeat(301), "Mobile error"],
+	["TypeError", undefined, "private ".repeat(26).trim(), "Mobile error"],
+	["TypeError", undefined, "Open /home/alice/config from https://host.test/path for alice@example.test 'prompt' comic-12", "Open <path> from <url> for <email> '?' <id>"],
+	["Error", undefined, "Error invoking remote method 'browser:ensure': TypeError: Cannot read properties of undefined (reading 'x')", "Cannot read properties of undefined (reading '?')"],
+] as const)("limits mobile message display by type, code and size", async (type, code, value, title) => {
+	const sentry = await import("./sentry");
+	sentry.setMobileSentryConsent(true);
+	await sentry.initMobileSentry();
+	sentry.captureMobileException(new Error(value), { category: "render_crash" });
+	const event = await sentry.sanitizeMobileSentryEvent({
+		type: undefined,
+		tags: { ...sdk.captureException.mock.calls.at(-1)?.[1]?.tags, "ao.code": code },
+		exception: { values: [{ type, value }] },
+	});
+	expect(event?.message).toBe(title);
+	expect(event?.fingerprint?.at(-2)).toBe(code ? "code" : "sha256");
+	expect(JSON.stringify(event)).not.toContain(value);
+	if (title === "Mobile error" || code) expect(JSON.stringify(event)).not.toContain("Cannot read properties");
 });

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { AoError, sentryErrorCode } from "../../../packages/shared/telemetry/ao-error";
-import { scrubSentryMessage, sentryMessageFingerprint, sentryMessageIdentity } from "../../../packages/shared/telemetry/sentry-message";
+import { sentryMessageIdentity } from "../../../packages/shared/telemetry/sentry-message";
 
 describe("Sentry message normalization", () => {
 	it.each([
-		[undefined, ""],
-		["", ""],
-		["x".repeat(4097), ""],
+		[undefined, undefined],
+		["", undefined],
+		["x".repeat(4097), undefined],
 		["Uncaught (in promise) CustomError: Connection failed\nsecond line", "Connection failed"],
 		["Uncaught Error: failed\r\nsecond line", "failed"],
 		["open http://host/a https://host/b file:///home/a app://renderer/x ws://host wss://host", "open <url> <url> <url> <url> <url> <url>"],
@@ -32,12 +32,12 @@ describe("Sentry message normalization", () => {
 		["request failed refresh_token=supersecretvalue", "request failed <credential>"],
 		["request failed client_secret=supersecretvalue", "request failed <credential>"],
 		["x".repeat(150), "x".repeat(120)],
-		["x".repeat(301), ""],
-		["word ".repeat(26), ""],
-	])("normalizes %j", (input, expected) => expect(scrubSentryMessage(input)).toBe(expected));
+		["x".repeat(301), undefined],
+		["word ".repeat(26), undefined],
+	])("normalizes %j", (input, expected) => expect(sentryMessageIdentity(input, undefined, "TypeError").text).toBe(expected));
 
 	it("uses the lowercase normalized text for a fingerprint", () => {
-		const fingerprint = (text: string) => sentryMessageFingerprint(scrubSentryMessage(text));
+		const fingerprint = (text: string) => sentryMessageIdentity(text).hashInput;
 		expect(fingerprint("Spawn comic-12: /home/alice returned 3")).toEqual(fingerprint("spawn comic-31: ~/secret returned 9"));
 		expect(fingerprint("Spawn comic-12: /home/alice returned 3")).not.toEqual(fingerprint("Open comic-12: /home/alice returned 3"));
 	});

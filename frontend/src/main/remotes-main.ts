@@ -60,7 +60,7 @@ export type RemotesIpcDeps = {
 	deviceName?: () => Promise<string>;
 };
 
-class LocalIdentityUnavailableError extends ExpectedIpcError {
+export class LocalIdentityUnavailableError extends ExpectedIpcError {
 	override readonly code: string = "LOCAL_IDENTITY_UNAVAILABLE_ERROR";
 	constructor() { super("Local Orchestrator identity is unavailable; remote connection is offline"); }
 }
@@ -177,7 +177,7 @@ export function registerRemotesIpc(
 			const code = includeErrorCode === true ? sentryErrorCode(error) : undefined;
 			if (!code || !(error instanceof Error)) throw error;
 			captureMainError({ category: "ipc", reason: "handler", detail: "channel:remotes:list", error });
-			return { code, message: error.toString() };
+			return { code, message: error.toString(), ...(error instanceof ExpectedIpcError ? { expected: true } : {}) };
 		}
 	}));
 	ipcMain.handle("remotes:add", async (_event, input: RemoteEntry) => ordered(async () => {

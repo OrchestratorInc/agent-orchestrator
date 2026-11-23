@@ -46,6 +46,7 @@ export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { orig
 	const identity = sentryMessageIdentity(
 		exceptions.at(-1)?.value ?? (event.message === "Mobile API error" ? undefined : event.message),
 		sentryErrorCode(hint?.originalException) ?? event.tags?.["ao.code"],
+		safeSentryExceptionType(exceptions.at(-1)?.type),
 	);
 	let messageFingerprint: string[] = [];
 	if (identity.hashInput !== undefined) {

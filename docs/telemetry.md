@@ -59,10 +59,12 @@ upload their source maps to the ao-electron project; the maps are not shipped
 in the app. An event may carry the debug ID of each app bundle in its stack and
 the bundle's app URL (`app://renderer/assets/...` or `app:///.vite/build/...`),
 never an install path. Desktop and mobile Sentry reports use the application
-error code when available. For uncoded errors, the sender normalizes the first
-line locally by removing paths, URLs, emails, identifiers, quoted values, and
-numbers. Sentry receives a short SHA-256 fingerprint and a computed title.
-The original and normalized message text stay on the device.
+error code when available. Uncoded JavaScript engine errors such as TypeError,
+ReferenceError, RangeError, SyntaxError, and DOMException can include the first
+line of the message after paths, URLs, emails, identifiers, quoted values, and
+numbers are removed, capped at 120 characters. Long engine messages and other
+uncoded errors use a computed title. All uncoded errors group by a short
+SHA-256 hash of the locally normalized first line.
 The app's global renderer error boundary binds handlers independently of
 PostHog setup. Electron main still checks Share error events before sending.
 Preload installs main-world error and rejection handlers before renderer imports
@@ -99,8 +101,7 @@ analytics opt-out boundary. No failed mobile Sentry send is persisted for retry.
 The sender checks consent both before capture and immediately before network
 send, so an event still queued when opt-out arrives is discarded.
 
-Mobile Sentry applies the error code, local normalization and hash rules
-above. It also receives the error category, safe stack line numbers with generic
+Mobile Sentry sends application codes and applies the same normalized first-line display rule for JavaScript engine errors. Other uncoded errors contribute only a hash of the cleaned-up text. It also receives the error category, safe stack line numbers with generic
 frame names, release version and build number, and the production or preview
 environment. The sender excludes request bodies and account identity. Its `user.id` is the authenticated paired
 desktop installation ID only. It is absent before pairing, during repair, and
@@ -1224,9 +1225,7 @@ and no HTTP route tag.
 An event may include a bounded `git`, `db`, `agent`, or `network` area when the
 error provides evidence. Panic events keep function and line information, but
 remove stack paths, request data, project, session, repository and branch
-names, and panic text. Electron issues use an application error code or a
-computed title based on the error type, location, and category. Uncoded
-messages contribute only a hash of the locally normalized text.
+names, and panic text. Electron issues use application codes, eligible engine\nmessages, or a computed title based on the type, location, and category.\nUncoded messages group by a hash of the locally normalized text.
 Daemon and Electron events use the same installation ID as Sentry `user.id`.
 Canceled requests, plain transient 503 responses, and expected upstream link-preview
 502 responses do not create Sentry issues. A 503 caused by a server deadline or

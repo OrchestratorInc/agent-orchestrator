@@ -158,3 +158,33 @@ it("still captures an early rejection whose code getter throws", async () => {
 		message: "An early failure", tags: expect.objectContaining({ code: "UNHANDLED_REJECTION" }),
 	})));
 });
+
+it.each([
+	["EXPECTED_IPC_ERROR", "Sign in to Orchestrator Cloud"],
+	["LOCAL_IDENTITY_UNAVAILABLE_ERROR", "Local Orchestrator identity is unavailable; remote connection is offline"],
+])("preserves the expected %s rejection without reporting it", async (code, message) => {
+	const { controller, resolvePolicy } = await setup(true);
+	resolvePolicy(controller.snapshot());
+	mocks.invoke.mockImplementation(async (channel: string) => channel === "remotes:list"
+		? { code, message: "Error: " + message, expected: true }
+		: null);
+	const { listRemoteHosts } = await import("./renderer/lib/remote-host-list");
+	const error = await listRemoteHosts().catch((reason: unknown) => reason);
+	expect(error).toMatchObject({ code, expected: true, message: "Error invoking remote method 'remotes:list': Error: " + message });
+	const wrapped = new AoError("REMOTE_WRAPPER", "wrapped", { cause: error });
+	const event = new Event("unhandledrejection");
+	Object.defineProperty(event, "reason", { value: wrapped });
+	window.dispatchEvent(event);
+	const { captureExceptionToSentry } = await import("./renderer/lib/sentry");
+	captureExceptionToSentry(wrapped);
+	expect(mocks.invoke.mock.calls.some(([channel]) => channel === "telemetry:capture")).toBe(false);
+});
+
+it("forwards uncoded engine errors with their original type for main's display rule", async () => {
+	const { controller, capture, resolvePolicy } = await setup(true);
+	const message = "Cannot read properties of undefined (reading 'id')";
+	fail(new TypeError(message));
+	resolvePolicy(controller.snapshot());
+	await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
+	expect(capture.mock.calls[0][0]).toMatchObject({ message, exception: { type: "TypeError" } });
+});
