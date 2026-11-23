@@ -7064,6 +7064,7 @@ function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
 function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>): TimelineGroup[] {
 	const out: TimelineGroup[] = [];
 	const used = new Set<string>();
+	const held: TimelineGroup[] = [];
 	let run: { kind: "background" | "failed"; key: string; members: TimelineGroup[] } | undefined;
 	const close = () => {
 		if (!run) return;
@@ -7076,13 +7077,14 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 		out.push(kind === "failed" && members.length === 1
 			? first
 			: { key, anchor: first.anchor, items: members.flatMap((member) => member.items), folded: { kind, members } });
+		out.push(...held.splice(0));
 		run = undefined;
 	};
 	const segments = new Map<string, number>();
 	for (const group of groups) if (group.turnId) segments.set(group.turnId, (segments.get(group.turnId) ?? 0) + 1);
 	for (const group of groups) {
 		if (run?.kind === "background" && isLooseNotices(group)) {
-			run.members.push(group);
+			held.push(group);
 			continue;
 		}
 		const outcome = group.turnId && !group.live && segments.get(group.turnId) === 1
@@ -7103,7 +7105,7 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 			close();
 			run = { kind: standing, key, members: [] };
 		}
-		run.members.push(group);
+		run.members.push(...held.splice(0), group);
 	}
 	close();
 	return out;
@@ -7121,7 +7123,7 @@ function backgroundRows(members: readonly TimelineGroup[]) {
 	const latest = new Map<string, WorkerUpdate>();
 	for (const member of members) {
 		const updates = isLooseNotices(member) ? [] : workerUpdatesOf(member.items[0]!);
-		for (const update of updates) latest.set(senderOf(update), update);
+		if (!isAccountFailure(member)) for (const update of updates) latest.set(senderOf(update), update);
 		const senders = new Set(updates.map(senderOf));
 		const sender = senders.size === 1 ? [...senders][0] : undefined;
 		const at = sender === undefined ? -1 : rows.findIndex((row) => row.sender === sender);
@@ -7134,14 +7136,14 @@ function backgroundRows(members: readonly TimelineGroup[]) {
 		rows.push(row);
 	}
 	const tally: BackgroundTally = {};
-	const add = (name: keyof BackgroundTally) => { tally[name] = (tally[name] ?? 0) + 1; };
+	const add = (name: keyof BackgroundTally, count = 1) => { tally[name] = (tally[name] ?? 0) + count; };
 	for (const { state } of latest.values()) {
 		if (state === "done") add("done");
 		else if (state === "needs_input") add("neededYou");
 		else if (state === "stuck") add("stuck");
 	}
 	for (const member of members) {
-		if (isAccountFailure(member)) add("notHandled");
+		if (isAccountFailure(member)) add("notHandled", Math.max(1, workerUpdatesOf(member.items[0]!).length));
 		if (isLooseNotices(member)) for (const item of member.items) add(looseNotice(item)!);
 	}
 	return { rows, tally };
@@ -7190,8 +7192,19 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 			{rows ? rows.map((row) => {
 				const [only] = row.members;
 				if (row.members.length === 1) return isLooseNotices(only!) ? <Fragment key={row.key}>{renderTurn(only!)}</Fragment> : turnRow(only!);
+				const worker = toggleAll("worker", row.members);
 				return (
-					<BackgroundWorkerRow key={row.key} update={row.latest!} count={row.count} at={row.members.at(-1)!.items[0]!.createdAt} {...toggleAll("worker", row.members)}>
+					<BackgroundWorkerRow
+						key={row.key}
+						update={row.latest!}
+						count={row.count}
+						at={row.members.at(-1)!.items[0]!.createdAt}
+						open={worker.open || row.members.some((member) => overrides[`${member.key}:open`])}
+						onOpenChange={(open) => {
+							worker.onOpenChange(open);
+							if (!open) for (const member of row.members) onOpenChange(`${member.key}:open`, false);
+						}}
+					>
 						{row.members.map(turnRow)}
 					</BackgroundWorkerRow>
 				);

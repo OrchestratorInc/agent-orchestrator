@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { create } from "zustand";
-import { turnStanding } from "../components/chat/background-turns";
+import { accountFailure, turnStanding } from "../components/chat/background-turns";
 import { indexWorkerUpdates, placeBatchedReports } from "../components/chat/WorkerUpdates";
 import { fetchRecentConversation } from "../hooks/useConversation";
 import type { WorkspaceSession } from "../types/workspace";
@@ -64,7 +64,7 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 			const ids = new Set(settled.map((turn) => turn.id));
 			const drained = (snapshot.batchedDeliveries ?? []).filter((delivery) => ids.has(delivery.deliveredWithTurnId));
 			const standsOut = [...settled, ...drained.map((delivery) => ({ id: delivery.turnId, state: "completed", hasHumanPrompt: false }))].some((turn) => {
-				if (turn.hasHumanPrompt) return true;
+				if (turn.hasHumanPrompt || accountFailure(turn)) return true;
 				const items = snapshot.items.filter((item) => item.turnId === turn.id);
 				if (items.length === 0 && !ids.has(turn.id)) return false;
 				const standing = turnStanding(items, turn, index, under);

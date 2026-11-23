@@ -97,14 +97,12 @@ describe("useOrchestratorReplyState", () => {
 		expect(hook.result.current).toBeNull();
 	});
 
-	it("stays quiet for a background turn that failed on the account", async () => {
+	it("lights up when a background turn failed on the account", async () => {
 		const failed = workerTurn("");
 		fetchRecentConversation.mockResolvedValue({ ...failed, turns: failed.turns.map((turn) => ({ ...turn, state: "failed", usageLimit: { autoResume: false } })) });
 		const hook = afterYourReply();
 		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
-		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalledWith("orch-1", undefined));
-		await act(async () => {});
-		expect(hook.result.current).toBeNull();
+		await waitFor(() => expect(hook.result.current).toBe("unread"));
 	});
 
 	it("ignores a queued message the user cancelled during the work", async () => {

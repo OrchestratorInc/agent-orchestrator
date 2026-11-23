@@ -508,7 +508,7 @@ describe("background turns in the orchestrator chat", () => {
 
 	it("drops the account notice once a later background turn in the run went through", () => {
 		const base = snapshot([
-			report("t1", 1, "[checkpoint] [iOS pages](ao://sessions/proj/proj-286)\nPages render."),
+			report("t1", 1, "[done] [iOS pages](ao://sessions/proj/proj-286)\nPages render."),
 			report("t2", 3, "[done] [Docs](ao://sessions/proj/proj-287)\nDocs build."),
 			reply("t2", 4, "Noted."),
 		]);
@@ -556,16 +556,16 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.getByText(/Session 12:/)).toBeInTheDocument();
 	});
 
-	it("shows a long reply in full when it ends in a question or opens with a lead-in", () => {
+	it("shows a long reply in full when it asks a question or opens with a lead-in", () => {
 		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
 		renderOrchestrator([
 			human("t1", 1, "How is the browser work going?"),
-			reply("t1", 2, `Menus and iOS pages are merged.\n\n${detail}\n\nShould I close the remote host PR?`),
+			reply("t1", 2, `Menus and iOS pages are merged.\n\n${detail}\n\nShould I close the remote host PR? Meanwhile I'll rerun CI.`),
 			human("t2", 3, "And the docs?"),
 			reply("t2", 4, `Here's where everything stands:\n\n${detail}`),
 		]);
 
-		expect(screen.getByText("Should I close the remote host PR?")).toBeInTheDocument();
+		expect(screen.getByText(/Should I close the remote host PR\?/)).toBeInTheDocument();
 		expect(screen.getAllByText(/Session 12:/)).toHaveLength(2);
 		expect(screen.queryByRole("button", { name: "Details" })).not.toBeInTheDocument();
 	});
@@ -599,7 +599,40 @@ describe("background turns in the orchestrator chat", () => {
 			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render.\n\n[done] [Docs](ao://sessions/proj/proj-287)\nDocs build."),
 			reply("t1", 2, "Noted."),
 		]);
-		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^1 background update · 2 done · /);
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 2 done · /);
+	});
+
+	it("leaves an agent stopped after the last background turn in view", () => {
+		const stopped: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.terminated:proj-9", sequence: 25, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Terminated an agent", createdAt: at(2),
+			detail: { action: "session.terminated", operationId: "proj-9", targetSessionId: "proj-9" },
+		};
+		renderOrchestrator([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "Noted."),
+			stopped,
+			human("t3", 3, "What next?"),
+			reply("t3", 4, "The docs."),
+		]);
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^1 background update · 1 done · /);
+		expect(screen.getByText("Terminated an agent")).toBeInTheDocument();
+	});
+
+	it("keeps a turn the user opened open when a newer report from that worker joins it", async () => {
+		const first = [report("t1", 1, "[checkpoint] [iOS pages](ao://sessions/proj/proj-286)\nPages render."), reply("t1", 2, "Noted.")];
+		const view = orchestratorView();
+		const { rerender } = render(view(snapshot(first)));
+		await userEvent.click(screen.getByRole("button", { name: /^1 background update/ }));
+		await userEvent.click(within(screen.getByTestId("background-turn")).getAllByRole("button")[0]!);
+		expect(within(screen.getByTestId("background-turn")).getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "true");
+
+		rerender(view(snapshot([...first, report("t2", 3, "[done] [iOS pages](ao://sessions/proj/proj-286)\nPages ship."), reply("t2", 4, "Noted.")])));
+		const worker = screen.getByTestId("background-worker");
+		expect(worker).toHaveTextContent(/done · 2 updates/);
+		const rows = within(worker).getAllByTestId("background-turn");
+		expect(rows).toHaveLength(2);
+		expect(within(rows[0]!).getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "true");
 	});
 
 	it("leaves a failed stop between background turns in view", () => {

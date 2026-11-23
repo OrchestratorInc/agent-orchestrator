@@ -1441,16 +1441,14 @@ export type ReplyDetails = { open: boolean; onOpenChange: (open: boolean) => voi
 
 const REPLY_LEAD_AT = 2000;
 
-export const asksQuestion = (text: string) => /[?？][*_)\]"'”’`」』）】》〉»›]*$/.test(text.trimEnd());
-
 function replyLead(text: string): string | undefined {
-	if (text.length <= REPLY_LEAD_AT || asksQuestion(text)) return undefined;
+	if (text.length <= REPLY_LEAD_AT || /[?？][*_)\]"'”’`」』）】》〉»›]*(?:\s|$)/.test(text)) return undefined;
 	const start = text.search(/\S/);
 	const end = text.slice(start).search(/\n[ \t]*\n/);
 	if (end < 0) return undefined;
 	const lead = text.slice(0, start + end);
 	const first = lead.trim();
-	return first.length * 2 < text.length && !/^(?:#{1,6}(?:\s|$)|\||>|[-*+]\s|\d+[.)]\s|([-*_])\1{2,}\s*$)|```|~~~|[:：]$|^(\*\*|__)[^\n]*\2$/.test(first) ? lead : undefined;
+	return first.length * 2 < text.length && !/^(?:#{1,6}(?:\s|$)|\||>|[-*+]\s|\d+[.)]\s|([-*_])\1{2,}\s*$)|```|~~~|\]\[|\[\^|[:：]$|^(\*\*|__)[^\n]*\2$/.test(first) ? lead : undefined;
 }
 
 /** The agent's prose. Streaming is represented by text arriving in place. */
