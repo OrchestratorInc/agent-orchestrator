@@ -34,7 +34,10 @@ import type {
   Cue,
   CueDefinitionInput,
   InvokeCueResult,
+  DataRetention,
+  DataRetentionChange,
   PutAgentProviderConnectionInput,
+  PutDataRetentionInput,
   RedactedProviderConnection,
   RequestOptions,
   Session,
@@ -51,6 +54,7 @@ import type {
   TerminalKind,
   TerminalTicket,
   TurnSteeredEvent,
+  TurnSteerRequestedEvent,
   UpdateProjectInput,
   UserMessageEvent,
   UserMessageEditedEvent,
@@ -144,6 +148,21 @@ export class CloudClient {
 
   getCurrentAccount(options: RequestOptions = {}): Promise<CurrentAccount> {
     return this.request("/api/cloud/v1/me", options);
+  }
+
+  /** How long the signed-in user's Cloud sessions and their conversation content are kept. */
+  getDataRetention(options: RequestOptions = {}): Promise<DataRetention> {
+    return this.request("/api/cloud/v1/me/data-retention", options);
+  }
+
+  /**
+   * Choose how long the signed-in user's Cloud sessions are kept. With
+   * `dryRun` nothing changes; both modes count the sessions the period deletes.
+   */
+  putDataRetention(input: PutDataRetentionInput, options: RequestOptions = {}): Promise<DataRetentionChange> {
+    return this.request("/api/cloud/v1/me/data-retention", {
+      method: "PUT", body: input, signal: options.signal,
+    });
   }
 
   async listAgents(
@@ -776,14 +795,18 @@ export class CloudClient {
   /**
    * Take back a message whose turn is still queued (offered when
    * offering.features lists queued-delete). Unlike cancelTurn it never stops a
-   * turn that left the queue: 409 TURN_NOT_QUEUED once the agent took it.
+   * turn that left the queue: 409 TURN_NOT_QUEUED once the agent took it,
+   * 409 ALREADY_STEERED once the agent took it as a steer. While the worker is
+   * taking the message as a steer it answers pending, and the steer's outcome
+   * decides (chat.turn_interrupted deleted, or chat.turn_steered with
+   * deleteRequested).
    */
   deleteQueuedMessage(
     orgId: string,
     sessionId: string,
     turnId: string,
     options: RequestOptions = {},
-  ): Promise<WorkerOKResponse> {
+  ): Promise<WorkerOKResponse & { pending?: boolean }> {
     return this.request(
       this.orgPath(
         orgId,
@@ -791,6 +814,33 @@ export class CloudClient {
       ),
       {
         method: "POST",
+        signal: options.signal,
+      },
+    );
+  }
+
+  /**
+   * Steer a message whose turn is still queued into the running turn
+   * (offered when offering.features lists queued-steer). Answers the steer
+   * request; the message leaves the queue on chat.turn_steered and stays
+   * queued on chat.turn_steer_failed. 409 TURN_NOT_QUEUED once the agent took
+   * it, TURN_NOT_STEERABLE when no running turn can take guidance.
+   */
+  steerQueuedMessage(
+    orgId: string,
+    sessionId: string,
+    turnId: string,
+    options: IdempotentRequestOptions & { composerEpoch?: number },
+  ): Promise<{ event: TurnSteerRequestedEvent }> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/steer-queued`,
+      ),
+      {
+        method: "POST",
+        body: options.composerEpoch !== undefined ? { composerEpoch: options.composerEpoch } : {},
+        idempotencyKey: options.idempotencyKey,
         signal: options.signal,
       },
     );

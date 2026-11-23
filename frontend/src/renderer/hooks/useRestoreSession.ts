@@ -1,18 +1,23 @@
 import { useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { aoBridge } from "../lib/bridge";
-import type { CloudCpSession } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpSession } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "./useCloudCp";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useContentExpiredSessionsStore } from "../stores/content-expired-sessions-store";
 import type { WorkspaceSummary } from "../types/workspace";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 
 export type RestoreSessionResult =
-	{ status: "success" } | { status: "not_resumable"; message: string } | { status: "error"; message: string };
+	| { status: "success" }
+	| { status: "not_resumable"; message: string }
+	/** `code` is the daemon's error code, when it answered with one. */
+	| { status: "error"; message: string; code?: string };
 
 /**
  * A deleted cloud session stays in the cloud sessions listing (flagged
@@ -43,6 +48,7 @@ function findCloudSession(
 
 export function useRestoreSession(): (sessionId: string, hostId?: string) => Promise<RestoreSessionResult> {
 	const queryClient = useQueryClient();
+	const { t } = useTranslation();
 
 	return useCallback(
 		async (sessionId: string, hostId?: string) => {
@@ -76,6 +82,12 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 					useTerminalResetStore.getState().bump(sessionId, baselineEpoch);
 					return { status: "success" };
 				} catch (err) {
+					// Past its creator's data retention: its content is being removed
+					// and it can never be restored, so Restore stops being offered.
+					if (err instanceof CloudCpError && err.code === "SESSION_CONTENT_EXPIRED") {
+						useContentExpiredSessionsStore.getState().mark(sessionId);
+						return { status: "error", message: t("restoreUnavailable.contentExpired") };
+					}
 					return {
 						status: "error",
 						message: err instanceof Error ? err.message : "Unable to restore session",
@@ -93,7 +105,7 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 					if (code === "SESSION_NOT_RESUMABLE") {
 						return { status: "not_resumable", message };
 					}
-					return { status: "error", message };
+					return { status: "error", message, code };
 				}
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				if (data?.restoreMode === "saved_prompt") {
@@ -115,6 +127,6 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 				};
 			}
 		},
-		[queryClient],
+		[queryClient, t],
 	);
 }

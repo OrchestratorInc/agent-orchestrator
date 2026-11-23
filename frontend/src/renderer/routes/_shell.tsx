@@ -3,7 +3,7 @@ import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
 import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, useMatch, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderPlus } from "@/components/app-icons";
@@ -22,10 +22,13 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
+import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
+import { GuidedTour } from "../components/onboarding/GuidedTour";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
+import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { PageTopbar } from "../components/PageTopbar";
@@ -36,6 +39,7 @@ import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
+import { useSettingsPolling } from "../hooks/useSettings";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
 import { SwipeNavigation } from "../components/SwipeNavigation";
@@ -60,6 +64,7 @@ import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
+import { reportOnboardingProjectAdded } from "../lib/onboarding-telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -82,6 +87,7 @@ import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useHeldSession } from "../hooks/useHeldSession";
+import { useSwitchHistoryRead } from "../hooks/useSwitchHistoryRead";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -97,8 +103,10 @@ import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
-import { useAppShortcut } from "../hooks/useAppShortcut";
+import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
+import { markLaunchUsable } from "../lib/launch-telemetry";
+import { useSessionOpenTiming } from "../lib/performance-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
 
@@ -165,6 +173,9 @@ function ShellLayoutWithSettings() {
 	return (
 		<SettingsProvider>
 			<ShellLayout />
+			{/* Outside ShellLayout, so links it holds survive every route and the
+			    startup loader that replaces the shell while the daemon restarts. */}
+			<SharedArtifactLinkHost />
 		</SettingsProvider>
 	);
 }
@@ -213,7 +224,9 @@ function LocalSessionHost() {
 	const cloudOrgId = org?.id;
 	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
 	const liveProjectId = projectSession?.projectId;
-	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId);
+	const historyPending = useSwitchHistoryRead(liveSessionId);
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId, historyPending);
+	useSessionOpenTiming(liveSessionId, sessionId);
 	const view = useMemo(
 		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
 		[cloudOrgId, projectId, sessionId],
@@ -325,6 +338,14 @@ const ShellCenter = memo(function ShellCenter({
 // the <Outlet> content (board / session / settings / …) swaps. Lifted out of
 // the old single <App>, with selection now owned by the router (route params)
 // instead of Zustand. The daemon-status effect runs here exactly once.
+// What useMatchRoute checked: "/" and "/new" exactly, the settings pages fuzzily, ignoring case.
+function shellRouteKind(pathname: string): "home" | "new" | "settings" | "" {
+	const path = pathname.toLowerCase();
+	if (path === "/") return "home";
+	if (path === "/new") return "new";
+	return /^\/(projects\/[^/]+\/)?settings(\/|$)/.test(path) ? "settings" : "";
+}
+
 function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
@@ -336,14 +357,17 @@ function ShellLayout() {
 	const router = useRouter();
 	const canGoForward = useCanGoForward();
 	const settingsPage = useSettingsPage();
-	const matchRoute = useMatchRoute();
+	// One string, so a session switch (same kind of route) does not re-render the shell
+	// while the router loads; useMatchRoute would on every location and status change.
+	const routeKind = useRouterState({ select: (state) => shellRouteKind((state.resolvedLocation ?? state.location).pathname) });
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
 	useWorkspacePolling();
+	useSettingsPolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, refresh: refreshRemoteHosts } = useRemoteHosts();
+	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
@@ -362,10 +386,6 @@ function ShellLayout() {
 	}, [queryClient, refusedRemoteHostKey]);
 	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds, loadedSessionHostIds: remoteLoadedSessionHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
 	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
-	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
-	useEffect(() => {
-		if (failedRemoteHostKey) void refreshRemoteHosts();
-	}, [failedRemoteHostKey, refreshRemoteHosts]);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.
 	const workspacesRef = useRef(workspaces);
@@ -390,11 +410,14 @@ function ShellLayout() {
 	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
-	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
+	const firstRunOnboardingOpen = useUiStore((state) => state.firstRunOnboardingOpen);
+	// While the full-window onboarding shows, the shell behind it takes no
+	// focus or clicks; Settings opened from it lifts that, as it steps aside.
+	const onboardingCoversShell = useUiStore((state) => state.firstRunOnboardingOpen && state.settingsModal?.scope !== "global");
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
@@ -591,10 +614,10 @@ function ShellLayout() {
 	}, [queryClient, scopedProjectId]);
 	// The root route is the intentionally minimal home surface, regardless of
 	// whether projects have already been registered.
-	const isHomeRoute = Boolean(matchRoute({ to: "/" }));
+	const isHomeRoute = routeKind === "home";
 	// The new chat page is a session that does not exist yet, so it takes the
 	// session frame and the session view replaces it without the chrome moving.
-	const isNewChatRoute = Boolean(matchRoute({ to: "/new" }));
+	const isNewChatRoute = routeKind === "new";
 	// The new chat page keeps its host in the search, not the path.
 	const newChatHost = useRouterState({
 		select: (state) => (isNewChatRoute ? (state.location.search as { host?: string }).host : undefined),
@@ -606,9 +629,7 @@ function ShellLayout() {
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
-	const isSettingsRoute =
-		Boolean(matchRoute({ to: "/settings", fuzzy: true })) ||
-		Boolean(matchRoute({ to: "/projects/$projectId/settings", fuzzy: true }));
+	const isSettingsRoute = routeKind === "settings";
 	// Welcome/settings always self-frame. Platforms that hide the shell-owned
 	// topbar (macOS) use the same full-height inset; session actions mount
 	// inside SessionView.
@@ -642,6 +663,20 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	// Launch timing: the second frame runs once the first frame that shows the
+	// workspace is on screen. A daemon failure is not a launch, and main logs the
+	// first report only, so nothing is reported while one is showing.
+	const workspaceShown = !isStartupLoading && !daemonStatus.code && workspaceQuery.data !== undefined;
+	useEffect(() => {
+		if (!workspaceShown) return;
+		let frame = requestAnimationFrame(() => {
+			frame = requestAnimationFrame(() => {
+				markLaunchUsable();
+				aoBridge.app.reportSessionsShown();
+			});
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [workspaceShown]);
 	// The startup loader renders no sidebar, so measure again once the shell
 	// mounts it. Otherwise the strip keeps the 240px default and its fill
 	// paints over the center panel's top-left corner beside a narrower sidebar.
@@ -795,6 +830,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			project: components["schemas"]["Project"],
 			input: CreateProjectConfigInput,
 			source: "project_add" | "project_clone",
+			// The onboarding tour's project source; a prepared clone is added as a project but came from a clone.
+			onboardingSource: "clone" | "local_folder" = source === "project_add" ? "local_folder" : "clone",
 		) => {
 			const workspace: WorkspaceSummary = {
 				id: project.id,
@@ -807,6 +844,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				sessions: [],
 			};
 			void captureRendererEvent(source === "project_add" ? "ao.projects.added" : "ao.renderer.project_clone_succeeded", { project_id: workspace.id });
+			reportOnboardingProjectAdded(onboardingSource, workspace.id);
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
 			// Ids come from the folder name: a folder removed and added again is the same id.
@@ -889,6 +927,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					}
 					if (registeredWorkspace) {
 						if (input.clonePreparationId) {
+							// The clone registered before its response was lost: still a clone for the tour.
+							reportOnboardingProjectAdded("clone", registeredWorkspace.id);
 							setOrchestratorStartupError(registeredWorkspace.id, null);
 							setProjectProvisioning(registeredWorkspace.id, true);
 							await navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
@@ -914,7 +954,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				reportFailure("NO_PROJECT");
 				throw new Error("Project creation returned no project");
 			}
-			await completeProjectCreation(data.project, input, "project_add");
+			await completeProjectCreation(data.project, input, "project_add", input.clonePreparationId ? "clone" : "local_folder");
 		},
 		[completeProjectCreation, navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast],
 	);
@@ -1111,9 +1151,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[openProjectSettings],
 	);
 	const retryRemoteHosts = useCallback(() => {
-		void refreshRemoteHosts();
+		void retryRemoteHostsNow();
 		void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
-	}, [queryClient, refreshRemoteHosts]);
+	}, [queryClient, retryRemoteHostsNow]);
 	// A new handler on every shell render would rebuild the sidebar context and
 	// re-render every row button that reads it.
 	const handleSidebarOpenChange = useCallback((open: boolean) => {
@@ -1246,10 +1286,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// transparency").
 	const windowTranslucent = isMac && windowTranslucency;
 
-	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read. A translucent window
-	// paints no background, and the read forces a whole-document style recalc
-	// mid-switch, so it is skipped there.
+	// Match the native window background to the sidebar fill, following both the
+	// mode and the color theme. Deferred a frame so data-theme and
+	// data-style-theme have been applied before the token is read. A translucent
+	// window paints no background, and the read forces a whole-document style
+	// recalc mid-switch, so it is skipped there.
 	useEffect(() => {
 		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
@@ -1257,7 +1298,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, windowTranslucent]);
+	}, [resolvedTheme, themeStyle, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
@@ -1307,7 +1348,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// for the in-scope project, or a standalone agent when no project is in scope.
 	useEffect(
 		() =>
-			aoBridge.app.onNewSessionShortcut(() => {
+			onDedicatedShortcut("new-session", (handler) => aoBridge.app.onNewSessionShortcut(handler), () => {
 			// On the new chat page, stay with the project and host it shows.
 			if (newChatHost) {
 				requestNewTask(newChatProject ?? STANDALONE_WORKSPACE_ID, newChatHost);
@@ -1365,7 +1406,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// strip, so the shortcut does nothing outside a session (#4772).
 	useEffect(
 		() =>
-			aoBridge.app.onNewShellTerminalShortcut(() => {
+			onDedicatedShortcut("new-shell-terminal", (handler) => aoBridge.app.onNewShellTerminalShortcut(handler), () => {
 				if (routeParams.sessionId) requestNewShellTerminal();
 			}),
 		[requestNewShellTerminal, routeParams.sessionId],
@@ -1500,8 +1541,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, [handleSessionDeepLink, sessionDeepLinksReady]);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));
-		const disposeNext = aoBridge.app.onNextSessionShortcut(() => navigateSession(1));
+		const disposePrevious = onDedicatedShortcut("previous-session", (handler) => aoBridge.app.onPreviousSessionShortcut(handler), () => navigateSession(-1));
+		const disposeNext = onDedicatedShortcut("next-session", (handler) => aoBridge.app.onNextSessionShortcut(handler), () => navigateSession(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -1522,6 +1563,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			openRemoteProjectSettings: (hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
 			openProject,
 			remoteHosts,
+			removeProject,
 			retryRemoteHosts,
 			validateImport,
 		}),
@@ -1533,6 +1575,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			openProjectSettings,
 			openProject,
 			remoteHosts,
+			removeProject,
 			retryRemoteHosts,
 			validateImport,
 			workspaceStartupState,
@@ -1564,7 +1607,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
+				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />}
 				<TrayRuntime />
 				<SharedWithYouNotifier />
 				{isDragActive ? (
@@ -1584,6 +1627,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					</div>
 				) : null}
 				<NewTaskNavigator />
+				<FirstRunOnboarding />
+				<GuidedTour />
 				<ArchiveModalHost />
 				<GlobalToast />
 				<RestartToUpdateDialog />
@@ -1614,6 +1659,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					isLinux && "platform-linux",
 					isFullScreen && "native-fullscreen",
 				)}
+				inert={onboardingCoversShell}
 			>
 				{/* Windows-only custom title bar (sidebar toggle + File/Edit/View/…
             menu); paints the chrome the frameless window drops. Renders null on

@@ -62,6 +62,8 @@ import { useTheme, useThemeState } from "../../lib/ThemeProvider";
 import { preferenceLabel, type ThemePreference } from "../../lib/themePreference";
 import { ToastHost, type ToastController } from "../../lib/Toast";
 import { checkAndDownload, describeUpdateRow, type UpdateOutcome } from "../../lib/updates";
+import { applyUpdate } from "../../lib/updateScreenState";
+import { reloadIntoUpdate } from "../../lib/updateResumeStore";
 import { useToast } from "../../lib/useToast";
 import { VERSION_FLOOR } from "../../lib/versionFloor";
 import { getThemeDefinition } from "../../../shared/theme/palettes";
@@ -526,7 +528,7 @@ function SoftwareUpdateRow() {
 			return;
 		}
 		if (row.action === "restart") {
-			try { await Updates.reloadAsync(); } catch (error) { console.warn("[updates] reload failed", error); }
+			try { await applyUpdate({ reloadAsync: reloadIntoUpdate }); } catch (error) { console.warn("[updates] reload failed", error); }
 			return;
 		}
 		if (row.action !== "check") return;

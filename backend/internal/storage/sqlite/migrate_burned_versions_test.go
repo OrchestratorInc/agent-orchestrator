@@ -222,6 +222,8 @@ var shippedMigrations = map[int64]string{
 	20261021142844923: "20261021142844923_index_conversation_activity_provider_item_lookup.sql",
 	20261021230230412: "20261021230230412_provider_events_session_index.sql",
 	20261022054735000: "20261022054735000_device_model_catalogs.sql",
+	20261022081903875: "20261022081903875_review_run_worker_notice.sql",
+	20261022084559932: "20261022084559932_review_run_worker_notice_attempts.sql",
 	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
 	20261022172135175: "20261022172135175_session_branch_naming.sql",
 	20261023055441558: "20261023055441558_automation_model_settings.sql",
@@ -249,6 +251,7 @@ var shippedMigrations = map[int64]string{
 	20261101145613011: "20261101145613011_repository_renames.sql",
 	20261101192928401: "20261101192928401_add_shell_terminal_command_owner.sql",
 	20261102100313400: "20261102100313400_lifetime_session_count.sql",
+	20261102133300897: "20261102133300897_session_delete_cascade_indexes.sql",
 	20261102164353715: "20261102164353715_automation_template_metadata.sql",
 	20261103000000000: "20261103000000000_session_import.sql",
 	20261103030401452: "20261103030401452_open_usage_source_kinds.sql",
@@ -258,11 +261,33 @@ var shippedMigrations = map[int64]string{
 	20261109072438921: "20261109072438921_terminal_titles.sql",
 	20261109120000000: "20261109120000000_conversation_turn_batch_delivery.sql",
 	20261110172911382: "20261110172911382_conversation_turn_artifacts.sql",
+	20261111020206870: "20261111020206870_shell_terminal_ended.sql",
+	20261116231134450: "20261116231134450_shell_terminal_agent_conversation.sql",
+	20261119061500000: "20261119061500000_review_requester.sql",
 	20261109094334974: "20261109094334974_session_artifacts.sql",
 	20261028180000000: "20261028180000000_pr_details.sql",
 	20261101102149555: "20261101102149555_pr_details_conversation.sql",
+	20261109153109361: "20261109153109361_session_forks.sql",
 	20261111145612313: "20261111145612313_pr_details_provider_updated_at.sql",
 	20261113111818788: "20261113111818788_clear_switched_model_reroutes.sql",
+	20261113173435236: "20261113173435236_session_search.sql",
+	20261114072016988: "20261114072016988_drop_session_account_pins.sql",
+	20261114182101000: "20261114182101000_session_accepted_delivery.sql",
+	20261115050423095: "20261115050423095_allow_stakpak_harness.sql",
+	20261115071147951: "20261115071147951_allow_docker_agent_harness.sql",
+	20261115072651599: "20261115072651599_allow_minimax_code_harness.sql",
+	20261115072835107: "20261115072835107_review_run_state_machine.sql",
+	20261116063923032: "20261116063923032_index_pr_source_branch.sql",
+	20261116070040471: "20261116070040471_kept_artifacts.sql",
+	20261116101450009: "20261116101450009_report_delivery_terminal_state.sql",
+	20261116113334512: "20261116113334512_pr_head_stack_facts.sql",
+	20261116125847855: "20261116125847855_allow_open_interpreter_harness.sql",
+	20261116173035000: "20261116173035000_agent_account_api_keys.sql",
+	20261116173733857: "20261116173733857_timestamp_repair_progress.sql",
+	20261117090000000: "20261117090000000_allow_tau_harness.sql",
+	20261118180603285: "20261118180603285_report_unacknowledged_attempts.sql",
+	20261119090000000: "20261119090000000_allow_mastra_code_harness.sql",
+	20261121120000000: "20261121120000000_pr_merge_queue.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -279,7 +304,14 @@ var shippedMigrations = map[int64]string{
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
 	// 203 was used by the historical Hermes candidate and must not be reused.
-	return v == 22 || v == 203
+	// 20261021083138547 and 20261114173247220 were used by unmerged Docker Agent
+	// builds before the migration moved above main's latest version. 216 and
+	// 20261114174124485 were Open Interpreter draft numbers for the same reason.
+	return v == 22 || v == 203 || v == 20261021083138547 || v == 20261114173247220 ||
+		v == 216 || v == 20261114174124485 ||
+		// 0207, 20261023182047274 and 20261114174310512 were Mastra Code draft
+		// numbers before its migration moved above main's latest version.
+		v == 207 || v == 20261023182047274 || v == 20261114174310512
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

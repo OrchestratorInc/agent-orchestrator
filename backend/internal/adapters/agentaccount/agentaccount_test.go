@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -342,5 +344,84 @@ func TestClaudeIdentityCountsSubscriptionLogins(t *testing.T) {
 		if err != nil || got.SignedIn != tc.signedIn || got.LoggedIn != tc.loggedIn || got.Email != tc.email || got.OrgID != tc.org || got.OrgName != tc.orgName {
 			t.Fatalf("%s: identity = %+v, %v", tc.name, got, err)
 		}
+	}
+}
+
+// TestClaudeSlowCheckReportsTheDeadline: a CLI killed at the deadline says
+// "signal: killed"; the check reports the deadline, so the app can say the CLI
+// was slow rather than that it failed.
+func TestClaudeSlowCheckReportsTheDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the CLI")
+	}
+	bin := filepath.Join(t.TempDir(), "claude")
+	write(t, bin, "#!/bin/sh\nexec sleep 10\n")
+	if err := os.Chmod(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := c.Identity(ctx, t.TempDir()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("slow identity check = %v, want the deadline", err)
+	}
+}
+
+// A stored login whose access token expired is left to the next session: the
+// checks start no Claude Code process, since one would try the renewal, and a
+// refused renewal wipes the login (#8724). A current login is checked as before.
+func TestClaudeChecksLeaveAnExpiredRenewableLoginAlone(t *testing.T) {
+	now := time.Now()
+	previous := claudeNow
+	claudeNow = func() time.Time { return now }
+	t.Cleanup(func() { claudeNow = previous })
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+		t.Setenv(name, "")
+	}
+	for _, tc := range []struct {
+		name      string
+		device    bool
+		expiresAt time.Time
+		pending   bool
+	}{
+		{name: "account folder, expired", expiresAt: now.Add(-time.Hour), pending: true},
+		{name: "computer's own login, expired", device: true, expiresAt: now.Add(-time.Hour), pending: true},
+		{name: "account folder, current", expiresAt: now.Add(time.Hour)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			home := dir
+			if tc.device {
+				// The computer's own login lives where CLAUDE_CONFIG_DIR points.
+				home = ""
+				t.Setenv("CLAUDE_CONFIG_DIR", dir)
+				t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", dir)
+			}
+			path := filepath.Join(dir, ".credentials.json")
+			write(t, path, fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-test","refreshToken":"sk-ant-ort01-test","expiresAt":%d,"refreshTokenExpiresAt":%d}}`,
+				tc.expiresAt.UnixMilli(), now.Add(30*24*time.Hour).UnixMilli()))
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := 0
+			c := &Claude{Binary: func(context.Context) (string, error) {
+				started++
+				return "", ports.ErrAgentBinaryNotFound
+			}}
+			_, identityErr := c.Identity(context.Background(), home)
+			_, limitsErr := c.Limits(context.Background(), home)
+			if tc.pending {
+				if !errors.Is(identityErr, errClaudeRenewalPending) || !errors.Is(limitsErr, errClaudeRenewalPending) || started != 0 {
+					t.Fatalf("identity %v, limits %v, CLI started %d times; want both left to the next session", identityErr, limitsErr, started)
+				}
+			} else if started != 2 || errors.Is(identityErr, errClaudeRenewalPending) {
+				t.Fatalf("identity %v, CLI started %d times; want a current login checked", identityErr, started)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || string(after) != string(before) {
+				t.Fatalf("the stored login changed: %v", err)
+			}
+		})
 	}
 }

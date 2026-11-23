@@ -14,15 +14,17 @@ ao spawn [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `--branch string` | Branch for the session worktree | `ao/<session-id>/root` |
-| `--claim-pr string` | Claim an existing PR for authorized implementation continuation. Omit for review-only work | - |
+| `--claim-pr string` | Claim an existing PR. For review-only work, add `--no-takeover --review` | - |
 | `--kind string` | Session role: `worker` or `orchestrator` | `worker` |
 | `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; required if the project has none |
 | `--issue string` | Issue id to associate with the session | - |
 | `--model string` | Agent model override for this session only; overrides project/role config | - |
 | `--effort string` | Reasoning effort override for this session only (for example `low`, `medium`, `high`); overrides project/role config | - |
+| `--account string` | Claude Code or Codex account id to start on (from `ao account ls`); the account must be signed in | The agent's default account |
 | `--name string` | Display name shown in the sidebar (max 100 characters) | Required |
 | `--mode chat\|tui` | Initial session interface; Chat requires harness support (including Grok Build via native ACP) | Daemon default, otherwise Terminal UI |
 | `--output artifact` | Ask the worker for a file in its artifact directory instead of a PR | Ordinary task |
+| `--review` | Claim the PR to review it, not work on it: turn off automatic CI and review-comment fixing and native auto-review before the claim. Implies `--no-takeover` | Requires `--claim-pr` |
 | `--no-takeover` | Refuse if another active session owns the claimed PR (requires `--claim-pr`) | - |
 | `--project string` | Project id to spawn the session in | Optional when `--standalone` is used; defaults to `AO_PROJECT_ID` or the current repo's registered project |
 | `--standalone` | Spawn a projectless worker session in an Orchestrator-managed directory | Disabled when `--project` is set |
@@ -32,7 +34,7 @@ ao spawn [flags]
 
 `--agent` is an alias for `--harness`.
 
-Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`, `grok`, `droid`, `amp`, `agy`, `crush`, `cursor`, `qwen`, `gemini`, `copilot`, `goose`, `auggie`, `continue`, `devin`, `cline`, `kimi`, `muse`, `kiro`, `kilocode`, `vibe`, `pi`, `kimchi`, `prime-agent`, `autohand`, `omp`, `fx`, `unreal-agent`, `mimo-code`, `deepseek-harness`, `openhands`, `command-code`. Check `ao agent ls --refresh` for readiness on the installed build. `unreal-agent` is Chat-only; Gemini, MiMo Code, and OpenHands are Terminal UI-only.
+Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`, `grok`, `droid`, `amp`, `agy`, `crush`, `cursor`, `qwen`, `gemini`, `copilot`, `goose`, `auggie`, `continue`, `devin`, `cline`, `kimi`, `muse`, `kiro`, `kilocode`, `vibe`, `pi`, `kimchi`, `prime-agent`, `autohand`, `omp`, `fx`, `unreal-agent`, `mimo-code`, `minimax-code`, `deepseek-harness`, `openhands`, `command-code`. Check `ao agent ls --refresh` for readiness on the installed build. `unreal-agent` is Chat-only; Gemini, MiMo Code, MiniMax Code, and OpenHands are Terminal UI-only.
 
 `fx` is experimental and Terminal UI only: spawn it with `--agent fx --mode tui`.
 
@@ -51,8 +53,10 @@ ao spawn --project agent-orchestrator --name "continue-pr-88" --claim-pr 88 --pr
 ```
 
 ```bash
-# Spawn a normal worker to review someone else's PR without taking ownership
-ao spawn --project agent-orchestrator --name "review-pr-88" --prompt "Review PR 88 and submit only the requested provider review. Do not claim or attach the PR."
+# Spawn a worker to review someone else's PR: it claims the PR with automatic
+# fixing and native auto-review off, so it gets none of the PR's CI failures or
+# review comments
+ao spawn --project agent-orchestrator --name "review-pr-88" --claim-pr 88 --no-takeover --review --prompt "Review PR 88 and submit only the requested provider review. The PR is not the user's; do not change it."
 ```
 
 ```bash

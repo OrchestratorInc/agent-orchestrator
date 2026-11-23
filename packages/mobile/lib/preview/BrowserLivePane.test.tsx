@@ -10,7 +10,13 @@ type Handlers = {
 };
 
 const fixtures = vi.hoisted(() => ({
-	config: { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" },
+	config: { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" } as { host: string; httpPort: string; muxPort: string; password: string } | null,
+	paired: true as boolean | null,
+	unreachable: false,
+	// The board poll: closed with no failure is what an app switch leaves behind.
+	connection: "closed",
+	error: null as string | null,
+	errorStatus: null as number | null,
 	platform: { OS: "android" },
 	clients: [] as Array<{ handlers: Handlers; sent: unknown[]; closed: boolean }>,
 }));
@@ -77,7 +83,7 @@ vi.mock("../browserLive", () => ({
 		close() { this.record.closed = true; }
 	},
 }));
-vi.mock("../store", () => ({ useApp: () => ({ config: fixtures.config }) }));
+vi.mock("../store", () => ({ useApp: () => ({ config: fixtures.config, paired: fixtures.paired, unreachable: fixtures.unreachable, connection: fixtures.connection, error: fixtures.error, errorStatus: fixtures.errorStatus }) }));
 vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: (_target, name) => `theme.${String(name)}` });
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
@@ -172,6 +178,11 @@ async function showFrame() {
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.platform.OS = "android";
+	fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+	fixtures.paired = true;
+	fixtures.unreachable = false;
+	fixtures.error = null;
+	fixtures.errorStatus = null;
 	fixtures.clients.length = 0;
 	onTitle.mockClear();
 });
@@ -310,6 +321,66 @@ describe("live browser states", () => {
 	});
 });
 
+describe("live browser without a verified connection", () => {
+	const alerts = () => screen.root.findAll((node) => node.props.accessibilityRole === "alert");
+	const alert = () => screen.root.find((node) => node.props.accessibilityRole === "alert");
+	const rerender = () => act(async () => { screen.update(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} />); });
+
+	// Preview keeps this pane on screen through an app switch when the session
+	// has an app preview. The app drops its verified connection every time it
+	// goes to the background, which this pane read as never paired: the error
+	// flashed on every return, into the app-switcher snapshot too.
+	it("waits for the connection after an app switch instead of saying the phone isn't paired", async () => {
+		await render();
+		await open();
+		fixtures.config = null;
+		await rerender();
+		expect(alerts()).toHaveLength(0);
+		expect(nodes("EmptyState").map((node) => node.props.title)).toContain("Connecting to browser…");
+		expect(fixtures.clients).toHaveLength(1);
+		expect(fixtures.clients[0].closed).toBe(true);
+		// Back on a verified connection: the stream opens again by itself.
+		fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+		await rerender();
+		expect(fixtures.clients).toHaveLength(2);
+		expect(alerts()).toHaveLength(0);
+	});
+
+	it("says the machine is offline once it really is", async () => {
+		fixtures.config = null;
+		fixtures.unreachable = true;
+		await render();
+		expect(alert().findByType("EmptyState" as never).props.message).toBe("This machine is offline. The browser connects once the app reconnects.");
+		expect(fixtures.clients).toHaveLength(0);
+	});
+
+	// A password change or a removed device: the poll stopped on the refusal,
+	// so waiting for the connection spun "Connecting to browser…" forever.
+	it("says the machine rejected this phone in the board's words, without connecting", async () => {
+		await render();
+		await open();
+		fixtures.config = null;
+		fixtures.error = "Your machine rejected this phone's password.";
+		fixtures.errorStatus = 401;
+		await rerender();
+		expect(nodes("EmptyState").map((node) => node.props.title)).not.toContain("Connecting to browser…");
+		expect(alert().findByType("EmptyState" as never).props.message).toBe("Your machine rejected this phone. It was removed from that machine, or the password changed. Scan a new code there.");
+		expect(fixtures.clients).toHaveLength(1);
+		expect(fixtures.clients[0].closed).toBe(true);
+		// Checking again asks nothing of the machine: no attempt toward its lockout.
+		await act(async () => { alert().findByType("Button" as never).props.onPress(); });
+		expect(fixtures.clients).toHaveLength(1);
+	});
+
+	it("still asks to pair a phone with no machine", async () => {
+		fixtures.config = null;
+		fixtures.paired = false;
+		await render();
+		expect(alert().findByType("EmptyState" as never).props.message).toBe("Pair this phone with the desktop app first.");
+		expect(fixtures.clients).toHaveLength(0);
+	});
+});
+
 describe("live browser gestures", () => {
 	it("stays still until there is a frame to touch, and ignores a screen reader's activation", async () => {
 		await render();
@@ -322,6 +393,29 @@ describe("live browser gestures", () => {
 		// VoiceOver's double-tap is taken, so it isn't sent on as a click in the page's middle.
 		await act(async () => frame.props.onAccessibilityTap());
 		expect(sent()).toEqual([]);
+	});
+
+	// The pane stays on screen through an app switch, and so does the last
+	// stream's frame. The desktop page may have moved meanwhile, so a tap on
+	// that frame could click another control: it waits for the new stream's own.
+	it("takes no taps on the last stream's frame until the new stream draws one", async () => {
+		await render();
+		await open();
+		await showFrame();
+		expect(gesture("tap").enabled).toBe(true);
+		fixtures.config = null;
+		await act(async () => { screen.update(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} />); });
+		fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+		await act(async () => { screen.update(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} />); });
+		expect(fixtures.clients).toHaveLength(2);
+		await open();
+		// The old frame still shows, but neither tap nor drag reaches the page.
+		expect(nodes("Image")).toHaveLength(1);
+		expect(gesture("tap").enabled).toBe(false);
+		expect(gesture("pan").enabled).toBe(false);
+		await showFrame();
+		expect(gesture("tap").enabled).toBe(true);
+		expect(gesture("pan").enabled).toBe(true);
 	});
 
 	it("clicks the page where a tap lands, and ignores the letterbox", async () => {

@@ -28,10 +28,11 @@ type connectedSideForkDriver struct {
 	sources []string
 	// mainConfig is the main session's start config, kept to prove sides copy
 	// rather than mutate it.
-	mainConfig ports.ChatStartConfig
-	onFork     func(context.Context) error
-	beforeFork func(context.Context) error
-	afterFork  func(context.Context) error
+	mainConfig    ports.ChatStartConfig
+	onFork        func(context.Context) error
+	beforeFork    func(context.Context) error
+	afterFork     func(context.Context) error
+	configureFork func(*fakeConversation)
 }
 
 func (d *connectedSideForkDriver) ForkIntoHost(ctx context.Context, source, anchor string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
@@ -75,6 +76,9 @@ func (d *connectedSideForkDriver) ForkIntoHost(ctx context.Context, source, anch
 	defer d.mu.Unlock()
 	conv := newFakeConversation()
 	conv.providerConversationID = "fork-" + string(cfg.SessionID)
+	if d.configureFork != nil {
+		d.configureFork(conv)
+	}
 	d.hosts = append(d.hosts, cfg.SessionID)
 	d.anchors = append(d.anchors, anchor)
 	d.forks = append(d.forks, conv)
@@ -166,7 +170,7 @@ func TestCodexSideReopenUsesConnectedNativeFork(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return awaitSide(side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "ready" }).Side
+		return side
 	}
 	sendSide := func(side domain.SideConversation, client string) {
 		t.Helper()
@@ -174,6 +178,7 @@ func TestCodexSideReopenUsesConnectedNativeFork(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		awaitSide(side.ID, func(s domain.SideSnapshot) bool { return s.Side.State == "ready" })
 		driver.mu.Lock()
 		conv := driver.forks[len(driver.forks)-1]
 		driver.mu.Unlock()

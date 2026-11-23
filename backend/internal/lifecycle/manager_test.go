@@ -16,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 var ctx = context.Background()
@@ -137,6 +138,24 @@ func (f *fakeStore) UpdateSessionFromActivitySignal(_ context.Context, rec domai
 type activityRevisionConflictStore struct {
 	*fakeStore
 	conflictNext bool
+}
+
+type fakeSemanticDeliveryActivityStore struct {
+	*fakeStore
+	accepted []string // coordination IDs recorded as accepted
+}
+
+func (f *fakeSemanticDeliveryActivityStore) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+	ctx context.Context,
+	rec domain.SessionRecord,
+	expectedRevision int64,
+	coordinationID string,
+) (bool, error) {
+	applied, err := f.UpdateSessionFromActivitySignal(ctx, rec, expectedRevision)
+	if applied && err == nil {
+		f.accepted = append(f.accepted, coordinationID)
+	}
+	return applied, err
 }
 
 func (f *activityRevisionConflictStore) UpdateSessionFromActivitySignal(
@@ -766,6 +785,100 @@ func TestActivity_UserPromptStoresItsSignalTimestamp(t *testing.T) {
 	}
 }
 
+func TestActivity_MixedHumanPromptKeepsSemanticReceiptAfterCheckpointOverwrite(t *testing.T) {
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close sqlite store: %v", err)
+		}
+	})
+	now := time.Now().UTC()
+	rec, err := store.CreateSession(ctx, domain.SessionRecord{
+		Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
+		Metadata:  domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	const deliveryID = "report-batch:mixedhuman1"
+	manager := New(store, nil)
+	if err := manager.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-1",
+		LatestUserPrompt: "human text containing an internal report", Timestamp: now.Add(time.Second),
+		ConversationCheckpointOrigin: domain.ConversationCheckpointOriginHuman, CoordinationID: deliveryID,
+	}); err != nil {
+		t.Fatalf("apply mixed human prompt: %v", err)
+	}
+	afterMixed, found, err := store.GetSession(ctx, rec.ID)
+	if err != nil || !found {
+		t.Fatalf("load mixed prompt session: found=%v err=%v", found, err)
+	}
+	if afterMixed.Metadata.LatestUserPrompt != "human text containing an internal report" ||
+		afterMixed.Metadata.ConversationCheckpointState == domain.ConversationCheckpointCoordination {
+		t.Fatalf("mixed prompt was not retained as human checkpoint: %+v", afterMixed.Metadata)
+	}
+	if accepted, err := store.SemanticDeliveryAccepted(ctx, rec.ID, "launch-1", deliveryID); err != nil || !accepted {
+		t.Fatalf("mixed human prompt receipt: accepted=%v err=%v", accepted, err)
+	}
+
+	if err := manager.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: "launch-1",
+		LatestUserPrompt: "a later human prompt replaced the checkpoint", Timestamp: now.Add(2 * time.Second),
+		ConversationCheckpointOrigin: domain.ConversationCheckpointOriginHuman,
+	}); err != nil {
+		t.Fatalf("apply later human prompt: %v", err)
+	}
+	afterOverwrite, found, err := store.GetSession(ctx, rec.ID)
+	if err != nil || !found {
+		t.Fatalf("load overwritten session: found=%v err=%v", found, err)
+	}
+	if afterOverwrite.Metadata.LatestUserPrompt != "a later human prompt replaced the checkpoint" {
+		t.Fatalf("latest user prompt = %q", afterOverwrite.Metadata.LatestUserPrompt)
+	}
+	if accepted, err := store.SemanticDeliveryAccepted(ctx, rec.ID, "launch-1", deliveryID); err != nil || !accepted {
+		t.Fatalf("receipt lost after checkpoint overwrite: accepted=%v err=%v", accepted, err)
+	}
+}
+
+// Acceptance needs a runtime launch and a store that can record it. Without
+// either, the prompt's activity projection still applies, as before acceptance
+// was recorded at all.
+func TestActivity_CoordinationIDWithoutAcceptanceStillProjectsActivity(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		launchID   string
+		acceptance bool
+	}{
+		{name: "no runtime launch", launchID: "", acceptance: true},
+		{name: "store cannot record acceptance", launchID: "launch-1", acceptance: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m, store, _ := newManager()
+			if tt.acceptance {
+				m.store = &fakeSemanticDeliveryActivityStore{fakeStore: store}
+			}
+			rec := working("mer-1")
+			rec.Activity.State = domain.ActivityIdle
+			rec.Metadata.RuntimeLaunchID = tt.launchID
+			store.sessions[rec.ID] = rec
+			if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
+				Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit", LaunchID: tt.launchID,
+				CoordinationID: "report-batch:no-acceptance",
+			}); err != nil {
+				t.Fatalf("ApplyActivitySignal: %v", err)
+			}
+			if got := store.sessions[rec.ID].Activity.State; got != domain.ActivityActive {
+				t.Fatalf("activity = %q, want active", got)
+			}
+		})
+	}
+}
+
 func TestActivity_ReorderedPromptPreservesLatestHumanCheckpoint(t *testing.T) {
 	promptAt := time.Unix(456, 0).UTC()
 	for _, tt := range []struct {
@@ -1338,6 +1451,7 @@ func TestActivity_MainPromptWithoutTextInvalidatesPriorConversationCheckpoint(t 
 
 func TestActivity_CoordinationPromptFollowedByPromptlessStopDoesNotAdvanceCheckpoint(t *testing.T) {
 	m, store, _ := newManager()
+	m.store = &fakeSemanticDeliveryActivityStore{fakeStore: store}
 	previousPromptAt := time.Unix(122, 0).UTC()
 	coordinationPromptAt := previousPromptAt.Add(time.Minute)
 	rec := working("mer-1")
@@ -2383,6 +2497,49 @@ func TestPRObservation_HumanReplyInBotThreadStillNudgesAgent(t *testing.T) {
 	}
 }
 
+func TestPRObservation_PRAuthorRepliesAreNotInjected(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.prs["mer-1"] = []domain.PullRequest{{URL: "pr1", Author: "worker-account"}}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "r1", ThreadID: "T1", Author: "coderabbitai[bot]", IsBot: true, File: "a.go", Line: 3, Body: "merge the buckets", AutoInjectReview: true},
+		// The worker answering, with the PR author's account.
+		{ID: "r2", ThreadID: "T1", Author: "@Worker-Account", File: "a.go", Line: 3, Body: "Fixed in abc123.", AutoInjectReview: true},
+		{ID: "r3", ThreadID: "T1", Author: "alice", File: "a.go", Line: 3, Body: "not quite, keep both links", AutoInjectReview: true},
+		// The author reviewing their own PR still reaches the worker.
+		{ID: "a1", ThreadID: "T2", Author: "worker-account", File: "b.go", Line: 9, Body: "rename this helper", AutoInjectReview: true},
+		// An app named after the author is someone else.
+		{ID: "b1", ThreadID: "T3", Author: "worker-account[bot]", IsBot: true, File: "c.go", Line: 1, Body: "bot feedback", AutoInjectReview: true},
+		{ID: "b2", ThreadID: "T3", Author: "worker-account[bot]", IsBot: true, File: "c.go", Line: 1, Body: "bot follow-up", AutoInjectReview: true},
+	}
+
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "pr1"}); err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(msg.msgs, "\n---\n")
+	if strings.Contains(all, "Fixed in abc123.") {
+		t.Fatalf("the PR author's reply was injected:\n%s", all)
+	}
+	for _, want := range []string{"merge the buckets", "not quite, keep both links", "rename this helper", "bot feedback", "bot follow-up"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("missing %q from nudges:\n%s", want, all)
+		}
+	}
+	if len(msg.msgs) != 5 {
+		t.Fatalf("want 5 per-comment nudges, got %d:\n%s", len(msg.msgs), all)
+	}
+}
+
+func TestWithoutPRAuthorRepliesKeepsEverythingWhenAuthorUnknown(t *testing.T) {
+	comments := []domain.PullRequestComment{
+		{ID: "1", ThreadID: "T1", Author: "alice"},
+		{ID: "2", ThreadID: "T1", Author: "worker-account"},
+	}
+	if got := withoutPRAuthorReplies(comments, " "); len(got) != 2 {
+		t.Fatalf("withoutPRAuthorReplies with no author = %v, want both comments", got)
+	}
+}
+
 func TestPRObservation_ReviewFeedbackNotInjectedWhenDisabled(t *testing.T) {
 	m, st, msg := newManager()
 	rec := working("mer-1")
@@ -2578,6 +2735,87 @@ func TestPRObservation_ChangesRequestedReviewUsesPersistedBodyAndDecision(t *tes
 	}
 }
 
+// The chat shows a PR event at the time the reviewer wrote it, read from the
+// nudge text. A nudge can be delivered long after (held while the session
+// waited on the user), so the delivery time is not the event time.
+func TestPRObservation_ReviewNudgesCarryProviderTime(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	posted := time.Date(2026, 11, 16, 7, 54, 42, 0, time.FixedZone("IST", 5*3600+1800))
+	submitted := time.Date(2026, 11, 16, 7, 54, 41, 0, time.UTC)
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", Author: "alice", File: "telemetry.ts", Line: 12, Body: "fix this", CreatedAt: posted, AutoInjectReview: true}}
+	st.reviews["pr1"] = []domain.PullRequestReview{{ID: "r1", Author: "bob", State: domain.ReviewChangesRequest, Body: "change this", SubmittedAt: submitted, AutoInjectReview: true}}
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Review: domain.ReviewChangesRequest}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("want comment and review nudges, got %v", msg.msgs)
+	}
+	// The time ends the first line, where older chat clients do not look; the
+	// comment heading keeps the shape they parse.
+	if first := strings.SplitN(msg.msgs[0], "\n", 2)[0]; !strings.HasSuffix(first, " Newest comment posted at 2026-11-16T02:24:42Z.") {
+		t.Fatalf("comment nudge first line missing UTC posted time: %q", first)
+	}
+	if !strings.Contains(msg.msgs[0], "\n1. telemetry.ts:12 (@alice):\nfix this") {
+		t.Fatalf("comment heading changed shape:\n%s", msg.msgs[0])
+	}
+	if first := strings.SplitN(msg.msgs[1], "\n", 2)[0]; first != "A changes-requested review from @bob is on your PR. Submitted at 2026-11-16T07:54:41Z." {
+		t.Fatalf("review nudge first line missing submitted time: %q", first)
+	}
+}
+
+func TestPRObservation_ReviewNudgesOmitUnknownProviderTime(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", Author: "alice", Body: "fix this", AutoInjectReview: true}}
+	st.reviews["pr1"] = []domain.PullRequestReview{{ID: "r1", Author: "bob", State: domain.ReviewChangesRequest, Body: "change this", AutoInjectReview: true}}
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Review: domain.ReviewChangesRequest}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("want comment and review nudges, got %v", msg.msgs)
+	}
+	if strings.Contains(msg.msgs[0], "posted at") {
+		t.Fatalf("comment nudge invented a posted time:\n%s", msg.msgs[0])
+	}
+	if strings.Contains(msg.msgs[1], "Submitted at") {
+		t.Fatalf("review nudge invented a submitted time:\n%s", msg.msgs[1])
+	}
+}
+
+func TestSCMObservation_TerminalNotificationsUseProviderTime(t *testing.T) {
+	observed := time.Date(2026, 11, 16, 8, 26, 0, 0, time.UTC)
+	merged := time.Date(2026, 11, 16, 7, 54, 0, 0, time.UTC)
+	closed := time.Date(2026, 11, 16, 7, 40, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		pr   ports.SCMPRObservation
+		want time.Time
+	}{
+		{name: "merged", pr: ports.SCMPRObservation{URL: "https://github.com/o/r/pull/2", Number: 2, Merged: true, MergedAtProvider: merged}, want: merged},
+		{name: "closed", pr: ports.SCMPRObservation{URL: "https://github.com/o/r/pull/3", Number: 3, Closed: true, ClosedAtProvider: closed}, want: closed},
+		{name: "merged without provider time", pr: ports.SCMPRObservation{URL: "https://github.com/o/r/pull/4", Number: 4, Merged: true}, want: observed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			sink := &fakeNotificationSink{}
+			m := New(st, nil, WithNotificationSink(sink))
+			st.sessions["mer-1"] = working("mer-1")
+			if err := m.ApplySCMObservation(ctx, "mer-1", ports.SCMObservation{Fetched: true, ObservedAt: observed, PR: tc.pr}); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.intents) != 1 {
+				t.Fatalf("intents = %d, want 1", len(sink.intents))
+			}
+			if got := sink.intents[0].CreatedAt; !got.Equal(tc.want) {
+				t.Fatalf("CreatedAt = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSCMObservationProjectsToExistingPRReactions(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -2646,6 +2884,31 @@ func TestPRObservation_MergeConflictNudgesAgent(t *testing.T) {
 	}
 	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "merge conflicts") {
 		t.Fatalf("want merge-conflict nudge, got %v", msg.msgs)
+	}
+}
+
+// TestPRObservation_CISwitchOffSilencesMergeConflict: the "Automatically fix
+// CI failures" switch also covers merge conflicts, so a session reviewing
+// someone else's PR with it off is never told to rebase that PR.
+func TestPRObservation_CISwitchOffSilencesMergeConflict(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.prPolicies["pr1"] = false
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("CI switch is off; want no merge-conflict nudge, got %v", msg.msgs)
+	}
+
+	// Turning the switch back on (taking the PR over) brings the nudge back.
+	st.prPolicies["pr1"] = true
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "merge conflicts") {
+		t.Fatalf("want merge-conflict nudge after the switch is back on, got %v", msg.msgs)
 	}
 }
 
@@ -5055,5 +5318,95 @@ func TestScopedPostAgentRefreshesIdleProofWithoutStateTransition(t *testing.T) {
 				t.Fatalf("idle proof = %v, want %v", got.LastActivityAt, want)
 			}
 		})
+	}
+}
+
+// Hooks post from their own processes, so a turn's user-prompt-submit can reach
+// AO after the Stop that ended it, as when AO delivers a message just as the
+// previous turn stops (#6686). The session must stay idle at its last turn end
+// instead of reading as working for good; a prompt that fired after that Stop
+// still starts a turn.
+func TestActivity_LatePromptDoesNotUndoALaterStop(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		promptAt  time.Duration
+		wantState domain.ActivityState
+	}{
+		{name: "prompt fired before the last Stop, arrives after it", promptAt: 35500 * time.Millisecond, wantState: domain.ActivityIdle},
+		{name: "prompt fired after the last Stop", promptAt: 40 * time.Second, wantState: domain.ActivityActive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _ := newManager()
+			rec := working("mer-1")
+			rec.Metadata.RuntimeLaunchID = "launch-current"
+			rec.Metadata.AgentSessionID = "native-current"
+			rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+			base := time.Now().UTC().Truncate(time.Second)
+			rec.Activity.LastActivityAt = base
+			st.sessions[rec.ID] = rec
+			signal := func(state domain.ActivityState, event string, at time.Duration) ports.ActivitySignal {
+				return ports.ActivitySignal{Valid: true, State: state, Event: event,
+					LaunchID: "launch-current", AgentSessionID: "native-current", Timestamp: base.Add(at)}
+			}
+			for _, s := range []ports.ActivitySignal{
+				signal(domain.ActivityActive, "user-prompt-submit", 30*time.Second),
+				signal(domain.ActivityIdle, "stop", 35*time.Second),
+				// AO's delivery is answered and that turn ends too.
+				signal(domain.ActivityIdle, "stop", 38*time.Second),
+				// The delivered turn's prompt hook, arriving last.
+				signal(domain.ActivityActive, "user-prompt-submit", tc.promptAt),
+			} {
+				if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, _, err := st.GetSession(ctx, rec.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Activity.State != tc.wantState {
+				t.Fatalf("activity = %s at %s, want %s", got.Activity.State, got.Activity.LastActivityAt.Sub(base), tc.wantState)
+			}
+			if tc.wantState == domain.ActivityIdle && !got.Activity.LastActivityAt.Equal(base.Add(38*time.Second)) {
+				t.Fatalf("idle since %s, want the last Stop at 38s", got.Activity.LastActivityAt.Sub(base))
+			}
+		})
+	}
+}
+
+// A late prompt cannot change the idle state, but it was still submitted: the
+// delivery it carries is recorded as accepted.
+func TestActivity_LatePromptStillAcceptsItsDelivery(t *testing.T) {
+	m, st, _ := newManager()
+	semantic := &fakeSemanticDeliveryActivityStore{fakeStore: st}
+	m.store = semantic
+	rec := working("mer-1")
+	rec.Metadata.RuntimeLaunchID = "launch-current"
+	rec.Metadata.AgentSessionID = "native-current"
+	rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+	base := time.Now().UTC().Truncate(time.Second)
+	rec.Activity.LastActivityAt = base
+	st.sessions[rec.ID] = rec
+	signal := func(state domain.ActivityState, event, prompt string, at time.Duration, coordination string) ports.ActivitySignal {
+		return ports.ActivitySignal{Valid: true, State: state, Event: event, LaunchID: "launch-current",
+			AgentSessionID: "native-current", LatestUserPrompt: prompt, CoordinationID: coordination, Timestamp: base.Add(at)}
+	}
+	for _, s := range []ports.ActivitySignal{
+		signal(domain.ActivityActive, "user-prompt-submit", "review notice", 36*time.Second, ""),
+		signal(domain.ActivityIdle, "stop", "", 38*time.Second, ""),
+		// A delayed duplicate of that prompt, carrying its delivery: older than
+		// the Stop and the recorded prompt, it changes neither the state nor any
+		// metadata.
+		signal(domain.ActivityActive, "user-prompt-submit", "review notice", 35*time.Second, "session-send:review-notice"),
+	} {
+		if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := st.sessions[rec.ID].Activity.State; got != domain.ActivityIdle {
+		t.Fatalf("activity = %s, want idle", got)
+	}
+	if !slices.Contains(semantic.accepted, "session-send:review-notice") {
+		t.Fatalf("accepted deliveries = %q, want the late prompt's", semantic.accepted)
 	}
 }

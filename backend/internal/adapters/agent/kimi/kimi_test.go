@@ -372,8 +372,16 @@ timeout = 7
 		`command = "ao hooks kimi session-start"`,
 		`event = "UserPromptSubmit"`,
 		`command = "ao hooks kimi user-prompt-submit"`,
+		`event = "PreToolUse"`,
+		`command = "ao hooks kimi pre-tool-use"`,
+		`event = "PostToolUse"`,
+		`command = "ao hooks kimi post-tool-use"`,
+		`event = "PostToolUseFailure"`,
+		`command = "ao hooks kimi post-tool-use-failure"`,
 		`event = "PermissionRequest"`,
 		`command = "ao hooks kimi permission-request"`,
+		`event = "PermissionResult"`,
+		`command = "ao hooks kimi permission-resolved"`,
 		`event = "Stop"`,
 		`command = "ao hooks kimi stop"`,
 		kimiHooksSentinelEnd,
@@ -827,6 +835,66 @@ func TestGetAgentHooksRewritesManagedKimiConfigBlock(t *testing.T) {
 	}
 	if strings.Count(text, kimiHooksSentinelStart) != 1 {
 		t.Fatalf("managed block duplicated:\n%s", text)
+	}
+}
+
+// Deployed installs carry the pre-tool-use era managed block with only the
+// four lifecycle hooks; the next GetAgentHooks must rewrite it in place to the
+// current block instead of leaving those sessions on idle mid-turn.
+func TestGetAgentHooksRewritesLegacyFourHookManagedBlock(t *testing.T) {
+	workspace := t.TempDir()
+	kimiHome := t.TempDir()
+	configPath := filepath.Join(kimiHome, "config.toml")
+	legacy := kimiHooksSentinelStart + "\n\n" +
+		kimiHookEntry("SessionStart", "startup", "ao hooks kimi session-start") +
+		kimiHookEntry("UserPromptSubmit", "", "ao hooks kimi user-prompt-submit") +
+		kimiHookEntry("PermissionRequest", "", "ao hooks kimi permission-request") +
+		kimiHookEntry("Stop", "", "ao hooks kimi stop") +
+		kimiHooksSentinelEnd + "\n"
+	existing := "before = true\n\n" + legacy + "\nafter = true\n"
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plugin := &Plugin{}
+	cfg := ports.WorkspaceHookConfig{
+		WorkspacePath: workspace,
+		Env:           map[string]string{"KIMI_CODE_HOME": kimiHome},
+	}
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatalf("GetAgentHooks err = %v", err)
+	}
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatalf("second GetAgentHooks err = %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"before = true",
+		"after = true",
+		`event = "PreToolUse"`,
+		`command = "ao hooks kimi pre-tool-use"`,
+		`event = "PostToolUse"`,
+		`command = "ao hooks kimi post-tool-use"`,
+		`event = "PostToolUseFailure"`,
+		`command = "ao hooks kimi post-tool-use-failure"`,
+		`event = "PermissionResult"`,
+		`command = "ao hooks kimi permission-resolved"`,
+		`command = "ao hooks kimi stop"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Count(text, kimiHooksSentinelStart) != 1 {
+		t.Fatalf("managed block duplicated:\n%s", text)
+	}
+	if got := strings.Count(text, `command = "ao hooks kimi session-start"`); got != 1 {
+		t.Fatalf("legacy entry count = %d, want 1:\n%s", got, text)
 	}
 }
 

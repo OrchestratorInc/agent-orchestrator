@@ -5,13 +5,13 @@ import { Cloud, Folder, Plus, Smartphone, StickyNote } from "@/components/app-ic
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
+import { fetchWorkspaceFilePaths, seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiErrorMessage } from "../lib/api-client";
 import { PLAN_REFUSAL_CODES } from "../lib/cloud-cp/client";
 import { dropReportPrompt, sessionNameFromBrief } from "../lib/report-problem";
 import { chatDraftScopeKey, newChatDraftScope, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
-import { clientForHost, labelForHost } from "../lib/host-clients";
+import { labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
@@ -23,6 +23,9 @@ import type { ApprovalMode, ChatConfigOption, ChatConfigOptionValue, ChatModel, 
 import { readChatSettingsTemplate, readChatSkills } from "../lib/chat-settings-template";
 import { agentModelDisplayLabel } from "../lib/agent-model-choices";
 import { ChatWorkspace } from "./chat/ChatWorkspace";
+import type { ChatComposerHandle } from "./chat/ChatComposer";
+import { handOffComposerDraft } from "../lib/chat-context-bus";
+import { sessionUiKey } from "../lib/hosts";
 import { startingConversationSnapshot } from "./chat/OrchestratorStartingChat";
 import { LaunchSettingsBar, rememberLaunchSettings, rememberOpeningStart, type LaunchSettings } from "./chat/LaunchSettingsBar";
 import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnSettingsBar } from "./chat/TurnSettingsBar";
@@ -32,6 +35,8 @@ import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
+import { agentAccountLabel, agentAccountUsable, oneRowPerLogin, useAgentAccounts } from "../hooks/useAgentAccounts";
+import type { AccountChoice } from "./chat/AgentSwitchPicker";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
@@ -49,14 +54,27 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const queryClient = useQueryClient();
 	// A Cloud task's session starts spinning up as the page opens (not Coder's).
 	const task = useTaskLaunch({ projectId, hostId });
+	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
+	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
+	const accountRows = oneRowPerLogin(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
+	const accountChoice: AccountChoice | undefined = task.account && accountRows.length > 0 ? {
+		options: accountRows.map((row) => ({ id: row.id, label: agentAccountLabel(row, accountRows, t), disabled: !agentAccountUsable(row) })),
+		value: task.account.value ?? accountRows.find((row) => row.default)?.id,
+		onPick: task.account.choose,
+		disabled: accountRows.length < 2,
+	} : undefined;
 	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
+	const stalePick = Boolean(task.account?.value && hostAccounts.data && !accountRows.some((row) => row.id === task.account?.value && agentAccountUsable(row)));
+	useEffect(() => {
+		if (stalePick) taskRef.current.account?.choose(undefined);
+	}, [stalePick]);
 	// The page this render shows. A send is bound to the page it started on.
 	const targetRef = useRef({ projectId, hostId });
 	targetRef.current = { projectId, hostId };
 	// The session's own composer shortcuts, before the session exists.
-	useSessionShortcut("model-picker", openComposerModelPicker);
+	useSessionShortcut("model-picker", () => { openComposerModelPicker(); });
 	useSessionShortcut("dictate", toggleComposerDictation);
 	const mounted = useRef(true);
 	useEffect(() => {
@@ -71,6 +89,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const draftRevision = useUiStore((state) => state.newChatDraftRevision);
 	const draftScope = useMemo(() => newChatDraftScope(hostId), [hostId]);
 	const [echo, setEcho] = useState<ConversationLocalEcho>();
+	// A follow-up typed while the session is created goes on to the session's composer.
+	const composerRef = useRef<ChatComposerHandle | null>(null);
 	// The settings bar the brief was sent with, held still until the session takes over.
 	const [launched, setLaunched] = useState<LaunchSettings>();
 	// A failed fallback start has no composer send to report it, so the page does.
@@ -83,6 +103,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	// lost response cannot create a second session.
 	const fallbackRequest = useRef<string | undefined>(undefined);
 	const fallbackInFlight = useRef(false);
+	// The fallback starts the brief the box still shows, so the box stays shut meanwhile.
+	const [fallbackStarting, setFallbackStarting] = useState(false);
 	const [heldAttachments, setHeldAttachments] = useState<FileAttachmentPayload[]>([]);
 	const [attachmentsPreparing, setAttachmentsPreparing] = useState(false);
 	const onHeldAttachmentsChange = useCallback((attachments: FileAttachmentPayload[], preparing: boolean) => {
@@ -103,33 +125,39 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		// The worktree is still being created when the id arrives; ask again until it
 		// exists, backing off so a stalled preparation is not polled every 1.5s.
 		refetchInterval: (query) => (query.state.data ? 30_000 : Math.min(1_500 * 2 ** query.state.errorUpdateCount, 15_000)),
+		// Each read restarts the host's expiry for this preparation, so keep
+		// reading while the window is hidden: the page still holds the worktree.
+		refetchIntervalInBackground: true,
 		queryFn: async () => {
-			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/workspace/files", {
-				params: { path: { sessionId: preparedId as string } },
-			});
+			// The host restarts the expiry as the read arrives, so time it from its start.
+			const readAt = Date.now();
+			const { data, error } = await fetchWorkspaceFilePaths(preparedId as string, hostId);
 			if (error) throw error;
-			return {
-				paths: (data?.files ?? []).filter((file) => file.status !== "deleted").map((file) => file.path),
-				truncated: Boolean(data?.truncated),
-			};
+			return { paths: data?.paths ?? [], truncated: Boolean(data?.truncated), readAt };
 		},
 	});
+	// A read that answered restarted the host's expiry; the next visit offers a
+	// kept preparation by its time.
+	const { notePreparationUsed } = task;
+	const lastReadAt = workspaceFiles.data?.readAt;
+	useEffect(() => {
+		if (preparedId && lastReadAt) notePreparationUsed(preparedId, lastReadAt);
+	}, [lastReadAt, notePreparationUsed, preparedId]);
 	const stagePrepared = useStageAttachments(preparedId, hostId);
 	// A Cloud task carries files when its control plane takes them: they ride
-	// the first message of its Chat session, up to the size one upload may be.
-	// A Cloud standalone agent starts without them (createCloudTask).
+	// the first message of its Chat session, in a project or of its own
+	// (createCloudTask), up to the size one upload may be.
 	const cloudOffering = useCloudOffering(task.isCloudProject);
-	const cloudTaskTakesFiles = task.isCloudProject && projectId !== CLOUD_STANDALONE_WORKSPACE_ID;
-	const cloudFiles = useMemo(() => cloudTaskTakesFiles && cloudOffering.maxAttachmentBytes !== undefined
+	const cloudFiles = useMemo(() => task.isCloudProject && cloudOffering.maxAttachmentBytes !== undefined
 		? { maxBytes: Math.min(cloudOffering.maxAttachmentBytes, MAX_CLOUD_CP_BINARY_BYTES) } : undefined,
-	[cloudOffering.maxAttachmentBytes, cloudTaskTakesFiles]);
+	[cloudOffering.maxAttachmentBytes, task.isCloudProject]);
 	// A draft keeps the files it brought from a target that takes them; here
 	// they stay with why this target takes none, until they are removed.
-	const attachmentsRefusal = projectId === CLOUD_STANDALONE_WORKSPACE_ID && task.isCloudProject
-		? t("newTask.cloudStandaloneNoFiles", { defaultValue: "Files can't start a standalone agent. Remove them to continue." })
-		: task.isCloudProject && cloudOffering.loaded && !cloudFiles
-			? t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
-			: undefined;
+	const attachmentsRefusal = task.isCloudProject && cloudOffering.loaded && !cloudFiles
+		? projectId === CLOUD_STANDALONE_WORKSPACE_ID
+			? t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." })
+			: t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
+		: undefined;
 	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
 	// Files staged into one project's worktree do not exist in another's.
 	const attachmentsProject = useRef(projectId);
@@ -138,15 +166,20 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		writeChatAttachments(draftScope, []);
 	}
 	// "/" skills come from this computer's agent; a Cloud task's agent runs in its sandbox without them.
-	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId), [hostId, task.agent.value, task.isCloudProject]);
+	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId, projectId), [hostId, projectId, task.agent.value, task.isCloudProject]);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
 	);
 	// A session of this agent already reported its own settings: draw exactly those
 	// controls, holding this chat's choices, so the bar never changes on handoff.
+	// Those are this computer's agent's. A Cloud task's agent runs in its sandbox,
+	// and its session's bar lists Cloud's own models, so the bar here does too.
 	const harness = task.agent.value;
-	const template = useMemo(() => readChatSettingsTemplate(harness, hostId), [harness, hostId]);
+	const template = useMemo(
+		() => task.isCloudProject ? undefined : readChatSettingsTemplate(harness, hostId),
+		[harness, hostId, task.isCloudProject],
+	);
 	const barFor = (settings: TurnSettings): LaunchSettings => {
 		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.approvalModes) : undefined;
 		return {
@@ -260,7 +293,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	) => {
 		// The session's chat shows the brief from its first frame; cloud and
 		// terminal sessions open on their own surfaces and need none of it.
-		if (!taskRef.current.isCloudProject && interfaceMode === "chat") {
+		const sessionChat = !taskRef.current.isCloudProject && interfaceMode === "chat";
+		if (sessionChat) {
 			seedOpeningLocalEcho(queryClient, sessionId, target.hostId, brief);
 			rememberLaunchSettings(queryClient, sessionId, target.hostId, settings);
 			rememberOpeningStart(queryClient, sessionId, target.hostId, brief.createdAt);
@@ -275,6 +309,9 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			if (!mounted.current) return;
 			const here = targetRef.current;
 			if (here.projectId === target.projectId && here.hostId === target.hostId) {
+				// What was typed meanwhile, sent or not, waits in the session's composer.
+				const followUp = sessionChat ? composerRef.current?.takeDraft() : undefined;
+				if (followUp) handOffComposerDraft(sessionUiKey(sessionId, target.hostId), followUp);
 				void navigate({ ...sessionNavigateTarget(sessionProjectId, sessionId, target.hostId), replace: true });
 				return;
 			}
@@ -327,8 +364,23 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			if (saved && !sendIsUncertain(error)) setRefusedRetry(apiErrorMessage(error, t("newTask.unableToStart")));
 			if (sendIsUncertain(error) || saved) throw error;
 			resolveLaunch(clientMessageId);
+			keepFollowUpBelowBrief();
 			throw Object.assign(apiErrorException(error, t("newTask.unableToStart")), { code: "TASK_CREATE_FAILED" });
 		}
+	};
+
+	// A refused brief comes back to the box only while the box is empty; a follow-up
+	// typed as it started would keep the brief out of sight. The follow-up leaves the
+	// box, and once the composer has put the brief back (as this send rejects), it
+	// returns below it.
+	const keepFollowUpBelowBrief = () => {
+		const followUp = composerRef.current?.takeDraft();
+		if (!followUp) return;
+		setTimeout(() => {
+			if (!mounted.current) return;
+			const brief = readChatSessionDraft(draftScope).composer.text.replace(/\s+$/, "");
+			composerRef.current?.setDraft(brief ? `${brief}\n\n${followUp.text}` : followUp.text);
+		}, 0);
 	};
 
 	// The fallback starts what the composer holds now; a brief the user cleared stays cleared.
@@ -347,6 +399,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			? barFor({ ...task.turnSettings, approvalMode: "bypass-permissions" })
 			: barSettings;
 		setFallbackFailed(false);
+		setFallbackStarting(true);
 		setEcho(brief);
 		setLaunched(settings);
 		try {
@@ -363,6 +416,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			setEcho(undefined);
 		} finally {
 			fallbackInFlight.current = false;
+			setFallbackStarting(false);
 		}
 	};
 
@@ -384,6 +438,9 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		useUiStore.getState().setNewChatSending(pending);
 		return () => useUiStore.getState().setNewChatSending(false);
 	}, [pending]);
+	// After a refused send the composer shows the load error itself, so the notice
+	// drops the text and keeps only the action, which the composer cannot show.
+	const loadErrorInComposer = task.remoteLoadError === reportedLoadError;
 	const notice = pending ? null : task.error && (task.errorAction || fallbackFailed) ? (
 		<div role="alert" className="flex items-center gap-2 px-1 text-xs text-destructive">
 			<span>{task.error}</span>
@@ -405,8 +462,11 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		</div>
 	) : pendingLaunch && refusedRetry ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{refusedRetry}</p>
-	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError ? (
-		<p role="alert" className="px-1 text-xs text-destructive">{task.remoteLoadError}</p>
+	) : task.remoteLoadError && (!loadErrorInComposer || task.remoteLoadErrorAction) ? (
+		<div role={loadErrorInComposer ? undefined : "alert"} className="flex items-center gap-2 px-1 text-xs text-destructive">
+			{loadErrorInComposer ? null : <span>{task.remoteLoadError}</span>}
+			{task.remoteLoadErrorAction ? <Button size="sm" variant="ghost" onClick={task.remoteLoadErrorAction.onClick}>{task.remoteLoadErrorAction.label}</Button> : null}
+		</div>
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
 			<p role="status" className="min-w-0 text-xs text-warning">{task.modelWarning}</p>
@@ -445,6 +505,9 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				welcomeHeading={report ? t("report.heading") : undefined}
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
+				// A local chat's session composer takes over what is typed while it starts.
+				followUpWhileOpening={!task.isCloudProject && task.effectiveInterface === "chat" && !fallbackStarting}
+				composerRef={composerRef}
 				// A Cloud task whose control plane takes no files offers none. A send
 				// whose answer was lost keeps the files it went with until its outcome
 				// is known: its retry carries them under the same request, and only a
@@ -456,6 +519,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}
 				filePathsTruncated={workspaceFiles.data?.truncated}
+				filePathsLoading={workspaceFiles.isLoading}
 				skills={skills}
 				composerTray={
 					<>
@@ -491,6 +555,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 								onPendingChange: (next) => {
 									if (next) task.switchAgent(next.harness, { model: next.model, effort: next.effort ?? next.shownEffort });
 								},
+								account: accountChoice,
 							}}
 							autoSelectEffortOnOpen
 						/>
@@ -512,13 +577,18 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 	const out: ChatConfigOption[] = [];
 	const model = grouped.model[0];
 	if (!model) return undefined;
+	// The agent's own rows, as its session's bar is given them. The bar folds a
+	// Default row into the model its description names; folded here as well, that
+	// model's row would be gone before the bar sees it (Fable, where it is this
+	// agent's default).
+	const rows = options.find((option) => option.id === model.id)?.choices ?? model.choices;
 	// A saved template predates the live catalog: a model it does not list means it
 	// can no longer show every choice, so AO's own controls take over.
-	const listed = (item: ChatModel) => model.choices.some((choice) =>
+	const listed = (item: ChatModel) => rows.some((choice) =>
 		choice.value === item.id || choice.name === agentModelDisplayLabel(harness, item.displayName));
 	if (models.some((item) => item.id !== "default" && !listed(item))) return undefined;
 	// Only choices a new task can start with: those AO's model list also has.
-	const modelChoices = model.choices.flatMap((choice) => {
+	const modelChoices = rows.flatMap((choice) => {
 		const listed = catalogModelFor(choice, harness, models);
 		return listed ? [listed.hint ? { ...choice, hint: listed.hint } : choice] : [];
 	});

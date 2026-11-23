@@ -58,7 +58,8 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
+import { artifactCount, groupArtifactsByProject, withKeptArtifacts } from "../lib/artifacts";
+import { useKeptArtifacts } from "../hooks/useKeptArtifacts";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -139,9 +140,10 @@ import { Pressable } from "./ui/pressable";
 import { menuFocusReturnTarget } from "./ui/menu-focus";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SharedProjectMark } from "./teams/SharedProjectMark";
+import { CloudMark } from "./CloudMark";
 import { ProjectIcon } from "./ProjectIcon";
 import { OrchestratorIcon } from "./icons";
-import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
+import { OrchestratorReplyIcon, orchestratorReplyLabel, ReplyBadge } from "./OrchestratorReplyIcon";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -152,7 +154,7 @@ import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
-import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
+import { isSessionUnread, sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
@@ -183,6 +185,8 @@ const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperti
 const ROW_ACTIONS_CLASS = "absolute inset-y-0 right-1 flex items-center gap-0.5";
 /** Long enough that sweeping the pointer across the list starts no agents. */
 const AGENT_WARM_UP_HOVER_MS = 300;
+/** How long the pointer rests on a chat row before its history is read. */
+const CHAT_PREFETCH_REST_MS = 100;
 const ROW_ACTION_BUTTON_CLASS = "sidebar-icon-action [&_svg]:size-icon-md";
 const HOVER_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 const SESSION_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
@@ -191,7 +195,7 @@ const SESSION_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 // Plain fill stays for non-interactive status rows; interactive rows use
 // {@link NavRowHighlight} via {@link NAV_ROW_HIGHLIGHT_HOST_CLASS}.
 const NAV_ROW_CLASS =
-	"h-9 gap-2.5 rounded-lg px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground active:bg-interactive-hover active:text-foreground data-[active=true]:bg-interactive-active data-[active=true]:font-medium data-[active=true]:text-foreground";
+	"h-9 gap-2.5 rounded-lg px-2.5 text-sm font-medium text-muted-foreground hover:bg-interactive-hover hover:text-foreground active:bg-interactive-hover active:text-foreground data-[active=true]:bg-interactive-active data-[active=true]:font-medium data-[active=true]:text-foreground";
 
 /** Expanded footer action row: growing highlight behind icon + label. */
 const FOOTER_NAV_BUTTON_CLASS = cn(
@@ -442,24 +446,16 @@ function SidebarSectionScroller({
 	);
 }
 
-function AnimatedSectionBody({ open, children, className }: { open: boolean; children: ReactNode; className?: string }) {
-	const prefersReducedMotion = useReducedMotion();
+// Sidebar sections open, close and fill at their final size in one frame: no
+// height animation, so a section gaining its first row never pushes the rows
+// below it down over several frames. The single 1fr row bounds the content to
+// the section's height so its scroller scrolls.
+function SectionBody({ open, children, className }: { open: boolean; children: ReactNode; className?: string }) {
+	if (!open) return null;
 	return (
-		<AnimatePresence initial={false}>
-			{open ? (
-				<motion.div
-					key="section-body"
-					initial={{ gridTemplateRows: "0fr", opacity: 0 }}
-					animate={{ gridTemplateRows: "1fr", opacity: 1 }}
-					exit={{ gridTemplateRows: "0fr", opacity: 0 }}
-					transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.18, ease: [0.25, 0.46, 0.45, 0.94] }}
-					style={{ display: "grid" }}
-					className={className}
-				>
-					<div className="flex min-h-0 flex-col overflow-hidden">{children}</div>
-				</motion.div>
-			) : null}
-		</AnimatePresence>
+		<div className={cn("grid grid-rows-[1fr]", className)}>
+			<div className="flex min-h-0 flex-col overflow-hidden">{children}</div>
+		</div>
 	);
 }
 const expandedProjectsStorageKey = "ao.sidebar.expanded-projects";
@@ -606,7 +602,8 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
 // Each state has its own glyph, so colour is never the only difference: a red
 // alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge.
+// request is ready to merge. A row's blue spinner (working) and its dot are
+// drawn by SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
@@ -631,10 +628,37 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 	);
 }
 
+// The spinner and the dot: a blue spinner while the agent works, a filled grey
+// dot for a session that changed since the user last opened it, a hollow grey
+// ring otherwise.
+function SessionActivityGlyph({ state, ...rest }: {
+	state: "working" | "unread" | "read";
+} & Record<`data-${string}`, string | undefined>) {
+	if (state === "working") {
+		return (
+			<LoaderCircle
+				className="-mx-0.5 size-3 animate-spin text-status-working motion-reduce:animate-none"
+				{...rest}
+			/>
+		);
+	}
+	return (
+		<span className="-mx-0.5 inline-flex size-3 items-center justify-center" {...rest}>
+			<span
+				className={cn(
+					"size-2 rounded-full",
+					state === "unread" ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
+				)}
+				data-session-unread={state === "unread" ? "" : undefined}
+			/>
+		</span>
+	);
+}
+
 // A row flags only what the user has something to do about, a spinner while
 // its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
-function SessionStatusDot({ session, indicator }: {
+export function SessionStatusDot({ session, indicator }: {
 	session: WorkspaceSession;
 	indicator: ReturnType<typeof getSessionRowIndicator>;
 }) {
@@ -668,24 +692,13 @@ function SessionStatusDot({ session, indicator }: {
 					popped={popped}
 				/>
 			) : working ? (
-				<LoaderCircle
-					className="-mx-0.5 size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
-					data-session-status={session.status}
-					data-session-spinner=""
-				/>
+				<SessionActivityGlyph data-session-spinner="" data-session-status={session.status} state="working" />
 			) : (
-				<span
-					className="-mx-0.5 inline-flex size-3 items-center justify-center"
+				<SessionActivityGlyph
 					data-session-idle={stopped ? "stopped" : "idle"}
 					data-session-status={session.status}
-				>
-					<span
-						className={cn(
-							"size-2 rounded-full",
-							unread ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
-						)}
-					/>
-				</span>
+					state={unread ? "unread" : "read"}
+				/>
 			)}
 		</span>
 	);
@@ -742,9 +755,11 @@ export const Sidebar = memo(function Sidebar({
 	const developerMode = useUiStore((s) => s.developerMode);
 	// Cloud projects count only while the control plane keeps artifacts, as on the Artifacts page.
 	const cloudArtifacts = useCloudOffering().artifacts;
+	// Kept artifacts are listed there too.
+	const kept = useKeptArtifacts().data;
 	const artifactTotal = useMemo(
-		() => artifactCount(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud"))),
-		[cloudArtifacts, workspaces],
+		() => artifactCount(withKeptArtifacts(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud")), kept, workspaces, "")),
+		[cloudArtifacts, workspaces, kept],
 	);
 	const existingProjectPaths = useMemo(
 		() => workspaces
@@ -827,9 +842,18 @@ export const Sidebar = memo(function Sidebar({
 	// while staying on a session is left alone.
 	const activeSessionKey = selection.activeSessionId ?? selection.activeRemoteSessionId;
 	const activeProjectKey = selection.activeProjectId;
+	// A project row's Orchestrator button opens its chat without touching the
+	// project's disclosure, so the reveal below must not expand the project for
+	// the chat that button opened. Cleared by the next session change either way.
+	const orchestratorButtonSessionId = useRef<string | null>(null);
+	const noteOrchestratorButtonOpen = useLatestCallback((sessionId: string) => {
+		orchestratorButtonSessionId.current = sessionId;
+	});
 	useEffect(() => {
+		const openedFromOrchestratorButton = orchestratorButtonSessionId.current === activeSessionKey;
+		orchestratorButtonSessionId.current = null;
 		if (!activeSessionKey || isCollapsed) return;
-		if (activeProjectKey) {
+		if (activeProjectKey && !openedFromOrchestratorButton) {
 			setExpandedIds((prev) => {
 				if (prev.has(activeProjectKey)) return prev;
 				const next = new Set(prev);
@@ -1193,7 +1217,7 @@ export const Sidebar = memo(function Sidebar({
 							onToggle={() => toggleSection("pinned", pinnedOpen, setPinnedOpen)}
 							className="mb-1"
 						/>
-						<AnimatedSectionBody open={pinnedOpen}>
+						<SectionBody open={pinnedOpen}>
 							<SidebarMenuSub
 								className="sidebar-expanded-chrome mx-0 ml-0 translate-x-0 gap-0.5 border-l-0 px-0 py-0.5 mb-2"
 								data-testid="pinned-session-list"
@@ -1211,7 +1235,7 @@ export const Sidebar = memo(function Sidebar({
 									/>
 								))}
 							</SidebarMenuSub>
-						</AnimatedSectionBody>
+						</SectionBody>
 					</div>
 				)}
 			</div>
@@ -1261,34 +1285,32 @@ export const Sidebar = memo(function Sidebar({
 							</div>
 						) : null}
 						{projectWorkspaces.length > 0 || remoteHosts.length > 0 ? (
-							<AnimatedSectionBody open={projectContentOpen} className="min-h-0 flex-initial group-data-[collapsible=icon]:flex-none">
+							<SectionBody open={projectContentOpen} className="min-h-0 flex-initial group-data-[collapsible=icon]:flex-none">
 								<SidebarSectionScroller
 									className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
 									testId="sidebar-projects-scroller"
 									wrapperClassName="flex flex-col flex-1"
 								>
 									<SidebarMenu className="relative gap-0.5 rounded-lg group-data-[collapsible=icon]:gap-1 group-data-[collapsible=icon]:rounded-none">
-										<AnimatePresence initial={false}>
-											{!workspaceError && visibleWorkspaces.map((workspace) => (
-												<ProjectItem
-													key={workspace.id}
-													workspace={workspace}
-													avatarUrl={projectAvatars.get(workspace.id)}
-													expanded={expandedIds.has(workspace.id) || (initialActiveSessionProjectId === workspace.id && !dismissedInitialActiveProjectIds.has(workspace.id))}
-													suppressInitialExpandAnimation={expandedIds.has(workspace.id)}
-													selection={selection}
-													isDragged={draggingProjectId === workspace.id}
-													projectDragInProgress={draggingProjectId !== null}
-													consumeDragClick={projectDragClickGuard.consumeClick}
-													onToggle={toggleProjectDisclosure}
-													onRemoveProject={onRemoveProject}
-													onProjectDragStart={handleProjectDragStart}
-													onProjectDragEnd={handleProjectDragEnd}
-													onProjectDragOver={handleProjectDragOver}
-													onProjectDrop={handleProjectDrop}
-												/>
-											))}
-										</AnimatePresence>
+										{!workspaceError && visibleWorkspaces.map((workspace) => (
+											<ProjectItem
+												key={workspace.id}
+												workspace={workspace}
+												avatarUrl={projectAvatars.get(workspace.id)}
+												expanded={expandedIds.has(workspace.id) || (initialActiveSessionProjectId === workspace.id && !dismissedInitialActiveProjectIds.has(workspace.id))}
+												selection={selection}
+												isDragged={draggingProjectId === workspace.id}
+												projectDragInProgress={draggingProjectId !== null}
+												consumeDragClick={projectDragClickGuard.consumeClick}
+												onToggle={toggleProjectDisclosure}
+												onOrchestratorButtonOpen={noteOrchestratorButtonOpen}
+												onRemoveProject={onRemoveProject}
+												onProjectDragStart={handleProjectDragStart}
+												onProjectDragEnd={handleProjectDragEnd}
+												onProjectDragOver={handleProjectDragOver}
+												onProjectDrop={handleProjectDrop}
+											/>
+										))}
 										<RemoteHostsSection
 											hosts={remoteHosts}
 											workspaces={remoteWorkspaces}
@@ -1320,7 +1342,6 @@ export const Sidebar = memo(function Sidebar({
 													})}
 													onRemoveProject={(projectId) => onRemoveRemoteProject(hostId, projectId)}
 													onOpenOrchestrator={() => onOpenRemoteOrchestrator(hostId, workspace.id)}
-													suppressInitialExpandAnimation
 													onProjectDragStart={() => undefined}
 													onProjectDragEnd={() => undefined}
 													onProjectDragOver={() => undefined}
@@ -1349,7 +1370,7 @@ export const Sidebar = memo(function Sidebar({
 											onClick={toggleShowAllProjects}
 									/>
 								) : null}
-							</AnimatedSectionBody>
+							</SectionBody>
 						) : null}
 					</SidebarGroupContent>
 				</SidebarGroup>
@@ -1371,32 +1392,6 @@ export const Sidebar = memo(function Sidebar({
 						daemon {daemonStatus.state}
 					</span>
 				)}
-				{settingsPage ? (
-					<>
-						<div className={FOOTER_UPDATES_CLASS}>
-							<SidebarUpdateRow
-								onRequestInstall={openUpdateInstallPrompt}
-								status={updateStatus}
-								tabIndex={isCollapsed ? -1 : 0}
-							/>
-						</div>
-						<div className={FOOTER_BOTTOM_ROW_CLASS}>
-							<Pressable
-								className={FOOTER_NAV_BUTTON_CLASS}
-								disabled={settingsPage.cueBusy}
-								onClick={settingsPage.close}
-								type="button"
-							>
-								<NavRowHighlight />
-								<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
-									<ArrowLeft aria-hidden="true" />
-									<span className="tracking-tight">{t("settings.back")}</span>
-								</span>
-							</Pressable>
-						</div>
-					</>
-				) : (
-				<>
 				<div
 					aria-hidden={isCollapsed || undefined}
 					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
@@ -1413,60 +1408,82 @@ export const Sidebar = memo(function Sidebar({
 							tabIndex={isCollapsed ? -1 : 0}
 						/>
 					</div>
-					<FooterAccountRow
-						onConnectMobile={() => selection.goConnectMobile()}
-						onOpenSettings={() => selection.goGlobalSettings()}
-						tabIndex={isCollapsed ? -1 : 0}
-					/>
-				</div>
-				<div
-					aria-hidden={!isCollapsed || undefined}
-					className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
-				>
-					<SidebarUpdateRail
-						onRequestInstall={openUpdateInstallPrompt}
-						status={updateStatus}
-						tabIndex={isCollapsed ? 0 : -1}
-					/>
-					<CloudSignInRailButton tabIndex={isCollapsed ? 0 : -1} />
-					<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
-					<Tooltip>
-						<TooltipTrigger asChild>
+					{settingsPage ? (
+						<div className={FOOTER_BOTTOM_ROW_CLASS}>
 							<Pressable
-								aria-label={t("settings.connectMobile")}
-								className={FOOTER_RAIL_BUTTON_CLASS}
-								onClick={() => selection.goConnectMobile()}
-								tabIndex={isCollapsed ? 0 : -1}
+								className={FOOTER_NAV_BUTTON_CLASS}
+								disabled={settingsPage.cueBusy}
+								onClick={settingsPage.close}
+								tabIndex={isCollapsed ? -1 : 0}
 								type="button"
 							>
 								<NavRowHighlight />
-								<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
-									<Smartphone aria-hidden="true" />
+								<span className="relative z-[1] flex min-w-0 flex-1 items-center gap-2 [&_svg]:size-icon-md [&_svg]:shrink-0">
+									<ArrowLeft aria-hidden="true" />
+									<span className="tracking-tight">{t("settings.back")}</span>
 								</span>
 							</Pressable>
-						</TooltipTrigger>
-						<TooltipContent side="right">{t("settings.connectMobile")}</TooltipContent>
-					</Tooltip>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Pressable
-								aria-label={t("shell.settings")}
-								className={FOOTER_RAIL_BUTTON_CLASS}
-								onClick={() => selection.goGlobalSettings()}
-								tabIndex={isCollapsed ? 0 : -1}
-								type="button"
-							>
-								<NavRowHighlight />
-								<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
-									<Settings aria-hidden="true" />
-								</span>
-							</Pressable>
-						</TooltipTrigger>
-						<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
-					</Tooltip>
+						</div>
+					) : (
+						<FooterAccountRow
+							onConnectMobile={() => selection.goConnectMobile()}
+							onOpenSettings={() => selection.goGlobalSettings()}
+							tabIndex={isCollapsed ? -1 : 0}
+						/>
+					)}
 				</div>
-				</>
-				)}
+				{/* Keep the collapsed icon rail in its own slot instead of pairing it
+				    with an opaque Settings footer row: reusing that DOM node on close
+				    triggers transition-opacity from 1 to 0 and flashes the centered
+				    Settings icon in the middle of the footer. */}
+				{!settingsPage ? (
+					<div
+						aria-hidden={!isCollapsed || undefined}
+						className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
+					>
+						<SidebarUpdateRail
+							onRequestInstall={openUpdateInstallPrompt}
+							status={updateStatus}
+							tabIndex={isCollapsed ? 0 : -1}
+						/>
+						<CloudSignInRailButton tabIndex={isCollapsed ? 0 : -1} />
+						<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									aria-label={t("settings.connectMobile")}
+									className={FOOTER_RAIL_BUTTON_CLASS}
+									onClick={() => selection.goConnectMobile()}
+									tabIndex={isCollapsed ? 0 : -1}
+									type="button"
+								>
+									<NavRowHighlight />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
+										<Smartphone aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent side="right">{t("settings.connectMobile")}</TooltipContent>
+						</Tooltip>
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Pressable
+									aria-label={t("shell.settings")}
+									className={FOOTER_RAIL_BUTTON_CLASS}
+									onClick={() => selection.goGlobalSettings()}
+									tabIndex={isCollapsed ? 0 : -1}
+									type="button"
+								>
+									<NavRowHighlight />
+									<span className="relative z-[1] grid place-items-center [&_svg]:size-icon-base">
+										<Settings aria-hidden="true" />
+									</span>
+								</Pressable>
+							</TooltipTrigger>
+							<TooltipContent shortcut="open-settings" side="right">{t("shell.settings")}</TooltipContent>
+						</Tooltip>
+					</div>
+				) : null}
 			</SidebarFooter>
 
 			{/* useResizable owns clamp. */}
@@ -1495,6 +1512,8 @@ type ProjectItemProps = {
 	avatarUrl?: string;
 	hostLabel?: string;
 	onOpenOrchestrator?: () => void;
+	/** Called with the orchestrator chat the row's Orchestrator button is about to open. */
+	onOrchestratorButtonOpen?: (sessionId: string) => void;
 	expanded: boolean;
 	selection: Selection;
 	isDragged: boolean;
@@ -1502,7 +1521,6 @@ type ProjectItemProps = {
 	consumeDragClick: (id: string) => boolean;
 	onToggle: (projectId: string) => void;
 	onRemoveProject: (projectId: string, cloud: boolean) => void;
-	suppressInitialExpandAnimation: boolean;
 	onProjectDragStart: (event: ReactDragEvent<HTMLElement>, projectId: string) => void;
 	onProjectDragEnd: () => void;
 	onProjectDragOver: (event: ReactDragEvent<HTMLElement>, overId: string) => void;
@@ -1543,6 +1561,7 @@ const ProjectItem = memo(function ProjectItem({
 	avatarUrl,
 	hostLabel,
 	onOpenOrchestrator,
+	onOrchestratorButtonOpen,
 	expanded,
 	selection,
 	isDragged,
@@ -1550,7 +1569,6 @@ const ProjectItem = memo(function ProjectItem({
 	consumeDragClick,
 	onToggle,
 	onRemoveProject,
-	suppressInitialExpandAnimation,
 	onProjectDragStart,
 	onProjectDragEnd,
 	onProjectDragOver,
@@ -1562,7 +1580,6 @@ const ProjectItem = memo(function ProjectItem({
 	// A Cloud standalone agent (here, one shared with the person) is one
 	// session: it has no board, orchestrator or project settings to offer.
 	const isAgent = workspace.standaloneAgent === true;
-	const prefersReducedMotion = useReducedMotion();
 	const activeProjectMatches = selection.activeProjectId === workspace.id;
 	const projectHeaderRef = useRef<HTMLDivElement>(null);
 	const projectSessionsRef = useRef<HTMLDivElement>(null);
@@ -1576,15 +1593,6 @@ const ProjectItem = memo(function ProjectItem({
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [isSpawning, setIsSpawning] = useState(false);
-	// Skip enter animation on first mount — sessions arrive async and we don't
-	// want them to slide in on every sidebar load. Only animate on subsequent
-	// expand/collapse toggles.
-	const [animReady, setAnimReady] = useState(false);
-	const hasInteractedWithDisclosure = useRef(false);
-	useEffect(() => {
-		const id = window.setTimeout(() => setAnimReady(true), 500);
-		return () => window.clearTimeout(id);
-	}, []);
 	const projectKey = sessionUiKey(workspace.id, workspace.hostId);
 	const isProjectProvisioning = useUiStore((state) => state.provisioningProjectIds.has(projectKey));
 	const projectActive = dashboardActive || orchestratorActive || (activeProjectMatches && isProjectProvisioning);
@@ -1606,6 +1614,33 @@ const ProjectItem = memo(function ProjectItem({
 		[workspace.sessions, workspace.shared],
 	);
 	const projectNeedsInput = useMemo(() => visibleSessions.some(sessionNeedsInput), [visibleSessions]);
+	// What a collapsed project signals, strongest first: a session waiting on the
+	// user (the alert replaces the icon), then one whose agent is working, then a
+	// finished turn the user has not opened (both a corner dot on the icon, like
+	// the orchestrator button's).
+	const readAt = useSessionReadStore((state) => state.readAt);
+	const readBaseline = useSessionReadStore((state) => state.baseline);
+	const markRead = useSessionReadStore((state) => state.markRead);
+	const openSessionId = selection.activeSessionId;
+	const viewedSession = visibleSessions.find((session) => session.id === openSessionId);
+	// The open session's row marks it read, but a collapsed project has no rows,
+	// so the project keeps it read too: nothing the user is looking at is unread.
+	useEffect(() => {
+		if (!viewedSession) return;
+		const updated = Date.parse(viewedSession.updatedAt);
+		if (Number.isFinite(updated)) markRead(sessionReadKey(viewedSession), updated);
+	}, [markRead, viewedSession]);
+	const projectActivity = useMemo(() => {
+		if (projectNeedsInput) return "attention" as const;
+		const indicators = visibleSessions.map((session) => getSessionRowIndicator(session));
+		if (indicators.includes("working")) return "working" as const;
+		const read = { readAt, baseline: readBaseline };
+		return visibleSessions.some(
+			(session, index) => session.id !== openSessionId && indicators[index] === null && isSessionUnread(session, read),
+		)
+			? ("unread" as const)
+			: null;
+	}, [openSessionId, projectNeedsInput, readAt, readBaseline, visibleSessions]);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
 		() => {
@@ -1687,18 +1722,18 @@ const ProjectItem = memo(function ProjectItem({
 		orchestrator,
 		viewing: orchestratorActive,
 	});
-	const toggleDisclosure = () => {
-		hasInteractedWithDisclosure.current = true;
-		onToggle(workspace.id);
-	};
+	const toggleDisclosure = () => onToggle(workspace.id);
 
 	// Mirrors the session topbar's launcher: attach to the running orchestrator, or
 	// spawn one via the daemon and follow it once the workspace refetches.
-	// Expand a collapsed project so opening the orchestrator also reveals its
-	// session list — otherwise the tree stays shut while you're inside it.
+	// Opening the orchestrator leaves the project's session list as it was:
+	// only the row and folder toggle change disclosure.
+	const goOrchestrator = (sessionId: string) => {
+		onOrchestratorButtonOpen?.(sessionId);
+		selection.goSession(workspace.id, sessionId);
+	};
 	const openOrchestrator = async () => {
 		if (isSpawning || isProjectProvisioning || isProjectRestarting) return;
-		if (!expanded) toggleDisclosure();
 		if (onOpenOrchestrator) {
 			onOpenOrchestrator();
 			return;
@@ -1711,7 +1746,7 @@ const ProjectItem = memo(function ProjectItem({
 					// Start the resume, then open the chat while it runs; its
 					// composer shows the startup shimmer in the meantime.
 					const resume = resumeOrchestrator(orchestrator.id);
-					selection.goSession(workspace.id, orchestrator.id);
+					goOrchestrator(orchestrator.id);
 					await resume;
 					await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 					return;
@@ -1727,7 +1762,7 @@ const ProjectItem = memo(function ProjectItem({
 					setIsSpawning(false);
 				}
 			}
-			selection.goSession(workspace.id, orchestrator.id);
+			goOrchestrator(orchestrator.id);
 			return;
 		}
 		// A guest cannot start an orchestrator in someone else's project.
@@ -1740,7 +1775,7 @@ const ProjectItem = memo(function ProjectItem({
 			try {
 				const sessionId = await spawnCloudOrchestrator(queryClient, workspace.id);
 				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				selection.goSession(workspace.id, sessionId);
+				goOrchestrator(sessionId);
 			} catch (err) {
 				console.error("Failed to spawn cloud orchestrator:", err);
 				void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
@@ -1757,7 +1792,7 @@ const ProjectItem = memo(function ProjectItem({
 		try {
 			const sessionId = await spawnOrchestrator(workspace.id, "sidebar");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			selection.goSession(workspace.id, sessionId);
+			goOrchestrator(sessionId);
 		} catch (err) {
 			console.error("Failed to spawn orchestrator:", err);
 			void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
@@ -1805,6 +1840,7 @@ const ProjectItem = memo(function ProjectItem({
 
 
 	const removeProject = () => setConfirmOpen(true);
+	const isCloudProject = !workspace.hostId && workspace.kind === CLOUD_PROJECT_KIND;
 	const copyToClipboard = useCopyToClipboard();
 	// Pins are a local list preference; remote host rows and the Scratchpad
 	// have their own sections and are not pinnable.
@@ -1902,14 +1938,16 @@ const ProjectItem = memo(function ProjectItem({
 						label: t("shell.projectSettings"),
 						onSelect: () => selection.goSettings(workspace.id, workspace.cloudOrgId),
 					},
-					{
+					// A project shared from another organization is its organization's to delete.
+					...(workspace.shared ? [] : [{
 						kind: "item" as const,
 						id: "remove",
 						icon: <Trash2 aria-hidden="true" />,
-						label: t("shell.removeProjectTitle"),
+						// A Cloud project is deleted for good; a local one only leaves the sidebar.
+						label: isCloudProject ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle"),
 						destructive: true,
 						onSelect: removeProject,
-					},
+					}]),
 				]
 				: []),
 		];
@@ -1925,7 +1963,7 @@ const ProjectItem = memo(function ProjectItem({
 	return (
 		<ContextMenu>
 			<ContextMenuTrigger asChild>
-				<motion.li
+				<li
 					className={cn(
 						"group/menu-item relative group-data-[collapsible=icon]:mb-0",
 						projectIsDragging && "opacity-50",
@@ -1937,12 +1975,8 @@ const ProjectItem = memo(function ProjectItem({
 					data-host-id={workspace.hostId}
 					data-sidebar="menu-item"
 					data-slot="sidebar-menu-item"
-					initial={false}
-					animate={{ opacity: 1, y: 0 }}
-					exit={{ opacity: 0, y: -4, transition: { duration: prefersReducedMotion ? 0 : 0.12, ease: "easeIn" } }}
 					onDragOver={(event) => onProjectDragOver(event, workspace.id)}
 					onDrop={onProjectDrop}
-					transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
 				>
 					<div
 						ref={projectHeaderRef}
@@ -1990,20 +2024,24 @@ const ProjectItem = memo(function ProjectItem({
 										data-expanded={expanded ? "" : undefined}
 										data-project-folder-visual=""
 									>
-										{/* 1.2 — contextual icon swap: scale 0.8↔1 (animated); opacity snaps for hide.
+										{/* 1.2 — contextual icon swap on hover, instant (scale and opacity snap).
 										    Hover paint lives in styles.css (fine pointer only). */}
 										<span
-											className="inline-flex size-icon-md items-center justify-center transition-[scale] duration-normal ease-[var(--ease-out)] motion-reduce:transition-none"
+											className="relative inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
-											{!expanded && projectNeedsInput ? (
+											{!expanded && projectActivity === "attention" ? (
 												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
 											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
+											{!expanded && (projectActivity === "working" || projectActivity === "unread") ? (
+												<ReplyBadge data-project-marker={projectActivity} reply={projectActivity} surface="sidebar" />
+											) : null}
 										</span>
 										<span
 											className={cn(
 												"absolute inline-flex size-icon-md scale-[0.8] items-center justify-center opacity-0",
-												"transition-[scale,rotate] duration-normal ease-[var(--ease-out)]",
+												// Only expanding or collapsing turns it; the hover swap is instant.
+												"transition-[rotate] duration-normal ease-[var(--ease-out)]",
 												"motion-reduce:transition-none",
 												expanded && "rotate-90",
 											)}
@@ -2045,12 +2083,7 @@ const ProjectItem = memo(function ProjectItem({
 										</Badge>
 									)}
 									{workspace.kind === "cloud" && (
-										<Badge
-											variant="outline"
-											className="sidebar-expanded-chrome relative z-[1] h-4 shrink-0 px-1.5 text-2xs group-data-[collapsible=icon]:hidden"
-										>
-											{t("shell.cloudProjectBadge")}
-										</Badge>
+										<CloudMark className="sidebar-expanded-chrome relative z-[1] translate-y-px group-data-[collapsible=icon]:hidden" />
 									)}
 								</SidebarMenuButton>
 								{/* Folder disclosure toggle: sibling of the nav button, absolutely positioned over
@@ -2195,79 +2228,56 @@ const ProjectItem = memo(function ProjectItem({
 						{/* end outer relative */}
 					</div>
 					{/* project-sidebar__sessions: indented under the project parent so worker
-          sessions read as children without adding a persistent guide rail. */}
-		<AnimatePresence initial={false}>
-			{expanded && sessions.length > 0 && (
-				<motion.div
-					key="sessions"
-					ref={projectSessionsRef}
-					initial={
-						animReady && (!suppressInitialExpandAnimation || hasInteractedWithDisclosure.current) ? { gridTemplateRows: "0fr" } : false
-					}
-					animate={{ gridTemplateRows: "1fr" }}
-					exit={{ gridTemplateRows: "0fr" }}
-					transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
-					style={{ display: "grid" }}
-					className="sidebar-expanded-chrome"
-				>
-					<div style={{ minHeight: 0, overflow: "hidden" }}>
-					<motion.div
-						initial={
-							animReady && (!suppressInitialExpandAnimation || hasInteractedWithDisclosure.current)
-								? { y: -12, opacity: 0 }
-								: false
-						}
-						animate={{ y: 0, opacity: 1 }}
-						exit={{ y: -12, opacity: 0 }}
-						transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
-					>
-											<SessionReorderList
-										dndId={sessionDndId(projectKey)}
-										testId={`session-list-${projectKey}`}
-												className={cn(
-													"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
-													hiddenSessionCount > 0 ? "pb-px" : "pb-1",
-												)}
-												sessions={listedSessions}
-												sessionIds={listedSessionIds}
-												activeSessionId={selection.activeSessionId}
-												plain={projectDragInProgress}
-												onReorder={commitSessionOrder}
-												onKilled={handleSessionKilled}
-												onOpen={openSession}
-											/>
-											{hiddenSessionCount > 0 ? (
-												// Indented to the session list so its label starts on the status-dot column.
-												<div className="pl-4">
-													<ShowMoreRow
-														className="px-3"
-														expanded={showAllSessions}
-														label={
-															showAllSessions
-																? t("shell.showLessAgents")
-																: t("shell.showMoreAgents", { count: hiddenSessionCount })
-														}
-														onClick={toggleShowAllSessions}
-													/>
-												</div>
-											) : null}
-								</motion.div>
-							</div>
-							</motion.div>
-						)}
-					</AnimatePresence>
+					    sessions read as children without adding a persistent guide rail. The
+					    list opens, closes and gains its first session at full height in one
+					    frame, so the projects below never slide. */}
+					{expanded && sessions.length > 0 && (
+						<div ref={projectSessionsRef} className="sidebar-expanded-chrome overflow-hidden">
+							<SessionReorderList
+								dndId={sessionDndId(projectKey)}
+								testId={`session-list-${projectKey}`}
+								className={cn(
+									"mx-0 ml-3.5 translate-x-0 gap-px border-l-0 px-0 pt-1",
+									hiddenSessionCount > 0 ? "pb-px" : "pb-1",
+								)}
+								sessions={listedSessions}
+								sessionIds={listedSessionIds}
+								activeSessionId={selection.activeSessionId}
+								plain={projectDragInProgress}
+								onReorder={commitSessionOrder}
+								onKilled={handleSessionKilled}
+								onOpen={openSession}
+							/>
+							{hiddenSessionCount > 0 ? (
+								// Indented to the session list so its label starts on the status-dot column.
+								<div className="pl-4">
+									<ShowMoreRow
+										className="px-3"
+										expanded={showAllSessions}
+										label={
+											showAllSessions
+												? t("shell.showLessAgents")
+												: t("shell.showMoreAgents", { count: hiddenSessionCount })
+										}
+										onClick={toggleShowAllSessions}
+									/>
+								</div>
+							) : null}
+						</div>
+					)}
 					<ConfirmDialog
 						open={confirmOpen}
 						onOpenChange={setConfirmOpen}
-						title={t("shell.removeProjectTitle")}
+						title={isCloudProject ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle")}
 						description={
 							<>
-								<p className="text-sm font-medium text-foreground">{t("shell.removeProjectLead", { name: workspace.name })}</p>
-								<p className="mt-1 text-xs text-muted-foreground">
-									{workspace.kind === CLOUD_PROJECT_KIND
-										? t("shell.removeCloudProjectBody")
-										: t("shell.removeProjectBody")}
+								<p className="text-sm font-medium text-foreground">
+									{isCloudProject
+										? t("shell.deleteCloudProjectLead", { name: workspace.name })
+										: t("shell.removeProjectLead", { name: workspace.name })}
 								</p>
+								{/* The lead already says a Cloud project is deleted for good. */}
+								{isCloudProject ? null : <p className="mt-1 text-xs text-muted-foreground">{t("shell.removeProjectBody")}</p>}
 								{openPullRequestCount > 0 ? (
 									<p className="mt-2 text-xs font-medium text-error">
 										{t("shell.removeProjectOpenPrWarning", { count: openPullRequestCount })}
@@ -2275,11 +2285,11 @@ const ProjectItem = memo(function ProjectItem({
 								) : null}
 							</>
 						}
-						confirmLabel={t("shell.remove")}
+						confirmLabel={isCloudProject ? t("shell.deleteCloudProjectConfirm") : t("shell.remove")}
 						destructive
 						onConfirm={handleConfirmRemove}
 					/>
-				</motion.li>
+				</li>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
 				<LazyMenuEntries build={buildMenuEntries} />
@@ -2398,9 +2408,7 @@ function ScratchpadSection({
 									<span
 										className={cn(
 											"pointer-events-none absolute right-full top-0 flex h-full origin-center pr-1.5 scale-[0.8] items-center opacity-0",
-											"transition-[scale] duration-normal ease-[var(--ease-out)]",
-											"motion-reduce:transition-none",
-											"group-has-[:focus-visible]/scratchpad:pointer-events-auto group-has-[:focus-visible]/scratchpad:scale-100 group-has-[:focus-visible]/scratchpad:opacity-100",
+											"focus-visible-in-scratchpad:pointer-events-auto focus-visible-in-scratchpad:scale-100 focus-visible-in-scratchpad:opacity-100",
 										)}
 										data-scratchpad-archive-action=""
 									>
@@ -2458,7 +2466,7 @@ function ScratchpadSection({
 					</ContextMenuItem>
 				</ContextMenuContent>
 			</ContextMenu>
-			<AnimatedSectionBody open={open && (listedSessions.length > 0 || showArchivedRow)} className="min-h-0 flex-1">
+			<SectionBody open={open && (listedSessions.length > 0 || showArchivedRow)} className="min-h-0 flex-1">
 				<SidebarSectionScroller
 					className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
 					testId="sidebar-scratchpad-scroller"
@@ -2498,7 +2506,7 @@ function ScratchpadSection({
 						<span className="tabular-nums">{archivedCount}</span>
 					</button>
 				) : null}
-			</AnimatedSectionBody>
+			</SectionBody>
 		</div>
 	);
 }
@@ -2527,19 +2535,17 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	active,
 	consumeDragClick,
 	indented = true,
-	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
-	hostLabel,
+	cloud,
 	onKilled,
 	onOpen,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
-	hostLabel?: string;
+	cloud?: boolean;
 	indented?: boolean;
-	layoutDependency?: string;
 	listIsDragging: boolean;
 	dropTransitionDisabled: boolean;
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2561,11 +2567,10 @@ const SortableSessionRow = memo(function SortableSessionRow({
 		<SessionRow
 			session={session}
 			active={active}
-			hostLabel={hostLabel}
+			cloud={cloud}
 			indented={indented}
 			onKilled={onKilled}
 			onOpen={open}
-			layoutDependency={layoutDependency}
 			listIsDragging={listIsDragging}
 			reorder={reorder}
 		/>
@@ -2606,17 +2611,6 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
-	const { t } = useTranslation();
-	const hostLabelOf = (session: WorkspaceSession) => cloudBadge && session.cloud ? t("shell.cloudProjectBadge") : undefined;
-	// Suppress the vertical glide for the first 500ms after the list mounts, so the
-	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
-	const [layoutSettled, setLayoutSettled] = useState(false);
-	useEffect(() => {
-		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
-		return () => window.clearTimeout(timer);
-	}, []);
-	const orderKey = useMemo(() => sessionIds.join("\u0000"), [sessionIds]);
-	const layoutDependency = layoutSettled ? orderKey : undefined;
 	const sensors = useReorderSensors();
 	const dragClickGuard = usePostDragClickGuard();
 	const [listDragging, setListDragging] = useState(false);
@@ -2634,8 +2628,8 @@ function SessionReorderList({
 		// cross-list drop leaves both lists' orders untouched.
 		const next = reorderById(sessionIds, sessionId, String(over.id));
 		// Commit the destination DOM order before dnd-kit removes its live transform.
-		// Otherwise the row briefly snaps back to its derived (usually top) position,
-		// then Motion animates it forward to the persisted destination.
+		// Otherwise the row briefly snaps back to its derived (usually top) position
+		// for a frame before the persisted order moves it to the destination.
 		flushSync(() => {
 			onReorder(next);
 			setListDragging(false);
@@ -2657,7 +2651,7 @@ function SessionReorderList({
 						key={session.id}
 						session={session}
 						active={activeSessionId === session.id}
-						hostLabel={hostLabelOf(session)}
+						cloud={cloudBadge && Boolean(session.cloud)}
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
@@ -2685,9 +2679,8 @@ function SessionReorderList({
 							session={session}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
-							hostLabel={hostLabelOf(session)}
+							cloud={cloudBadge && Boolean(session.cloud)}
 							indented={indented}
-							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
 							dropTransitionDisabled={dropTransitionDisabledId === session.id}
 							onKilled={onKilled}
@@ -2711,8 +2704,8 @@ const SessionRow = memo(function SessionRow({
 	session,
 	active,
 	hostLabel,
+	cloud = false,
 	indented = true,
-	layoutDependency,
 	listIsDragging = false,
 	onKilled,
 	onOpen,
@@ -2721,10 +2714,9 @@ const SessionRow = memo(function SessionRow({
 	session: WorkspaceSession;
 	active: boolean;
 	hostLabel?: string;
+	/** Mark the row as a Cloud session, in a list (the Scratchpad) that mixes them with local ones. */
+	cloud?: boolean;
 	indented?: boolean;
-	/** The list order. Present only for rows in a reorderable list: the row then
-	 *  animates its vertical position (and nothing else) when the order changes. */
-	layoutDependency?: string;
 	listIsDragging?: boolean;
 	/** Project drags pause nested session projection work. */
 	onKilled?: (session: WorkspaceSession) => void;
@@ -2733,7 +2725,6 @@ const SessionRow = memo(function SessionRow({
 	reorder?: SessionReorder;
 }) {
 	const { t } = useTranslation();
-	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
 	// The open row keeps a full-contrast title, so it gets the spinner without
 	// the shimmer.
@@ -2780,6 +2771,12 @@ const SessionRow = memo(function SessionRow({
 	const prefetchConversation = () => {
 		if (!canPrefetchChat || (!session.hostId && !hasTrustedApiBaseUrl()) || queryClient.getQueryData(conversationQueryKey(session.id, session.hostId))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id, session.hostId));
+	};
+	// Reads the chat once the pointer rests on the row, not as it passes over: every
+	// move restarts the wait, so sweeping down the list, however slowly, reads nothing.
+	const prefetchWhenResting = () => {
+		clearTimeout(hoverTimerRef.current);
+		hoverTimerRef.current = setTimeout(prefetchConversation, CHAT_PREFETCH_REST_MS);
 	};
 	// A stopped agent takes seconds to come back. Start it while the pointer rests
 	// on the row so the chat is ready when it opens; opening joins this request.
@@ -2860,11 +2857,8 @@ const SessionRow = memo(function SessionRow({
 					style={reorder ? sortableRowStyle(reorder) : undefined}
 					{...preview.triggerProps}
 				>
-			<motion.div
-				layout={layoutDependency !== undefined && !listIsDragging ? "y" : false}
-				layoutDependency={layoutDependency}
-				transition={prefersReducedMotion ? { duration: 0 } : { layout: { type: "spring", stiffness: 520, damping: 42, mass: 0.55 } }}
-			>
+				{/* No layout animation: a new or resorted session takes its final slot in
+				    the same frame. Only an active drag displaces rows (dnd-kit). */}
 				<div
 					className={cn(
 						"group/session-row group/nav-row relative flex h-8 w-full items-center rounded-lg",
@@ -2881,21 +2875,22 @@ const SessionRow = memo(function SessionRow({
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-keyshortcuts="F2"
-							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
+							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
-									"group-hover/session-row:pr-sidebar-project-actions group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
+									"group-hover/session-row:pr-sidebar-project-actions focus-visible-in-session-row:pr-sidebar-project-actions",
 								reorder && "cursor-grab active:cursor-grabbing",
 								reorder?.isDragging && "!cursor-grabbing",
 							)}
 							{...(reorder?.listeners ?? {})}
 							onMouseEnter={() => {
 								if (!canPrefetchChat) return;
-								hoverTimerRef.current = setTimeout(prefetchConversation, 100);
+								prefetchWhenResting();
 								if (canPrefetch) resumeTimerRef.current = setTimeout(warmUpAgent, AGENT_WARM_UP_HOVER_MS);
 							}}
+							onMouseMove={canPrefetchChat ? prefetchWhenResting : undefined}
 							onMouseLeave={() => {
 								clearTimeout(hoverTimerRef.current);
 								clearTimeout(resumeTimerRef.current);
@@ -2933,7 +2928,7 @@ const SessionRow = memo(function SessionRow({
 										active || marker === "attention"
 											? "text-foreground"
 											: "text-muted-foreground group-hover/session-row:text-foreground",
-										shimmer && "chat-working-shimmer",
+										shimmer && "relative",
 									)}
 									data-session-name=""
 									onPointerUp={(event) => {
@@ -2947,8 +2942,10 @@ const SessionRow = memo(function SessionRow({
 									}}
 								>
 									{session.title}
+									{shimmer ? <span aria-hidden="true" className="sidebar-working-shimmer"><span><span>{session.title}</span></span></span> : null}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
+								{cloud ? <CloudMark /> : null}
 							</span>
 						</Pressable>
 					</div>
@@ -2962,7 +2959,6 @@ const SessionRow = memo(function SessionRow({
 						session={session}
 					/>
 				</div>
-			</motion.div>
 				</SidebarMenuSubItem>
 				</HoverCardTrigger>
 			</ContextMenuTrigger>
@@ -2995,7 +2991,7 @@ const SessionMessageAge = memo(function SessionMessageAge({ session }: { session
 
 	return (
 		<time
-			className="absolute inset-y-0 right-2 z-[1] flex min-w-0 shrink-0 items-center whitespace-nowrap font-sans text-micro tabular-nums text-passive opacity-100 group-has-[:focus-visible]/session-row:opacity-0"
+			className="absolute inset-y-0 right-2 z-[1] flex min-w-0 shrink-0 items-center whitespace-nowrap font-sans text-micro tabular-nums text-passive opacity-100 focus-visible-in-session-row:opacity-0"
 			data-session-message-age=""
 			dateTime={at}
 			title={t("shell.lastMessageAt", { time: formatTimeCompact(at) })}
@@ -3051,13 +3047,11 @@ const SessionActions = memo(function SessionActions({
 		>
 			<div
 				className={cn(
-					/* 1.3 — pin/kill: scale 0.8↔1 from center (not origin-right — that reads as a slide) */
+					/* 1.3 — pin/kill appear on hover at once: scale and opacity snap */
 					ROW_ACTIONS_CLASS,
 					"origin-center scale-[0.8] opacity-0",
-					"transition-[scale] duration-normal ease-[var(--ease-out)]",
-					"motion-reduce:transition-none",
 					!isDragging &&
-						"group-has-[:focus-visible]/session-row:pointer-events-auto group-has-[:focus-visible]/session-row:scale-100 group-has-[:focus-visible]/session-row:opacity-100",
+						"focus-visible-in-session-row:pointer-events-auto focus-visible-in-session-row:scale-100 focus-visible-in-session-row:opacity-100",
 				)}
 				data-session-action-buttons=""
 			>
@@ -3316,9 +3310,9 @@ function FooterMobileMenu({ onConnectMobile, tabIndex }: { onConnectMobile: () =
  * The header carries the full name, email and plan, which the one-line footer
  * row leaves out so nothing there has to truncate.
  */
-function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
+function CloudAccountMenuContent({ side, onSignOut }: { side: "top" | "right"; onSignOut: () => void }) {
 	const { t } = useTranslation();
-	const { session, signOut } = useCloudSession();
+	const { session } = useCloudSession();
 	// The plan badge is self-serve billing only; a contract org has no plan to show.
 	const billing = useCloudBilling();
 	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
@@ -3343,12 +3337,49 @@ function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
 				</div>
 			</div>
 			<DropdownMenuSeparator />
-			<DropdownMenuItem onSelect={() => void signOut()} variant="destructive">
+			<DropdownMenuItem onSelect={onSignOut} variant="destructive">
 				<LogOut aria-hidden="true" />
 				{t("shell.signOut")}
 			</DropdownMenuItem>
 		</DropdownMenuContent>
 	);
+}
+
+/**
+ * Sign out of Orchestrator Cloud after a confirmation, as logging out of an
+ * agent asks first. The dialog sits in the account menu's root, not its
+ * content: the content unmounts as soon as the menu closes.
+ */
+function useConfirmedCloudSignOut() {
+	const { t } = useTranslation();
+	const { signOut } = useCloudSession();
+	const [open, setOpen] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const confirm = () => {
+		setBusy(true);
+		setError(null);
+		void signOut()
+			.then(() => setOpen(false), (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)))
+			.finally(() => setBusy(false));
+	};
+	const dialog = (
+		<ConfirmDialog
+			open={open}
+			title={t("shell.signOutConfirmTitle")}
+			description={t("shell.signOutConfirmDescription")}
+			confirmLabel={t("shell.signOut")}
+			destructive
+			busy={busy}
+			error={error}
+			onConfirm={confirm}
+			onOpenChange={(next) => {
+				setOpen(next);
+				if (!next) setError(null);
+			}}
+		/>
+	);
+	return { requestSignOut: () => setOpen(true), signOutDialog: dialog };
 }
 
 // CloudAccountRow: avatar and name for an existing cloud session (the
@@ -3358,6 +3389,7 @@ function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, session, status } = useCloudSession();
+	const { requestSignOut, signOutDialog } = useConfirmedCloudSignOut();
 	if (!configured || status !== "authenticated") return null;
 	const email = session?.user.email;
 
@@ -3382,7 +3414,8 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 					</span>
 				</Pressable>
 			</DropdownMenuTrigger>
-			<CloudAccountMenuContent side="top" />
+			<CloudAccountMenuContent side="top" onSignOut={requestSignOut} />
+			{signOutDialog}
 		</DropdownMenu>
 	);
 }
@@ -3446,6 +3479,7 @@ function AccountAvatar({
 function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, session, status } = useCloudSession();
+	const { requestSignOut, signOutDialog } = useConfirmedCloudSignOut();
 	if (!configured || status !== "authenticated") return null;
 	const label = t("shell.signedInAs", {
 		email: session?.user.email ?? "Orchestrator Cloud",
@@ -3471,7 +3505,8 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 				</TooltipTrigger>
 				<TooltipContent side="right">{label}</TooltipContent>
 			</Tooltip>
-			<CloudAccountMenuContent side="right" />
+			<CloudAccountMenuContent side="right" onSignOut={requestSignOut} />
+			{signOutDialog}
 		</DropdownMenu>
 	);
 }
@@ -3502,9 +3537,9 @@ function ShowMoreRow({
 					"mb-1 shrink-0 rounded-lg text-left text-muted-foreground",
 					className,
 				)}
-				initial={{ opacity: 0, y: 4 }}
-				animate={{ opacity: 1, y: 0 }}
-				exit={{ opacity: 0, y: -4 }}
+				initial={{ opacity: 0 }}
+				animate={{ opacity: 1 }}
+				exit={{ opacity: 0 }}
 				onClick={onClick}
 				transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 				type="button"

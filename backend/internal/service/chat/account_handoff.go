@@ -28,7 +28,6 @@ const (
 
 type accountHandoffStore interface {
 	AccountHandoffCandidateTurns(context.Context, time.Time) ([]domain.ConversationTurn, error)
-	SessionAccountPinned(context.Context, domain.SessionID) (bool, error)
 	GetSessionInterfaceTransition(context.Context, string) (domain.SessionInterfaceTransition, bool, error)
 	ListPendingSessionInterfaceTransitionMessages(context.Context, string) ([]domain.SessionInterfaceTransitionMessage, error)
 }
@@ -71,6 +70,24 @@ func (s *Service) SetAccountHandoff(enabled func(context.Context) bool, accounts
 	defer s.handoffMu.Unlock()
 	s.handoff = accountHandoffDeps{enabled: enabled, accounts: accounts, mover: mover}
 	s.handoffSince = s.now()
+}
+
+// AccountHandoffIdle reports whether no account handoff is being claimed, is
+// running, or waits for its next step, so the loop that drives them may rest
+// while handoff is off. A finished handoff kept only to avoid repeating it
+// does not count.
+func (s *Service) AccountHandoffIdle() bool {
+	s.handoffMu.Lock()
+	defer s.handoffMu.Unlock()
+	if s.handoffScanning {
+		return false
+	}
+	for _, h := range s.handoffs {
+		if !h.done {
+			return false
+		}
+	}
+	return true
 }
 
 // HandoffUsageLimitedTurns advances the automatic usage-limit account handoffs by one step.
@@ -237,11 +254,6 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	}
 	if !deps.enabled(ctx) {
 		return true, nil
-	}
-	if pinned, err := store.SessionAccountPinned(ctx, h.sessionID); err != nil {
-		return false, err
-	} else if pinned {
-		return s.stayOnAccount(ctx, h, source, "This session stays on its account.")
 	}
 	transition, err := deps.mover.StartAccountTransition(ctx, h.sessionID, target, domain.SessionInterfaceTransitionDrain)
 	if err != nil {

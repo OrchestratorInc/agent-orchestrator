@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -607,6 +608,11 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 	var err error
 	switch method {
 	case acpsdk.ClientMethodSessionUpdate:
+		// Decode for an async task only when its discriminator can be present,
+		// so ordinary frames are not decoded twice on the frame reader.
+		if bytes.Contains(params, []byte("async_task")) && c.observeAsyncTaskNotification(params) {
+			return true
+		}
 		var update acpsdk.SessionNotification
 		if err = json.Unmarshal(params, &update); err == nil {
 			err = update.Validate()
@@ -614,7 +620,8 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 		if err == nil {
 			err = c.SessionUpdate(context.Background(), update)
 		}
-	case persistenthost.ACPPromptResultMethod, persistenthost.ACPInteractionCommandMethod:
+	case persistenthost.ACPPromptResultMethod, persistenthost.ACPPromptHandoffMethod,
+		persistenthost.ACPInteractionCommandMethod:
 		_, err = c.HandleExtensionMethod(context.Background(), method, params)
 	case claudeSDKMessageMethod:
 		err = c.handleClaudeSDKMessage(params)
@@ -714,8 +721,14 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
+		if c.steerAcknowledgement(turnID, contentText(update.AgentMessageChunk.Content)) {
+			// The agent's note that it took a steer prompt; the "↳ Steered" mark
+			// already says so.
+			break
+		}
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
+		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
@@ -725,9 +738,14 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			}
 			break
 		}
-		id := c.providerItemID(messageID(update.AgentMessageChunk.MessageId, "assistant", turnID))
+		parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta))
+		if parentID != "" {
+			// A steer goes to the parent turn, so a subagent's reply stays one message.
+			segment = 0
+		}
+		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", turnID, segment))
 		if delta := contentText(update.AgentMessageChunk.Content); delta != "" {
-			if parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta)); parentID != "" {
+			if parentID != "" {
 				c.mu.Lock()
 				item, existed := c.nestedMessages[id]
 				item.text += delta
@@ -752,11 +770,12 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	case update.AgentThoughtChunk != nil:
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
+		segment := c.steerSegment
 		c.mu.Unlock()
 		if isCompacting {
 			break
 		}
-		id := c.providerItemID(messageID(update.AgentThoughtChunk.MessageId, "thought", turnID))
+		id := c.providerItemID(segmentedMessageID(update.AgentThoughtChunk.MessageId, "thought", turnID, segment))
 		if delta := contentText(update.AgentThoughtChunk.Content); delta != "" {
 			c.mu.Lock()
 			_, existed := c.thoughts[id]
@@ -780,6 +799,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		c.mu.Lock()
 		c.tools[tool.id] = tool
 		c.mu.Unlock()
+		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 	case update.ToolCallUpdate != nil:
@@ -788,6 +808,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			emit(ports.ChatEvent{Kind: ports.ChatEventCommandOutputDelta, ProviderTurnID: turnID,
 				ProviderItemID: c.providerItemID(tool.id), Delta: delta})
 		}
+		c.observeBackgroundTool(tool)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 	case update.Plan != nil:
@@ -796,11 +817,19 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
 	case update.SessionInfoUpdate != nil:
 		if update.SessionInfoUpdate.Title != nil {
-			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})
+			if title, ok := providerTitle(*update.SessionInfoUpdate.Title); ok {
+				emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: title})
+			}
 		}
 		if turnID != "" {
-			if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
-				emit(event)
+			// A retry or limit notice is live status. The live run already stored
+			// and settled it; replayed into a reconstructed turn it would come back
+			// as a new running row (direct connections give it a fresh id) on a turn
+			// that has long ended, spinning in every client.
+			if !c.historyReplayActive() {
+				if event, ok := c.sessionFailureEvent(turnID, sourceID, update.SessionInfoUpdate.Meta); ok {
+					emit(event)
+				}
 			}
 			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
 		}
@@ -845,9 +874,16 @@ func contentText(content acpsdk.ContentBlock) string {
 	return content.Text.Text
 }
 
-func messageID(id *string, prefix, turnID string) string {
+// segmentedMessageID names a streamed message. An agent that sends no message
+// id streams the whole turn as one message, so each steer the turn takes starts
+// a new one: otherwise the reply written after the steer would grow the message
+// that sits above it in the timeline.
+func segmentedMessageID(id *string, prefix, turnID string, segment int) string {
 	if id != nil && *id != "" {
 		return *id
+	}
+	if segment > 0 {
+		return fmt.Sprintf("%s-%s-%d", prefix, turnID, segment)
 	}
 	return prefix + "-" + turnID
 }

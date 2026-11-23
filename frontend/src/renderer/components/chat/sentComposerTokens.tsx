@@ -193,7 +193,7 @@ export function useComposerTokenRenderer(sessionId: string, text: string): Compo
 			if (segments.length === 1 && !segments[0]?.token) return renderPlain(run);
 			return segments.map((segment, index) =>
 				segment.token ? (
-					<span key={index} data-message-token={segment.token.kind} className="text-logo-accent">
+					<span key={index} data-message-token={segment.token.kind} className="text-logo-accent-text">
 						{segment.text}
 					</span>
 				) : (

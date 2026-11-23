@@ -10,6 +10,9 @@ import type { TerminalMux } from "../lib/terminal-mux";
 import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
+import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useContentExpiredSessionsStore } from "../stores/content-expired-sessions-store";
+import { CloudCpError } from "../lib/cloud-cp";
 import {
 	cloudTerminalKind,
 	TerminalCacheProvider,
@@ -78,7 +81,9 @@ vi.mock("../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({ features: dropSetup.maxAttachmentBytes === undefined ? [] : ["attachments"], maxAttachmentBytes: dropSetup.maxAttachmentBytes }),
 }));
 
+const cloudRestoreMock = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock("../hooks/useCloudCp", () => ({
+	createRendererCloudCpClient: () => ({ restoreSession: cloudRestoreMock }),
 	useCloudCp: () => ({
 		baseUrl: "https://cloud.example.test",
 		client: { createTerminalTicket: cloudTicketMock },
@@ -357,6 +362,7 @@ function renderPane(
 	onInputRequestResult?: (id: number, accepted: boolean) => void,
 	terminalTarget?: TerminalTarget,
 	onTerminalContentReadyChange?: (ready: boolean) => void,
+	onLinkOpen?: (uri: string) => void,
 ) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const previousAO = window.ao;
@@ -370,6 +376,7 @@ function renderPane(
 					inputRequest={inputRequest}
 					onInputRequestResult={onInputRequestResult}
 					onTerminalContentReadyChange={onTerminalContentReadyChange}
+					onLinkOpen={onLinkOpen}
 					session={session}
 					terminalTarget={terminalTarget}
 					theme="dark"
@@ -406,6 +413,7 @@ function renderCachedPane({
 	terminalTarget,
 	focusRequested = false,
 	createMux,
+	onLinkOpen,
 }: {
 	session?: WorkspaceSession;
 	sessions: WorkspaceSession[];
@@ -413,8 +421,10 @@ function renderCachedPane({
 	terminalTarget?: TerminalTarget;
 	focusRequested?: boolean;
 	createMux?: () => TerminalMux;
+	onLinkOpen?: (uri: string) => void;
 }) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryDefaults(shellTerminalsQueryKey, { staleTime: Infinity });
 	queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions(sessions));
 	queryClient.setQueryData(shellTerminalsQueryKey, shellTerminals);
 	const previousAO = window.ao;
@@ -433,6 +443,7 @@ function renderCachedPane({
 							theme="dark"
 							focusRequested={focusRequested}
 							createMux={createMux}
+							onLinkOpen={onLinkOpen}
 						/>
 					) : (
 						<div data-testid="away" />
@@ -906,6 +917,22 @@ describe("TerminalPane replay cover", () => {
 describe("TerminalCacheProvider", () => {
 	const sessionA = { ...worker, id: "sess-a", title: "session A", terminalHandleId: "handle-a" };
 	const sessionB = { ...worker, id: "sess-b", title: "session B", terminalHandleId: "handle-b" };
+	it("opens a standalone Cline link from the cached terminal", async () => {
+		const shell = { handleId: "cline-login", title: "Cline login", workingDir: "/repo", createdAt: "2026-11-22T00:00:00Z" } satisfies ShellTerminal;
+		const onLinkOpen = vi.fn();
+		const view = renderCachedPane({
+			sessions: [], shellTerminals: [shell], onLinkOpen,
+			terminalTarget: { kind: "shell", handleId: shell.handleId, generation: shell.createdAt, title: shell.title },
+		});
+		try {
+			await waitFor(() => expect(activeXterm()).toBeInTheDocument(), { timeout: 10_000 });
+			act(() => terminalLinkHandler?.("https://app.cline.bot/auth/device"));
+			expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://app.cline.bot/auth/device");
+			expect(postMock).not.toHaveBeenCalled();
+		} finally {
+			view.restore();
+		}
+	});
 
 	it("uses a caller-provided mux without retaining a remote shell in the local cache", async () => {
 		const shell = { handleId: "auth-a", title: "Log in", workingDir: "/host-a", createdAt: "2026-09-29T00:00:00Z" } satisfies ShellTerminal;
@@ -1336,6 +1363,62 @@ describe("terminal restore", () => {
 		}
 	});
 
+	it("restores an archived Cloud session from the strip through the control plane", async () => {
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		// Restore finds a Cloud session in the Cloud listing, which keeps archived rows.
+		view.queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cloud.example.test" });
+		view.queryClient.setQueryData(["cloud-sessions", "https://cloud.example.test", "org-1"], [{ id: worker.id, kind: "worker", workerEpoch: 3 }]);
+		try {
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+			await waitFor(() => expect(cloudRestoreMock).toHaveBeenCalledWith("org-1", worker.id));
+			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
+		} finally {
+			view.restore();
+			// The restore leaves the session waiting for its new box; later tests reuse its id.
+			useTerminalResetStore.getState().markConnected(worker.id);
+		}
+	});
+
+	it("says a Cloud session past its data retention can't be restored, and stops offering Restore", async () => {
+		terminalState.value = "exited";
+		cloudRestoreMock.mockRejectedValueOnce(new CloudCpError(
+			"This session is older than its creator's data retention period, so its content is being deleted. It can't be restored.",
+			{ status: 410, code: "SESSION_CONTENT_EXPIRED" },
+		));
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		view.queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cloud.example.test" });
+		view.queryClient.setQueryData(["cloud-sessions", "https://cloud.example.test", "org-1"], [{ id: worker.id, kind: "worker", workerEpoch: 3 }]);
+		try {
+			await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+			expect(await screen.findByText(
+				"This session is past its data retention period, so its content is being removed. It can't be restored.",
+			)).toBeInTheDocument();
+			expect(screen.queryByText(/older than its creator's data retention period/)).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			expect(useContentExpiredSessionsStore.getState().ids[worker.id]).toBe(true);
+		} finally {
+			view.restore();
+			useContentExpiredSessionsStore.setState({ ids: {} });
+		}
+	});
+
+	it("offers no Restore to a guest on an archived Cloud session shared with them", () => {
+		// Only the sharer's organization restores a session; a guest's restore
+		// would not even reach the control plane (the session is not in their
+		// own Cloud listing), it would go to this machine's daemon instead.
+		terminalState.value = "exited";
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1", shared: true }, terminalHandleId: "term-1" });
+		try {
+			expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
+		} finally {
+			view.restore();
+		}
+	});
+
 	it.each([
 		["exited", undefined],
 		["error", "terminal handle missing"],
@@ -1585,6 +1668,18 @@ describe("terminal link preview", () => {
 		const view = renderPane();
 		try {
 			act(() => terminalLinkHandler?.("http://localhost:3000"));
+			expect(postMock).not.toHaveBeenCalled();
+		} finally {
+			view.restore();
+		}
+	});
+
+	it("uses the standalone terminal's link handler when supplied", () => {
+		const onLinkOpen = vi.fn();
+		const view = renderPane(undefined, undefined, undefined, { kind: "shell", handleId: "cline-login", generation: "2026-11-22T00:00:00Z", title: "Cline login" }, undefined, onLinkOpen);
+		try {
+			act(() => terminalLinkHandler?.("https://app.cline.bot/auth/device"));
+			expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://app.cline.bot/auth/device");
 			expect(postMock).not.toHaveBeenCalled();
 		} finally {
 			view.restore();

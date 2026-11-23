@@ -34,20 +34,79 @@ func AgentAccountProviderFor(h AgentHarness) (AgentAccountProvider, bool) {
 // login the computer's own CLI uses, launched with its config folder untouched.
 func DeviceAgentAccountID(p AgentAccountProvider) string { return "device-" + string(p) }
 
-// AgentAccount is one subscription login AO can launch a provider's CLI with.
-// Home is the CLI config folder (CLAUDE_CONFIG_DIR or CODEX_HOME); it is empty
-// for the device account, whose folder is the CLI's own default.
+// AgentAccountKind says how an account signs its CLI in.
+type AgentAccountKind string
+
+// Account kinds. A subscription account is the CLI's own sign-in, and a setup
+// token account a subscription signed in with a saved `claude setup-token`
+// token. An API key account launches the CLI with a saved key, and a metered
+// account is the CLI's own sign-in to API billing (Anthropic Console, an
+// OpenAI API key); both bill per token and have no usage limits to read or
+// move a session at.
+const (
+	AgentAccountKindSubscription AgentAccountKind = "subscription"
+	AgentAccountKindSetupToken   AgentAccountKind = "setup_token"
+	AgentAccountKindAPIKey       AgentAccountKind = "api_key"
+	AgentAccountKindMetered      AgentAccountKind = "metered"
+)
+
+// AgentAccount is one login AO can launch a provider's CLI with. Home is the
+// CLI config folder (CLAUDE_CONFIG_DIR or CODEX_HOME); it is empty for the
+// device account, whose folder is the CLI's own default. Name and KeyHint (the
+// key's last four characters) are set only on an API key account.
 type AgentAccount struct {
 	ID        string
 	Provider  AgentAccountProvider
 	Home      string
 	Email     string
 	Plan      string
+	Kind      AgentAccountKind
+	Name      string
+	KeyHint   string
 	CreatedAt time.Time
 }
 
 // Device reports the "This computer" account.
 func (a AgentAccount) Device() bool { return strings.TrimSpace(a.Home) == "" }
+
+// APIKey reports an account that launches its CLI with a saved API key.
+func (a AgentAccount) APIKey() bool { return a.Kind == AgentAccountKindAPIKey }
+
+// SetupToken reports a subscription account signed in with a saved setup token.
+func (a AgentAccount) SetupToken() bool { return a.Kind == AgentAccountKindSetupToken }
+
+// PerToken reports an account billed per token: it has no usage limits, is
+// never the fallback for a signed-out default, and no session moves to or from
+// it at a usage limit.
+func (a AgentAccount) PerToken() bool {
+	return a.Kind == AgentAccountKindAPIKey || a.Kind == AgentAccountKindMetered
+}
+
+// AgentAccountProblemKind says why an account's identity or limits could not
+// be read, so the app can say it plainly instead of showing the CLI's error.
+type AgentAccountProblemKind string
+
+// Problem kinds. Slow, rate limited and unavailable pass on their own; a
+// missing CLI and another login need the user.
+const (
+	// AgentAccountProblemSlow: the CLI did not answer in time.
+	AgentAccountProblemSlow AgentAccountProblemKind = "slow"
+	// AgentAccountProblemRateLimited: the provider refused the check for now.
+	AgentAccountProblemRateLimited AgentAccountProblemKind = "rate_limited"
+	// AgentAccountProblemUnavailable: any other failed check.
+	AgentAccountProblemUnavailable AgentAccountProblemKind = "unavailable"
+	// AgentAccountProblemCLIMissing: the provider's CLI is not installed.
+	AgentAccountProblemCLIMissing AgentAccountProblemKind = "cli_missing"
+	// AgentAccountProblemOtherLogin: the folder is signed in as another login.
+	AgentAccountProblemOtherLogin AgentAccountProblemKind = "other_login"
+	// AgentAccountProblemOtherOrg: the folder is signed in to another organization.
+	AgentAccountProblemOtherOrg AgentAccountProblemKind = "other_org"
+)
+
+// Transient reports a problem the next check may not have.
+func (k AgentAccountProblemKind) Transient() bool {
+	return k == AgentAccountProblemSlow || k == AgentAccountProblemRateLimited || k == AgentAccountProblemUnavailable
+}
 
 // AgentAccountLimitWindow is one usage meter of an account, such as the
 // five-hour session or the weekly limit.
