@@ -55,16 +55,11 @@ type fakeHandoffMover struct {
 	mu       sync.Mutex
 	started  []domain.SessionInterfaceTransition
 	err      error
-	onStart  func(domain.SessionInterfaceTransition)
-	onCall   func()
 }
 
 func (m *fakeHandoffMover) StartAccountTransition(ctx context.Context, id domain.SessionID, accountID string, policy domain.SessionInterfaceTransitionPolicy) (domain.SessionInterfaceTransition, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.onCall != nil {
-		m.onCall()
-	}
 	if m.err != nil {
 		return domain.SessionInterfaceTransition{}, m.err
 	}
@@ -85,9 +80,6 @@ func (m *fakeHandoffMover) StartAccountTransition(ctx context.Context, id domain
 		return rec, errors.New("transition in progress")
 	}
 	m.started = append(m.started, rec)
-	if m.onStart != nil {
-		m.onStart(rec)
-	}
 	return rec, nil
 }
 
@@ -567,9 +559,6 @@ func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
 	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
 	hh.tick(t)
 	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
-	if err := hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession, hh.mover.moves()[0].ID); err != nil {
-		t.Fatal(err)
-	}
 	if err := hh.svc.DrainQueued(ctx, testSession); err != nil {
 		t.Fatal(err)
 	}
@@ -654,54 +643,4 @@ func TestAccountHandoffAbortedMoveKeepsTheQueueHeld(t *testing.T) {
 	if got := hh.conv.sentTexts(); len(got) != 1 {
 		t.Fatalf("provider received %v, want nothing more on the limited account", got)
 	}
-}
-
-func TestManualMoveDuringTheHandoffReleasesTheHeldQueue(t *testing.T) {
-	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
-	ctx := context.Background()
-	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
-	held := true
-	var err error
-	hh.accounts.onTarget = func() {
-		if err = hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession, "manual-move"); err == nil {
-			held, err = hh.st.ConversationQueueHeld(ctx, source.ConversationID)
-		}
-	}
-	hh.tick(t)
-	if err != nil || held {
-		t.Fatalf("queue held = %v, %v after a move the handoff did not start", held, err)
-	}
-}
-
-func TestAccountHandoffMoveDoneBeforeItIsRecordedKeepsTheHold(t *testing.T) {
-	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
-	ctx := context.Background()
-	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
-	held := false
-	var err error
-	hh.mover.onStart = func(move domain.SessionInterfaceTransition) {
-		if err = hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession, move.ID); err == nil {
-			held, err = hh.st.ConversationQueueHeld(ctx, source.ConversationID)
-		}
-	}
-	hh.tick(t)
-	if err != nil || !held {
-		t.Fatalf("queue held = %v, %v after the handoff's own move finished before it was recorded", held, err)
-	}
-}
-
-func TestManualMoveWhileTheHandoffFailsToStartReleasesTheHold(t *testing.T) {
-	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
-	ctx := context.Background()
-	failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
-	hh.mover.err = errors.New("transition in progress")
-	hh.mover.onCall = func() {
-		if err := hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession, "manual-move"); err != nil {
-			t.Error(err)
-		}
-	}
-	hh.tick(t)
-	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
-	})
 }

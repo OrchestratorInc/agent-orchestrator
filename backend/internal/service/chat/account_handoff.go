@@ -54,12 +54,10 @@ type accountHandoff struct {
 	conversationID string
 	sessionID      domain.SessionID
 
-	busy     bool
-	done     bool
-	starting bool
-	skipped  bool
-	retryAt  time.Time
-	moved    atomic.Bool
+	busy    bool
+	done    bool
+	retryAt time.Time
+	moved   atomic.Bool
 
 	targetAccount string
 	transitionID  string
@@ -257,24 +255,11 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	if !deps.enabled(ctx) {
 		return true, nil
 	}
-	s.handoffMu.Lock()
-	h.starting = true
-	s.handoffMu.Unlock()
 	transition, err := deps.mover.StartAccountTransition(ctx, h.sessionID, target, domain.SessionInterfaceTransitionDrain)
-	s.handoffMu.Lock()
-	h.starting = false
-	skipped := h.skipped
-	h.skipped = false
-	if err == nil {
-		h.targetAccount, h.transitionID, h.stepAt = transition.TargetAccountID, transition.ID, s.now()
-	}
-	s.handoffMu.Unlock()
 	if err != nil {
-		if skipped {
-			s.releaseAccountHandoffQueue(ctx, h)
-		}
 		return s.stayOnAccount(ctx, h, source, "could not start the move: "+err.Error())
 	}
+	h.targetAccount, h.transitionID, h.stepAt = transition.TargetAccountID, transition.ID, s.now()
 	return s.settleAccountHandoffMove(ctx, store, deps, h)
 }
 
@@ -372,32 +357,6 @@ func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHand
 	if err != nil && !errors.Is(err, ErrNoController) {
 		s.log.Warn("account handoff: queued messages not released", "session", h.sessionID, "turn", h.turnID, "error", err)
 	}
-}
-
-// ReleaseQueueAfterAccountMove releases the session's held queue after a completed move, unless the automatic handoff started or is starting it.
-func (s *Service) ReleaseQueueAfterAccountMove(ctx context.Context, id domain.SessionID, transitionID string) error {
-	s.handoffMu.Lock()
-	for _, h := range s.handoffs {
-		if h.sessionID != id || h.done {
-			continue
-		}
-		if h.starting {
-			h.skipped = true
-		}
-		if h.starting || h.transitionID == transitionID {
-			s.handoffMu.Unlock()
-			return nil
-		}
-	}
-	s.handoffMu.Unlock()
-	conversation, err := s.store.ConversationForSession(ctx, id)
-	if errors.Is(err, domain.ErrNoConversation) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return releaseHeldQueue(ctx, s.store, conversation.ID)
 }
 
 func (s *Service) retryAccountHandoff(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {

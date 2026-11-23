@@ -230,22 +230,3 @@ func TestInterfaceHandoffDrainsTheHeldQueue(t *testing.T) {
 		t.Fatalf("prepare handoff: %v", err)
 	}
 }
-
-func TestCompletedManualAccountMoveReleasesTheHeldQueue(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-	failUsageLimitedTurnBehindQueue(t, h, "queued note")
-	if err := h.svc.DrainQueued(ctx, testSession); err != nil {
-		t.Fatal(err)
-	}
-	assertTurnStaysQueued(t, h, "queued note")
-	if err := h.svc.ReleaseQueueAfterAccountMove(ctx, testSession, "manual-move"); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.svc.DrainQueued(ctx, testSession); err != nil {
-		t.Fatal(err)
-	}
-	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
-	})
-}

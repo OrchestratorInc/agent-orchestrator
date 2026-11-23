@@ -581,7 +581,6 @@ type transitionChat struct {
 	relayIDs         []string
 	supportsChat     bool
 	switchMarks      []string // account moves that told the chat why its turn stopped
-	queueReleases    chan domain.SessionID
 }
 
 type historyPolicyTransitionChat struct {
@@ -805,12 +804,6 @@ func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, p
 }
 func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID, accountID string) error {
 	c.switchMarks = append(c.switchMarks, accountID)
-	return nil
-}
-func (c *transitionChat) ReleaseQueueAfterAccountMove(_ context.Context, id domain.SessionID, _ string) error {
-	if c.queueReleases != nil {
-		c.queueReleases <- id
-	}
 	return nil
 }
 func (c *transitionChat) PrepareChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
