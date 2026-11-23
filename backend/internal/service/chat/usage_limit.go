@@ -61,6 +61,12 @@ func releaseHeldQueue(ctx context.Context, store Store, conversationID string) e
 	return holds.ReleaseConversationQueue(ctx, conversationID)
 }
 
+func (c *Controller) releaseHeldQueueForHandoff(ctx context.Context) {
+	if err := releaseHeldQueue(ctx, c.store, c.conversation.ID); err != nil {
+		c.log.Warn("failed to release held queue during handoff", "session", c.sessionID, "error", err)
+	}
+}
+
 type usageLimitAccountReader interface {
 	SessionLimits(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error)
 }

@@ -261,6 +261,47 @@ func TestInterfaceHandoffReleasesAHoldWithNothingQueued(t *testing.T) {
 	}
 }
 
+func TestInterfaceHandoffReleasesTheHoldWhenTheAgentExits(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "finish this task", ClientMessageID: "c1", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, turn.ID)
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "automation task", ClientMessageID: "c2", Origin: domain.MessageOriginAutomation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["automation task"] == domain.TurnStateRunning
+	})
+
+	prepared := make(chan error, 1)
+	go func() { prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for !h.ctrl.HandoffArmed() {
+		if time.Now().After(deadline) {
+			t.Fatal("handoff never armed")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := h.conv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-prepared; err != nil {
+		t.Fatalf("prepare handoff: %v", err)
+	}
+	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID()); err != nil || held {
+		t.Fatalf("queue held = %v, %v after the agent exited during a terminal switch", held, err)
+	}
+}
+
 func TestInterfaceHandoffDrainsPastANewUsageLimit(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
