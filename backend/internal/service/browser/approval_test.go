@@ -574,7 +574,11 @@ func (r *scriptedRuntime) dialogOps() []string {
 }
 
 func confirmDialog(message string) map[string]interface{} {
-	return map[string]interface{}{"open": true, "type": "confirm", "message": message}
+	return confirmDialogOn("t1", message)
+}
+
+func confirmDialogOn(tab, message string) map[string]interface{} {
+	return map[string]interface{}{"open": true, "type": "confirm", "message": message, "target": map[string]interface{}{"tabId": tab}}
 }
 
 func TestDialogAcceptAsksAndDenyLeavesTheDialogOpen(t *testing.T) {
@@ -645,5 +649,34 @@ func TestDialogAcceptRefusedWhenTheDialogChangedWhileWaiting(t *testing.T) {
 	}
 	if slices.Contains(rt.dialogOps(), "accept") {
 		t.Fatalf("accepted a dialog the user never saw: %v", rt.dialogOps())
+	}
+}
+
+func TestDialogAcceptRefusedWhenTheSameTextIsOnAnotherTab(t *testing.T) {
+	// The active tab changed while the user decided, and the new tab shows
+	// the same "Are you sure?": accepting would answer a dialog the user
+	// never saw.
+	rt := &scriptedRuntime{dialogs: []map[string]interface{}{confirmDialogOn("t1", "Are you sure?"), confirmDialogOn("t2", "Are you sure?")}}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": "accept"}); apiErrorCode(err) != "BROWSER_TARGET_CHANGED" {
+		t.Fatalf("err = %v", err)
+	}
+	if slices.Contains(rt.dialogOps(), "accept") {
+		t.Fatalf("accepted another tab's dialog: %v", rt.dialogOps())
+	}
+}
+
+func TestDialogAcceptCarriesTheApprovedTab(t *testing.T) {
+	// The runtime acts on its active tab when the accept arrives: it gets the
+	// approved tab to check against.
+	rt := &scriptedRuntime{dialogs: []map[string]interface{}{confirmDialogOn("t1", "Are you sure?")}}
+	svc, gate, token := approvalService(t, rt)
+	answer(t, gate, approval.DecisionAllowOnce)
+	if _, _, err := svc.Execute(context.Background(), "s1", token, "dialog", map[string]interface{}{"operation": "accept"}); err != nil {
+		t.Fatal(err)
+	}
+	if rt.lastArgs["dialogTab"] != "t1" {
+		t.Fatalf("accept args = %v", rt.lastArgs)
 	}
 }

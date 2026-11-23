@@ -6694,6 +6694,21 @@ describe("browser human pointer and annotated screenshots", () => {
 		await expect(host.execute("sess-1", "describe", { action: "click", ref: "e1" })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
 	});
 
+	it("answers an approved dialog only on the tab the user approved", async () => {
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId: ensure.viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
+		const tabs = (await host.execute("sess-1", "tabs")) as { activeTabId: string };
+		const dialogCalls = () =>
+			(runtime.runAction as unknown as ReturnType<typeof vi.fn>).mock.calls.filter((call: unknown[]) => call[1] === "dialog").length;
+		await expect(host.execute("sess-1", "dialog", { operation: "accept", dialogTab: "t-other" })).rejects.toMatchObject({
+			code: "BROWSER_TARGET_CHANGED",
+		});
+		expect(dialogCalls()).toBe(0);
+		await host.execute("sess-1", "dialog", { operation: "accept", dialogTab: tabs.activeTabId });
+		expect(dialogCalls()).toBe(1);
+	});
+
 	it("refuses an approved act whose description found no element", async () => {
 		const { host, runtime, invoke, emit } = setupPointerHost();
 		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };

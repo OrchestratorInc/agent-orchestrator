@@ -730,6 +730,23 @@ describe("Executor", () => {
 		expect(await run("snapshot", { interactive: true })).toBeDefined();
 	});
 
+	it("answers an approved dialog only on the tab the user approved", async () => {
+		const { fake, run, approve } = setup();
+		await approve("s1", true);
+		await run("open", { url: "https://shop.test/" });
+		const tabId = [...fake.tabs.keys()][0]!;
+		// A dialog follows an action, which starts the debugger listener.
+		await run("press", { key: "Tab" });
+		fake.events.debuggerEvent.fire({ tabId }, "Page.javascriptDialogOpening", { type: "confirm", message: "Are you sure?" });
+		const answered = () => fake.debuggerCalls.filter((call) => call.method === "Page.handleJavaScriptDialog").length;
+		// Approved on another tab: refused, the dialog stays unanswered.
+		await expect(run("dialog", { operation: "accept", dialogTab: "t-other" })).rejects.toMatchObject({ code: "BROWSER_TARGET_CHANGED" });
+		expect(answered()).toBe(0);
+		const { target } = (await run("dialog", { operation: "status" })) as { target: { tabId: string } };
+		expect(await run("dialog", { operation: "accept", dialogTab: target.tabId })).toMatchObject({ handled: "accept" });
+		expect(answered()).toBe(1);
+	});
+
 	it("describes with the URL and title of the document it read", async () => {
 		const { chrome, run, approve } = setup();
 		await approve("s1", false);
