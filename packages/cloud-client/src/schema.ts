@@ -5195,6 +5195,13 @@ export interface components {
             projectName: string;
             /** @description The session has ended, so the thread is read-only (no comments, replies, resolve, reopen or send). */
             sessionTerminated: boolean;
+            /** @description The caller may prompt the session's agent: the rule of the composer and of replyToSessionAside's sendToAgent (false for a viewer, who gets 403 prompt_forbidden). A client offers "Also send to agent" only when it is true and the session has not ended (sessionTerminated). */
+            canPrompt: boolean;
+            /**
+             * Format: date-time
+             * @description When the anchored message was written (for the agent's answer, its first output), for "On the agent's answer · {time}". Absent when the message is no longer in the session.
+             */
+            anchorAt?: string;
             aside: components["schemas"]["Aside"];
             /** @description The newest comment. Absent for a tagged message's thread with no reply yet. */
             lastComment?: {

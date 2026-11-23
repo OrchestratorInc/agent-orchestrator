@@ -9840,7 +9840,7 @@ components:
     CommentThread:
       type: object
       additionalProperties: false
-      required: [orgId, sessionId, projectId, sessionTitle, projectName, sessionTerminated, aside, participants, participantCount, commentCount, unread, muted, lastActivityAt]
+      required: [orgId, sessionId, projectId, sessionTitle, projectName, sessionTerminated, canPrompt, aside, participants, participantCount, commentCount, unread, muted, lastActivityAt]
       description: >-
         One row of the threads view. Open the thread with getSessionAside
         (orgId, sessionId, aside.asideId) and mark it read with
@@ -9863,6 +9863,21 @@ components:
         sessionTerminated:
           type: boolean
           description: The session has ended, so the thread is read-only (no comments, replies, resolve, reopen or send).
+        canPrompt:
+          type: boolean
+          description: >-
+            The caller may prompt the session's agent: the rule of the
+            composer and of replyToSessionAside's sendToAgent (false for a
+            viewer, who gets 403 prompt_forbidden). A client offers "Also send
+            to agent" only when it is true and the session has not ended
+            (sessionTerminated).
+        anchorAt:
+          type: string
+          format: date-time
+          description: >-
+            When the anchored message was written (for the agent's answer, its
+            first output), for "On the agent's answer · {time}". Absent when
+            the message is no longer in the session.
         aside:
           $ref: "#/components/schemas/Aside"
         lastComment:
