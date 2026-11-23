@@ -1,6 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserLiveState } from "../browserLive";
+import type { BrowserCapabilities, BrowserTransport } from "../browserTransport";
 
 type Handlers = {
 	onStatus(status: "connecting" | "open" | "closed" | "error", message?: string): void;
@@ -72,15 +73,16 @@ vi.mock("expo-router", async () => {
 	};
 });
 vi.mock("../browserLive", () => ({
-	BrowserLiveClient: class {
-		readonly record: { handlers: Handlers; sent: unknown[]; closed: boolean };
-		constructor(_config: unknown, _sessionID: string, handlers: Handlers) {
+	LocalBrowserTransport: class {
+		readonly capabilities = { text: true, keys: true, viewport: false, quality: false, control: false, dialogs: false };
+		record: { handlers: Handlers; sent: unknown[]; closed: boolean } | null = null;
+		connect(handlers: Handlers) {
 			this.record = { handlers, sent: [], closed: false };
 			fixtures.clients.push(this.record);
+			handlers.onStatus("connecting");
 		}
-		connect() { this.record.handlers.onStatus("connecting"); }
-		send(command: unknown) { this.record.sent.push(command); }
-		close() { this.record.closed = true; }
+		send(command: unknown) { this.record?.sent.push(command); }
+		close() { if (this.record) this.record.closed = true; }
 	},
 }));
 vi.mock("../store", () => ({ useApp: () => ({ config: fixtures.config, paired: fixtures.paired, unreachable: fixtures.unreachable, connection: fixtures.connection, error: fixtures.error, errorStatus: fixtures.errorStatus }) }));
@@ -450,5 +452,45 @@ describe("live browser gestures", () => {
 		await act(async () => gesture("tap").onEnd({ x: 195 + 97.5, y: 300 }, true));
 		expect(sent()[0]).toEqual({ type: "input", payload: { kind: "wheel", deltaX: 0, deltaY: -30 / (fitted * 2) } });
 		expect(sent()[1]).toEqual({ type: "input", payload: { kind: "pointer", phase: "down", x: 0.625, y: 0.5, button: "left" } });
+	});
+});
+
+describe("transport contract", () => {
+	function fakeTransport(capabilities: Partial<BrowserCapabilities> = {}) {
+		const record = { handlers: null as Handlers | null, sent: [] as unknown[], closed: false };
+		const transport: BrowserTransport = {
+			capabilities: { text: false, keys: false, viewport: false, quality: false, control: false, dialogs: false, ...capabilities },
+			connect(handlers) { record.handlers = handlers as Handlers; handlers.onStatus("connecting"); },
+			send(command) { record.sent.push(command); },
+			close() { record.closed = true; },
+		};
+		return { record, transport, factory: () => transport };
+	}
+
+	it("a fake transport drives the pane without a paired machine", async () => {
+		fixtures.config = null;
+		fixtures.paired = false;
+		const fake = fakeTransport();
+		await act(async () => { screen = create(<BrowserLivePane sessionID="cloud-1" transport={fake.factory} onTitle={onTitle} />); });
+		// The local socket is never opened for a supplied transport.
+		expect(fixtures.clients).toHaveLength(0);
+		await act(async () => {
+			fake.record.handlers!.onStatus("open");
+			fake.record.handlers!.onState(page);
+		});
+		expect(onTitle).toHaveBeenLastCalledWith("Todo app");
+		await act(async () => { toolbarButton("Reload").props.onPress(); });
+		expect(fake.record.sent).toEqual([{ type: "navigate", payload: { action: "reload" } }]);
+		act(() => { screen.unmount(); });
+		expect(fake.record.closed).toBe(true);
+	});
+
+	it("the pane keeps the local transport's capabilities: pointer input always reaches it", async () => {
+		await render();
+		await open();
+		await showFrame();
+		const tap = gesture("tap");
+		await act(async () => { tap.onEnd({ x: 195, y: 300 }, true); });
+		expect(sent().map((command) => (command as { payload: { kind: string } }).payload.kind)).toEqual(["pointer", "pointer"]);
 	});
 });

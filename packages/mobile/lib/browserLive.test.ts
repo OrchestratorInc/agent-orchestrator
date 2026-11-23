@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, apiRequest } from "./api";
-import { BrowserLiveClient } from "./browserLive";
+import { LocalBrowserTransport } from "./browserLive";
+import type { BrowserTransportHandlers } from "./browserTransport";
 import { browserJPEGDataURI, browserLiveURL, browserWheelDeltaFromDrag, containBrowserFrame, decodeBrowserFrame, normalizedFramePoint } from "./browserLiveProtocol";
+
+/** Binds handlers at construction, as these cases were written before the transport seam. */
+class BrowserLiveClient extends LocalBrowserTransport {
+	constructor(config: ConstructorParameters<typeof LocalBrowserTransport>[0], sessionID: string, private readonly bound: BrowserTransportHandlers) {
+		super(config, sessionID);
+	}
+
+	override connect(): void { super.connect(this.bound); }
+}
 
 vi.mock("./config", () => ({
 	authHeaders: (config: { password: string }) => ({ Authorization: `Bearer ${config.password}` }),
@@ -220,7 +230,27 @@ describe("browser live transport", () => {
 		const state = { url: "http://localhost:3000/", title: "App", loading: true, canGoBack: true, canGoForward: false, activeTabId: "t1", tabs: [{ id: "t1", title: "App", url: "http://localhost:3000/", active: true }], width: 1280, height: 800 };
 		FakeWebSocket.instance.onmessage?.({ data: JSON.stringify({ type: "state", payload: state }) });
 		await Promise.resolve();
-		expect(onState).toHaveBeenCalledWith(state);
+		// This desktop predates control and focus reporting.
+		expect(onState).toHaveBeenCalledWith({ ...state, control: "none", focusedEditable: null });
+	});
+
+	it("drops a command the desktop can't carry", () => {
+		class FakeWebSocket {
+			static OPEN = 1;
+			static instance: FakeWebSocket;
+			readyState = 1;
+			binaryType = "";
+			sent: string[] = [];
+			constructor() { FakeWebSocket.instance = this; }
+			send(data: string) { this.sent.push(data); }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const transport = new LocalBrowserTransport({ host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" }, "s1");
+		transport.connect({ onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn() });
+		transport.send({ type: "quality", payload: { quality: 50, maxFps: 15 } });
+		transport.send({ type: "navigate", payload: { action: "reload" } });
+		expect(FakeWebSocket.instance.sent).toEqual([JSON.stringify({ type: "navigate", payload: { action: "reload" } })]);
 	});
 
 	it("fits the desktop frame without stretching it", () => {
