@@ -559,6 +559,9 @@ func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
 	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
 	hh.tick(t)
 	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
+	if err := hh.svc.ReleaseQueueAfterAccountMove(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
 	if err := hh.svc.DrainQueued(ctx, testSession); err != nil {
 		t.Fatal(err)
 	}

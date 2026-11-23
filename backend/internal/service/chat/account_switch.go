@@ -18,21 +18,24 @@ type activeTransitionReader interface {
 }
 
 func (s *Service) accountMoveAwaitingTarget(ctx context.Context, id domain.SessionID) bool {
-	move, moving := s.activeAccountMove(ctx, id)
-	return moving && move.AccountMoveAwaitsTarget()
-}
-
-func (s *Service) activeAccountMove(ctx context.Context, id domain.SessionID) (domain.SessionInterfaceTransition, bool) {
-	reader, ok := s.store.(activeTransitionReader)
-	if !ok {
-		return domain.SessionInterfaceTransition{}, false
-	}
-	move, active, err := reader.GetActiveSessionInterfaceTransition(ctx, id)
+	move, err := s.activeTransition(ctx, id)
 	if err != nil {
 		s.log.Warn("chat: read account move", "session", id, "error", err)
-		return domain.SessionInterfaceTransition{}, false
+		return false
 	}
-	return move, active && move.AccountMove()
+	return move.AccountMoveAwaitsTarget()
+}
+
+func (s *Service) activeTransition(ctx context.Context, id domain.SessionID) (domain.SessionInterfaceTransition, error) {
+	reader, ok := s.store.(activeTransitionReader)
+	if !ok {
+		return domain.SessionInterfaceTransition{}, nil
+	}
+	move, active, err := reader.GetActiveSessionInterfaceTransition(ctx, id)
+	if err != nil || !active {
+		return domain.SessionInterfaceTransition{}, err
+	}
+	return move, nil
 }
 
 // MarkAccountSwitch records that the turn the session's account move stopped

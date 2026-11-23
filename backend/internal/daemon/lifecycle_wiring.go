@@ -933,6 +933,10 @@ func (c chatLauncher) DrainChatQueue(ctx context.Context, id domain.SessionID) e
 	return c.svc.DrainQueued(ctx, id)
 }
 
+func (c chatLauncher) ReleaseQueueAfterAccountMove(ctx context.Context, id domain.SessionID) error {
+	return c.svc.ReleaseQueueAfterAccountMove(ctx, id)
+}
+
 func (c chatLauncher) HasLiveChatController(id domain.SessionID) bool {
 	return c.svc.HasLiveChatController(id)
 }

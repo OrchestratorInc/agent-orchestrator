@@ -359,6 +359,26 @@ func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHand
 	}
 }
 
+// ReleaseQueueAfterAccountMove releases the session's held queue after a completed move the automatic handoff does not own.
+func (s *Service) ReleaseQueueAfterAccountMove(ctx context.Context, id domain.SessionID) error {
+	s.handoffMu.Lock()
+	for _, h := range s.handoffs {
+		if h.sessionID == id && !h.done {
+			s.handoffMu.Unlock()
+			return nil
+		}
+	}
+	s.handoffMu.Unlock()
+	conversation, err := s.store.ConversationForSession(ctx, id)
+	if errors.Is(err, domain.ErrNoConversation) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return releaseHeldQueue(ctx, s.store, conversation.ID)
+}
+
 func (s *Service) retryAccountHandoff(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps, h *accountHandoff) (bool, error) {
 	if on, err := s.onHandoffTarget(ctx, deps, h); err != nil {
 		return false, err

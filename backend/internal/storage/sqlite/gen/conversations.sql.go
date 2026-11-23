@@ -5377,19 +5377,23 @@ const settleOrphanedConversationTurnsKeepingHeldQueue = `-- name: SettleOrphaned
 UPDATE conversation_turns
 SET state = 'failed',
     error_message = 'controller ended before the turn completed',
-    completed_at = ?
-WHERE handled_by_session_id = ?
-  AND (state = 'running' OR (state = 'queued' AND conversation_id NOT IN (
-      SELECT id FROM conversations WHERE queue_held_at IS NOT NULL)))
+    completed_at = ?1
+WHERE handled_by_session_id = ?2
+  AND (state = 'running' OR (state = 'queued' AND NOT EXISTS (
+      SELECT 1 FROM conversations
+      WHERE conversations.id = ?3
+        AND conversations.id = conversation_turns.conversation_id
+        AND conversations.queue_held_at IS NOT NULL)))
 `
 
 type SettleOrphanedConversationTurnsKeepingHeldQueueParams struct {
 	CompletedAt        sql.NullTime
 	HandledBySessionID domain.SessionID
+	ConversationID     string
 }
 
 func (q *Queries) SettleOrphanedConversationTurnsKeepingHeldQueue(ctx context.Context, arg SettleOrphanedConversationTurnsKeepingHeldQueueParams) error {
-	_, err := q.db.ExecContext(ctx, settleOrphanedConversationTurnsKeepingHeldQueue, arg.CompletedAt, arg.HandledBySessionID)
+	_, err := q.db.ExecContext(ctx, settleOrphanedConversationTurnsKeepingHeldQueue, arg.CompletedAt, arg.HandledBySessionID, arg.ConversationID)
 	return err
 }
 

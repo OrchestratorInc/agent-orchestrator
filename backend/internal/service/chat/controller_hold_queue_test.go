@@ -215,11 +215,36 @@ func TestInterfaceHandoffDrainsTheHeldQueue(t *testing.T) {
 	defer cancel()
 	prepared := make(chan error, 1)
 	go func() { prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain) }()
+	var running string
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, turn := range s.Turns {
+			if turn.State == domain.TurnStateRunning {
+				running = turn.ProviderTurnID
+			}
+		}
 		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
 	})
-	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-2", TurnState: domain.TurnStateCompleted})
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running, TurnState: domain.TurnStateCompleted})
 	if err := <-prepared; err != nil {
 		t.Fatalf("prepare handoff: %v", err)
 	}
+}
+
+func TestCompletedManualAccountMoveReleasesTheHeldQueue(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	failUsageLimitedTurnBehindQueue(t, h, "queued note")
+	if err := h.svc.DrainQueued(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	assertTurnStaysQueued(t, h, "queued note")
+	if err := h.svc.ReleaseQueueAfterAccountMove(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.DrainQueued(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+	})
 }

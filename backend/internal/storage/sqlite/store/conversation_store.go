@@ -1765,15 +1765,8 @@ func (s *Store) SettleTurnWithFailureCode(
 	}); err != nil {
 		return fmt.Errorf("settle turn %s: %w", turn.ID, err)
 	}
-	if state == domain.TurnStateFailed && turn.State != domain.TurnStateFailed &&
-		domain.ParseConversationUsageLimit(errMessage, &now) != nil {
-		if err := q.HoldConversationQueueForTurn(ctx, gen.HoldConversationQueueForTurnParams{
-			QueueHeldAt:    sql.NullTime{Time: now, Valid: true},
-			ConversationID: conversationID,
-			TurnID:         sql.NullString{String: turn.ID, Valid: true},
-		}); err != nil {
-			return fmt.Errorf("hold queue behind turn %s: %w", turn.ID, err)
-		}
+	if err := holdQueueBehindUsageLimit(ctx, q, turn, state, errMessage, now); err != nil {
+		return err
 	}
 	if err := q.SettleStreamingConversationMessagesForTurn(ctx,
 		gen.SettleStreamingConversationMessagesForTurnParams{
@@ -1972,9 +1965,7 @@ func (s *Store) CleanupOwnedControllerWork(
 	return s.cleanupOwnedControllerWork(ctx, session, conversationID, generation, false, now)
 }
 
-// CleanupOwnedControllerWorkKeepingHeldQueue is CleanupOwnedControllerWork for a
-// controller stopped by an account move: turns queued behind a usage limit stay
-// queued for the controller on the new account.
+// CleanupOwnedControllerWorkKeepingHeldQueue is CleanupOwnedControllerWork that leaves a held queue queued.
 func (s *Store) CleanupOwnedControllerWorkKeepingHeldQueue(
 	ctx context.Context,
 	session domain.SessionID,
@@ -2028,14 +2019,15 @@ func cleanupOwnedControllerWork(
 		}); err != nil {
 		return false, fmt.Errorf("settle orphaned activities for %s: %w", session, err)
 	}
-	orphans := gen.SettleOrphanedConversationTurnsParams{
-		CompletedAt:        sql.NullTime{Time: now, Valid: true},
-		HandledBySessionID: session,
-	}
+	completedAt := sql.NullTime{Time: now, Valid: true}
 	if keepHeldQueue {
-		err = q.SettleOrphanedConversationTurnsKeepingHeldQueue(ctx, gen.SettleOrphanedConversationTurnsKeepingHeldQueueParams(orphans))
+		err = q.SettleOrphanedConversationTurnsKeepingHeldQueue(ctx, gen.SettleOrphanedConversationTurnsKeepingHeldQueueParams{
+			CompletedAt: completedAt, HandledBySessionID: session, ConversationID: conversationID,
+		})
 	} else {
-		err = q.SettleOrphanedConversationTurns(ctx, orphans)
+		err = q.SettleOrphanedConversationTurns(ctx, gen.SettleOrphanedConversationTurnsParams{
+			CompletedAt: completedAt, HandledBySessionID: session,
+		})
 	}
 	if err != nil {
 		return false, fmt.Errorf("settle orphaned turns for %s: %w", session, err)
@@ -3234,6 +3226,10 @@ func (s *Store) SettleTurnByID(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	turn, err := s.qw.SelectConversationTurnByID(ctx, turnID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("select turn %s: %w", turnID, err)
+	}
 	if err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
 		ErrorMessage: errMessage,
@@ -3242,6 +3238,24 @@ func (s *Store) SettleTurnByID(
 		ID:           turnID,
 	}); err != nil {
 		return fmt.Errorf("settle turn %s: %w", turnID, err)
+	}
+	if turn.ID == "" {
+		return nil
+	}
+	return holdQueueBehindUsageLimit(ctx, s.qw, turn, state, errMessage, now)
+}
+
+func holdQueueBehindUsageLimit(ctx context.Context, q *gen.Queries, turn gen.ConversationTurn, state domain.TurnState, errMessage string, now time.Time) error {
+	if state != domain.TurnStateFailed || turn.State == domain.TurnStateFailed ||
+		domain.ParseConversationUsageLimit(errMessage, &now) == nil {
+		return nil
+	}
+	if err := q.HoldConversationQueueForTurn(ctx, gen.HoldConversationQueueForTurnParams{
+		QueueHeldAt:    sql.NullTime{Time: now, Valid: true},
+		ConversationID: turn.ConversationID,
+		TurnID:         sql.NullString{String: turn.ID, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("hold queue behind turn %s: %w", turn.ID, err)
 	}
 	return nil
 }

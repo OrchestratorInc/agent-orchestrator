@@ -820,10 +820,13 @@ WHERE handled_by_session_id = ? AND state IN ('queued', 'running');
 UPDATE conversation_turns
 SET state = 'failed',
     error_message = 'controller ended before the turn completed',
-    completed_at = ?
-WHERE handled_by_session_id = ?
-  AND (state = 'running' OR (state = 'queued' AND conversation_id NOT IN (
-      SELECT id FROM conversations WHERE queue_held_at IS NOT NULL)));
+    completed_at = sqlc.arg(completed_at)
+WHERE handled_by_session_id = sqlc.arg(handled_by_session_id)
+  AND (state = 'running' OR (state = 'queued' AND NOT EXISTS (
+      SELECT 1 FROM conversations
+      WHERE conversations.id = sqlc.arg(conversation_id)
+        AND conversations.id = conversation_turns.conversation_id
+        AND conversations.queue_held_at IS NOT NULL)));
 
 -- Reviewer Chat has its own controller generation on review, separate from
 -- the worker session. Settle only turns owned by that review conversation.

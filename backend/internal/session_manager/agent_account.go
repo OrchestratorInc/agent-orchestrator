@@ -163,12 +163,19 @@ func (m *Manager) markAccountSwitch(ctx context.Context, rec domain.SessionRecor
 	}
 }
 
-func (m *Manager) deliverQueuedAfterAccountMove(transition domain.SessionInterfaceTransition) {
+func (m *Manager) deliverQueuedAfterAccountMove(transition domain.SessionInterfaceTransition, completed bool) {
 	if !transition.AccountMove() || transition.SourceMode != domain.SessionModeChat || m.chat == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), interfaceTransitionStepLimit)
 	defer cancel()
+	if releaser, ok := m.chat.(interface {
+		ReleaseQueueAfterAccountMove(context.Context, domain.SessionID) error
+	}); ok && completed {
+		if err := releaser.ReleaseQueueAfterAccountMove(ctx, transition.SessionID); err != nil {
+			m.logger.Warn("account transition: held queue not released", "sessionID", transition.SessionID, "transition", transition.ID, "error", err)
+		}
+	}
 	if err := m.chat.DrainChatQueue(ctx, transition.SessionID); err != nil {
 		m.logger.Warn("account transition: messages sent during the move not delivered",
 			"sessionID", transition.SessionID, "transition", transition.ID, "error", err)

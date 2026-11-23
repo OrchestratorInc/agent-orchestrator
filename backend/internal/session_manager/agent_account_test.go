@@ -489,6 +489,40 @@ func TestAccountTransitionThatStopsTheTurnMarksTheSwitchInChat(t *testing.T) {
 	}
 }
 
+func TestOnlyACompletedChatAccountMoveReleasesTheHeldQueue(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		bindErr error
+		phase   domain.SessionInterfaceTransitionPhase
+	}{
+		{"completed", nil, domain.SessionInterfaceTransitionCompleted},
+		{"rolled back", errors.New("database is locked"), domain.SessionInterfaceTransitionFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager, store, _, chat, accounts, _ := newAccountTransitionManager(t, domain.SessionModeChat)
+			accounts.bindErr = tc.bindErr
+			chat.queueReleases = make(chan domain.SessionID, 1)
+			transition, err := manager.StartAccountTransition(context.Background(), "session-1", "acct-b", domain.SessionInterfaceTransitionDrain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settled := awaitTransition(t, store, transition.ID); settled.Phase != tc.phase {
+				t.Fatalf("phase = %s %s, want %s", settled.Phase, settled.ErrorDetail, tc.phase)
+			}
+			select {
+			case <-chat.queueReleases:
+				if tc.phase != domain.SessionInterfaceTransitionCompleted {
+					t.Fatal("a rolled-back move released the held queue on the old account")
+				}
+			case <-time.After(500 * time.Millisecond):
+				if tc.phase == domain.SessionInterfaceTransitionCompleted {
+					t.Fatal("a completed move left the held queue held")
+				}
+			}
+		})
+	}
+}
+
 // A terminal move keeps its mode, so the reaper probes the session all through
 // it and finds the old terminal dead while the new one starts. The move must
 // fence it, or the session is ended (and its containers reaped) mid-move.
