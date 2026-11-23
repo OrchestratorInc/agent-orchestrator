@@ -4942,7 +4942,7 @@ func TestChatHandoffInterruptArmBlocksCompletionFromPromotingQueue(t *testing.T)
 	// Session Manager performs this fast step before returning the accepted
 	// transition and before target preflight. It is a reversible dispatch fence:
 	// the active turn can finish, but its completion must not release the queue.
-	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
+	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt, false); err != nil {
 		t.Fatalf("arm interrupt handoff: %v", err)
 	}
 	h.conv.emit(ports.ChatEvent{
@@ -4999,7 +4999,7 @@ func TestChatHandoffInterruptAbortAfterPreflightFailureResumesFencedQueue(t *tes
 	}); err != nil {
 		t.Fatalf("queue second turn: %v", err)
 	}
-	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
+	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt, false); err != nil {
 		t.Fatalf("arm interrupt handoff: %v", err)
 	}
 
@@ -5186,7 +5186,7 @@ func TestChatHandoffInterruptDoesNotReachProviderUntilQueueCancellationSucceeds(
 		t.Fatalf("queue second turn: %v", err)
 	}
 
-	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
+	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt, false); err != nil {
 		t.Fatalf("arm reversible handoff fence: %v", err)
 	}
 	if got := flakyStore.callCount(); got != 0 {
@@ -5202,7 +5202,7 @@ func TestChatHandoffInterruptDoesNotReachProviderUntilQueueCancellationSucceeds(
 	// Preparation aborts the reversible fence after a local-store failure. A
 	// caller may re-arm and retry; provider I/O begins only after the durable queue
 	// is terminal.
-	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
+	if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt, false); err != nil {
 		t.Fatalf("re-arm handoff after preparation failure: %v", err)
 	}
 	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {

@@ -1836,6 +1836,7 @@ func (s *Service) ArmChatHandoff(
 	ctx context.Context,
 	id domain.SessionID,
 	policy domain.SessionInterfaceTransitionPolicy,
+	accountMove bool,
 ) error {
 	controller, err := s.Controller(id)
 	if errors.Is(err, ErrNoController) {
@@ -1847,7 +1848,7 @@ func (s *Service) ArmChatHandoff(
 	if controller.State() == ports.ChatControllerStopped {
 		return nil
 	}
-	return controller.ArmHandoff(ctx, policy)
+	return controller.ArmHandoff(ctx, policy, accountMove)
 }
 
 // PrepareChatHandoff closes source intake and makes the controller quiescent.

@@ -567,6 +567,7 @@ func (r *transitionRuntime) GetStyledOutput(ctx context.Context, handle ports.Ru
 }
 
 type transitionChat struct {
+	armedAccountMove bool
 	log              *[]string
 	armed            chan domain.SessionInterfaceTransitionPolicy
 	aborted          chan struct{}
@@ -795,7 +796,8 @@ func (c *transitionChat) StopChat(_ context.Context, _ domain.SessionID) error {
 	*c.log = append(*c.log, "stop:chat")
 	return nil
 }
-func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
+func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy, accountMove bool) error {
+	c.armedAccountMove = accountMove
 	select {
 	case c.armed <- policy:
 	default:

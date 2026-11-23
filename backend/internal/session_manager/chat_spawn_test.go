@@ -248,7 +248,7 @@ func (l *recordingLauncher) RunBackgroundTask(_ context.Context, harness domain.
 	return "Generated title", nil
 }
 
-func (l *recordingLauncher) ArmChatHandoff(_ context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
+func (l *recordingLauncher) ArmChatHandoff(_ context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy, _ bool) error {
 	l.armed = append(l.armed, id)
 	l.armPolicy = append(l.armPolicy, policy)
 	return nil

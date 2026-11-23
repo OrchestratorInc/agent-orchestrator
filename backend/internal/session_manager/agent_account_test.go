@@ -166,6 +166,9 @@ func TestAccountTransitionResumesTheSameChatConversationOnTheNewAccount(t *testi
 	if accounts.boundTo("session-1") != "acct-b" {
 		t.Fatal("binding did not move to acct-b")
 	}
+	if !chat.armedAccountMove {
+		t.Fatal("chat handoff was not armed as an account move")
+	}
 }
 
 // A chat that was never messaged has no native conversation to name, yet its

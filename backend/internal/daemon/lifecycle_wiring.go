@@ -807,7 +807,7 @@ var _ sessionmanager.ChatUpdateHibernator = chatLauncher{}
 var _ interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 	RunPromptSuggestionTask(context.Context, domain.SessionID, string, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
-	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
+	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy, bool) error
 	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	AbortChatHandoff(domain.SessionID)
 } = chatLauncher{}
@@ -972,8 +972,9 @@ func (c chatLauncher) ArmChatHandoff(
 	ctx context.Context,
 	id domain.SessionID,
 	policy domain.SessionInterfaceTransitionPolicy,
+	accountMove bool,
 ) error {
-	return c.svc.ArmChatHandoff(ctx, id, policy)
+	return c.svc.ArmChatHandoff(ctx, id, policy, accountMove)
 }
 
 // MarkAccountSwitch marks the turn an account move stopped, so the chat shows

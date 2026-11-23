@@ -54,7 +54,7 @@ type interfaceTransitionStore interface {
 }
 
 type chatHandoffLauncher interface {
-	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
+	ArmChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy, bool) error
 	PrepareChatHandoff(context.Context, domain.SessionID, domain.SessionInterfaceTransitionPolicy) error
 	AbortChatHandoff(domain.SessionID)
 }
@@ -297,7 +297,7 @@ func (m *Manager) launchInterfaceTransition(ctx context.Context, transition doma
 		// This is the acceptance boundary visible to the caller. The transition
 		// must not return while a Chat completion can still promote queued work;
 		// target preflight and provider cancellation happen asynchronously later.
-		if err := handoff.ArmChatHandoff(ctx, transition.SessionID, transition.Policy); err != nil {
+		if err := handoff.ArmChatHandoff(ctx, transition.SessionID, transition.Policy, transition.AccountMove()); err != nil {
 			finishErr := m.finishInterfaceTransition(transition.ID,
 				domain.SessionInterfaceTransitionFailed, "SOURCE_FENCE_FAILED", err.Error())
 			if finishErr != nil {

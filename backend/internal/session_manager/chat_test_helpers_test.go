@@ -43,8 +43,8 @@ func (l integrationChatLauncher) HasLiveChatController(id domain.SessionID) bool
 	return l.service.HasLiveChatController(id)
 }
 
-func (l integrationChatLauncher) ArmChatHandoff(ctx context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
-	return l.service.ArmChatHandoff(ctx, id, policy)
+func (l integrationChatLauncher) ArmChatHandoff(ctx context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy, accountMove bool) error {
+	return l.service.ArmChatHandoff(ctx, id, policy, accountMove)
 }
 
 func (l integrationChatLauncher) PrepareChatHandoff(ctx context.Context, id domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {

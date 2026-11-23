@@ -208,26 +208,38 @@ func TestUsageLimitOnAutomationPromptLeavesTheQueueUnheld(t *testing.T) {
 }
 
 func TestInterfaceHandoffDrainsTheHeldQueue(t *testing.T) {
-	h := newHarness(t)
-	failUsageLimitedTurnBehindQueue(t, h, "queued note")
+	for _, afterAccountMove := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after account move %v", afterAccountMove), func(t *testing.T) {
+			h := newHarness(t)
+			failUsageLimitedTurnBehindQueue(t, h, "queued note")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	prepared := make(chan error, 1)
-	go func() { prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain) }()
-	var running string
-	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		running = ""
-		for _, turn := range s.Turns {
-			if turn.State == domain.TurnStateRunning {
-				running = turn.ProviderTurnID
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if afterAccountMove {
+				if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, true); err != nil {
+					t.Fatal(err)
+				}
 			}
-		}
-		return running != "" && turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
-	})
-	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running, TurnState: domain.TurnStateCompleted})
-	if err := <-prepared; err != nil {
-		t.Fatalf("prepare handoff: %v", err)
+			if err := h.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, false); err != nil {
+				t.Fatal(err)
+			}
+			prepared := make(chan error, 1)
+			go func() { prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain) }()
+			var running string
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				running = ""
+				for _, turn := range s.Turns {
+					if turn.State == domain.TurnStateRunning {
+						running = turn.ProviderTurnID
+					}
+				}
+				return running != "" && turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+			})
+			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running, TurnState: domain.TurnStateCompleted})
+			if err := <-prepared; err != nil {
+				t.Fatalf("prepare handoff: %v", err)
+			}
+		})
 	}
 }
 

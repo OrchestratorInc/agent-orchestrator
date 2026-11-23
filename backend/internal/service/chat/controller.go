@@ -2449,6 +2449,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 func (c *Controller) ArmHandoff(
 	ctx context.Context,
 	policy domain.SessionInterfaceTransitionPolicy,
+	accountMove bool,
 ) error {
 	if !policy.Valid() {
 		return fmt.Errorf("invalid interface handoff policy %q", policy)
@@ -2462,29 +2463,12 @@ func (c *Controller) ArmHandoff(
 	}
 
 	c.mu.Lock()
-	if c.handoff == want {
-		c.mu.Unlock()
-		return nil
-	}
-	if c.handoff != controllerHandoffNone {
-		c.mu.Unlock()
-		return ErrControllerHandoff
-	}
-	c.mu.Unlock()
-	moving := false
-	if policy == domain.SessionInterfaceTransitionDrain {
-		var err error
-		if moving, err = c.accountMoveActive(ctx); err != nil {
-			return fmt.Errorf("check account move before handoff: %w", err)
-		}
-	}
-	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.handoff != controllerHandoffNone {
+	if c.handoff != want && c.handoff != controllerHandoffNone {
 		return ErrControllerHandoff
 	}
 	c.handoff = want
-	c.keepHeld = moving
+	c.keepHeld = accountMove && policy == domain.SessionInterfaceTransitionDrain
 	return nil
 }
 
@@ -2496,12 +2480,12 @@ func (c *Controller) BeginHandoff(
 	ctx context.Context,
 	policy domain.SessionInterfaceTransitionPolicy,
 ) error {
-	if err := c.ArmHandoff(ctx, policy); err != nil {
+	c.mu.Lock()
+	keepHeld := c.handoff == interfaceHandoff(policy) && c.keepHeld
+	c.mu.Unlock()
+	if err := c.ArmHandoff(ctx, policy, keepHeld); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	keepHeld := c.keepHeld
-	c.mu.Unlock()
 
 	if policy == domain.SessionInterfaceTransitionInterrupt {
 		// Target preflight has succeeded. Settle every accepted queue row while
