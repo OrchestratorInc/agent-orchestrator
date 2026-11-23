@@ -686,9 +686,12 @@ export function useRenameShellTerminal(hostId?: HostId) {
 			return toShellTerminal(data.shellTerminal, hostId);
 		},
 		onSuccess: (shell, { handleId, token }) => {
-			const settled = settleOptimisticRename(shellRenameKey(handleId, hostId), token, true);
+			const key = shellRenameKey(handleId, hostId);
+			const settled = settleOptimisticRename(key, token, true);
 			// An older rename's answer must not replace a newer title.
 			if (!settled?.latest) return;
+			// Stored: a later failure rolls back to this name, never to the snapshot.
+			shellsBeforeRename.delete(key);
 			writeShell(queryClient, queryKey, handleId, () => shell);
 			if (!shell.cloud) void queryClient.invalidateQueries({ queryKey });
 		},

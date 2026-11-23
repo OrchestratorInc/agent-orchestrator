@@ -72,8 +72,9 @@ export function hasOptimisticRenames(): boolean {
 	return entries.size > 0;
 }
 
-/** Whether `key` has a title in flight or covering older reads. */
+/** Whether `key` has a title in flight or covering older reads. Expired entries are dropped first. */
 export function isOptimisticRenameTracked(key: string): boolean {
+	pruneSettled();
 	return entries.has(key);
 }
 

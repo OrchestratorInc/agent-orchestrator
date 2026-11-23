@@ -483,6 +483,30 @@ describe("useRenameShellTerminal", () => {
 		]);
 	});
 
+	it("rolls a failure back to the stored name, not an old snapshot, after a quiet spell", async () => {
+		const { first } = renderTabs();
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		stored = [{ ...shells[0], title: "server" }, shells[1]];
+		patchMock.mockResolvedValueOnce(answerWith("server"));
+		act(() => renderedRename("server"));
+		await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(first()).toMatchObject({ title: "server" }));
+
+		// Minutes pass with no list read, so nothing prunes the settled rename.
+		const later = Date.now() + 10 * 60_000;
+		const now = vi.spyOn(Date, "now").mockReturnValue(later);
+		try {
+			getMock.mockReturnValue(new Promise(() => {}));
+			patchMock.mockRejectedValueOnce(new Error("disk full"));
+			act(() => renderedRename("logs"));
+			await waitFor(() => expect(useUiStore.getState().globalToasts).toHaveLength(1));
+			expect(first()?.title).toBe("server");
+			expect(first()?.terminalTitle).toBeUndefined();
+		} finally {
+			now.mockRestore();
+		}
+	});
+
 	let renderedRename: (title: string) => void = () => {};
 	beforeEach(() => {
 		renderedRename = () => { throw new Error("render the tabs first"); };
