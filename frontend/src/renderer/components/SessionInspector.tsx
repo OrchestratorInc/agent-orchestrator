@@ -5,7 +5,7 @@ import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, Package, Smartphone } from "@/components/app-icons";
-import { DevicePanel, useSessionDevice } from "./DevicePanel";
+import { DevicePanel } from "./DevicePanel";
 import { AppLink } from "./AppLink";
 import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
 import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
@@ -275,7 +275,6 @@ export const SessionInspector = memo(function SessionInspector({
 	// Simulators and emulators run on this machine: the Device tab serves
 	// local worker sessions only until remote and cloud providers exist.
 	const deviceAvailable = session !== undefined && !session.cloud && !hostId && !orchestrator;
-	const deviceLease = useSessionDevice(session?.id ?? "", deviceAvailable);
 	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"
@@ -305,7 +304,7 @@ export const SessionInspector = memo(function SessionInspector({
 		const label = t(entry.labelKey);
 		return {
 			...entry,
-			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen) || (entry.id === "device" && view !== "device" && Boolean(deviceLease.data)),
+			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
 			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)

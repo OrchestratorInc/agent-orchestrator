@@ -1,6 +1,5 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { deviceRevealStep, type DeviceBaseline } from "../lib/device-reveal";
-import { useSessionDevice } from "./DevicePanel";
+import { DeviceRevealWatcher } from "./DeviceRevealWatcher";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
@@ -1770,27 +1769,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Browser: a lease opened while this session is on screen opens the tab once;
 	// entering a session that already holds one does not.
 	const deviceAvailable = Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
-	const deviceLease = useSessionDevice(sessionId, deviceAvailable && !terminated);
-	const deviceLeaseKey = deviceLease.data ? `${deviceLease.data.device.id}:${deviceLease.data.openedAt}` : "";
-	const deviceBaselineRef = useRef<DeviceBaseline | null>(null);
-	// When this session was entered: a lease answer older than that is the
-	// cache from an earlier visit, not what the session holds now.
-	const deviceEnteredRef = useRef({ sessionId: "", at: 0 });
-	if (deviceEnteredRef.current.sessionId !== uiSessionId) deviceEnteredRef.current = { sessionId: uiSessionId, at: Date.now() };
-	const deviceLeaseUpdatedAt = deviceLease.dataUpdatedAt;
-	useEffect(() => {
-		if (!deviceAvailable || deviceLease.isPending) return;
-		const step = deviceRevealStep(deviceBaselineRef.current, {
-			sessionId: uiSessionId,
-			key: deviceLeaseKey,
-			dataUpdatedAt: deviceLeaseUpdatedAt,
-			enteredAt: deviceEnteredRef.current.at,
-		});
-		deviceBaselineRef.current = step.baseline;
-		if (!step.reveal || terminated) return;
+	const revealDevice = useCallback(() => {
 		transitionInspectorView("device");
 		setInspectorOpenForSession(uiSessionId, true);
-	}, [deviceAvailable, deviceLease.isPending, deviceLeaseKey, deviceLeaseUpdatedAt, setInspectorOpenForSession, terminated, transitionInspectorView, uiSessionId]);
+	}, [setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.
@@ -2944,6 +2926,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
+			<DeviceRevealWatcher enabled={deviceAvailable} onReveal={revealDevice} sessionId={sessionId} terminated={terminated} uiSessionId={uiSessionId} />
 			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}

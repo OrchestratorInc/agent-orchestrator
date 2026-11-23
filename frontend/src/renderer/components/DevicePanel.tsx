@@ -6,6 +6,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import type { components } from "../../api/schema";
 import { apiClient, getApiBaseUrl } from "../lib/api-client";
 import { apiErrorException } from "../lib/api-error-exception";
+import { useWorkspaceSession } from "../hooks/useWorkspaceQuery";
 import { playH264, playMjpeg } from "../lib/device-stream";
 import { deviceStreamRoutes, encodeButton, encodeTouch, normalizedPoint, type DeviceButton, type TouchPhase } from "../lib/device-input";
 import { cn } from "../lib/utils";
@@ -31,13 +32,30 @@ async function fetchSessionDevice(sessionId: string): Promise<DeviceLease | null
 	return data.lease ?? null;
 }
 
-/** The session's lease, polled while the Device tab is open so an agent's `ao device open` shows up. */
-export function useSessionDevice(sessionId: string, enabled: boolean) {
+/** Whether device support is on, checked rarely: nothing about a session's device is worth polling while it is off. */
+function useDeviceSupportOn(enabled: boolean) {
+	return useQuery({
+		queryKey: devicesQueryKey,
+		queryFn: fetchDeviceStatus,
+		enabled,
+		refetchInterval: 30_000,
+		select: (status) => status.enabled && status.state !== "off",
+	}).data;
+}
+
+/**
+ * The session's lease, so an agent's `ao device open` shows up. Polled only
+ * while device support is on: every 2 s while the Device tab is open or a
+ * device is held, every 10 s otherwise, and every 30 s after a failure (each
+ * failure is reported, so a dead daemon must not be hammered).
+ */
+export function useSessionDevice(sessionId: string, enabled: boolean, watching = false) {
+	const supportOn = useDeviceSupportOn(enabled);
 	return useQuery({
 		queryKey: sessionDeviceQueryKey(sessionId),
 		queryFn: () => fetchSessionDevice(sessionId),
-		enabled,
-		refetchInterval: 2_000,
+		enabled: enabled && supportOn === true,
+		refetchInterval: (query) => (query.state.status === "error" ? 30_000 : watching || query.state.data ? 2_000 : 10_000),
 	});
 }
 
@@ -55,7 +73,7 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 		enabled: isActive,
 		refetchInterval: (query) => (query.state.data?.state === "installing" ? 1_000 : 5_000),
 	});
-	const lease = useSessionDevice(sessionId, isActive);
+	const lease = useSessionDevice(sessionId, isActive, true);
 	const refresh = useCallback(() => {
 		void queryClient.invalidateQueries({ queryKey: devicesQueryKey });
 		void queryClient.invalidateQueries({ queryKey: sessionDeviceQueryKey(sessionId) });
@@ -92,7 +110,7 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 	const supportOff = status.data !== undefined && (!status.data.enabled || status.data.state === "off");
 	if (lease.data && !supportOff) {
 		const held = lease.data;
-		return <DeviceLive isActive={isActive} lease={held} onRelease={(shutdown) => release.mutate(shutdown)} onStart={() => open.mutate(held.device)} releasing={release.isPending} sessionId={sessionId} starting={open.isPending} />;
+		return <DeviceLive error={release.error?.message ?? open.error?.message} isActive={isActive} lease={held} onRelease={(shutdown) => release.mutate(shutdown)} onStart={() => open.mutate(held.device)} releasing={release.isPending} sessionId={sessionId} starting={open.isPending} />;
 	}
 	if (status.isPending) return <PanelMessage>{t("device.loading")}</PanelMessage>;
 	if (status.isError) return <PanelMessage action={<RetryButton onClick={refresh} />}>{t("device.unavailable")}</PanelMessage>;
@@ -119,7 +137,7 @@ export function DevicePanel({ isActive, sessionId }: { isActive: boolean; sessio
 		return (
 			<PanelMessage action={<RetryButton onClick={() => setup.mutate()} />}>
 				{t("device.setupFailed")}
-				{current.error ? <span className="mt-1 block font-mono text-caption">{current.error}</span> : null}
+				{current.error ? <span className="mt-1 block text-caption">{current.error}</span> : null}
 			</PanelMessage>
 		);
 	}
@@ -169,8 +187,10 @@ function DevicePicker({
 		<div className="board-scrollbar flex h-full flex-col gap-3 overflow-y-auto p-3">
 			<p className="text-xs text-muted-foreground">{t("device.pickHint")}</p>
 			{error ? <p className="text-xs text-destructive">{error}</p> : null}
+			{/* Devices that could not be listed are not an empty machine: say why. */}
+			{status.error ? <p className="text-xs text-destructive">{status.error}</p> : null}
 			{devices.length === 0 ? (
-				<PanelMessage compact>{t("device.noDevices")}</PanelMessage>
+				status.error ? null : <PanelMessage compact>{t("device.noDevices")}</PanelMessage>
 			) : (
 				<ul className="divide-y divide-border overflow-hidden rounded-md bg-settings-row">
 					{devices.map((device) => {
@@ -181,7 +201,9 @@ function DevicePicker({
 								<div className="min-w-0 flex-1">
 									<p className="truncate text-sm text-foreground">{device.name}</p>
 									<p className="truncate text-xs text-muted-foreground">
-										{[device.version, takenByOther ? t("device.inUse", { session: owner }) : device.booted ? t("device.running") : undefined].filter(Boolean).join(" · ")}
+										{[device.version, takenByOther ? <SessionTitle key="owner" sessionId={owner} /> : device.booted ? t("device.running") : undefined]
+											.filter(Boolean)
+											.flatMap((part, index) => (index === 0 ? [part] : [" · ", part]))}
 									</p>
 								</div>
 								<Button
@@ -203,9 +225,17 @@ function DevicePicker({
 	);
 }
 
+/** "In use by <session title>", falling back to the id while the title loads. */
+function SessionTitle({ sessionId }: { sessionId: string }) {
+	const { t } = useTranslation();
+	const title = useWorkspaceSession(sessionId).data?.title;
+	return <>{t("device.inUse", { session: title || sessionId })}</>;
+}
+
 type StreamState = "connecting" | "live" | "reconnecting";
 
 function DeviceLive({
+	error,
 	isActive,
 	lease,
 	onRelease,
@@ -214,6 +244,8 @@ function DeviceLive({
 	sessionId,
 	starting,
 }: {
+	/** A failed release, shutdown or start: said, not swallowed. */
+	error?: string;
 	isActive: boolean;
 	lease: DeviceLease;
 	onRelease: (shutdown: boolean) => void;
@@ -315,15 +347,21 @@ function DeviceLive({
 		},
 		[platform, send],
 	);
+	const [pressError, setPressError] = useState<string>();
 	const press = (button: DeviceButton) => {
 		const viaSocket = () => send(encodeButton(platform, button));
+		setPressError(undefined);
 		// The simulator's Home and app switcher buttons do nothing on a Face ID
-		// iPhone; the daemon makes the home indicator swipe instead.
+		// iPhone; the daemon makes the home indicator swipe instead. Only its
+		// "send it on the socket" answer falls back there; any other failure is
+		// said, not swallowed.
 		if (platform === "ios" && (button === "recents" || button === "home")) {
 			void apiClient
 				.POST("/api/v1/sessions/{sessionId}/device/button", { params: { path: { sessionId } }, body: { button } })
-				.then(({ error, response }) => {
-					if (error && response.status === 409) viaSocket();
+				.then(({ error }) => {
+					if (!error) return;
+					if (error.code === "DEVICE_BUTTON_UNSUPPORTED") viaSocket();
+					else setPressError(apiErrorException(error, "The button press failed.").message);
 				})
 				.catch(viaSocket);
 			return;
@@ -395,6 +433,7 @@ function DeviceLive({
 			</div>
 			<div className="flex shrink-0 flex-col items-center gap-1 px-3 pb-3">
 				{state === "live" ? null : <p className="text-xs text-muted-foreground">{state === "reconnecting" ? t("device.reconnecting") : t("device.connecting")}</p>}
+				{pressError || error ? <p className="text-xs text-destructive" role="alert">{pressError || error}</p> : null}
 				<div className="flex items-center divide-x divide-border overflow-hidden rounded-full border border-border bg-card">
 					{buttons.map(({ button, icon: Icon, label }) => (
 						<Button className="h-8 gap-1.5 rounded-none px-3" disabled={state !== "live"} key={button} onClick={() => press(button)} size="sm" type="button" variant="ghost">

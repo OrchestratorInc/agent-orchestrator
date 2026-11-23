@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,11 +74,21 @@ function mockApi({ deviceStatus = status(), lease = null as unknown }: { deviceS
 }
 
 function renderPanel(ui: ReactNode) {
-	return render(
-		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-			<TooltipProvider>{ui}</TooltipProvider>
-		</QueryClientProvider>,
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const wrap = (node: ReactNode) => (
+		<QueryClientProvider client={client}>
+			<TooltipProvider>{node}</TooltipProvider>
+		</QueryClientProvider>
 	);
+	const view = render(wrap(ui));
+	return { ...view, rerender: (next: ReactNode) => view.rerender(wrap(next)) };
+}
+
+async function liveSocket() {
+	await waitFor(() => expect(FakeSocket.instances.length).toBeGreaterThan(0));
+	const socket = FakeSocket.instances.at(-1)!;
+	act(() => socket.open());
+	return socket;
 }
 
 describe("DevicePanel", () => {
@@ -179,6 +189,86 @@ describe("DevicePanel", () => {
 			params: { path: { sessionId: "ao-1" } },
 			body: { deviceId: "UDID-1", platform: "ios" },
 		});
+	});
+
+	it("stops the stream and closes the input socket when the tab is hidden", async () => {
+		const stop = vi.fn();
+		playMjpeg.mockReturnValueOnce({ stop });
+		mockApi({ lease: iosLease });
+		const view = renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		await waitFor(() => expect(playMjpeg).toHaveBeenCalled());
+		const socket = await liveSocket();
+
+		view.rerender(<DevicePanel isActive={false} sessionId="ao-1" />);
+
+		expect(stop).toHaveBeenCalledTimes(1);
+		expect(socket.readyState).toBe(3);
+		expect(FakeSocket.instances).toHaveLength(1);
+	});
+
+	it("reconnects the input socket after it drops", async () => {
+		mockApi({ lease: iosLease });
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		const first = await liveSocket();
+		expect(screen.getByRole("button", { name: "Home" })).toBeEnabled();
+
+		act(() => {
+			first.readyState = 3;
+			first.onclose?.();
+		});
+
+		expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Home" })).toBeDisabled();
+		await waitFor(() => expect(FakeSocket.instances).toHaveLength(2), { timeout: 3_000 });
+		const second = await liveSocket();
+		expect(second.url).toBe(first.url);
+		expect(screen.getByRole("button", { name: "Home" })).toBeEnabled();
+	});
+
+	it("sends iOS Home on the socket only when the daemon says to, and says any other failure", async () => {
+		mockApi({ lease: iosLease });
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		const socket = await liveSocket();
+
+		postMock.mockResolvedValueOnce({ error: { code: "DEVICE_BUTTON_UNSUPPORTED", message: "Send this button on the device's input socket." } });
+		await userEvent.click(screen.getByRole("button", { name: "Home" }));
+		await waitFor(() => expect(socket.sent).toHaveLength(1));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+		postMock.mockResolvedValueOnce({ error: { code: "DEVICE_BUTTON_FAILED", message: "The simulator did not respond." } });
+		await userEvent.click(screen.getByRole("button", { name: "Recents" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("The simulator did not respond.");
+		expect(socket.sent).toHaveLength(1);
+	});
+
+	it("goes back to the device list once the device is released", async () => {
+		let lease: unknown = iosLease;
+		getMock.mockImplementation(async (path: string) => (path === "/api/v1/devices" ? { data: status({ leases: [] }) } : { data: { lease } }));
+		postMock.mockImplementation(async () => {
+			lease = null;
+			return { data: {} };
+		});
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		await liveSocket();
+
+		await userEvent.click(screen.getByRole("button", { name: "Device options" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Shut down device" }));
+
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/device/close", { params: { path: { sessionId: "ao-1" } }, body: { shutdown: true } });
+		expect(await screen.findAllByRole("button", { name: "Open" })).toHaveLength(2);
+	});
+
+	it("says why a release failed and keeps the device", async () => {
+		mockApi({ lease: iosLease });
+		postMock.mockResolvedValue({ error: { code: "DEVICE_CLOSE_FAILED", message: "The device could not be shut down." } });
+		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
+		await liveSocket();
+
+		await userEvent.click(screen.getByRole("button", { name: "Device options" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Release device" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("The device could not be shut down.");
+		expect(screen.getByRole("img", { name: "iPhone 17 Pro screen", hidden: true })).toBeInTheDocument();
 	});
 
 	it("loads nothing while the tab is hidden", () => {
