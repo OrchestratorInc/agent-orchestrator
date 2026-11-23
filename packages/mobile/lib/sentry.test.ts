@@ -129,10 +129,10 @@ describe("mobile Sentry consent and payload", () => {
 			exception: { values: [{ type: "TypeError", value }] },
 		});
 		const first = await clean("HTTP error 500: /etc/private http://localhost:8080/x alice@example.test");
-		expect(first?.exception?.values).toMatchObject([{ type: "TypeError", value: "HTTP error <n>: <path> <url> <email> (in mobile, render_crash)" }]);
+		expect(first?.exception?.values).toMatchObject([{ type: "TypeError", value: "Mobile error" }]);
 		expect((await clean("HTTP error 502: ~/private wss://host bob@example.test"))?.fingerprint).toEqual(first?.fingerprint);
 		expect((await clean("Invalid array length"))?.fingerprint).not.toEqual(first?.fingerprint);
-		expect((await clean("/home/alice/private"))?.message).toBe("<path>");
+		expect((await clean("/home/alice/private"))?.message).toBe("Mobile error");
 		const unsafe = await clean("private ".repeat(40));
 		expect(unsafe?.message).toBe("Mobile error");
 		expect(unsafe?.fingerprint?.slice(-2)).toEqual(["sha256", createHash("sha256").update("private ".repeat(40).trim()).digest("hex").slice(0, 10)]);
@@ -212,7 +212,12 @@ it.each([
 	["request failed access_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
 	["request failed refresh_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
 	["request failed client_secret=supersecretvalue", "request failed <credential>", /supersecretvalue/],
-] as const)("scrubs sensitive values in the final mobile event", async (value, title, privateText) => {
+	["repository acme/secret-project not found", "repository acme/secret-project not found", /secret-project/],
+	["git checkout feature/acme-merger failed", "git checkout feature/acme-merger failed", /acme-merger/],
+	["getaddrinfo ENOTFOUND build.acme-internal.corp", "getaddrinfo enotfound build.acme-internal.corp", /acme-internal/],
+	["Session alice-laptop not found", "session alice-laptop not found", /alice-laptop/],
+	["HTTP 401 Bad credentials sk-ant-abcdefghijklmnop", "http <n> bad credentials sk-ant-abcdefghijklmnop", /abcdefghijklmnop/],
+] as const)("scrubs sensitive values in the final mobile event", async (value, normalized, privateText) => {
 	const sentry = await import("./sentry");
 	sentry.setMobileSentryConsent(true);
 	await sentry.initMobileSentry();
@@ -222,6 +227,7 @@ it.each([
 		tags: sdk.captureException.mock.calls.at(-1)?.[1]?.tags,
 		exception: { values: [{ type: "Error", value }] },
 	});
-	expect(event?.message).toBe(title);
+	expect(event?.message).toBe("Mobile error");
+	expect(event?.fingerprint?.at(-1)).toBe(createHash("sha256").update(normalized).digest("hex").slice(0, 10));
 	expect(JSON.stringify(event)).not.toMatch(privateText);
 });

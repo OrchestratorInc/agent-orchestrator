@@ -1,6 +1,6 @@
 import type { ErrorEvent, StackFrame } from "@sentry/react-native";
 import { classifyError, type ClassifyInput } from "./observability";
-import { safeSentryExceptionType, sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue, sentryMessageFingerprint } from "../../shared/telemetry/sentry-message";
+import { safeSentryExceptionType, sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue } from "../../shared/telemetry/sentry-message";
 import { safeSentryCode, sentryErrorCode } from "../../shared/telemetry/ao-error";
 import { DEFAULT_SENTRY_DSN } from "./sentry-config";
 
@@ -47,7 +47,7 @@ export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { orig
 		exceptions.at(-1)?.value ?? (event.message === "Mobile API error" ? undefined : event.message),
 		sentryErrorCode(hint?.originalException) ?? event.tags?.["ao.code"],
 	);
-	let messageFingerprint = sentryMessageFingerprint(identity.label);
+	let messageFingerprint: string[] = [];
 	if (identity.hashInput !== undefined) {
 		try {
 			const { CryptoDigestAlgorithm, digestStringAsync } = await import("expo-crypto");
@@ -85,7 +85,7 @@ export async function sanitizeMobileSentryEvent(event: ErrorEvent, hint?: { orig
 			...(severity ? { "ao.severity": severity } : {}),
 			...(daemonVersion && /^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.]+)?$/.test(daemonVersion) ? { "ao.daemon_version": daemonVersion } : {}),
 		},
-		fingerprint: ["mobile", ...(identity.channel ? ["ipc", identity.channel] : []),
+		fingerprint: ["mobile",
 			...(identity.code ? ["code", identity.code] : [title, category, ...(primary ? [primary.type] : []), ...messageFingerprint])],
 		user: pairedInstallId ? { id: pairedInstallId } : undefined,
 	};

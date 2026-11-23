@@ -40,19 +40,19 @@ export function sentryMessageFingerprint(message: string): string[] {
 }
 
 export function sentryMessageIdentity(value: unknown, errorCode?: unknown) {
-	const { text, unsafe, channel } = normalizeSentryMessage(value);
+	const { text, channel } = normalizeSentryMessage(value);
 	const stableCode = safeSentryCode(errorCode);
 	return {
 		code: stableCode,
 		channel,
-		label: stableCode ?? (unsafe ? "" : text.slice(0, 120)),
-		hashInput: !stableCode && unsafe ? text : undefined,
+		label: stableCode ?? "",
+		// Normalization stabilizes grouping. Arbitrary error text stays local.
+		hashInput: !stableCode && text ? text.toLowerCase() : undefined,
 	};
 }
 
 export function sentryIdentityTitle(identity: ReturnType<typeof sentryMessageIdentity>, fallback: string): string {
-	if (!identity.label) return fallback;
-	return identity.channel ? identity.channel + ": " + identity.label : identity.label;
+	return identity.label || fallback;
 }
 
 export function sentryExceptionValue(message: string, title: string, location: string, label: string): string {

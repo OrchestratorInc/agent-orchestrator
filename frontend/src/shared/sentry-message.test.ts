@@ -52,7 +52,17 @@ describe("Sentry message normalization", () => {
 			{ cause: new AoError("REMOTES_READ_FAILED", "Original failure") });
 		const code = sentryErrorCode(error);
 		expect(sentryMessageIdentity(error.message, code)).toMatchObject({ channel: "remotes:list", code: "REMOTES_READ_FAILED", label: "REMOTES_READ_FAILED" });
-		expect(sentryMessageIdentity(error.message)).toMatchObject({ channel: "remotes:list", label: "translated failure" });
+		expect(sentryMessageIdentity(error.message)).toMatchObject({ channel: "remotes:list", label: "", hashInput: "translated failure" });
 		expect(sentryErrorCode({ code: "invalid code!" })).toBeUndefined();
 	});
+});
+
+it.each([
+	"repository acme/secret-project not found",
+	"git checkout feature/acme-merger failed",
+	"getaddrinfo ENOTFOUND build.acme-internal.corp",
+	"Session alice-laptop not found",
+	"HTTP 401 Bad credentials sk-ant-abcdefghijklmnop",
+])("keeps short uncoded text out of the title", (message) => {
+	expect(sentryMessageIdentity(message)).toMatchObject({ label: "", hashInput: expect.any(String) });
 });

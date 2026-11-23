@@ -10,6 +10,8 @@ import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
 import { DesktopTelemetryController } from "./desktop-telemetry-controller";
 import { clearMainSentryCache, createErrorBudget, ERROR_BUDGET_FILE, electronMainSentryDsn, initMainSentry, installInErrorSample, sanitizeRendererCapture } from "./sentry-main";
 
+const hashParts = (text: string) => ["sha256", createHash("sha256").update(text).digest("hex").slice(0, 10)];
+
 const sdkTransport = vi.hoisted(() => vi.fn());
 const sdk = vi.hoisted(() => ({
 	init: vi.fn<(options: ElectronMainOptions) => void>(),
@@ -113,10 +115,10 @@ describe("Electron main Sentry configuration", () => {
 		expect(sdk.captureEvent).toHaveBeenCalledTimes(2);
 		const first = beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent);
 		expect(first).toMatchObject({
-			message: "spawn <path>",
-			fingerprint: ["electron", "handled", "daemon", "exited", "electron-main", "spawn <path>"],
+			message: "Electron main daemon failure (exited)",
+			fingerprint: ["electron", "handled", "daemon", "exited", "electron-main", ...hashParts("spawn <path>")],
 			tags: { surface: "electron-main", kind: "handled", category: "daemon", reason: "exited", detail: "signal:SIGKILL" },
-			exception: { values: [{ type: "TypeError", value: "spawn <path> (in electron-main, daemon/exited)" }] },
+			exception: { values: [{ type: "TypeError", value: "Electron main daemon failure (exited)" }] },
 		});
 		const second = beforeSend(sdk.captureEvent.mock.calls[1]?.[0] as ErrorEvent);
 		expect(second?.tags).not.toHaveProperty("detail");
@@ -128,7 +130,7 @@ describe("Electron main Sentry configuration", () => {
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		transport.captureMain?.({ category: "side_chat", reason: "recovery", error: new TypeError("Could not restore session-123 from /Users/private token=secret"), detail: "private-project" });
 		const event = beforeSend(sdk.captureEvent.mock.calls[0][0]);
-		expect(event).toMatchObject({ message: "Could not restore <id> from <path> <credential>", tags: { category: "side_chat", reason: "recovery" }, exception: { values: [{ type: "TypeError", value: "Could not restore <id> from <path> <credential> (in electron-main, side_chat/recovery)" }] } });
+		expect(event).toMatchObject({ message: "Electron main side_chat failure (recovery)", tags: { category: "side_chat", reason: "recovery" }, exception: { values: [{ type: "TypeError", value: "Electron main side_chat failure (recovery)" }] } });
 		expect(JSON.stringify(event)).not.toMatch(/private|Users|secret/);
 	});
 
@@ -348,7 +350,7 @@ describe("Electron main Sentry configuration", () => {
 		const otherMessage = capture("TypeError", "ChatWorkspace", "get project sample-123");
 		const otherType = capture("RangeError", "ChatWorkspace", "resume agent sample-123");
 		const otherFrame = capture("TypeError", "SessionView", "resume agent sample-123");
-		expect(first.fingerprint).toEqual(["electron", "exception", "unknown", "TypeError", "ChatWorkspace", "renderer", "resume agent <id>"]);
+		expect(first.fingerprint).toEqual(["electron", "exception", "unknown", "TypeError", "ChatWorkspace", "renderer", ...hashParts("resume agent <id>")]);
 		expect(same.fingerprint).toEqual(first.fingerprint);
 		expect(otherMessage.fingerprint).not.toEqual(first.fingerprint);
 		expect(otherType.fingerprint).not.toEqual(first.fingerprint);
@@ -433,7 +435,7 @@ describe("Electron main Sentry configuration", () => {
 		}
 		// They share one fingerprint, so scrub one: the per-fingerprint budget allows three a day.
 		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
-		expect(event.message).toBe("safe");
+		expect(event.message).toBe("Renderer API error (onboarding)");
 		expect(event.tags).toMatchObject({ code: "unknown" });
 		expect(event.tags).not.toHaveProperty("action");
 		// An onboarding code is not a code for any other category.
@@ -467,7 +469,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(mainError("TypeError", "startDaemon", "resume agent project-16").fingerprint).toEqual(first.fingerprint);
 		expect(mainError("RangeError", "startDaemon", "other").fingerprint).not.toEqual(first.fingerprint);
 		expect(mainError("TypeError", "initMainSentry", "other").fingerprint).not.toEqual(first.fingerprint);
-		expect(first.fingerprint).toEqual(["electron", "main_error", "unknown", "TypeError", "startDaemon", "electron-main", "resume agent <id>"]);
+		expect(first.fingerprint).toEqual(["electron", "main_error", "unknown", "TypeError", "startDaemon", "electron-main", ...hashParts("resume agent <id>")]);
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo|\/Users\/alice/);
 	});
 
@@ -497,7 +499,7 @@ describe("Electron main Sentry configuration", () => {
 			type: undefined, message,
 				exception: { values: [{ type: "Error", value: message, mechanism: { type: "auto.node.onunhandledrejection" } }] },
 		});
-		expect(mainError("resume agent ai-sports-coach-113")?.fingerprint).toEqual(["electron", "unhandled_rejection", "unknown", "Error", "unknown", "electron-main", "resume agent <id>"]);
+		expect(mainError("resume agent ai-sports-coach-113")?.fingerprint).toEqual(["electron", "unhandled_rejection", "unknown", "Error", "unknown", "electron-main", ...hashParts("resume agent <id>")]);
 		expect(mainError("get project private-repo")?.fingerprint).not.toEqual(mainError("resume agent ai-sports-coach-113")?.fingerprint);
 		expect(beforeSend({ type: undefined, message: "'renderer' process exited with 'crashed'" })?.fingerprint).toEqual(["electron", "process_exit", "crashed", "Error", "unknown", "electron-main"]);
 		expect(beforeSend({ type: undefined, level: "fatal", exception: { values: [{ type: "TypeError", mechanism: { type: "generic" } }] } })?.fingerprint).toEqual(["electron", "uncaught_exception", "unknown", "TypeError", "unknown", "electron-main"]);
@@ -689,11 +691,11 @@ it("uses scrubbed renderer exception text for titles and grouping", async () => 
 	const first = send("HTTP error 500: /etc/private http://localhost:8080/token alice@example.test '0xdeadbeef'");
 	const same = send("HTTP error 503: ~/private http://127.0.0.1/x bob@example.test '12345678-1234-1234-1234-123456789abc'");
 	const other = send("Cannot read properties of undefined (reading 'id')");
-	expect(first?.exception?.values?.[0]?.value).toBe("HTTP error <n>: <path> <url> <email> '?' (in unknown, render_crash)");
+	expect(first?.exception?.values?.[0]?.value).toBe("Renderer TypeError in unknown (render_crash)");
 	expect(same?.fingerprint).toEqual(first?.fingerprint);
 	expect(other?.fingerprint).not.toEqual(first?.fingerprint);
-	expect(other?.exception?.values?.[0]?.value).toBe("Cannot read properties of undefined (reading '?') (in unknown, render_crash)");
-	expect(send("/home/alice/private.txt")?.exception?.values?.[0]?.value).toBe("<path> (in unknown, render_crash)");
+	expect(other?.exception?.values?.[0]?.value).toBe("Renderer TypeError in unknown (render_crash)");
+	expect(send("/home/alice/private.txt")?.exception?.values?.[0]?.value).toBe("Renderer TypeError in unknown (render_crash)");
 });
 
 it("uses scrubbed messages for handled and SDK-originated main errors", async () => {
@@ -702,10 +704,10 @@ it("uses scrubbed messages for handled and SDK-originated main errors", async ()
 	const value = "ENOENT: no such file or directory, open '/var/projects/alice/private'";
 	transport.captureMain?.({ category: "ipc", reason: "handler", detail: "channel:project:read", error: new Error(value) });
 	const handled = beforeSend(sdk.captureEvent.mock.calls[0][0]);
-	expect(handled?.exception?.values?.[0]?.value).toBe("project:read: ENOENT: no such file or directory, open '?' (in channel:project:read, ipc/handler)");
-	expect(handled?.fingerprint?.at(-1)).toBe("enoent: no such file or directory, open '?'");
+	expect(handled?.exception?.values?.[0]?.value).toBe("Electron main ipc failure (handler)");
+	expect(handled?.fingerprint?.slice(-2)).toEqual(hashParts("enoent: no such file or directory, open '?'"));
 	const uncaught = beforeSend({ type: undefined, exception: { values: [{ type: "Error", value }] } });
-	expect(uncaught?.exception?.values?.[0]?.value).toBe("ENOENT: no such file or directory, open '?' (in unknown, main_error)");
+	expect(uncaught?.exception?.values?.[0]?.value).toBe("Electron main Error in unknown");
 });
 
 it("uses the IPC channel and cause code, or the normalized IPC message without one", async () => {
@@ -721,11 +723,14 @@ it("uses the IPC channel and cause code, or the normalized IPC message without o
 		return beforeSend(sdk.captureEvent.mock.calls.at(-1)![0], {});
 	};
 	const first = await send("remotes:list", "Internal server error", "REMOTES_READ_FAILED");
-	expect(first).toMatchObject({ message: "remotes:list: REMOTES_READ_FAILED", fingerprint: ["electron", "ipc", "remotes:list", "code", "REMOTES_READ_FAILED"] });
+	expect(first).toMatchObject({ message: "REMOTES_READ_FAILED", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], "code", "REMOTES_READ_FAILED"] });
 	expect((await send("remotes:list", "Erreur interne", "REMOTES_READ_FAILED"))?.fingerprint).toEqual(first?.fingerprint);
 	expect((await send("remotes:sync", "Internal server error", "REMOTES_READ_FAILED"))?.fingerprint).not.toEqual(first?.fingerprint);
 	const uncoded = await send("remotes:list", "Cannot read /home/alice/private");
-	expect(uncoded).toMatchObject({ message: "remotes:list: Cannot read <path>", fingerprint: ["electron", "ipc", "remotes:list", "cannot read <path>"] });
+	expect(uncoded).toMatchObject({ message: "Renderer Error in unknown (unknown)", fingerprint: ["electron", "ipc", hashParts("remotes:list")[1], ...hashParts("cannot read <path>")] });
+
+	const privateChannel = await send("private-project", "Cannot read a file");
+	expect(JSON.stringify(privateChannel)).not.toContain("private-project");
 
 	const cause = new AoError("WORKSPACE_NO_READY_REPOS", "Workspace project must contain at least one fully resolved git repository");
 	const sdkError = await beforeSend({ type: undefined, message: "Wrapped" }, { originalException: new Error("Wrapped", { cause }) });
@@ -749,7 +754,7 @@ it("omits quoted prompts, email addresses, home paths and remote URLs from the f
 		exception: { type: "Error", frames: [] },
 	});
 	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
-	expect(event?.message).toBe("Could not send '?' to <email> from <path> via <url>");
+	expect(event?.message).toBe("Renderer Error in unknown (unknown)");
 	expect(JSON.stringify(event)).not.toMatch(/my private prompt|alice|host\.test/);
 });
 
@@ -758,10 +763,16 @@ it.each([
 	["request failed access_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
 	["request failed refresh_token=supersecretvalue", "request failed <credential>", /supersecretvalue/],
 	["request failed client_secret=supersecretvalue", "request failed <credential>", /supersecretvalue/],
-] as const)("scrubs sensitive values in the final event", async (message, title, privateText) => {
+	["repository acme/secret-project not found", "repository acme/secret-project not found", /secret-project/],
+	["git checkout feature/acme-merger failed", "git checkout feature/acme-merger failed", /acme-merger/],
+	["getaddrinfo ENOTFOUND build.acme-internal.corp", "getaddrinfo enotfound build.acme-internal.corp", /acme-internal/],
+	["Session alice-laptop not found", "session alice-laptop not found", /alice-laptop/],
+	["HTTP 401 Bad credentials sk-ant-abcdefghijklmnop", "http <n> bad credentials sk-ant-abcdefghijklmnop", /abcdefghijklmnop/],
+] as const)("scrubs sensitive values in the final event", async (message, normalized, privateText) => {
 	const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 	transport.capture({ consentGeneration: "g", kind: "exception", message, exception: { type: "Error", frames: [] } });
 	const event = await sdk.init.mock.calls[0][0].beforeSend!(sdk.captureEvent.mock.calls[0][0], {});
-	expect(event?.message).toBe(title);
+	expect(event?.message).toBe("Renderer Error in unknown (unknown)");
+	expect(event?.fingerprint?.slice(-2)).toEqual(hashParts(normalized));
 	expect(JSON.stringify(event)).not.toMatch(privateText);
 });

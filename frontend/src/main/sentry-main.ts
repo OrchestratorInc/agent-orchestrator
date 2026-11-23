@@ -8,7 +8,7 @@ import path from "node:path";
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
 import { DEFAULT_ELECTRON_SENTRY_DSN, isPublishedSentryBuild, SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName, sentryEnvironment } from "../shared/sentry-config";
 import { safeSentryCode, sentryErrorCode } from "../../../packages/shared/telemetry/ao-error";
-import { sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue, sentryMessageFingerprint } from "../../../packages/shared/telemetry/sentry-message";
+import { sentryIdentityTitle, sentryMessageIdentity, sentryExceptionValue } from "../../../packages/shared/telemetry/sentry-message";
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 import { isSafeMainErrorDetail, MAIN_ERROR_CATEGORIES, MAIN_ERROR_REASONS, sanitizeMainErrorCapture, type MainErrorCapture } from "./main-error-capture";
@@ -175,9 +175,9 @@ function isExpectedNoise(event: Sentry.ErrorEvent): boolean {
 }
 
 function errorFingerprint(identity: ReturnType<typeof sentryMessageIdentity>, fallback: string[]): string[] {
-	const prefix = identity.channel ? ["electron", "ipc", identity.channel] : undefined;
+	const prefix = identity.channel ? ["electron", "ipc", createHash("sha256").update(identity.channel).digest("hex").slice(0, 10)] : undefined;
 	if (identity.code) return [...(prefix ?? ["electron"]), "code", identity.code];
-	const message = identity.hashInput === undefined ? sentryMessageFingerprint(identity.label)
+	const message = identity.hashInput === undefined ? []
 		: ["sha256", createHash("sha256").update(identity.hashInput).digest("hex").slice(0, 10)];
 	return [...(prefix ?? fallback), ...message];
 }
