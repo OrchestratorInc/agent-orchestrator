@@ -2649,6 +2649,7 @@
 	"shell.removeProjectRetry": "Retry",
 	"shell.renameSession": "Rename {{title}}",
 	"shell.rename": "Rename",
+	"shell.renameFailed": "Couldn't rename to {{name}}",
 	"shell.openDashboard": "Open dashboard",
 	"shell.copied": "Copied to clipboard",
 	"shell.copyFailed": "Could not copy",

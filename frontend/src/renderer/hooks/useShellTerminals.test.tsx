@@ -32,7 +32,10 @@ vi.mock("../lib/host-clients", () => ({
 	},
 }));
 
-vi.mock("../lib/platform", () => ({ isWindowsPlatform: isWindowsMock }));
+vi.mock("../lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/platform")>()),
+	isWindowsPlatform: isWindowsMock,
+}));
 vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => ({ client: { resumeSession: cloudResumeMock } }),
 }));
@@ -56,6 +59,8 @@ import {
 	useShellTerminals,
 } from "./useShellTerminals";
 import { takeCloudShellInput } from "../lib/cloud-shell-input";
+import { resetOptimisticRenamesForTest } from "./optimistic-renames";
+import { useUiStore } from "../stores/ui-store";
 import { useShellAgentStore } from "../stores/shell-agent-store";
 
 const shells: ShellTerminal[] = [
@@ -88,6 +93,8 @@ function queryClientWithShells() {
 }
 
 beforeEach(() => {
+	resetOptimisticRenamesForTest();
+	useUiStore.getState().clearGlobalToast();
 	useShellAgentStore.setState({ agents: {}, resuming: {} });
 	deleteMock.mockReset();
 	getMock.mockReset();
@@ -387,6 +394,98 @@ describe("useRenameShellTerminal", () => {
 		);
 		act(() => finishRename({ data: { shellTerminal: { ...shells[0], title: "server — zsh" } } }));
 		await waitFor(() => expect(result.current.isPending).toBe(false));
+	});
+
+	type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void };
+	const deferred = <T,>(): Deferred<T> => {
+		let resolve!: (value: T) => void;
+		let reject!: (error: unknown) => void;
+		const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+		return { promise, resolve, reject };
+	};
+	// A program set the first tab's title ("vim"); a given name hides it.
+	const titled = [{ ...shells[0], terminalTitle: "vim" }, shells[1]];
+	/** The daemon's list, read back after each rename settles. */
+	let stored = titled;
+	const renderTabs = () => {
+		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
+		queryClient.setQueryData(shellTerminalsQueryKey, titled);
+		const hook = renderHook(() => ({ list: useShellTerminals(), rename: useRenameShellTerminal() }), { wrapper: wrapper(queryClient) });
+		renderedRename = (title) => hook.result.current.rename.mutate({ handleId: shells[0].handleId, title });
+		return { queryClient, hook, first: () => hook.result.current.list.data?.[0] };
+	};
+	const answerWith = (title: string) => ({ data: { shellTerminal: { ...shells[0], title } } });
+
+	beforeEach(() => {
+		stored = titled;
+		getMock.mockImplementation(async () => ({ data: { shellTerminals: stored } }));
+	});
+
+	it("shows the new name, not the program's title, in the commit that closes the editor", async () => {
+		patchMock.mockReturnValue(new Promise(() => {}));
+		const { first } = renderTabs();
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		expect(first()).toMatchObject({ title: "one", terminalTitle: "vim" });
+
+		// TanStack delivers cache writes on setTimeout(0); hold it.
+		vi.useFakeTimers();
+		try {
+			act(() => renderedRename("server"));
+			expect(first()?.title).toBe("server");
+			expect(first()?.terminalTitle).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps the new name through a slow answer and a read that still has the old one", async () => {
+		const answer = deferred<ReturnType<typeof answerWith>>();
+		patchMock.mockReturnValue(answer.promise);
+		const { first, queryClient } = renderTabs();
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+
+		act(() => renderedRename("server"));
+		await act(async () => { await queryClient.refetchQueries({ queryKey: shellTerminalsQueryKey }); });
+		expect(first()).toMatchObject({ title: "server" });
+		expect(first()?.terminalTitle).toBeUndefined();
+
+		stored = [{ ...shells[0], title: "server" }, shells[1]];
+		await act(async () => answer.resolve(answerWith("server")));
+		await waitFor(() => expect(first()?.title).toBe("server"));
+	});
+
+	it("never lets an older rename's answer replace a newer name", async () => {
+		const older = deferred<ReturnType<typeof answerWith>>();
+		const newer = deferred<ReturnType<typeof answerWith>>();
+		patchMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+		const { first } = renderTabs();
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+
+		act(() => renderedRename("server"));
+		act(() => renderedRename("logs"));
+		// Hold the reads after each answer, so only the answers decide what shows.
+		getMock.mockReturnValue(new Promise(() => {}));
+		await act(async () => newer.resolve(answerWith("logs")));
+		await act(async () => older.resolve(answerWith("server")));
+		await act(async () => undefined);
+		expect(first()?.title).toBe("logs");
+	});
+
+	it("rolls a failed rename back to the program's title and says so", async () => {
+		patchMock.mockRejectedValue(new Error("disk full"));
+		const { first } = renderTabs();
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+
+		act(() => renderedRename("server"));
+		await waitFor(() => expect(first()).toMatchObject({ title: "one", terminalTitle: "vim" }));
+		expect(useUiStore.getState().globalToasts).toEqual([
+			expect.objectContaining({ title: "Couldn't rename to server", body: "disk full", tone: "error" }),
+		]);
+	});
+
+	let renderedRename: (title: string) => void = () => {};
+	beforeEach(() => {
+		renderedRename = () => { throw new Error("render the tabs first"); };
 	});
 });
 

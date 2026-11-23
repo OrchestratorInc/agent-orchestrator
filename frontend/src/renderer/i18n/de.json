@@ -2264,6 +2264,7 @@
 	"shell.removeProjectRetry": "Erneut versuchen",
 	"shell.renameSession": "{{title}} umbenennen",
 	"shell.rename": "Umbenennen",
+	"shell.renameFailed": "Umbenennen in {{name}} fehlgeschlagen",
 	"shell.openDashboard": "Dashboard öffnen",
 	"shell.copied": "In die Zwischenablage kopiert",
 	"shell.copyFailed": "Kopieren fehlgeschlagen",

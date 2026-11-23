@@ -3,7 +3,20 @@
 // the workspaces query — they are not sessions, never appear on the board, and
 // must not invalidate session state when they come and go.
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useMemo } from "react";
+import { appI18n } from "../i18n";
+import { withQueryFields } from "../lib/query-result";
+import { useUiStore } from "../stores/ui-store";
+import {
+	beginOptimisticRename,
+	hasOptimisticRenames,
+	isOptimisticRenameTracked,
+	renamedTitle,
+	renameReadStarted,
+	settleOptimisticRename,
+	useOptimisticRenamesVersion,
+} from "./optimistic-renames";
 import { queueCloudShellInput } from "../lib/cloud-shell-input";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import { paneTerminalGridHint } from "../lib/terminal-grid-hint";
@@ -170,10 +183,32 @@ function settlePendingShell(handleId: string) {
 }
 
 async function fetchShellTerminals(hostId?: HostId): Promise<ShellTerminal[]> {
+	// A rename confirmed while this read is out shows over what it returns.
+	const readStartedAt = renameReadStarted();
 	let listed = await fetchListedShellTerminals(hostId);
 	if (discardingShells.size) listed = listed.filter((shell) => !discardingShells.has(shell.handleId));
 	const pending = [...pendingShells.values()].filter((shell) => hostKey(shell.hostId) === hostKey(hostId));
-	return pending.length ? [...listed, ...pending] : listed;
+	return applyOptimisticShellTitles(pending.length ? [...listed, ...pending] : listed, hostId, readStartedAt);
+}
+
+const shellRenameKey = (handleId: string, hostId?: HostId) => `shell:${reopenKey(handleId, hostId)}`;
+
+/** A shell's tab with the title the user gave it. A given name hides the program's title, on the daemon too. */
+function withShellTitle(shell: ShellTerminal, title: string): ShellTerminal {
+	return shell.title === title && shell.terminalTitle === undefined ? shell : { ...shell, title, terminalTitle: undefined };
+}
+
+/** The shells with their confirmed renames (see optimistic-renames); the same array when none applies. */
+function applyOptimisticShellTitles(shells: ShellTerminal[], hostId?: HostId, readStartedAt?: number): ShellTerminal[] {
+	if (!hasOptimisticRenames()) return shells;
+	let changed = false;
+	const next = shells.map((shell) => {
+		const title = renamedTitle(shellRenameKey(shell.handleId, hostId), readStartedAt);
+		const renamed = title === undefined ? shell : withShellTitle(shell, title);
+		if (renamed !== shell) changed = true;
+		return renamed;
+	});
+	return changed ? next : shells;
 }
 
 async function fetchListedShellTerminals(hostId?: HostId): Promise<ShellTerminal[]> {
@@ -205,11 +240,19 @@ export const shellTerminalsQueryOptions = {
 };
 
 export function useShellTerminals(hostId?: HostId) {
-	return useQuery(hostId && hostId !== LOCAL_HOST ? {
+	const query = useQuery(hostId && hostId !== LOCAL_HOST ? {
 		...shellTerminalsQueryOptions,
 		queryKey: shellTerminalsQueryKeyForHost(hostId),
 		queryFn: () => fetchShellTerminals(hostId),
 	} : shellTerminalsQueryOptions);
+	// A rename in flight redraws the tabs in the commit that closes the editor;
+	// the cached list catches up a tick later (TanStack notifies on a timeout).
+	const renameVersion = useOptimisticRenamesVersion();
+	const listed = query.data;
+	// renameVersion is read outside React by applyOptimisticShellTitles.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	const data = useMemo(() => listed && applyOptimisticShellTitles(listed, hostId), [listed, hostId, renameVersion]);
+	return withQueryFields(query, { data });
 }
 
 export type OpenShellTerminalInput = {
@@ -598,13 +641,28 @@ export function useReopenShellTerminal(hostId?: HostId) {
 
 export type RenameShellTerminalInput = { handleId: string; title: string };
 
-/** Renames a shell terminal's tab. The new title persists on the daemon. */
+/** Each shell's tab as it was before the first rename still in flight, for a full rollback. */
+const shellsBeforeRename = new Map<string, ShellTerminal>();
+
+function writeShell(queryClient: QueryClient, queryKey: ReturnType<typeof shellTerminalsQueryKeyForHost>, handleId: string, update: (shell: ShellTerminal) => ShellTerminal) {
+	queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) =>
+		current?.map((shell) => (shell.handleId === handleId ? update(shell) : shell)),
+	);
+}
+
+type RenameShellTerminalRequest = RenameShellTerminalInput & { token: number };
+
+/**
+ * Renames a shell terminal's tab. The new title persists on the daemon and
+ * shows from the commit that calls `mutate`; a newer rename always wins over an
+ * older one's answer, and a failure rolls back only its own title and says so.
+ */
 export function useRenameShellTerminal(hostId?: HostId) {
 	const queryClient = useQueryClient();
 	const queryKey = shellTerminalsQueryKeyForHost(hostId);
 	const remote = Boolean(hostId && hostId !== LOCAL_HOST);
-	return useMutation({
-		mutationFn: async ({ handleId, title }: RenameShellTerminalInput): Promise<ShellTerminal> => {
+	const mutation = useMutation({
+		mutationFn: async ({ handleId, title }: RenameShellTerminalRequest): Promise<ShellTerminal> => {
 			if (usePreviewData && !remote) {
 				previewShellTerminals = previewShellTerminals.map((s) => (s.handleId === handleId ? { ...s, title } : s));
 				const shell = previewShellTerminals.find((s) => s.handleId === handleId);
@@ -627,22 +685,44 @@ export function useRenameShellTerminal(hostId?: HostId) {
 			if (!data) throw new Error("Daemon returned no shell terminal");
 			return toShellTerminal(data.shellTerminal, hostId);
 		},
-		onMutate: async ({ handleId, title }) => {
-			await queryClient.cancelQueries({ queryKey });
-			const previous = queryClient.getQueryData<ShellTerminal[]>(queryKey);
-			queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) =>
-				current?.map((shell) => (shell.handleId === handleId ? { ...shell, title } : shell)),
-			);
-			return { previous };
-		},
-		onError: (_error, _input, context) => {
-			if (context?.previous) queryClient.setQueryData(queryKey, context.previous);
-		},
-		onSuccess: (shell) => {
-			queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) =>
-				current?.map((candidate) => (candidate.handleId === shell.handleId ? shell : candidate)),
-			);
+		onSuccess: (shell, { handleId, token }) => {
+			const settled = settleOptimisticRename(shellRenameKey(handleId, hostId), token, true);
+			// An older rename's answer must not replace a newer title.
+			if (!settled?.latest) return;
+			writeShell(queryClient, queryKey, handleId, () => shell);
 			if (!shell.cloud) void queryClient.invalidateQueries({ queryKey });
 		},
+		onError: (error, { handleId, title, token }) => {
+			const key = shellRenameKey(handleId, hostId);
+			const settled = settleOptimisticRename(key, token, false);
+			if (!settled?.latest) return;
+			const before = shellsBeforeRename.get(key);
+			// Nothing else in flight or stored: the tab goes back to exactly what it showed.
+			if (!isOptimisticRenameTracked(key) && before) writeShell(queryClient, queryKey, handleId, (shell) => ({ ...shell, title: before.title, terminalTitle: before.terminalTitle }));
+			else writeShell(queryClient, queryKey, handleId, (shell) => withShellTitle(shell, settled.title));
+			void queryClient.invalidateQueries({ queryKey });
+			useUiStore.getState().showGlobalToast(
+				appI18n.t("shell.renameFailed", { name: title }),
+				error instanceof Error ? error.message : undefined,
+				"error",
+			);
+		},
 	});
+	const { mutate: send, mutateAsync: sendAsync } = mutation;
+	// Synchronous up to the request, so the tab shows the new title in the same
+	// commit as its editor closing (useMutation's onMutate runs after an await).
+	const start = useCallback(({ handleId, title }: RenameShellTerminalInput): RenameShellTerminalRequest => {
+		const key = shellRenameKey(handleId, hostId);
+		const shell = queryClient.getQueryData<ShellTerminal[]>(queryKey)?.find((candidate) => candidate.handleId === handleId);
+		if (!isOptimisticRenameTracked(key)) {
+			if (shell) shellsBeforeRename.set(key, shell);
+			else shellsBeforeRename.delete(key);
+		}
+		const token = beginOptimisticRename(key, title, shell ? (shell.terminalTitle ?? shell.title) : title);
+		writeShell(queryClient, queryKey, handleId, (current) => withShellTitle(current, title));
+		return { handleId, title, token };
+	}, [hostId, queryClient, queryKey]);
+	const mutate = useCallback((input: RenameShellTerminalInput) => send(start(input)), [send, start]);
+	const mutateAsync = useCallback((input: RenameShellTerminalInput) => sendAsync(start(input)), [sendAsync, start]);
+	return { ...mutation, mutate, mutateAsync };
 }

@@ -2264,6 +2264,7 @@
 	"shell.removeProjectRetry": "再試行",
 	"shell.renameSession": "{{title}} の名前を変更",
 	"shell.rename": "名前を変更",
+	"shell.renameFailed": "{{name}} に名前を変更できませんでした",
 	"shell.openDashboard": "ダッシュボードを開く",
 	"shell.copied": "クリップボードにコピーしました",
 	"shell.copyFailed": "コピーできませんでした",

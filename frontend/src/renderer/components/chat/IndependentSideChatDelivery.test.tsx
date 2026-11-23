@@ -5,6 +5,7 @@ import { TooltipProvider } from "../ui/tooltip";
 import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
+import { resetOptimisticRenamesForTest } from "../../hooks/optimistic-renames";
 import { aoBridge } from "../../lib/bridge";
 import type { SideCloseRequest } from "../../../shared/side-close";
 
@@ -34,7 +35,10 @@ vi.mock("../../lib/bridge", () => ({
 	} },
 }));
 
-beforeEach(() => { closeProtocol.status = "closed"; });
+beforeEach(() => {
+	closeProtocol.status = "closed";
+	resetOptimisticRenamesForTest();
+});
 
 describe("side delivery draft ownership", () => {
 	let accept: (value: { error?: object }) => void;
@@ -595,6 +599,79 @@ describe("side panel navigation and recovery", () => {
 				"First draft with an unsent follow-up",
 			),
 		);
+	});
+
+	describe("renaming a tab", () => {
+		/** Labels the fake daemon stored, read back by the list. */
+		let storedLabels: Record<string, string>;
+		/** While set, list reads wait; each one answers with the labels stored when it began. */
+		let holdLists = false;
+		let heldLists: Array<() => void> = [];
+		const listNow = () => ({ data: { sides: panelSides.map((side) => ({ ...side, label: storedLabels[side.id] ?? side.label })) } });
+		beforeEach(() => {
+			storedLabels = {};
+			holdLists = false;
+			heldLists = [];
+			const normalGet = get.getMockImplementation()!;
+			get.mockImplementation(async (path, options) => {
+				if (path.endsWith("/side-chats")) {
+					const answer = listNow();
+					if (holdLists) return new Promise((resolve) => heldLists.push(() => resolve(answer)));
+					return answer;
+				}
+				return normalGet(path, options);
+			});
+		});
+		const renameFirstTab = (label: string) => {
+			fireEvent.doubleClick(screen.getByRole("tab", { name: "First question" }));
+			const input = screen.getByRole("textbox", { name: "Rename side chat" });
+			input.focus();
+			fireEvent.change(input, { target: { value: label } });
+			fireEvent.keyDown(input, { key: "Enter" });
+		};
+
+		it("shows the new label as the editor closes and keeps it through a slow answer and a stale read", async () => {
+			let answer!: (value: { error?: object }) => void;
+			patch.mockImplementation((_path: string, request: { params: { path: { sideId: string } }; body: { label: string } }) => {
+				storedLabels[request.params.path.sideId] = request.body.label;
+				return new Promise((resolve) => (answer = resolve));
+			});
+			render(<SidePanelHarness />);
+			await screen.findByRole("tab", { name: "First question" });
+
+			renameFirstTab("Pricing notes");
+			// Same commit as the editor closing: no waiting.
+			expect(screen.queryByRole("textbox", { name: "Rename side chat" })).not.toBeInTheDocument();
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+
+			// The 2 s poll reads the list while the rename is in flight. The daemon
+			// has not stored the label yet, so that read has the old one.
+			const stored = storedLabels.side;
+			delete storedLabels.side;
+			holdLists = true;
+			await waitFor(() => expect(heldLists).toHaveLength(1), { timeout: 3_000 });
+			storedLabels.side = stored;
+			// The answer arrives; the read it triggers waits too.
+			await act(async () => answer({}));
+			await waitFor(() => expect(heldLists).toHaveLength(2));
+			// The stale read lands first, then the fresh one.
+			await act(async () => heldLists[0]!());
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "First question" })).not.toBeInTheDocument();
+			await act(async () => heldLists[1]!());
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+		});
+
+		it("rolls a failed rename back to the old label", async () => {
+			patch.mockResolvedValue({ error: { message: "nope" } });
+			render(<SidePanelHarness />);
+			await screen.findByRole("tab", { name: "First question" });
+
+			renameFirstTab("Pricing notes");
+			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+			expect(await screen.findByRole("tab", { name: "First question" })).toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "Pricing notes" })).not.toBeInTheDocument();
+		});
 	});
 
 	it("keeps the no-open-side-chat state to one message", async () => {

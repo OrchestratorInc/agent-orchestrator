@@ -2252,6 +2252,7 @@
 	"shell.removeProjectRetry": "重试",
 	"shell.renameSession": "重命名{{title}}",
 	"shell.rename": "重命名",
+	"shell.renameFailed": "无法重命名为 {{name}}",
 	"shell.openDashboard": "打开仪表盘",
 	"shell.copied": "已复制到剪贴板",
 	"shell.copyFailed": "无法复制",

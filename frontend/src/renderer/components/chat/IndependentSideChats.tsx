@@ -33,8 +33,11 @@ import { handleTabListKeyDown } from "../../lib/terminal-tabs";
 import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
+import { beginOptimisticRename, renamedTitle, renameReadStarted, settleOptimisticRename } from "../../hooks/optimistic-renames";
 import { useUiStore } from "../../stores/ui-store";
 import { INLINE_ATTACHMENT_BYTES, readBlobAsBase64, type OutgoingAttachment } from "../../lib/attachment-uploads";
+
+const sideChatRenameKey = (sessionId: string, sideId: string) => `side-chat:${sessionId}:${sideId}`;
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
@@ -772,6 +775,8 @@ export function useIndependentSideChats(
 		const revision = lifecycleRevision.current;
 		const request = ++listRequests.current;
 		const current = () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === lifecycleRevision.current && request > appliedListRequest.current;
+		// A rename confirmed while this read is out shows over what it returns.
+		const readStartedAt = renameReadStarted();
 		try {
 			const { data, error: requestError } = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/side-chats", { params: { path: { sessionId } } });
 			if (!current()) return;
@@ -780,7 +785,10 @@ export function useIndependentSideChats(
 			if (!Array.isArray(data?.sides)) { if (reportErrors) setListError("Could not load side chats."); return; }
 			inventoryKnown.current = true;
 			setListError(undefined);
-			const nextSides = data.sides.filter(side => !closedSidesRef.current.has(side.id));
+			const nextSides = data.sides.filter(side => !closedSidesRef.current.has(side.id)).map((side) => {
+				const label = renamedTitle(sideChatRenameKey(sessionId, side.id), readStartedAt);
+				return label === undefined || label === side.label ? side : { ...side, label };
+			});
 			for (const side of nextSides) closePlaceholders.current.delete(side.id);
 			for (const [id, side] of localCreates.current) {
 				if (nextSides.some(current => current.id === id)) localCreates.current.delete(id);
@@ -1809,13 +1817,34 @@ export function useIndependentSideChats(
 		setRenameId(undefined);
 		renameIdRef.current = undefined;
 		setRenameText(undefined);
-		if (!label || label === sides.find((side) => side.id === id)?.label) return;
+		const previous = sides.find((side) => side.id === id)?.label ?? "";
+		if (!label || label === previous) return;
 		const available = operationCurrent(id);
 		if (!available()) return;
-		await runSideMutation(id, "rename", () => apiClient.PATCH(
-			"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label",
-			{ params: { path: { sessionId, sideId: id } }, body: { label } },
-		), () => { void refreshList(); });
+		// The tab shows the new label as its editor closes. Every attempt settles,
+		// so a newer rename wins over an older one's answer and a failure rolls
+		// back only its own label.
+		const key = sideChatRenameKey(sessionId, id);
+		const token = beginOptimisticRename(key, label, previous);
+		setSides((current) => current.map((side) => (side.id === id ? { ...side, label } : side)));
+		clearSideError(id, "rename");
+		let failure: string | undefined;
+		try {
+			const { error: renameError } = await apiClient.PATCH(
+				"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label",
+				{ params: { path: { sessionId, sideId: id } }, body: { label } },
+			);
+			if (renameError) failure = apiErrorMessage(renameError);
+		} catch (cause) {
+			failure = apiErrorMessage(cause);
+		}
+		const settled = settleOptimisticRename(key, token, failure === undefined);
+		if (!settled?.latest || !available()) return;
+		if (failure !== undefined) {
+			setSides((current) => current.map((side) => (side.id === id ? { ...side, label: settled.title } : side)));
+			setSideError({ id, message: failure, kind: "rename" });
+		}
+		void refreshList();
 	};
 
 	const tabBar = enabled ? (
