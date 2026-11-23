@@ -82,7 +82,7 @@ describe("approval hosts", () => {
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(a)");
 		expect(screen.getByText(/Payment/)).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
-		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything(), undefined));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything(), undefined, undefined));
 		state.pending = [request("b", "ao-2")];
 		rerender(<QueryClientProvider client={new QueryClient()}><SessionChatApprovalCard sessionId="ao-1" /></QueryClientProvider>);
 		expect(container).toBeEmptyDOMElement();
@@ -95,7 +95,7 @@ describe("approval hosts", () => {
 		fireEvent.keyDown(screen.getByRole("button", { name: "Allow once" }), { key: "Enter" });
 		expect(state.decide).not.toHaveBeenCalled();
 		fireEvent.keyDown(screen.getByTestId("approval-prompt"), { key: "Escape" });
-		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "deny", expect.anything(), undefined));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "deny", expect.anything(), undefined, undefined));
 	});
 
 	it("renders nothing for a session with no requests", () => {
