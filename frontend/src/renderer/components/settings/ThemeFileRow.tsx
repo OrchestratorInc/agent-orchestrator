@@ -11,7 +11,8 @@ import { Button } from "../ui/button";
 import { SettingsRow } from "./SettingsRow";
 
 const COPIED_MS = 1600;
-// The daemon takes a request of 4 MiB; a larger file is not a theme.
+// A theme's CSS is at most 2 MiB (MaxCSSBytes in service/apptheme), so a file
+// twice that size cannot be a theme and is not read into the dialog.
 const MAX_THEME_FILE_BYTES = 4 * 1024 * 1024;
 
 /**
