@@ -34,7 +34,7 @@ type signIn struct {
 }
 
 // CallbackURL is the address a sign-in server sends the browser back to.
-func (s *Service) CallbackURL() string { return s.baseURL + callbackPath }
+func (s *Service) CallbackURL() string { return s.base() + callbackPath }
 
 // StartSignIn starts a sign-in and returns the page the user must open. It returns "" when the server asks for no sign-in.
 func (s *Service) StartSignIn(ctx context.Context, ref string) (string, error) {

@@ -254,3 +254,18 @@ func TestOnlyTheSessionGetsTheCommandAndValuesOfACommandConnector(t *testing.T) 
 }
 
 func first(status int, _ string) int { return status }
+
+func TestSessionEntriesAndTheCallbackUseTheAddressTheDaemonBound(t *testing.T) {
+	svc := New(t.TempDir(), "http://127.0.0.1:3001")
+	if _, err := svc.Create(context.Background(), Input{Name: "docs", Transport: TransportHTTP, URL: "https://docs.example/mcp"}); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetBaseURL("http://127.0.0.1:52991/")
+	servers := svc.ForSession(context.Background(), SessionInput{SessionID: "ao-1"})
+	if len(servers) != 1 || servers[0].URL != "http://127.0.0.1:52991/mcp/s/ao-1/connectors/docs" {
+		t.Fatalf("servers = %+v", servers)
+	}
+	if got := svc.CallbackURL(); got != "http://127.0.0.1:52991/oauth/mcp/callback" {
+		t.Fatalf("callback = %s", got)
+	}
+}

@@ -1387,6 +1387,7 @@ func Run(buildVersion string) (retErr error) {
 		return err
 	}
 	browserLive.SetLoopbackBaseURL("http://" + srv.Addr().String())
+	connectorSvc.SetBaseURL("http://" + srv.Addr().String())
 	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{
 		Logger:       log,
 		Wake:         cdcPipe.sessionChanges(),

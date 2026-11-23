@@ -85,7 +85,7 @@ func (s *Service) ForSession(_ context.Context, in SessionInput) []ports.ChatMCP
 		use.keys = append(use.keys, rec.Key)
 		entry := ports.ChatMCPServerConfig{
 			Name: rec.Key, Type: "http",
-			URL:     s.baseURL + proxyPrefix + url.PathEscape(in.SessionID) + "/connectors/" + url.PathEscape(rec.Key),
+			URL:     s.base() + proxyPrefix + url.PathEscape(in.SessionID) + "/connectors/" + url.PathEscape(rec.Key),
 			Headers: map[string]string{"Authorization": "Bearer " + token},
 		}
 		if rec.Transport == TransportStdio {

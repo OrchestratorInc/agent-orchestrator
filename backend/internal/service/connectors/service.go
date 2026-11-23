@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,7 +40,7 @@ var (
 type Service struct {
 	mu      sync.Mutex
 	path    string
-	baseURL string
+	baseURL atomic.Value
 	http    *http.Client
 	now     func() time.Time
 	loaded  bool
@@ -55,11 +56,25 @@ type Service struct {
 
 // New returns a Service that keeps its file in dataDir. baseURL is the loopback address of the daemon.
 func New(dataDir, baseURL string) *Service {
-	return &Service{
-		path: filepath.Join(dataDir, fileName), baseURL: strings.TrimRight(baseURL, "/"),
+	s := &Service{
+		path: filepath.Join(dataDir, fileName),
 		http: &http.Client{Timeout: 30 * time.Second}, now: time.Now,
 		signIns: map[string]*signIn{}, sources: map[string]oauth2.TokenSource{}, sessions: map[string]*sessionUse{},
 	}
+	s.SetBaseURL(baseURL)
+	return s
+}
+
+// SetBaseURL sets the loopback address the daemon answers on. The daemon calls
+// it with the bound address, which differs from the configured one when that
+// port was taken.
+func (s *Service) SetBaseURL(baseURL string) {
+	s.baseURL.Store(strings.TrimRight(baseURL, "/"))
+}
+
+func (s *Service) base() string {
+	base, _ := s.baseURL.Load().(string)
+	return base
 }
 
 // List returns every connector in name order.
