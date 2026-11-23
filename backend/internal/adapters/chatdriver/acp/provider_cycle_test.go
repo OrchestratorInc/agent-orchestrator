@@ -169,6 +169,44 @@ func TestACPProviderCycleAfterTurnSettlesAndStaysOutOfTheNextTurn(t *testing.T) 
 	}
 }
 
+// A usage_update before a tool call closed the response that asked for the
+// tool. The agent answers the tool's result in a new response, so the tool's
+// completion must not end the cycle at the short grace; the new response's
+// own usage_update does.
+func TestACPProviderCycleWaitsForTheResponseAfterAToolCompletes(t *testing.T) {
+	restore := setProviderCycleWaits(20*time.Millisecond, time.Hour)
+	defer restore()
+	conv := &conversation{
+		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		sessionID: "s", events: make(chan ports.ChatEvent, 32),
+		messages: map[string]string{}, thoughts: map[string]string{},
+		nestedMessages: map[string]nestedMessageState{}, tools: map[string]*toolState{},
+	}
+	update := func(u acpsdk.SessionUpdate) {
+		t.Helper()
+		if err := conv.processUpdate(acpsdk.SessionNotification{SessionId: "s", Update: u}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	update(acpsdk.UpdateAgentMessageText("Checking."))
+	update(usageUpdate())
+	update(acpsdk.StartToolCall("call-1", "git status",
+		acpsdk.WithStartKind(acpsdk.ToolKindExecute), acpsdk.WithStartStatus(acpsdk.ToolCallStatusInProgress)))
+	update(acpsdk.UpdateToolCall("call-1", acpsdk.WithUpdateStatus(acpsdk.ToolCallStatusCompleted)))
+	time.Sleep(100 * time.Millisecond)
+	for len(conv.events) > 0 {
+		if e := <-conv.events; e.Kind == ports.ChatEventMessageCompleted || isProviderState(domain.ThreadStatusIdle)(e) {
+			t.Fatalf("cycle ended before the agent answered its tool: %+v", e)
+		}
+	}
+	update(acpsdk.UpdateAgentMessageText(" Clean."))
+	update(usageUpdate())
+	message := settledMessage(t, collectUntil(t, conv.events, isProviderState(domain.ThreadStatusIdle)))
+	if message.Text != "Checking. Clean." {
+		t.Fatalf("settled message = %+v", message)
+	}
+}
+
 // Claude Code reports its own running and idle states; its idle ends the
 // cycle, and AO adds no state of its own.
 func TestACPProviderCycleEndsOnTheProvidersOwnIdle(t *testing.T) {

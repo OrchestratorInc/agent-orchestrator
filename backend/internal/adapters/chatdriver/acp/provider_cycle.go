@@ -108,6 +108,10 @@ func (c *conversation) armProviderCycle(cycle *providerCycle, update acpsdk.Sess
 			return
 		}
 	}
+	// Only a usage_update that is the latest update ends the cycle early. One
+	// before a tool call closed the response that asked for the tool; once the
+	// tool completes the agent answers its result in a new response, which
+	// ends with its own usage_update, so a tool completion waits the fallback.
 	wait := providerCycleQuietWait
 	if update.UsageUpdate != nil {
 		wait = providerCycleSettleGrace
