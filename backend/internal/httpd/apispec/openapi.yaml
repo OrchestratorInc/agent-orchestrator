@@ -5273,6 +5273,50 @@ paths:
       summary: Start a worker task and refine its title in the background
       tags:
       - sessions
+  /api/v1/pr-preview:
+    get:
+      operationId: getPRPreview
+      parameters:
+      - description: A github.com pull request URL.
+        in: query
+        name: url
+        schema:
+          description: A github.com pull request URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PRPreviewResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Gateway
+      summary: Read the state and summary of a GitHub pull request a chat links to
+      tags:
+      - link-preview
   /api/v1/projects:
     get:
       operationId: listProjects
@@ -22791,6 +22835,57 @@ components:
       - name
       - contentType
       - data
+      type: object
+    PRPreviewResponse:
+      properties:
+        additions:
+          type: integer
+        author:
+          type: string
+        changedFiles:
+          type: integer
+        checks:
+          enum:
+          - passing
+          - failing
+          - pending
+          type: string
+        deletions:
+          type: integer
+        number:
+          type: integer
+        repo:
+          description: owner/name
+          type: string
+        sourceBranch:
+          type: string
+        state:
+          enum:
+          - open
+          - draft
+          - merged
+          - closed
+          type: string
+        stateChangedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        targetBranch:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - url
+      - repo
+      - number
+      - title
+      - state
+      - additions
+      - deletions
+      - changedFiles
       type: object
     PRReviewState:
       properties:
