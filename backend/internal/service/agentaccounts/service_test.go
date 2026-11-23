@@ -1257,3 +1257,115 @@ func TestFailedChecksInARowKeepTheLastGoodReadingAndAnyMismatch(t *testing.T) {
 		t.Fatalf("ValidateAccount = %v, want the wrong login refused", err)
 	}
 }
+
+type scriptedClaudeIdentity struct {
+	*fakeClaude
+	identity func(context.Context, string) (domain.AgentAccountIdentityCheck, error)
+}
+
+func (p *scriptedClaudeIdentity) Identity(ctx context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
+	return p.identity(ctx, home)
+}
+
+// readPublishGate pauses a read after it has copied the previous reading but
+// before it publishes. It lets the test place another result in that gap.
+type readPublishGate struct {
+	context.Context
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *readPublishGate) Err() error {
+	g.once.Do(func() {
+		close(g.entered)
+		<-g.release
+	})
+	return g.Context.Err()
+}
+
+func TestFailedReadKeepsMismatchPublishedAfterItsSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"timeout", context.DeadlineExceeded},
+		{"pending renewal", ports.ErrAgentAccountRenewalPending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mismatchStarted := make(chan struct{})
+			releaseMismatch := make(chan struct{})
+			gate := &readPublishGate{Context: context.Background(), entered: make(chan struct{}), release: make(chan struct{})}
+			var releaseMismatchOnce, releaseFailedOnce sync.Once
+			releaseMismatchRead := func() { releaseMismatchOnce.Do(func() { close(releaseMismatch) }) }
+			releaseFailedRead := func() { releaseFailedOnce.Do(func() { close(gate.release) }) }
+			t.Cleanup(releaseMismatchRead)
+			t.Cleanup(releaseFailedRead)
+
+			calls := 0
+			var callsMu sync.Mutex
+			provider := &scriptedClaudeIdentity{fakeClaude: &fakeClaude{}}
+			provider.identity = func(context.Context, string) (domain.AgentAccountIdentityCheck, error) {
+				callsMu.Lock()
+				calls++
+				call := calls
+				callsMu.Unlock()
+				switch call {
+				case 1:
+					return domain.AgentAccountIdentityCheck{SignedIn: true, LoggedIn: true, Email: "expected@example.com"}, nil
+				case 2:
+					close(mismatchStarted)
+					<-releaseMismatch
+					return domain.AgentAccountIdentityCheck{SignedIn: true, LoggedIn: true, Email: "other@example.com"}, nil
+				default:
+					return domain.AgentAccountIdentityCheck{}, tc.err
+				}
+			}
+			account := domain.AgentAccount{ID: "saved", Provider: domain.AgentAccountProviderClaude, Home: t.TempDir(), Email: "expected@example.com"}
+			svc := New(&memStore{}, []ports.AgentAccountProviderCLI{provider}, t.TempDir(), fakeTerminals{}, nil)
+			if first := svc.read(context.Background(), account); first == nil || !first.identity.SignedIn {
+				t.Fatalf("initial reading = %+v, want the saved login", first)
+			}
+
+			mismatchDone := make(chan *reading, 1)
+			go func() { mismatchDone <- svc.read(context.Background(), account) }()
+			select {
+			case <-mismatchStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("mismatch read did not start")
+			}
+			failedDone := make(chan *reading, 1)
+			go func() { failedDone <- svc.read(gate, account) }()
+			select {
+			case <-gate.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("failed read did not reach publication")
+			}
+			releaseMismatchRead()
+			select {
+			case mismatch := <-mismatchDone:
+				if !mismatch.mismatch {
+					t.Fatal("the earlier read did not record the wrong login")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("mismatch read did not finish")
+			}
+			releaseFailedRead()
+			var failed *reading
+			select {
+			case failed = <-failedDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("failed read did not finish")
+			}
+			if !failed.mismatch || failed.identity.SignedIn || failed.identity.LoggedIn || failed.identityProblem != domain.AgentAccountProblemOtherLogin {
+				t.Fatalf("failed read = %+v, want the wrong-login refusal preserved", failed)
+			}
+			svc.mu.Lock()
+			stored := svc.readings[account.ID]
+			svc.mu.Unlock()
+			if stored != failed {
+				t.Fatal("the failed read did not publish the checked result")
+			}
+		})
+	}
+}

@@ -467,6 +467,15 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		}
 		if err != nil {
 			r.confirmed, r.confirmedSeq = prev.confirmed, prev.confirmedSeq
+			// Another read may have recorded a wrong login after this failed
+			// read copied its earlier snapshot. A failed check cannot clear that
+			// refusal, including when the login is waiting for renewal.
+			if prev.mismatch {
+				r.identity, r.limits = prev.identity, prev.limits
+				r.identity.SignedIn, r.identity.LoggedIn = false, false
+				r.mismatch = true
+				r.identityProblem, r.identityErr = prev.identityProblem, prev.identityErr
+			}
 		}
 	}
 	if r.failedOnItsOwn() {
