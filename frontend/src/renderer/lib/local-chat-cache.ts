@@ -1,5 +1,7 @@
 import type { InfiniteData, QueryClient, QueryKey } from "@tanstack/react-query";
+import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import type { ConversationSnapshot } from "../types/conversation";
+import type { WorkspaceSummary } from "../types/workspace";
 import { done } from "./remote-chat-cache";
 
 const DB_NAME = "ao-local-chats";
@@ -7,12 +9,11 @@ const STORE = "pages";
 const MAX_CHATS = 50;
 const WRITE_DELAY_MS = 2_000;
 
-type Entry = { sessionId: string; savedAt: number; page: ConversationSnapshot };
+type Entry = { sessionId: string; createdAt: string; savedAt: number; page: ConversationSnapshot };
 
 export const savedConversationQueryKey = (sessionId: string) => ["conversation-saved", sessionId] as const;
 
 let database: Promise<IDBDatabase> | undefined;
-let listed: Set<string> | undefined;
 
 function openDatabase(): Promise<IDBDatabase> {
 	database ??= new Promise((resolve, reject) => {
@@ -25,6 +26,13 @@ function openDatabase(): Promise<IDBDatabase> {
 		};
 	});
 	return database;
+}
+
+function listedCreatedAt(queryClient: QueryClient, sessionId: string): string | undefined {
+	const session = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)
+		?.flatMap((workspace) => workspace.sessions)
+		.find((candidate) => candidate.id === sessionId);
+	return session ? session.createdAt ?? "" : undefined;
 }
 
 const localChat = (key: QueryKey) => (key[0] === "conversation" && key.length === 2 && typeof key[1] === "string" ? key[1] : undefined);
@@ -43,7 +51,6 @@ async function pruneOldChats(): Promise<void> {
 export function keepLocalChats(sessionIds: string[]): Promise<void> {
 	if (typeof indexedDB === "undefined") return Promise.resolve();
 	const keep = new Set(sessionIds);
-	listed = keep;
 	return openDatabase()
 		.then(async (db) => {
 			const store = db.transaction(STORE, "readwrite").objectStore(STORE);
@@ -68,18 +75,20 @@ export function persistLocalChats(queryClient: QueryClient): () => void {
 			void openDatabase()
 				.then((db) => done(db.transaction(STORE).objectStore(STORE).get(sessionId)))
 				.then((entry: Entry | undefined) => {
-					if (entry && event.query.state.data === undefined) queryClient.setQueryData(savedConversationQueryKey(sessionId), entry.page);
+					if (!entry || event.query.state.data !== undefined || entry.createdAt !== listedCreatedAt(queryClient, sessionId)) return;
+					queryClient.setQueryData(savedConversationQueryKey(sessionId), entry.page);
 				})
 				.catch(() => undefined);
 		}
 		if (event.action.type === "success") queryClient.removeQueries({ queryKey: savedConversationQueryKey(sessionId), exact: true });
-		if (timers.has(sessionId) || (listed && !listed.has(sessionId))) return;
+		if (timers.has(sessionId)) return;
 		timers.set(sessionId, setTimeout(() => {
 			timers.delete(sessionId);
 			const page = (event.query.state.data as InfiniteData<ConversationSnapshot> | undefined)?.pages[0];
-			if (!page || written.has(page)) return;
+			const createdAt = listedCreatedAt(queryClient, sessionId);
+			if (!page || createdAt === undefined || written.has(page)) return;
 			written.add(page);
-			const entry: Entry = { sessionId, savedAt: Date.now(), page };
+			const entry: Entry = { sessionId, createdAt, savedAt: Date.now(), page };
 			void openDatabase()
 				.then((db) => done(db.transaction(STORE, "readwrite").objectStore(STORE).put(entry)))
 				.catch(() => written.delete(page));

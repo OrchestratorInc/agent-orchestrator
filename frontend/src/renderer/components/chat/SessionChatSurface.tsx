@@ -595,7 +595,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(optimisticArrival
 			? { ...startingConversationSnapshot(session.id, session.provider), controller: { state: "stopped" as const } }
 			: snapshot) ??
-		savedSnapshot ??
+		(renderShellFallback ? undefined : savedSnapshot) ??
 		(optimisticChat ? startingConversationSnapshot(session.id, session.provider) : undefined) ??
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
