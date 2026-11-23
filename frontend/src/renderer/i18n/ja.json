@@ -3903,6 +3903,7 @@
 	"chat.draft.storageUnavailable": "現在、下書きを保存できません。チャットは続けられますが、このチャットを離れると未送信のテキストは失われます。",
 	"chat.draft.queueSaveLocalFailed": "下書きを保存できませんでした。このチャットを開いたままにするか、離れる前に下書きをコピーしてください。",
 	"chat.draft.queueUnavailable": "現在、待機中のメッセージは編集できません。",
+	"chat.configOption.noChoices": "このオプションには選択肢がありません。選択内容は送信されませんでした。",
 	"chat.draft.queueMissing": "このメッセージは待機中ではありません。続行するには、この編集をコピーするかキャンセルしてください。",
 	"chat.draft.queueReplaced": "この待機中のメッセージの編集は置き換えられました。何も送信されていません。",
 	"chat.draft.queuePrepareFailed": "下書きと復元 ID をローカルに保存できませんでした。何も送信されていません。ローカルストレージへのアクセスを復旧して再試行してください。",

@@ -3995,6 +3995,7 @@
 	"chat.draft.storageUnavailable": "Les brouillons ne peuvent pas être enregistrés pour le moment. Vous pouvez continuer à discuter, mais le texte non envoyé sera perdu si vous quittez cette conversation.",
 	"chat.draft.queueSaveLocalFailed": "Le brouillon n’a pas pu être enregistré. Gardez cette conversation ouverte ou copiez-le avant de partir.",
 	"chat.draft.queueUnavailable": "La modification des messages en attente est indisponible pour le moment.",
+	"chat.configOption.noChoices": "Aucun choix n’est disponible pour cette option. Votre sélection n’a pas été envoyée.",
 	"chat.draft.queueMissing": "Ce message n’est plus en attente. Copiez ou annulez cette modification pour continuer.",
 	"chat.draft.queueReplaced": "Cette modification du message en attente a été remplacée. Rien n’a été envoyé.",
 	"chat.draft.queuePrepareFailed": "Le brouillon et son identifiant de récupération n’ont pas pu être enregistrés localement. Rien n’a été envoyé. Rétablissez le stockage local et réessayez.",

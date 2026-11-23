@@ -3995,6 +3995,7 @@
 	"chat.draft.storageUnavailable": "Ahora no se pueden guardar borradores. Puedes seguir chateando, pero el texto sin enviar se perderá si sales de este chat.",
 	"chat.draft.queueSaveLocalFailed": "No se pudo guardar el borrador. Mantén este chat abierto o cópialo antes de salir.",
 	"chat.draft.queueUnavailable": "La edición de mensajes en cola no está disponible en este momento.",
+	"chat.configOption.noChoices": "No hay opciones disponibles para este ajuste. Tu selección no se envió.",
 	"chat.draft.queueMissing": "Este mensaje ya no está en cola. Copia o cancela esta edición para continuar.",
 	"chat.draft.queueReplaced": "Esta edición del mensaje en cola se reemplazó. No se envió nada.",
 	"chat.draft.queuePrepareFailed": "No se pudieron guardar localmente el borrador y su ID de recuperación. No se envió nada. Restablece el almacenamiento local y reintenta.",

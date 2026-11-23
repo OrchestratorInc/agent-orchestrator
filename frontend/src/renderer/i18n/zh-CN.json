@@ -3885,6 +3885,7 @@
 	"chat.draft.storageUnavailable": "暂时无法保存草稿。你可以继续聊天，但离开此聊天后，未发送的文字将不会保留。",
 	"chat.draft.queueSaveLocalFailed": "无法保存草稿。请保持此聊天打开，或在离开前复制草稿。",
 	"chat.draft.queueUnavailable": "目前无法编辑排队消息。",
+	"chat.configOption.noChoices": "此选项没有可用的选择项。您的选择未发送。",
 	"chat.draft.queueMissing": "此消息已不在队列中。请复制或取消此编辑以继续。",
 	"chat.draft.queueReplaced": "此排队消息编辑已被替换。未发送任何内容。",
 	"chat.draft.queuePrepareFailed": "无法在本地保存草稿及其恢复 ID。未发送任何内容。请恢复本地存储后重试。",
