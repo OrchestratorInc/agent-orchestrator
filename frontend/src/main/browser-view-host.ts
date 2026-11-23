@@ -695,6 +695,9 @@ type BrowserSessionEntry = {
   layoutRevision: number;
   networkTabId?: string;
   agentBrowserCommands: number;
+  // Control is on its way back to a person, waiting on a fresh read of the
+  // focused field (handBackControl). Until then, every update says "agent".
+  controlHandoff?: object;
   browserOperations: number;
   // Woken when no agent command or renderer operation is in flight.
   idleWaiters: Array<() => void>;
@@ -1105,16 +1108,8 @@ export function createBrowserViewHost(
     // A phone stops typing the moment the agent starts acting. Control comes
     // back only once the page has said what its focused field now holds: the
     // agent may have typed into it, and the phone starts again from that value.
-    if (session.live) {
-      const shown = shownEntry(session);
-      if (session.agentBrowserCommands > 0 || !shown) emitShownLiveState(session);
-      else {
-        const live = session.live;
-        void queryFreshFocus(shown).finally(() => {
-          if (session.live === live) emitShownLiveState(session);
-        });
-      }
-    }
+    if (session.agentBrowserCommands > 0) emitShownLiveState(session);
+    else handBackControl(session);
     shellWebContents.send("browser:agentActivity", {
       viewId: session.viewId,
       active: session.agentBrowserCommands > 0,
@@ -3473,7 +3468,7 @@ export function createBrowserViewHost(
       throw error;
     } finally {
       session.profileSwitching = false;
-      emitShownLiveState(session);
+      handBackControl(session);
       session.profileReplacing = false;
       session.profileSwitchTargetId = null;
     }
@@ -4216,9 +4211,35 @@ export function createBrowserViewHost(
 			}),
 			width: bounds.width,
 			height: bounds.height,
-			control: session.agentBrowserCommands > 0 || session.profileSwitching ? "agent" : "human",
+			control: session.agentBrowserCommands > 0 || session.profileSwitching || session.controlHandoff ? "agent" : "human",
 			focusedEditable: current.focusedEditable ?? null,
 		};
+	}
+
+	// Hands control back to a person only with the focused field as the page
+	// holds it now: the agent may just have typed into it. Every update until
+	// then, a frame's included, still says the agent has control.
+	function handBackControl(session: BrowserSessionEntry): void {
+		const shown = shownEntry(session);
+		if (!session.live || !shown || session.agentBrowserCommands > 0 || session.profileSwitching) {
+			session.controlHandoff = undefined;
+			emitShownLiveState(session);
+			return;
+		}
+		const handoff = {};
+		session.controlHandoff = handoff;
+		const settle = () => {
+			if (session.controlHandoff !== handoff) return;
+			session.controlHandoff = undefined;
+			emitShownLiveState(session);
+		};
+		// A page that never answers must not keep the phone read-only.
+		const timeout = setTimeout(settle, CONTROL_HANDOFF_MAX_MS);
+		timeout.unref?.();
+		void queryFreshFocus(shown).finally(() => {
+			clearTimeout(timeout);
+			settle();
+		});
 	}
 
 	// For updates outside a stream's own lifecycle, which may find every tab
@@ -6321,6 +6342,9 @@ function hostOf(url: string): string {
     return "";
   }
 }
+
+/** The longest a handback waits for the page to say what its field holds. */
+const CONTROL_HANDOFF_MAX_MS = 2_000;
 
 /** How often a watched page is asked which field has focus. */
 const FOCUS_POLL_MS = 500;

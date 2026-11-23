@@ -7118,6 +7118,49 @@ describe("browser live typing", () => {
 		expect(handoff?.focusedEditable?.value).toBe("agent wrote");
 	});
 
+	// A frame may arrive while the handoff still asks the page: its state must
+	// not hand control back with the old value either.
+	it("keeps reporting agent control on every update until the handoff's read lands", async () => {
+		const { debuggerListeners, debuggerSendCommand, host } = setupHost();
+		const page = focusPage(debuggerSendCommand);
+		page.focus = JSON.stringify({ kind: "text", value: "old", field: 1 });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		await host.handleRemoteInput("sess-1", { kind: "text", value: "x" });
+
+		let release!: () => void;
+		let held = false;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const answer = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+			if (method === "Runtime.evaluate" && !held) {
+				held = true;
+				await gate;
+			}
+			return answer(method, params);
+		});
+		page.focus = JSON.stringify({ kind: "text", value: "agent wrote", field: 1 });
+		sink.state.mockClear();
+		const agent = host.execute("sess-1", "tabs");
+		await vi.waitFor(() => expect(held).toBe(true));
+
+		const jpeg = Buffer.alloc(21);
+		jpeg.set([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08]);
+		jpeg.writeUInt16BE(720, 7);
+		jpeg.writeUInt16BE(1280, 9);
+		const message = debuggerListeners.get("message") as unknown as (event: unknown, method: string, params: unknown) => void;
+		message({}, "Page.screencastFrame", { data: jpeg.toString("base64"), sessionId: 1, metadata: { timestamp: 1 } });
+		await vi.waitFor(() => expect(sink.frame).toHaveBeenCalled());
+
+		release();
+		await agent;
+		await vi.waitFor(() => expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ control: "human" })));
+		const human = sink.state.mock.calls
+			.map(([state]) => state as { control: string; focusedEditable: { value?: string } | null })
+			.filter((state) => state.control === "human");
+		for (const state of human) expect(state.focusedEditable?.value).toBe("agent wrote");
+	});
+
 	it("notices focus the phone did not move while it watches", async () => {
 		vi.useFakeTimers();
 		try {
