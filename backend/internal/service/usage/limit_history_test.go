@@ -185,6 +185,47 @@ func TestLimitHistoryKeepsLoginsThatShareAnEmailApart(t *testing.T) {
 	}
 }
 
+// An account that read a login and then moved to another organization no
+// longer stands for the login it left.
+func TestLimitHistoryShowsALoginAsAnAccountThatStillHoldsIt(t *testing.T) {
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	aReset, bReset := now.Add(2*time.Hour), now.Add(4*time.Hour)
+	read := func(account, org string, reset, readAt time.Time) domain.AgentLimitReading {
+		return domain.AgentLimitReading{
+			AccountID: account, Provider: domain.AgentAccountProviderClaude, Email: "same@example.com", OrgID: org,
+			WindowID: "five_hour", DurationMinutes: 300, UsedPercent: 10, ResetsAt: &reset, ReadAt: readAt,
+		}
+	}
+	reader := NewLimitHistoryReader(fakeLimitStore{
+		fakeLimitReadings: fakeLimitReadings{
+			read("acct-a", "org-a", aReset, now.Add(-3*time.Hour)),
+			read("device-claude", "org-a", aReset, now.Add(-2*time.Hour)),
+			read("device-claude", "org-b", bReset, now.Add(-time.Hour)),
+		},
+		saved: []domain.AgentAccount{{ID: "acct-a", Provider: domain.AgentAccountProviderClaude}},
+	}, nil)
+	reader.now = func() time.Time { return now }
+
+	history, err := reader.History(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	got := map[string]string{}
+	for _, login := range history.Logins {
+		if len(login.Windows) != 1 {
+			t.Fatalf("login %s windows = %+v, want one", login.AccountID, login.Windows)
+		}
+		got[login.AccountID] = login.Windows[0].ResetsAt.Format(time.RFC3339)
+	}
+	want := map[string]string{"acct-a": aReset.Format(time.RFC3339), "device-claude": bReset.Format(time.RFC3339)}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("logins = %v, want org A as acct-a and org B as the device", got)
+	}
+	if a := history.Logins[0]; a.AccountID != "acct-a" || a.Windows[0].Readings != 2 {
+		t.Fatalf("org A login = %+v, want both its readings shown as acct-a", a)
+	}
+}
+
 func TestLimitHistoryWindows(t *testing.T) {
 	now := time.Date(2026, 10, 28, 20, 0, 0, 0, time.UTC)
 	at := func(h, m int) time.Time { return time.Date(2026, 10, 28, h, m, 0, 0, time.UTC) }

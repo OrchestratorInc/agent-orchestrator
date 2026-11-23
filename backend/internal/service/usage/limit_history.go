@@ -135,19 +135,35 @@ func withOrgs(readings []domain.AgentLimitReading) []domain.AgentLimitReading {
 	return out
 }
 
-// holds reports whether a held login is the given one. A login whose
-// organization is unknown on either side matches the same email address in
-// any organization.
-func holds(held map[loginKey]bool, key loginKey) bool {
-	for h := range held {
-		if h.provider == key.provider && h.who == key.who && (h.org == key.org || h.org == "" || key.org == "") {
-			return true
-		}
+// heldBy is each held login with the accounts that hold it now.
+type heldBy map[loginKey]map[string]bool
+
+func (h heldBy) add(key loginKey, account string) {
+	if h[key] == nil {
+		h[key] = map[string]bool{}
 	}
-	return false
+	h[key][account] = true
 }
 
-func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount, confirmed map[string]domain.AgentAccountIdentityCheck) map[loginKey]bool {
+// holders returns the accounts that hold the given login now, or nil when no
+// account does. A login whose organization is unknown on either side matches
+// the same email address in any organization.
+func (h heldBy) holders(key loginKey) map[string]bool {
+	var out map[string]bool
+	for held, accounts := range h {
+		if held.provider == key.provider && held.who == key.who && (held.org == key.org || held.org == "" || key.org == "") {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			for account := range accounts {
+				out[account] = true
+			}
+		}
+	}
+	return out
+}
+
+func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount, confirmed map[string]domain.AgentAccountIdentityCheck) heldBy {
 	accounts := map[string]domain.AgentAccount{}
 	for _, p := range domain.AgentAccountProviders {
 		accounts[domain.DeviceAgentAccountID(p)] = domain.AgentAccount{Provider: p}
@@ -155,7 +171,7 @@ func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount
 	for _, account := range saved {
 		accounts[account.ID] = account
 	}
-	held := map[loginKey]bool{}
+	held := heldBy{}
 	for id, identity := range confirmed {
 		account, exists := accounts[id]
 		if !exists || !identity.SignedIn {
@@ -165,7 +181,7 @@ func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount
 		if email == "" {
 			email = account.Email
 		}
-		held[loginOf(account.Provider, email, identity.OrgID, id)] = true
+		held.add(loginOf(account.Provider, email, identity.OrgID, id), id)
 	}
 	latest := map[string]domain.AgentLimitReading{}
 	for _, reading := range readings {
@@ -175,28 +191,38 @@ func heldLogins(readings []domain.AgentLimitReading, saved []domain.AgentAccount
 			latest[reading.AccountID] = reading
 		}
 	}
-	for _, reading := range latest {
-		held[readingLogin(reading)] = true
+	for id, reading := range latest {
+		held.add(readingLogin(reading), id)
 	}
 	return held
 }
 
-func limitLogins(readings []domain.AgentLimitReading, held map[loginKey]bool, now time.Time) []domain.UsageLimitLogin {
+func limitLogins(readings []domain.AgentLimitReading, held heldBy, now time.Time) []domain.UsageLimitLogin {
 	byLogin := map[loginKey][]domain.AgentLimitReading{}
 	for _, reading := range readings {
 		if reading.ResetsAt == nil {
 			continue
 		}
 		key := readingLogin(reading)
-		if !holds(held, key) {
+		if held.holders(key) == nil {
 			continue
 		}
 		byLogin[key] = append(byLogin[key], reading)
 	}
 	logins := make([]domain.UsageLimitLogin, 0, len(byLogin))
-	for _, group := range byLogin {
+	for key, group := range byLogin {
 		sort.SliceStable(group, func(i, j int) bool { return group[i].ReadAt.Before(group[j].ReadAt) })
+		// The login is shown as the account that read it last among those that
+		// hold it now: an account that read it and has since moved to another
+		// organization no longer stands for it.
 		latest := group[len(group)-1]
+		holders := held.holders(key)
+		for i := len(group) - 1; i >= 0; i-- {
+			if holders[group[i].AccountID] {
+				latest = group[i]
+				break
+			}
+		}
 		login := domain.UsageLimitLogin{Provider: latest.Provider, Email: latest.Email, AccountID: latest.AccountID, Windows: []domain.UsageLimitSpan{}}
 		for i := len(group) - 1; i >= 0 && login.Plan == ""; i-- {
 			login.Plan = group[i].Plan
