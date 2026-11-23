@@ -16,6 +16,8 @@ printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'  -u) echo 1000 ;;' '  -un) echo ao ;;' 'esac' > "$tmp/bin/id"
 printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'  -s) echo Linux ;;' '  -m) echo "${TEST_UNAME_M:-x86_64}" ;;' 'esac' > "$tmp/bin/uname"
+printf '%s\n' '#!/bin/sh' '[ "${TEST_GLIBC:-2.35}" = none ] && exit 1' 'echo "glibc ${TEST_GLIBC:-2.35}"' > "$tmp/bin/getconf"
+chmod +x "$tmp/bin/getconf"
 printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'  status)' \
 	'    if [ -n "${TEST_AO_BLOCK_FILE:-}" ]; then' \
@@ -217,7 +219,7 @@ PY
 			result=0
 			run_bootstrap || result=$?
 			if [[ "$machine" == riscv64 ]]; then
-				[[ "$result" == 1 ]] && grep -q 'supports Ubuntu on x64 or arm64 only' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+				[[ "$result" == 1 ]] && grep -q 'supports Linux on x64 or arm64 only' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 				[[ ! -e "$tmp/args-$machine" ]]
 				continue
 			fi
@@ -231,6 +233,57 @@ PY
 				cat "$tmp/out" "$tmp/curl-$machine" >&2; exit 1;
 			}
 		done
+		;;
+	bootstrap-dnf)
+		bootstrap="${script%/*}/bootstrap-self-hosted.sh"
+		ln -s /bin/bash "$tmp/bin/bash"
+		for tool in head sort; do
+			ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
+		done
+		for tool in dnf systemctl; do
+			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/$tool"
+			chmod +x "$tmp/bin/$tool"
+		done
+		# Records each privileged command; drains piped repo files for `tee`.
+		printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$TEST_SUDO_LOG"' \
+			'if [ "$1" = tee ]; then while read -r _; do :; done; fi' > "$tmp/bin/sudo"
+		printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" > "$TEST_INSTALL_ARGS"' > "$tmp/installer"
+		printf '%s\n' '#!/bin/sh' 'echo "$2" >> "$TEST_CURL_LOG"' \
+			'case "$2" in https://go.dev/*|https://nodejs.org/*) exit 1 ;; esac' \
+			'if [ "$3" = -o ]; then cp "$TEST_INSTALLER" "$4"; else echo "[repo]"; fi' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/sudo" "$tmp/bin/curl"
+		run_bootstrap() {
+			env PATH="$tmp/bin" HOME="$tmp/home" TEST_INSTALLER="$tmp/installer" TEST_INSTALL_ARGS="$tmp/args" \
+				TEST_SUDO_LOG="$tmp/sudo" TEST_CURL_LOG="$tmp/curl" TEST_GLIBC="${TEST_GLIBC:-2.35}" \
+				/bin/bash "$bootstrap" "$@" > "$tmp/out" 2>&1
+		}
+		# A release install takes base tools, gh and cloudflared from dnf, never apt.
+		run_bootstrap || { cat "$tmp/out" >&2; exit 1; }
+		for want in 'tee /etc/yum.repos.d/gh-cli.repo' 'dnf install -y ca-certificates gh git python3 tar' \
+			'tee /etc/yum.repos.d/cloudflared.repo' 'dnf install -y cloudflared'; do
+			grep -Fxq "$want" "$tmp/sudo" || { printf 'missing: %s\n' "$want" >&2; cat "$tmp/sudo" >&2; exit 1; }
+		done
+		! grep -q 'apt' "$tmp/sudo" || { cat "$tmp/sudo" >&2; exit 1; }
+		[[ -f "$tmp/args" ]]
+		# A branch build adds the compiler toolchain from dnf.
+		: > "$tmp/sudo"
+		result=0
+		run_bootstrap --source-ref main || result=$?
+		[[ "$result" != 0 ]]
+		grep -Fxq 'dnf install -y gcc gcc-c++ make pkgconf-pkg-config xz' "$tmp/sudo" || { cat "$tmp/sudo" "$tmp/out" >&2; exit 1; }
+		# Too old a glibc, or none, stops before anything is installed.
+		for glibc in 2.28 none; do
+			: > "$tmp/sudo"
+			result=0
+			TEST_GLIBC="$glibc" run_bootstrap || result=$?
+			[[ "$result" == 1 && ! -s "$tmp/sudo" ]] || { cat "$tmp/out" >&2; exit 1; }
+			grep -q "needs glibc 2.34 or newer.*found: ${glibc/2.28/glibc 2.28}$" "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		done
+		# Neither apt-get nor dnf.
+		rm "$tmp/bin/dnf"
+		result=0
+		run_bootstrap || result=$?
+		[[ "$result" == 1 ]] && grep -q 'needs apt-get (Ubuntu, Debian) or dnf' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		;;
 	bad-tmux)
 		chmod -x "$tmp/pkg/resources/tmux/bin/tmux"
@@ -514,6 +567,6 @@ PY
 			! grep -q 'Pair this host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		fi
 		;;
-	*) printf 'Usage: %s {release-channels|bootstrap-nightly|release-arm64|bootstrap-arch|bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-pairing-code|tunnel-unavailable|tunnel-linked}\n' "$0" >&2; exit 2 ;;
+	*) printf 'Usage: %s {release-channels|bootstrap-nightly|release-arm64|bootstrap-arch|bootstrap-dnf|bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-pairing-code|tunnel-unavailable|tunnel-linked}\n' "$0" >&2; exit 2 ;;
 esac
 printf 'PASS %s\n' "$1"

@@ -26,6 +26,7 @@ on:
       - "frontend/scripts/build-tmux.mjs"
       - "frontend/scripts/go-version.mjs"
       - "frontend/scripts/tmux-version.mjs"
+      - "scripts/bootstrap-self-hosted.sh"
       - "scripts/setup-self-hosted.sh"
 
 permissions:
@@ -105,6 +106,42 @@ jobs:
           "$resources/daemon/ao" remote-host --help >/dev/null
           "$resources/acp-runtime/node/bin/node" --version
           "$resources/tmux/bin/tmux" -V
+      # Amazon Linux 2023 has glibc 2.34, the oldest the package supports. PR runs
+      # only, so a slow package mirror cannot hold up a release build.
+      - name: Install on Amazon Linux 2023
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        run: |
+          script="$(cat <<'SH'
+          dnf install -y -q sudo shadow-utils gzip
+          useradd -m ao
+          echo 'ao ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ao
+          # A container has no systemd user session, so the bootstrap stops at
+          # that check, after its dnf installs.
+          su - ao -c 'bash /src/scripts/bootstrap-self-hosted.sh' || true
+          su - ao -c 'gh --version && git --version && python3 --version'
+          su - ao -c 'bash /src/scripts/setup-self-hosted.sh --bundle /src/frontend/dist-host/ao-host-linux-arm64.tar.gz --install-only'
+          cat > /tmp/check.sh <<'CHECK'
+          set -euo pipefail
+          resources="$HOME/.ao/host/current/resources"
+          ~/.local/bin/ao version
+          "$resources/acp-runtime/node/bin/node" --version
+          tmux="$resources/tmux/bin/tmux"
+          "$tmux" -S /tmp/smoke.sock -f /dev/null new-session -d -s smoke 'sleep 30'
+          "$tmux" -S /tmp/smoke.sock has-session -t smoke
+          "$tmux" -S /tmp/smoke.sock kill-server
+          ~/.local/bin/ao daemon > /tmp/daemon.log 2>&1 &
+          ready() { ~/.local/bin/ao status --json | python3 -c 'import json, sys; sys.exit(json.load(sys.stdin).get("state") != "ready")'; }
+          for _ in $(seq 60); do ready && break; sleep 1; done
+          ready || { cat /tmp/daemon.log; exit 1; }
+          ~/.local/bin/ao stop
+          CHECK
+          chmod 755 /tmp/check.sh
+          su - ao -c 'bash /tmp/check.sh'
+          SH
+          )"
+          docker run --rm -v "$GITHUB_WORKSPACE:/src:ro" public.ecr.aws/amazonlinux/amazonlinux:2023 \
+            bash -euo pipefail -c "$script"
       - name: Collect artifact and compute digest
         run: |
           set -euo pipefail
