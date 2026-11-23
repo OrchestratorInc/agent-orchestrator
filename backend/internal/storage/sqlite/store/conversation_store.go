@@ -1460,6 +1460,11 @@ func (s *Store) appendUserMessage(
 		}); err != nil {
 			return err
 		}
+		if retryOfTurnID == "" && msg.Origin == domain.MessageOriginHuman {
+			if err := q.ReleaseConversationQueue(ctx, conversationID); err != nil {
+				return fmt.Errorf("release held queue: %w", err)
+			}
+		}
 		if retryOfTurnID == "" && reviewID == "" && !msg.SpawnOpeningPrompt && msg.Origin == domain.MessageOriginHuman &&
 			msg.SenderSessionID == "" && s.usageAllowed() {
 			if err := q.IncrementUsageMessageSummary(ctx, usageMessageIncrement(ctx, session, usageMessageChat, now)); err != nil {
@@ -1760,6 +1765,16 @@ func (s *Store) SettleTurnWithFailureCode(
 	}); err != nil {
 		return fmt.Errorf("settle turn %s: %w", turn.ID, err)
 	}
+	if state == domain.TurnStateFailed && turn.State != domain.TurnStateFailed &&
+		domain.ParseConversationUsageLimit(errMessage, &now) != nil {
+		if err := q.HoldConversationQueueForTurn(ctx, gen.HoldConversationQueueForTurnParams{
+			QueueHeldAt:    sql.NullTime{Time: now, Valid: true},
+			ConversationID: conversationID,
+			TurnID:         sql.NullString{String: turn.ID, Valid: true},
+		}); err != nil {
+			return fmt.Errorf("hold queue behind turn %s: %w", turn.ID, err)
+		}
+	}
 	if err := q.SettleStreamingConversationMessagesForTurn(ctx,
 		gen.SettleStreamingConversationMessagesForTurnParams{
 			UpdatedAt:      now,
@@ -1954,8 +1969,30 @@ func (s *Store) CleanupOwnedControllerWork(
 	conversationID, generation string,
 	now time.Time,
 ) (owned bool, err error) {
+	return s.cleanupOwnedControllerWork(ctx, session, conversationID, generation, false, now)
+}
+
+// CleanupOwnedControllerWorkKeepingHeldQueue is CleanupOwnedControllerWork for a
+// controller stopped by an account move: turns queued behind a usage limit stay
+// queued for the controller on the new account.
+func (s *Store) CleanupOwnedControllerWorkKeepingHeldQueue(
+	ctx context.Context,
+	session domain.SessionID,
+	conversationID, generation string,
+	now time.Time,
+) (owned bool, err error) {
+	return s.cleanupOwnedControllerWork(ctx, session, conversationID, generation, true, now)
+}
+
+func (s *Store) cleanupOwnedControllerWork(
+	ctx context.Context,
+	session domain.SessionID,
+	conversationID, generation string,
+	keepHeldQueue bool,
+	now time.Time,
+) (owned bool, err error) {
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
-		return cleanupOwnedControllerWork(ctx, q, session, conversationID, generation, now)
+		return cleanupOwnedControllerWork(ctx, q, session, conversationID, generation, keepHeldQueue, now)
 	}
 
 	s.writeMu.Lock()
@@ -1964,7 +2001,7 @@ func (s *Store) CleanupOwnedControllerWork(
 	err = s.inTx(ctx, "clean up owned Chat controller work", func(q *gen.Queries) error {
 		var cleanupErr error
 		owned, cleanupErr = cleanupOwnedControllerWork(
-			ctx, q, session, conversationID, generation, now)
+			ctx, q, session, conversationID, generation, keepHeldQueue, now)
 		return cleanupErr
 	})
 	return owned, err
@@ -1975,6 +2012,7 @@ func cleanupOwnedControllerWork(
 	q *gen.Queries,
 	session domain.SessionID,
 	conversationID, generation string,
+	keepHeldQueue bool,
 	now time.Time,
 ) (bool, error) {
 	owner, err := q.GetSession(ctx, session)
@@ -1990,11 +2028,16 @@ func cleanupOwnedControllerWork(
 		}); err != nil {
 		return false, fmt.Errorf("settle orphaned activities for %s: %w", session, err)
 	}
-	if err := q.SettleOrphanedConversationTurns(ctx,
-		gen.SettleOrphanedConversationTurnsParams{
-			CompletedAt:        sql.NullTime{Time: now, Valid: true},
-			HandledBySessionID: session,
-		}); err != nil {
+	orphans := gen.SettleOrphanedConversationTurnsParams{
+		CompletedAt:        sql.NullTime{Time: now, Valid: true},
+		HandledBySessionID: session,
+	}
+	if keepHeldQueue {
+		err = q.SettleOrphanedConversationTurnsKeepingHeldQueue(ctx, gen.SettleOrphanedConversationTurnsKeepingHeldQueueParams(orphans))
+	} else {
+		err = q.SettleOrphanedConversationTurns(ctx, orphans)
+	}
+	if err != nil {
 		return false, fmt.Errorf("settle orphaned turns for %s: %w", session, err)
 	}
 	if err := q.FailPendingConversationRequestsForSession(ctx,
@@ -2694,6 +2737,29 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 		SenderProjectID:     row.SenderProjectID,
 		SenderDisplayName:   row.SenderDisplayName,
 	}, nil
+}
+
+// ConversationQueueHeld reports whether the conversation's queued turns wait
+// behind a prompt that failed on a usage limit.
+func (s *Store) ConversationQueueHeld(ctx context.Context, conversationID string) (bool, error) {
+	heldAt, err := s.conversationReader(ctx).SelectConversationQueueHeldAt(ctx, conversationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read queue hold of %s: %w", conversationID, err)
+	}
+	return heldAt.Valid, nil
+}
+
+// ReleaseConversationQueue lets the conversation's queued turns dispatch again.
+func (s *Store) ReleaseConversationQueue(ctx context.Context, conversationID string) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.ReleaseConversationQueue(ctx, conversationID); err != nil {
+		return fmt.Errorf("release queue of %s: %w", conversationID, err)
+	}
+	return nil
 }
 
 // ListQueuedBatch previews the current queue without reserving any message.

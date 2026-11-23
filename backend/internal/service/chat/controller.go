@@ -2384,6 +2384,9 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	if !allowDispatch {
 		return nil
 	}
+	if held, err := c.queueHeld(ctx); err != nil || held {
+		return err
+	}
 
 	take := limit
 	for {
@@ -2543,7 +2546,15 @@ func (c *Controller) BeginHandoff(
 				c.AbortHandoff()
 				return fmt.Errorf("check queued turns before handoff: %w", err)
 			case policy == domain.SessionInterfaceTransitionDrain:
-				if err := c.drainLocked(ctx, true); err != nil {
+				held, err := c.queueHeld(ctx)
+				if err == nil && held {
+					c.sendMu.Unlock()
+					return nil
+				}
+				if err == nil {
+					err = c.drainLocked(ctx, true)
+				}
+				if err != nil {
 					c.sendMu.Unlock()
 					c.AbortHandoff()
 					return fmt.Errorf("drain queued turns during handoff: %w", err)
@@ -3468,6 +3479,13 @@ func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Ti
 		_, err := c.store.CleanupOwnedReviewControllerWork(ctx, c.reviewID, c.conversation.ID, c.generation, now)
 		return err
 	}
+	c.mu.Lock()
+	moving := c.handoff == controllerHandoffInterfaceDrain
+	c.mu.Unlock()
+	if store, ok := c.store.(queueHoldStore); ok && moving {
+		_, err := store.CleanupOwnedControllerWorkKeepingHeldQueue(ctx, c.sessionID, c.conversation.ID, c.generation, now)
+		return err
+	}
 	_, err := c.store.CleanupOwnedControllerWork(ctx, c.sessionID, c.conversation.ID, c.generation, now)
 	return err
 }
@@ -4071,6 +4089,11 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// provider never answered, so the queued messages get their own turns.
 		releaseQueue := settledTurnState(event) == domain.TurnStateCompleted ||
 			errors.Is(event.Err, ports.ErrChatPromptStalled)
+		if releaseQueue {
+			if err := releaseHeldQueue(ctx, c.store, c.conversation.ID); err != nil {
+				c.log.Error("failed to release held queue", "session", c.sessionID, "error", err)
+			}
+		}
 		_ = c.drainLocked(ctx, releaseQueue) // drain logs failures.
 	case ports.ChatEventProviderState:
 		c.reportProviderState(ctx, event.ThreadState, now)

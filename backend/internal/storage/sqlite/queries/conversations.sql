@@ -816,6 +816,15 @@ SET state = 'failed',
     completed_at = ?
 WHERE handled_by_session_id = ? AND state IN ('queued', 'running');
 
+-- name: SettleOrphanedConversationTurnsKeepingHeldQueue :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'controller ended before the turn completed',
+    completed_at = ?
+WHERE handled_by_session_id = ?
+  AND (state = 'running' OR (state = 'queued' AND conversation_id NOT IN (
+      SELECT id FROM conversations WHERE queue_held_at IS NOT NULL)));
+
 -- Reviewer Chat has its own controller generation on review, separate from
 -- the worker session. Settle only turns owned by that review conversation.
 -- name: FailOrphanedReviewActivities :exec
@@ -1153,6 +1162,24 @@ WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.promotion_started_at IS NULL
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
 LIMIT 1;
+
+-- name: HoldConversationQueueForTurn :exec
+UPDATE conversations
+SET queue_held_at = sqlc.arg(queue_held_at)
+WHERE conversations.id = sqlc.arg(conversation_id)
+  AND EXISTS (
+      SELECT 1 FROM conversation_messages
+      WHERE conversation_messages.turn_id = sqlc.arg(turn_id)
+        AND conversation_messages.role = 'user'
+        AND conversation_messages.origin = 'human'
+  );
+
+-- name: ReleaseConversationQueue :exec
+UPDATE conversations SET queue_held_at = NULL
+WHERE id = ? AND queue_held_at IS NOT NULL;
+
+-- name: SelectConversationQueueHeldAt :one
+SELECT queue_held_at FROM conversations WHERE id = ?;
 
 -- name: SelectQueuedConversationBatch :many
 SELECT conversation_turns.id,

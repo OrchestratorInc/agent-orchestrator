@@ -68,6 +68,23 @@ func TestSettleTurnReplayKeepsUsageLimitRefusal(t *testing.T) {
 	}
 }
 
+func TestUsageLimitHoldIsNotRestoredByAReplay(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
+	mustNoError(t, s.BindTurnToProvider(ctx, "turn-limited", "provider-limited", testNow))
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, refusal, testNow))
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || !held {
+		t.Fatalf("queue held = %v, %v after a usage-limit failure", held, err)
+	}
+	mustNoError(t, s.ReleaseConversationQueue(ctx, conversation.ID))
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, "", testNow.Add(time.Minute)))
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || held {
+		t.Fatalf("queue held = %v, %v after replaying the released failure", held, err)
+	}
+}
+
 // A resumed Codex thread replays a turn the dead controller left in progress as
 // interrupted, with no error. Nobody interrupted it, so the failure must stay.
 func TestSettleTurnInterruptedReplayKeepsStoredFailure(t *testing.T) {

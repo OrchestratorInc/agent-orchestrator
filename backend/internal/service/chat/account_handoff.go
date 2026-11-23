@@ -295,6 +295,9 @@ func (s *Service) settleAccountHandoffMove(ctx context.Context, store accountHan
 		return true, nil
 	}
 	if on, err := s.onHandoffTarget(ctx, deps, h); err != nil || !on {
+		if err == nil {
+			s.releaseAccountHandoffQueue(ctx, h)
+		}
 		return err == nil, err
 	}
 	if err := s.noteAccountHandoff(ctx, h, ""); err != nil {
@@ -340,6 +343,19 @@ func (s *Service) noteAccountHandoff(ctx context.Context, h *accountHandoff, ret
 func (s *Service) recordAccountHandoffRetry(ctx context.Context, h *accountHandoff, retry string) {
 	if err := s.noteAccountHandoff(ctx, h, retry); err != nil {
 		s.log.Warn("account handoff: note not updated", "session", h.sessionID, "turn", h.turnID, "retry", retry, "error", err)
+	}
+	if retry == accountHandoffRetrySkipped {
+		s.releaseAccountHandoffQueue(ctx, h)
+	}
+}
+
+func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHandoff) {
+	err := releaseHeldQueue(ctx, s.store, h.conversationID)
+	if err == nil {
+		err = s.DrainQueued(ctx, h.sessionID)
+	}
+	if err != nil && !errors.Is(err, ErrNoController) {
+		s.log.Warn("account handoff: queued messages not released", "session", h.sessionID, "turn", h.turnID, "error", err)
 	}
 }
 

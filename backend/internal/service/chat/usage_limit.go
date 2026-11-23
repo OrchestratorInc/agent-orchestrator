@@ -30,6 +30,28 @@ type usageLimitStore interface {
 	AppendAutoResumeRetryUserMessage(context.Context, string, domain.SessionID, string, domain.ConversationMessage, string, string, time.Time) (bool, error)
 }
 
+type queueHoldStore interface {
+	ConversationQueueHeld(context.Context, string) (bool, error)
+	ReleaseConversationQueue(context.Context, string) error
+	CleanupOwnedControllerWorkKeepingHeldQueue(context.Context, domain.SessionID, string, string, time.Time) (bool, error)
+}
+
+func (c *Controller) queueHeld(ctx context.Context) (bool, error) {
+	store, ok := c.store.(queueHoldStore)
+	if !ok {
+		return false, nil
+	}
+	return store.ConversationQueueHeld(ctx, c.conversation.ID)
+}
+
+func releaseHeldQueue(ctx context.Context, store Store, conversationID string) error {
+	holds, ok := store.(queueHoldStore)
+	if !ok {
+		return nil
+	}
+	return holds.ReleaseConversationQueue(ctx, conversationID)
+}
+
 type usageLimitAccountReader interface {
 	SessionLimits(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error)
 }
