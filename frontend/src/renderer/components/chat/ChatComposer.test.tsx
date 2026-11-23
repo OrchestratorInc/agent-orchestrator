@@ -1,4 +1,5 @@
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
+import { claimArtifactFind, registerArtifactFindRoot } from "../../lib/artifact-find-focus";
 import { CLOUD_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { appI18n } from "../../i18n/instance";
 import { purgeFileAttachmentsForSession } from "../../hooks/useFileAttachments";
@@ -397,6 +398,18 @@ describe("send keys", () => {
 		});
 
 		expect(document.activeElement).toBe(field);
+	});
+	it("does not recover composer focus during an artifact frame's Find handoff", () => {
+		const { field } = renderComposer({ autoFocusKey: "session-1" });
+		const reader = document.createElement("div"); reader.dataset.artifactFindScope = "";
+		reader.getClientRects = () => [{}] as unknown as DOMRectList;
+		document.body.append(reader);
+		const unregister = registerArtifactFindRoot(reader);
+		try {
+			field.blur(); claimArtifactFind(reader);
+			act(() => window.dispatchEvent(new Event("focus")));
+			expect(document.activeElement).not.toBe(field);
+		} finally { unregister(); reader.remove(); }
 	});
 
  it("does not steal selection when the same composer becomes enabled", () => {

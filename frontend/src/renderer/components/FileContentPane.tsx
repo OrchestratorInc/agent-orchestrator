@@ -660,7 +660,7 @@ export function FileContentPane({
 		<div ref={selectionPane} data-selection-toolbar-scope="" className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 			{toolbarNode}
 			<EditProvider createEditor={createReviewEditor}>
-			{effectiveMode === "rendered" && renderedAvailable ? renderedView : fileView}
+			<div className="contents" data-artifact-find-content="" data-artifact-find-unavailable={detail.contentTruncated ? "partial" : (detail.binary && !mediaKind || mediaKind && mediaKind !== "pdf" || effectiveMode === "rendered" && canRenderSvg(path, detail)) ? "unavailable" : undefined}>{effectiveMode === "rendered" && renderedAvailable ? renderedView : fileView}</div>
 			</EditProvider>
 			{saveError ? <p className="border-t border-error/40 bg-error/10 px-3 py-2 text-xs text-error" role="alert">{saveError}</p> : null}
 			{sendBar}

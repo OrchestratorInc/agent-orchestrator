@@ -28,8 +28,9 @@ import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatImageDialog } from "./ChatImage";
-import { useChatArtifactLinks, useChatRemoteHost, useChatRemoteSession } from "./chat-image-source";
+import { useChatArtifactFiles, useChatArtifactLinks, useChatRemoteHost, useChatRemoteSession } from "./chat-image-source";
 import { useChatBrowserOpen } from "./ChatMarkdown";
+import { ArtifactFindScope, type ArtifactFindState } from "../ArtifactFindScope";
 
 type RenderImage = { src: string; alt: string };
 
@@ -309,7 +310,7 @@ function RenderSource({ url }: { url: string }) {
 		);
 	}
 	return (
-		<pre className="max-h-[calc(100svh-8rem)] w-full overflow-auto px-2 font-mono text-xs whitespace-pre select-text">{source}</pre>
+		<pre data-artifact-find-content="" className="max-h-[calc(100svh-8rem)] w-full overflow-auto px-2 font-mono text-xs whitespace-pre select-text">{source}</pre>
 	);
 }
 
@@ -351,6 +352,8 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 		if (foldKey !== undefined) rememberFold(foldKey, next);
 	};
 	const remoteHost = useChatRemoteHost();
+	const artifactFiles = useChatArtifactFiles();
+	const localArtifact = "artifact" in props && !artifactFiles?.cloud && !remoteHost;
 	const render = "render" in props ? props.render : undefined;
 	const links = useChatArtifactLinks("artifact" in props ? props.artifact.path : undefined);
 	const remoteUrl = useRemoteRenderUrl(render?.path);
@@ -366,6 +369,7 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 					frameUrl: links?.inlineUrl,
 				};
 	const [expanded, setExpanded] = useState(false);
+	const [findState, setFindState] = useState<ArtifactFindState>({ open: false, query: "" });
 	const [wrapContent, setWrapContent] = useState(false);
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -443,7 +447,7 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 		</RenderAction>
 	) : null;
 	return (
-		<div className="group/render relative min-w-0">
+		<div className="group/render relative min-w-0" data-artifact-find-container={"artifact" in props ? "" : undefined}>
 			{"artifact" in props ? (
 				<div className="flex h-8 items-center gap-1.5 text-xs" data-testid="artifact-card-header">
 					{/* The header is the fold, like a turn's "Worked for" line; its
@@ -480,7 +484,9 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 					inert={folded}
 					className="overflow-hidden"
 				>
-					{frameMounted ? <RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} /> : null}
+					<ArtifactFindScope identity={page.path} enabled={localArtifact && !expanded && !folded} findState={findState} onFindStateChange={setFindState} className="relative min-w-0">
+						{frameMounted ? <RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} /> : null}
+					</ArtifactFindScope>
 				</motion.div>
 			) : (
 				<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
@@ -554,11 +560,13 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 							</RenderAction>
 						) : null}
 					</div>
+					<ArtifactFindScope identity={`${page.path}:${showSource}`} enabled={localArtifact && expanded} findState={findState} onFindStateChange={setFindState} className="relative min-h-0 min-w-0">
 					{!expanded ? null : showSource ? (
 						<RenderSource url={renderUrl(page)} />
 					) : (
 						<RenderDocument page={page} displayMode="fullscreen" wrapContent={wrapContent} onOpenImage={openImage} className="max-h-[calc(100svh-8rem)]" />
 					)}
+					</ArtifactFindScope>
 				</DialogContent>
 			</Dialog>
 			{image ? <ChatImageDialog open={imageOpen} onOpenChange={setImageOpen} url={image.src} label={image.alt} /> : null}

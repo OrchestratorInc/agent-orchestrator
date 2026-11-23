@@ -2,6 +2,7 @@ import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from ".
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
+import { artifactOwnsFind } from "../../lib/artifact-find-focus";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 /**
  * The Chat composer.
@@ -1135,7 +1136,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!autoFocus) return;
 
 		const onWindowFocus = () => {
-			if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
+			if (isDialogOrMenuOpen() || artifactOwnsFind() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
 			// A click that activates the window can land in another field (the Browser
 			// address bar, a terminal) before this fires; taking focus would send the
 			// user's typing into the composer instead.

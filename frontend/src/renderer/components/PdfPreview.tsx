@@ -5,6 +5,7 @@ import { useArtifactZoomTarget } from "../lib/artifact-zoom";
 import { aoBridge } from "../lib/bridge";
 import { formatBytes } from "./ReadOnlyFileView";
 import { PanelMessage } from "./WorkspaceDiffView";
+import { usePdfArtifactFind } from "../hooks/usePdfArtifactFind";
 
 type Pdfjs = typeof import("pdfjs-dist");
 type PageSize = { width: number; height: number };
@@ -100,6 +101,7 @@ export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false
 	loadRef.current = load;
 	const { controller: zoomController, zoom } = useArtifactZoomTarget(!firstPageOnly);
 	const zoomRef = useRef(zoom);
+	usePdfArtifactFind(loaded?.pdf, scrollRef, !cover && !firstPageOnly && !cloud);
 
 	// Keeps the point under the pinch (or the pane's center) in place as the pages resize.
 	useLayoutEffect(() => {
@@ -223,6 +225,12 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 	const textRef = useRef<HTMLDivElement>(null);
 	const [near, setNear] = useState(false);
 	const drawnRef = useRef(false);
+	useEffect(() => {
+		const page = pageRef.current;
+		const reveal = () => setNear(true);
+		page?.addEventListener("artifact-find-reveal", reveal);
+		return () => page?.removeEventListener("artifact-find-reveal", reveal);
+	}, []);
 	// The page resizes with every zoom step; it redraws once the zoom settles.
 	const [drawScale, setDrawScale] = useState(scale);
 	useEffect(() => {

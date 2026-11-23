@@ -1,7 +1,8 @@
 import { useTranslation } from "react-i18next";
-import { Button } from "../components/ui/button";
+import { FindBar } from "../components/FindBar";
+import { artifactOwnsFind } from "../lib/artifact-find-focus";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { ChevronDown, ChevronUp, Loader2, Search, X } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useAppShortcut, isSettingsPageOpen } from "./useAppShortcut";
 import { useHarnessUpdateNoticeClearance } from "./useHarnessUpdateNoticeClearance";
 import { toSnapshot, mergeConversationPages } from "./useConversation";
@@ -123,10 +124,15 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 		}
 		previousBranch.current = branch;
 	}, [identity, branch, close, cancelWork, clearHighlights, prepareRefresh]);
+	useEffect(() => {
+		const suspend = () => close(false);
+		document.addEventListener("artifact-find-open", suspend);
+		return () => document.removeEventListener("artifact-find-open", suspend);
+	}, [close]);
 	const canHandle = useCallback(() => {
 		const element = root.current;
 		if (!element || !element.getClientRects().length || isSettingsPageOpen()) return false;
-		if (isFindModalOpen()) return false;
+		if (isFindModalOpen() || artifactOwnsFind()) return false;
 		const focused = document.activeElement;
 		if (focused instanceof Element && focused.closest(OTHER_SURFACE)) return false;
 		const focusedChat = focused instanceof Element ? focused.closest("[data-chat-find-scope], [data-chat-find-surface]") : null;
@@ -417,29 +423,32 @@ export function useChatFind({ source, root, viewport, hostId, unavailable = fals
 	const noticeClearance = useHarnessUpdateNoticeClearance(open ? root.current : null);
 	const newestWindowSequence = windowPage?.items.at(-1)?.sequence, firstSourceSequence = source.items[0]?.sequence;
 	const gapBeforeSequence = !sideChat && source.hasMoreBefore && newestWindowSequence !== undefined && firstSourceSequence !== undefined && newestWindowSequence < firstSourceSequence ? firstSourceSequence : undefined;
-	const bar = open ? <div ref={barRef} role="search" style={noticeClearance ? { right: noticeClearance, maxWidth: `calc(100% - 12px - ${noticeClearance}px)` } : undefined} onFocusCapture={activate} onPointerDownCapture={activateControl} onClickCapture={activateControl} onKeyDownCapture={activate} onBlurCapture={(event) => {
-		if (event.relatedTarget instanceof Node) { if (!event.currentTarget.contains(event.relatedTarget)) deactivate(); }
-		else queueMicrotask(() => { if (!barRef.current?.contains(document.activeElement)) deactivate(); });
-	}} aria-label={t("shortcut.find-in-chat")} aria-busy={engaged && (state.updating || state.phase === "searching")} className="z-overlay absolute top-3 right-3 flex w-[320px] max-w-[calc(100%-24px)] shrink-0 items-center gap-1 rounded-lg border border-(--color-border-overlay) bg-overlay px-3 py-2 text-sm leading-5 shadow-(--shadow-popover) focus-within:ring-1 focus-within:ring-ring/40">
-		<Search aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-		<input ref={input} type="search" aria-label={t("shortcut.find-in-chat")} placeholder={t("shortcut.find-in-chat")} value={query} className="min-w-0 flex-1 bg-transparent px-1 outline-none [&::-webkit-search-cancel-button]:hidden" onChange={(event) => {
-			const value = event.target.value;
-			cancelWork(); activate(); prepareRefresh();
-			setQuery(value); setAnnouncement(""); setActive(undefined); setState({ ...initial, phase: isEmptyFindQuery(value) ? "idle" : "searching" });
-		}} onCompositionStart={() => { cancelWork(); setComposing(true); }} onCompositionEnd={() => { prepareRefresh(); setComposing(false); }} onKeyDown={(event) => {
-			if (event.nativeEvent.isComposing || composing) return;
-			if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); move(event.shiftKey ? -1 : 1); }
-		}} />
-		<span role="status" aria-live="polite" className={`inline-flex min-h-4 min-w-16 max-w-24 shrink-0 items-center ${state.phase === "searching" ? "justify-center" : "justify-end"} overflow-hidden px-2 whitespace-nowrap text-muted-foreground tabular-nums`}>
+	const bar = open ? <FindBar rootRef={barRef} inputRef={input} label={t("shortcut.find-in-chat")}
+		style={noticeClearance ? { right: noticeClearance, maxWidth: `calc(100% - 12px - ${noticeClearance}px)` } : undefined}
+		onFocusCapture={activate} onPointerDownCapture={activateControl} onClickCapture={activateControl} onKeyDownCapture={activate}
+		onBlurCapture={(event) => {
+			if (event.relatedTarget instanceof Node) { if (!event.currentTarget.contains(event.relatedTarget)) deactivate(); }
+			else queueMicrotask(() => { if (!barRef.current?.contains(document.activeElement)) deactivate(); });
+		}} aria-busy={engaged && (state.updating || state.phase === "searching")}
+		inputProps={{ value: query,
+			onChange: (event) => {
+				const value = event.target.value;
+				cancelWork(); activate(); prepareRefresh();
+				setQuery(value); setAnnouncement(""); setActive(undefined); setState({ ...initial, phase: isEmptyFindQuery(value) ? "idle" : "searching" });
+			},
+			onCompositionStart: () => { cancelWork(); setComposing(true); },
+			onCompositionEnd: () => { prepareRefresh(); setComposing(false); },
+			onKeyDown: (event) => {
+				if (event.nativeEvent.isComposing || composing) return;
+				if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); move(event.shiftKey ? -1 : 1); }
+			},
+		}}
+		status={<span role="status" aria-live="polite" className={`inline-flex min-h-4 min-w-16 max-w-24 shrink-0 items-center ${state.phase === "searching" ? "justify-center" : "justify-end"} overflow-hidden px-2 whitespace-nowrap text-muted-foreground tabular-nums`}>
 			{state.phase === "searching" ? engaged ? <><Loader2 aria-hidden="true" className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" /><span className="sr-only">{t("command.searching")}</span></> : null : state.phase === "error" ? t("chat.find.incomplete") : isEmptyFindQuery(query) ? "" : state.total ? <><span aria-hidden="true">{activeIndex}/{state.total}</span><span className="sr-only">{t("browser.find.matchCount", { active: activeIndex, total: state.total })}</span></> : state.phase === "ready" ? t("browser.find.noResults") : ""}
-		</span>
-		<div className="flex shrink-0 items-center gap-1 border-l border-border pl-2">
-			<Button type="button" variant="quiet" size="icon-sm" aria-label={t("browser.find.previous")} disabled={state.phase !== "ready" || !state.total} onClick={() => move(-1)} className="focus-visible:ring-1 focus-visible:ring-ring"><ChevronUp className="size-3.5" /></Button>
-			<Button type="button" variant="quiet" size="icon-sm" aria-label={t("browser.find.next")} disabled={state.phase !== "ready" || !state.total} onClick={() => move(1)} className="focus-visible:ring-1 focus-visible:ring-ring"><ChevronDown className="size-3.5" /></Button>
-			<Button type="button" variant="quiet" size="icon-sm" aria-label={t("browser.find.close")} onClick={() => close()} className="focus-visible:ring-1 focus-visible:ring-ring"><X className="size-3.5" /></Button>
-		</div>
+		</span>} disabled={state.phase !== "ready" || !state.total}
+		onPrevious={() => move(-1)} onNext={() => move(1)} onClose={() => close()}>
 		{state.error ? <span role="alert" className="absolute top-full right-0 mt-2 w-full rounded-lg border border-border bg-surface p-2 shadow-lg">{state.error} <button type="button" className="underline" onClick={() => { prepareRefresh(); setRetry((value) => value + 1); }}>{t("notify.retry")}</button></span> : null}
 		<span className="sr-only" role="status" aria-live="polite">{announcement}</span>
-	</div> : null;
+	</FindBar> : null;
 	return { snapshot, bar, active, open, engaged, gapBeforeSequence, dropWindow, showWindowAt, openWith };
 }

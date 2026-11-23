@@ -7,6 +7,57 @@
 // The messages are the MCP Apps postMessage methods, so this host could later
 // show upstream MCP apps.
 (function () {
+  // Enabled only by the local artifact viewer, never by a page itself.
+  var findEngine, findBindings = [], findRequest, findAnchor, findAnchorQuery, findOpen = false, findTimer = 0;
+  function findPost(method, params) {
+    window.parent.postMessage({ jsonrpc: "2.0", method: method, params: params }, "*");
+  }
+  function runFind(params) {
+    if (!findEngine || typeof params.query !== "string" || !Number.isSafeInteger(params.generation)) return;
+    if (findRequest && params.generation < findRequest.generation) return;
+    var retain = findAnchorQuery === params.query && !params.reveal && findAnchor;
+    findRequest = params;
+    if (!params.query.trim()) { findEngine.clear(); return; }
+    var ranges = findEngine.ranges(document.body, params.query);
+    var active = Math.max(0, Math.min(ranges.length - 1, Number.isSafeInteger(params.active) ? params.active : 0));
+    var retained = retain ? findEngine.retained(ranges, findAnchor) : -1;
+    if (retained >= 0) active = retained;
+    var range = ranges[active];
+    findAnchorQuery = params.query;
+    findAnchor = findEngine.anchor(range);
+    findEngine.paint(ranges, active, document);
+    if (params.reveal) findEngine.reveal(ranges[active]);
+    findPost("ao/find-result", { generation: params.generation, total: ranges.length, active: active });
+  }
+  window.addEventListener("message", function (event) {
+    var data = event.data, params = data && data.params;
+    if (event.source !== window.parent || !data || data.jsonrpc !== "2.0" || !params || window.parent === window) return;
+    if (data.method === "ao/find-configure" && params.exceptions && Array.isArray(params.bindings)) {
+      if (!findEngine) {
+        findEngine = createArtifactSearchEngine(params.exceptions);
+        var observe = function () {
+          if (!document.body) return;
+          new MutationObserver(function (changes) {
+            if (!findRequest || !findRequest.query.trim() || changes.every(function (change) { return (change.target.nodeType === 1 ? change.target : change.target.parentElement).closest("style[data-artifact-find-style]"); })) return;
+            clearTimeout(findTimer);
+            findTimer = setTimeout(function () { findPost("ao/find-changed", { generation: findRequest.generation }); }, 150);
+          }).observe(document.body, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class", "style", "aria-hidden", "open"] });
+        };
+        if (document.body) observe(); else document.addEventListener("DOMContentLoaded", observe, { once: true });
+      }
+      findBindings = params.bindings;
+      findOpen = params.open === true;
+    } else if (data.method === "ao/find") runFind(params);
+  });
+  document.addEventListener("keydown", function (event) {
+    if (!findEngine || event.isComposing || event.repeat || event.target.closest("input,textarea,[contenteditable='true'],.cm-editor,.monaco-editor")) return;
+    var matches = findBindings.some(function (binding) {
+      return (String(binding.key).toLowerCase() === event.key.toLowerCase() || binding.code && binding.code === event.code) &&
+        binding.ctrl === event.ctrlKey && binding.meta === event.metaKey && binding.shift === event.shiftKey && binding.alt === event.altKey;
+    });
+    if (matches) { event.preventDefault(); event.stopImmediatePropagation(); findPost("ao/find-open", {}); }
+    if (event.key === "Escape" && findOpen) { event.preventDefault(); event.stopImmediatePropagation(); findPost("ao/find-close", {}); }
+  }, true);
   var theme = document.getElementById("ao-theme");
   // Created now, so it precedes the page's own styles and they win over it.
   var display = document.createElement("style");

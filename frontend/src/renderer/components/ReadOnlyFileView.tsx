@@ -176,6 +176,7 @@ export function ReadOnlyFileView({
 		<div
 			className="ao-pierre-surface min-w-0 select-text"
 			data-editing={editing || undefined}
+			data-artifact-find-content=""
 			onPointerLeave={gutterHover.onPointerLeave}
 			onPointerMove={gutterHover.onPointerMove}
 			ref={containerRef}

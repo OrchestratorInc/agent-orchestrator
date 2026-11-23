@@ -26,6 +26,8 @@ import { CloseButton } from "./ui/close-button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, settingsDialogContentClass } from "./ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
+import { ArtifactFindScope } from "./ArtifactFindScope";
+
 export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	artifact: ArtifactRow | null;
 	projectName: string;
@@ -118,9 +120,11 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 						</div>}
 					</header>
 					<div className="min-h-0 flex-1 overflow-hidden">
-						{artifact.shared
-							? <SharedArtifactFrame key={artifactKey(artifact)} linkId={artifact.shared.linkId} title={artifact.name} />
-							: <ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />}
+						<ArtifactFindScope identity={artifactKey(artifact)} enabled={!artifact.cloud && !artifact.hostId && !artifact.shared}>
+							{artifact.shared
+								? <SharedArtifactFrame key={artifactKey(artifact)} linkId={artifact.shared.linkId} title={artifact.name} />
+								: <ArtifactPreviewBody artifact={artifact} key={artifactKey(artifact)} />}
+						</ArtifactFindScope>
 					</div>
 				</DialogContent>
 			) : null}

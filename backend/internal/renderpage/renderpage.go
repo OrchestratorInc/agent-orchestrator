@@ -14,6 +14,9 @@ import (
 //go:embed render_bootstrap.js
 var bootstrapJS string
 
+//go:embed artifact_find.js
+var artifactFindJS string
+
 // The variables agent pages style against (documented in commands/render.md).
 // The host replaces this rule before first paint with the reader's live theme.
 const defaultThemeCSS = `:root{color-scheme:dark;--background:oklch(0.210 0.002 250);--foreground:oklch(0.970 0.002 250);--muted:oklch(0.295 0.002 250);--muted-foreground:oklch(0.720 0.002 250);--card:oklch(0.250 0.002 250);--card-foreground:oklch(0.970 0.002 250);--popover:oklch(0.300 0.002 250);--border:oklch(1 0 0 / 7%);--border-strong:oklch(1 0 0 / 4%);--primary:oklch(0.900 0.002 250);--primary-foreground:oklch(0.210 0.002 250);--accent:oklch(0.900 0.002 250);--accent-foreground:oklch(0.210 0.002 250);--success:#4ade80;--warning:#f06445;--destructive:oklch(0.704 0.191 22.216);--code:#79b0dc;--link:#79b0dc;--chart-1:#79b0dc;--chart-2:#2dd4bf;--chart-3:#fbbf24;--chart-4:#c084fc;--chart-5:#fb7185;--chart-6:#a3e635;--radius:0.5rem;--font-sans:ui-sans-serif,system-ui,sans-serif;--font-mono:ui-monospace,Menlo,Consolas,monospace}` +
@@ -105,7 +108,7 @@ func inject(page string) string {
 	var b strings.Builder
 	b.WriteString(themeStyleOpen + defaultThemeCSS + `</style>`)
 	b.WriteString(`<style>` + baseCSS + `</style>`)
-	b.WriteString(`<script>` + bootstrapJS + `</script>`)
+	b.WriteString(`<script>` + strings.ReplaceAll(artifactFindJS, "export function", "function") + bootstrapJS + `</script>`)
 	if !pageViewport.MatchString(page) {
 		b.WriteString(viewportMeta)
 	}
