@@ -3034,6 +3034,19 @@ describe("Sidebar", () => {
 
 		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBeInTheDocument();
+
+		// The toggle relabels in place, with no outgoing copy left behind: the
+		// keyboard keeps its focus on the same button in both directions.
+		const toggle = screen.getByRole("button", { name: "Show 3 more agents" });
+		toggle.focus();
+		await user.keyboard("{Enter}");
+		expect(screen.getByRole("button", { name: "Show fewer agents" })).toBe(toggle);
+		expect(toggle).toHaveFocus();
+		expect(screen.getByText("Agent 7")).toBeInTheDocument();
+		await user.keyboard("{Enter}");
+		expect(screen.getByRole("button", { name: "Show 3 more agents" })).toBe(toggle);
+		expect(toggle).toHaveFocus();
+		expect(screen.queryByText("Agent 7")).not.toBeInTheDocument();
 	});
 
 	it("lifts a project's agent cap when the open session sits past it", () => {
