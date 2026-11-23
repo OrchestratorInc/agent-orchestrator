@@ -217,12 +217,13 @@ func TestInterfaceHandoffDrainsTheHeldQueue(t *testing.T) {
 	go func() { prepared <- h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain) }()
 	var running string
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		running = ""
 		for _, turn := range s.Turns {
 			if turn.State == domain.TurnStateRunning {
 				running = turn.ProviderTurnID
 			}
 		}
-		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+		return running != "" && turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
 	})
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running, TurnState: domain.TurnStateCompleted})
 	if err := <-prepared; err != nil {
