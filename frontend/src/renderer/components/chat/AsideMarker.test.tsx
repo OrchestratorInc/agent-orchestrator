@@ -282,7 +282,9 @@ describe("a message Also send to agent sent", () => {
 	it("says when the earlier comments were sent, for a thread sent again", async () => {
 		const { FromCommentThreadCard } = await import("./ChatTimelineItems");
 		const { container } = render(<FromCommentThreadCard thread={{ asideId: "c-1", framed: true, requestText: "And now the tests.", sinceSent: true, previouslySentAt: "2026-11-24T10:00:00Z", commentCount: 1, comments: [{ authorName: "Mohak", text: "Tests too." }] }} />);
-		expect(container.querySelector("[data-from-comment-since]")).toHaveTextContent(/^Earlier comments were sent at /);
+		// A relative time ("2h ago", "just now"), so no "at" before it.
+		expect(container.querySelector("[data-from-comment-since]")).toHaveTextContent(/^Earlier comments were sent (\d|just now|[A-Z])/);
+		expect(container.querySelector("[data-from-comment-since]")).not.toHaveTextContent(/sent at/);
 	});
 
 	it("replaces the message's text in its bubble", () => {

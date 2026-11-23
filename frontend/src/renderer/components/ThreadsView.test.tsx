@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { closeThreadInView, openThreadInView, peekThreadInView } from "../lib/cloud-asides";
 import type { CloudCpAsideThread, CloudCpCommentThread, CloudCpCommentThreadPage } from "../lib/cloud-cp/types";
@@ -205,6 +206,25 @@ describe("opening a thread from the list", () => {
 		await waitFor(() => expect(pane.querySelector("[data-comment-pane-title]")).toHaveTextContent("Notification session"));
 		await waitFor(() => expect(mocks.markSessionAsideRead).toHaveBeenCalledWith("org-1", "session-x", "c-9"));
 		expect(peekThreadInView()?.asideId).toBe("c-9");
+	});
+});
+
+describe("muting from the pane", () => {
+	it("marks the row muted at once", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		mocks.muteSessionAside.mockImplementation(async (_o: string, _s: string, asideId: string, muted: boolean) => ({ ...thread(asideId).aside, muted, unread: false }));
+		renderView();
+		fireEvent.click(await findRow("c-1"));
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(within(pane).getByText("Should this use jitter?")).toBeInTheDocument());
+		expect((await findRow("c-1")).querySelector("[data-thread-muted]")).toBeNull();
+		// The list is read again after the mute: answer with the muted row from then on.
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { muted: true })]));
+		const user = userEvent.setup();
+		await user.click(within(pane).getByRole("button", { name: "Comment options" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Mute thread" }));
+		await waitFor(() => expect(mocks.muteSessionAside).toHaveBeenCalledWith("org-1", "session-c-1", "c-1", true));
+		await waitFor(() => expect(document.querySelector("[data-thread-row='c-1'] [data-thread-muted]")).toHaveTextContent("Muted"));
 	});
 });
 

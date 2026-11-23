@@ -964,10 +964,16 @@ export function CloudAsidePane({
 	const muted = aside?.muted ?? false;
 	const onMute = useCallback((next: boolean) => {
 		patchCachedAside(queryClient, orgId, sessionId, asideId, { muted: next });
+		// Its row in the threads view says so at once (a muted thread is never unread).
+		patchCommentThreadRows(queryClient, baseUrl, userId, asideId, next ? { muted: true, unread: false } : { muted: false });
 		void client.muteSessionAside(orgId, sessionId, asideId, next)
 			.then((changed) => replaceCachedAside(queryClient, orgId, sessionId, asideId, changed))
-			.catch(() => patchCachedAside(queryClient, orgId, sessionId, asideId, { muted: !next }));
-	}, [asideId, client, orgId, queryClient, sessionId]);
+			.catch(() => {
+				patchCachedAside(queryClient, orgId, sessionId, asideId, { muted: !next });
+				patchCommentThreadRows(queryClient, baseUrl, userId, asideId, { muted: !next });
+			})
+			.finally(() => invalidateCommentThreads(queryClient, baseUrl, userId));
+	}, [asideId, baseUrl, client, orgId, queryClient, sessionId, userId]);
 
 	const resolved = Boolean(aside?.resolvedAt);
 	// The person's own name, for "Resolved by {Name}" before the server answers (else it read "Someone").

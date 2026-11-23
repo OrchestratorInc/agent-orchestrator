@@ -5368,7 +5368,7 @@
 	"comment.card.showAll_one": "Show {{count}} comment",
 	"threads.unreadCount_one": "{{count}} unread thread",
 	"comment.card.sentThread": "Sent the thread to the agent",
-	"comment.card.earlierSentAt": "Earlier comments were sent at {{time}}",
+	"comment.card.earlierSentAt": "Earlier comments were sent {{time}}",
 	"comment.card.earlierSent": "Earlier comments were sent before",
 	"comment.history.sentResolved": "Sent to the agent · resolved by {{name}}",
 	"comment.jumpToSent": "Jump to the sent message",
