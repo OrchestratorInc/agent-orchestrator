@@ -40,6 +40,7 @@ vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGla
 vi.mock("./ChatTurnSettingsControl", () => ({ ChatTurnSettingsControl: "ChatTurnSettingsControl" }));
 vi.mock("./RequestCard", () => ({ RequestCard: "RequestCard" }));
 vi.mock("../effort-slider", () => ({ EffortSliderOverlay: "EffortSliderOverlay" }));
+vi.mock("../permission-picker", () => ({ PermissionPickerHost: "PermissionPickerHost", PermissionPickerButton: "PermissionPickerButton" }));
 vi.mock("./PRChip", () => ({ PRChipContent: "PRChipContent", prChipAccessibilityLabel: () => "Pull request" }));
 
 import type { ComponentProps } from "react";

@@ -4,9 +4,9 @@ import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
-import { approvalSymbol } from "../approvalSymbol";
 import { EffortSliderGauge } from "../effort-slider-host";
-import { ApprovalMenu, Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
+import { PermissionPickerButton } from "../permission-picker";
+import { Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import { defaultModelChoice } from "../spawnModel";
 import { AUTOMATIC_MODEL } from "../agentSwitch";
@@ -29,7 +29,7 @@ const topicSymbols: Partial<Record<NonNullable<ReturnType<typeof turnSettingTopi
  * models as the new task's lists each agent's, then any other setting the
  * provider offers, such as Fast mode.
  */
-export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort, otherAgents }: ChatTurnSettingsControlProps) {
+export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort, permissions, otherAgents }: ChatTurnSettingsControlProps) {
 	const { scheme } = useThemeState();
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
@@ -123,18 +123,16 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 				    opens the slider over the composer. */}
 				{effort?.choices.length ? (
 					<RNHostView matchContents>
-						<EffortSliderGauge slider={effort.slider} choices={effort.choices} disabled={off} testID="chat-effort" />
+						<EffortSliderGauge slider={effort.slider} choices={effort.choices} disabled={off} onPress={() => permissions?.slider.setOpen(false)} testID="chat-effort" />
 					</RNHostView>
 				) : null}
 				<Spacer minLength={0} />
-				{approvalRow ? (
-					<ApprovalMenu
-						key={`approval-${generation}`}
-						choices={approvalRow.choices.map((choice) => ({ value: choice.value, label: choice.label, symbol: approvalSymbol(choice.permissionMode, snapshot.harness), selected: choice.selected }))}
-						onChoose={(value) => choose(approvalRow, value)}
-						disabled={off}
-						id="chat-approval"
-					/>
+				{/* The permission mode as its own icon; a tap opens the picker over
+				    the composer, as the effort's does. */}
+				{permissions?.choices.length ? (
+					<RNHostView matchContents>
+						<PermissionPickerButton slider={permissions.slider} choices={permissions.choices} disabled={off} onPress={() => effort?.slider.setOpen(false)} testID="chat-approval" />
+					</RNHostView>
 				) : null}
 			</HStack>
 		</Host>

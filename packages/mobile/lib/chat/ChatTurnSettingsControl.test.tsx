@@ -11,6 +11,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
+		Box: host("Box"),
 		Button: host("Button"),
 		DropdownMenu: Object.assign(host("DropdownMenu"), { Trigger: host("DropdownMenuTrigger"), Items: host("DropdownMenuItems") }),
 		DropdownMenuItem: Object.assign(host("DropdownMenuItem"), { Text: host("DropdownMenuItemText"), LeadingIcon: host("DropdownMenuItemLeading"), TrailingIcon: host("DropdownMenuItemTrailing") }),
@@ -46,6 +47,7 @@ vi.mock("../composeMenu.android", async () => {
 		SUBMENU: { focusable: false, dismissOnClickOutside: false },
 		HarnessMark: (props: object) => React.createElement("HarnessMark", props),
 		MenuRow: (props: object) => React.createElement("MenuRow", props),
+		PermissionMenuRow: (props: object) => React.createElement("PermissionMenuRow", props),
 		useCloseMenuOnBack: (open: boolean, close: () => void) => {
 			React.useEffect(() => {
 				if (!open) return;
@@ -63,6 +65,7 @@ vi.mock("react-native", () => ({
 vi.mock("../toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
 vi.mock("../effort-gauge", () => ({ EffortGaugeButton: "EffortGaugeButton" }));
 vi.mock("../effort-slider", () => ({ EffortSliderOverlay: "EffortSliderOverlay" }));
+vi.mock("../permission-picker", () => ({ PermissionPickerHost: "PermissionPickerHost", PermissionPickerButton: "PermissionPickerButton" }));
 vi.mock("../haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("../ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
@@ -71,6 +74,7 @@ vi.mock("../ThemeProvider", () => ({
 
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import { createEffortSliderSwitch, type EffortSliderSwitch } from "../useEffortSlider";
+import type { PermissionChoice } from "../permission-picker";
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -112,18 +116,24 @@ afterEach(() => {
 });
 
 const levels = [{ value: "low", label: "Low", selected: true }, { value: "high", label: "High", selected: false }];
+const modes: PermissionChoice[] = [
+	{ value: "accept-edits", label: "Accept edits", selected: false, look: "accept-edits" },
+	{ value: "auto", label: "Auto-approve", selected: true, look: "auto" },
+];
 
 type OtherAgents = NonNullable<Parameters<typeof ChatTurnSettingsControl>[0]["otherAgents"]>;
 
-function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean; effort?: { choices: typeof levels; slider: EffortSliderSwitch } | null; otherAgents?: OtherAgents } = {}) {
+function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean; effort?: { choices: typeof levels; slider: EffortSliderSwitch } | null; permissions?: { choices: PermissionChoice[]; slider: EffortSliderSwitch } | null; otherAgents?: OtherAgents } = {}) {
 	const handlers = {
 		onSettings: vi.fn(() => Promise.resolve()),
 		onOption: vi.fn(() => Promise.resolve([] as ChatConfigOption[])),
 		slider: createEffortSliderSwitch(),
+		permissions: { choices: modes, slider: createEffortSliderSwitch() },
 	};
 	const effort = over.effort === null ? undefined : over.effort ?? { choices: levels, slider: handlers.slider };
+	const permissions = over.permissions === null ? undefined : over.permissions ?? handlers.permissions;
 	act(() => {
-		renderer = create(<ChatTurnSettingsControl snapshot={over.snapshot ?? snapshot()} models={over.models ?? models} options={over.options ?? [fast]} disabled={over.disabled} onSettings={handlers.onSettings} onOption={handlers.onOption} effort={effort} otherAgents={over.otherAgents} />);
+		renderer = create(<ChatTurnSettingsControl snapshot={over.snapshot ?? snapshot()} models={over.models ?? models} options={over.options ?? [fast]} disabled={over.disabled} onSettings={handlers.onSettings} onOption={handlers.onOption} effort={effort} permissions={permissions} otherAgents={over.otherAgents} />);
 	});
 	return handlers;
 }
@@ -132,8 +142,8 @@ const hasTestID = (node: { props: { modifiers?: Array<{ modifier: string; args: 
 	node.props.modifiers?.some((modifier) => modifier.modifier === "testID" && modifier.args[0] === id) ?? false;
 const trigger = (id: string) => renderer!.root.find((node) => (node.type === ("Button" as never) || node.type === ("IconButton" as never)) && hasTestID(node, id));
 const menu = (id: string) => renderer!.root.findAll((node) => node.type === ("DropdownMenu" as never)).find((node) => node.findAll((child) => hasTestID(child, id)).length)!;
-const rows = (id: string) => menu(id).findAll((node) => node.type === ("MenuRow" as never));
-const titles = (id: string) => rows(id).map((row) => [row.props.label, row.props.selected ? "on" : "off"]);
+const rows = (id: string) => menu(id).findAll((node) => node.type === ("MenuRow" as never) || node.type === ("PermissionMenuRow" as never));
+const titles = (id: string) => rows(id).map((row) => [row.props.label ?? row.props.title, row.props.selected ? "on" : "off"]);
 const open = (id: string) => act(() => trigger(id).props.onClick());
 const pick = (id: string, index: number) => act(() => rows(id)[index].props.onClick());
 
@@ -169,10 +179,34 @@ describe("Android chat controls row", () => {
 		expect(gauge()).toBeUndefined();
 	});
 
-	it("offers the approval modes from the shield", () => {
+	// The permission mode opens its picker over the composer, as the effort's
+	// slider does, and opening either puts the other away.
+	it("shows the permission button, which opens its picker and puts the effort slider away", () => {
+		const { slider, permissions } = render();
+		const button = () => renderer!.root.findAll((node) => node.type === ("PermissionPickerButton" as never) && node.props.testID === "chat-approval")[0];
+		expect(button().props.choices).toBe(permissions.choices);
+		expect(button().props.slider).toBe(permissions.slider);
+		expect(button().props.disabled).toBe(false);
+		act(() => slider.setOpen(true));
+		act(() => button().props.onPress());
+		expect(slider.isOpen()).toBe(false);
+		act(() => permissions.slider.setOpen(true));
+		act(() => gauge().props.onPress());
+		expect(permissions.slider.isOpen()).toBe(false);
+	});
+
+	// A host sized only by its content had no width until React Native
+	// measured the button, and the capsule, measured then, hid the model's name.
+	it("keeps the permission button in a slot of its own size, so the capsule has its room from the start", () => {
 		render();
-		expect(trigger("chat-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Auto-approve");
-		expect(titles("chat-approval").find(([, state]) => state === "on")).toEqual(["Auto-approve", "on"]);
+		const button = renderer!.root.findAll((node) => node.type === ("PermissionPickerButton" as never))[0];
+		const slot = renderer!.root.findAll((node) => node.type === ("Box" as never) && node.findAll((child) => child === button).length > 0)[0];
+		expect(slot.props.modifiers).toEqual([{ modifier: "width", args: [44] }, { modifier: "height", args: [44] }]);
+	});
+
+	it("shows no permission button for a chat with no permission setting", () => {
+		render({ permissions: null });
+		expect(renderer!.root.findAll((node) => node.type === ("PermissionPickerButton" as never))).toHaveLength(0);
 	});
 
 	// The M3 menu once listed models only, and with the settings sheet gone
@@ -206,10 +240,8 @@ describe("Android chat controls row", () => {
 		pick("chat-model", 1);
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
 		expect(menu("chat-model").props.expanded).toBe(false);
-		pick("chat-approval", 2);
-		expect(onSettings).toHaveBeenLastCalledWith(expect.objectContaining({ approvalMode: "bypass-permissions" }));
 		expect(onOption).not.toHaveBeenCalled();
-		expect(fixtures.select).toHaveBeenCalledTimes(2);
+		expect(fixtures.select).toHaveBeenCalledTimes(1);
 	});
 
 	// A long catalog keeps the newest of each family on top and its older
@@ -282,14 +314,15 @@ describe("Android chat controls row", () => {
 
 	it("closes an open menu on back, since it does not take focus", () => {
 		render();
-		open("chat-approval");
+		open("chat-model");
 		act(() => { for (const handler of [...fixtures.back]) handler(); });
-		expect(menu("chat-approval").props.expanded).toBe(false);
+		expect(menu("chat-model").props.expanded).toBe(false);
 	});
 
 	it("disables every control while the conversation cannot take a change", () => {
 		render({ disabled: true });
 		expect(gauge().props.disabled).toBe(true);
-		for (const id of ["chat-model", "chat-approval"]) expect(trigger(id).props.enabled).toBe(false);
+		expect(trigger("chat-model").props.enabled).toBe(false);
+		expect(renderer!.root.findAll((node) => node.type === ("PermissionPickerButton" as never))[0].props.disabled).toBe(true);
 	});
 });

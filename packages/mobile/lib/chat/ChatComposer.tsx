@@ -37,7 +37,9 @@ import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { EffortSliderHost } from "../effort-slider-host";
+import { PermissionPickerHost } from "../permission-picker";
 import { useChatEffort } from "./useChatEffort";
+import { useChatPermissions } from "./useChatPermissions";
 import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, hardwareReturnIntent, type ComposerDeliveryIntent } from "./composerDeliveryModel";
 import { HardwareReturn } from "./HardwareReturn";
@@ -606,9 +608,12 @@ function Composer({
 	}, []);
 	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
 	const effort = useChatEffort(settingsProps);
-	// Typing is a tap outside the slider that the keyboard, not the app, hears.
+	const permissions = useChatPermissions(settingsProps);
+	// Typing is a tap outside the slider and the picker that the keyboard, not
+	// the app, hears.
 	const closeEffort = effort.close;
-	useEffect(() => { closeEffort(); }, [text, closeEffort]);
+	const closePermissions = permissions.close;
+	useEffect(() => { closeEffort(); closePermissions(); }, [text, closeEffort, closePermissions]);
 	const placeholder = stopped ? "Agent is stopped" : startingAgentName ? `${startingAgentName} is starting…` : deliveryPresentation.placeholder;
 	const activeReviewPR = reviewPromptAvailable ? reviewPR : undefined;
 	const sendBlocked = Boolean(disabled || stopped || pending || submitting || (draftKey && !draftLoaded));
@@ -857,12 +862,16 @@ function Composer({
 			/> : null}
 			{/* The field spans the pill between its two controls, so a touch on the
 			    pill focuses it and the pill opens. */}
-			{/* The pill's height goes to the effort slider floating over it, through
-			    its switch, so a change re-renders the slider, not the composer. A
+			{/* The pill's height goes to the effort slider and the permission picker
+			    floating over it, through their switches, so a change re-renders
+			    them, not the composer. A
 			    percentage `bottom` resolves against the pill's content box, which
 			    leaves out its padding, and sat the slider that far down over the
 			    pill's top edge. */}
-			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => effort.slider.setBottom(event.nativeEvent.layout.height)}>
+			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => {
+				effort.slider.setBottom(event.nativeEvent.layout.height);
+				permissions.slider.setBottom(event.nativeEvent.layout.height);
+			}}>
 				<ComposerGlass radius={COMPOSER_RADIUS} />
 				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
 					{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
@@ -916,7 +925,7 @@ function Composer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, slider: effort.slider }} />
+						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, slider: effort.slider }} permissions={{ choices: permissions.choices, slider: permissions.slider }} />
 					</View>
 					{steerAction}
 				</Animated.View>
@@ -929,6 +938,7 @@ function Composer({
 				</View>
 				{/* The effort slider floats just above the pill, over the conversation. */}
 				<EffortSliderHost slider={effort.slider} choices={effort.choices} busy={effort.busy} onChoose={effort.choose} onRelease={effort.commit} onClose={effort.commit} />
+				<PermissionPickerHost slider={permissions.slider} choices={permissions.choices} busy={permissions.busy} onChoose={permissions.choose} />
 			</View>}
 		</Animated.View>
 	);
