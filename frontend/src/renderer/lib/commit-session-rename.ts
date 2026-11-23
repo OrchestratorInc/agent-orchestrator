@@ -98,13 +98,14 @@ export async function commitSessionRename(
 			else await renameSession(session.id, displayName);
 			return displayName;
 		});
-		const settled = settleOptimisticRename(key, token, true);
-		if (settled?.latest && queryClient) {
-			if (stored !== displayName) writeSessionTitle(queryClient, session, stored);
+		// The name the server kept covers older reads and is the rollback point.
+		const settled = settleOptimisticRename(key, token, true, stored);
+		if (settled?.latest) {
+			if (queryClient && stored !== displayName) writeSessionTitle(queryClient, session, stored);
 			// A Cloud title lives in the control plane's lists, whatever else the caller reads again.
 			await Promise.all([
 				options.refresh?.(),
-				!options.refresh || session.cloud ? refreshSessionLists(queryClient, session) : undefined,
+				queryClient && (!options.refresh || session.cloud) ? refreshSessionLists(queryClient, session) : undefined,
 			]);
 		}
 		return true;

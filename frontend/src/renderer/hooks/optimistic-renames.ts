@@ -125,15 +125,20 @@ export type RenameSettlement = {
 	latest: boolean;
 };
 
-/** Settles one attempt. A late answer for a superseded attempt changes nothing that shows. */
-export function settleOptimisticRename(key: string, token: number, ok: boolean): RenameSettlement | undefined {
+/**
+ * Settles one attempt. A late answer for a superseded attempt changes nothing
+ * that shows. `storedTitle` is the name the server kept when it differs from
+ * the one sent; it then covers older reads and is what a later failure rolls
+ * back to.
+ */
+export function settleOptimisticRename(key: string, token: number, ok: boolean, storedTitle?: string): RenameSettlement | undefined {
 	const entry = entries.get(key);
 	const index = entry?.attempts.findIndex((attempt) => attempt.token === token) ?? -1;
 	if (!entry || index < 0) return undefined;
 	const latest = index === entry.attempts.length - 1;
 	if (ok) {
 		// The server has this title, so the attempts before it are moot.
-		entry.base = entry.attempts[index].title;
+		entry.base = storedTitle ?? entry.attempts[index].title;
 		entry.attempts = entry.attempts.slice(index + 1);
 		clock += 1;
 		entry.ackedAt = clock;

@@ -690,7 +690,7 @@ export function useRenameShellTerminal(hostId?: HostId) {
 		},
 		onSuccess: (shell, { handleId, token }) => {
 			const key = shellRenameKey(handleId, hostId);
-			const settled = settleOptimisticRename(key, token, true);
+			const settled = settleOptimisticRename(key, token, true, shell.title);
 			// An older rename's answer must not replace a newer title.
 			if (!settled?.latest) return;
 			// Stored: a later failure rolls back to this name, never to the snapshot.

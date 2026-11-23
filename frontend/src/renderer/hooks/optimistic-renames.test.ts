@@ -111,6 +111,17 @@ describe("optimistic renames", () => {
 		expect(settleOptimisticRename(KEY, token, false)).toEqual({ title: "Elsewhere", latest: true });
 	});
 
+	it("records the name the server kept when it differs from the one sent", () => {
+		const token = beginOptimisticRename(KEY, "New", "Old");
+		const staleRead = renameReadStarted();
+
+		expect(settleOptimisticRename(KEY, token, true, "New (2)")).toEqual({ title: "New (2)", latest: true });
+		expect(renamedTitle(KEY, staleRead)).toBe("New (2)");
+		// A later failure rolls back to the stored name, not the one sent.
+		const next = beginOptimisticRename(KEY, "Newer", "New (2)");
+		expect(settleOptimisticRename(KEY, next, false)?.title).toBe("New (2)");
+	});
+
 	it("keeps keys apart", () => {
 		beginOptimisticRename(KEY, "New", "Old");
 		expect(renamedTitle("session:local:s-2")).toBeUndefined();

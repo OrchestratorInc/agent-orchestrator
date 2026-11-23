@@ -120,6 +120,18 @@ describe("renaming a session on a remote host", () => {
 	});
 });
 
+describe("renaming without a query cache", () => {
+	it("still runs the caller's refresh once the rename is stored", async () => {
+		h.renameSession.mockResolvedValue(undefined);
+		const refresh = vi.fn();
+
+		await expect(commitSessionRename(null, { id: "s-1", title: "Old" }, "New", { refresh })).resolves.toBe(true);
+
+		expect(h.renameSession).toHaveBeenCalledWith("s-1", "New");
+		expect(refresh).toHaveBeenCalledTimes(1);
+	});
+});
+
 describe("renaming a Cloud session", () => {
 	const cloud = { orgId: "org-1" };
 	const target = { id: "c-1", title: "Old", cloud };
@@ -147,10 +159,13 @@ describe("renaming a Cloud session", () => {
 		expect(h.renameCloudSession).toHaveBeenCalledWith(queryClient, { id: "c-1", cloud }, "New");
 		expect(shownIn(queryClient)).toEqual({ list: ["New", "Other"], lookup: "New" });
 
+		const staleRead = renameReadStarted();
 		answer.resolve("New (stored)");
 		await expect(done).resolves.toBe(true);
 		expect(shownIn(queryClient)).toEqual({ list: ["New (stored)", "Other"], lookup: "New (stored)" });
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: cloudSessionsQueryKey });
+		// A read begun before the answer shows the stored name, not the one sent.
+		expect(applyOptimisticCloudSessionTitles(sessions, staleRead).map((session) => session.displayName)).toEqual(["New (stored)", "Other"]);
 	});
 
 	it("rolls a failed rename back and says so", async () => {
