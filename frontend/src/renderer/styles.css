@@ -2187,7 +2187,7 @@ textarea,
 	/* The last row's centre above the list's bottom edge: its 4px bottom
 	   space (the list's pb-1, or Show more's mb-1) plus half the 32px row. */
 	--tree-tail: calc(var(--spacing) * 5);
-	--tree-line: color-mix(in srgb, var(--color-text-muted) 25%, transparent);
+	--tree-line: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
 	position: relative;
 }
 
