@@ -94,7 +94,7 @@ describe("a sent message", () => {
 	it("holds room below its turn while it is the newest row", () => {
 		expect(source).toContain("const roomKey = sent && sent.index === groups.length - 1 ? groups[sent.index].key : undefined;");
 		expect(source).toContain("room={group.key === roomKey ? room : undefined}");
-		expect(source).toContain("const roomStyle = room ? { minHeight: roomOffset + room } : undefined;");
+		expect(source).toContain("return room ? { minHeight: roomOffset + room } : undefined;");
 		// Three quarters of the way up, not all the way.
 		expect(source).toContain("share: SENT_ROOM_SHARE");
 		expect(source.match(/<View style=\{roomStyle\}>/g)).toHaveLength(3);
@@ -120,6 +120,20 @@ describe("a sent message", () => {
 	});
 
 	// The send button closes the keyboard: the room is laid out for none.
+	// A steer folded behind "Worked for" (or drawn inside the fold) gives no
+	// offset: the room it measured earlier would leave a gap below the turn.
+	it("starts the room at the message only while its row is drawn in the turn", () => {
+		expect(source).toContain("const roomOffset = drawn && placed && placed.item === roomItem ? placed.y : 0;");
+		expect(source).toContain("const roomStyle = roomStyleFor(drawsRoomItem([partition.prompt, partition.settled ? [] : partition.work, partition.notices, partition.final]));");
+		expect(source).toContain("{renderRows(partition.work, false)}</FoldBody>");
+	});
+
+	// The last turn's room goes and this one's comes in the same painted frame,
+	// so the content never shrinks under the list in between.
+	it("lays the room out before paint", () => {
+		expect(source).toContain("useLayoutEffect(() => {\n\t\tif (sentAt === undefined || roomKeyboard?.at === sentAt) return;");
+	});
+
 	it("lays the room out for the keyboard left after the send", () => {
 		expect(source).toContain("keyboard: keyboardMoving.value && !keyboardOpening.value ? 0 : keyboardInset.current");
 	});

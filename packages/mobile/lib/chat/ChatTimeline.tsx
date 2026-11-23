@@ -2,7 +2,7 @@ import { Feather } from "../icons";
 import { useStableFunctionProps } from "../useStableFunctionProps";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
 	FlatList,
 	Image,
@@ -401,8 +401,10 @@ function Timeline({
 	// closing, as it does when the send button is tapped.
 	// Sends are told apart by `at`: the screen updates an anchor when its send returns.
 	const sentAt = anchorFound?.at;
+	// Before paint: a frame with the last turn's room gone and this one's not yet
+	// laid out shrank the content, and iOS pulled the list up to its new end.
 	const [roomKeyboard, setRoomKeyboard] = useState<{ at: number; keyboard: number } | undefined>(undefined);
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (sentAt === undefined || roomKeyboard?.at === sentAt) return;
 		setRoomKeyboard({ at: sentAt, keyboard: keyboardMoving.value && !keyboardOpening.value ? 0 : keyboardInset.current });
 	}, [sentAt, keyboardMoving, keyboardOpening, roomKeyboard]);
@@ -906,18 +908,25 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 }) {
 	// Where the sent message sits in the turn, measured, so the room starts at it.
 	const [placed, setPlaced] = useState<{ item: string; y: number } | undefined>(undefined);
-	const roomOffset = placed && placed.item === roomItem ? placed.y : 0;
 	// Laid out with the turn, so what fills it in moves nothing below or above.
-	const roomStyle = room ? { minHeight: roomOffset + room } : undefined;
+	// The room starts at the message only while its row is drawn in the turn
+	// itself: a settled turn folds a steer away (or draws it inside the fold),
+	// and its old offset would leave a gap below the turn.
+	const roomStyleFor = (drawn: boolean) => {
+		const roomOffset = drawn && placed && placed.item === roomItem ? placed.y : 0;
+		return room ? { minHeight: roomOffset + room } : undefined;
+	};
+	const drawsRoomItem = (lists: ConversationItem[][]) => Boolean(roomItem) && lists.some((list) => list.some((item) => item.id === roomItem));
 	const placeRoom = (item: string) => (event: LayoutChangeEvent) => {
 		const y = Math.round(event.nativeEvent.layout.y);
 		setPlaced((current) => current?.item === item && current.y === y ? current : { item, y });
 	};
 	// After the commit that laid the room out at the measured message.
 	const placedItem = placed?.item;
+	const placedY = placed?.y;
 	useEffect(() => {
 		if (room && roomItem && placedItem === roomItem) onRoomPlaced?.();
-	}, [onRoomPlaced, placedItem, room, roomItem, roomOffset]);
+	}, [onRoomPlaced, placedItem, placedY, room, roomItem]);
 	// A provider failure arrives twice: as an error activity, and again as the
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
@@ -929,9 +938,10 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
 		? <InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked={!editableTurns?.has(editDraft.turnId)} onCancel={onCancelEdit} onEdit={onSubmitEdit} onFocus={onEditFocus} />
 		: undefined;
-	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
+	// `measured`: drawn in the turn itself, not inside the fold (see `roomStyleFor`).
+	const renderRows = (list: ConversationItem[], measured = true) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: row.items[0].id === roomItem
+		: measured && row.items[0].id === roomItem
 			? <View key={row.key} onLayout={placeRoom(row.items[0].id)}>{renderItem(row.items[0])}</View>
 			: renderItem(row.items[0], row.key));
 	const renderItem = (item: ConversationItem, key?: string) => <TimelineItem key={key} item={item} sessionId={sessionId} conversationId={conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} onEdit={item.turnId && editableTurns?.has(item.turnId) ? onEditMessage : undefined} editor={editorFor(item)} answeredBelow={answeredBelow} />;
@@ -942,6 +952,7 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 		const leading = firstWork < 0 ? items.length : firstWork;
 		// The checklist explains the wait, so the brief drops its "Queued" note.
 		const brief = items.slice(0, leading).map((item) => item.kind === "message" && item.delivery === "queued" ? { ...item, delivery: undefined } : item);
+		const roomStyle = roomStyleFor(true);
 		return <View style={roomStyle}>
 			{renderRows(brief)}
 			<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
@@ -950,16 +961,20 @@ const ConversationTurnGroup = memo(function ConversationTurnGroup({ group, sessi
 	}
 	const partition = partitionTurnItems(items, group.turn);
 	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
-	if (!partition || !group.turn) return <View style={roomStyle}>{renderRows(items)}{summary}</View>;
+	if (!partition || !group.turn) {
+		const roomStyle = roomStyleFor(true);
+		return <View style={roomStyle}>{renderRows(items)}{summary}</View>;
+	}
 	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
 	const actions = <TurnActions turn={group.turn} reply={reply} onRollback={canRollBack ? onRollback : undefined} onFork={onFork} />;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
 	// leaving the notices and the final reply in view.
+	const roomStyle = roomStyleFor(drawsRoomItem([partition.prompt, partition.settled ? [] : partition.work, partition.notices, partition.final]));
 	return <View style={roomStyle}>
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
-		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
+		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work, false)}</FoldBody> : null) : renderRows(partition.work)}
 		{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}
 	</View>;
 });

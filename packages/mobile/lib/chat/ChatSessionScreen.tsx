@@ -254,11 +254,19 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useEffect(() => { setSendAnchor(undefined); }, [session.id]);
 	// The send's own key goes with it, so the timeline knows its message from
 	// one another device or agent sends meanwhile.
+	// A failed send waiting to be resolved decides the key: the same text resends
+	// it under its own (reservePendingSend), and other text is refused, so no
+	// early copy is drawn for it.
+	const pendingSendsRef = useRef(conversation.pendingSends);
+	pendingSendsRef.current = conversation.pendingSends;
 	const anchorSend = (kind: "send" | "steer", text?: string): SendAnchor | undefined => {
 		const current = latestSnapshot.current;
 		if (!current) return undefined;
 		const turnId = kind === "steer" ? activeTurn(current)?.id : undefined;
-		const anchor = { conversationId: current.conversationId, after: newestSequence(current.items), at: Date.now(), kind, text, turnId, clientMessageId: clientMessageId() };
+		const waiting = pendingSendsRef.current.find((item) => item.state === "failed");
+		const resends = waiting && (waiting.kind ?? "send") === kind && waiting.draftText === text && !waiting.hasAttachments;
+		const shown = waiting && !resends ? undefined : text;
+		const anchor = { conversationId: current.conversationId, after: newestSequence(current.items), at: Date.now(), kind, text: shown, turnId, clientMessageId: resends && waiting ? waiting.id : clientMessageId() };
 		setSendAnchor(anchor);
 		return anchor;
 	};

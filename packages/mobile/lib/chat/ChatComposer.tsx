@@ -97,7 +97,6 @@ const OPEN_FIELD_INSET = space.xs;
 // The waveform's inset from the pill's leading edge while the mic is open.
 const DICTATION_INSET = space.md;
 
-/** The chat's composer, sharing the screen's keyboard handler when there is one (see KeyboardMotionScope). */
 /**
  * Plain sends in flight, by draft key: the text each emptied from its field.
  * A composer opened on the same conversation while one is in flight (the
@@ -111,6 +110,7 @@ function sendFailed(draftKey: string, text: string) {
 	for (const listener of [...(failedSendListeners.get(draftKey) ?? [])]) listener(text);
 }
 
+/** The chat's composer, sharing the screen's keyboard handler when there is one (see KeyboardMotionScope). */
 export function ChatComposer(props: ComponentProps<typeof Composer>) {
 	return <KeyboardMotionScope><Composer {...props} /></KeyboardMotionScope>;
 }
@@ -532,7 +532,8 @@ function Composer({
 		} catch (cause) {
 			// Unless something new was typed meanwhile; a composer opened since gets it instead.
 			if (clearedAtSend && draftKey) {
-				sendsInFlight.delete(draftKey);
+				// Only this send's entry: a composer opened since may have one in flight.
+				if (sendsInFlight.get(draftKey) === text) sendsInFlight.delete(draftKey);
 				sendFailed(draftKey, text);
 			} else if (clearedAtSend && latestText.current === "") {
 				latestText.current = text;

@@ -93,7 +93,7 @@ describe("chat composer pill", () => {
 		expect(composer).toContain('const text = draft.text === sendsInFlight.get(draftKey) ? "" : draft.text;');
 		expect(composer).toContain("if (!clearedAtSend || await AsyncStorage.getItem(draftKey) === sentDraft) await AsyncStorage.removeItem(draftKey);");
 		expect(composer).toContain("listeners.add(restore);");
-		expect(composer).toContain("sendsInFlight.delete(draftKey);\n\t\t\t\tsendFailed(draftKey, text);");
+		expect(composer).toContain("if (sendsInFlight.get(draftKey) === text) sendsInFlight.delete(draftKey);\n\t\t\t\tsendFailed(draftKey, text);");
 	});
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {
