@@ -6956,7 +6956,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		}
 	}
 	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
-		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
+		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer, restyleAppPrompt(skillassets.Dir(m.dataDir)))
 	}
 	if chat && m.computerUseEnabled(ctx) {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
@@ -7017,6 +7017,17 @@ func (m *Manager) aoSkillPointer(chat bool) string {
 		"If you cannot see them, search your tools for them. " +
 		"If you find nothing, read `" + renderFile + "` and use `ao render`. " +
 		"Do not use a built-in visualize skill."
+}
+
+// restyleAppPrompt routes "change how Orchestrator looks" to `ao theme`.
+// Without it an agent that finds the Orchestrator source on disk edits the
+// theme catalog there, which changes nothing until a rebuild, or restyles
+// another app it guesses was meant.
+func restyleAppPrompt(skillDir string) string {
+	themeFile := filepath.ToSlash(filepath.Join(skillDir, "commands", "theme.md"))
+	return "## Restyling Orchestrator\n\n" +
+		"When the user asks to change how Orchestrator itself looks (a theme, colors, fonts, spacing, light or dark) or gives you a theme file to use, read `" + themeFile + "` and use `ao theme`: it adds a theme to Settings and switches every window to it live. " +
+		"Do not edit Orchestrator's source code for this, even when a checkout is on disk, unless the user asks for a code change."
 }
 
 func (m *Manager) workspaceProjectPrompt(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID) (string, error) {

@@ -208,6 +208,14 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao session switch":       {},
 	"ao spawn":                {},
 	"ao stop":                 {},
+	"ao theme":                {},
+	"ao theme delete":         {},
+	"ao theme import":         {},
+	"ao theme list":           {},
+	"ao theme mode":           {},
+	"ao theme set":            {},
+	"ao theme show":           {},
+	"ao theme use":            {},
 	"ao version":              {},
 
 	// Legacy commands observed in PostHog's current billing-period data.
