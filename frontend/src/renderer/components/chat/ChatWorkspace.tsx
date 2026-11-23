@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
 import { excerptSizeError } from "../../../shared/chat-excerpt";
 import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excerpt-snapshot";
@@ -155,6 +156,7 @@ import {
 	TurnResults,
 	TurnOutcome,
 	LoginStatusNote,
+	useFreshFailureReport,
 	LiveResponseStatus,
 	LiveStepChoices,
 	RevealedChatActivity,
@@ -3489,6 +3491,7 @@ export function Timeline({
 	findRequest?: ChatFindRequest;
 	onFindRequestHandled?: ChatWorkspaceProps["onFindRequestHandled"];
 }) {
+	useTelemetrySurface("chat");
 	const findSurface = useRef<HTMLDivElement>(null);
 	const scroller = useRef<HTMLDivElement>(null);
 	const pauseFindFollow = useRef<() => void>(() => {});
@@ -5761,6 +5764,7 @@ export function Timeline({
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"
+				data-telemetry-surface="chat"
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
 				{/* Before the settle snapshot: its restore reads how far this one moved the view. */}
@@ -6305,6 +6309,8 @@ const TurnGroup = memo(function TurnGroup({
 	const loginNoteMessageId = login?.align === "end"
 		? group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human")?.id
 		: undefined;
+	// Counted here, not in the outcome, so a failure shown as a login note counts too.
+	useFreshFailureReport(endsWithOutcome ? group.outcome?.state : undefined, group.outcome?.completedAt, group.turnId, group.outcome?.failureCode);
 	const copyableMessage = endsWithOutcome && copyableMessageId
 		? group.items.find(
 				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
@@ -7085,6 +7091,8 @@ type TimelineGroup = {
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
 		failureCode?: ConversationTurn["failureCode"];
+		/** When the turn ended, for telling a failure that just happened from one in history. */
+		completedAt?: string;
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
@@ -7683,6 +7691,7 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 				)?.summary
 				: undefined),
 			failureCode: turn.failureCode,
+			completedAt: turn.completedAt,
 		};
 	}
 

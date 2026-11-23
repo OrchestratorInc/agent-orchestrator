@@ -108,6 +108,7 @@ import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 import { markLaunchUsable } from "../lib/launch-telemetry";
 import { useSessionOpenTiming } from "../lib/performance-telemetry";
+import { uiUsage } from "../lib/ui-usage-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
 
@@ -587,6 +588,10 @@ function ShellLayout() {
 				: null,
 		);
 	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
+	// Counts a switch to another session and where it started (sidebar, tab, Cmd+K…).
+	useEffect(() => {
+		if (scopedSession?.id) uiUsage.sessionViewed(sessionUiKey(scopedSession.id, routeParams.hostId));
+	}, [routeParams.hostId, scopedSession?.id]);
 	// Warms the New Task composer's model-catalog cache while the user is just
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
