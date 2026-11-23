@@ -215,6 +215,13 @@ type Config struct {
 	// session (claude-agent-acp's task list), re-sent into later turns, rather
 	// than a plan for the turn it arrives in.
 	PlansSpanTurns bool
+	// ToolsOutliveTurn marks an agent whose commands keep running after the
+	// prompt that ran them ends, and whose later update reports how they ended:
+	// `agy acp` hands a command to the background once its WaitMsBeforeAsync
+	// passes and can end the turn while it runs. A tool still in progress at a
+	// normal end_turn is then a background task, not one the turn abandoned, so
+	// it is not failed with the turn.
+	ToolsOutliveTurn bool
 	// HideCommand reports an advertised command that AO keeps out of the `/`
 	// menu. AO sends a picked command as ordinary prompt text, so a built-in
 	// that drives the agent's own terminal UI, or changes a setting AO has its
@@ -234,6 +241,9 @@ type Config struct {
 	// StopBackgroundTask stops one native background task. Nil when the
 	// provider has no stop control; tasks are then never reported stoppable.
 	StopBackgroundTask func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) error
+	// BackgroundTaskOutput reads one native background task's recent output.
+	// Nil when the provider keeps none; reads then report it unavailable.
+	BackgroundTaskOutput func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) (ports.ChatBackgroundTaskOutput, error)
 	// EncodeProviderConversationID and DecodeProviderConversationID let a binding
 	// persist ownership metadata around an opaque provider ID while keeping the
 	// raw value on the ACP wire.
@@ -719,6 +729,9 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
 		conv.initialPermission = ports.PermissionMode(live.InitialPermissions)
 		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
+		// The snapshot's current values are the agent's launch defaults; the
+		// provider process is in the state these restored settings describe.
+		conv.markSettingsApplied(ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions})
 		return conv, nil
 	}
 	return d.resumeSession(ctx, conv, init, launchCfg, cfg, reportedProviderConversationID)
@@ -956,12 +969,14 @@ func (d *Driver) initialize(
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.backgroundTasks = d.cfg.BackgroundTasks
 	conv.stopBackgroundTask = d.cfg.StopBackgroundTask
+	conv.backgroundTaskOutput = d.cfg.BackgroundTaskOutput
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.hideCommand = d.cfg.HideCommand
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.historyReconciler = d.cfg.HistoryReconciler
 	conv.plansSpanTurns = d.cfg.PlansSpanTurns
+	conv.toolsOutliveTurn = d.cfg.ToolsOutliveTurn
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if d.cfg.ServedModel != nil {
 		servedModel := d.cfg.ServedModel

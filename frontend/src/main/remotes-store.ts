@@ -1,3 +1,4 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -84,6 +85,7 @@ function seal({ password, sealedPassword, accountToken, fallbackPassword, sealed
 }
 
 export class RemotesFilePermissionError extends Error {
+	readonly code: string = "REMOTES_FILE_PERMISSION_ERROR";
 	constructor(
 		readonly path: string,
 		readonly mode: number,
@@ -196,7 +198,7 @@ export async function updateRemote(path: string, url: string, changes: RemoteCha
 	return serializeMutation(async () => {
 		const existing = await readRemotes(path);
 		const current = existing.find((candidate) => candidate.url === url);
-		if (!current) throw new Error(`no saved host for ${url}`);
+		if (!current) throw new AoError("SAVED_REMOTE_NOT_FOUND", `no saved host for ${url}`);
 		const updated = applyRemoteChanges(current, changes);
 		// Re-pointing a host MOVES its entry: the row keeps its place, and any other
 		// row already sitting on the new url is absorbed rather than left as a twin.

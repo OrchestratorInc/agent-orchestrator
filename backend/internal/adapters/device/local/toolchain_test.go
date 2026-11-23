@@ -226,7 +226,7 @@ func TestUnlistedSimulatorsAddsWhatTheHubHides(t *testing.T) {
 "com.apple.CoreSimulator.SimRuntime.iOS-26-5":[{"udid":"SEEN","name":"Seen","state":"Shutdown"},{"udid":"NEW","name":"Fresh iPhone","state":"Shutdown"},{"udid":"UP","name":"Running","state":"Booted"}],
 "com.apple.CoreSimulator.SimRuntime.tvOS-26-0":[{"udid":"TV","name":"Apple TV","state":"Shutdown"}]}}`), nil
 	}
-	got := p.unlistedSimulators(context.Background(), []ports.DeviceInfo{{ID: "SEEN"}})
+	got, _ := p.unlistedSimulators(context.Background(), []ports.DeviceInfo{{ID: "SEEN"}})
 	if len(got) != 2 || got[0].Name != "Fresh iPhone" || got[0].Version != "iOS 26.5" || got[1].Name != "Running" || !got[1].Booted {
 		t.Fatalf("got %+v, want the unlisted iOS simulators only", got)
 	}
@@ -311,13 +311,13 @@ func TestUnlistedEmulatorsAddsAVDsTheHubHides(t *testing.T) {
 		}
 		return nil, fmt.Errorf("unexpected %s %v", name, args)
 	}
-	got := p.unlistedEmulators(context.Background(), []ports.DeviceInfo{{ID: "seen", Name: "seen"}})
+	got, _ := p.unlistedEmulators(context.Background(), []ports.DeviceInfo{{ID: "seen", Name: "seen"}})
 	if len(got) != 2 || got[0].ID != "fresh" || got[0].Version != "API 35" || got[0].Booted ||
 		got[1].ID != "emulator-5590" || got[1].Name != "up" || !got[1].Booted {
 		t.Fatalf("got %+v, want the unlisted AVDs, the running one by serial", got)
 	}
 	// The hub already lists the running one by serial: not offered twice.
-	got = p.unlistedEmulators(context.Background(), []ports.DeviceInfo{{ID: "seen", Name: "seen"}, {ID: "emulator-5590", Name: "up"}})
+	got, _ = p.unlistedEmulators(context.Background(), []ports.DeviceInfo{{ID: "seen", Name: "seen"}, {ID: "emulator-5590", Name: "up"}})
 	if len(got) != 1 || got[0].ID != "fresh" {
 		t.Fatalf("got %+v, want only the stopped AVD", got)
 	}
@@ -747,5 +747,98 @@ func TestToolLocksPinTheToolVersions(t *testing.T) {
 		if lock.Name != toolManifestName || lock.Packages[""].Dependencies[tool.pkg] != tool.version || lock.Packages["node_modules/"+tool.pkg].Version != tool.version {
 			t.Fatalf("%s lockfile does not pin %s (regenerate it with npm install --package-lock-only --save-exact)", tool.pkg, tool.version)
 		}
+	}
+}
+
+// The hub puts what failed in error (inspect output) and often ends message
+// at a colon: both are shown, the detail by its first line.
+func TestHubErrorsShowTheFirstLineOfTheDetail(t *testing.T) {
+	spawn := "Error: spawn /sdk/cmdline-tools/latest/bin/avdmanager ENOENT\n    at ChildProcess._handle.onexit\n  errno: -2\n}"
+	got := hubErrors{{Message: "Failed to allocate an emulator port for QA: [android-utils] Failed to run `avdmanager list avd`:", Error: spawn}}.String()
+	if want := "Failed to allocate an emulator port for QA: [android-utils] Failed to run `avdmanager list avd`: Error: spawn /sdk/cmdline-tools/latest/bin/avdmanager ENOENT"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := (hubErrors{{Message: "Camera feed seed failed", Error: "Error: ENOENT"}}).String(); got != "Camera feed seed failed: Error: ENOENT" {
+		t.Fatalf("got %q", got)
+	}
+	if got := (hubErrors{{Error: spawn}}).String(); got != "Error: spawn /sdk/cmdline-tools/latest/bin/avdmanager ENOENT" {
+		t.Fatalf("detail only: got %q, want its first line", got)
+	}
+	if got := (hubErrors{{Message: "plain reason"}}).String(); got != "plain reason" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// The hub runs avdmanager before every Android boot; an SDK without the
+// command-line tools must not offer Android, or every open fails.
+func TestAndroidNeedsTheCommandLineTools(t *testing.T) {
+	sdk := t.TempDir()
+	for _, rel := range []string{"platform-tools/adb", "emulator/emulator"} {
+		path := filepath.Join(sdk, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("ANDROID_HOME", sdk)
+	p := New(Config{DataDir: t.TempDir()})
+	p.run = func(context.Context, string, ...string) ([]byte, error) { return []byte("/usr/bin/simctl\n"), nil }
+	android := func() ports.DevicePlatformAvailability {
+		for _, platform := range p.Platforms(context.Background()) {
+			if platform.Platform == ports.DevicePlatformAndroid {
+				return platform
+			}
+		}
+		t.Fatal("no android entry")
+		return ports.DevicePlatformAvailability{}
+	}
+	if got := android(); got.Available || !strings.Contains(got.Reason, "Command-line Tools") {
+		t.Fatalf("without avdmanager: %+v, want unavailable with what to install", got)
+	}
+	tool := avdmanagerPath(sdk)
+	if err := os.MkdirAll(filepath.Dir(tool), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := android(); !got.Available {
+		t.Fatalf("with avdmanager: %+v, want available", got)
+	}
+}
+
+// A list where one platform failed still succeeds with the rest, but asking
+// for that platform alone fails: its devices may only be missing.
+func TestListPlatformFailsForAPlatformThatDidNotList(t *testing.T) {
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"simulators":[],"emulators":[{"id":"emulator-5554","name":"Pixel","platform":"android","booted":true}],`+
+			`"errors":[{"id":"x","message":"Failed to list iOS simulators:","error":"Error: xcrun simctl list exited 1"}]}`)
+	}))
+	t.Cleanup(hub.Close)
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{origin: hub.URL, token: "tok", done: make(chan struct{})}
+	// simctl and the SDK (whichever this machine has) list nothing more.
+	p.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		switch {
+		case len(args) > 0 && args[0] == "simctl":
+			return []byte(`{"devices":{}}`), nil
+		case len(args) > 0 && args[0] == "-list-avds":
+			return nil, nil
+		case len(args) > 0 && args[0] == "devices":
+			return []byte("List of devices attached\n"), nil
+		}
+		return nil, errors.New("unexpected")
+	}
+	ctx := context.Background()
+	if all, err := p.List(ctx); err != nil || len(all) != 1 {
+		t.Fatalf("List = %+v, %v; want the emulator", all, err)
+	}
+	if android, err := p.ListPlatform(ctx, ports.DevicePlatformAndroid); err != nil || len(android) != 1 {
+		t.Fatalf("ListPlatform(android) = %+v, %v; want the emulator", android, err)
+	}
+	if _, err := p.ListPlatform(ctx, ports.DevicePlatformIOS); err == nil || !strings.Contains(err.Error(), "simctl") {
+		t.Fatalf("ListPlatform(ios) err = %v, want the listing failure", err)
 	}
 }

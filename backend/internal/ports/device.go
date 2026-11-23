@@ -106,6 +106,14 @@ type DeviceStreamTuner interface {
 	SetStreamQuality(ctx context.Context, device DeviceInfo, quality DeviceStreamQuality) error
 }
 
+// DevicePlatformLister is implemented by a provider whose List can succeed
+// while one platform failed to list (simctl erroring while emulators still
+// list). ListPlatform fails unless that platform listed cleanly, so a device
+// missing from its answer is really gone.
+type DevicePlatformLister interface {
+	ListPlatform(ctx context.Context, platform DevicePlatform) ([]DeviceInfo, error)
+}
+
 // DeviceControlRevoker is implemented by a provider whose agent command
 // outlives the lease it was bound for: a session that no longer holds a device
 // must not keep driving it, so RevokeControl turns that command off.
