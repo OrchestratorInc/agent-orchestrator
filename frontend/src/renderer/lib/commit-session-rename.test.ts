@@ -1,11 +1,14 @@
 import { QueryClient } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { components } from "../../api/schema";
 import { renameReadStarted, resetOptimisticRenamesForTest } from "../hooks/optimistic-renames";
 import { applyOptimisticCloudSessionTitles, applyOptimisticSessionViewTitles } from "../hooks/optimistic-session-titles";
 import { cloudSessionsQueryKey, remoteSessionsQueryKey, remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSummary } from "../types/workspace";
 import type { CloudCpSession } from "./cloud-cp";
+
+type SessionView = components["schemas"]["ControllersSessionView"];
 
 const h = vi.hoisted(() => ({ renameSession: vi.fn(), renameCloudSession: vi.fn() }));
 vi.mock("./rename-session", () => ({ renameSession: h.renameSession, renameCloudSession: h.renameCloudSession }));
@@ -35,7 +38,7 @@ describe("renaming a session on a remote host", () => {
 	const workspaces = (title: string): WorkspaceSummary[] => [
 		{ id: "p-1", name: "repo", path: "/repo", hostId: "box", sessions: [{ ...target, workspaceId: "p-1", workspaceName: "repo", title }] } as unknown as WorkspaceSummary,
 	];
-	const views = [{ id: "s-1", projectId: "p-1", displayName: "Old", terminalTitle: "vim", isTerminated: false, updatedAt: "" }];
+	const views = [{ id: "s-1", projectId: "p-1", displayName: "Old", terminalTitle: "vim", isTerminated: false, updatedAt: "" }] as SessionView[];
 	const remoteClient = () => {
 		const queryClient = new QueryClient();
 		queryClient.setQueryData(remoteWorkspaceQueryKey("box"), workspaces("Old"));
