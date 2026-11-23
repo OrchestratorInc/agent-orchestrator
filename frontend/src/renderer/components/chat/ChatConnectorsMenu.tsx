@@ -32,7 +32,9 @@ const stateKeys = {
 
 /**
  * The connectors this chat started with: their state, and how many calls the
- * chat made to each. Nothing shows for a chat without connectors.
+ * chat made to each server URL connector. Calls to a local command do not pass
+ * through the daemon, so that row names its kind and shows no count. Nothing
+ * shows for a chat without connectors.
  */
 export function ChatConnectorsMenu({ sessionId, servers }: { sessionId: string; servers: readonly McpServer[] }) {
 	const { t } = useTranslation();
@@ -65,9 +67,11 @@ export function ChatConnectorsMenu({ sessionId, servers }: { sessionId: string; 
 							<span className="min-w-0">
 								<span className="block truncate text-foreground">{connector.name}</span>
 								<span className="block truncate text-muted-foreground">
-									{connector.calls > 0
-										? `${t("chat.connectors.calls", { count: connector.calls })}${connector.lastTool ? ` · ${connector.lastTool}` : ""}`
-										: t("chat.connectors.noCalls")}
+									{connector.transport === "stdio"
+										? t("settings.connectors.dialog.tabCommand")
+										: connector.calls > 0
+											? `${t("chat.connectors.calls", { count: connector.calls })}${connector.lastTool ? ` · ${connector.lastTool}` : ""}`
+											: t("chat.connectors.noCalls")}
 								</span>
 							</span>
 							<span

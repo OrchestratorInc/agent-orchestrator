@@ -38,12 +38,13 @@ type SessionInput struct {
 
 // SessionConnector is one connector a session got, with its use in that session.
 type SessionConnector struct {
-	Key      string
-	Name     string
-	Status   Status
-	Enabled  bool
-	Calls    int
-	LastTool string
+	Key       string
+	Name      string
+	Transport Transport
+	Status    Status
+	Enabled   bool
+	Calls     int
+	LastTool  string
 }
 
 type sessionUse struct {
@@ -127,7 +128,7 @@ func (s *Service) SessionConnectors(_ context.Context, sessionID string) ([]Sess
 	for _, key := range use.keys {
 		one := SessionConnector{Key: key, Name: key, Status: StatusUnavailable, Calls: use.calls[key], LastTool: use.last[key]}
 		if i := s.index(key); i >= 0 {
-			one.Name, one.Status, one.Enabled = s.records[i].Name, s.records[i].Status, s.records[i].Enabled
+			one.Name, one.Transport, one.Status, one.Enabled = s.records[i].Name, s.records[i].Transport, s.records[i].Status, s.records[i].Enabled
 		}
 		out = append(out, one)
 	}

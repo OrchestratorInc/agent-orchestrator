@@ -92,7 +92,8 @@ func (c *ConnectorsController) forSession(w http.ResponseWriter, r *http.Request
 	out := make([]SessionConnectorResponse, 0, len(used))
 	for _, one := range used {
 		out = append(out, SessionConnectorResponse{
-			Key: one.Key, Name: one.Name, Status: string(one.Status), Enabled: one.Enabled, Calls: one.Calls, LastTool: one.LastTool,
+			Key: one.Key, Name: one.Name, Transport: string(one.Transport), Status: string(one.Status), Enabled: one.Enabled,
+			Calls: one.Calls, LastTool: one.LastTool,
 		})
 	}
 	envelope.WriteJSON(w, http.StatusOK, ListSessionConnectorsResponse{Connectors: out})

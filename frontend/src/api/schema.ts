@@ -8778,7 +8778,7 @@ export interface components {
             unpushed: number;
         };
         SessionConnectorResponse: {
-            /** @description Tool calls of this session to the connector since the daemon started. */
+            /** @description Tool calls of this session to a server URL connector since the daemon started. Calls to a command connector do not pass through the daemon and are not counted. */
             calls: number;
             enabled: boolean;
             key: string;
@@ -8786,6 +8786,11 @@ export interface components {
             name: string;
             /** @enum {string} */
             status: "unchecked" | "connected" | "needs_signin" | "unavailable";
+            /**
+             * @description Empty when the connector was removed after the session started.
+             * @enum {string}
+             */
+            transport?: "http" | "stdio";
         };
         SessionHistoryResponse: {
             offset: number;

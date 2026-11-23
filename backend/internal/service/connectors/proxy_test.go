@@ -102,7 +102,8 @@ func TestASessionCallsAToolThroughTheProxy(t *testing.T) {
 		t.Fatalf("content = %+v", result.Content[0])
 	}
 	used, err := svc.SessionConnectors(ctx, "ao-12")
-	if err != nil || len(used) != 2 || used[0].Key != "fake" || used[0].Calls != 1 || used[0].LastTool != "echo" || used[0].Status != StatusConnected {
+	if err != nil || len(used) != 2 || used[0].Key != "fake" || used[0].Calls != 1 || used[0].LastTool != "echo" || used[0].Status != StatusConnected ||
+		used[0].Transport != TransportHTTP || used[1].Transport != TransportStdio {
 		t.Fatalf("session connectors = %+v, %v", used, err)
 	}
 }

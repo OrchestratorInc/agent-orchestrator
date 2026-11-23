@@ -25088,8 +25088,9 @@ components:
     SessionConnectorResponse:
       properties:
         calls:
-          description: Tool calls of this session to the connector since the daemon
-            started.
+          description: Tool calls of this session to a server URL connector since
+            the daemon started. Calls to a command connector do not pass through the
+            daemon and are not counted.
           type: integer
         enabled:
           type: boolean
@@ -25105,6 +25106,12 @@ components:
           - connected
           - needs_signin
           - unavailable
+          type: string
+        transport:
+          description: Empty when the connector was removed after the session started.
+          enum:
+          - http
+          - stdio
           type: string
       required:
       - key

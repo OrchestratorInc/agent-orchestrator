@@ -18,9 +18,9 @@ function renderMenu(servers: Parameters<typeof ChatConnectorsMenu>[0]["servers"]
 const three = {
 	data: {
 		connectors: [
-			{ key: "linear", name: "Linear", status: "connected", enabled: true, calls: 4, lastTool: "create_issue" },
-			{ key: "sentry", name: "Sentry", status: "needs_signin", enabled: true, calls: 0 },
-			{ key: "files", name: "files", status: "connected", enabled: true, calls: 0 },
+			{ key: "linear", name: "Linear", transport: "http", status: "connected", enabled: true, calls: 4, lastTool: "create_issue" },
+			{ key: "sentry", name: "Sentry", transport: "http", status: "needs_signin", enabled: true, calls: 0 },
+			{ key: "files", name: "files", transport: "stdio", status: "connected", enabled: true, calls: 0 },
 		],
 	},
 };
@@ -49,7 +49,8 @@ describe("ChatConnectorsMenu", () => {
 		expect(rows).toHaveLength(3);
 		expect(rows[0]).toHaveTextContent("Linear4 calls · create_issueLoaded");
 		expect(rows[1]).toHaveTextContent("SentryNo calls yetNeeds sign-in");
-		expect(rows[2]).toHaveTextContent("filesNo calls yetFailed");
+		// Calls to a local command are not counted, so the row does not say "No calls yet".
+		expect(rows[2]).toHaveTextContent("filesLocal commandFailed");
 		expect(screen.getByText("Failed")).toHaveAttribute("title", "spawn npx ENOENT");
 		await user.click(screen.getByRole("menuitem", { name: "Manage connectors" }));
 		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "connectors" });

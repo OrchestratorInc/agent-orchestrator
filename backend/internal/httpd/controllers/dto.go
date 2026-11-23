@@ -3088,12 +3088,13 @@ type ConnectorSignInResponse struct {
 
 // SessionConnectorResponse is one connector a session got when it started, with its use in that session.
 type SessionConnectorResponse struct {
-	Key      string `json:"key"`
-	Name     string `json:"name"`
-	Status   string `json:"status" enum:"unchecked,connected,needs_signin,unavailable"`
-	Enabled  bool   `json:"enabled"`
-	Calls    int    `json:"calls" description:"Tool calls of this session to the connector since the daemon started."`
-	LastTool string `json:"lastTool,omitempty"`
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	Transport string `json:"transport,omitempty" enum:"http,stdio" description:"Empty when the connector was removed after the session started."`
+	Status    string `json:"status" enum:"unchecked,connected,needs_signin,unavailable"`
+	Enabled   bool   `json:"enabled"`
+	Calls     int    `json:"calls" description:"Tool calls of this session to a server URL connector since the daemon started. Calls to a command connector do not pass through the daemon and are not counted."`
+	LastTool  string `json:"lastTool,omitempty"`
 }
 
 // ListSessionConnectorsResponse is the body of GET /api/v1/sessions/{sessionId}/connectors.
