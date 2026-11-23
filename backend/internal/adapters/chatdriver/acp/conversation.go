@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -1698,11 +1699,18 @@ func (c *conversation) emit(event ports.ChatEvent) {
 }
 
 func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnState) {
+	// Copy what is settled while holding the lock. A late session/update for the
+	// same turn can still write these maps and tool states (processUpdate) while
+	// the items below are emitted, so iterating the live ones raced.
 	c.mu.Lock()
-	messages := c.messages
-	thoughts := c.thoughts
-	nestedMessages := c.nestedMessages
-	tools := c.tools
+	messages := maps.Clone(c.messages)
+	thoughts := maps.Clone(c.thoughts)
+	nestedMessages := maps.Clone(c.nestedMessages)
+	liveTools := c.tools
+	tools := make(map[string]toolState, len(liveTools))
+	for id, tool := range liveTools {
+		tools[id] = *tool
+	}
 	c.mu.Unlock()
 	recovered := len(turnState) > 0 && turnState[0] == domain.TurnStateRecovered
 	activityStatus := domain.ActivityStatusCompleted
@@ -1733,8 +1741,8 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 	toolIDs := sortedKeys(tools)
 	for _, id := range toolIDs {
 		tool := tools[id]
-		if tool.status == acpsdk.ToolCallStatusPending || tool.status == acpsdk.ToolCallStatusInProgress || tool.status == "" {
-			snapshot := *tool
+		if toolStatusOpen(tool.status) && c.toolStillOpen(liveTools, id) {
+			snapshot := tool
 			snapshot.status = acpsdk.ToolCallStatusFailed
 			event := c.toolEvent(turnID, &snapshot, true)
 			if recovered {
@@ -1743,6 +1751,21 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 			c.emit(event)
 		}
 	}
+}
+
+func toolStatusOpen(status acpsdk.ToolCallStatus) bool {
+	return status == acpsdk.ToolCallStatusPending || status == acpsdk.ToolCallStatusInProgress || status == ""
+}
+
+// toolStillOpen reports whether the settled turn's tool is still open in the
+// map it was snapshotted from. A late session/update may complete it after
+// the snapshot; settling must not then replace that completion with a
+// synthetic failure.
+func (c *conversation) toolStillOpen(tools map[string]*toolState, id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tool := tools[id]
+	return tool == nil || toolStatusOpen(tool.status)
 }
 
 func sortedKeys[T any](values map[string]T) []string {
