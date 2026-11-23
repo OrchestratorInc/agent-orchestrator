@@ -262,7 +262,7 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText(/AO TASK TITLE UPDATE/)).not.toBeInTheDocument();
 	});
 
-	it("draws nothing for reports sent with a human message", () => {
+	it("draws only the reports sent with a human message that still need the user", async () => {
 		const envelope = [
 			"Reports since your previous turn:", "",
 			"[needs_input] [iOS pages](ao://sessions/proj/proj-286)", "Tunnel or loopback?", "",
@@ -275,9 +275,12 @@ describe("orchestrator worker updates", () => {
 		renderOrchestrator([human, reply("t1", 2, "Both moved.")]);
 
 		expect(screen.getByText("How is it going?")).toBeInTheDocument();
-		expect(screen.queryByTestId("worker-reports")).not.toBeInTheDocument();
-		expect(screen.queryByTestId("worker-update")).not.toBeInTheDocument();
-		expect(screen.queryByText(/iOS pages/)).not.toBeInTheDocument();
+		const line = screen.getByTestId("worker-reports");
+		expect(line).toHaveTextContent("1 needs you");
+		await userEvent.click(within(line).getByRole("button"));
+		expect(screen.getAllByTestId("worker-update")).toHaveLength(1);
+		expect(screen.getByText("iOS pages")).toBeInTheDocument();
+		expect(screen.queryByText(/Menus/)).not.toBeInTheDocument();
 	});
 
 	it("keeps reports a worker's steer carried under that steer after the turn settles", async () => {
@@ -373,8 +376,8 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.queryByText("Noted.")).not.toBeInTheDocument();
 		const lines = screen.getAllByTestId("background-updates");
 		expect(lines).toHaveLength(2);
-		expect(lines[0]).toHaveTextContent(/^2 background updates · 2 workers/);
-		expect(lines[1]).toHaveTextContent(/^1 background update · 1 worker/);
+		expect(lines[0]).toHaveTextContent(/^2 background updates · 1 done · /);
+		expect(lines[1]).toHaveTextContent(/^1 background update · 1 done · /);
 
 		await userEvent.click(within(lines[0]!).getByRole("button", { name: /^2 background updates/ }));
 		const rows = within(lines[0]!).getAllByTestId("background-turn");
@@ -422,7 +425,103 @@ describe("background turns in the orchestrator chat", () => {
 			reply("t2", 4, "Noted."),
 		]);
 		expect(screen.queryByTestId("worker-reports")).not.toBeInTheDocument();
-		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 1 worker/);
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 1 done · /);
+	});
+
+	it("names where each worker got to on the line, and opens to one row per worker", async () => {
+		renderOrchestrator([
+			report("t1", 1, "[checkpoint] [iOS pages](ao://sessions/proj/proj-286)\nPages render."),
+			reply("t1", 2, "Noted."),
+			report("t2", 3, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t2", 4, "Noted."),
+			report("t3", 5, "[done] [iOS pages](ao://sessions/proj/proj-286)\nPages ship."),
+			reply("t3", 6, "Noted."),
+		]);
+		const line = screen.getByTestId("background-updates");
+		expect(line).toHaveTextContent(/^3 background updates · 2 done · /);
+
+		await userEvent.click(within(line).getByRole("button", { name: /^3 background updates/ }));
+		const rows = within(line).getAllByTestId(/^background-(turn|worker)$/);
+		expect(rows).toHaveLength(2);
+		expect(rows[0]).toHaveTextContent("Menus");
+		expect(rows[1]).toHaveAttribute("data-testid", "background-worker");
+		expect(rows[1]).toHaveTextContent(/iOS pagesdone · 2 updatesPages ship/);
+
+		await userEvent.click(within(rows[1]!).getByRole("button", { name: /iOS pages/ }));
+		expect(within(rows[1]!).getAllByTestId("background-turn")).toHaveLength(2);
+	});
+
+	it("folds account failures into the background line, with one notice for the newest", () => {
+		const base = snapshot([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "Noted."),
+			report("t2", 3, "[checkpoint] [iOS pages](ao://sessions/proj/proj-286)\nPages render."),
+			report("t3", 5, "[done] [Docs](ao://sessions/proj/proj-287)\nDocs build."),
+			reply("t3", 6, "Noted."),
+			report("t4", 7, "[checkpoint] [iOS pages](ao://sessions/proj/proj-286)\nPages ship."),
+		]);
+		renderSnapshot({
+			...base,
+			turns: base.turns.map((turn) => turn.id === "t2" || turn.id === "t4"
+				? { ...turn, state: "failed", errorMessage: "You've hit your usage limit.", usageLimit: { autoResume: false } }
+				: turn),
+		});
+
+		const lines = screen.getAllByTestId("background-updates");
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toHaveTextContent(/^4 background updates · 2 not handled · 2 done · /);
+		expect(screen.getAllByTestId("usage-limit-marker")).toHaveLength(1);
+		expect(screen.getAllByText("You've hit your usage limit.")).toHaveLength(1);
+	});
+
+	it("drops the account notice once a later background turn in the run went through", () => {
+		const base = snapshot([
+			report("t1", 1, "[checkpoint] [iOS pages](ao://sessions/proj/proj-286)\nPages render."),
+			report("t2", 3, "[done] [Docs](ao://sessions/proj/proj-287)\nDocs build."),
+			reply("t2", 4, "Noted."),
+		]);
+		renderSnapshot({
+			...base,
+			turns: base.turns.map((turn) => turn.id === "t1"
+				? { ...turn, state: "failed", errorMessage: "Signed out.", failureCode: "auth_required" }
+				: turn),
+		});
+
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 1 not handled · 1 done · /);
+		expect(screen.queryByText("Signed out.")).not.toBeInTheDocument();
+	});
+
+	it("folds an agent stopped between background turns into their line", () => {
+		const stopped: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.terminated:proj-9", sequence: 25, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Terminated an agent", createdAt: at(2),
+			detail: { action: "session.terminated", operationId: "proj-9", targetSessionId: "proj-9" },
+		};
+		renderOrchestrator([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			reply("t1", 2, "Noted."),
+			stopped,
+			report("t3", 3, "[done] [iOS pages](ao://sessions/proj/proj-286)\nPages ship."),
+			reply("t3", 4, "Noted."),
+		]);
+
+		const lines = screen.getAllByTestId("background-updates");
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toHaveTextContent(/^2 background updates · 2 done · 1 agent stopped · /);
+		expect(screen.queryByText("Terminated an agent")).not.toBeInTheDocument();
+	});
+
+	it("shows a long reply to the user as its first paragraph, with the rest behind Details", async () => {
+		const detail = Array.from({ length: 40 }, (_, index) => `- Session ${index}: still running its checks on the pull request.`).join("\n");
+		renderOrchestrator([
+			human("t1", 1, "How is the browser work going?"),
+			reply("t1", 2, `Menus and iOS pages are merged; remote host waits on your call.\n\n${detail}`),
+		]);
+
+		expect(screen.getByText("Menus and iOS pages are merged; remote host waits on your call.")).toBeInTheDocument();
+		expect(screen.queryByText(/Session 12:/)).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Details" }));
+		expect(screen.getByText(/Session 12:/)).toBeInTheDocument();
 	});
 
 	it("merges repeated failures with the same error into one line above the latest", async () => {
@@ -604,7 +703,7 @@ describe("background turns in the orchestrator chat", () => {
 			steer,
 			reply("t2", 4, "Rebased #5051 too."),
 		]);
-		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^1 background update · 1 worker/);
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^1 background update · 1 done · /);
 		expect(screen.getByText("Checking the iOS pages.")).toBeInTheDocument();
 	});
 
@@ -616,7 +715,7 @@ describe("background turns in the orchestrator chat", () => {
 		]);
 		renderSnapshot({ ...base, turns: base.turns.filter((turn) => turn.id !== "t2") });
 		expect(screen.queryByTestId("worker-update")).not.toBeInTheDocument();
-		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 2 workers/);
+		expect(screen.getByTestId("background-updates")).toHaveTextContent(/^2 background updates · 1 done · /);
 	});
 
 	it("leaves a turn a tool sent for the user in view", () => {

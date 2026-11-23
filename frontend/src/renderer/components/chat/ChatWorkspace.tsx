@@ -34,6 +34,7 @@ import { useTabListTabStop } from "../../hooks/useTabListTabStop";
  */
 
 import {
+	Fragment,
 	memo,
 	useContext,
 	useCallback,
@@ -163,13 +164,20 @@ import {
 	liveTaskLabel,
 	reconnectCopy,
 	stepInProgress,
+	type ReplyDetails,
 	type TurnOutcomeLogin,
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
 import {
+	type BackgroundTally,
 	BackgroundTurnRow,
 	BackgroundUpdates,
+	BackgroundWorkerRow,
+	leadUpdate,
+	needsYouNow,
+	piggybackedUpdates,
+	senderOf,
 	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
@@ -211,7 +219,7 @@ import { ActivityRun } from "./ActivityRun";
 import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
 import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
 import { isSubagentLaunch, partitionSubagentSteps, readSubagent, type SubagentRef } from "./subagent-team";
-import { isOrdinaryActivity } from "./activity-action";
+import { aoActionName, isOrdinaryActivity } from "./activity-action";
 import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -6294,6 +6302,7 @@ const TurnGroup = memo(function TurnGroup({
 }) {
 	const hostId = useContext(ChatHostId);
 	const batched = useContext(BatchedReportsContext);
+	const updateIndex = useContext(WorkerUpdateIndexContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
@@ -6453,6 +6462,10 @@ const TurnGroup = memo(function TurnGroup({
 			}
 			rollbackDisabled={rollbackDisabled}
 			onSelectAnnotation={onSelectAnnotation}
+			details={workerUpdates && group.outcome && run.items[0]?.id === lastAssistantId ? {
+				open: Boolean(activityDisclosureOverrides[`${group.key}:reply`]),
+				onOpenChange: (open) => onActivityDisclosureChange(`${group.key}:reply`, open),
+			} : undefined}
 			status={run.items[0]?.id === loginNoteMessageId && login
 				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
 				: undefined}
@@ -6490,8 +6503,13 @@ const TurnGroup = memo(function TurnGroup({
 		if (updates.length > 0) return reportsLine(run.key, updates);
 		const namedTitle = isTaskTitleUpdate(item) ? renamedTitle(group.items) : undefined;
 		if (namedTitle) return <TaskNamedLine key={run.key} title={namedTitle} />;
-		// Reports delivered with a human message or steer are not drawn: the message stands alone.
-		return renderRun(run);
+		// Reports delivered with a human message draw only where a worker still needs the user.
+		const waiting = item.kind === "message" && item.role === "user"
+			? [...piggybackedUpdates(item), ...(batched?.under.get(item.id) ?? [])].filter((update) => needsYouNow(updateIndex, update))
+			: [];
+		if (waiting.length === 0) return renderRun(run);
+		drewReportsUnder = true;
+		return [renderRun(run), reportsLine(`${run.key}:waiting`, waiting)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
 	const tail = workedRuns.at(-1);
@@ -6698,6 +6716,7 @@ function TimelineItem({
 	rollbackDisabled,
 	onSelectAnnotation,
 	status,
+	details,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -6739,12 +6758,14 @@ function TimelineItem({
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
 	/** Where a human message stands, leading the row under its bubble. */
 	status?: ReactNode;
+	details?: ReplyDetails;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
 			return (
 				<AssistantMessage
 					message={item}
+					details={details}
 					showCopy={showCopy}
 					live={live}
 					onRollback={onRollback}
@@ -7005,9 +7026,36 @@ const turnsIn = (group: TimelineGroup): TimelineGroup[] => group.folded?.members
 
 function revealKeys(group: TimelineGroup, holds: (item: ConversationItem) => boolean): string[] {
 	const member = group.folded?.members.find((candidate) => candidate.items.some(holds));
-	if (!member) return [`${group.key}:worked`];
-	if (group.folded!.kind === "failed" && member === group.folded!.members.at(-1)) return [`${member.key}:worked`];
-	return [group.folded!.kind === "replaced" ? `${group.key}:open` : `${member.key}:line`, `${member.key}:open`, `${member.key}:worked`];
+	const turn = member ?? group;
+	const hit = turn.items.find(holds);
+	const inside = [`${turn.key}:worked`, ...(hit?.kind === "message" && hit.role === "assistant" ? [`${turn.key}:reply`] : [])];
+	if (!member) return inside;
+	const { kind } = group.folded!;
+	if (member === bannerOf(group) && (kind === "failed" || !holds(member.items[0]!))) return inside;
+	if (kind === "replaced") return [`${group.key}:open`, ...inside];
+	return [`${member.key}:line`, `${member.key}:worker`, `${member.key}:open`, ...inside];
+}
+
+const isAccountFailure = (group: TimelineGroup) =>
+	group.outcome?.state === "failed" && Boolean(group.outcome.usageLimit || group.outcome.failureCode === "auth_required");
+
+const LOOSE_ACTIONS: Readonly<Record<string, "started" | "stopped">> = { "session.spawned": "started", "session.terminated": "stopped" };
+
+function looseNotice(item: ConversationItem): "started" | "stopped" | "reset" | undefined {
+	if (item.kind !== "activity") return undefined;
+	if (item.activityKind === "system" && item.detail?.event === "context.reset") return "reset";
+	return item.activityKind === "ao_action" ? LOOSE_ACTIONS[aoActionName(item)] : undefined;
+}
+
+const isLooseNotices = (group: TimelineGroup) => !group.turnId && group.items.length > 0 && group.items.every((item) => looseNotice(item) !== undefined);
+
+/** The member a folded line draws in full under itself: the last of identical failures, or an account failure that ends a background run. */
+function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
+	const { kind, members } = group.folded!;
+	if (kind === "failed") return members.at(-1);
+	if (kind !== "background") return undefined;
+	const last = members.findLast((member) => !isLooseNotices(member));
+	return last && isAccountFailure(last) ? last : undefined;
 }
 
 function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>): TimelineGroup[] {
@@ -7030,12 +7078,17 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 	const segments = new Map<string, number>();
 	for (const group of groups) if (group.turnId) segments.set(group.turnId, (segments.get(group.turnId) ?? 0) + 1);
 	for (const group of groups) {
+		if (run?.kind === "background" && isLooseNotices(group)) {
+			run.members.push(group);
+			continue;
+		}
 		const outcome = group.turnId && !group.live && segments.get(group.turnId) === 1
 			? group.outcome ?? (known.has(group.turnId) ? undefined : { state: "completed" as const })
 			: undefined;
 		const { steps, live, stopped } = groupSubagents(group);
 		const teamWorking = group.items.some((item) => isSubagentLaunch(item) && readSubagent(item, steps.get(item.id) ?? [], live.has(item.id), stopped).state === "working");
-		const standing = outcome && !teamWorking ? turnStanding(group.items, outcome.state, index, carried) : "yours";
+		const turnStands = outcome && !teamWorking ? turnStanding(group.items, outcome.state, index, carried) : "yours";
+		const standing = turnStands === "failed" && isAccountFailure(group) ? "background" : turnStands;
 		if (standing !== "background" && standing !== "failed") {
 			close();
 			out.push(standing === "replaced"
@@ -7061,6 +7114,37 @@ function withoutLead(member: TimelineGroup): TimelineGroup {
 	return body;
 }
 
+/** A background run's rows: one per worker, in the order they last reported, and each other turn or notice on its own. */
+function backgroundRows(members: readonly TimelineGroup[]) {
+	const rows: { key: string; members: TimelineGroup[]; sender?: string; latest?: WorkerUpdate; count: number }[] = [];
+	for (const member of members) {
+		const lead = isLooseNotices(member) ? undefined : leadUpdate(member.items);
+		const sender = lead && senderOf(lead);
+		const at = sender === undefined ? -1 : rows.findIndex((row) => row.sender === sender);
+		const row = at >= 0 ? rows.splice(at, 1)[0]! : { key: member.key, members: [], sender, count: 0 };
+		row.members.push(member);
+		for (const update of workerUpdatesOf(member.items[0]!)) {
+			if (senderOf(update) !== sender) continue;
+			row.latest = update;
+			row.count += 1;
+		}
+		rows.push(row);
+	}
+	const tally: BackgroundTally = {};
+	const add = (name: keyof BackgroundTally) => { tally[name] = (tally[name] ?? 0) + 1; };
+	for (const row of rows) {
+		const state = row.latest?.state;
+		if (state === "done") add("done");
+		else if (state === "needs_input") add("neededYou");
+		else if (state === "stuck") add("stuck");
+	}
+	for (const member of members) {
+		if (isAccountFailure(member)) add("notHandled");
+		if (isLooseNotices(member)) for (const item of member.items) add(looseNotice(item)!);
+	}
+	return { rows, tally };
+}
+
 function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 	group: TimelineGroup;
 	overrides: Readonly<Record<string, boolean>>;
@@ -7077,28 +7161,43 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 			</ReplacedNotice>
 		);
 	}
+	const banner = bannerOf(group);
 	const listed = kind === "failed" ? members.slice(0, -1) : members;
+	const toggleAll = (suffix: string, among: readonly TimelineGroup[]) => ({
+		open: among.some((member) => overrides[`${member.key}:${suffix}`]),
+		onOpenChange: (open: boolean) => { for (const member of among) onOpenChange(`${member.key}:${suffix}`, open); },
+	});
+	const turnRow = (member: TimelineGroup) => (
+		<BackgroundTurnRow
+			key={member.key}
+			items={member.items}
+			open={Boolean(overrides[`${member.key}:open`])}
+			onOpenChange={(open) => onOpenChange(`${member.key}:open`, open)}
+		>
+			{member === banner ? null : body(member)}
+		</BackgroundTurnRow>
+	);
+	const { rows, tally } = kind === "background" ? backgroundRows(listed) : { rows: undefined, tally: undefined };
 	const line = (
 		<BackgroundUpdates
-			turns={listed.map((member) => member.items)}
+			turns={listed.filter((member) => !isLooseNotices(member)).map((member) => member.items)}
+			tally={tally}
 			failed={kind === "failed"}
-			open={listed.some((member) => overrides[`${member.key}:line`])}
-			onOpenChange={(open) => { for (const member of listed) onOpenChange(`${member.key}:line`, open); }}
+			{...toggleAll("line", listed)}
 		>
-			{listed.map((member) => (
-				<BackgroundTurnRow
-					key={member.key}
-					items={member.items}
-					open={Boolean(overrides[`${member.key}:open`])}
-					onOpenChange={(open) => onOpenChange(`${member.key}:open`, open)}
-				>
-					{body(member)}
-				</BackgroundTurnRow>
-			))}
+			{rows ? rows.map((row) => {
+				const [only] = row.members;
+				if (row.members.length === 1) return isLooseNotices(only!) ? <Fragment key={row.key}>{renderTurn(only!)}</Fragment> : turnRow(only!);
+				return (
+					<BackgroundWorkerRow key={row.key} update={row.latest!} count={row.count} at={row.members.at(-1)!.items[0]!.createdAt} {...toggleAll("worker", row.members)}>
+						{row.members.map(turnRow)}
+					</BackgroundWorkerRow>
+				);
+			}) : listed.map(turnRow)}
 		</BackgroundUpdates>
 	);
-	if (kind !== "failed") return line;
-	return <div className="flex min-w-0 flex-col gap-2.5">{line}{renderTurn(members.at(-1)!)}</div>;
+	if (!banner) return line;
+	return <div className="flex min-w-0 flex-col gap-2.5">{line}{renderTurn(kind === "failed" ? banner : withoutLead(banner))}</div>;
 }
 
 /**

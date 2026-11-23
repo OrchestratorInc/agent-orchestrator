@@ -11,6 +11,7 @@
 
 import { Bot, ChevronDown, ChevronRight, CircleAlert, FileText, GitPullRequest, Layers, LoaderCircle, Split, Tag } from "@/components/app-icons";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
 import { remarkPlainReferences } from "../../lib/session-links";
@@ -472,15 +473,35 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 	);
 }
 
-export function BackgroundUpdates({ turns, failed = false, open, onOpenChange, children }: {
+/** The report that names a worker turn: the one that needed the user, else the first. */
+export function leadUpdate(items: readonly ConversationItem[]): WorkerUpdate | undefined {
+	const updates = items[0] ? workerUpdatesOf(items[0]) : [];
+	return updates.find((update) => update.state && STATES[update.state]?.attention) ?? updates[0];
+}
+
+export const senderOf = (update: WorkerUpdate) => update.sessionId ?? update.name;
+
+export type BackgroundTally = Partial<Record<"notHandled" | "neededYou" | "stuck" | "done" | "started" | "stopped" | "reset", number>>;
+
+const TALLY_ORDER = ["notHandled", "neededYou", "stuck", "done", "started", "stopped", "reset"] as const;
+
+function pastState(t: TFunction, state: string | undefined): string | undefined {
+	if (state === "needs_input") return t("chat.background.neededYou");
+	if (state === "stuck") return t("chat.background.wasStuck");
+	return state && (STATES[state]?.label ?? state.replaceAll("_", " "));
+}
+
+export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenChange, children }: {
 	turns: readonly (readonly ConversationItem[])[];
+	tally?: BackgroundTally;
 	failed?: boolean;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	children: ReactNode;
 }) {
 	const { t } = useTranslation();
-	const workers = new Set(turns.flatMap((items) => (items[0] ? workerUpdatesOf(items[0]) : []).map((update) => update.sessionId ?? update.name))).size;
+	const workers = new Set(turns.flatMap((items) => (items[0] ? workerUpdatesOf(items[0]) : []).map(senderOf))).size;
+	const tallies = TALLY_ORDER.filter((name) => tally?.[name]).map((name) => t(`chat.background.tally.${name}`, { count: tally![name] }));
 	const first = turns[0]?.[0]?.createdAt ?? "";
 	const last = turns.at(-1)?.[0]?.createdAt ?? first;
 	const start = formatMessageTimestamp(first);
@@ -501,11 +522,48 @@ export function BackgroundUpdates({ turns, failed = false, open, onOpenChange, c
 					<span className="font-medium text-foreground/85">
 						{t(failed ? "chat.background.failedEarlier" : "chat.background.count", { count: turns.length })}
 					</span>
-					{workers > 0 ? ` · ${t("chat.background.workers", { count: workers })}` : null} · {span}
+					{tallies.length > 0
+						? tallies.map((label) => ` · ${label}`).join("")
+						: workers > 0 ? ` · ${t("chat.background.workers", { count: workers })}` : null} · {span}
 				</span>
 				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
 			</Pressable>
 			{open ? <div className="ml-1.5 mt-1 flex min-w-0 flex-col border-l border-border pl-3">{children}</div> : null}
+		</div>
+	);
+}
+
+/** One worker's turns in a background line: its name, where it got to, and how many updates it sent. */
+export function BackgroundWorkerRow({ update, count, at, open, onOpenChange, children }: {
+	update: WorkerUpdate;
+	count: number;
+	at: string;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	children: ReactNode;
+}) {
+	const { t } = useTranslation();
+	const session = useWorkerSession(update.sessionId, update.projectId);
+	const name = update.name === update.sessionId ? session?.title || update.name : update.name;
+	const stateLabel = pastState(t, update.state);
+	return (
+		<div className="min-w-0 text-xs" data-testid="background-worker">
+			<Pressable
+				aria-expanded={open}
+				onClick={() => onOpenChange(!open)}
+				className="group -mx-1.5 flex h-7 w-[calc(100%+0.75rem)] min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-muted-foreground transition-colors hover:bg-interactive-hover"
+			>
+				<Bot aria-hidden="true" className="size-3.5 shrink-0" />
+				<span className="max-w-[40%] shrink-0 truncate font-medium text-foreground">{name}</span>
+				<span className="shrink-0">
+					{stateLabel ? `${stateLabel} · ` : null}
+					{t("chat.background.updates", { count })}
+				</span>
+				<span className="min-w-0 flex-1 truncate group-hover:text-foreground">{splitHeadline(splitArtifacts(update.body).text).headline}</span>
+				<span className="shrink-0 tabular-nums">{formatTime(at)}</span>
+				<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+			</Pressable>
+			{open ? <div className="mb-1 ml-[22px] flex min-w-0 flex-col">{children}</div> : null}
 		</div>
 	);
 }
@@ -519,16 +577,12 @@ export function BackgroundTurnRow({ items, open, onOpenChange, children }: {
 	const { t } = useTranslation();
 	const lead = items[0];
 	const updates = lead ? workerUpdatesOf(lead) : [];
-	const top = updates.find((update) => update.state && STATES[update.state]?.attention) ?? updates[0];
-	const senders = [...new Set(updates.map((update) => update.sessionId ?? update.name))];
+	const top = leadUpdate(items);
+	const senders = [...new Set(updates.map(senderOf))];
 	const session = useWorkerSession(top?.sessionId, top?.projectId);
 	const title = top ? undefined : renamedTitle(items);
 	const name = top && (top.name === top.sessionId ? session?.title || top.name : top.name);
-	const stateLabel = top?.state === "needs_input"
-		? t("chat.background.neededYou")
-		: top?.state === "stuck"
-			? t("chat.background.wasStuck")
-			: top?.state && (STATES[top.state]?.label ?? top.state.replaceAll("_", " "));
+	const stateLabel = pastState(t, top?.state);
 	const result = splitHeadline(finalReply(items)).headline;
 	return (
 		<div className="min-w-0 text-xs" data-testid="background-turn">
