@@ -1496,6 +1496,7 @@
 	"pr.stack.newTaskStart": "开始任务",
 	"pr.stack.newTaskFailed": "无法启动任务。",
 	"pr.stack.mergeThrough": "合并至 #{{number}} · {{layers}} 个 PR",
+	"pr.stack.mergeShort": "合并堆栈 · {{layers}}",
 	"pr.stack.confirmTitle": "合并 {{layers}} 个拉取请求？",
 	"pr.stack.confirmDescription": "{{numbers}} 将通过 {{method}} 一起进入 {{branch}}。只要有一个无法合并，就都不会合并。",
 	"pr.stack.confirmAction": "合并堆栈",

@@ -1514,6 +1514,7 @@
 	"pr.stack.newTaskStart": "Aufgabe starten",
 	"pr.stack.newTaskFailed": "Die Aufgabe konnte nicht gestartet werden.",
 	"pr.stack.mergeThrough": "Bis #{{number}} mergen · {{layers}} PRs",
+	"pr.stack.mergeShort": "Stack mergen · {{layers}}",
 	"pr.stack.confirmTitle": "{{layers}} Pull Requests mergen?",
 	"pr.stack.confirmDescription": "{{numbers}} landen gemeinsam auf {{branch}} per {{method}}. Kann einer nicht gemergt werden, wird keiner gemergt.",
 	"pr.stack.confirmAction": "Stack mergen",

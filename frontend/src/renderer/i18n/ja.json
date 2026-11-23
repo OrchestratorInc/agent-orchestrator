@@ -1514,6 +1514,7 @@
 	"pr.stack.newTaskStart": "タスクを開始",
 	"pr.stack.newTaskFailed": "タスクを開始できませんでした。",
 	"pr.stack.mergeThrough": "#{{number}} までマージ · {{layers}} 件の PR",
+	"pr.stack.mergeShort": "スタックをマージ · {{layers}}",
 	"pr.stack.confirmTitle": "{{layers}} 件のプルリクエストをマージしますか？",
 	"pr.stack.confirmDescription": "{{numbers}} を {{method}} で {{branch}} にまとめて反映します。1 件でもマージできない場合は、どれもマージされません。",
 	"pr.stack.confirmAction": "スタックをマージ",

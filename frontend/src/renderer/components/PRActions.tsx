@@ -254,6 +254,8 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 	const mergeNotice = mergeStack.data?.status === "enqueued" ? t("pr.stack.queued") : mergeStack.data?.status === "pending" ? t("pr.stack.pending") : null;
 	const methodLabel = t(`pr.merge.method.${method}`);
 	const mergeLabel = severalLayers ? t("pr.stack.mergeThrough", { layers: severalLayers.length, number: pr.number }) : viaQueue ? t("pr.queue.add") : methodLabel;
+	// In the card's title row the stack's label shortens; the full one stays its name and tooltip.
+	const mergeButtonLabel = severalLayers && messages !== undefined ? t("pr.stack.mergeShort", { layers: severalLayers.length }) : mergeLabel;
 	const mergeAria = severalLayers ? mergeLabel : viaQueue ? t("pr.queue.addFor", { number: pr.number }) : t("pr.merge.methodFor", { method: methodLabel, number: pr.number });
 	const queuedLabel = queued ? (queued.position > 0 ? t("pr.queue.queuedAt", { position: queued.position }) : t("pr.queue.queued")) : "";
 	const choose = (next: string) => {
@@ -279,7 +281,7 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 			: queued
 				// Already in the queue: the button says where, and the menu takes it out.
 				? { label: queuedLabel, aria: t("pr.queue.queuedFor", { number: pr.number, status: queuedLabel }), icon: ListEnd, run: () => {}, disabled: true, tone: "secondary" as const }
-				: { label: merging ? t(viaQueue && !severalLayers ? "pr.queue.adding" : "pr.merge.merging") : mergeLabel, aria: mergeAria, icon: viaQueue && !severalLayers ? ListEnd : GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
+				: { label: merging ? t(viaQueue && !severalLayers ? "pr.queue.adding" : "pr.merge.merging") : mergeButtonLabel, aria: mergeAria, icon: viaQueue && !severalLayers ? ListEnd : GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
 	const primary = gitPrimary ?? { ...prPrimary, spinning: false };
 	const gitMenu = updateYields && git?.primary ? [git.primary, ...git.menu] : (git?.menu ?? []).filter((step) => step.kind !== git?.primary?.kind);
 	// Ready for review, when branch work holds the button on a draft.
@@ -310,7 +312,7 @@ export function PRActionButton({ canMerge, git, hostId, messages, pr, sessionId 
 					key={gitPrimary ? "git" : "pr"}
 					onClick={primary.run}
 					size={messages === undefined ? "sm" : "xs"}
-					title={!gitPrimary && pr.state === "open" && blocker ? blocker : undefined}
+					title={!gitPrimary && pr.state === "open" && blocker ? blocker : !gitPrimary && primary.label === mergeButtonLabel && mergeButtonLabel !== mergeLabel ? mergeLabel : undefined}
 					type="button"
 					variant={primary.tone === "go" ? "primary" : "secondary"}
 				>

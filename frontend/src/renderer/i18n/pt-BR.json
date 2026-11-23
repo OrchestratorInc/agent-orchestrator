@@ -1529,6 +1529,7 @@
 	"pr.stack.newTaskStart": "Iniciar tarefa",
 	"pr.stack.newTaskFailed": "Não foi possível iniciar a tarefa.",
 	"pr.stack.mergeThrough": "Fazer merge até #{{number}} · {{layers}} PRs",
+	"pr.stack.mergeShort": "Fazer merge da pilha · {{layers}}",
 	"pr.stack.confirmTitle": "Fazer merge de {{layers}} pull requests?",
 	"pr.stack.confirmDescription": "{{numbers}} chegarão juntos a {{branch}} com {{method}}. Se um não puder ser mesclado, nenhum será.",
 	"pr.stack.confirmAction": "Fazer merge da pilha",

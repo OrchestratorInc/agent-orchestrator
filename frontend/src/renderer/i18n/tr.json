@@ -1481,6 +1481,7 @@
 	"pr.stack.newTaskStart": "Görevi başlat",
 	"pr.stack.newTaskFailed": "Görev başlatılamadı.",
 	"pr.stack.mergeThrough": "#{{number}} dahil birleştir · {{layers}} PR",
+	"pr.stack.mergeShort": "Yığını birleştir · {{layers}}",
 	"pr.stack.confirmTitle": "{{layers}} çekme isteği birleştirilsin mi?",
 	"pr.stack.confirmDescription": "{{numbers}}, {{method}} yöntemiyle birlikte {{branch}} dalına birleştirilecek. Biri birleştirilemezse hiçbiri birleştirilmez.",
 	"pr.stack.confirmAction": "Yığını birleştir",

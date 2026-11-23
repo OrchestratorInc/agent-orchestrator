@@ -1529,6 +1529,7 @@
 	"pr.stack.newTaskStart": "Lancer la tâche",
 	"pr.stack.newTaskFailed": "Impossible de lancer la tâche.",
 	"pr.stack.mergeThrough": "Fusionner jusqu'à #{{number}} · {{layers}} PR",
+	"pr.stack.mergeShort": "Fusionner la pile · {{layers}}",
 	"pr.stack.confirmTitle": "Fusionner {{layers}} pull requests ?",
 	"pr.stack.confirmDescription": "{{numbers}} arriveront ensemble sur {{branch}} avec {{method}}. Si l'une ne peut pas fusionner, aucune ne le sera.",
 	"pr.stack.confirmAction": "Fusionner la pile",

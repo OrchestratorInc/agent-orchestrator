@@ -1439,6 +1439,24 @@ describe("SessionInspector PR section", () => {
       expect(getMock).not.toHaveBeenCalledWith("/api/v1/prs/{id}/stack", expect.anything());
     });
 
+    it("shortens the stack's merge label in the card's title row, keeping the full one as its name and tooltip", async () => {
+      const summary = prSummary(2, "open", ready as Partial<SessionPRSummary>);
+      const respond = commonGetsResponder();
+      getMock.mockImplementation(async (path: string) => {
+        if (path === "/api/v1/prs/{id}/stack") return { data: stackOf(layer(1, "open"), layer(2, "open")) };
+        return path === "/api/v1/sessions/{sessionId}/pr" ? { data: { prs: [summary], linkedPrs: [] } } : respond(path);
+      });
+      renderWithQuery(<SessionInspector session={session([pr(2, "open", { url: summary.url })])} />, undefined, (client) => seedPRSummaries(client, [summary]));
+      const button = await within(await screen.findByTestId("pr-card")).findByRole("button", { name: "Merge through #2 · 2 PRs" });
+      expect(button).toHaveTextContent("Merge stack · 2");
+      expect(button).toHaveAttribute("title", "Merge through #2 · 2 PRs");
+    });
+
+    it("keeps the full stack merge label in the PR's tab", async () => {
+      serveStack(stackOf(layer(1, "open"), layer(2, "open")));
+      expect(await screen.findByRole("button", { name: "Merge through #2 · 2 PRs" })).toHaveTextContent("Merge through #2 · 2 PRs");
+    });
+
     it("turns Merge into the whole way up, and confirms which PRs land", async () => {
       postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/stack/merge"
         ? { data: { method: "squash", numbers: [1, 2], ok: true, prNumber: 2, stateChangedAt: "2026-11-04T00:00:00Z", status: "merged" } }

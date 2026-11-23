@@ -1514,6 +1514,7 @@
 	"pr.stack.newTaskStart": "작업 시작",
 	"pr.stack.newTaskFailed": "작업을 시작하지 못했습니다.",
 	"pr.stack.mergeThrough": "#{{number}}까지 병합 · PR {{layers}}개",
+	"pr.stack.mergeShort": "스택 병합 · {{layers}}",
 	"pr.stack.confirmTitle": "풀 리퀘스트 {{layers}}개를 병합할까요?",
 	"pr.stack.confirmDescription": "{{numbers}}이(가) {{method}}(으)로 {{branch}}에 함께 반영됩니다. 하나라도 병합할 수 없으면 아무것도 병합되지 않습니다.",
 	"pr.stack.confirmAction": "스택 병합",

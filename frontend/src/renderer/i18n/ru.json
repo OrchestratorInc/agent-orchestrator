@@ -1510,6 +1510,7 @@
 	"pr.stack.newTaskStart": "Запустить задачу",
 	"pr.stack.newTaskFailed": "Не удалось запустить задачу.",
 	"pr.stack.mergeThrough": "Слить до #{{number}} включительно · {{layers}} PR",
+	"pr.stack.mergeShort": "Слить стек · {{layers}}",
 	"pr.stack.confirmTitle": "Слить {{layers}} PR?",
 	"pr.stack.confirmDescription": "{{numbers}} будут слиты в {{branch}} одновременно ({{method}}). Если хотя бы один из них нельзя слить, не будет слит ни один.",
 	"pr.stack.confirmAction": "Слить стек",

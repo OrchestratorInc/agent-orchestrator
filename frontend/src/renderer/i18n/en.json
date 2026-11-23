@@ -1481,6 +1481,7 @@
 	"pr.stack.newTaskStart": "Start task",
 	"pr.stack.newTaskFailed": "Could not start the task.",
 	"pr.stack.mergeThrough": "Merge through #{{number}} · {{layers}} PRs",
+	"pr.stack.mergeShort": "Merge stack · {{layers}}",
 	"pr.stack.confirmTitle": "Merge {{layers}} pull requests?",
 	"pr.stack.confirmDescription": "{{numbers}} will land on {{branch}} together using {{method}}. If one can't merge, none will.",
 	"pr.stack.confirmAction": "Merge stack",
