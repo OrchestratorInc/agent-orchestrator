@@ -17,7 +17,7 @@
     if (findRequest && params.generation < findRequest.generation) return;
     var retain = findAnchorQuery === params.query && !params.reveal && findAnchor;
     findRequest = params;
-    if (!params.query.trim()) { findEngine.clear(); return; }
+    if (!params.query.trim()) { clearTimeout(findTimer); findEngine.clear(); return; }
     var ranges = findEngine.ranges(document.body, params.query);
     var active = Math.max(0, Math.min(ranges.length - 1, Number.isSafeInteger(params.active) ? params.active : 0));
     var retained = retain ? findEngine.retained(ranges, findAnchor) : -1;

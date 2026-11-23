@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -288,7 +288,7 @@ describe("render activity", () => {
 		const expanded = frames.find((f) => f !== inline) as HTMLIFrameElement;
 		// The dialog is a reading column wide, with no border and no fixed height;
 		// the frame fits the page, up to the window, and the page centers itself.
-		const dialog = expanded.parentElement!;
+		const dialog = expanded.closest<HTMLElement>("[role='dialog']")!;
 		expect(dialog.getAttribute("role")).toBe("dialog");
 		expect(dialog.className).toContain("w-[min(64rem,calc(100vw-4rem))]");
 		expect(dialog.className).toContain("border-0");
@@ -683,11 +683,18 @@ describe("artifact activity", () => {
 		const { unmount } = renderArtifact(undefined, activity);
 		expect(fold()).toHaveAttribute("aria-expanded", "true");
 		const frame = artifactFrame();
+		const doc = frame.contentDocument!;
+		doc.open(); doc.write('<input value="unsaved document state">'); doc.close();
 		await user.click(fold());
 		expect(fold()).toHaveAttribute("aria-expanded", "false");
 		// Folded, the page leaves the tab order and its hover actions go with it.
 		expect(frame.closest("[inert]")).not.toBeNull();
 		expect(screen.queryByRole("button", { name: "Expand page" })).toBeNull();
+		await user.click(fold());
+		expect(artifactFrame()).toBe(frame);
+		expect(frame.contentDocument).toBe(doc);
+		expect(doc.querySelector("input")).toHaveValue("unsaved document state");
+		await user.click(fold());
 		// A long chat remounts a card that scrolls away; it comes back folded, without loading the page.
 		unmount();
 		renderArtifact(undefined, activity);
@@ -697,6 +704,32 @@ describe("artifact activity", () => {
 		expect(fold()).toHaveAttribute("aria-expanded", "true");
 		expect(artifactFrame().closest("[inert]")).toBeNull();
 		expect(screen.getByRole("button", { name: "Expand page" })).toBeInTheDocument();
+	});
+
+	it("folding closes Find, retains the query, and leaves focus on the fold button", async () => {
+		const rects = vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
+		try {
+			const user = userEvent.setup();
+			renderArtifact(undefined, { ...artifactActivity, id: "act-fold-find" });
+			const fold = within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" });
+			const frame = artifactFrame();
+			fireEvent.pointerDown(frame); fireEvent.keyDown(document.body, { key: "f", ctrlKey: true });
+			const input = await screen.findByRole("searchbox", { name: "Find in artifact" });
+			fireEvent.change(input, { target: { value: "retained query" } });
+			await user.click(fold);
+			expect(screen.queryByRole("searchbox")).toBeNull(); expect(fold).toHaveFocus();
+			await user.click(fold);
+			expect(artifactFrame()).toBe(frame); expect(screen.queryByRole("searchbox")).toBeNull();
+			fireEvent.keyDown(fold, { key: "f", ctrlKey: true });
+			expect(await screen.findByRole("searchbox", { name: "Find in artifact" })).toHaveValue("retained query");
+			await user.click(screen.getByRole("button", { name: "Expand page" }));
+			const dialog = await screen.findByRole("dialog");
+			expect(frame.isConnected).toBe(true);
+			expect(within(dialog).getByRole("searchbox", { name: "Find in artifact" })).toHaveValue("retained query");
+			await user.click(within(dialog).getByRole("button", { name: "Close" }));
+			expect(artifactFrame()).toBe(frame);
+			expect(screen.getByRole("searchbox", { name: "Find in artifact" })).toHaveValue("retained query");
+		} finally { rects.mockRestore(); }
 	});
 
 	it("opens a later report of a folded file unfolded", async () => {

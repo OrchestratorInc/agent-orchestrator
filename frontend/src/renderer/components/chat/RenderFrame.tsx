@@ -348,6 +348,7 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 	const toggleFold = () => {
 		const next = !folded;
 		setFolded(next);
+		if (next) setFindState((state) => ({ ...state, open: false }));
 		if (!next) setFrameMounted(true);
 		if (foldKey !== undefined) rememberFold(foldKey, next);
 	};

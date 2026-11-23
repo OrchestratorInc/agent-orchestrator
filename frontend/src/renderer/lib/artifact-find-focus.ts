@@ -10,7 +10,8 @@ function record(event: Event) {
 	for (const target of event.composedPath()) {
 		if (!(target instanceof Element)) continue;
 		const container = target.closest("[data-artifact-find-container]");
-		const pane = container?.querySelector("[data-artifact-find-scope]") ?? target.closest("[data-artifact-find-scope], [data-chat-find-surface], [data-chat-find-scope]");
+		// Remember the card even while folded: its reader registers after unfolding.
+		const pane = container ?? target.closest("[data-artifact-find-scope], [data-chat-find-surface], [data-chat-find-scope]");
 		if (pane) { lastPane = pane; return; }
 	}
 }
@@ -38,7 +39,7 @@ export function artifactFindOwner(): HTMLElement | undefined {
 	const available = Array.from(roots).filter((root) => visible(root) && (!dialog || dialog.contains(root)));
 	if (dialog) return available.find((root) => root.contains(focused)) ?? available.at(-1);
 	if (focused instanceof HTMLIFrameElement) return available.find((root) => root.contains(focused));
-	if (lastPane?.isConnected) return available.find((root) => root === lastPane);
+	if (lastPane?.isConnected) return available.find((root) => root === lastPane || root.closest("[data-artifact-find-container]") === lastPane);
 	return available.find((root) => root.contains(focused));
 }
 export function artifactOwnsFind(): boolean { return artifactFindOwner() !== undefined; }

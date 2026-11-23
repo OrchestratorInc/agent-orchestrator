@@ -50,8 +50,9 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 	}, [invalidate]);
 	const close = useCallback(() => {
 		generation.current++; result.current?.clear(); result.current = undefined;
+		activeRange.current = undefined; setActive(0);
 		setOpen(false); setState({ phase: "idle", total: 0 });
-		if (previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true });
+		if (previousFocus.current?.isConnected && visible(previousFocus.current) && previousFocus.current.getClientRects().length > 0 && !previousFocus.current.closest("[inert]")) previousFocus.current.focus({ preventScroll: true });
 		else if (root.current) { root.current.tabIndex = -1; root.current.focus({ preventScroll: true }); }
 	}, [setOpen]);
 	const show = useCallback(() => {
@@ -68,15 +69,17 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 		if (!enabled || !root.current) return;
 		return registerArtifactFindRoot(root.current);
 	}, [enabled]);
+	const ownsEscape = useCallback((event: KeyboardEvent) => enabled && open && event.key === "Escape" && !event.defaultPrevented && !event.isComposing && !composing.current && artifactFindOwner() === root.current &&
+		!Array.from(document.querySelectorAll("[role='menu'][data-state='open']")).some((menu) => visible(menu) && menu.getClientRects().length > 0), [enabled, open]);
 	useEffect(() => {
 		if (!enabled || !open) return;
 		const escape = (event: KeyboardEvent) => {
-			if (event.key !== "Escape" || event.isComposing || artifactFindOwner() !== root.current || document.querySelector("[role='menu'][data-state='open']")) return;
+			if (!ownsEscape(event)) return;
 			event.preventDefault(); event.stopImmediatePropagation(); close();
 		};
 		window.addEventListener("keydown", escape, true);
 		return () => window.removeEventListener("keydown", escape, true);
-	}, [enabled, open, close]);
+	}, [enabled, open, close, ownsEscape]);
 	useEffect(() => {
 		if (!enabled) return;
 		const suspend = (event: Event) => {
@@ -108,7 +111,13 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 		const observer = new MutationObserver(configure); observer.observe(element, { childList: true, subtree: true });
 		const unsubscribe = useKeybindingsStore.subscribe(configure);
 		configure();
-		return () => { observer.disconnect(); unsubscribe(); element.removeEventListener("load", loaded, true); window.removeEventListener("message", message); };
+		return () => {
+			observer.disconnect(); unsubscribe(); element.removeEventListener("load", loaded, true); window.removeEventListener("message", message);
+			for (const frame of element.querySelectorAll("iframe")) {
+				frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find-configure", params: { exceptions: foldExceptions, bindings: [], open: false } } satisfies ArtifactFindMessage, "*");
+				frame.contentWindow?.postMessage({ jsonrpc: "2.0", method: "ao/find", params: { generation: ++generation.current, query: "", active: 0, reveal: false } } satisfies ArtifactFindMessage, "*");
+			}
+		};
 	}, [enabled, open, show, close, invalidate]);
 	useEffect(() => {
 		const element = root.current;
@@ -192,13 +201,18 @@ export function ArtifactFindScope({ children, identity, enabled = true, findStat
 		const selected = (active + direction + state.total) % state.total;
 		setActive(selected); result.current.paint(selected, true);
 	};
-	useEffect(() => { if (!enabled) { result.current?.clear(); result.current = undefined; } }, [enabled]);
+	useEffect(() => {
+		if (!enabled) {
+			generation.current++; result.current?.clear(); result.current = undefined;
+			activeRange.current = undefined; composing.current = false; setActive(0); setState({ phase: "idle", total: 0 });
+		}
+	}, [enabled]);
 	const warning = state.warning ? t(`artifacts.find.${state.warning}`) : undefined;
-	if (!enabled) return <AdapterContext.Provider value={undefined}>{children}</AdapterContext.Provider>;
+	// Keep the document's parent stable when folding or handing Find to a dialog.
 	return <AdapterContext.Provider value={enabled ? register : undefined}>
 		<div ref={root} className={className} data-artifact-find-scope={enabled ? "" : undefined}
 			onKeyDownCapture={(event) => {
-				if (event.key === "Escape" && open && artifactFindOwner() === root.current) { event.preventDefault(); event.stopPropagation(); close(); }
+				if (!event.defaultPrevented && ownsEscape(event.nativeEvent)) { event.preventDefault(); event.stopPropagation(); close(); }
 			}}>
 			{children}
 			{enabled && open ? <FindBar label={t("artifacts.find.label")} inputRef={input} aria-busy={state.phase === "searching"}

@@ -71,4 +71,19 @@ describe("local artifact sandbox find bridge", () => {
 		h.doc.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 		expect(h.sent).toHaveBeenLastCalledWith({ jsonrpc: "2.0", method: "ao/find-close", params: {} }, "*");
 	});
+	it("stops shortcuts, highlights and queued changes when a reader is deactivated", async () => {
+		vi.useFakeTimers();
+		const h = frameHarness(); h.configure();
+		h.message("ao/find", { generation: 1, query: "hello", active: 0, reveal: false });
+		h.doc.querySelector("p")!.textContent = "changed";
+		await vi.advanceTimersByTimeAsync(0);
+		h.message("ao/find-configure", { exceptions: foldExceptions, bindings: [], open: false });
+		h.message("ao/find", { generation: 2, query: "", active: 0, reveal: false });
+		h.sent.mockClear();
+		h.doc.body.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+		h.doc.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await vi.advanceTimersByTimeAsync(200);
+		expect(h.sent.mock.calls.filter(([message]) => message.method.startsWith("ao/find"))).toEqual([]);
+		expect(h.highlights.size).toBe(0);
+	});
 });
