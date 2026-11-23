@@ -1443,11 +1443,11 @@ func TestResolveSpawnHarness_ReviewerDefault(t *testing.T) {
 			Reviewers: []reviewerConfig{{Harness: "claude-code"}},
 		},
 	}
-	if got, err := resolveSpawnHarness("", "reviewer", project); err != nil || got != "claude-code" {
-		t.Fatalf("reviewer default: got %q err %v, want claude-code", got, err)
+	if got := resolveSpawnHarness("", "reviewer", project); got != "claude-code" {
+		t.Fatalf("reviewer default: got %q, want claude-code", got)
 	}
-	if got, err := resolveSpawnHarness("aider", "reviewer", project); err != nil || got != "aider" {
-		t.Fatalf("explicit reviewer agent: got %q err %v, want aider", got, err)
+	if got := resolveSpawnHarness("aider", "reviewer", project); got != "aider" {
+		t.Fatalf("explicit reviewer agent: got %q, want aider", got)
 	}
 	// With no reviewers configured, falls back to worker.agent.
 	noReviewer := projectDetails{
@@ -1456,8 +1456,8 @@ func TestResolveSpawnHarness_ReviewerDefault(t *testing.T) {
 			Worker: roleOverride{Agent: "codex"},
 		},
 	}
-	if got, err := resolveSpawnHarness("", "reviewer", noReviewer); err != nil || got != "codex" {
-		t.Fatalf("reviewer fallback to worker: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "reviewer", noReviewer); got != "codex" {
+		t.Fatalf("reviewer fallback to worker: got %q, want codex", got)
 	}
 	// When worker agent is not an unattended-safe reviewer (e.g. aider), falls back to claude-code.
 	unattendedUnsafeWorker := projectDetails{
@@ -1466,13 +1466,13 @@ func TestResolveSpawnHarness_ReviewerDefault(t *testing.T) {
 			Worker: roleOverride{Agent: "aider"},
 		},
 	}
-	if got, err := resolveSpawnHarness("", "reviewer", unattendedUnsafeWorker); err != nil || got != "claude-code" {
-		t.Fatalf("reviewer fallback for unsafe worker: got %q err %v, want claude-code", got, err)
+	if got := resolveSpawnHarness("", "reviewer", unattendedUnsafeWorker); got != "claude-code" {
+		t.Fatalf("reviewer fallback for unsafe worker: got %q, want claude-code", got)
 	}
-	// With no reviewers and no worker agent configured, surfaces --reviewer hint.
+	// With no reviewers and no worker agent configured, leaves the harness to the daemon.
 	noAgent := projectDetails{ID: "demo", Config: &projectConfig{}}
-	if _, err := resolveSpawnHarness("", "reviewer", noAgent); err == nil || !strings.Contains(err.Error(), "--reviewer") {
-		t.Fatalf("missing reviewer agent: err=%v, want --reviewer hint", err)
+	if got := resolveSpawnHarness("", "reviewer", noAgent); got != "" {
+		t.Fatalf("missing reviewer agent: got %q, want daemon-resolved empty harness", got)
 	}
 }
 
@@ -1487,24 +1487,24 @@ func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
 			Orchestrator: roleOverride{Agent: "claude-code"},
 		},
 	}
-	if got, err := resolveSpawnHarness("", "orchestrator", project); err != nil || got != "claude-code" {
-		t.Fatalf("orchestrator default: got %q err %v, want claude-code", got, err)
+	if got := resolveSpawnHarness("", "orchestrator", project); got != "claude-code" {
+		t.Fatalf("orchestrator default: got %q, want claude-code", got)
 	}
-	if got, err := resolveSpawnHarness("", "worker", project); err != nil || got != "codex" {
-		t.Fatalf("worker default: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "worker", project); got != "codex" {
+		t.Fatalf("worker default: got %q, want codex", got)
 	}
-	if got, err := resolveSpawnHarness("aider", "orchestrator", project); err != nil || got != "aider" {
-		t.Fatalf("explicit agent: got %q err %v, want aider", got, err)
+	if got := resolveSpawnHarness("aider", "orchestrator", project); got != "aider" {
+		t.Fatalf("explicit agent: got %q, want aider", got)
 	}
 	// Unset kind is the default `ao spawn` path and must resolve to worker.agent.
-	if got, err := resolveSpawnHarness("", "", project); err != nil || got != "codex" {
-		t.Fatalf("unset kind: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "", project); got != "codex" {
+		t.Fatalf("unset kind: got %q, want codex", got)
 	}
-	// Orchestrator spawn with no orchestrator.agent configured surfaces the
-	// --orchestrator-agent hint (the error branch this PR adds).
+	// Orchestrator spawn with no orchestrator.agent configured leaves the
+	// harness to the daemon, which fills the project's empty roles.
 	noOrch := projectDetails{ID: "demo", Config: &projectConfig{Worker: roleOverride{Agent: "codex"}}}
-	if _, err := resolveSpawnHarness("", "orchestrator", noOrch); err == nil || !strings.Contains(err.Error(), "--orchestrator-agent") {
-		t.Fatalf("missing orchestrator agent: err=%v, want --orchestrator-agent hint", err)
+	if got := resolveSpawnHarness("", "orchestrator", noOrch); got != "" {
+		t.Fatalf("missing orchestrator agent: got %q, want daemon-resolved empty harness", got)
 	}
 }
 

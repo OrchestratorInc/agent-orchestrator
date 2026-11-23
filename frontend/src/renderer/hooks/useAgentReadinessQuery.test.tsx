@@ -17,6 +17,7 @@ vi.mock("../lib/api-client", () => ({
 import {
 	agentReadinessQueryOptions,
 	agentReadinessQueryKey,
+	loadProjectAgentDefaults,
 	mergeAgentReadiness,
 	useAgentReadinessQuery,
 	useEnsureAgentReadiness,
@@ -115,5 +116,45 @@ describe("agent readiness query", () => {
 			expect(result.current).toBe(true);
 			unmount();
 		} finally { vi.useRealTimers(); }
+	});
+});
+
+describe("project agent defaults", () => {
+	it("forces a daemon refresh before falling back when cached agents are not installed", async () => {
+		const none = { data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined };
+		getMock.mockResolvedValue(none);
+		postMock.mockResolvedValue({ data: {}, error: undefined });
+
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/refresh");
+	});
+
+	it("forces a daemon refresh on a cached not_installed snapshot and ranks a newly installed agent", async () => {
+		getMock
+			.mockResolvedValueOnce({ data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined })
+			.mockResolvedValueOnce({ data: { agents: [agentReadiness("codex", "Codex")] }, error: undefined });
+		postMock.mockResolvedValueOnce({ data: {}, error: undefined });
+
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/refresh");
+	});
+
+	it("ranks the daemon's latest snapshot when the checks outlast the limit", async () => {
+		vi.useFakeTimers();
+		try {
+			const unchecked = { installation: "unknown", authentication: "unknown" } as const;
+			getMock
+				.mockResolvedValueOnce({ data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", unchecked)] }, error: undefined })
+				.mockResolvedValue({ data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", { authentication: "unknown" })] }, error: undefined });
+			postMock.mockReturnValue(new Promise(() => {}));
+
+			const defaults = loadProjectAgentDefaults(new QueryClient());
+			await vi.advanceTimersByTimeAsync(5000);
+
+			// Claude Code was never checked; the daemon found Codex installed by now.
+			await expect(defaults).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
