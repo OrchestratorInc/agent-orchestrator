@@ -15,7 +15,7 @@ done
 printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'  -u) echo 1000 ;;' '  -un) echo ao ;;' 'esac' > "$tmp/bin/id"
 printf '%s\n' '#!/bin/sh' 'case "$1" in' \
-	'  -s) echo Linux ;;' '  -m) echo x86_64 ;;' 'esac' > "$tmp/bin/uname"
+	'  -s) echo Linux ;;' '  -m) echo "${TEST_UNAME_M:-x86_64}" ;;' 'esac' > "$tmp/bin/uname"
 printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'  status)' \
 	'    if [ -n "${TEST_AO_BLOCK_FILE:-}" ]; then' \
@@ -34,13 +34,16 @@ printf '%s\n' '#!/bin/sh' 'case "$1" in' \
 	'      case "$2" in' \
 	'        enable) if [ "$TEST_AO_TUNNEL_PAIRING" = unavailable ]; then' \
 	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel unavailable: cloudflared missing\nPassword: test-secret\n"' \
+	'                elif [ "$TEST_AO_TUNNEL_PAIRING" = code ]; then' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel: starting; run status for the HTTPS address\nPairing code: stale-code\nOne device can use it, within 10 minutes.\n"' \
 	'                elif [ "$TEST_AO_TUNNEL_PAIRING" = linked ]; then' \
-	'                  printf "Remote host enabled\nHost ID: h_test\nLinked to an AO account: its signed-in devices list this machine.\nAddress: https://h-test.useao.dev:443\nPassword: test-secret\n"' \
+	'                  printf "Remote host enabled\nHost ID: h_test\nLinked to an Orchestrator account: its signed-in devices list this machine.\nAddress: https://h-test.useao.dev:443\nPassword: test-secret\n"' \
 	'                else' \
 	'                  printf "Remote host enabled\nHost ID: h_test\nTunnel: starting; run status for the HTTPS address\nPassword: test-secret\n"' \
 	'                fi ;;' \
 	'        status) printf "Remote host enabled\nHost ID: h_test\nAddress: https://example.trycloudflare.com:443\nPassword: test-secret\n" ;;' \
 	'        link) [ "$3" = --help ] && echo "  --no-qr   Do not print a QR code" ;;' \
+	'        pair) [ "$TEST_AO_TUNNEL_PAIRING" = code ] && printf "Address: https://example.trycloudflare.com:443\nPairing code: fresh-code\nOne device can use it, within 10 minutes.\n" ;;' \
 	'      esac' \
 	'    fi ;;' \
 	'  daemon) printf "%s\n" "$PATH" > "$TEST_SERVICE_PATH_CAPTURE" ;;' \
@@ -145,6 +148,88 @@ PY
 			/bin/bash "$entry" --nightly "$option" main > "$tmp/out" 2>&1 || result=$?
 			[[ "$result" == 2 ]]
 			grep -q 'cannot be combined' "$tmp/out"
+		done
+		;;
+	release-arm64)
+		for tool in awk find shasum; do
+			ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
+		done
+		COPYFILE_DISABLE=1 tar -czf "$tmp/host-package.tar.gz" -C "$tmp/pkg" resources
+		digest="$(shasum -a 256 "$tmp/host-package.tar.gz" | awk '{print $1}')"
+		python3 - "$tmp" "$digest" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+appimage = {"name": "agent-orchestrator-linux-x64.AppImage", "browser_download_url": "https://example.test/x64", "digest": "sha256:" + "1" * 64}
+host = {"name": "ao-host-linux-arm64.tar.gz", "browser_download_url": "https://example.test/arm64", "digest": "sha256:" + sys.argv[2]}
+release = {"tag_name": "v1.0.0", "prerelease": False, "draft": False, "published_at": "2026-10-10T00:00:00Z"}
+(root / "arm64.json").write_text(json.dumps(dict(release, assets=[appimage, host])))
+(root / "arm64-missing.json").write_text(json.dumps(dict(release, assets=[appimage])))
+PY
+		printf '%s\n' '#!/bin/sh' \
+			'while [ "$#" -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; https://*) url="$1"; shift ;; --retry) shift 2 ;; *) shift ;; esac; done' \
+			'echo "$url" >> "$TEST_CURL_LOG"' \
+			'case "$url" in' \
+			'  */releases/latest) cp "$TEST_RELEASE_FIXTURES/$TEST_RELEASE_CASE.json" "$out" ;;' \
+			'  https://example.test/arm64) cp "$TEST_RELEASE_FIXTURES/host-package.tar.gz" "$out" ;;' \
+			'  *) exit 1 ;;' 'esac' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/curl"
+		for fixture in arm64 arm64-missing; do
+			result=0
+			env PATH="$tmp/bin" TEST_UNAME_M=aarch64 AO_HOST_INSTALL_DIR="$tmp/host-$fixture" \
+				TEST_RELEASE_FIXTURES="$tmp" TEST_RELEASE_CASE="$fixture" TEST_CURL_LOG="$tmp/$fixture.urls" \
+				/bin/bash "$script" --install-only > "$tmp/out" 2>&1 || result=$?
+			if [[ "$fixture" == arm64 ]]; then
+				[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+				[[ -x "$(readlink "$tmp/host-$fixture/current")/resources/daemon/ao" ]]
+				grep -Fxq https://example.test/arm64 "$tmp/$fixture.urls"
+			else
+				[[ "$result" != 0 && ! -e "$tmp/host-$fixture/current" ]]
+				grep -q 'No verified release asset: ao-host-linux-arm64.tar.gz; this release predates Linux arm64 support' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			fi
+		done
+		result=0
+		env PATH="$tmp/bin" TEST_UNAME_M=riscv64 AO_HOST_INSTALL_DIR="$tmp/host-riscv64" \
+			/bin/bash "$script" --install-only > "$tmp/out" 2>&1 || result=$?
+		[[ "$result" == 1 ]] && grep -q 'Unsupported host platform: Linux/riscv64' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+		;;
+	bootstrap-arch)
+		bootstrap="${script%/*}/bootstrap-self-hosted.sh"
+		ln -s /bin/bash "$tmp/bin/bash"
+		for tool in head sort; do
+			ln -s "$(command -v "$tool")" "$tmp/bin/$tool"
+		done
+		for tool in apt-get sudo systemctl cloudflared; do
+			printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/$tool"
+			chmod +x "$tmp/bin/$tool"
+		done
+		printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$@" > "$TEST_INSTALL_ARGS"' > "$tmp/installer"
+		# The installer download succeeds; a branch build stops at its first toolchain download.
+		printf '%s\n' '#!/bin/sh' 'echo "$2" >> "$TEST_CURL_LOG"' \
+			'case "$2" in https://go.dev/*|https://nodejs.org/*) exit 1 ;; esac' \
+			'cp "$TEST_INSTALLER" "$4"' > "$tmp/bin/curl"
+		chmod +x "$tmp/bin/curl"
+		for machine in x86_64 aarch64 riscv64; do
+			run_bootstrap() {
+				env PATH="$tmp/bin" HOME="$tmp/home-$machine" TEST_UNAME_M="$machine" TEST_INSTALLER="$tmp/installer" \
+					TEST_INSTALL_ARGS="$tmp/args-$machine" TEST_CURL_LOG="$tmp/curl-$machine" \
+					/bin/bash "$bootstrap" "$@" > "$tmp/out" 2>&1
+			}
+			result=0
+			run_bootstrap || result=$?
+			if [[ "$machine" == riscv64 ]]; then
+				[[ "$result" == 1 ]] && grep -q 'supports Ubuntu on x64 or arm64 only' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+				[[ ! -e "$tmp/args-$machine" ]]
+				continue
+			fi
+			[[ "$result" == 0 && -f "$tmp/args-$machine" ]] || { cat "$tmp/out" >&2; exit 1; }
+			go_arch=amd64
+			[[ "$machine" == aarch64 ]] && go_arch=arm64
+			result=0
+			run_bootstrap --source-ref main || result=$?
+			[[ "$result" != 0 ]]
+			grep -q "^https://go.dev/dl/go[0-9.]*\.linux-$go_arch\.tar\.gz$" "$tmp/curl-$machine" || {
+				cat "$tmp/out" "$tmp/curl-$machine" >&2; exit 1;
+			}
 		done
 		;;
 	bad-tmux)
@@ -391,13 +476,14 @@ PY
 			/bin/bash -s -- --bundle "$bundle" --install-only > "$tmp/out" 2>&1
 		[[ -d "$(readlink "$tmp/host/current")" ]]
 		;;
-	tunnel-pairing|tunnel-unavailable|tunnel-linked)
+	tunnel-pairing|tunnel-pairing-code|tunnel-unavailable|tunnel-linked)
 		printf '%s\n' '#!/bin/sh' 'exit 0' > "$tmp/bin/systemctl"
 		chmod +x "$tmp/bin/systemctl"
 		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
 		mode=1
 		[[ "$1" == tunnel-unavailable ]] && mode=unavailable
 		[[ "$1" == tunnel-linked ]] && mode=linked
+		[[ "$1" == tunnel-pairing-code ]] && mode=code
 		result=0
 		env HOME="$tmp/home" PATH="$tmp/bin" AO_HOST_INSTALL_DIR="$tmp/host" \
 			TEST_AO_HOST_ROOT="$tmp/host" TEST_AO_READY_AFTER_INSTALL=1 TEST_AO_TUNNEL_PAIRING="$mode" \
@@ -407,11 +493,17 @@ PY
 			grep -q '^Address: https://example.trycloudflare.com:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			awk '/^Address: https:\/\/example.trycloudflare.com:443$/ { address = NR } /^Password: test-secret$/ { password = NR } END { exit !(address && password > address + 1) }' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			grep -q 'On your laptop: Settings → Remote hosts → Add host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
-			grep -q 'The host is not linked to an AO account. To link it, run: .*remote-host link$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'The host is not linked to an Orchestrator account. To link it, run: .*remote-host link$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			TEST_SERVICE_PATH_CAPTURE="$tmp/service-path" "$tmp/host/run-daemon.sh"
 			[[ ":$(<"$tmp/service-path"):" == *":$tmp/host/current/resources/acp-runtime/node/bin:"* ]] || {
 				printf '%s\n' 'daemon service PATH omits bundled Node' >&2; exit 1;
 			}
+		elif [[ "$1" == tunnel-pairing-code ]]; then
+			# A release with pairing codes shows a code, not the password.
+			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
+			awk '/^Address: https:\/\/example.trycloudflare.com:443$/ { address = NR } /^Pairing code: fresh-code$/ { code = NR } END { exit !(address && code > address + 1) }' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'For another, run: .*remote-host pair$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			! grep -q 'stale-code\|^Password' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		elif [[ "$1" == tunnel-linked ]]; then
 			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
 			grep -q '^Address: https://h-test.useao.dev:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
@@ -422,6 +514,6 @@ PY
 			! grep -q 'Pair this host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		fi
 		;;
-	*) printf 'Usage: %s {release-channels|bootstrap-nightly|bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-unavailable|tunnel-linked}\n' "$0" >&2; exit 2 ;;
+	*) printf 'Usage: %s {release-channels|bootstrap-nightly|release-arm64|bootstrap-arch|bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-pairing-code|tunnel-unavailable|tunnel-linked}\n' "$0" >&2; exit 2 ;;
 esac
 printf 'PASS %s\n' "$1"

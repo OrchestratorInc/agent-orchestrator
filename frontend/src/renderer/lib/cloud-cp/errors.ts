@@ -6,6 +6,8 @@
 
 import { CLOUD_UNREACHABLE, isOpaqueRequestId, safeErrorCode, safeNetworkCause } from "../../../shared/cloud-cp-errors";
 
+import { markApiError } from "../reported-errors";
+
 export interface CloudCpErrorOptions {
 	/** HTTP status of the failed response; 0 when the request never produced one (network failure). */
 	status: number;
@@ -33,6 +35,9 @@ export class CloudCpError extends Error {
 	constructor(message: string, options: CloudCpErrorOptions) {
 		super(message, options.cause === undefined ? undefined : { cause: options.cause });
 		this.name = "CloudCpError";
+		// Control-plane failures have their own monitoring. A client bug thrown
+		// outside this typed API boundary still reaches the renderer reporter.
+		markApiError(this);
 		this.status = options.status;
 		this.code = options.code;
 		this.requestId = options.requestId;
@@ -79,7 +84,7 @@ export function cloudCpErrorFromFailure(failure: CloudCpFailureFields, cause?: u
 	};
 	const message = typeof failure.message === "string" && failure.message !== ""
 		? failure.message
-		: status === 0 ? "AO Cloud could not be reached." : `Cloud control plane request failed with status ${status}.`;
+		: status === 0 ? "Orchestrator Cloud could not be reached." : `Cloud control plane request failed with status ${status}.`;
 	return status === 401 ? new CloudCpAuthError(message, options) : new CloudCpError(message, options);
 }
 

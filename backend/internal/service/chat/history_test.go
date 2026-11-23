@@ -188,7 +188,7 @@ func TestRollbackDiscardsTheTurnAndEverythingAfterIt(t *testing.T) {
 	second := completeTurn(t, h, "second", "provider-turn-2")
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
 
-	discarded, err := h.svc.Rollback(ctx, testSession, second)
+	discarded, err := h.svc.Rollback(ctx, testSession, second, "")
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestRollbackRemovesLaterLegacyCompactionState(t *testing.T) {
 		t.Fatalf("mark compacted: %v", err)
 	}
 
-	if _, err := h.svc.Rollback(ctx, testSession, second); err != nil {
+	if _, err := h.svc.Rollback(ctx, testSession, second, ""); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
 	snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
@@ -275,7 +275,7 @@ func TestRollbackIsRefusedWhileATurnIsRunning(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	_, err := h.svc.Rollback(ctx, testSession, turnID)
+	_, err := h.svc.Rollback(ctx, testSession, turnID, "")
 	if !errors.Is(err, chatsvc.ErrTurnRunning) {
 		t.Fatalf("err = %v, want ErrTurnRunning", err)
 	}
@@ -303,7 +303,7 @@ func TestRollbackReportsAnUnsupportedDriver(t *testing.T) {
 	turnID := completeTurn(t, h, "first", "provider-turn-1")
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
 
-	_, err := h.svc.Rollback(ctx, testSession, turnID)
+	_, err := h.svc.Rollback(ctx, testSession, turnID, "")
 	if !errors.Is(err, chatsvc.ErrRollbackUnsupported) {
 		t.Fatalf("err = %v, want ErrRollbackUnsupported", err)
 	}
@@ -336,7 +336,7 @@ func TestRollbackRefusesATurnTheProviderNeverAccepted(t *testing.T) {
 		t.Fatalf("second send state = %q, want queued", queued.State)
 	}
 
-	_, err = h.svc.Rollback(ctx, testSession, queued.ID)
+	_, err = h.svc.Rollback(ctx, testSession, queued.ID, "")
 	// It is refused, though which refusal depends on whether the running turn is
 	// noticed first; both are honest and neither is a 500.
 	if !errors.Is(err, chatsvc.ErrTurnNotRollbackable) && !errors.Is(err, chatsvc.ErrTurnRunning) {
@@ -349,7 +349,7 @@ func TestRollbackReportsAnUnknownTurn(t *testing.T) {
 	recorder := newHistoryRecorder()
 	h := newHarnessWithConversation(t, recorder)
 
-	_, err := h.svc.Rollback(context.Background(), testSession, "turn-that-never-was")
+	_, err := h.svc.Rollback(context.Background(), testSession, "turn-that-never-was", "")
 	if !errors.Is(err, domain.ErrNoConversationTurn) {
 		t.Fatalf("err = %v, want domain.ErrNoConversationTurn", err)
 	}
@@ -366,7 +366,7 @@ func TestRollbackClassifiesAProviderRefusal(t *testing.T) {
 	turnID := completeTurn(t, h, "first", "provider-turn-1")
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
 
-	_, err := h.svc.Rollback(ctx, testSession, turnID)
+	_, err := h.svc.Rollback(ctx, testSession, turnID, "")
 	if !errors.Is(err, chatsvc.ErrProviderRefused) {
 		t.Fatalf("err = %v, want ErrProviderRefused", err)
 	}
@@ -2957,7 +2957,7 @@ func TestProviderBoundaryRejectsSourceProviderBranchAndEdit(t *testing.T) {
 	if startCalls != 1 {
 		t.Fatalf("driver starts = %d, want source-provider edit rejected before target driver", startCalls)
 	}
-	if _, err := svc.Rollback(ctx, testSession, "source-turn"); !errors.Is(err, chatsvc.ErrTurnProviderMismatch) {
+	if _, err := svc.Rollback(ctx, testSession, "source-turn", ""); !errors.Is(err, chatsvc.ErrTurnProviderMismatch) {
 		t.Fatalf("source-provider rollback error = %v, want ErrTurnProviderMismatch", err)
 	}
 	target.mu.Lock()
@@ -3064,5 +3064,127 @@ func TestEditLaterTurnReplaysEarlierFileCapture(t *testing.T) {
 	}
 	if strings.Count(replay, "AO_CAPTURE_ORCHID_742") != 1 || !strings.Contains(replay, `deleted-demo.ts\"#L2-L2`) {
 		t.Fatalf("lost earlier durable capture: %s", replay)
+	}
+}
+
+// The launch config registered at Start is what the session was spawned with.
+// Choices made in the picker since are conversation settings; the provider an
+// edit launches continues that conversation and must run with them, whether it
+// forks natively or replays. Before this, an edit dropped them for the agent's
+// defaults, so a session pinned to one model silently answered with another.
+func TestEditMessageLaunchesReplacementWithCurrentConversationSettings(t *testing.T) {
+	chosen := domain.ConversationSettings{
+		Model: "opus", ReasoningEffort: "xhigh", ApprovalMode: ports.PermissionModeBypassPermissions,
+	}
+	for _, tc := range []struct {
+		name   string
+		replay bool
+	}{{"replay", true}, {"native fork", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, driver := newEditHarness(t, tc.replay)
+			ctx := context.Background()
+			completeTurn(t, h, "A", "provider-turn-1")
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+			second, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "B", Origin: domain.MessageOriginHuman})
+			if err != nil {
+				t.Fatalf("Send B: %v", err)
+			}
+			h.conv.emit(
+				ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-2"},
+				ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-2", ProviderItemID: "answer-b", Text: "answer B"},
+				ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-2", TurnState: domain.TurnStateCompleted},
+			)
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
+			if _, err := h.svc.SetTurnSettings(ctx, testSession, chosen); err != nil {
+				t.Fatalf("SetTurnSettings: %v", err)
+			}
+
+			if _, err := h.svc.EditMessage(ctx, testSession, second.ID, ports.ChatUserMessage{
+				Text: "B edited", Origin: domain.MessageOriginHuman,
+			}); err != nil {
+				t.Fatalf("EditMessage: %v", err)
+			}
+			driver.mu.Lock()
+			starts := append([]ports.ChatStartConfig(nil), driver.startConfigs...)
+			resumes := append([]ports.ChatResumeConfig(nil), driver.resumeCalls...)
+			driver.mu.Unlock()
+			got := domain.ConversationSettings{}
+			switch {
+			case tc.replay && len(starts) == 2:
+				got = domain.ConversationSettings{Model: starts[1].Model, ReasoningEffort: starts[1].Effort, ApprovalMode: starts[1].Permissions}
+			case !tc.replay && len(resumes) == 1:
+				got = domain.ConversationSettings{Model: resumes[0].Model, ReasoningEffort: resumes[0].Effort, ApprovalMode: resumes[0].Permissions}
+			default:
+				t.Fatalf("replacement launches: starts=%d resumes=%d", len(starts), len(resumes))
+			}
+			if got != chosen {
+				t.Fatalf("replacement launched with %+v, want the conversation's %+v", got, chosen)
+			}
+			// The picker reads the replacement's settings, so it shows them too.
+			_, shown, err := h.svc.Models(ctx, testSession)
+			if err != nil && !errors.Is(err, chatsvc.ErrModelsUnsupported) {
+				t.Fatalf("Models: %v", err)
+			}
+			if shown.Model != chosen.Model || shown.ReasoningEffort != chosen.ReasoningEffort || shown.ApprovalMode != chosen.ApprovalMode {
+				t.Fatalf("picker shows %+v after the edit, want the conversation's %+v", shown, chosen)
+			}
+		})
+	}
+}
+
+// Activating another branch relaunches the provider the same way an edit does,
+// so it keeps the conversation's current settings too (#6759).
+func TestActivateBranchKeepsTheConversationSettings(t *testing.T) {
+	chosen := domain.ConversationSettings{
+		Model: "opus", ReasoningEffort: "xhigh", ApprovalMode: ports.PermissionModeBypassPermissions,
+	}
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	first := completeTurn(t, h, "A", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	result, err := h.svc.EditMessage(ctx, testSession, first, ports.ChatUserMessage{
+		Text: "A edited", ClientMessageID: "edit-a", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("EditMessage: %v", err)
+	}
+	driver.fresh.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-101"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-101", TurnState: domain.TurnStateCompleted},
+	)
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		controller, controllerErr := h.svc.Controller(testSession)
+		if controllerErr == nil && controller.State() == ports.ChatControllerReady {
+			snapshot, snapshotErr := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+			if snapshotErr == nil && len(snapshot.Turns) == 1 && snapshot.Turns[0].State.Terminal() {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the edited turn never settled")
+		}
+	}
+	if _, err := h.svc.SetTurnSettings(ctx, testSession, chosen); err != nil {
+		t.Fatalf("SetTurnSettings: %v", err)
+	}
+	if _, err := h.svc.ActivateBranch(ctx, testSession, result.SourceBranchID); err != nil {
+		t.Fatalf("ActivateBranch: %v", err)
+	}
+	driver.mu.Lock()
+	resumes := append([]ports.ChatResumeConfig(nil), driver.resumeCalls...)
+	driver.mu.Unlock()
+	if len(resumes) == 0 {
+		t.Fatal("branch activation resumed no provider")
+	}
+	last := resumes[len(resumes)-1]
+	if got := (domain.ConversationSettings{Model: last.Model, ReasoningEffort: last.Effort, ApprovalMode: last.Permissions}); got != chosen {
+		t.Fatalf("activated branch resumed with %+v, want the conversation's %+v", got, chosen)
+	}
+	_, shown, err := h.svc.Models(ctx, testSession)
+	if err != nil && !errors.Is(err, chatsvc.ErrModelsUnsupported) {
+		t.Fatalf("Models: %v", err)
+	}
+	if shown.Model != chosen.Model || shown.ReasoningEffort != chosen.ReasoningEffort || shown.ApprovalMode != chosen.ApprovalMode {
+		t.Fatalf("picker shows %+v after activating the branch, want %+v", shown, chosen)
 	}
 }

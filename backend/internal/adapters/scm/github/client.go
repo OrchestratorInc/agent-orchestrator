@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +31,10 @@ var (
 	ErrNotFound    = ports.ErrSCMNotFound
 	ErrAuthFailed  = errors.New("github scm: authentication failed")
 	ErrRateLimited = errors.New("github scm: rate limited")
+	// errGraphQL marks a GraphQL error payload that is not an auth, rate-limit,
+	// or not-found failure. For a mutation it is the provider refusing the
+	// request.
+	errGraphQL = errors.New("github scm: graphql error")
 )
 
 // RateLimitError carries the structured backoff hints from a rate-limit
@@ -261,6 +266,12 @@ func (c *Client) doREST(ctx context.Context, method, path string, q url.Values, 
 	return RESTResponse{StatusCode: resp.StatusCode, Body: b}, err
 }
 
+type graphQLError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Path    []any  `json:"path"`
+}
+
 // doGraphQL posts one GraphQL request and returns the decoded data map
 // (the "data" field). Top-level GraphQL errors are surfaced as Go errors
 // classified by the same sentinels as REST.
@@ -302,14 +313,18 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 	}
 	var decoded struct {
 		Data   map[string]any `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-		} `json:"errors"`
+		Errors []graphQLError `json:"errors"`
 	}
 	if err := json.Unmarshal(respBody, &decoded); err != nil {
 		return nil, fmt.Errorf("github scm: decode graphql response: %w", err)
 	}
+	// A token without Actions read access gets an error on every
+	// checkSuite.workflowRun it touches, with that field nulled and the rest of
+	// the data intact. The field only lets latestCheckRuns match reruns, which
+	// keeps runs without it, so it must not fail the whole fetch.
+	decoded.Errors = slices.DeleteFunc(decoded.Errors, func(e graphQLError) bool {
+		return slices.Contains(e.Path, any("workflowRun"))
+	})
 	if len(decoded.Errors) > 0 {
 		msg := decoded.Errors[0].Message
 		low := strings.ToLower(msg)
@@ -322,7 +337,7 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 		case strings.Contains(low, "could not resolve") || strings.Contains(low, "not found"):
 			return decoded.Data, fmt.Errorf("%w: %s", ErrNotFound, msg)
 		default:
-			return decoded.Data, fmt.Errorf("github scm: graphql error: %s", msg)
+			return decoded.Data, fmt.Errorf("%w: %s", errGraphQL, msg)
 		}
 	}
 	return decoded.Data, nil

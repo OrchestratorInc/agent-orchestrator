@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Loader2 } from "lucide-react";
+import { Loader2 } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWorkspaceScope } from "../hooks/useWorkspaceQuery";
@@ -80,13 +80,13 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 						</div>
 					) : null}
 					<div className={settingsDialogFooterClass}>
-						<Button type="button" variant="footer" onClick={() => onOpenChange(false)} disabled={busy}>
+						<Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
 							{orchestrator ? t("confirm.cancel") : t("restoreUnavailable.close")}
 						</Button>
 						{orchestrator ? (
 							<Button
 								type="button"
-								variant="footer-primary"
+								variant="primary"
 								onClick={recreate}
 								disabled={busy || checkingProject}
 							>

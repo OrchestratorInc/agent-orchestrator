@@ -159,7 +159,8 @@ export interface CloudCpStreamSender {
 }
 
 export interface CloudCpProxy {
-	request(init: unknown): Promise<CloudCpProxyResponse>;
+	/** internal is for the main process only: renderer requests never carry it. */
+	request(init: unknown, internal?: { hostTokens: true; signal?: AbortSignal }): Promise<CloudCpProxyResponse>;
 	/** sender is the WebContents that asked: its requests end when it goes away. */
 	requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse>;
 	/** Abort one of a WebContents' binary requests; another's is never touched. */
@@ -312,6 +313,32 @@ function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path"
 	return target.toString();
 }
 
+const ACCOUNT_HOSTS_PATH = /\/api\/cloud\/v1\/me\/hosts(?:\/|$)/;
+
+/** The account's machine directory, whose host tokens stay in the main process. */
+function isAccountHostsUrl(url: string): boolean {
+	const { pathname } = new URL(url);
+	try {
+		return ACCOUNT_HOSTS_PATH.test(decodeURIComponent(pathname));
+	} catch {
+		return ACCOUNT_HOSTS_PATH.test(pathname);
+	}
+}
+
+function withoutHostTokens(body: string): string {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(body);
+	} catch {
+		return body;
+	}
+	if (typeof parsed !== "object" || parsed === null) return body;
+	const record = parsed as { token?: unknown; hosts?: unknown };
+	delete record.token;
+	if (Array.isArray(record.hosts)) for (const host of record.hosts) if (typeof host === "object" && host !== null) delete (host as { token?: unknown }).token;
+	return JSON.stringify(record);
+}
+
 function buildHeaders(requested: Record<string, string> | undefined, token: string): { headers: Headers; requestId: string } {
 	const headers = new Headers();
 	for (const [name, value] of Object.entries(requested ?? {})) {
@@ -363,7 +390,7 @@ function unreachableFailure(requestId: string, cause: string): CloudCpProxyFailu
 	return {
 		status: 0,
 		code: CLOUD_UNREACHABLE,
-		message: "AO Cloud could not be reached. Check your connection and try again.",
+		message: "Orchestrator Cloud could not be reached. Check your connection and try again.",
 		requestId,
 		cause,
 	};
@@ -402,7 +429,7 @@ function unauthorizedResponse(): CloudCpProxyResponse {
 		body: JSON.stringify({
 			error: "unauthorized",
 			code: "no_token",
-			message: "No AO Cloud session is available. Sign in and try again.",
+			message: "No Orchestrator Cloud session is available. Sign in and try again.",
 		}),
 	};
 }
@@ -427,10 +454,10 @@ export async function pinnedTargetUrl(
 	controlPlaneUrl: ControlPlaneUrlResolver,
 ): Promise<string> {
 	const configured = await controlPlaneUrl();
-	if (!configured) throw invalid("no AO Cloud control plane is configured.");
+	if (!configured) throw invalid("no Orchestrator Cloud control plane is configured.");
 	parseCloudBaseUrl(configured);
 	if (!sameControlPlaneUrl(init.baseUrl, configured)) {
-		throw invalid("baseUrl is not the configured AO Cloud control plane.");
+		throw invalid("baseUrl is not the configured Orchestrator Cloud control plane.");
 	}
 	return resolveTargetUrl({ baseUrl: configured, path: init.path, method: init.method });
 }
@@ -544,9 +571,10 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		}
 	}
 
-	async function request(init: unknown): Promise<CloudCpProxyResponse> {
+	async function request(init: unknown, internal?: { hostTokens: true; signal?: AbortSignal }): Promise<CloudCpProxyResponse> {
 		const valid = validateInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		const redact = internal?.hostTokens !== true && isAccountHostsUrl(url);
 		const token = await getCloudAccessToken(getDataDir());
 		// 401-shaped without touching the network, so the renderer client's
 		// standard auth-error path handles signed-out exactly like a server 401.
@@ -561,9 +589,12 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 				method: valid.method.toUpperCase(),
 				headers: requestHeaders,
 				body: valid.body,
+				signal: internal?.signal,
 			});
 			body = await response.text();
 		} catch (error) {
+			// A main-process caller handles its own failures, its abort included.
+			if (internal) throw error;
 			// DNS, TLS, offline, a refused or dropped connection: the renderer gets
 			// the CP's error envelope with status 0 instead of an IPC rejection,
 			// which would keep only a message.
@@ -582,7 +613,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		}
 		// The renderer reads the id from here when the CP's body names none.
 		if (headers[REQUEST_ID_HEADER] === undefined) headers[REQUEST_ID_HEADER] = requestId;
-		return { status: response.status, headers, body };
+		return { status: response.status, headers, body: redact ? withoutHostTokens(body) : body };
 	}
 
 	// In-flight binary requests by WebContents and request id, so a cancel
@@ -616,11 +647,12 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	async function requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse> {
 		const valid = validateBinaryInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		if (isAccountHostsUrl(url)) throw invalid("the account's machines are read through cloudCp:request.");
 		// Over the channel's limit is a refusal with a message the person can
 		// read, not a request.
 		if (valid.body !== undefined && valid.body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) {
 			return binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
-				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app sends to AO Cloud at once.`);
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app sends to Orchestrator Cloud at once.`);
 		}
 		const token = await getCloudAccessToken(getDataDir());
 		if (token === null || token === "") {
@@ -649,7 +681,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 			});
 			if (headers[REQUEST_ID_HEADER] === undefined) headers[REQUEST_ID_HEADER] = requestId;
 			const tooLarge = () => binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
-				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app takes from AO Cloud at once.`);
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app takes from Orchestrator Cloud at once.`);
 			const declared = Number(response.headers.get("content-length"));
 			if (Number.isFinite(declared) && declared > MAX_CLOUD_CP_BINARY_BYTES) {
 				await response.body?.cancel().catch(() => undefined);
@@ -666,7 +698,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 			if (timeout.aborted && !cancelled.signal.aborted) {
 				noteFailure(attempt, { status: 0, code: CLOUD_CP_BINARY_TIMEOUT, requestId }, "TimeoutError");
 				return binaryError(504, CLOUD_CP_BINARY_TIMEOUT,
-					`AO Cloud did not answer within ${Math.round(timeoutMs / 1000)} seconds. Try again.`);
+					`Orchestrator Cloud did not answer within ${Math.round(timeoutMs / 1000)} seconds. Try again.`);
 			}
 			if (!cancelled.signal.aborted) noteFailure(attempt, { status: 0, code: CLOUD_UNREACHABLE, requestId }, networkFailureCause(error));
 			throw error;
@@ -678,13 +710,14 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	async function openStream(sender: CloudCpStreamSender, init: unknown): Promise<CloudCpOpenStreamResult> {
 		const valid = validateInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		if (isAccountHostsUrl(url)) throw invalid("the account's machines are read through cloudCp:request.");
 		const ids = trackSender(sender);
 		if (ids.size >= MAX_STREAMS_PER_WEBCONTENTS) {
 			return { error: { status: 429, message: `This window already has ${MAX_STREAMS_PER_WEBCONTENTS} open cloud streams.` } };
 		}
 		const token = await getCloudAccessToken(getDataDir());
 		if (token === null || token === "") {
-			return { error: { status: 401, code: "no_token", message: "No AO Cloud session is available. Sign in and try again." } };
+			return { error: { status: 401, code: "no_token", message: "No Orchestrator Cloud session is available. Sign in and try again." } };
 		}
 		const controller = new AbortController();
 		const { headers: requestHeaders, requestId } = buildHeaders(valid.headers, token);
@@ -765,7 +798,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	return { request, requestBinary, cancelBinary, openStream, closeStream, diagnostics };
 }
 
-export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: ControlPlaneUrlResolver): void {
+export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: ControlPlaneUrlResolver): CloudCpProxy {
 	const proxy = createCloudCpProxy(getDataDir, { controlPlaneUrl });
 	ipcMain.handle(CLOUD_CP_REQUEST_CHANNEL, (_event, init: unknown) => proxy.request(init));
 	ipcMain.handle(CLOUD_CP_REQUEST_BINARY_CHANNEL, (event, init: unknown) => proxy.requestBinary(init, event.sender));
@@ -777,4 +810,5 @@ export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: C
 		proxy.closeStream(event.sender, streamId);
 	});
 	ipcMain.handle(CLOUD_CP_DIAGNOSTICS_CHANNEL, () => proxy.diagnostics());
+	return proxy;
 }

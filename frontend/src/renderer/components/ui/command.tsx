@@ -4,19 +4,22 @@ import * as React from "react";
 import { FocusScope } from "@radix-ui/react-focus-scope";
 import { Command as CommandPrimitive } from "cmdk";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Search } from "lucide-react";
+import { Search } from "@/components/app-icons";
 
 import { cn } from "@/lib/utils";
 import { ShortcutCaps } from "./kbd";
+
+const commandClassName = "flex w-full flex-col overflow-hidden rounded-[var(--radius-command-palette)] text-foreground outline-none";
+
+/** The search field's look, shared by cmdk's input and a surface that runs its own list. */
+const commandInputClassName =
+	"flex h-control-sm min-w-0 flex-1 bg-transparent text-[length:var(--font-size-command-input)] leading-body text-foreground caret-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50";
 
 function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
 	return (
 		<CommandPrimitive
 			data-slot="command"
-			className={cn(
-				"flex w-full flex-col overflow-hidden rounded-[var(--radius-command-palette)] text-foreground outline-none",
-				className,
-			)}
+			className={cn(commandClassName, className)}
 			{...props}
 		/>
 	);
@@ -30,6 +33,7 @@ function CommandDialog({
 	commandProps,
 	contentProps,
 	modal,
+	plain = false,
 	...props
 }: React.ComponentProps<typeof Dialog.Root> & {
 	title?: string;
@@ -37,8 +41,13 @@ function CommandDialog({
 	className?: string;
 	commandProps?: React.ComponentProps<typeof CommandPrimitive>;
 	contentProps?: React.ComponentProps<typeof Dialog.Content>;
+	/**
+	 * The palette's surface without cmdk, for a body that owns its own list and
+	 * keys (the archive grid). Only `commandProps.className` applies.
+	 */
+	plain?: boolean;
 }) {
-	const { className: commandClassName, ...restCommandProps } = commandProps ?? {};
+	const { className: bodyClassName, ...restCommandProps } = commandProps ?? {};
 	const nonModal = modal === false;
 	const content = (
 		<Dialog.Content
@@ -53,15 +62,21 @@ function CommandDialog({
 		>
 			<Dialog.Title className="sr-only">{title}</Dialog.Title>
 			<Dialog.Description className="sr-only">{description}</Dialog.Description>
-			<Command
-				className={cn(
-					"**:[[cmdk-group-heading]]:px-[var(--size-command-pad-x)] **:[[cmdk-group-heading]]:pt-2 **:[[cmdk-group-heading]]:pb-1 **:[[cmdk-group-heading]]:text-caption **:[[cmdk-group-heading]]:font-medium **:[[cmdk-group-heading]]:text-muted-foreground **:[[cmdk-group]]:px-0",
-					commandClassName,
-				)}
-				{...restCommandProps}
-			>
-				{children}
-			</Command>
+			{plain ? (
+				<div data-slot="command" className={cn(commandClassName, bodyClassName)}>
+					{children}
+				</div>
+			) : (
+				<Command
+					className={cn(
+						"**:[[cmdk-group-heading]]:px-[var(--size-command-pad-x)] **:[[cmdk-group-heading]]:pt-2 **:[[cmdk-group-heading]]:pb-1 **:[[cmdk-group-heading]]:text-caption **:[[cmdk-group-heading]]:font-medium **:[[cmdk-group-heading]]:text-muted-foreground **:[[cmdk-group]]:px-0",
+						bodyClassName,
+					)}
+					{...restCommandProps}
+				>
+					{children}
+				</Command>
+			)}
 		</Dialog.Content>
 	);
 	return (
@@ -106,10 +121,7 @@ function CommandInput({
 			{leading ?? <Search className="size-icon-base shrink-0 text-muted-foreground" aria-hidden="true" />}
 			<CommandPrimitive.Input
 				data-slot="command-input"
-				className={cn(
-					"flex h-control-sm min-w-0 flex-1 bg-transparent text-[length:var(--font-size-command-input)] leading-body text-foreground caret-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
-					className,
-				)}
+				className={cn(commandInputClassName, className)}
 				{...props}
 			/>
 			{trailing}
@@ -201,6 +213,7 @@ function CommandFooter({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 export {
+	commandInputClassName,
 	Command,
 	CommandDialog,
 	CommandBar,

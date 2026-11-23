@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
@@ -100,13 +101,52 @@ func (c *commandContext) runCodexLogin(ctx context.Context, executable string, u
 		return usageError{fmt.Errorf("login method must be 1, 2, 3, or 4")}
 	}
 
-	if err := c.deps.RunInteractiveCommand(ctx, codex, args, childInput, out, stderr); err != nil {
+	if err := c.deps.RunInteractiveCommand(ctx, codex, "", args, childInput, out, stderr); err != nil {
+		if startErr := c.codexStartFailure(ctx, codex); startErr != nil {
+			return startErr
+		}
 		return fmt.Errorf("codex login failed: %w", err)
 	}
 	if _, err := fmt.Fprintf(out, "\n%s\n", style.success("Codex sign-in complete.")); err != nil {
 		return err
 	}
 	return nil
+}
+
+// codexStartProbeTimeout bounds the `codex --version` run that tells a Codex
+// that cannot start from a sign-in that failed.
+const codexStartProbeTimeout = 15 * time.Second
+
+// codexStartFailure reports a Codex that cannot start at all, after its login
+// failed. An npm launcher whose native binary is gone (macOS can quarantine
+// it) fails both runs with only a raw spawn error, which says nothing about
+// what to do (#7579). A Codex whose --version works failed the sign-in itself,
+// and is left to that error.
+func (c *commandContext) codexStartFailure(ctx context.Context, codex string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, codexStartProbeTimeout)
+	defer cancel()
+	var output bytes.Buffer
+	err := c.deps.RunInteractiveCommand(probeCtx, codex, "", []string{"--version"}, strings.NewReader(""), &output, &output)
+	if err == nil || ctx.Err() != nil {
+		return nil
+	}
+	reason := lastLine(output.String())
+	if reason == "" {
+		reason = err.Error()
+	}
+	return fmt.Errorf("the Codex CLI at %s could not start (%s). Reinstall or update Codex, then try again", codex, reason)
+}
+
+// lastLine is the last non-blank line of s, where a failed launcher leaves
+// its error, cut to a length an error message can carry.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	line := strings.TrimSpace(lines[len(lines)-1])
+	const limit = 300 // characters, so a cut never splits one
+	if runes := []rune(line); len(runes) > limit {
+		line = string(runes[:limit]) + "..."
+	}
+	return line
 }
 
 func resolveLoginExecutable(explicit, name string, lookPath func(string) (string, error)) (string, error) {
@@ -204,12 +244,17 @@ func readCodexLoginSelection(in io.Reader) (string, error) {
 	}
 }
 
-func runInteractiveCommand(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+func runInteractiveCommand(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec,forbidigo // interactive login must inherit the caller's console.
 	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(ctx, name)
+	configureCLIBatch(cmd)
+	cmd.Dir = dir
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// A child the launcher started can keep a captured output pipe open after
+	// the context kills the launcher; stop waiting for it shortly after.
+	cmd.WaitDelay = 100 * time.Millisecond
 	return cmd.Run()
 }
 

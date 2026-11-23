@@ -148,7 +148,7 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 		ProjectID: definition.ProjectID, Kind: definition.Kind, Harness: definition.Harness,
 		AgentConfig:    ports.AgentConfig{Model: definition.Model, Mode: definition.Mode, Effort: definition.Effort},
 		EffortOverride: definition.Model != "" || definition.Effort != "",
-		Prompt:         definition.Prompt, DisplayName: definition.DisplayName, AutomationRunID: &run.ID,
+		Prompt:         definition.Prompt, DisplayName: definition.DisplayName, DisplayNameExplicit: definition.DisplayName != "", AutomationRunID: &run.ID,
 	})
 	if spawnErr != nil {
 		var apiError *apierr.Error
@@ -168,7 +168,9 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 			_, markErr := store.FailAutomationRun(context.WithoutCancel(ctx), run.ID, runError(spawnErr), now)
 			return errors.Join(spawnErr, markErr)
 		}
-		permanent := errors.As(spawnErr, &apiError) && (apiError.Kind == apierr.KindInvalid || apiError.Kind == apierr.KindNotFound)
+		// A paused project fails this occurrence rather than re-queueing it: the
+		// pause holds until a person starts a session or changes its settings.
+		permanent := errors.As(spawnErr, &apiError) && (apiError.Kind == apierr.KindInvalid || apiError.Kind == apierr.KindNotFound || apiError.Code == "AUTO_SPAWN_PAUSED")
 		if permanent {
 			_, markErr := store.FailAutomationRun(context.WithoutCancel(ctx), run.ID, runError(spawnErr), now)
 			return errors.Join(spawnErr, markErr)

@@ -99,6 +99,15 @@ export function useMenuReturnTarget<T extends HTMLElement>() {
 	}, []);
 }
 
+/**
+ * Where the open menu would return focus: its trigger, or for a context menu
+ * the element the user was on. A surface opened from a menu item that has no
+ * trigger of its own (the archive modal) returns there when it closes.
+ */
+export function menuFocusReturnTarget(): HTMLElement | null {
+	return menuReturnTarget?.isConnected ? menuReturnTarget : null;
+}
+
 export function keepFocusOnOpenedSurface(event: Event) {
 	if (event.defaultPrevented) return;
 	const active = document.activeElement;

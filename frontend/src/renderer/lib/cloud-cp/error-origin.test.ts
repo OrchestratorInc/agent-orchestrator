@@ -81,7 +81,7 @@ describe("cloud error origin over the main-process bridge", () => {
 	const unreachable = {
 		status: 0,
 		headers: { "content-type": "application/json", "x-request-id": REQUEST_ID },
-		body: JSON.stringify({ error: "cloud_unreachable", code: CLOUD_UNREACHABLE, message: "AO Cloud could not be reached.", requestId: REQUEST_ID, cause: "ECONNREFUSED" }),
+		body: JSON.stringify({ error: "cloud_unreachable", code: CLOUD_UNREACHABLE, message: "Orchestrator Cloud could not be reached.", requestId: REQUEST_ID, cause: "ECONNREFUSED" }),
 	};
 
 	it("turns main's status-0 answer into a typed error through the bridged fetch, keeping the id and cause", async () => {
@@ -103,7 +103,7 @@ describe("cloud error origin over the main-process bridge", () => {
 
 	it("builds the typed error from main's fields: 401 is a sign-in error, status 0 defaults to CLOUD_UNREACHABLE", () => {
 		expect(cloudCpErrorFromFailure({ status: 401, code: "no_token", message: "Sign in" })).toBeInstanceOf(CloudCpAuthError);
-		expect(cloudCpErrorFromFailure({ status: 0, message: "" })).toMatchObject({ code: CLOUD_UNREACHABLE, message: "AO Cloud could not be reached." });
+		expect(cloudCpErrorFromFailure({ status: 0, message: "" })).toMatchObject({ code: CLOUD_UNREACHABLE, message: "Orchestrator Cloud could not be reached." });
 		expect(cloudCpErrorFromFailure({ status: 503, message: "x", code: "a sentence, not a code" }).code).toBeUndefined();
 	});
 });

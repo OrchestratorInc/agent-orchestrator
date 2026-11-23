@@ -3,6 +3,8 @@ import {
 	buildLinuxAppMenuTemplate,
 	buildMacAppMenuTemplate,
 	buildWindowsAppMenuTemplate,
+	coerceAppMenuAvailability,
+	type AppMenuCommands,
 } from "./menu";
 
 type MenuItem = ReturnType<typeof buildWindowsAppMenuTemplate>[number];
@@ -139,6 +141,78 @@ describe("buildMacAppMenuTemplate", () => {
 	});
 });
 
+
+describe("macOS top bar commands", () => {
+	const quit = { appName: "AO", onQuit: () => undefined };
+	const macTemplate = (commands?: AppMenuCommands) => buildMacAppMenuTemplate(() => undefined, quit, { commands });
+	const commands = (overrides: Partial<AppMenuCommands> = {}): AppMenuCommands => ({
+		accelerator: (id) => (id === "toggle-sidebar" ? "Command+B" : undefined),
+		isEnabled: () => false,
+		run: vi.fn(),
+		...overrides,
+	});
+	const submenuOf = (template: MenuItem[], match: (item: MenuItem) => boolean): readonly SubmenuItem[] => {
+		const menu = template.find(match);
+		return Array.isArray(menu?.submenu) ? menu.submenu : [];
+	};
+
+	it("adds no command items without commands, so other callers keep today's menu", () => {
+		const template = macTemplate();
+		expect(template.some((item) => item.label === "Go")).toBe(false);
+		expect(viewSubmenu(template).some((item) => item.id === "toggle-sidebar")).toBe(false);
+	});
+
+	it("puts commands where a Mac user expects them, before the Window menu", () => {
+		const template = macTemplate(commands());
+		expect(submenuOf(template, (item) => item.role === "fileMenu").map((item) => item.id).filter(Boolean)).toEqual([
+			"new-session",
+			"new-shell-terminal",
+			"open-in-editor",
+			"open-in-file-manager",
+			"archive-session",
+		]);
+		expect(viewSubmenu(template).slice(0, 2).map((item) => item.id)).toEqual(["toggle-sidebar", "toggle-inspector"]);
+		expect(submenuOf(template, (item) => item.label === "Go").map((item) => item.id).filter(Boolean)).toEqual([
+			"history-back",
+			"history-forward",
+			"open-orchestrator",
+			"toggle-notifications",
+		]);
+		const labels = template.map((item) => item.label ?? item.role);
+		expect(labels.indexOf("Go")).toBe(labels.indexOf("windowMenu") - 1);
+	});
+
+	it("shows the binding, and omits the accelerator for a command with none", () => {
+		const view = viewSubmenu(macTemplate(commands()));
+		expect(view.find((item) => item.id === "toggle-sidebar")).toMatchObject({ accelerator: "Command+B" });
+		expect(view.find((item) => item.id === "toggle-inspector")).not.toHaveProperty("accelerator");
+	});
+
+	it("reflects availability and reports whether a chord fired the item", () => {
+		const run = vi.fn();
+		const sidebar = viewSubmenu(macTemplate(commands({ isEnabled: (id) => id === "toggle-sidebar", run }))).find(
+			(item) => item.id === "toggle-sidebar",
+		);
+		expect(sidebar).toMatchObject({ enabled: true });
+		sidebar?.click?.(undefined as never, undefined as never, { triggeredByAccelerator: true } as never);
+		sidebar?.click?.(undefined as never, undefined as never, {} as never);
+		expect(run.mock.calls).toEqual([["toggle-sidebar", true], ["toggle-sidebar", false]]);
+	});
+
+	it("keeps Windows and Linux menus free of the commands", () => {
+		for (const template of [buildWindowsAppMenuTemplate(), buildLinuxAppMenuTemplate()]) {
+			expect(template.some((item) => item.label === "Go" || item.label === "File")).toBe(false);
+		}
+	});
+
+	it("coerces availability from IPC to known commands and strict booleans", () => {
+		const availability = coerceAppMenuAvailability({ "toggle-sidebar": true, "history-back": "yes", bogus: true });
+		expect(availability["toggle-sidebar"]).toBe(true);
+		expect(availability["history-back"]).toBe(false);
+		expect(availability).not.toHaveProperty("bogus");
+		expect(coerceAppMenuAvailability(null)["toggle-sidebar"]).toBe(false);
+	});
+});
 
 describe("packaged application menus", () => {
 	it.each(["darwin", "win32", "linux"])("never registers shell reload or built-in DevTools roles on %s", (platform) => {

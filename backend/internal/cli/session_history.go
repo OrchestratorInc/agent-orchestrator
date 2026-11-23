@@ -35,7 +35,7 @@ func newSessionHistoryCommand(ctx *commandContext) *cobra.Command {
 				id = strings.TrimSpace(args[0])
 			}
 			if id == "" {
-				return usageError{errors.New("session id is required outside an AO session (AO_SESSION_ID is not set)")}
+				return usageError{errors.New("session id is required outside an Orchestrator-managed session (AO_SESSION_ID is not set)")}
 			}
 			if offset < 0 || limit < 1 {
 				return usageError{errors.New("--offset must be 0 or more and --limit must be 1 or more")}
@@ -55,6 +55,11 @@ func (c *commandContext) printSessionHistory(ctx context.Context, cmd *cobra.Com
 		return err
 	}
 	out := cmd.OutOrStdout()
+	if response.Total == 0 {
+		// Only completed turns are listed, so a session in its first turn has none.
+		_, err := fmt.Fprintf(out, "no completed turns yet; `ao session get %s` shows whether the session is still working\n", id)
+		return err
+	}
 	if len(response.Turns) == 0 {
 		_, err := fmt.Fprintf(out, "no turns at offset %d (session has %d)\n", response.Offset, response.Total)
 		return err

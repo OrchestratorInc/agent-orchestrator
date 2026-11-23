@@ -1,0 +1,78 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "srgb:0.10000,0.09800,0.09800,1.00000",
+      "srgb:0.01000,0.01000,0.01000,1.00000"
+    ],
+    "orientation" : {
+      "start" : {
+        "x" : 0.3,
+        "y" : 0
+      },
+      "stop" : {
+        "x" : 0.6,
+        "y" : 1
+      }
+    }
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "ruto.svg",
+          "name" : "Ruto",
+          "position" : {
+            "scale" : 1.258,
+            "translation-in-points" : [
+              1,
+              1
+            ]
+          }
+        }
+      ],
+      "name" : "Ruto",
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    },
+    {
+      "layers" : [
+        {
+          "glass" : true,
+          "image-name" : "baton.svg",
+          "name" : "Baton",
+          "position" : {
+            "scale" : 1.258,
+            "translation-in-points" : [
+              1,
+              1
+            ]
+          }
+        }
+      ],
+      "name" : "Baton",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

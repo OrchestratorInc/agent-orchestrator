@@ -2,61 +2,103 @@
 // the latest main-owned generation before forwarding to Electron main.
 import { classifyError, type ClassifyInput, type Triage } from "../../shared/observability";
 import { SAFE_APP_ASSET, SAFE_FUNCTION, safeSentryExceptionType, safeSentryFunctionName } from "../../shared/sentry-config";
+import { scrubSentryMessage } from "../../../../packages/shared/telemetry/sentry-message";
+import { onboardingFailureCode, ONBOARDING_SENTRY_REASONS, type OnboardingAction, type OnboardingFailureReason } from "../../shared/onboarding-failures";
 import { aoBridge } from "./bridge";
+import { onboardingSentryFlow } from "./onboarding-flow";
+import type { RendererTelemetryCaptureInput } from "../../shared/telemetry-policy";
+
+function forwardCapture(input: RendererTelemetryCaptureInput): void {
+	try { void Promise.resolve(aoBridge.telemetry?.capture(input)).catch(() => undefined); }
+	catch { /* a failing reporter must not become an unhandled rejection */ }
+}
 
 export type ObservabilityContext = { release?: string; channel?: string; platform?: string; distinctId?: string };
 export type CaptureMeta = ClassifyInput & { operation?: string; surface?: string; domain?: string; requestId?: string };
 let context: ObservabilityContext = {};
 export async function initSentry(next: ObservabilityContext): Promise<void> { context = next; }
+
 function domainOf(operation?: string): string | undefined {
 	if (!operation) return undefined;
 	const parts = (operation.split(" ").pop() ?? operation).split("/").filter(Boolean);
 	const index = parts.indexOf("v1"); return index >= 0 ? parts[index + 1] : parts[0];
 }
 function tagsFor(meta: CaptureMeta, triage: Triage): Record<string, string> {
-	return Object.fromEntries(Object.entries({ platform: context.platform ?? "desktop", surface: meta.surface, domain: meta.domain, operation: meta.operation, category: meta.category, code: meta.code, http_status: meta.httpStatus?.toString(), apierr_kind: meta.kind, severity: triage.severity, owner: triage.owner }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+	return Object.fromEntries(Object.entries({ platform: context.platform ?? "desktop", surface: meta.surface, domain: meta.domain, operation: meta.operation, category: meta.category, code: meta.code, http_status: meta.httpStatus?.toString(), apierr_kind: meta.kind, severity: triage.severity, owner: triage.owner, flow: onboardingSentryFlow() }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
-// A V8 stack line; `asyncFrames` also reads the "at async fn (...)" lines V8
-// adds for the awaits that led to the failure.
-const STACK_FRAME = /^\s*at\s+([^\s()]+)\s+\(([^)]+)\)\s*$/;
-const STACK_FRAME_OR_ASYNC = /^\s*at\s+(?:async\s+)?([^\s()]+)\s+\(([^)]+)\)\s*$/;
+type RendererFrame = { function: string; filename?: string; lineno?: number; colno?: number; debug_id?: string };
 
-function safeRendererFrames(error: unknown, asyncFrames = false): Array<{ function: string; filename?: string; lineno?: number; colno?: number }> {
-	if (!(error instanceof Error) || !error.stack) return [];
-	const frames: Array<{ function: string; filename?: string; lineno?: number; colno?: number }> = [];
-	for (const line of error.stack.split("\n")) {
-		const match = (asyncFrames ? STACK_FRAME_OR_ASYNC : STACK_FRAME).exec(line);
-		if (!match || !SAFE_FUNCTION.test(match[1]) || match[1].length > 128) continue;
-		const location = match[2];
+// The release build's Sentry bundler plugin registers each chunk's debug ID
+// under a stack captured inside that chunk. Map the chunk's asset path to it so
+// Sentry can apply the uploaded source map.
+function debugIdsByAsset(): Map<string, string> {
+	const ids = (globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds;
+	const byAsset = new Map<string, string>();
+	for (const [stack, id] of Object.entries(ids ?? {})) {
+		const asset = /app:\/\/renderer\/(assets\/[^\s:)?#]+)/.exec(stack)?.[1];
+		if (asset && SAFE_APP_ASSET.test(asset)) byAsset.set(asset, id);
+	}
+	return byAsset;
+}
+
+// Named ("at fn (location)") and anonymous ("at location") frames are both
+// kept when the location is an app asset. Function text crosses only when it is
+// an allowlisted name; anything else becomes "renderer_frame", and Electron
+// main titles the event by bundle file and line instead.
+function safeRendererFrames(error: unknown, event?: ErrorEvent): RendererFrame[] {
+	const frames: RendererFrame[] = [];
+	const debugIds = debugIdsByAsset();
+	const stack = (error instanceof Error || error instanceof DOMException) && typeof error.stack === "string" ? error.stack : "";
+	for (const line of stack.split("\n")) {
+		const match = /^\s*at\s+(?:(.+?)\s+\((\S+)\)|((?:async )?\S+))\s*$/.exec(line);
+		if (!match) continue;
+		const name = match[1]?.replace(/^(?:async|new)\s+/, "");
+		const location = (match[2] ?? match[3]).replace(/^async\s+/, "");
 		if (!location.startsWith("app://renderer/") && !/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\//.test(location)) continue;
-		const source = location.replace(/:\d+:\d+$/, "");
+		const source = location.replace(/:\d+:\d+$/, "").split(/[?#]/, 1)[0];
 		const appPath = source.startsWith("app://renderer/") ? source.slice("app://renderer/".length) : undefined;
 		const filename = appPath && SAFE_APP_ASSET.test(appPath) ? appPath : undefined;
+		const debugId = filename ? debugIds.get(filename) : undefined;
 		const position = /:(\d+):(\d+)$/.exec(location);
 		const lineno = position ? Number(position[1]) : undefined;
 		const colno = position ? Number(position[2]) : undefined;
-		frames.push({ function: safeSentryFunctionName(match[1], "renderer_frame"), ...(filename ? { filename } : {}), ...(lineno && Number.isSafeInteger(lineno) && lineno <= 1_000_000 ? { lineno } : {}), ...(colno && Number.isSafeInteger(colno) && colno <= 10_000_000 ? { colno } : {}) });
+		const fn = name && name.length <= 128 && SAFE_FUNCTION.test(name) ? safeSentryFunctionName(name, "renderer_frame") : "renderer_frame";
+		frames.push({ function: fn, ...(filename ? { filename } : {}), ...(lineno && Number.isSafeInteger(lineno) && lineno <= 1_000_000 ? { lineno } : {}), ...(colno && Number.isSafeInteger(colno) && colno <= 10_000_000 ? { colno } : {}), ...(debugId ? { debug_id: debugId } : {}) });
 		if (frames.length === 8) break;
+	}
+	if (!frames.length && event?.filename?.startsWith("app://renderer/")) {
+		const filename = event.filename.slice("app://renderer/".length).split(/[?#]/, 1)[0];
+		if (SAFE_APP_ASSET.test(filename)) {
+			const debugId = debugIds.get(filename);
+			frames.push({ function: "renderer_frame", filename,
+				...(Number.isSafeInteger(event.lineno) && event.lineno > 0 && event.lineno <= 1_000_000 ? { lineno: event.lineno } : {}),
+				...(Number.isSafeInteger(event.colno) && event.colno > 0 && event.colno <= 10_000_000 ? { colno: event.colno } : {}),
+				...(debugId ? { debug_id: debugId } : {}),
+			});
+		}
 	}
 	return frames.reverse();
 }
 
-export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {}): void {
+export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {}, event?: ErrorEvent): void {
 	const triage = classifyError(meta);
-	void aoBridge.telemetry?.capture({
+	const isError = error instanceof Error || error instanceof DOMException;
+	const message = isError ? error.message : event?.message ?? error;
+	const type = isError ? error.name : typeof message === "string" ? /^(?:Uncaught(?: \(in promise\))? )?(\w+): /.exec(message)?.[1] : undefined;
+	forwardCapture({
 		kind: triage.report ? "exception" : "breadcrumb",
-		message: String((error as Error)?.message ?? error),
+		message: scrubSentryMessage(message) || "Renderer error",
 		level: triage.level,
 		tags: tagsFor(meta, triage),
-		...(triage.report ? { exception: { type: safeSentryExceptionType((error as Error)?.name), frames: safeRendererFrames(error) } } : {}),
+		...(triage.report ? { exception: { type: safeSentryExceptionType(type), frames: safeRendererFrames(error, event) } } : {}),
 	});
 }
 /** A daemon API failure; its origin tag says so, apart from AO Cloud's. */
 export function captureApiErrorToSentry(operation: string, category: string, status?: number, code?: string, requestId?: string): void {
 	const meta: CaptureMeta = { operation, category, httpStatus: status, code, requestId, domain: domainOf(operation) };
 	const triage = classifyError(meta);
-	void aoBridge.telemetry?.capture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: { ...tagsFor(meta, triage), origin: "daemon" } });
+	forwardCapture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: { ...tagsFor(meta, triage), origin: "daemon" } });
 }
 
 export type CloudFailureCategory = "http_5xx" | "malformed_response";
@@ -77,7 +119,7 @@ export function captureCloudErrorToSentry(
 	// The shared triage has no rule for an unreadable response; it is AO Cloud failing.
 	const report = category === "malformed_response" || triage.report;
 	const level = category === "malformed_response" ? "error" : triage.level;
-	void aoBridge.telemetry?.capture({
+	forwardCapture({
 		kind: report ? "exception" : "breadcrumb",
 		message: `AO Cloud ${category}`,
 		level,
@@ -93,6 +135,21 @@ export function captureCloudErrorToSentry(
 			severity: triage.severity,
 			owner: triage.owner,
 		},
-		...(report ? { exception: { type: safeSentryExceptionType(error.name), frames: safeRendererFrames(error, true) } } : {}),
+		...(report ? { exception: { type: safeSentryExceptionType(error.name), frames: safeRendererFrames(error) } } : {}),
 	});
+}
+
+/**
+ * An onboarding install or sign-in that broke, as its own Sentry issue titled
+ * and grouped by action and reason, tagged with what it was for (`target`,
+ * which main checks against its list). Setup states (a login not finished, no
+ * installer for this platform) are not sent. Electron main's consent gate and
+ * daily caps decide whether it leaves the machine.
+ */
+export function captureOnboardingFailureToSentry(action: OnboardingAction, reason: OnboardingFailureReason, target?: string): void {
+	if (!ONBOARDING_SENTRY_REASONS.has(reason)) return;
+	const meta: CaptureMeta = { category: "onboarding", code: onboardingFailureCode(action, reason) };
+	const triage = classifyError(meta);
+	const tags = { ...tagsFor(meta, triage), flow: "onboarding", ...(target ? { target } : {}) };
+	forwardCapture({ kind: "message", message: "Onboarding action failed", level: triage.level, tags });
 }

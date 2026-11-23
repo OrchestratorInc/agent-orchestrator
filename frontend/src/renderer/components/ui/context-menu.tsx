@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight } from "@/components/app-icons";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 import { composeMenuCloseAutoFocus, useMenuReturnTarget } from "./menu-focus";
@@ -83,6 +83,11 @@ export function ContextMenuSeparator({
 	...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Separator>) {
 	return <ContextMenuPrimitive.Separator className={cn(actionMenuSeparatorClass, className)} {...props} />;
+}
+
+/** Trailing key hint on a menu row; same look as DropdownMenuShortcut. */
+export function ContextMenuShortcut({ className, ...props }: React.ComponentProps<"span">) {
+	return <span className={cn("ml-auto pl-4 text-micro tracking-wide-md text-passive", className)} {...props} />;
 }
 
 export const ContextMenuSub = ContextMenuPrimitive.Sub;
