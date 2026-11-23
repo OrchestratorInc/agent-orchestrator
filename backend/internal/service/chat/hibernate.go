@@ -201,10 +201,13 @@ type hibernateOptions struct {
 	// message is about to wake the session anyway.
 	ignoreViews bool
 	otherWriter bool
+	// loginRefused stops a provider whose login was refused, so the message
+	// about to be sent starts it again with the login AO hands sessions now.
+	loginRefused bool
 }
 
 func (o hibernateOptions) enabled(s *Service) bool {
-	if o.versionRefresh || o.forUpdate || o.otherWriter {
+	if o.versionRefresh || o.forUpdate || o.otherWriter || o.loginRefused {
 		return true
 	}
 	return s.hibernationEnabled != nil && s.hibernationEnabled()
@@ -214,11 +217,16 @@ func (o hibernateOptions) enabled(s *Service) bool {
 // provider confirms it has no background work.
 func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
 	candidate := rec
-	if (o.forUpdate || o.versionRefresh) && candidate.Kind == domain.KindOrchestrator {
-		// Idle hibernation keeps orchestrators running. An update or a move to
-		// a new release stops them only to start them again, so they go too,
-		// under the same turn, queue and approval checks.
+	if (o.forUpdate || o.versionRefresh || o.loginRefused) && candidate.Kind == domain.KindOrchestrator {
+		// Idle hibernation keeps orchestrators running. An update, a move to a
+		// new release or a refused login stops them only to start them again,
+		// so they go too, under the same turn, queue and approval checks.
 		candidate.Kind = ""
+	}
+	if o.loginRefused && candidate.Activity.State == domain.ActivityWaitingInput {
+		// The refusal left the session waiting on the user's login; that wait
+		// is what this stop ends.
+		candidate.Activity.State = domain.ActivityIdle
 	}
 	if !candidate.EligibleForChatHibernation() || rec.Activity.LastActivityAt.Add(o.minIdle).After(s.now()) {
 		return false
@@ -722,6 +730,43 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 // ErrChatOpenElsewhere reports a message refused because another Claude Code
 // process has the chat open.
 var ErrChatOpenElsewhere = apierr.Conflict("CHAT_OPEN_ELSEWHERE", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again.", nil)
+
+// restartRefusedLogin stops an idle provider whose latest turn was refused for
+// its login, and reports the stop. A process keeps the credential it started
+// with: a login fixed since (a new sign-in, a setup token saved or removed)
+// never reaches it, so everything it sent would be refused the same way. The
+// delivery that called it then starts the provider again, and that start reads
+// the login AO hands sessions now, or is refused itself while there is none.
+func (s *Service) restartRefusedLogin(ctx context.Context, rec domain.SessionRecord) bool {
+	if rec.IsTerminated || rec.HibernatedAt != nil {
+		return false
+	}
+	controller, err := s.Controller(rec.ID)
+	if err != nil {
+		return false
+	}
+	controller.mu.Lock()
+	refused := controller.loginRefused
+	controller.mu.Unlock()
+	if !refused && controller.started.IsZero() {
+		// A provider reconnected after a daemon restart has no start of its own
+		// here, so it may be the one that was refused: a login still demanded
+		// says it was.
+		account, err := s.store.ConversationAccount(ctx, controller.conversation.ID)
+		refused = err == nil && account != nil && account.ReauthRequiredAt != nil
+	}
+	if !refused {
+		return false
+	}
+	stopped, err := s.hibernateChat(ctx, rec.ID, hibernateOptions{loginRefused: true, ignoreViews: true})
+	if err != nil {
+		s.log.Warn("could not restart a chat whose login was refused", "session", rec.ID, "err", err)
+	}
+	if stopped {
+		s.log.Info("chat session stopped to start again with the current login", "session", rec.ID)
+	}
+	return stopped
+}
 
 // checkOtherWriter refuses a delivery while another process has the chat open.
 // When one wrote turns and left, it stops the idle provider so its next start

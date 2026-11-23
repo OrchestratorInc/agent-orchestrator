@@ -226,7 +226,7 @@ func (m *claudeMoney) major() *float64 {
 }
 
 func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
-	out := domain.AgentAccountLimits{Windows: []domain.AgentAccountLimitWindow{}, FetchedAt: now}
+	out := domain.AgentAccountLimits{Windows: []domain.AgentAccountLimitWindow{}, FetchedAt: now, Unreported: !b.RateLimitsAvailable}
 	r := b.RateLimits
 	if r == nil {
 		return out

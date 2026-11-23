@@ -194,11 +194,51 @@ describe("ChatWorkspace refused login", () => {
 		rerender(<ChatWorkspace snapshot={after} retryControl={{ retry }} />);
 
 		expect(screen.getByLabelText("Message the agent")).not.toHaveAttribute("aria-readonly");
-		expect(band()).toHaveTextContent("Logged in to Claude Code · send your message again");
-		// Nothing watched this login take, so the message waits for the user's click.
-		expect(retry).not.toHaveBeenCalled();
-		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+		// The message did no work, so it goes out on its own, as after a login from
+		// the band: the user is never told they are in and asked to send it.
+		expect(retry).toHaveBeenCalledOnce();
 		expect(retry).toHaveBeenCalledWith("turn-1");
+		expect(band()).toHaveTextContent("Logged in to Claude Code · sending your message");
+		expect(within(band()).queryByRole("button", { name: "Send again" })).not.toBeInTheDocument();
+		await act(async () => {});
+	});
+
+	it("sends a message again on its own only once, when the daemon finds the login back", async () => {
+		const retry = vi.fn();
+		const snapshot = signedOutSnapshot({ didWork: false });
+		const refusedAt = Date.parse(snapshot.turns[0]!.completedAt!);
+		const confirmed = (at: number) => ({ authenticationState: "authenticated" as const, authVerifiedAt: new Date(at).toISOString() });
+		const { rerender } = render(<ChatWorkspace snapshot={{ ...snapshot, account: confirmed(refusedAt + 1_000) }} retryControl={{ retry }} />);
+		expect(retry).toHaveBeenCalledOnce();
+		await act(async () => {});
+
+		// The message sent again was refused too, and the daemon finds the login
+		// working once more: it waits for the user rather than going round again.
+		const first = snapshot.turns[0]!;
+		const prompt = snapshot.items[0]!;
+		const again = { ...first, id: "turn-2", providerTurnId: "provider-turn-2", retryOfTurnId: "turn-1" };
+		rerender(<ChatWorkspace snapshot={{
+			...snapshot,
+			turns: [first, again],
+			items: [prompt, { ...prompt, id: "user-retry", turnId: "turn-2", sequence: prompt.sequence + 1 } as typeof prompt],
+			account: confirmed(refusedAt + 60_000),
+		}} retryControl={{ retry }} />);
+
+		expect(retry).toHaveBeenCalledOnce();
+		expect(band()).toHaveTextContent("Logged in to Claude Code · send your message again");
+		await userEvent.click(within(band()).getByRole("button", { name: "Send again" }));
+		expect(retry).toHaveBeenLastCalledWith("turn-2");
+	});
+
+	it("leaves a message that did work for the user once the daemon finds the login back", () => {
+		const retry = vi.fn();
+		const snapshot = signedOutSnapshot({ didWork: true });
+		const refusedAt = Date.parse(snapshot.turns[0]!.completedAt!);
+		render(<ChatWorkspace snapshot={{ ...snapshot, account: { authenticationState: "authenticated", authVerifiedAt: new Date(refusedAt + 60_000).toISOString() } }} retryControl={{ retry }} />);
+
+		// Sending it again could run its work twice, so that stays the user's click.
+		expect(retry).not.toHaveBeenCalled();
+		expect(band()).toHaveTextContent("Logged in to Claude Code · send your message again");
 	});
 
 	it("leaves the chat box open when nothing could send the message again", () => {

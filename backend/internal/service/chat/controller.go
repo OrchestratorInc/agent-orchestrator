@@ -252,6 +252,10 @@ type Controller struct {
 	// The replacement generation owns lifecycle state; publishing an exited fact
 	// from the source would make that replacement unable to report active work.
 	suppressStoppedActivity bool
+	// loginRefused is set while the provider's latest turn was refused for its
+	// login. The process keeps the credential it started with, so it must start
+	// again before it can use a login fixed since.
+	loginRefused bool
 	// activeTurn maps a provider turn id to AO's turn id for the turn currently
 	// in flight, so a completion can be attributed without a round trip.
 	pendingTurnID string
@@ -3954,6 +3958,13 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		if !primaryTurn {
 			return
 		}
+		c.mu.Lock()
+		if reauthRequired {
+			c.loginRefused = true
+		} else if settledTurnState(event) == domain.TurnStateCompleted {
+			c.loginRefused = false
+		}
+		c.mu.Unlock()
 		activityState := domain.ActivityIdle
 		activityEvent := "chat.turn.completed"
 		if reauthRequired {

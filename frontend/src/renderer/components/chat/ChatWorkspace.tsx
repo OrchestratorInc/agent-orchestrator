@@ -7327,6 +7327,22 @@ function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWor
 			setAutoSending((current) => current === refusedId ? undefined : current);
 		});
 	}, [loginReturn, loginSpent, newWorkDisabled, queued, refusedId, retryControl?.pending, retryTurn, settingsOpen, snapshot]);
+	// The daemon found the login working again however it came back (another
+	// chat's login, a terminal, a token that refreshed): a message that did no work
+	// goes out on its own, as after a login from this band, so the user is never
+	// told they are in and asked to send it themselves. One try per message: if
+	// that send is refused too, its own refusal waits for the user.
+	const confirmedSend = useRef<string>(undefined);
+	useEffect(() => {
+		if (!loginConfirmed || loginReturn || !refusedId || !queued || sendError) return;
+		if (confirmedSend.current === refusedId || (refused?.retryOfTurnId && confirmedSend.current === refused.retryOfTurnId)) return;
+		if (activeTurn(snapshot) || retryControl?.pending || newWorkDisabled) return;
+		confirmedSend.current = refusedId;
+		setAutoSending(refusedId);
+		void Promise.resolve(retryTurn(refusedId)).catch(() => undefined).finally(() => {
+			setAutoSending((current) => current === refusedId ? undefined : current);
+		});
+	}, [loginConfirmed, loginReturn, newWorkDisabled, queued, refused?.retryOfTurnId, refusedId, retryControl?.pending, retryTurn, sendError, snapshot]);
 	const lines = useMemo(() => {
 		const map = new Map<string, TurnOutcomeLogin>();
 		for (const turn of snapshot.turns) {

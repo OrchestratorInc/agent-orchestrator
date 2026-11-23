@@ -1704,8 +1704,10 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			pending:
 				trackedDispatch?.operation === "retry" ||
 				(retryTurn.isPending && retryTargetsCurrentSession),
+			// Refused because the agent is still signed out: the chat already says
+			// so and offers the login, which sends the message once it takes.
 			error:
-				retryTargetsCurrentSession && retryTurn.error
+				retryTargetsCurrentSession && retryTurn.error && apiErrorCode(retryTurn.error) !== "CHAT_AUTH_REQUIRED"
 					? apiErrorMessage(retryTurn.error)
 					: undefined,
 			turnId:
