@@ -31,3 +31,18 @@ describe("browser approval push", () => {
 		expect(approvalPushAction({ ...data, source: "cloud", orgId: "o1" }, "deny")).toEqual({ kind: "deny", sessionId: "s 1", approvalId: "apr_1", orgId: "o1" });
 	});
 });
+
+// The control plane's push (ao-control-plane #213), field for field.
+describe("Cloud browser approval push", () => {
+	const cloud = { source: "cloud", type: "browser_approval", orgId: "o1", sessionId: "s1", projectId: "p1", notificationId: "n1", approvalId: "a1" };
+
+	it("a tap opens the Cloud session with the approval's card", async () => {
+		const { cloudPushTarget } = await import("../cloud/pushTarget");
+		expect(cloudPushTarget(cloud)).toEqual({ pathname: "/session/[id]", params: { id: "s1", hostId: expect.any(String), approval: "a1" } });
+		expect(approvalPushAction(cloud, "expo.modules.notifications.actions.DEFAULT")).toEqual({ kind: "open" });
+	});
+
+	it("Deny decides in its organization without opening the app", () => {
+		expect(approvalPushAction(cloud, "deny")).toEqual({ kind: "deny", sessionId: "s1", approvalId: "a1", orgId: "o1" });
+	});
+});
