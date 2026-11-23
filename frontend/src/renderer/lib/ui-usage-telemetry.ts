@@ -113,6 +113,8 @@ type PersistedState = {
 	controls: Partial<Record<UiControl, ControlStats>>;
 };
 
+type PendingDeadClick = { element: Element; surface: UiSurface; x: number; y: number };
+
 type Intent = { kind: "click" | "keyboard" | "shortcut" | "cmdk" | "swipe"; surface?: UiSurface; at: number };
 
 type SurfaceToken = {
@@ -274,8 +276,7 @@ export class UiUsageRuntime {
 	private intent: Intent | undefined;
 	private rage: { key: unknown; times: number[]; reported: boolean } | undefined;
 	private hover: { control: UiControl; element: Element; start: number; clicked: boolean } | undefined;
-	private pendingDeadClicks: Array<{ element: Element; surface: UiSurface; x: number; y: number }> = [];
-	private deadClickCheckScheduled = false;
+	private pendingDeadClicks: PendingDeadClick[] = [];
 	/** Surfaces waiting out their one second on screen before a daily view, and how they opened. */
 	private readonly pendingViews = new Map<UiSurface, SurfaceOpenedBy>();
 	private dirty = false;
@@ -558,23 +559,20 @@ export class UiUsageRuntime {
 			return;
 		}
 		if (!surface || control || event.detail !== 1 || target.closest(INTERACTIVE_SELECTOR)) return;
-		this.pendingDeadClicks.push({ element: target, surface, x: event.clientX, y: event.clientY });
-		if (this.deadClickCheckScheduled) return;
-		this.deadClickCheckScheduled = true;
-		this.afterPaint(() => this.processDeadClicks());
+		const pending: PendingDeadClick = { element: target, surface, x: event.clientX, y: event.clientY };
+		this.pendingDeadClicks.push(pending);
+		// Each click waits out its own settle time, so a later one is never judged early.
+		this.afterPaint(() => this.processDeadClick(pending));
 	}
 
-	/** Checks clicks on nothing interactive once their frame has painted. */
-	private processDeadClicks(): void {
-		this.deadClickCheckScheduled = false;
-		const clicks = this.pendingDeadClicks;
-		this.pendingDeadClicks = [];
-		if (this.optedOut()) return;
-		for (const click of clicks) {
-			if (!isDeadClick(click.element, click.x, click.y)) continue;
-			this.bumpSurface(click.surface, "dead_click_count");
-			this.bumpCounter("dead_click_count");
-		}
+	/** Checks a click on nothing interactive once its frame has painted, unless a double click or a discard dropped it. */
+	private processDeadClick(click: PendingDeadClick): void {
+		const index = this.pendingDeadClicks.indexOf(click);
+		if (index === -1) return;
+		this.pendingDeadClicks.splice(index, 1);
+		if (this.optedOut() || !isDeadClick(click.element, click.x, click.y)) return;
+		this.bumpSurface(click.surface, "dead_click_count");
+		this.bumpCounter("dead_click_count");
 	}
 
 	private trackRage(key: unknown, control: UiControl | undefined, surface: UiSurface | undefined, now: number): void {

@@ -156,6 +156,7 @@ import {
 	TurnResults,
 	TurnOutcome,
 	LoginStatusNote,
+	useFreshFailureReport,
 	LiveResponseStatus,
 	LiveStepChoices,
 	RevealedChatActivity,
@@ -6308,6 +6309,8 @@ const TurnGroup = memo(function TurnGroup({
 	const loginNoteMessageId = login?.align === "end"
 		? group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human")?.id
 		: undefined;
+	// Counted here, not in the outcome, so a failure shown as a login note counts too.
+	useFreshFailureReport(endsWithOutcome ? group.outcome?.state : undefined, group.outcome?.completedAt, group.turnId, group.outcome?.failureCode);
 	const copyableMessage = endsWithOutcome && copyableMessageId
 		? group.items.find(
 				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
@@ -6635,8 +6638,6 @@ const TurnGroup = memo(function TurnGroup({
 					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
 					rollbackDisabled={rollbackDisabled}
 					timestamp={copyableMessage?.createdAt}
-					failedAt={group.outcome.completedAt}
-					failureKey={group.turnId}
 				/>
 			) : null}
 		</div>

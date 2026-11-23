@@ -3267,7 +3267,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{session && !session.cloud ? prTabs.open.map((url) => (
 								<div className={cn("absolute inset-0 z-10", url !== activePRUrl && "invisible pointer-events-none [content-visibility:hidden]")} key={url}>
 									<PRTabPane
-										active={url === activePRUrl}
+										// Not on screen while a maximized Browser or Files covers the workspace.
+										active={url === activePRUrl && !browserPoppedOut && !filesPoppedOut}
 										hostId={hostId}
 										onViewInDiff={handleOpenReviewFile}
 										request={prTabs.request?.url === url ? prTabs.request : undefined}

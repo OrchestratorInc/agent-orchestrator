@@ -653,14 +653,8 @@ export function TurnOutcome({
 	onRollback,
 	rollbackDisabled,
 	timestamp,
-	failedAt,
-	failureKey,
 }: {
 	state: "recovered" | "interrupted" | "failed" | "unknown" | "not_run";
-	/** When the turn ended; a failure is counted only when it just happened. */
-	failedAt?: string;
-	/** The turn's id, so one failure is counted once however often it renders. */
-	failureKey?: string;
 	error?: string;
 	failureCode?: ConversationTurn["failureCode"];
 	onConfigure?: () => void;
@@ -668,7 +662,6 @@ export function TurnOutcome({
 	login?: TurnOutcomeLogin;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
-	useFreshFailureReport(state, failedAt, failureKey, failureCode);
 	// A usage limit has its own notice, whose resume action stands in for Retry. The
 	// turn still closes on the shared row, so copy and undo stay where they always are.
 	if (state === "failed" && usageLimit) {
@@ -831,8 +824,13 @@ export interface TurnOutcomeLogin {
 const reportedFailures = new Set<string>();
 const FRESH_FAILURE_MS = 2 * 60_000;
 
-/** Counts a failed turn as an error shown, once, when it failed moments ago (not one read from history). */
-function useFreshFailureReport(state: string, failedAt: string | undefined, failureKey: string | undefined, failureCode: string | undefined) {
+/**
+ * Counts a failed turn as an error shown, once, when it failed moments ago (not
+ * one read from history). Called by the turn's owner, so a failure counts however
+ * it is shown: as the turn's outcome or as a login note under the message.
+ * `failedAt` is when the turn ended; `failureKey` is the turn's id.
+ */
+export function useFreshFailureReport(state: string | undefined, failedAt: string | undefined, failureKey: string | undefined, failureCode: string | undefined) {
 	useEffect(() => {
 		if (state !== "failed" || !failedAt) return;
 		const at = Date.parse(failedAt);

@@ -470,6 +470,25 @@ describe("UiUsageRuntime", () => {
 		expect((await summary()).dead_click_count).toBe(1);
 	});
 
+	it("gives each click its own settle time before calling it dead", async () => {
+		runtime = make({ afterPaint: (callback) => setTimeout(callback, 500) });
+		const blank = document.getElementById("blank")!;
+		const other = document.createElement("div");
+		document.getElementById("sidebar")!.append(other);
+		box(blank, { left: 0, top: 200, width: 300, height: 100 });
+		box(other, { left: 0, top: 300, width: 300, height: 100 });
+		click(blank, 1, 20, 250);
+		vi.advanceTimersByTime(450);
+		click(other, 1, 20, 350);
+		// The first click is judged; the second is still settling.
+		vi.advanceTimersByTime(50);
+		vi.advanceTimersByTime(150);
+		// Its double click arrives 200 ms in and cancels it.
+		click(other, 2, 20, 350);
+		vi.advanceTimersByTime(500);
+		expect((await summary()).dead_click_count).toBe(1);
+	});
+
 	it("waits for the window to be on screen before sending a view", async () => {
 		let active = true;
 		runtime = make({ isWindowActive: () => active });
