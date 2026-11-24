@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -38,5 +39,43 @@ func forwardReportActivity(observer reportActivityObserver) func(cdc.Event) {
 			return
 		}
 		observer.SessionActivityChanged(payload.Activity, payload.IsTerminated)
+	}
+}
+
+// workerReportObserver turns session activity changes into worker reports.
+type workerReportObserver interface {
+	Transition(domain.SessionID, domain.ActivityState, bool) (domain.ReportState, time.Time)
+	Write(context.Context, domain.SessionID, domain.ReportState, time.Time)
+}
+
+// startWorkerReporter subscribes the worker reporter to the CDC feed. The
+// transition is decided in feed order; the store reads and write run off the
+// broadcaster so a slow query never delays other subscribers.
+func startWorkerReporter(ctx context.Context, broadcaster *cdc.Broadcaster, reporter workerReportObserver) func() {
+	return broadcaster.Subscribe(forwardWorkerReports(ctx, reporter))
+}
+
+func forwardWorkerReports(ctx context.Context, reporter workerReportObserver) func(cdc.Event) {
+	return func(e cdc.Event) {
+		if e.Type != cdc.EventSessionUpdated {
+			return
+		}
+		var payload struct {
+			ID           domain.SessionID     `json:"id"`
+			Activity     domain.ActivityState `json:"activity"`
+			IsTerminated bool                 `json:"isTerminated"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			return
+		}
+		id := domain.SessionID(e.SessionID)
+		if id == "" {
+			id = payload.ID
+		}
+		state, since := reporter.Transition(id, payload.Activity, payload.IsTerminated)
+		if state == "" {
+			return
+		}
+		go reporter.Write(ctx, id, state, since)
 	}
 }
