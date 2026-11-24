@@ -1,0 +1,116 @@
+name: Security audit
+
+# Known-vulnerability checks for the Go daemon and the npm dependency trees.
+# Runs when dependencies change, on main, and weekly so advisories published
+# after a merge still surface.
+
+on:
+  pull_request:
+    paths:
+      - "backend/go.mod"
+      - "backend/go.sum"
+      - "**/package.json"
+      - "**/package-lock.json"
+      - ".github/workflows/security-audit.yml"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-go-cached
+        with:
+          name: govulncheck
+
+      # Binary mode: govulncheck's source loader does not type-check Go 1.27
+      # code yet, and the shipped binaries are what users run. It still
+      # reports only vulnerabilities whose symbols the binary contains.
+      - name: Build shipped binaries
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          for cmd in ao ao-mcp ao-chat-host; do
+            go build -o "$RUNNER_TEMP/bin/$cmd" "./cmd/$cmd"
+          done
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+
+      - name: Scan
+        run: |
+          status=0
+          for bin in "$RUNNER_TEMP"/bin/*; do
+            echo "::group::govulncheck $(basename "$bin")"
+            "$(go env GOPATH)/bin/govulncheck" -mode=binary "$bin" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  npm-audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      # Blocking: what the desktop app ships. That is the renderer's runtime
+      # dependencies plus Electron itself, which is a devDependency and so
+      # invisible to `--omit=dev`.
+      - name: Shipped desktop dependencies
+        working-directory: frontend
+        run: |
+          npm audit --omit=dev --audit-level=moderate
+          npm audit --json > "$RUNNER_TEMP/frontend-audit.json" || true
+          node -e '
+            const report = require(process.argv[1]);
+            const hit = report.vulnerabilities?.electron;
+            if (hit) {
+              console.log(`::error::electron ${hit.range} has a ${hit.severity} advisory`);
+              process.exit(1);
+            }
+          ' "$RUNNER_TEMP/frontend-audit.json"
+
+      # Report only, until the existing dev and build-tool backlog is cleared:
+      # every lockfile, dev dependencies included, summarized on the run page.
+      - name: Full audit (all lockfiles, dev included)
+        if: always()
+        run: |
+          {
+            echo "### npm audit, dev dependencies included"
+            echo
+            echo "| Lockfile | Critical | High | Moderate | Low |"
+            echo "| --- | ---: | ---: | ---: | ---: |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for dir in . frontend frontend/acp-runtime frontend/src/docs packages/cloud-client packages/mobile packages/product-ui scripts; do
+            (cd "$dir" && npm audit --json > "$RUNNER_TEMP/audit.json") || true
+            node -e '
+              const [file, dir] = process.argv.slice(1);
+              const v = require(file).metadata?.vulnerabilities ?? {};
+              console.log(`| ${dir} | ${v.critical ?? "?"} | ${v.high ?? "?"} | ${v.moderate ?? "?"} | ${v.low ?? "?"} |`);
+            ' "$RUNNER_TEMP/audit.json" "$dir" >> "$GITHUB_STEP_SUMMARY"
+          done
