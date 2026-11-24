@@ -20,18 +20,10 @@ import (
 )
 
 type accessGrantDTO struct {
-	Preset    string     `json:"preset,omitempty"`
-	Groups    []string   `json:"groups"`
+	Level     string     `json:"level"`
 	Projects  []string   `json:"projects,omitempty"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 	Ended     bool       `json:"ended,omitempty"`
-}
-
-func (g accessGrantDTO) level() string {
-	if g.Preset != "" {
-		return g.Preset
-	}
-	return strings.Join(g.Groups, ",")
 }
 
 func (g accessGrantDTO) scope() string {
@@ -69,7 +61,7 @@ type accessTokenDTO struct {
 
 type accessActionDTO struct {
 	ID         string           `json:"id"`
-	Group      string           `json:"group"`
+	Level      string           `json:"level"`
 	Method     string           `json:"method"`
 	Path       string           `json:"path"`
 	Summary    string           `json:"summary,omitempty"`
@@ -86,9 +78,8 @@ func newWhoamiCommand(ctx *commandContext) *cobra.Command {
 		Long: `Show who the daemon takes this caller to be, and what it may do.
 
 A caller with no agent token on this machine is the user and has no limit. A
-caller that sets AO_TOKEN is that token, held to its grant. A session that a
-token started carries the same grant. Inside a session the caller is always
-the session, and AO_TOKEN is not used.`,
+caller that sets AO_TOKEN is that token, held to its grant. Inside a session
+the caller is always the session, which has no limit, and AO_TOKEN is not used.`,
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var who whoamiDTO
@@ -104,30 +95,15 @@ the session, and AO_TOKEN is not used.`,
 				return writeJSON(cmd.OutOrStdout(), who)
 			}
 			out := cmd.OutOrStdout()
-			line := who.Kind
-			if label := strings.TrimSpace(who.Name + " " + who.ID); label != "" && who.Kind != "session" {
-				line += " " + label
-			} else if who.Kind == "session" {
-				line += " " + who.ID
-			}
-			if _, err := fmt.Fprintln(out, line); err != nil {
+			if _, err := fmt.Fprintln(out, strings.TrimSpace(who.Kind+" "+who.Name+" "+who.ID)); err != nil {
 				return err
 			}
 			if who.Grant == nil {
 				_, err := fmt.Fprintln(out, "  grant: none, no limit")
 				return err
 			}
-			if who.Grant.Ended && len(who.Grant.Groups) == 0 {
-				_, err := fmt.Fprintln(out, "  grant: ended; the token that started this session is gone")
-				return err
-			}
-			if who.Kind == "session" && who.Name != "" {
-				if _, err := fmt.Fprintf(out, "  started by token: %s\n", who.Name); err != nil {
-					return err
-				}
-			}
-			_, err := fmt.Fprintf(out, "  grant: %s\n  groups: %s\n  projects: %s\n  expires: %s\n",
-				who.Grant.level(), strings.Join(who.Grant.Groups, ", "), who.Grant.scope(), who.Grant.expiry())
+			_, err := fmt.Fprintf(out, "  grant: %s\n  projects: %s\n  expires: %s\n",
+				who.Grant.Level, who.Grant.scope(), who.Grant.expiry())
 			return err
 		},
 	}
@@ -141,11 +117,16 @@ func newTokenCommand(ctx *commandContext) *cobra.Command {
 		Short: "Make and revoke tokens for agents outside the app",
 		Long: `Make and revoke tokens for agents outside the app.
 
-An agent that sets AO_TOKEN to a token is held to the token's grant: a preset
-(read, operate or manage) or named groups, limited to projects when you name
-them. With remote access on, the same token works from another machine as a
-bearer token. A grant limits calls to the daemon. It does not confine a process
-that runs as your OS user, or what a session it starts does in its shell.`,
+An agent that sets AO_TOKEN to a token is held to the token's grant: a level,
+limited to projects when you name them. read looks. operate also runs work:
+it starts, messages and stops sessions, answers their questions and merges
+PRs. manage also changes setup and deletes. With remote access on, the same
+token works from another machine as a bearer token.
+
+Only read is a hard limit. A token that can start or message a session can
+have that session run any command as you, so give operate or manage only to
+an agent you trust with this machine. A grant limits calls to the daemon. It
+does not confine a process that runs as your OS user.`,
 	}
 	cmd.AddCommand(newTokenCreateCommand(ctx), newTokenListCommand(ctx), newTokenRevokeCommand(ctx))
 	return cmd
@@ -176,21 +157,15 @@ func parseTokenExpiry(value string, now time.Time) (*time.Time, error) {
 
 func newTokenCreateCommand(ctx *commandContext) *cobra.Command {
 	var (
-		preset, expires  string
-		groups, projects []string
-		asJSON           bool
+		level, expires string
+		projects       []string
+		asJSON         bool
 	)
 	cmd := &cobra.Command{
 		Use:   "create <name>",
 		Short: "Make a token and print its secret once",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if preset != "" && len(groups) > 0 {
-				return usageError{errors.New("give --preset or --group, not both")}
-			}
-			if preset == "" && len(groups) == 0 {
-				preset = "read"
-			}
 			if cmd.Flags().Changed("project") && (len(projects) == 0 || slices.ContainsFunc(projects, func(id string) bool { return strings.TrimSpace(id) == "" })) {
 				return usageError{errors.New("--project needs a project id; an empty one would mean every project")}
 			}
@@ -198,7 +173,7 @@ func newTokenCreateCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			body := map[string]any{"name": args[0], "preset": preset, "groups": groups, "projects": projects, "expiresAt": expiresAt}
+			body := map[string]any{"name": args[0], "level": level, "projects": projects, "expiresAt": expiresAt}
 			var res struct {
 				Token  accessTokenDTO `json:"token"`
 				Secret string         `json:"secret"`
@@ -211,14 +186,13 @@ func newTokenCreateCommand(ctx *commandContext) *cobra.Command {
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(),
 				"Made token %s (%s): %s on %s, expires %s.\n\n  %s=%s\n\nThis is the only time the secret is shown. Revoke it with `ao token revoke %s`.\n",
-				res.Token.Name, res.Token.ID, res.Token.Grant.level(), res.Token.Grant.scope(), res.Token.Grant.expiry(),
+				res.Token.Name, res.Token.ID, res.Token.Grant.Level, res.Token.Grant.scope(), res.Token.Grant.expiry(),
 				agentTokenEnv, res.Secret, res.Token.Name)
 			return err
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&preset, "preset", "", "Grant preset: read, operate or manage (default read)")
-	f.StringSliceVar(&groups, "group", nil, "Grant exactly these groups instead of a preset; see `ao actions ls`")
+	f.StringVar(&level, "level", "read", "Grant level: read, operate or manage")
 	f.StringSliceVarP(&projects, "project", "p", nil, "Limit the grant to this project id; repeat for more")
 	f.StringVar(&expires, "expires", "", "End the token after this span, such as 12h or 30d (default never)")
 	f.BoolVar(&asJSON, "json", false, "Output as JSON")
@@ -255,7 +229,7 @@ func newTokenListCommand(ctx *commandContext) *cobra.Command {
 				if token.LastUsedAt != nil {
 					used = token.LastUsedAt.Local().Format("2006-01-02 15:04")
 				}
-				if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", token.ID, token.Name, token.Grant.level(), token.Grant.scope(), token.Grant.expiry(), used); err != nil {
+				if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", token.ID, token.Name, token.Grant.Level, token.Grant.scope(), token.Grant.expiry(), used); err != nil {
 					return err
 				}
 			}
@@ -269,7 +243,7 @@ func newTokenListCommand(ctx *commandContext) *cobra.Command {
 func newTokenRevokeCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
 		Use:   "revoke <id-or-name>",
-		Short: "Revoke a token; sessions it started are refused from then on",
+		Short: "Revoke a token",
 		Args:  usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := ctx.deleteJSON(cmd.Context(), "access/tokens/"+url.PathEscape(args[0]), nil); err != nil {
@@ -287,14 +261,11 @@ func newActionsCommand(ctx *commandContext) *cobra.Command {
 		Short: "List the actions a caller with a grant can run",
 		Long: `List the actions a caller with a grant can run.
 
-The catalog is an explicit list. Each action has an id, the group a grant needs
+The catalog is an explicit list. Each action has an id, the level a grant needs
 for it, and an existing daemon route. Run one with a typed command where one
 exists, or with ` + "`ao call <id>`" + `.`,
 	}
-	var (
-		asJSON bool
-		group  string
-	)
+	var asJSON bool
 	list := &cobra.Command{
 		Use:     "ls",
 		Aliases: []string{"list"},
@@ -307,20 +278,11 @@ exists, or with ` + "`ao call <id>`" + `.`,
 			if err := ctx.getJSON(cmd.Context(), "access/actions", &res); err != nil {
 				return err
 			}
-			if group != "" {
-				kept := res.Actions[:0]
-				for _, action := range res.Actions {
-					if action.Group == group {
-						kept = append(kept, action)
-					}
-				}
-				res.Actions = kept
-			}
 			if asJSON {
 				return writeJSON(cmd.OutOrStdout(), res)
 			}
 			writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			if _, err := fmt.Fprintln(writer, "ACTION\tGROUP\tALLOWED\tWHAT IT DOES"); err != nil {
+			if _, err := fmt.Fprintln(writer, "ACTION\tLEVEL\tALLOWED\tWHAT IT DOES"); err != nil {
 				return err
 			}
 			for _, action := range res.Actions {
@@ -328,7 +290,7 @@ exists, or with ` + "`ao call <id>`" + `.`,
 				if !action.Allowed {
 					allowed = "no"
 				}
-				if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", action.ID, action.Group, allowed, action.Summary); err != nil {
+				if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", action.ID, action.Level, allowed, action.Summary); err != nil {
 					return err
 				}
 			}
@@ -336,7 +298,6 @@ exists, or with ` + "`ao call <id>`" + `.`,
 		},
 	}
 	list.Flags().BoolVar(&asJSON, "json", false, "Output as JSON")
-	list.Flags().StringVar(&group, "group", "", "Only actions of this group")
 	show := &cobra.Command{
 		Use:   "show <action>",
 		Short: "Show one action's input: path and query parameters and the JSON body schema",

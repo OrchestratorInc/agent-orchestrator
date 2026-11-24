@@ -957,12 +957,6 @@ func Run(buildVersion string) (retErr error) {
 	if agentTokensErr != nil {
 		log.Warn("load agent token registry failed", "err", agentTokensErr)
 	}
-	if wired, ok := sessMgr.(interface {
-		SetSessionGrants(sessionmanager.SessionGrants)
-	}); ok {
-		wired.SetSessionGrants(agentTokens)
-	}
-	sessionImportSvc.SetSessionCreated(agentTokens.SessionCreated)
 	pairingCodes := mobilebridge.NewPairingCodes(nil)
 	bs := &controllers.BridgeService{
 		ConfigPath:  mobilebridge.Path(cfg.DataDir),

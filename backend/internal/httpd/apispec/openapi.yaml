@@ -16212,16 +16212,21 @@ components:
     AccessActionDetailResponse:
       properties:
         allowed:
-          description: Whether the caller's grant has the action's group. Project
+          description: Whether the caller's grant reaches the action's level. Project
             limits are checked on the call.
           type: boolean
         body:
           additionalProperties: {}
           description: The JSON body schema, when the action takes a body.
           type: object
-        group:
-          type: string
         id:
+          type: string
+        level:
+          description: The lowest grant level that reaches the action.
+          enum:
+          - read
+          - operate
+          - manage
           type: string
         method:
           type: string
@@ -16237,7 +16242,7 @@ components:
           type: string
       required:
       - id
-      - group
+      - level
       - method
       - path
       - allowed
@@ -16253,12 +16258,17 @@ components:
     AccessActionResponse:
       properties:
         allowed:
-          description: Whether the caller's grant has the action's group. Project
+          description: Whether the caller's grant reaches the action's level. Project
             limits are checked on the call.
           type: boolean
-        group:
-          type: string
         id:
+          type: string
+        level:
+          description: The lowest grant level that reaches the action.
+          enum:
+          - read
+          - operate
+          - manage
           type: string
         method:
           type: string
@@ -16268,7 +16278,7 @@ components:
           type: string
       required:
       - id
-      - group
+      - level
       - method
       - path
       - allowed
@@ -16276,20 +16286,16 @@ components:
     AccessGrantResponse:
       properties:
         ended:
-          description: True when the grant expired or its token was revoked.
+          description: True when the grant has expired.
           type: boolean
         expiresAt:
           format: date-time
           type:
           - "null"
           - string
-        groups:
-          description: The action groups the grant allows.
-          items:
-            type: string
-          type: array
-        preset:
-          description: The preset the grant was made from, when it was.
+        level:
+          description: read looks, operate also runs work, manage also changes setup
+            and deletes.
           enum:
           - read
           - operate
@@ -16301,7 +16307,7 @@ components:
             type: string
           type: array
       required:
-      - groups
+      - level
       type: object
     AccessTokenResponse:
       properties:
@@ -21054,19 +21060,15 @@ components:
           type:
           - "null"
           - string
-        groups:
-          items:
-            type: string
-          type: array
-        name:
-          maxLength: 64
-          minLength: 1
-          type: string
-        preset:
+        level:
           enum:
           - read
           - operate
           - manage
+          type: string
+        name:
+          maxLength: 64
+          minLength: 1
           type: string
         projects:
           items:
@@ -21074,6 +21076,7 @@ components:
           type: array
       required:
       - name
+      - level
       type: object
     CreateAccessTokenResponse:
       properties:
@@ -27863,7 +27866,7 @@ components:
           - device
           type: string
         name:
-          description: The token name, also for a session that a token started.
+          description: The token name.
           type: string
       required:
       - kind

@@ -47,7 +47,7 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 		t.Fatalf("whoami as the user: %q %v", out, err)
 	}
 
-	out, err = runAccess(t, "token", "create", "api-bot", "--preset", "operate", "--project", "api", "--expires", "30d", "--json")
+	out, err = runAccess(t, "token", "create", "api-bot", "--level", "operate", "--project", "api", "--expires", "30d", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,24 +56,24 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 		Token  struct {
 			ID    string
 			Grant struct {
-				Preset    string
+				Level     string
 				Projects  []string
 				ExpiresAt *time.Time
 			}
 		}
 	}
 	if json.Unmarshal([]byte(out), &created) != nil || !strings.HasPrefix(created.Secret, access.TokenPrefix) ||
-		created.Token.Grant.Preset != "operate" || len(created.Token.Grant.Projects) != 1 || created.Token.Grant.ExpiresAt == nil {
+		created.Token.Grant.Level != "operate" || len(created.Token.Grant.Projects) != 1 || created.Token.Grant.ExpiresAt == nil {
 		t.Fatalf("token create: %s", out)
 	}
 	if out, err = runAccess(t, "token", "ls"); err != nil || !strings.Contains(out, "api-bot") || strings.Contains(out, created.Secret) {
 		t.Fatalf("token ls: %q %v", out, err)
 	}
-	if _, err = runAccess(t, "token", "create", "bad", "--preset", "read", "--group", "sessions.read"); ExitCode(err) != 2 {
-		t.Errorf("--preset with --group: exit %d, want 2", ExitCode(err))
+	if _, err = runAccess(t, "token", "create", "bad", "--level", "admin"); err == nil {
+		t.Error("an unknown level must be refused")
 	}
 	for _, project := range []string{"", " ", "api,"} {
-		if _, err = runAccess(t, "token", "create", "blank", "--preset", "operate", "--project", project); ExitCode(err) != 2 {
+		if _, err = runAccess(t, "token", "create", "blank", "--level", "operate", "--project", project); ExitCode(err) != 2 {
 			t.Errorf("--project %q: exit %d, want 2: an empty project must not become every project", project, ExitCode(err))
 		}
 	}
@@ -93,7 +93,7 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 	if _, err = runAccess(t, "project", "ls"); ExitCode(err) != exitRefused || !strings.Contains(err.Error(), "limited to: api") {
 		t.Errorf("a limited token listing every project: exit %d (%v)", ExitCode(err), err)
 	}
-	if _, err = runAccess(t, "call", "project.remove", "--input", `{"id":"api"}`); ExitCode(err) != exitRefused || !strings.Contains(err.Error(), "projects.manage") {
+	if _, err = runAccess(t, "call", "project.remove", "--input", `{"id":"api"}`); ExitCode(err) != exitRefused || !strings.Contains(err.Error(), "needs manage") {
 		t.Errorf("call above the grant: exit %d (%v)", ExitCode(err), err)
 	}
 	if _, err = runAccess(t, "call", "deleteProject"); ExitCode(err) != exitNotFound {
@@ -114,8 +114,8 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 	if _, err = runAccess(t, "call", "project.get", "--input", `{"id":"api"}`); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotImplemented {
 		t.Errorf("an allowed call must reach its handler (501 with no project service), got %v", err)
 	}
-	if out, err = runAccess(t, "actions", "ls", "--group", "projects.manage"); err != nil || !strings.Contains(out, "project.remove") || !strings.Contains(out, "no") || strings.Contains(out, "session.list") {
-		t.Errorf("actions ls --group: %q %v", out, err)
+	if out, err = runAccess(t, "actions", "ls"); err != nil || !strings.Contains(out, "project.remove") || !strings.Contains(out, "manage") || !strings.Contains(out, "orchestrator.spawn") {
+		t.Errorf("actions ls: %q %v", out, err)
 	}
 	if out, err = runAccess(t, "actions", "show", "session.spawn"); err != nil || !strings.Contains(out, `"projectId"`) {
 		t.Errorf("actions show: %q %v", out, err)

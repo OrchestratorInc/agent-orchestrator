@@ -8,95 +8,35 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
 
-// Group names a set of actions a grant can allow.
-type Group string
-
-// The groups a grant can allow.
+// The levels a grant can hold. Each allows everything the one before it does.
 const (
-	SessionsRead      Group = "sessions.read"
-	SessionsOperate   Group = "sessions.operate"
-	SessionsManage    Group = "sessions.manage"
-	ChatRespond       Group = "chat.respond"
-	ProjectsRead      Group = "projects.read"
-	ProjectsManage    Group = "projects.manage"
-	PRsOperate        Group = "prs.operate"
-	ReviewsOperate    Group = "reviews.operate"
-	AutomationsRead   Group = "automations.read"
-	AutomationsManage Group = "automations.manage"
-	AccountsRead      Group = "accounts.read"
-	AccountsManage    Group = "accounts.manage"
-	SettingsRead      Group = "settings.read"
-	SettingsManage    Group = "settings.manage"
+	LevelRead    = "read"
+	LevelOperate = "operate"
+	LevelManage  = "manage"
 )
 
-// The presets, each a superset of the one before.
-const (
-	PresetRead    = "read"
-	PresetOperate = "operate"
-	PresetManage  = "manage"
-)
+var levels = []string{LevelRead, LevelOperate, LevelManage}
 
-var (
-	readGroups    = []Group{SessionsRead, ProjectsRead, AutomationsRead, AccountsRead, SettingsRead}
-	operateGroups = append(slices.Clone(readGroups), SessionsOperate, ChatRespond, PRsOperate, ReviewsOperate)
-	manageGroups  = append(slices.Clone(operateGroups), SessionsManage, ProjectsManage, AutomationsManage, AccountsManage, SettingsManage)
-	presets       = map[string][]Group{PresetRead: readGroups, PresetOperate: operateGroups, PresetManage: manageGroups}
-)
-
-// Presets returns the preset names, narrowest first.
-func Presets() []string { return []string{PresetRead, PresetOperate, PresetManage} }
-
-// PresetGroups returns the groups a preset allows.
-func PresetGroups(name string) ([]Group, bool) {
-	groups, ok := presets[name]
-	return slices.Clone(groups), ok
-}
-
-// Groups returns every group, sorted.
-func Groups() []Group {
-	out := slices.Clone(manageGroups)
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
-}
+// Levels returns the level names, narrowest first.
+func Levels() []string { return slices.Clone(levels) }
 
 // Grant is what one caller may do. No projects means every project.
 type Grant struct {
-	Preset    string    `json:"preset,omitempty"`
-	Groups    []Group   `json:"groups"`
+	Level     string    `json:"level"`
 	Projects  []string  `json:"projects,omitempty"`
 	ExpiresAt time.Time `json:"expiresAt,omitzero"`
-	Ended     bool      `json:"-"`
 }
 
-// NewGrant builds a grant from a preset or from named groups, not both.
-func NewGrant(preset string, groups []Group, projects []string, expiresAt time.Time) (Grant, error) {
-	grant := Grant{ExpiresAt: expiresAt.UTC()}
-	switch {
-	case preset != "" && len(groups) > 0:
-		return Grant{}, fmt.Errorf("give a preset or groups, not both")
-	case preset != "":
-		presetGroups, ok := PresetGroups(preset)
-		if !ok {
-			return Grant{}, fmt.Errorf("unknown preset %q; use one of %s", preset, strings.Join(Presets(), ", "))
-		}
-		grant.Preset, grant.Groups = preset, presetGroups
-	case len(groups) > 0:
-		for _, group := range groups {
-			if !slices.Contains(manageGroups, group) {
-				return Grant{}, fmt.Errorf("unknown group %q", group)
-			}
-			if !slices.Contains(grant.Groups, group) {
-				grant.Groups = append(grant.Groups, group)
-			}
-		}
-	default:
-		return Grant{}, fmt.Errorf("give a preset or at least one group")
+// NewGrant builds a grant at a level, limited to projects when any are named.
+func NewGrant(level string, projects []string, expiresAt time.Time) (Grant, error) {
+	if !slices.Contains(levels, level) {
+		return Grant{}, fmt.Errorf("unknown level %q; use one of %s", level, strings.Join(levels, ", "))
 	}
+	grant := Grant{Level: level, ExpiresAt: expiresAt.UTC()}
 	for _, project := range projects {
 		if project = strings.TrimSpace(project); project == "" {
 			return Grant{}, fmt.Errorf("a project id is empty; an empty limit would mean every project")
@@ -111,50 +51,40 @@ func NewGrant(preset string, groups []Group, projects []string, expiresAt time.T
 // Refusal is why a grant does not allow a call.
 type Refusal struct {
 	Action  string `json:"action,omitempty"`
-	Group   Group  `json:"group,omitempty"`
+	Level   string `json:"level,omitempty"`
 	Reason  string `json:"reason"`
 	Message string `json:"-"`
 }
 
-func (r *Refusal) Error() string { return r.Message }
-
 // The reasons a call is refused.
 const (
 	ReasonCatalog = "not_in_catalog"
-	ReasonGroup   = "group"
+	ReasonLevel   = "level"
 	ReasonProject = "project"
-	ReasonEnded   = "grant_ended"
 )
-
-// Over reports whether the grant has ended or expired.
-func (g Grant) Over(now time.Time) bool {
-	return g.Ended || (!g.ExpiresAt.IsZero() && !now.Before(g.ExpiresAt))
-}
 
 // Check reports whether the grant allows action on project. known is false
 // when the caller named no project.
-func (g Grant) Check(action Action, project string, known bool, now time.Time) *Refusal {
-	if g.Over(now) {
-		return &Refusal{Action: action.ID, Reason: ReasonEnded, Message: "this grant has ended"}
-	}
-	if !slices.Contains(g.Groups, action.Group) {
-		return &Refusal{Action: action.ID, Group: action.Group, Reason: ReasonGroup,
-			Message: fmt.Sprintf("this grant has no group %s, which %s needs", action.Group, action.ID)}
+func (g Grant) Check(action Action, project string, known bool) *Refusal {
+	need := slices.Index(levels, action.Level)
+	if need < 0 || slices.Index(levels, g.Level) < need {
+		return &Refusal{Action: action.ID, Level: action.Level, Reason: ReasonLevel,
+			Message: fmt.Sprintf("this grant is %s, and %s needs %s", g.Level, action.ID, action.Level)}
 	}
 	if len(g.Projects) == 0 || action.Project == ProjectNone {
 		return nil
 	}
 	limit := strings.Join(g.Projects, ", ")
 	if action.Project == ProjectAll {
-		return &Refusal{Action: action.ID, Group: action.Group, Reason: ReasonProject,
+		return &Refusal{Action: action.ID, Level: action.Level, Reason: ReasonProject,
 			Message: fmt.Sprintf("%s reaches every project, and this grant is limited to: %s", action.ID, limit)}
 	}
 	if !known {
-		return &Refusal{Action: action.ID, Group: action.Group, Reason: ReasonProject,
+		return &Refusal{Action: action.ID, Level: action.Level, Reason: ReasonProject,
 			Message: fmt.Sprintf("%s needs a project, and this grant is limited to: %s", action.ID, limit)}
 	}
 	if !slices.Contains(g.Projects, project) {
-		return &Refusal{Action: action.ID, Group: action.Group, Reason: ReasonProject,
+		return &Refusal{Action: action.ID, Level: action.Level, Reason: ReasonProject,
 			Message: fmt.Sprintf("this grant is limited to: %s", limit)}
 	}
 	return nil
@@ -170,11 +100,10 @@ const (
 
 // Caller is who made a request. A nil Grant means no limit.
 type Caller struct {
-	Kind    string `json:"kind"`
-	ID      string `json:"id,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Grant   *Grant `json:"grant,omitempty"`
-	TokenID string `json:"tokenId,omitempty"`
+	Kind  string `json:"kind"`
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Grant *Grant `json:"grant,omitempty"`
 }
 
 type callerKey struct{}

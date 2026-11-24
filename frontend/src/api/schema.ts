@@ -5425,14 +5425,18 @@ export interface components {
             requestId?: string;
         };
         AccessActionDetailResponse: {
-            /** @description Whether the caller's grant has the action's group. Project limits are checked on the call. */
+            /** @description Whether the caller's grant reaches the action's level. Project limits are checked on the call. */
             allowed: boolean;
             /** @description The JSON body schema, when the action takes a body. */
             body?: {
                 [key: string]: unknown;
             };
-            group: string;
             id: string;
+            /**
+             * @description The lowest grant level that reaches the action.
+             * @enum {string}
+             */
+            level: "read" | "operate" | "manage";
             method: string;
             /** @description The path and query parameters, as OpenAPI parameter objects. */
             parameters: {
@@ -5445,26 +5449,28 @@ export interface components {
             action: components["schemas"]["AccessActionDetailResponse"];
         };
         AccessActionResponse: {
-            /** @description Whether the caller's grant has the action's group. Project limits are checked on the call. */
+            /** @description Whether the caller's grant reaches the action's level. Project limits are checked on the call. */
             allowed: boolean;
-            group: string;
             id: string;
+            /**
+             * @description The lowest grant level that reaches the action.
+             * @enum {string}
+             */
+            level: "read" | "operate" | "manage";
             method: string;
             path: string;
             summary?: string;
         };
         AccessGrantResponse: {
-            /** @description True when the grant expired or its token was revoked. */
+            /** @description True when the grant has expired. */
             ended?: boolean;
             /** Format: date-time */
             expiresAt?: null | string;
-            /** @description The action groups the grant allows. */
-            groups: string[];
             /**
-             * @description The preset the grant was made from, when it was.
+             * @description read looks, operate also runs work, manage also changes setup and deletes.
              * @enum {string}
              */
-            preset?: "read" | "operate" | "manage";
+            level: "read" | "operate" | "manage";
             /** @description Project ids the grant is limited to. Empty means every project. */
             projects?: string[];
         };
@@ -7295,10 +7301,9 @@ export interface components {
         CreateAccessTokenRequest: {
             /** Format: date-time */
             expiresAt?: null | string;
-            groups?: string[];
-            name: string;
             /** @enum {string} */
-            preset?: "read" | "operate" | "manage";
+            level: "read" | "operate" | "manage";
+            name: string;
             projects?: string[];
         };
         CreateAccessTokenResponse: {
@@ -9935,7 +9940,7 @@ export interface components {
              * @enum {string}
              */
             kind: "user" | "session" | "token" | "device";
-            /** @description The token name, also for a session that a token started. */
+            /** @description The token name. */
             name?: string;
         };
         WorkspaceBranchResponse: {

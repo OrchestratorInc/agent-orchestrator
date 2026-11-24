@@ -477,7 +477,6 @@ type Manager struct {
 	agentBrowserURL             string
 	agentBrowserToken           string
 	agentAccounts               ports.AgentAccountLaunchEnv
-	grants                      SessionGrants
 	refusedModelRefreshMu       sync.Mutex
 	refusedModelRefreshAt       map[string]time.Time
 	accountOverrideMu           sync.Mutex
@@ -734,24 +733,6 @@ func (m *Manager) SetUsageFlusher(flusher UsageFlusher) {
 // SetBranchStateRecorder completes daemon wiring before request handling begins.
 func (m *Manager) SetBranchStateRecorder(recorder BranchStateRecorder) {
 	m.branchStates = recorder
-}
-
-// SessionGrants is told of each new session before its agent starts, so the
-// session carries the grant of the caller that started it from its first call.
-type SessionGrants interface {
-	SessionCreated(ctx context.Context, sessionID string) error
-}
-
-// SetSessionGrants completes daemon wiring before request handling begins.
-func (m *Manager) SetSessionGrants(grants SessionGrants) {
-	m.grants = grants
-}
-
-func (m *Manager) sessionCreated(ctx context.Context, id domain.SessionID) error {
-	if m.grants == nil {
-		return nil
-	}
-	return m.grants.SessionCreated(ctx, string(id))
 }
 
 // SetAgentAccounts completes daemon wiring before request handling begins.
@@ -1372,16 +1353,6 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 	id := rec.ID
-	if err := m.sessionCreated(ctx, id); err != nil {
-		if prep != nil {
-			cleanupCtx, cancel := spawnRollbackContext(ctx)
-			m.discardClaimedTaskPreparation(cleanupCtx, prep)
-			cancel()
-		} else {
-			m.rollbackSpawnSeedRow(ctx, id)
-		}
-		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCreate, fmt.Errorf("record the session's grant: %w", err))
-	}
 	if m.agentAccounts != nil || cfg.AgentAccountID != "" {
 		err := ports.ErrAgentAccountUnknown
 		if m.agentAccounts != nil {

@@ -31,13 +31,10 @@ func (c *AccessController) Register(r chi.Router) {
 }
 
 func grantResponse(grant access.Grant, now time.Time) AccessGrantResponse {
-	out := AccessGrantResponse{Preset: grant.Preset, Groups: make([]string, 0, len(grant.Groups)), Projects: grant.Projects, Ended: grant.Ended}
-	for _, group := range grant.Groups {
-		out.Groups = append(out.Groups, string(group))
-	}
+	out := AccessGrantResponse{Level: grant.Level, Projects: grant.Projects}
 	if !grant.ExpiresAt.IsZero() {
 		expiresAt := grant.ExpiresAt
-		out.ExpiresAt, out.Ended = &expiresAt, grant.Ended || !now.Before(expiresAt)
+		out.ExpiresAt, out.Ended = &expiresAt, !now.Before(expiresAt)
 	}
 	return out
 }
@@ -53,9 +50,9 @@ func (c *AccessController) whoami(w http.ResponseWriter, r *http.Request) {
 }
 
 func actionResponse(action access.Action, who access.Caller) AccessActionResponse {
-	out := AccessActionResponse{ID: action.ID, Group: string(action.Group), Method: action.Method, Path: action.Path, Allowed: true}
+	out := AccessActionResponse{ID: action.ID, Level: action.Level, Method: action.Method, Path: action.Path, Allowed: true}
 	if who.Grant != nil {
-		refusal := who.Grant.Check(action, "", false, time.Now())
+		refusal := who.Grant.Check(action, "", false)
 		out.Allowed = refusal == nil || refusal.Reason == access.ReasonProject && action.Project != access.ProjectAll
 	}
 	if operation := apispec.Default().Operation(action.Method, action.Path); operation != nil {
@@ -150,16 +147,12 @@ func (c *AccessController) createToken(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid agent token request", nil)
 		return
 	}
-	groups := make([]access.Group, 0, len(req.Groups))
-	for _, group := range req.Groups {
-		groups = append(groups, access.Group(group))
-	}
 	var expiresAt time.Time
 	if req.ExpiresAt != nil {
 		expiresAt = *req.ExpiresAt
 	}
 	now := time.Now()
-	grant, err := access.NewGrant(req.Preset, groups, req.Projects, expiresAt)
+	grant, err := access.NewGrant(req.Level, req.Projects, expiresAt)
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "AGENT_TOKEN_INVALID_GRANT", err.Error(), nil)
 		return

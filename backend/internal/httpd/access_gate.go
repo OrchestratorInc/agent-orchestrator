@@ -33,36 +33,6 @@ var grantOpenRoutes = map[string]bool{
 	"GET /api/v1/access/actions/{actionId}":    true,
 }
 
-var sessionToolRoutes = map[string]bool{
-	"GET /api/v1/browser/status":           true,
-	"POST /api/v1/browser/commands":        true,
-	"GET /api/v1/computer-use/agent-tools": true,
-	"POST /api/v1/computer-use/call":       true,
-}
-
-var ownSessionRoutes = map[string]bool{
-	"POST /api/v1/sessions/{sessionId}/activity":                    true,
-	"POST /api/v1/sessions/{sessionId}/activity/codewhale":          true,
-	"POST /api/v1/sessions/{sessionId}/artifact-registrations":      true,
-	"POST /api/v1/sessions/{sessionId}/renders":                     true,
-	"POST /api/v1/sessions/{sessionId}/renders/check":               true,
-	"POST /api/v1/sessions/{sessionId}/renders/{renderId}/artifact": true,
-	"POST /api/v1/sessions/{sessionId}/preview":                     true,
-	"DELETE /api/v1/sessions/{sessionId}/preview":                   true,
-	"POST /api/v1/sessions/{sessionId}/preview/server":              true,
-	"DELETE /api/v1/sessions/{sessionId}/preview/server":            true,
-	"POST /api/v1/sessions/{sessionId}/panes":                       true,
-	"POST /api/v1/sessions/{sessionId}/panes/input":                 true,
-}
-
-func ownSessionRoute(r *http.Request, rctx *chi.Context, pattern, sessionID string) bool {
-	if r.Method != http.MethodGet && !ownSessionRoutes[r.Method+" "+pattern] {
-		return false
-	}
-	target, err := url.PathUnescape(rctx.URLParam("sessionId"))
-	return err == nil && target != "" && target == sessionID
-}
-
 func routePath(r *http.Request) string {
 	if r.URL.RawPath != "" {
 		return r.URL.RawPath
@@ -112,13 +82,7 @@ func (g *accessGate) middleware(next http.Handler) http.Handler {
 			return
 		}
 		pattern := rctx.RoutePattern()
-		route := r.Method + " " + pattern
-		if who.Kind == access.CallerSession && sessionToolRoutes[route] && who.Grant.Over(g.now()) {
-			writeGrantRefused(w, r, &access.Refusal{Reason: access.ReasonEnded, Message: "this grant has ended"})
-			return
-		}
-		own := who.Kind == access.CallerSession && (sessionToolRoutes[route] || ownSessionRoute(r, rctx, pattern, who.ID))
-		if grantOpenRoutes[route] || own {
+		if grantOpenRoutes[r.Method+" "+pattern] {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -128,24 +92,12 @@ func (g *accessGate) middleware(next http.Handler) http.Handler {
 				Message: fmt.Sprintf("the action catalog has no entry for %s %s; a caller with a grant can run only catalog actions", r.Method, pattern)})
 			return
 		}
-		if action.ID == "session.spawn" {
-			kind, err := bodyField(r, "kind")
-			if err != nil {
-				envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "GRANT_TARGET_UNREADABLE", err.Error(), nil)
-				return
-			}
-			if kind == string(domain.KindOrchestrator) {
-				writeGrantRefused(w, r, &access.Refusal{Action: action.ID, Reason: access.ReasonCatalog,
-					Message: "a caller with a grant cannot start a project's orchestrator: it is shared with the user"})
-				return
-			}
-		}
 		project, known, err := g.targetProject(r, rctx, action, who.Grant)
 		if err != nil {
 			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "GRANT_TARGET_UNREADABLE", err.Error(), nil)
 			return
 		}
-		if refusal := who.Grant.Check(action, project, known, g.now()); refusal != nil {
+		if refusal := who.Grant.Check(action, project, known); refusal != nil {
 			writeGrantRefused(w, r, refusal)
 			return
 		}
@@ -158,15 +110,15 @@ func writeGrantRefused(w http.ResponseWriter, r *http.Request, refusal *access.R
 	if refusal.Action != "" {
 		details["action"] = refusal.Action
 	}
-	if refusal.Group != "" {
-		details["group"] = string(refusal.Group)
+	if refusal.Level != "" {
+		details["level"] = refusal.Level
 	}
 	envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "GRANT_REFUSED", refusal.Message, details)
 }
 
 func tokenCaller(token access.Token) access.Caller {
 	grant := token.Grant
-	return access.Caller{Kind: access.CallerToken, ID: token.ID, Name: token.Name, Grant: &grant, TokenID: token.ID}
+	return access.Caller{Kind: access.CallerToken, ID: token.ID, Name: token.Name, Grant: &grant}
 }
 
 func (g *accessGate) resolve(w http.ResponseWriter, r *http.Request) (access.Caller, bool) {
@@ -191,23 +143,13 @@ func (g *accessGate) resolve(w http.ResponseWriter, r *http.Request) (access.Cal
 			return tokenCaller(token), true
 		}
 	}
-	who := access.Caller{Kind: access.CallerUser}
+	if sessionID := caller.From(r.Context()); sessionID != "" {
+		return access.Caller{Kind: access.CallerSession, ID: sessionID}, true
+	}
 	if credential.Kind != "" {
-		who = access.Caller{Kind: access.CallerDevice, ID: credential.DeviceID, Name: string(credential.Kind)}
+		return access.Caller{Kind: access.CallerDevice, ID: credential.DeviceID, Name: string(credential.Kind)}, true
 	}
-	sessionID := caller.From(r.Context())
-	if sessionID == "" {
-		return who, true
-	}
-	who = access.Caller{Kind: access.CallerSession, ID: sessionID}
-	if tokenID, bound := g.registry.ForSession(sessionID); bound {
-		grant := access.Grant{Ended: true}
-		if token, ok := g.registry.Get(tokenID); ok {
-			grant, who.Name = token.Grant, token.Name
-		}
-		who.Grant, who.TokenID = &grant, tokenID
-	}
-	return who, true
+	return access.Caller{Kind: access.CallerUser}, true
 }
 
 func writeAgentTokenInvalid(w http.ResponseWriter, r *http.Request) {

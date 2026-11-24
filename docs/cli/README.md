@@ -287,27 +287,27 @@ The CLI's main caller is an agent. Three parts decide what a call does:
 | Part | What it answers | Where |
 | --- | --- | --- |
 | Authentication | Who calls. A caller with no token on this machine is the user. `AO_TOKEN=aoa_...` makes the caller a named agent token. A session is named by `AO_SESSION_ID`, which locates it but proves nothing. | `ao whoami`, `ao token` |
-| Authorization | What that caller may do. A token carries a grant: a preset (`read`, `operate`, `manage`) or named groups, optionally limited to project ids, with an optional expiry. The daemon checks it before the route runs. | `backend/internal/access`, `httpd/access_gate.go` |
+| Authorization | What that caller may do. A token carries a grant: a level (`read`, `operate` or `manage`, each including the one before), optionally limited to project ids, with an optional expiry. The daemon checks it before the route runs. | `backend/internal/access`, `httpd/access_gate.go` |
 | Execution | Which actions exist. A caller with a grant can reach only the routes in the action catalog; every other route answers `403 GRANT_REFUSED`. | `ao actions ls`, `ao call` |
 
 ```bash
-ao token create ci-bot --preset operate --project api --expires 30d
+ao token create ci-bot --level operate --project api --expires 30d
 AO_TOKEN=aoa_... ao spawn --project api --agent claude-code --name "Fix login test" --prompt "..."
 AO_TOKEN=aoa_... ao session wait api-12 --timeout 20m     # exit 0 done, 5 needs an answer, 124 timed out
 AO_TOKEN=aoa_... ao send --session api-12 --message "Also update the changelog." --wait
 AO_TOKEN=aoa_... ao call chat.input.resolve --input '{"sessionId":"api-12","requestId":"...","action":"accept","content":{}}'
 ```
 
-- A session that a token starts carries the token's grant for its own `ao` calls, and so does a session that session starts. Revoking the token refuses them too: each bound session keeps its own record, and a session bound to a token that is gone (revoked, or lost with a damaged token file) is refused, never unlimited. A fork of a bound session is refused, because it would start with no grant. The grant limits what such a session reaches beyond itself: a fixed list of routes about the session itself (status hooks, artifact registration, renders, preview, side terminals) and reads of itself stay open, also after the grant ends. The browser and computer-use tools stay open while the grant is live. Every other route on itself is judged like any other call: a catalog action needs the grant, and a route outside the catalog is refused.
+- `read` looks. `operate` also runs work: it starts, messages and stops sessions, answers their questions and approvals, merges PRs and runs reviews. `manage` also changes setup and deletes: projects, automations, settings, accounts, deleting sessions.
+- Only `read` is a hard limit. A token that can start or message a session can have that session run any command as the user, so `operate` and `manage` are for an agent the user trusts with the machine; they differ in what the agent can do by mistake. A grant limits calls to the daemon. It does not confine a process that runs as the same OS user. The provider's permission mode is separate.
+- A session has no limit, whoever started it, and it keeps running when the token that started it is revoked.
 - With remote access on, the same token is accepted by the authenticated listener as a bearer token, held to the same catalog and grant. Token management answers only on the loopback listener.
 - The loopback listener stays open: a caller that presents no token has no limit, as before.
 - Inside a session the caller is always the session: the CLI does not send `AO_TOKEN` there, so a token exported in a shell profile cannot limit or break the sessions the app starts. Outside a session, an `AO_TOKEN` that does not start with `aoa_` is refused with exit 4, never treated as no token.
-- A caller with a grant cannot create or change automations, because the sessions an automation starts would carry no grant. It can list and delete them.
-- A caller with a grant cannot start a project's orchestrator, which is shared with the user, and a token limited to projects cannot change machine-wide settings or the default account.
-- A grant limits calls to the daemon. It does not confine a process that runs as the same OS user, and it does not limit what a session it starts or messages does in its shell. The provider's permission mode is separate.
+- A token limited to projects cannot run an action that reaches every project, such as machine-wide settings, the default account or automations.
 - Exit codes an agent can branch on: `2` wrong usage, `3` unknown catalog action, `4` refused by the grant or the token, `5` a session waits for an answer, `124` a wait timed out.
 
-Add an action to the catalog (`backend/internal/access/catalog.go`) only with the group that guards it and the place its project comes from. `TestRealRouterGatesTokensAndServesWhoami` fails for an action whose route is not in the API spec.
+Add an action to the catalog (`backend/internal/access/catalog.go`) only with its level and the place its project comes from. `TestRealRouterHoldsEveryActionToItsLevel` runs every action at every level through the real router, and `TestRealRouterGatesTokensAndServesWhoami` fails for an action whose route is not in the API spec.
 
 ## Configuration
 

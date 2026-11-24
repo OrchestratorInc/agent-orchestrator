@@ -1,7 +1,6 @@
 package access
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -58,29 +57,25 @@ func TokensPath(dataDir string) string {
 	return filepath.Join(dataDir, "access", "tokens.json")
 }
 
-// Registry holds the agent tokens this machine accepts and the sessions that started under one.
+// Registry holds the agent tokens this machine accepts.
 type Registry struct {
-	mu           sync.RWMutex
-	path         string
-	writeErr     error
-	tokens       map[string]Token
-	byHash       map[string]string
-	sessions     map[string]string
-	sessionsLost bool
-	unbound      map[string]bool
+	mu       sync.RWMutex
+	path     string
+	writeErr error
+	tokens   map[string]Token
+	byHash   map[string]string
 }
 
 // LoadRegistry reads the registry from path.
 func LoadRegistry(path string) (*Registry, error) {
-	r := &Registry{path: path, tokens: map[string]Token{}, byHash: map[string]string{}, sessions: map[string]string{}, unbound: map[string]bool{}}
-	bindingsErr := r.loadBindings()
+	r := &Registry{path: path, tokens: map[string]Token{}, byHash: map[string]string{}}
 	raw, err := os.ReadFile(path) // #nosec G304 -- path is the daemon's own data dir.
 	if errors.Is(err, fs.ErrNotExist) {
-		return r, bindingsErr
+		return r, nil
 	}
 	if err != nil {
 		r.writeErr = fmt.Errorf("read agent tokens: %w", err)
-		return r, errors.Join(r.writeErr, bindingsErr)
+		return r, r.writeErr
 	}
 	var file tokensFile
 	if err := json.Unmarshal(raw, &file); err != nil {
@@ -89,7 +84,7 @@ func LoadRegistry(path string) (*Registry, error) {
 			r.writeErr = fmt.Errorf("%w; moving it aside failed: %w", cause, moveErr)
 			cause = r.writeErr
 		}
-		return r, errors.Join(cause, bindingsErr)
+		return r, cause
 	}
 	for _, token := range file.Tokens {
 		if token.ID == "" || token.TokenHash == "" {
@@ -98,36 +93,7 @@ func LoadRegistry(path string) (*Registry, error) {
 		r.tokens[token.ID] = token
 		r.byHash[token.TokenHash] = token.ID
 	}
-	return r, bindingsErr
-}
-
-func (r *Registry) bindingsDir() string {
-	return filepath.Join(filepath.Dir(r.path), "sessions")
-}
-
-func (r *Registry) bindingPath(sessionID string) string {
-	return filepath.Join(r.bindingsDir(), hex.EncodeToString([]byte(sessionID)))
-}
-
-func (r *Registry) loadBindings() error {
-	dir := r.bindingsDir()
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		r.sessionsLost = true
-		return fmt.Errorf("read session grants: %w", err)
-	}
-	for _, entry := range entries {
-		sessionID, err := hex.DecodeString(entry.Name())
-		if err != nil || entry.IsDir() {
-			continue
-		}
-		tokenID, _ := os.ReadFile(filepath.Join(dir, entry.Name())) // #nosec G304 -- inside the daemon's own data dir.
-		r.sessions[string(sessionID)] = strings.TrimSpace(string(tokenID))
-	}
-	return nil
+	return r, nil
 }
 
 func hashSecret(secret string) string {
@@ -274,68 +240,6 @@ func (r *Registry) List() []Token {
 		return out[i].ID < out[j].ID
 	})
 	return out
-}
-
-// SessionCreated binds a new session to its caller's token, or clears a leftover binding.
-func (r *Registry) SessionCreated(ctx context.Context, sessionID string) error {
-	if who := CallerFrom(ctx); who.Grant != nil {
-		return r.Bind(sessionID, who.TokenID)
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, bound := r.sessions[sessionID]; !bound {
-		if r.sessionsLost {
-			r.unbound[sessionID] = true
-			_ = os.Remove(r.bindingPath(sessionID))
-		}
-		return nil
-	}
-	if err := os.Remove(r.bindingPath(sessionID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	delete(r.sessions, sessionID)
-	return nil
-}
-
-// Bind records that a session started under a token.
-func (r *Registry) Bind(sessionID, tokenID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.sessions[sessionID] = tokenID
-	delete(r.unbound, sessionID)
-	if err := os.MkdirAll(r.bindingsDir(), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(r.bindingPath(sessionID), []byte(tokenID), 0o600)
-}
-
-// ForSession returns the ID of the token a session started under, which may be gone.
-func (r *Registry) ForSession(sessionID string) (tokenID string, bound bool) {
-	if r == nil || sessionID == "" {
-		return "", false
-	}
-	r.mu.RLock()
-	tokenID, bound = r.sessions[sessionID]
-	lost := r.sessionsLost && !r.unbound[sessionID]
-	r.mu.RUnlock()
-	if bound || !lost {
-		return tokenID, bound
-	}
-	raw, err := os.ReadFile(r.bindingPath(sessionID)) // #nosec G304 -- inside the daemon's own data dir.
-	if errors.Is(err, fs.ErrNotExist) {
-		r.mu.Lock()
-		r.unbound[sessionID] = true
-		r.mu.Unlock()
-		return "", false
-	}
-	if err != nil {
-		return "", true
-	}
-	tokenID = strings.TrimSpace(string(raw))
-	r.mu.Lock()
-	r.sessions[sessionID] = tokenID
-	r.mu.Unlock()
-	return tokenID, true
 }
 
 func (r *Registry) persistLocked() error {

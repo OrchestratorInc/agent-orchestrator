@@ -1,11 +1,10 @@
 package access
 
 import (
-	"context"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,9 +12,9 @@ import (
 
 var testNow = time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
 
-func mustGrant(t *testing.T, preset string, groups []Group, projects []string, expires time.Time) Grant {
+func mustGrant(t *testing.T, level string, projects []string, expires time.Time) Grant {
 	t.Helper()
-	grant, err := NewGrant(preset, groups, projects, expires)
+	grant, err := NewGrant(level, projects, expires)
 	if err != nil {
 		t.Fatalf("NewGrant: %v", err)
 	}
@@ -31,32 +30,21 @@ func mustAction(t *testing.T, id string) Action {
 	return action
 }
 
-func TestPresetsNest(t *testing.T) {
-	read, _ := PresetGroups(PresetRead)
-	operate, _ := PresetGroups(PresetOperate)
-	manage, _ := PresetGroups(PresetManage)
-	for _, group := range read {
-		if !contains(operate, group) {
-			t.Errorf("operate lacks read group %s", group)
+func TestLevelsNest(t *testing.T) {
+	for _, action := range Catalog() {
+		need := slices.Index(Levels(), action.Level)
+		for have, level := range Levels() {
+			if refused := (Grant{Level: level}).Check(action, "", false) != nil; refused != (have < need) {
+				t.Errorf("%s needs %s: a %s grant refused=%v", action.ID, action.Level, level, refused)
+			}
+		}
+		if (Grant{Level: "admin"}).Check(action, "", false) == nil {
+			t.Errorf("a grant with an unknown level reached %s", action.ID)
 		}
 	}
-	for _, group := range operate {
-		if !contains(manage, group) {
-			t.Errorf("manage lacks operate group %s", group)
-		}
+	if (Grant{Level: LevelManage}).Check(Action{ID: "x", Level: "root"}, "", false) == nil {
+		t.Error("an action with an unknown level must be refused, not open to every grant")
 	}
-	if len(manage) != len(Groups()) {
-		t.Errorf("manage has %d groups, want every group (%d)", len(manage), len(Groups()))
-	}
-}
-
-func contains(groups []Group, want Group) bool {
-	for _, group := range groups {
-		if group == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestCatalogIsConsistent(t *testing.T) {
@@ -71,8 +59,8 @@ func TestCatalogIsConsistent(t *testing.T) {
 			t.Errorf("route %s is in the catalog twice", route)
 		}
 		routes[route] = true
-		if !contains(Groups(), action.Group) {
-			t.Errorf("%s has unknown group %s", action.ID, action.Group)
+		if !slices.Contains(Levels(), action.Level) {
+			t.Errorf("%s has unknown level %q", action.ID, action.Level)
 		}
 		needsKey := action.Project != ProjectNone && action.Project != ProjectAll
 		if needsKey != (action.Key != "") {
@@ -89,33 +77,23 @@ func TestCatalogIsConsistent(t *testing.T) {
 }
 
 func TestNewGrantRejectsBadInput(t *testing.T) {
-	for name, tc := range map[string]struct {
-		preset string
-		groups []Group
-	}{
-		"neither":        {},
-		"both":           {preset: PresetRead, groups: []Group{SessionsRead}},
-		"unknown preset": {preset: "admin"},
-		"unknown group":  {groups: []Group{"sessions.everything"}},
-	} {
-		if _, err := NewGrant(tc.preset, tc.groups, nil, time.Time{}); err == nil {
-			t.Errorf("%s: want an error", name)
+	for _, level := range []string{"", "admin", "Read"} {
+		if _, err := NewGrant(level, nil, time.Time{}); err == nil {
+			t.Errorf("level %q: want an error", level)
 		}
 	}
 	for _, projects := range [][]string{{""}, {"api", " "}} {
-		if _, err := NewGrant(PresetOperate, nil, projects, time.Time{}); err == nil {
+		if _, err := NewGrant(LevelOperate, projects, time.Time{}); err == nil {
 			t.Errorf("projects %q: a blank project must be refused, not dropped: it would lift the limit", projects)
 		}
 	}
 }
 
 func TestGrantCheck(t *testing.T) {
-	read := mustGrant(t, PresetRead, nil, nil, time.Time{})
-	operateAPI := mustGrant(t, PresetOperate, nil, []string{"api"}, time.Time{})
-	expired := mustGrant(t, PresetManage, nil, nil, testNow.Add(-time.Minute))
-	custom := mustGrant(t, "", []Group{ChatRespond}, nil, time.Time{})
-	manageAPI := mustGrant(t, PresetManage, nil, []string{"api"}, time.Time{})
-	manage := mustGrant(t, PresetManage, nil, nil, time.Time{})
+	read := mustGrant(t, LevelRead, nil, time.Time{})
+	operateAPI := mustGrant(t, LevelOperate, []string{"api"}, time.Time{})
+	manageAPI := mustGrant(t, LevelManage, []string{"api"}, time.Time{})
+	manage := mustGrant(t, LevelManage, nil, time.Time{})
 
 	for name, tc := range map[string]struct {
 		grant   Grant
@@ -124,23 +102,23 @@ func TestGrantCheck(t *testing.T) {
 		known   bool
 		want    string
 	}{
-		"read may list":                     {grant: read, action: "session.list"},
-		"read may not spawn":                {grant: read, action: "session.spawn", project: "api", known: true, want: ReasonGroup},
-		"operate in its project":            {grant: operateAPI, action: "session.spawn", project: "api", known: true},
-		"operate in another project":        {grant: operateAPI, action: "session.spawn", project: "web", known: true, want: ReasonProject},
-		"limited grant must name a project": {grant: operateAPI, action: "session.list", want: ReasonProject},
-		"limited grant on every project":    {grant: operateAPI, action: "project.list", want: ReasonProject},
-		"limited grant on machine data":     {grant: operateAPI, action: "settings.get"},
-		"limited grant may refresh agents":  {grant: operateAPI, action: "agent.refresh"},
-		"limited grant on machine settings": {grant: manageAPI, action: "settings.session-retention", want: ReasonProject},
-		"limited grant on default account":  {grant: manageAPI, action: "account.set-default", want: ReasonProject},
-		"unlimited manage on settings":      {grant: manage, action: "settings.session-retention"},
-		"operate may not remove a project":  {grant: operateAPI, action: "project.remove", project: "api", known: true, want: ReasonGroup},
-		"expired":                           {grant: expired, action: "session.list", want: ReasonEnded},
-		"custom group only":                 {grant: custom, action: "chat.input.resolve", project: "api", known: true},
-		"custom group lacks reads":          {grant: custom, action: "session.get", project: "api", known: true, want: ReasonGroup},
+		"read may list":                      {grant: read, action: "session.list"},
+		"read may not spawn":                 {grant: read, action: "session.spawn", project: "api", known: true, want: ReasonLevel},
+		"operate in its project":             {grant: operateAPI, action: "session.spawn", project: "api", known: true},
+		"operate in another project":         {grant: operateAPI, action: "session.spawn", project: "web", known: true, want: ReasonProject},
+		"limited grant must name a project":  {grant: operateAPI, action: "session.list", want: ReasonProject},
+		"limited grant on every project":     {grant: operateAPI, action: "project.list", want: ReasonProject},
+		"limited grant on machine data":      {grant: operateAPI, action: "settings.get"},
+		"limited grant may refresh agents":   {grant: operateAPI, action: "agent.refresh"},
+		"limited grant on machine settings":  {grant: manageAPI, action: "settings.session-retention", want: ReasonProject},
+		"limited grant on default account":   {grant: manageAPI, action: "account.set-default", want: ReasonProject},
+		"unlimited manage on settings":       {grant: manage, action: "settings.session-retention"},
+		"operate may not remove a project":   {grant: operateAPI, action: "project.remove", project: "api", known: true, want: ReasonLevel},
+		"operate may start an orchestrator":  {grant: operateAPI, action: "orchestrator.spawn", project: "api", known: true},
+		"operate may not make an automation": {grant: operateAPI, action: "automation.create", want: ReasonLevel},
+		"manage may make an automation":      {grant: manage, action: "automation.create"},
 	} {
-		refusal := tc.grant.Check(mustAction(t, tc.action), tc.project, tc.known, testNow)
+		refusal := tc.grant.Check(mustAction(t, tc.action), tc.project, tc.known)
 		got := ""
 		if refusal != nil {
 			got = refusal.Reason
@@ -160,7 +138,7 @@ func TestRegistryLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant := mustGrant(t, PresetOperate, nil, []string{"api"}, testNow.Add(time.Hour))
+	grant := mustGrant(t, LevelOperate, []string{"api"}, testNow.Add(time.Hour))
 	token, secret, err := registry.Create(" grok-bot ", grant, testNow)
 	if err != nil {
 		t.Fatal(err)
@@ -196,12 +174,6 @@ func TestRegistryLifecycle(t *testing.T) {
 		t.Error("an unknown secret matched")
 	}
 
-	if err := reloaded.Bind("s-1", token.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, bound := reloaded.ForSession("s-2"); bound {
-		t.Error("a session that no token started must not be bound")
-	}
 	revoked, found, err := reloaded.Revoke("grok-bot")
 	if err != nil || !found || revoked.ID != token.ID {
 		t.Fatalf("Revoke = %+v, %v, %v", revoked, found, err)
@@ -222,138 +194,6 @@ func TestRegistryLifecycle(t *testing.T) {
 	if revoked, found, err := reloaded.Revoke(renewed.ID); err != nil || !found || revoked.Name != "grok-bot" {
 		t.Errorf("Revoke by id = %+v, %v, %v", revoked, found, err)
 	}
-	if _, _, err := reloaded.Create("grok-bot", grant, testNow); err != nil {
-		t.Fatal(err)
-	}
-	again, err := LoadRegistry(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tokenID, bound := again.ForSession("s-1")
-	if _, known := again.Get(tokenID); !bound || tokenID != token.ID || known {
-		t.Errorf("the session must stay bound to the revoked token after a reload: %q %v %v", tokenID, bound, known)
-	}
-}
-
-func TestBindingsOutliveTheTokenFile(t *testing.T) {
-	path := TokensPath(t.TempDir())
-	registry, err := LoadRegistry(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, _, err := registry.Create("ci", mustGrant(t, PresetRead, nil, nil, time.Time{}), testNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.Bind("api-1", token.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.Bind("gone/../1", "tok_gone"); err != nil {
-		t.Fatalf("a binding must not need its token, or a plain session id: %v", err)
-	}
-
-	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	damaged, err := LoadRegistry(path)
-	if err == nil {
-		t.Fatal("want an error for a damaged token file")
-	}
-	for session, want := range map[string]string{"api-1": token.ID, "gone/../1": "tok_gone"} {
-		if tokenID, bound := damaged.ForSession(session); !bound || tokenID != want {
-			t.Errorf("%s after the token file was damaged: %q %v, want it bound to %s", session, tokenID, bound, want)
-		}
-	}
-	if _, known := damaged.Get(token.ID); known {
-		t.Error("the damaged file must not yield tokens")
-	}
-
-	sessions := filepath.Join(filepath.Dir(path), "sessions")
-	if err := os.RemoveAll(sessions); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(sessions, []byte("not a directory"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	lost, err := LoadRegistry(path)
-	if err == nil {
-		t.Fatal("want an error when the bindings cannot be read")
-	}
-	if _, bound := lost.ForSession("never-bound"); !bound {
-		t.Error("with unreadable bindings every session must count as bound")
-	}
-	if err := lost.Bind("api-2", token.ID); err == nil {
-		t.Error("Bind must report a write that failed")
-	}
-	if err := lost.SessionCreated(context.Background(), "api-7"); err != nil {
-		t.Errorf("a caller with no grant must still be able to start a session: %v", err)
-	}
-	if _, bound := lost.ForSession("api-7"); bound {
-		t.Error("a session a caller with no grant started in this run has no binding, whatever the disk says")
-	}
-
-	if err := os.Remove(sessions); err != nil {
-		t.Fatal(err)
-	}
-	other, _ := LoadRegistry(path)
-	for _, session := range []string{"api-1", "api-3"} {
-		if err := other.Bind(session, token.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if tokenID, bound := lost.ForSession("api-1"); !bound || tokenID != token.ID {
-		t.Errorf("a binding that can be read again: %q %v, want it bound to %s", tokenID, bound, token.ID)
-	}
-	if _, bound := lost.ForSession("never-bound"); bound {
-		t.Error("once the bindings can be read again, a session with none must not count as bound")
-	}
-	if err := lost.SessionCreated(context.Background(), "api-3"); err != nil {
-		t.Fatal(err)
-	}
-	if _, bound := lost.ForSession("api-3"); bound {
-		t.Error("a new session of a caller with no grant must lose a leftover binding the registry had not read")
-	}
-}
-
-func TestSessionCreatedBindsOrClears(t *testing.T) {
-	path := TokensPath(t.TempDir())
-	registry, err := LoadRegistry(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	grant := mustGrant(t, PresetOperate, nil, []string{"api"}, time.Time{})
-	token, _, err := registry.Create("ci", grant, testNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	granted := WithCaller(context.Background(), Caller{Kind: CallerToken, Grant: &grant, TokenID: token.ID})
-
-	if err := registry.SessionCreated(context.Background(), "api-1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, bound := registry.ForSession("api-1"); bound {
-		t.Error("a session created by a caller with no grant must not be bound")
-	}
-	if err := registry.SessionCreated(granted, "api-2"); err != nil {
-		t.Fatal(err)
-	}
-	if tokenID, bound := registry.ForSession("api-2"); !bound || tokenID != token.ID {
-		t.Fatalf("a session created by a caller with a grant: %q %v, want it bound to %s", tokenID, bound, token.ID)
-	}
-
-	if err := registry.SessionCreated(context.Background(), "api-2"); err != nil {
-		t.Fatal(err)
-	}
-	if _, bound := registry.ForSession("api-2"); bound {
-		t.Error("a new session that reuses the ID of a deleted bound session must start with no binding")
-	}
-	reloaded, err := LoadRegistry(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, bound := reloaded.ForSession("api-2"); bound {
-		t.Error("the cleared binding came back after a reload")
-	}
 }
 
 func TestLoadRegistryMovesDamagedFileAside(t *testing.T) {
@@ -371,7 +211,7 @@ func TestLoadRegistryMovesDamagedFileAside(t *testing.T) {
 	if _, statErr := os.Stat(path + ".bad"); statErr != nil {
 		t.Errorf("the damaged file was not moved aside: %v", statErr)
 	}
-	if _, _, err := registry.Create("ci", mustGrant(t, PresetRead, nil, nil, time.Time{}), testNow); err != nil {
+	if _, _, err := registry.Create("ci", mustGrant(t, LevelRead, nil, time.Time{}), testNow); err != nil {
 		t.Errorf("the registry must work after a damaged file is moved aside: %v", err)
 	}
 }
@@ -391,22 +231,8 @@ func TestLoadRegistryKeepsAFileItCannotRead(t *testing.T) {
 	if registry.Unreadable() == nil {
 		t.Error("the registry must say that its token file could not be read, so a list is not shown as empty")
 	}
-	if _, _, err := registry.Create("ci", mustGrant(t, PresetRead, nil, nil, time.Time{}), testNow); err == nil {
+	if _, _, err := registry.Create("ci", mustGrant(t, LevelRead, nil, time.Time{}), testNow); err == nil {
 		t.Error("the registry must refuse writes over a file it could not read")
-	}
-}
-
-func TestCatalogLeavesOutAutomationWrites(t *testing.T) {
-	for _, route := range [][2]string{
-		{http.MethodPost, "/api/v1/automations"},
-		{http.MethodPatch, "/api/v1/automations/{automationId}"},
-	} {
-		if action, ok := ActionForRoute(route[0], route[1]); ok {
-			t.Errorf("%s is in the catalog, but the sessions an automation starts carry no grant", action.ID)
-		}
-	}
-	if action, ok := ActionForRoute(http.MethodPost, "/api/v1/orchestrators"); ok {
-		t.Errorf("%s is in the catalog, but a project's orchestrator is shared with the user and must not carry a token's grant", action.ID)
 	}
 }
 
@@ -416,7 +242,7 @@ func TestCreateCountsNameCharactersAndMarksAFailedSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant := mustGrant(t, PresetRead, nil, nil, time.Time{})
+	grant := mustGrant(t, LevelRead, nil, time.Time{})
 	if _, _, err := registry.Create(strings.Repeat("बॉट", 20), grant, testNow); err != nil {
 		t.Errorf("a 60-character name in a non-Latin script: %v", err)
 	}
@@ -428,11 +254,11 @@ func TestCreateCountsNameCharactersAndMarksAFailedSave(t *testing.T) {
 			t.Errorf("%s looks like a token id and must be refused: revoke takes an id or a name", name)
 		}
 	}
-	short := mustGrant(t, PresetRead, nil, nil, testNow.Add(time.Hour))
+	short := mustGrant(t, LevelRead, nil, testNow.Add(time.Hour))
 	if _, _, err := registry.Create("nightly", short, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := registry.Create("nightly", mustGrant(t, PresetRead, nil, nil, testNow.Add(26*time.Hour)), testNow.Add(25*time.Hour)); err != nil {
+	if _, _, err := registry.Create("nightly", mustGrant(t, LevelRead, nil, testNow.Add(26*time.Hour)), testNow.Add(25*time.Hour)); err != nil {
 		t.Errorf("an expired token must not keep its name or its place: %v", err)
 	}
 	if err := os.RemoveAll(filepath.Dir(path)); err != nil {

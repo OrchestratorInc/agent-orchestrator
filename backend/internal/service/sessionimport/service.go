@@ -103,13 +103,6 @@ type Service struct {
 	selections   map[string]selection
 	cache        map[string]parsed
 	now          func() time.Time
-	created      func(ctx context.Context, sessionID string) error
-}
-
-// SetSessionCreated late-binds a hook that runs for each session an import
-// creates. Nil skips it.
-func (s *Service) SetSessionCreated(created func(ctx context.Context, sessionID string) error) {
-	s.created = created
 }
 
 // New uses the same provider homes as ordinary native AO launches. AO's own
@@ -775,11 +768,6 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	result.Status = "already_imported"
 	if fresh {
 		result.Status = "created"
-		if s.created != nil {
-			if err := s.created(ctx, string(created.ID)); err != nil {
-				result.Error = fmt.Sprintf("Imported, but a leftover agent-token limit on this session id could not be cleared: %v", err)
-			}
-		}
 	}
 	item.candidate.SessionID = created.ID
 	s.selections[id] = item
