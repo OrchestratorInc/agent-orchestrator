@@ -865,7 +865,7 @@ export interface paths {
         /** @description The organization's automations, newest first, each with its latest run. Every member sees every automation of the organization's projects. Offered when offering.features lists automations; every /automations route answers 404 otherwise. */
         get: operations["listAutomations"];
         put?: never;
-        /** @description Schedule a prompt for a project's worker to run in AO Cloud. It runs as the caller, with their personal coding-agent credential for the harness (422 agent_provider_required without a validated one), and they are subscribed to its results. Refused with 409 AUTOMATION_LIMIT_REACHED when the organization has as many as it may, 422 AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project, and 422 validation_error for an invalid field or schedule. */
+        /** @description Schedule a prompt for a project's worker to run in AO Cloud. It runs as the caller, with their personal coding-agent credential for the harness, and they are subscribed to its results. Before saving, it checks what a run needs (preflight), so a problem shows when it is saved rather than at its first run: 422 agent_provider_required without a validated credential for the harness; 422 repository_not_accessible when AO's GitHub App cannot reach the project's repository, or repository_unreachable when the caller's GitHub token cannot reach it with push rights (a project on a personal access token); and, for an enabled automation, the refusal a session create would get when the organization or its plan has no room (409 SANDBOX_QUOTA_EXCEEDED, 402 PLAN_REQUIRED, 409 WORKER_SLOTS_FULL and the other plan limits). Refused with 409 AUTOMATION_LIMIT_REACHED when the organization has as many as it may, 422 AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project, and 422 validation_error for an invalid field or schedule. */
         post: operations["createAutomation"];
         delete?: never;
         options?: never;
@@ -891,7 +891,7 @@ export interface paths {
         delete: operations["deleteAutomation"];
         options?: never;
         head?: never;
-        /** @description Change an automation; omitted fields keep their values. Only the person it runs as, its creator and the organization's admins may (403 AUTOMATION_EDIT_FORBIDDEN). Changing anything but enabled, or turning the automation on when the caller is not already its runAs, makes the caller the person it runs as (runAs), with their own credential: a caller without a validated credential for the harness gets 422 agent_provider_required. Turning it off changes only enabled. The next run is computed afresh, so turning an automation back on never runs the occurrences it missed. */
+        /** @description Change an automation; omitted fields keep their values. Only the person it runs as, its creator and the organization's admins may (403 AUTOMATION_EDIT_FORBIDDEN). Changing anything but enabled, or turning the automation on when the caller is not already its runAs, makes the caller the person it runs as (runAs), with their own credential: a caller without a validated credential for the harness gets 422 agent_provider_required. Such a change, and turning it on, runs the same preflight as createAutomation (repository access and, while enabled, room in the organization and its plan). Turning it off changes only enabled. The next run is computed afresh, so turning an automation back on never runs the occurrences it missed. */
         patch: operations["updateAutomation"];
         trace?: never;
     };
@@ -3853,7 +3853,7 @@ export interface components {
             status: components["schemas"]["AutomationRunStatus"];
             /**
              * Format: uuid
-             * @description The session it ran in, once started. The session ends when the run does (completed, failed or timed_out), as deleteSession ends one: its sandbox is deleted and its transcript, artifacts and pull requests stay. It can be restored to continue the work; the automation's next run ends a restored one again, since it holds the shared branch.
+             * @description The session it ran in, once started. With the automation's deleteSessionOnComplete off, runs share one session: a run sends its prompt to the previous run's session when that is not deleted, and starts a new one when it is. On, the session ends when the run does (completed, failed or timed_out), as deleteSession ends one: its sandbox is deleted and its transcript, artifacts and pull requests stay; it can be restored, and the next run ends a restored one again, since it holds the shared branch.
              */
             sessionId?: string;
             attemptCount: number;
@@ -3868,7 +3868,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        /** @description A prompt a project's worker runs on a schedule in AO Cloud. Each run is one session, started as runAs. All runs share one branch and keep at most one open pull request per repository on it: a run updates the pull request an earlier run left open, and once that is merged or closed the next run moves to a new branch. Run sessions can be shared only to watch, with teams and by link. */
+        /** @description A prompt a project's worker runs on a schedule in AO Cloud. A run's session is a worker of the project, started as runAs, which the project's orchestrator adopts as it adopts any worker. With deleteSessionOnComplete off (the default) the session stays when a run finishes, pauses when idle, and the next run sends its prompt there as a new message, which wakes it; on, the session is deleted when the run finishes and each run starts a new one. All runs share one branch and keep at most one open pull request per repository on it: a run updates the pull request an earlier run left open, and once that is merged or closed the next run moves to a new branch. Run sessions can be shared only to watch, with teams and by link. */
         Automation: {
             /** Format: uuid */
             id: string;
@@ -3892,6 +3892,8 @@ export interface components {
              */
             nextRunAt?: string;
             maxRuntimeMinutes: number;
+            /** @description Whether a run's session is deleted when the run finishes. Off, the session stays (paused while idle) and the next run continues in it. */
+            deleteSessionOnComplete: boolean;
             /** @description The branch its runs work on. */
             branch: string;
             /** @description Whose credential its scheduled runs use: whoever last changed what it does or when, or turned it on. */
@@ -3938,6 +3940,8 @@ export interface components {
             timezone: string;
             /** @default 60 */
             maxRuntimeMinutes: number;
+            /** @default false */
+            deleteSessionOnComplete: boolean;
             /** @default true */
             enabled: boolean;
         };
@@ -3956,6 +3960,7 @@ export interface components {
             cron?: string;
             timezone?: string;
             maxRuntimeMinutes?: number;
+            deleteSessionOnComplete?: boolean;
             enabled?: boolean;
         };
         AutomationList: {
