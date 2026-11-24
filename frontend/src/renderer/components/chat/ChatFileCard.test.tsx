@@ -2,6 +2,7 @@ import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { ReactElement } from "react";
 import { ActivityRow } from "./ChatTimelineItems";
+import { ActivityRun } from "./ActivityRun";
 import { chatDiff, fileCardPath, readFileLines } from "./ChatFileCard";
 import type { ConversationActivity } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
@@ -176,5 +177,30 @@ describe("file cards in the timeline", () => {
 		expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
 		expect(document.querySelector("[data-command-shell]")).toHaveTextContent("Shell");
 		expect(screen.getByRole("button", { name: "Copy output" })).toBeInTheDocument();
+	});
+
+	it("hangs a run's steps on one rail and an opened step on its text column, not a second rail", () => {
+		const { container } = render(
+			<ActivityRun
+				activities={[
+					activity({ id: "a", sequence: 1, summary: "rg", detail: { command: "rg TODO src", output: "src/a.ts:1: TODO", exitCode: 0 } }),
+					activity({ id: "b", sequence: 2, summary: "npm", detail: { command: "npm test", output: "ok", exitCode: 0 } }),
+				]}
+			/>,
+		);
+		fireEvent.click(container.querySelector(".activity-run-toggle")!);
+		expect(container.querySelectorAll("[data-activity-rail]")).toHaveLength(1);
+		fireEvent.click(container.querySelector('.activity-row-toggle[aria-expanded="false"]')!);
+		expect(container.querySelectorAll("[data-activity-rail]")).toHaveLength(1);
+		expect(container.querySelector("[data-command-line]")?.closest(".pl-\\[22px\\]")).not.toBeNull();
+	});
+
+	it("draws a rail under a step opened on its own", () => {
+		const { container } = render(
+			<ActivityRow activity={activity({ summary: "npm", detail: { command: "npm test", output: "ok", exitCode: 0 } })} />,
+		);
+		expect(container.querySelector("[data-activity-rail]")).toBeNull();
+		fireEvent.click(container.querySelector(".activity-row-toggle")!);
+		expect(container.querySelector("[data-activity-rail] [data-command-line]")).not.toBeNull();
 	});
 });

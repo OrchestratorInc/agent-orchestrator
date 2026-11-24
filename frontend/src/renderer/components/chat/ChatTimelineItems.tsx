@@ -1959,6 +1959,33 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
  * A `running` activity with no completion is a real terminal state here, not a
  * spinner that hangs forever — a provider can start a command and supersede it.
  */
+/** True under a run's rail: an opened step's details hang on that rail instead of drawing their own. */
+const InsideActivityRail = createContext(false);
+
+/**
+ * A thin line under a row's icon that the row's contents hang from: a run's steps, or
+ * an opened step's details. One rule for both, so nesting reads the same everywhere.
+ */
+export function ActivityRail({ children, className }: { children: ReactNode; className?: string }) {
+	return (
+		<InsideActivityRail.Provider value={true}>
+			<div data-activity-rail="" className={cn("ml-1.5 border-l border-border-strong pl-[13px]", className)}>
+				{children}
+			</div>
+		</InsideActivityRail.Provider>
+	);
+}
+
+/**
+ * An opened step's details, lined up with the step's text. Inside a run they share the
+ * run's rail; a step on its own draws a rail under its icon.
+ */
+function ActivityStepBody({ children }: { children: ReactNode }) {
+	const insideRail = useContext(InsideActivityRail);
+	if (insideRail) return <div className="pl-[22px]">{children}</div>;
+	return <ActivityRail className="pl-[15px]">{children}</ActivityRail>;
+}
+
 function GenericActivityRow({
 	activity,
 	repeats = [],
@@ -2133,21 +2160,22 @@ function GenericActivityRow({
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						{repeats.length > 0 ? (
-							<div className="flex flex-col gap-1">
-								{/* The row itself is the last call's target; each earlier call's
-								    output is its own, so a reveal finds and marks that call. */}
-								{repeats.map((each) => (
-									<div key={each.id} className="min-w-0" data-chat-activity-id={each.id}>
-										<GenericActivityBody activity={each} />
-									</div>
-								))}
+						<ActivityStepBody>
+							{repeats.length > 0 ? (
+								<div className="flex flex-col gap-1">
+									{/* The row itself is the last call's target; each earlier call's
+									    output is its own, so a reveal finds and marks that call. */}
+									{repeats.map((each) => (
+										<div key={each.id} className="min-w-0" data-chat-activity-id={each.id}>
+											<GenericActivityBody activity={each} />
+										</div>
+									))}
+									<GenericActivityBody activity={activity} />
+								</div>
+							) : (
 								<GenericActivityBody activity={activity} />
-
-							</div>
-						) : (
-							<GenericActivityBody activity={activity} />
-						)}
+							)}
+						</ActivityStepBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -2906,7 +2934,9 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						<McpToolBody activity={activity} />
+						<ActivityStepBody>
+							<McpToolBody activity={activity} />
+						</ActivityStepBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -3013,7 +3043,8 @@ function AOToolRow({ view }: { view: AOToolView }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 pb-2.5">
+						<ActivityStepBody>
+						<div className="flex flex-col gap-1 pb-1">
 							{failed && view.error ? (
 								<p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-destructive">
 									{view.error}
@@ -3036,6 +3067,7 @@ function AOToolRow({ view }: { view: AOToolView }) {
 								</pre>
 							) : null}
 						</div>
+						</ActivityStepBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>

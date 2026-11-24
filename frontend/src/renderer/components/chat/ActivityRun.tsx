@@ -19,7 +19,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
-import { ActivityRow, ActivityTransition, RevealedChatActivity } from "./ChatTimelineItems";
+import { ActivityRail, ActivityRow, ActivityTransition, RevealedChatActivity } from "./ChatTimelineItems";
 import { useChatEntrance } from "./chat-entrance";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -155,7 +155,7 @@ export function ActivityRun({
 						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 pt-1">
+						<ActivityRail className="mt-1 flex flex-col gap-1">
 							{subgroups.length === 1
 								? renderActivityRows(subgroups[0]!.activities, nodesByActivityID)
 								: subgroups.map((group) => (
@@ -168,7 +168,7 @@ export function ActivityRun({
 											nodesByActivityID={nodesByActivityID}
 										/>
 								  ))}
-						</div>
+						</ActivityRail>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -340,9 +340,9 @@ function ActivitySubgroup({
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1">
+						<ActivityRail className="mt-1 flex flex-col gap-1">
 							{renderActivityRows(activities, nodesByActivityID)}
-						</div>
+						</ActivityRail>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
