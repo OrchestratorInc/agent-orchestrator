@@ -720,6 +720,34 @@ describe("AgentModelPicker", () => {
 			await user.keyboard("{ArrowRight}");
 			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ effort: "max", ultracode: true }));
 		});
+
+		it("cannot be switched while the agent's settings are locked", async () => {
+			const user = userEvent.setup();
+			const onToggleUltracode = vi.fn();
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					<AgentModelPicker
+						currentHarness="claude-code"
+						current={{ models: [{ id: "opus", label: "Opus" }], modelId: "opus", modelLabel: "Opus", onPickModel: vi.fn(), efforts: [], ultracode: false, onToggleUltracode }}
+						disabled
+						agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+					/>
+				</QueryClientProvider>,
+			);
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const ultracode = screen.getByRole("menuitemcheckbox", { name: "Ultracode" });
+			expect(ultracode).toHaveAttribute("aria-disabled", "true");
+			await user.click(ultracode);
+			expect(onToggleUltracode).not.toHaveBeenCalled();
+		});
+
+		it("keeps the permission mode picked for a switch", async () => {
+			const user = userEvent.setup();
+			const { onPendingChange } = open({ harness: "claude-code", effort: "high", approvalMode: "auto" }, false, "codex");
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			await user.click(await screen.findByRole("menuitemcheckbox", { name: "Ultracode" }));
+			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ ultracode: true, approvalMode: "auto" }));
+		});
 	});
 
 	it("puts Fast mode and auto-compact in one row", async () => {

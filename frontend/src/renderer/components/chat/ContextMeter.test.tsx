@@ -67,7 +67,7 @@ describe("ContextMeter", () => {
 			render(<ContextMeter usage={usage()} onCompact={() => Promise.reject(new Error("nope"))} />);
 			await userEvent.hover(screen.getByRole("progressbar"));
 			await userEvent.click(await screen.findByRole("button", { name: "Compact now" }));
-			expect(await screen.findByText("Conversation history could not be compacted. Try again.")).toBeInTheDocument();
+			expect(await screen.findByRole("alert")).toHaveTextContent("Conversation history could not be compacted. Try again.");
 		});
 
 		it("is absent without a compact action", async () => {

@@ -334,7 +334,7 @@ export function AgentModelPicker({
 		)
 		: undefined;
 	const currentSource: PickerSource = disabled || starting
-		? { ...(starting ?? live), onPickModel: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined }
+		? { ...(starting ?? live), onPickModel: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined, onToggleUltracode: undefined }
 		: live;
 	// The other agents' model lists load once the menu is open, so search reaches every model.
 	const others = agents.filter((agent) => agent.id !== currentHarness);
@@ -971,6 +971,8 @@ function otherAgentSource(
 	const keep = {
 		harness, model: pending?.model, modelLabel: pending?.modelLabel, shownEffort: defaultEffort,
 		fastMode: fastOn || undefined, ultracode: ultracodeOn || undefined, autoCompactWindow: pending?.autoCompactWindow,
+		// The permission mode picked for the switch stays through every other pick.
+		approvalMode: pending?.approvalMode,
 	};
 	return {
 		// The plain row is only for an agent that lists no models.

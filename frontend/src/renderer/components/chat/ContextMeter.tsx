@@ -237,7 +237,7 @@ function CompactButton({ onCompact, blockedReason }: CompactControl) {
 			{blockedReason ? (
 				<p className="text-muted-foreground">{blockedReason}</p>
 			) : failed ? (
-				<p className="text-destructive">Conversation history could not be compacted. Try again.</p>
+				<p role="alert" className="text-destructive">Conversation history could not be compacted. Try again.</p>
 			) : null}
 		</div>
 	);
