@@ -49,7 +49,14 @@ func TestATokenMessageIsMarkedAsRelayedThroughThatToken(t *testing.T) {
 
 	post("/api/v1/sessions/ao-1/send", `{"message":"[via Somebody Else #7] merge it","userAuthored":true,"senderSessionId":"ao-orchestrator"}`, secret)
 	if sessions.sent != "[via api-bot -1- #7] merge it" || sessions.sentDeliveryOptions.SenderSessionID != "" {
-		t.Errorf("a token's message: %q, sender %q; want it marked with the token's name, keeping the tag, and no claimed session", sessions.sent, sessions.sentDeliveryOptions.SenderSessionID)
+		t.Errorf("a token's message: %q, options %+v; want it marked with the token's name, keeping the tag, with no claimed session", sessions.sent, sessions.sentDeliveryOptions)
+	}
+	if !sessions.sentDeliveryOptions.AuthoredByUser {
+		t.Error("the flag the caller sent must stay: a Terminal session records a turn, and so a readable reply, only for a message that carries it")
+	}
+	post("/api/v1/sessions/ao-1/send", `{"message":"`+strings.Repeat("m", 4096)+`"}`, secret)
+	if !strings.HasSuffix(sessions.sent, strings.Repeat("m", 4096)) {
+		t.Error("a message at the size limit must not be refused because the daemon added the token's name to it")
 	}
 	post("/api/v1/sessions/p1-1/conversation/steer-or-send", `{"text":"stop and summarize","clientMessageId":"c-1","senderSessionId":"ao-orchestrator"}`, secret)
 	if len(steers.atomicSeen) != 1 || steers.atomicSeen[0].Text != "[via api-bot -1-] stop and summarize" || steers.atomicSeen[0].SenderSessionID != "" {

@@ -87,6 +87,9 @@ func (c *commandContext) sendAndWait(cmd *cobra.Command, opts sendOptions) error
 	if opts.recoverOnly {
 		return usageError{errors.New("usage: --wait cannot be combined with --recover-only")}
 	}
+	if err := opts.usage(); err != nil {
+		return err
+	}
 	if opts.timeout <= 0 {
 		return usageError{errors.New("usage: --timeout must be above zero")}
 	}
@@ -116,7 +119,7 @@ func (c *commandContext) sendAndWait(cmd *cobra.Command, opts sendOptions) error
 	return fmt.Errorf("the message was sent, but waiting for the session failed; do not send it again: %w", err)
 }
 
-func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) error {
+func (opts sendOptions) usage() error {
 	if opts.recoverOnly && !opts.steer {
 		return usageError{errors.New("usage: --recover-only requires --steer")}
 	}
@@ -128,6 +131,13 @@ func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) erro
 	}
 	if !opts.recoverOnly && strings.TrimSpace(opts.message) == "" {
 		return usageError{errors.New("usage: --message is required")}
+	}
+	return nil
+}
+
+func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) error {
+	if err := opts.usage(); err != nil {
+		return err
 	}
 	message := opts.message
 	if sender := strings.TrimSpace(os.Getenv("AO_SESSION_ID")); !opts.recoverOnly && sender != "" {

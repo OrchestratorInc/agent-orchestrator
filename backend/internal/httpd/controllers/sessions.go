@@ -362,9 +362,6 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	if text, token := relayed(r, in.Prompt); token {
-		in.Prompt, in.ParentSessionID = text, ""
-	}
 	if !validClientRequestID(in.ClientRequestID) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_CLIENT_REQUEST_ID", "clientRequestId must be 1-128 visible characters", nil)
 		return
@@ -386,6 +383,9 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	if len(in.Prompt) > maxPromptLen {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 100 KiB or fewer", nil)
 		return
+	}
+	if text, token := relayed(r, in.Prompt); token {
+		in.Prompt, in.ParentSessionID = text, ""
 	}
 	// displayName is optional at the API (the desktop new-task dialog omits it
 	// and the read model falls back to the session id). `ao spawn` makes it
@@ -2367,9 +2367,6 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	if text, token := relayed(r, in.Message); token {
-		in.Message, in.SenderSessionID = text, ""
-	}
 	if in.Message == "" {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MESSAGE_REQUIRED", "Message is required", nil)
 		return
@@ -2377,6 +2374,9 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	if len(in.Message) > maxMessageLen {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MESSAGE_TOO_LONG", "Message is too long", nil)
 		return
+	}
+	if text, token := relayed(r, in.Message); token {
+		in.Message, in.SenderSessionID = text, ""
 	}
 	var attachment *ports.SpawnAttachment
 	if in.Attachment != nil {

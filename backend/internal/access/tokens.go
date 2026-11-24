@@ -208,7 +208,7 @@ func (r *Registry) Touch(id string, now time.Time) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if token, ok = r.tokens[id]; !ok {
+	if token, ok = r.tokens[id]; !ok || now.Sub(token.LastUsedAt) < touchInterval {
 		return
 	}
 	token.LastUsedAt = now.UTC()

@@ -402,6 +402,9 @@ func TestSendWaitIgnoresTheStateFromBeforeTheMessage(t *testing.T) {
 	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--wait"); ExitCode(err) != 1 || sent || !strings.Contains(err.Error(), "was not sent") {
 		t.Errorf("--wait on a session that is mid-turn must be refused before sending: exit %d, sent %v, err %v", ExitCode(err), sent, err)
 	}
+	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--wait"); ExitCode(err) != 2 {
+		t.Errorf("--wait with no message must be a usage error before the daemon is asked anything: exit %d, err %v", ExitCode(err), err)
+	}
 	sent, busy = false, false
 	if _, _, err := executeCLI(t, deps, "send", "--session", "api-1", "--message", "run the tests", "--timeout", "30s"); ExitCode(err) != 2 || sent {
 		t.Errorf("--timeout without --wait: exit %d, sent %v, want a usage error before sending", ExitCode(err), sent)
