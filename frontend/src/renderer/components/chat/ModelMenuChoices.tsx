@@ -269,7 +269,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				<div
 					ref={headerRef}
 					// Its line runs through the menu's padding to both edges.
-					className="-mx-(--space-1) mb-1 shrink-0 border-b border-border px-(--space-1) pb-1"
+					className="-mx-(--space-1) mb-1 shrink-0 border-b border-border px-(--space-1) py-1"
 					// Kept from the composer's click-to-focus handler, as the search is.
 					onClick={(event) => event.stopPropagation()}
 					onKeyDown={(event) => {
