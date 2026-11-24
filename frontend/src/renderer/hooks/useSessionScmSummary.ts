@@ -6,14 +6,14 @@ import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 import { noPRDetails } from "../lib/pr-display";
-import type { CloudCpPullRequestSummary } from "../lib/cloud-cp";
+import type { CloudCpPullRequestMergeAccess, CloudCpPullRequestSummary } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "../lib/cloud-cp/renderer-client";
 import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 import { useSettings } from "./useSettings";
 
 // openedBy only comes from AO Cloud, which names the person behind a PR its
-// GitHub App opened for them.
-export type SessionPRSummary = components["schemas"]["SessionPRSummary"] & { openedBy?: PROpener };
+// GitHub App opened for them; so does mergeAccess, who may merge it and where.
+export type SessionPRSummary = components["schemas"]["SessionPRSummary"] & { openedBy?: PROpener; mergeAccess?: CloudCpPullRequestMergeAccess };
 export type SessionPRReference = components["schemas"]["SessionPRReference"];
 
 export const sessionScmSummaryQueryKey = (sessionId?: string, hostId?: string) =>

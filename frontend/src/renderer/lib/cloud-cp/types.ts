@@ -1226,6 +1226,18 @@ export interface CloudCpPullRequestOpener {
 	avatarUrl?: string;
 }
 
+/**
+ * Whether the person AO merges a pull request as may merge it, and where:
+ * permission is their GitHub permission on its repository (write covers
+ * maintain and admin; read covers triage), via is ao (AO merges it as them),
+ * github (only on GitHub: AO can't write there as them, for example its
+ * GitHub App isn't installed) or none (a maintainer has to merge it).
+ */
+export interface CloudCpPullRequestMergeAccess {
+	permission: "write" | "read" | "unknown";
+	via: "ao" | "github" | "none";
+}
+
 export interface CloudCpPullRequestSummary {
 	url: string;
 	htmlUrl?: string;
@@ -1238,6 +1250,8 @@ export interface CloudCpPullRequestSummary {
 	authorAvatarUrl?: string;
 	/** The person behind a pull request the AO GitHub App opened for them. */
 	openedBy?: CloudCpPullRequestOpener;
+	/** Who may merge it, and where; absent from an older control plane. */
+	mergeAccess?: CloudCpPullRequestMergeAccess;
 	sourceBranch: string;
 	targetBranch: string;
 	headSha: string;

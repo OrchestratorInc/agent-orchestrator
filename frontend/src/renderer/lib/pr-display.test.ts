@@ -10,6 +10,7 @@ import {
 	prCheckedOut,
 	prDiffSummary,
 	prHasNoChecks,
+	prMergeRoute,
 	prMergeQueueDetail,
 	prMergeQueueEntry,
 	noChecksSettlesAt,
@@ -1249,6 +1250,23 @@ describe("a PR nothing checks", () => {
 		expect(view.readinessRows?.map((row) => row.label)).toContain("No checks reported");
 		expect(view.statusRows?.map((row) => row.label)).toEqual(["Review status"]);
 		expect(prCardPresentation(unchecked()).readiness?.label).toBe("Checking merge readiness");
+	});
+});
+
+describe("prMergeRoute", () => {
+	it.each([
+		[undefined, "ao"],
+		[{ permission: "write", via: "ao" }, "ao"],
+		[{ permission: "write", via: "github" }, "github"],
+		[{ permission: "read", via: "none" }, "maintainer"],
+		// An unknown permission follows where AO says a merge can happen: AO
+		// can't merge as the person on a repository it can't write to (no App,
+		// no token of theirs), so that one merges on GitHub.
+		[{ permission: "unknown", via: "github" }, "github"],
+		[{ permission: "unknown", via: "ao" }, "ao"],
+		[{ permission: "unknown", via: "none" }, "maintainer"],
+	] as const)("maps %j to %s", (mergeAccess, route) => {
+		expect(prMergeRoute({ mergeAccess })).toBe(route);
 	});
 });
 

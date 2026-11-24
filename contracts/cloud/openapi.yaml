@@ -10578,6 +10578,32 @@ components:
           description: Their GitHub login, when they connected GitHub to AO.
         avatarUrl:
           type: string
+    PullRequestMergeAccess:
+      type: object
+      additionalProperties: false
+      required: [permission, via]
+      description: >-
+        Whether the person AO merges this pull request as may merge it, and
+        where. An older control plane omits it; a client then treats it as
+        unknown and shows merging as before.
+      properties:
+        permission:
+          type: string
+          enum: [write, read, unknown]
+          description: >-
+            That person's permission on the pull request's repository, as
+            GitHub last reported it: write (write, maintain or admin), read
+            (read or triage: they can't merge), or unknown (not read yet, or
+            no GitHub token could read it).
+        via:
+          type: string
+          enum: [ao, github, none]
+          description: >-
+            Where they can merge it: ao (AO can merge it as them, so the
+            client offers Merge), github (only on GitHub: AO can't write to
+            the repository as them, for example its GitHub App isn't installed
+            there), or none (they don't have write access: a maintainer has to
+            merge it).
     PullRequestSummary:
       type: object
       additionalProperties: false
@@ -10645,6 +10671,8 @@ components:
           $ref: "#/components/schemas/PullRequestReviewSummary"
         mergeability:
           $ref: "#/components/schemas/PullRequestMergeabilitySummary"
+        mergeAccess:
+          $ref: "#/components/schemas/PullRequestMergeAccess"
         stateChangedAt:
           type: string
           format: date-time

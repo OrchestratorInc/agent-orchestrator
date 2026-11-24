@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpFromLine, ChevronDown, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, ListEnd, ListX, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
+import { ArrowUpFromLine, ArrowUpRight, ChevronDown, GitCommitHorizontal, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, ListEnd, ListX, Loader2, RefreshCw, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { prStackQueryKey, usePRStack } from "../hooks/usePRStack";
@@ -8,13 +8,14 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { clientForSessionHost } from "../lib/host-clients";
-import { prMergeQueueDetail, prMergeQueueEntry, prSummaryBlockReason, type PRBlockReason, type PRMergeQueueEntry } from "../lib/pr-display";
+import { prBrowserUrl, prMergeQueueDetail, prMergeQueueEntry, prSummaryBlockReason, type PRBlockReason, type PRMergeQueueEntry, type PRMergeRoute } from "../lib/pr-display";
 import { stackBlocker, stackLayersToLand, type StackBlockReason } from "../lib/pr-stack";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { cn } from "../lib/utils";
 import type { SessionGitActionKind } from "../stores/session-git-action-store";
 import type { BranchGitStep } from "./SessionBranchSummary";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ProductExternalLink } from "./ProductExternalLink";
 import { prStateIcon } from "./PRPills";
 import { Button } from "./ui/button";
 import {
@@ -76,6 +77,54 @@ export function CloudPRGitStepButton({ git }: { git: BranchGitStep }) {
 			</Button>
 			{git.error ? <p className="m-0 text-xs leading-normal text-error" role="status">{git.error}</p> : null}
 		</div>
+	);
+}
+
+/**
+ * What a Cloud PR card shows in place of Merge when AO can't merge it as the
+ * person: "Merge on GitHub" when they have write access but AO can't write to
+ * the repository as them (its GitHub App isn't installed there), or "Waiting
+ * for a maintainer to merge" when they don't have write access. Either way
+ * the PR opens on GitHub; its next status read shows the merge.
+ */
+export function PRMergeOutsideAO({ pr, route }: { pr: SessionPRSummary; route: Exclude<PRMergeRoute, "ao"> }) {
+	const { t } = useTranslation();
+	const repository = pr.repo || prBrowserUrl(pr);
+	if (route === "github") {
+		return (
+			<Button asChild className="gap-1 px-2" size="sm" variant="secondary">
+				<ProductExternalLink
+					ariaLabel={t("pr.merge.onGitHubFor", { number: pr.number })}
+					href={prBrowserUrl(pr)}
+					title={t("pr.merge.appNotInstalled", { repository })}
+				>
+					<GitMerge aria-hidden="true" className="size-icon-sm" />
+					{t("pr.merge.onGitHub")}
+					<ArrowUpRight aria-hidden="true" className="size-icon-xs" />
+				</ProductExternalLink>
+			</Button>
+		);
+	}
+	// As compact as Merge, so the status beside it keeps its width; why the
+	// person can't merge it is PRMaintainerMergeNotice, under the status.
+	return (
+		<Button asChild className="gap-1 px-2" data-testid="pr-merge-maintainer-open" size="sm" variant="secondary">
+			<ProductExternalLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={prBrowserUrl(pr)} title={t("pr.merge.noWriteAccess", { repository })}>
+				{t("pr.merge.openOnGitHub")}
+				<ArrowUpRight aria-hidden="true" className="size-icon-xs" />
+			</ProductExternalLink>
+		</Button>
+	);
+}
+
+/** Under an open PR's merge status: a maintainer has to merge it, since the person has no write access. */
+export function PRMaintainerMergeNotice({ pr }: { pr: SessionPRSummary }) {
+	const { t } = useTranslation();
+	return (
+		// pl-4 lines it up with the merge status's own text above it.
+		<p className="mt-1 pl-4 text-xs leading-normal text-muted-foreground" data-testid="pr-merge-maintainer" title={t("pr.merge.noWriteAccess", { repository: pr.repo || prBrowserUrl(pr) })}>
+			{t("pr.merge.waitingForMaintainer")}
+		</p>
 	);
 }
 

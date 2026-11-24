@@ -599,6 +599,28 @@ export function prCanMerge(pr: SessionPRSummary, options: { noChecks?: boolean }
 	);
 }
 
+/**
+ * Where the person can merge a PR, from AO Cloud's mergeAccess: here, with
+ * the Merge button ("ao"); only on GitHub, because AO can't write to the
+ * repository as them, for example its GitHub App isn't installed there
+ * ("github"); or not at all, because they don't have write access
+ * ("maintainer"). A local PR, or one from a control plane that doesn't say,
+ * merges here as before.
+ */
+export type PRMergeRoute = "ao" | "github" | "maintainer";
+
+export function prMergeRoute(pr: Pick<SessionPRSummary, "mergeAccess">): PRMergeRoute {
+	const access = pr.mergeAccess;
+	if (!access) return "ao";
+	if (access.permission === "read" || access.via === "none") return "maintainer";
+	// via is the control plane's answer to whether a merge from AO can work:
+	// "github" means AO can't write to the repository as the person (its
+	// GitHub App isn't installed there and they connected no token), so a
+	// merge from AO is refused whatever their permission, unknown included.
+	if (access.via === "github") return "github";
+	return "ao";
+}
+
 export type PRMergeQueueEntry = NonNullable<SessionPRSummary["mergeQueue"]>;
 
 /** The PR's place in its base branch's merge queue; only an open PR has one. */
