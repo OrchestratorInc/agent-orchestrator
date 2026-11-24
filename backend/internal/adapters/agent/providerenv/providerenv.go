@@ -3,8 +3,14 @@
 package providerenv
 
 import (
+	"runtime"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 )
+
+// commandGOOS selects the platform for Command; tests override it.
+var commandGOOS = runtime.GOOS
 
 const bridgePrefix = "AO_EXPLICIT_PROVIDER_"
 
@@ -198,7 +204,13 @@ func Capture(env map[string]string) {
 // Absent values leave shell/native routing untouched; empty values clear it.
 // The script contains allowlisted names only, including for credentials and
 // URLs that may embed credentials. Shell expansions are quoted and not eval'd.
+//
+// Windows ConPTY applies the launch env map directly with no login shell to
+// override it, and has no sh, so argv is returned unchanged there.
 func Command(argv []string, env map[string]string) []string {
+	if commandGOOS == "windows" {
+		return argv
+	}
 	var script strings.Builder
 	for _, key := range variables {
 		value, explicit := env[key]
@@ -218,5 +230,5 @@ func Command(argv []string, env map[string]string) []string {
 		return argv
 	}
 	script.WriteString("exec \"$@\"")
-	return append([]string{"sh", "-c", script.String(), "ao-provider-env"}, argv...)
+	return append([]string{"sh", "-c", script.String(), agentlaunch.ProviderEnvMarker}, argv...)
 }

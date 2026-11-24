@@ -8192,6 +8192,7 @@ func (m *Manager) validateAgentBinary(argv []string) error {
 }
 
 func launchBinary(argv []string) (string, bool) {
+	argv = agentlaunch.UnwrapProviderEnv(argv)
 	if len(argv) == 0 {
 		return "", false
 	}
