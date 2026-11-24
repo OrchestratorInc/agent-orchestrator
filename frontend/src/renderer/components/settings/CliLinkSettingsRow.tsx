@@ -17,7 +17,7 @@ export function CliLinkSettings() {
 		setBusy(true);
 		return aoBridge.cliLink.inspect().then((next) => {
 			setView(next);
-			setError(next.ok ? null : next.message);
+			setError(null);
 		}).catch((cause: unknown) => {
 			setView(null);
 			setError(cause instanceof Error ? cause.message : "Could not inspect the global ao command.");
@@ -45,7 +45,6 @@ export function CliLinkSettings() {
 		void refresh();
 	}, []);
 
-	if (view ? !view.ok : !error) return null;
 	const status: CliLinkStatus | null = view?.ok ? view.status : null;
 	const foreign = status?.current.kind === "foreign";
 	const linked = status?.current.kind === "linked";

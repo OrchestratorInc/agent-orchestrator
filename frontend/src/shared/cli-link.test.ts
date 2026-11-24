@@ -185,6 +185,7 @@ describe("cli link", () => {
 		expect(await inspectCliLink(nodeCliLinkIo(), req)).toMatchObject({ ok: true, status: { current: { kind: "linked", managed: false } } });
 		expect(await linkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: true, changed: false });
 		expect(await unlinkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: false, code: "foreign" });
+		expect(await unlinkCli(nodeCliLinkIo(), { ...req, confirmReplacement: false })).toMatchObject({ ok: false, code: "foreign" });
 		expect(await readlink(linkPath)).toBe(appCliPath);
 		expect(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE)).catch(() => null)).toBeNull();
 	});

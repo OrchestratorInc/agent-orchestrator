@@ -38,12 +38,13 @@ beforeEach(async () => {
 });
 
 describe("CliLinkSettings", () => {
-	it("stays away where the app cannot link the command", async () => {
-		inspect.mockResolvedValue({ ok: false, code: "unsupported", message: "Windows is not supported." });
+	it("says why where the app cannot link the command", async () => {
+		inspect.mockResolvedValue({ ok: false, code: "unsupported", message: "Move Orchestrator to Applications before linking the global ao command." });
 		render(<CliLinkSettings />);
-		await vi.waitFor(() => expect(inspect).toHaveBeenCalledOnce());
-		expect(screen.queryByText("Global ao command")).not.toBeInTheDocument();
-		expect(screen.queryByText(/not supported/)).not.toBeInTheDocument();
+		expect(await screen.findByText(/Move Orchestrator to Applications/)).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(screen.getByText("Global ao command")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Link" })).not.toBeInTheDocument();
 	});
 
 	it("shows a command that already points at this app as linked", async () => {

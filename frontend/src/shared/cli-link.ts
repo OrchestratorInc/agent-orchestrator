@@ -1,6 +1,6 @@
-// Developer Mode only. Links the global ao command to the CLI shipped inside the
-// installed app. It never edits shell startup files and never replaces a
-// command AO did not create.
+// Links the global ao command to the CLI shipped inside the installed app. It
+// never edits shell startup files and never replaces a command AO did not
+// create.
 
 import { randomUUID } from "node:crypto";
 
@@ -370,6 +370,11 @@ export async function unlinkCli(io: CliLinkIo, request: CliLinkRequest): Promise
 	const { status } = view;
 	if (status.current.kind === "foreign") {
 		return failure("foreign", status.message ?? "The existing command is not an Orchestrator link.", {
+			linkPath: status.linkPath, currentTarget: status.current.target,
+		});
+	}
+	if (status.current.kind === "linked" && status.current.managed === false) {
+		return failure("foreign", `The command at ${status.linkPath} was not linked by Orchestrator. It was left unchanged.`, {
 			linkPath: status.linkPath, currentTarget: status.current.target,
 		});
 	}
