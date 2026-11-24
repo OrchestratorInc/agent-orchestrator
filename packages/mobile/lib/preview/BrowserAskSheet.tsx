@@ -1,87 +1,149 @@
-import { useEffect, useRef } from "react";
-import { ActionSheetIOS, Alert } from "react-native";
+import { Alert, Button, ConfirmationDialog, Host, SecureField, Text, TextField, useNativeState } from "@expo/ui/swift-ui";
+import { autocorrectionDisabled, textInputAutocapitalization } from "@expo/ui/swift-ui/modifiers";
+import { useRef, useState, type ReactNode } from "react";
+import { StyleSheet } from "react-native";
 import type { BrowserCommand, BrowserDialog } from "../browserTransport";
 import { answerAuth, answerDialog, answerSelect, askTitle, authMessage } from "./browserAsk";
 import { browserAskCopy as copy, type BrowserAskSheetProps } from "./BrowserAskSheet.types";
-import { answerWithFiles, fileSources, presentPageAlert } from "./browserAskAlerts";
+import { answerWithFiles, fileSources } from "./browserAskAlerts";
 
 export type { BrowserAskSheetProps } from "./BrowserAskSheet.types";
 
+type Answer = (command: BrowserCommand | null) => void;
+
 /**
- * What the page asks, as the system's own UI: alerts and prompts, a sign-in
- * prompt with a secure password field, and action sheets for a select and
- * for where to pick files from. It draws nothing in the screen itself.
+ * What the page asks, as SwiftUI's own alert and confirmation dialog. Both
+ * are presented only while this renders them, so a dialog the host closed,
+ * replaced or that the screen left goes away with it. A sign-in's password
+ * field is the system's secure field.
  */
 export function BrowserAskSheet({ dialog, onAnswer, pickers }: BrowserAskSheetProps) {
-	// A sheet outlives the render that showed it, so it answers through the latest handler.
 	const latest = useRef({ onAnswer, pickers });
 	latest.current = { onAnswer, pickers };
+	const answered = useRef<BrowserDialog | null>(null);
+	const [, closed] = useState(0);
+	const answer = (asked: BrowserDialog): Answer => (command) => {
+		if (answered.current === asked) return;
+		answered.current = asked;
+		closed((count) => count + 1);
+		latest.current.onAnswer(asked, command);
+	};
 
-	useEffect(() => {
-		if (!dialog) return;
-		let answered = false;
-		const answer = (command: BrowserCommand | null) => {
-			if (answered) return;
-			answered = true;
-			latest.current.onAnswer(dialog, command);
-		};
-		present(dialog, answer, () => latest.current.pickers);
-	}, [dialog]);
-
-	return null;
+	if (!dialog || answered.current === dialog) return null;
+	const respond = answer(dialog);
+	return (
+		<Host matchContents style={styles.host}>
+			<Ask key={keyOf(dialog)} dialog={dialog} answer={respond} pickers={() => latest.current.pickers} />
+		</Host>
+	);
 }
 
-function present(dialog: BrowserDialog, answer: (command: BrowserCommand | null) => void, pickers: () => BrowserAskSheetProps["pickers"]): void {
+let keys = new WeakMap<object, number>();
+let nextKey = 0;
+function keyOf(dialog: BrowserDialog): number {
+	let key = keys.get(dialog);
+	if (key === undefined) keys.set(dialog, (key = ++nextKey));
+	return key;
+}
+/** Tests start each case from the same keys. */
+export function resetBrowserAskKeys(): void {
+	keys = new WeakMap();
+	nextKey = 0;
+}
+
+function Ask({ dialog, answer, pickers }: { dialog: BrowserDialog; answer: Answer; pickers: () => BrowserAskSheetProps["pickers"] }) {
 	switch (dialog.kind) {
 		case "alert":
+			return <PageAlert title={askTitle(dialog)} message={dialog.message} onDismiss={() => answer(answerDialog(true))}>
+				<Button label={copy.ok} onPress={() => answer(answerDialog(true))} />
+			</PageAlert>;
 		case "confirm":
+			return <PageAlert title={askTitle(dialog)} message={dialog.message} onDismiss={() => answer(answerDialog(false))}>
+				<Button label={copy.cancel} role="cancel" onPress={() => answer(answerDialog(false))} />
+				<Button label={copy.ok} onPress={() => answer(answerDialog(true))} />
+			</PageAlert>;
 		case "beforeunload":
-			presentPageAlert(dialog, answer);
-			return;
+			return <PageAlert title={askTitle(dialog)} message={copy.leaveMessage} onDismiss={() => answer(answerDialog(false))}>
+				<Button label={copy.stay} role="cancel" onPress={() => answer(answerDialog(false))} />
+				<Button label={copy.leave} role="destructive" onPress={() => answer(answerDialog(true))} />
+			</PageAlert>;
 		case "prompt":
-			Alert.prompt(askTitle(dialog), dialog.message, [
-				{ text: copy.cancel, style: "cancel", onPress: () => answer(answerDialog(false)) },
-				{ text: copy.ok, isPreferred: true, onPress: (value?: string) => answer(answerDialog(true, value ?? "")) },
-			], "plain-text", dialog.defaultPrompt ?? "");
-			return;
+			return <PromptAlert dialog={dialog} answer={answer} />;
 		case "auth":
-			// The system's login prompt: its password field is secure, and what is
-			// typed goes to the host only.
-			Alert.prompt(askTitle(dialog), authMessage(dialog), [
-				{ text: copy.cancel, style: "cancel", onPress: () => answer(answerAuth(dialog, null)) },
-				{
-					text: copy.signIn,
-					isPreferred: true,
-					onPress: (value?: string | { login: string; password: string }) => {
-						const typed = typeof value === "object" && value ? value : { login: "", password: "" };
-						answer(answerAuth(dialog, { username: typed.login, password: typed.password }));
-					},
-				},
-			], "login-password");
-			return;
-		case "select": {
-			const cancel = dialog.options.length;
-			ActionSheetIOS.showActionSheetWithOptions({
-				title: askTitle(dialog),
-				options: [...dialog.options.map((option, index) => (index === dialog.selected ? `✓ ${option.label}` : option.label)), copy.cancel],
-				cancelButtonIndex: cancel,
-				disabledButtonIndices: dialog.options.flatMap((option, index) => (option.disabled ? [index] : [])),
-			}, (index) => answer(index === cancel ? null : answerSelect(dialog, index)));
-			return;
-		}
+			return <AuthAlert dialog={dialog} answer={answer} />;
+		case "select":
+			return (
+				<Choices title={askTitle(dialog)} onDismiss={() => answer(null)}>
+					{dialog.options.flatMap((option, index) => (option.disabled ? [] : [
+						<Button key={index} label={index === dialog.selected ? `✓ ${option.label}` : option.label} onPress={() => answer(answerSelect(dialog, index))} />,
+					]))}
+					<Button label={copy.cancel} role="cancel" onPress={() => answer(null)} />
+				</Choices>
+			);
 		case "filechooser": {
-			const sources = fileSources(dialog);
-			const cancel = sources.length;
-			ActionSheetIOS.showActionSheetWithOptions({
-				title: askTitle(dialog),
-				options: [...sources.map((source) => (source === "photos" ? copy.photos : copy.files(dialog.multiple))), copy.cancel],
-				cancelButtonIndex: cancel,
-			}, (index) => {
-				const source = sources[index];
-				if (!source) answer({ type: "files", payload: { files: [], folder: dialog.folder } });
-				else void answerWithFiles(source, dialog, answer, pickers());
-			});
-			return;
+			const none = () => answer({ type: "files", payload: { files: [], folder: dialog.folder } });
+			return (
+				<Choices title={askTitle(dialog)} onDismiss={none}>
+					{fileSources(dialog).map((source) => (
+						<Button
+							key={source}
+							label={source === "photos" ? copy.photos : copy.files(dialog.multiple)}
+							onPress={() => void answerWithFiles(source, dialog, answer, pickers())}
+						/>
+					))}
+					<Button label={copy.cancel} role="cancel" onPress={none} />
+				</Choices>
+			);
 		}
 	}
 }
+
+/** Presented while mounted; dismissing it any other way is `onDismiss`. */
+function PageAlert({ title, message, onDismiss, children }: { title: string; message?: string; onDismiss(): void; children: ReactNode }) {
+	return (
+		<Alert title={title} isPresented onIsPresentedChange={(shown) => { if (!shown) onDismiss(); }}>
+			<Alert.Actions>{children}</Alert.Actions>
+			{message ? <Alert.Message><Text>{message}</Text></Alert.Message> : null}
+		</Alert>
+	);
+}
+
+function Choices({ title, onDismiss, children }: { title: string; onDismiss(): void; children: ReactNode }) {
+	return (
+		<ConfirmationDialog title={title} titleVisibility="visible" isPresented onIsPresentedChange={(shown) => { if (!shown) onDismiss(); }}>
+			<ConfirmationDialog.Actions>{children}</ConfirmationDialog.Actions>
+		</ConfirmationDialog>
+	);
+}
+
+function PromptAlert({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind: "prompt" }>; answer: Answer }) {
+	const text = useNativeState(dialog.defaultPrompt ?? "");
+	const value = useRef(dialog.defaultPrompt ?? "");
+	return (
+		<PageAlert title={askTitle(dialog)} message={dialog.message} onDismiss={() => answer(answerDialog(false))}>
+			<TextField text={text} onTextChange={(next) => { value.current = next; }} />
+			<Button label={copy.cancel} role="cancel" onPress={() => answer(answerDialog(false))} />
+			<Button label={copy.ok} onPress={() => answer(answerDialog(true, value.current))} />
+		</PageAlert>
+	);
+}
+
+function AuthAlert({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind: "auth" }>; answer: Answer }) {
+	const usernameText = useNativeState("");
+	const passwordText = useNativeState("");
+	// Held only until the alert answers: never stored, logged or shown.
+	const typed = useRef({ username: "", password: "" });
+	return (
+		<PageAlert title={askTitle(dialog)} message={authMessage(dialog)} onDismiss={() => answer(answerAuth(dialog, null))}>
+			<TextField text={usernameText} placeholder={copy.username} modifiers={[autocorrectionDisabled(true), textInputAutocapitalization("never")]} onTextChange={(next) => { typed.current.username = next; }} />
+			<SecureField text={passwordText} placeholder={copy.password} onTextChange={(next) => { typed.current.password = next; }} />
+			<Button label={copy.cancel} role="cancel" onPress={() => answer(answerAuth(dialog, null))} />
+			<Button label={copy.signIn} onPress={() => answer(answerAuth(dialog, typed.current))} />
+		</PageAlert>
+	);
+}
+
+const styles = StyleSheet.create({
+	// The alert draws in its own window; the host only anchors it.
+	host: { position: "absolute" },
+});

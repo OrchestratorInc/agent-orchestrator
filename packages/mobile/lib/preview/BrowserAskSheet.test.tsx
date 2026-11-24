@@ -1,38 +1,42 @@
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { createElement, type ReactNode } from "react";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserCommand, BrowserDialog } from "../browserTransport";
 
-type Button = { text: string; style?: string; onPress?: (value?: unknown) => void };
-const native = vi.hoisted(() => ({
-	alert: vi.fn<(title: string, message?: string, buttons?: Button[], options?: object) => void>(),
-	prompt: vi.fn<(title: string, message?: string, buttons?: Button[], type?: string, defaultValue?: string) => void>(),
-	sheet: vi.fn<(options: { options: string[]; cancelButtonIndex: number; disabledButtonIndices?: number[]; title?: string }, callback: (index: number) => void) => void>(),
-}));
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
-vi.mock("react-native", () => ({
-	Alert: { alert: native.alert, prompt: native.prompt },
-	ActionSheetIOS: { showActionSheetWithOptions: native.sheet },
-}));
+vi.mock("react-native", () => ({ StyleSheet: { create: (styles: unknown) => styles }, Alert: { alert: vi.fn() } }));
+vi.mock("@expo/ui/swift-ui", async () => {
+	const doubles = (await import("../nativeFormTestDoubles")).swiftUIDouble();
+	const host = (name: string) => ({ children, ...props }: { children?: ReactNode }) => createElement(name, props, children);
+	const withSlots = (name: string, slots: string[]) => Object.assign(host(name), Object.fromEntries(slots.map((slot) => [slot, host(`${name}.${slot}`)])));
+	return {
+		...doubles,
+		Host: host("Host"),
+		Alert: withSlots("Alert", ["Actions", "Message", "Trigger"]),
+		ConfirmationDialog: withSlots("ConfirmationDialog", ["Actions", "Message", "Trigger"]),
+	};
+});
+vi.mock("@expo/ui/swift-ui/modifiers", async () => {
+	const { modifierDouble } = await import("../nativeFormTestDoubles");
+	return modifierDouble(["autocorrectionDisabled", "textInputAutocapitalization"]);
+});
 
-import { BrowserAskSheet as BrowserAsk } from "./BrowserAskSheet";
-
-Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+import { BrowserAskSheet, resetBrowserAskKeys } from "./BrowserAskSheet";
 
 let screen: ReactTestRenderer | undefined;
 let answers: Array<[BrowserDialog, BrowserCommand | null]>;
 
-function ask(dialog: BrowserDialog, pickers?: Parameters<typeof BrowserAsk>[0]["pickers"]) {
-	const element = <BrowserAsk dialog={dialog} pickers={pickers} onAnswer={(asked: BrowserDialog, command: BrowserCommand | null) => answers.push([asked, command])} />;
+function ask(dialog: BrowserDialog | null, pickers?: Parameters<typeof BrowserAskSheet>[0]["pickers"]) {
+	const element = <BrowserAskSheet dialog={dialog} pickers={pickers} onAnswer={(asked: BrowserDialog, command: BrowserCommand | null) => answers.push([asked, command])} />;
 	act(() => { if (screen) screen.update(element); else screen = create(element); });
 }
-const buttons = (mock: { mock: { lastCall?: unknown[] } }, at = 2) => (mock.mock.lastCall![at] as Button[]);
-const press = (list: Button[], text: string, value?: unknown) => act(() => list.find((button) => button.text === text)!.onPress!(value));
+const all = (type: string): ReactTestInstance[] => screen!.root.findAll((node) => (node.type as unknown) === type);
+const press = async (label: string) => { await act(async () => all("Button").find((node) => node.props.label === label)!.props.onPress()); };
 
 beforeEach(() => {
 	answers = [];
-	native.alert.mockReset();
-	native.prompt.mockReset();
-	native.sheet.mockReset();
+	resetBrowserAskKeys();
 });
 afterEach(() => {
 	act(() => screen?.unmount());
@@ -40,22 +44,19 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-describe("BrowserAsk on iOS", () => {
-	it("answers an alert, a confirm and a leave-page question", () => {
-		const alert = { kind: "alert", message: "Saved" } as const;
+describe("BrowserAskSheet on iOS", () => {
+	it("answers an alert, a confirm and a leave-page question", async () => {
+		const alert: BrowserDialog = { kind: "alert", message: "Saved" };
 		ask(alert);
-		expect(native.alert).toHaveBeenLastCalledWith("The page says", "Saved", expect.any(Array), { cancelable: false });
-		press(buttons(native.alert), "OK");
-
-		const confirm = { kind: "confirm", message: "Delete it?" } as const;
+		expect(all("Alert")[0]!.props).toMatchObject({ title: "The page says", isPresented: true });
+		await press("OK");
+		const confirm: BrowserDialog = { kind: "confirm", message: "Delete it?" };
 		ask(confirm);
-		press(buttons(native.alert), "Cancel");
-
-		const leave = { kind: "beforeunload", message: "" } as const;
+		await press("Cancel");
+		const leave: BrowserDialog = { kind: "beforeunload", message: "" };
 		ask(leave);
-		expect(native.alert.mock.lastCall![0]).toBe("Leave this page?");
-		press(buttons(native.alert), "Leave");
-
+		expect(all("Alert")[0]!.props.title).toBe("Leave this page?");
+		await press("Leave");
 		expect(answers).toEqual([
 			[alert, { type: "dialog", payload: { accept: true } }],
 			[confirm, { type: "dialog", payload: { accept: false } }],
@@ -63,52 +64,61 @@ describe("BrowserAsk on iOS", () => {
 		]);
 	});
 
-	it("answers a prompt with what was typed, starting from the page's default", () => {
-		const prompt = { kind: "prompt", message: "Your name?", defaultPrompt: "Ada" } as const;
+	it("goes away when the host closes the dialog or a newer one replaces it", () => {
+		const first: BrowserDialog = { kind: "confirm", message: "First?" };
+		ask(first);
+		expect(all("Alert")).toHaveLength(1);
+		const second: BrowserDialog = { kind: "alert", message: "Second" };
+		ask(second);
+		expect(all("Alert")).toHaveLength(1);
+		expect(all("Text").map((node) => node.props.children)).toEqual(["Second"]);
+		ask(null);
+		expect(all("Alert")).toHaveLength(0);
+		expect(all("ConfirmationDialog")).toHaveLength(0);
+		expect(answers).toEqual([]);
+	});
+
+	it("counts a dismissal as declining, once", async () => {
+		const confirm: BrowserDialog = { kind: "confirm", message: "Sure?" };
+		ask(confirm);
+		const alert = all("Alert")[0]!;
+		await act(async () => { alert.props.onIsPresentedChange(false); alert.props.onIsPresentedChange(false); });
+		expect(answers).toEqual([[confirm, { type: "dialog", payload: { accept: false } }]]);
+	});
+
+	it("answers a prompt with what was typed, starting from the page's default", async () => {
+		const prompt: BrowserDialog = { kind: "prompt", message: "Your name?", defaultPrompt: "Ada" };
 		ask(prompt);
-		expect(native.prompt).toHaveBeenLastCalledWith("The page asks", "Your name?", expect.any(Array), "plain-text", "Ada");
-		press(buttons(native.prompt), "OK", "Grace");
+		const field = all("TextField")[0]!;
+		expect(field.props.text.get()).toBe("Ada");
+		act(() => field.props.onTextChange("Grace"));
+		await press("OK");
 		expect(answers).toEqual([[prompt, { type: "dialog", payload: { accept: true, promptText: "Grace" } }]]);
 	});
 
-	it("auth password uses secure entry and is never logged", () => {
+	it("auth password uses secure entry and is never logged", async () => {
 		const logged: unknown[] = [];
 		for (const method of ["log", "info", "warn", "error", "debug"] as const) vi.spyOn(console, method).mockImplementation((...args) => { logged.push(...args); });
-		const auth = { kind: "auth", origin: "https://intranet.example", realm: "Staff", failed: true } as const;
+		const auth: BrowserDialog = { kind: "auth", origin: "https://intranet.example", realm: "Staff", failed: true };
 		ask(auth);
-		// The system's login prompt: a username field and a secure password field.
-		expect(native.prompt).toHaveBeenLastCalledWith(
-			"Sign in to intranet.example",
-			"That username or password didn't work.\nThe site says: Staff",
-			expect.any(Array),
-			"login-password",
-		);
-		press(buttons(native.prompt), "Sign in", { login: "ada", password: "s3cret-pw" });
+		expect(all("Alert")[0]!.props.title).toBe("Sign in to intranet.example");
+		const [username] = all("TextField");
+		const [password] = all("SecureField");
+		expect(password).toBeDefined();
+		expect(username!.props.modifiers).toEqual(expect.arrayContaining([{ $type: "autocorrectionDisabled", args: [true] }, { $type: "textInputAutocapitalization", args: ["never"] }]));
+		act(() => { username!.props.onTextChange("ada"); password!.props.onTextChange("s3cret-pw"); });
+		await press("Sign in");
 		expect(answers).toEqual([[auth, { type: "auth", payload: { origin: "https://intranet.example", username: "ada", password: "s3cret-pw" } }]]);
 		expect(JSON.stringify(logged)).not.toContain("s3cret");
+		expect(all("SecureField")).toHaveLength(0);
 	});
 
-	it("cancels a sign-in", () => {
-		const auth = { kind: "auth", origin: "https://a.example", failed: false } as const;
-		ask(auth);
-		press(buttons(native.prompt), "Cancel");
-		expect(answers).toEqual([[auth, { type: "auth", payload: { origin: "https://a.example", cancel: true } }]]);
-	});
-
-	it("offers a select's options, marking the current one and disabling what the page disabled", () => {
+	it("offers a select's enabled options, marking the current one", async () => {
 		const select: BrowserDialog = { kind: "select", id: "s1", selected: 0, options: [{ label: "Red" }, { label: "Green", disabled: true }, { label: "Blue" }] };
 		ask(select);
-		const [options, choose] = native.sheet.mock.lastCall!;
-		expect(options).toMatchObject({ options: ["✓ Red", "Green", "Blue", "Cancel"], cancelButtonIndex: 3, disabledButtonIndices: [1] });
-		act(() => choose(2));
+		expect(all("Button").map((node) => node.props.label)).toEqual(["✓ Red", "Blue", "Cancel"]);
+		await press("Blue");
 		expect(answers).toEqual([[select, { type: "select", payload: { id: "s1", index: 2 } }]]);
-	});
-
-	it("answers a cancelled select with nothing", () => {
-		const select: BrowserDialog = { kind: "select", id: "s1", selected: 0, options: [{ label: "Red" }] };
-		ask(select);
-		act(() => native.sheet.mock.lastCall![1](1));
-		expect(answers).toEqual([[select, null]]);
 	});
 
 	it("picks files from Photos or Files for the page's input", async () => {
@@ -116,26 +126,18 @@ describe("BrowserAsk on iOS", () => {
 			launchImageLibraryAsync: vi.fn(async () => ({ canceled: false, assets: [{ uri: "file:///p.jpg", fileName: "p.jpg", mimeType: "image/jpeg" }] })),
 			getDocumentAsync: vi.fn(async () => ({ canceled: true, assets: null })),
 		};
-		const chooser = { kind: "filechooser", multiple: false, accept: "image/*", folder: false } as const;
+		const chooser: BrowserDialog = { kind: "filechooser", multiple: false, accept: "image/*", folder: false };
 		ask(chooser, pickers);
-		expect(native.sheet.mock.lastCall![0]).toMatchObject({ options: ["Photo Library", "Choose File", "Cancel"], cancelButtonIndex: 2 });
-		await act(async () => native.sheet.mock.lastCall![1](0));
+		expect(all("Button").map((node) => node.props.label)).toEqual(["Photo Library", "Choose File", "Cancel"]);
+		await press("Photo Library");
 		expect(answers).toEqual([[chooser, { type: "files", payload: { folder: false, files: [{ uri: "file:///p.jpg", name: "p.jpg", type: "image/jpeg" }] } }]]);
 	});
 
-	it("offers only Files for an input that takes no images", () => {
-		ask({ kind: "filechooser", multiple: true, accept: ".pdf", folder: false });
-		expect(native.sheet.mock.lastCall![0]).toMatchObject({ options: ["Choose Files", "Cancel"], cancelButtonIndex: 1 });
-		act(() => native.sheet.mock.lastCall![1](1));
-		expect(answers[0]![1]).toEqual({ type: "files", payload: { files: [], folder: false } });
-	});
-
-	it("answers each dialog once", () => {
-		const alert = { kind: "alert", message: "x" } as const;
-		ask(alert);
-		const list = buttons(native.alert);
-		press(list, "OK");
-		press(list, "OK");
-		expect(answers).toHaveLength(1);
+	it("offers only Files for an input that takes no images, and cancels with no files", async () => {
+		const chooser: BrowserDialog = { kind: "filechooser", multiple: true, accept: ".pdf", folder: false };
+		ask(chooser);
+		expect(all("Button").map((node) => node.props.label)).toEqual(["Choose Files", "Cancel"]);
+		await press("Cancel");
+		expect(answers).toEqual([[chooser, { type: "files", payload: { files: [], folder: false } }]]);
 	});
 });

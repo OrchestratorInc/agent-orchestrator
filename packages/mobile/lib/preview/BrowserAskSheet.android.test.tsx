@@ -92,17 +92,29 @@ describe("BrowserAskSheet on Android", () => {
 		expect(answers).toEqual([[select, { type: "select", payload: { id: "s1", index: 2 } }]]);
 	});
 
-	it("uses the system alert for alerts and where to pick files from", () => {
+	it("answers alerts and where to pick files from in Material dialogs", () => {
 		const confirm: BrowserDialog = { kind: "confirm", message: "Sure?" };
 		ask(confirm);
-		act(() => (native.alert.mock.lastCall![2] as Button[]).find((button) => button.text === "OK")!.onPress!());
+		act(() => buttonLabelled("OK").props.onClick());
 		const chooser: BrowserDialog = { kind: "filechooser", multiple: true, accept: "", folder: false };
 		ask(chooser);
-		expect((native.alert.mock.lastCall![2] as Button[]).map((button) => button.text)).toEqual(["Photo Library", "Choose Files", "Cancel"]);
-		act(() => (native.alert.mock.lastCall![2] as Button[]).find((button) => button.text === "Cancel")!.onPress!());
+		expect(all("ListItem")).toHaveLength(2);
+		act(() => buttonLabelled("Cancel").props.onClick());
 		expect(answers).toEqual([
 			[confirm, { type: "dialog", payload: { accept: true } }],
 			[chooser, { type: "files", payload: { files: [], folder: false } }],
 		]);
+		expect(native.alert).not.toHaveBeenCalled();
+	});
+
+	it("goes away when the host closes the dialog or a newer one replaces it", () => {
+		ask({ kind: "confirm", message: "First?" });
+		expect(all("AlertDialog")).toHaveLength(1);
+		ask({ kind: "auth", origin: "https://a.example", failed: false });
+		expect(all("AlertDialog")).toHaveLength(1);
+		expect(all("TextField")).toHaveLength(2);
+		ask(null);
+		expect(all("AlertDialog")).toHaveLength(0);
+		expect(answers).toEqual([]);
 	});
 });
