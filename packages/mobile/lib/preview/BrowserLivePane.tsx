@@ -35,6 +35,8 @@ const TAP_MAX_MS = 10_000;
 const TOUCH_MARK = 36;
 const ignoreActivation = () => {};
 const BROWSER_UNPAIRED_COPY = "Pair this phone with the desktop app first.";
+/** How long an answer waits for the stream to come back, as after a system picker. */
+const PENDING_ANSWER_MS = 120_000;
 /** The downloads the browser menu lists, newest first. */
 const DOWNLOADS_KEPT = 20;
 const BROWSER_OFFLINE_COPY = "This machine is offline. The browser connects once the app reconnects.";
@@ -112,6 +114,14 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const [ask, setAsk] = useState<BrowserDialog | null>(null);
 	const askRef = useRef<BrowserDialog | null>(null);
 	askRef.current = ask;
+	// A file chooser being answered in the system picker, which sends the app
+	// to the background and so drops the stream: its answer still counts, and
+	// waits for the next stream.
+	const pickingRef = useRef<BrowserDialog | null>(null);
+	const pendingRef = useRef<{ command: BrowserCommand; until: number } | null>(null);
+	// This stream is open and has said what its page is (and so what it takes).
+	const streamReady = useRef(false);
+	streamReady.current = status === "open" && page !== null;
 	const [downloads, setDownloads] = useState<BrowserDownload[]>([]);
 
 	useEffect(() => {
@@ -155,9 +165,17 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				pageWidth.current = state.width;
 				setPage(state);
 			},
-			onDialog: (dialog) => { if (!disposed) setAsk(dialog); },
+			onDialog: (dialog) => {
+				if (disposed) return;
+				pickingRef.current = dialog.kind === "filechooser" ? dialog : null;
+				setAsk(dialog);
+			},
 			// The page moved on (or the host answered it): the sheet goes, and a late tap on it sends nothing.
-			onDialogClosed: () => { if (!disposed) setAsk(null); },
+			onDialogClosed: () => {
+				if (disposed) return;
+				pickingRef.current = null;
+				setAsk(null);
+			},
 			onDownload: (download) => {
 				if (disposed) return;
 				setDownloads((list) => [download, ...list.filter((item) => item.id !== download.id)].slice(0, DOWNLOADS_KEPT));
@@ -201,15 +219,33 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const control = page?.control ?? "none";
 	// Only the dialog on screen is answered, once; never while the agent drives.
 	const answerAsk = useCallback((dialog: BrowserDialog, command: BrowserCommand | null) => {
-		if (askRef.current !== dialog) return;
-		setAsk(null);
+		const picking = pickingRef.current === dialog;
+		if (askRef.current !== dialog && !picking) return;
+		if (askRef.current === dialog) setAsk(null);
+		if (picking) pickingRef.current = null;
 		if (!command) return;
 		if (control === "agent") {
 			showNotice("The agent is using the browser. Your answer wasn't sent.");
 			return;
 		}
-		send(command);
+		// Read now, not when the sheet opened: the stream may have changed since.
+		const live = client.current;
+		if (streamReady.current && live && commandSupported(live.capabilities, command)) send(command);
+		else pendingRef.current = { command, until: Date.now() + PENDING_ANSWER_MS };
 	}, [control, send, showNotice]);
+	// An answer held over a reconnect goes once the new stream can carry it.
+	useEffect(() => {
+		const pending = pendingRef.current;
+		const live = client.current;
+		if (!pending || status !== "open" || !page || !live) return;
+		if (Date.now() > pending.until) {
+			pendingRef.current = null;
+			return;
+		}
+		if (!commandSupported(live.capabilities, pending.command)) return;
+		pendingRef.current = null;
+		send(pending.command);
+	}, [page, send, status]);
 	const saveDownloadById = useCallback((id: string) => {
 		const live = client.current;
 		const download = downloads.find((item) => item.id === id);
