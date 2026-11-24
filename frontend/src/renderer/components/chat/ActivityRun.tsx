@@ -103,11 +103,11 @@ export function ActivityRun({
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
-				<span className="activity-summary-label text-xs text-muted-foreground">
+				<span className="activity-summary-label text-control text-muted-foreground">
 					<ActivityTransition value={summary} inline enter={entering}>{summary}</ActivityTransition>
 				</span>
 				{nonzeroExits > 0 ? (
-					<span className="text-caption text-muted-foreground/70">
+					<span className="text-xs text-muted-foreground/70">
 						{nonzeroExits} exited
 					</span>
 				) : null}
@@ -117,12 +117,12 @@ export function ActivityRun({
 					</span>
 				) : null}
 				{cancelled > 0 ? (
-					<span className="text-caption text-muted-foreground/70">
+					<span className="text-xs text-muted-foreground/70">
 						{cancelled} stopped
 					</span>
 				) : null}
 				{diffTotals.additions > 0 || diffTotals.deletions > 0 ? (
-					<span className="shrink-0 font-mono text-micro tabular-nums text-muted-foreground/70">
+					<span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/70">
 						{diffTotals.additions > 0 ? (
 							<span className="text-success">+{diffTotals.additions}</span>
 						) : null}
@@ -324,7 +324,7 @@ function ActivitySubgroup({
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
-				<span className="activity-summary-label text-xs text-muted-foreground">
+				<span className="activity-summary-label text-control text-muted-foreground">
 					<ActivityTransition value={summary} inline enter={entering}>
 						{summary}
 					</ActivityTransition>
@@ -462,7 +462,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 				onClick={() => setOpen(!open)}
 				aria-label={`Subagent ${count} ${count === 1 ? "step" : "steps"}`}
 				aria-expanded={open}
-				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+				className="activity-row-toggle flex min-h-7 w-full select-none items-center gap-2 text-control text-muted-foreground hover:text-foreground"
 			>
 				<span className="font-medium text-foreground/80">Subagent</span>
 				<span>{count} {count === 1 ? "step" : "steps"}</span>

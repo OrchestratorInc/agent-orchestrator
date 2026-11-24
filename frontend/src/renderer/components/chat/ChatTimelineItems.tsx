@@ -2033,7 +2033,7 @@ function GenericActivityRow({
 				)}
 			>
 				{compactSummary ? (
-					<StepMark aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
+					<StepMark aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
 				) : (
 					<Icon
 						aria-hidden="true"
@@ -2045,7 +2045,7 @@ function GenericActivityRow({
 					/>
 				)}
 				{singleEdit ? (
-					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
+					<span className="flex min-w-0 items-center gap-1 text-control font-normal">
 						<span className="shrink-0 text-muted-foreground">
 							{stepTense(activity) === "live"
 								? liveFileChangeVerb(singleEdit.status ?? "modified")
@@ -2053,12 +2053,12 @@ function GenericActivityRow({
 						</span>
 						<FileLocationLabel path={singleEdit.path} oldPath={singleEdit.oldPath} chip />
 						{singleEdit.additions > 0 ? (
-							<span className="shrink-0 font-mono text-micro tabular-nums text-success">
+							<span className="shrink-0 font-mono text-xs tabular-nums text-success">
 								+{singleEdit.additions}
 						</span>
 						) : null}
 						{singleEdit.deletions > 0 ? (
-							<span className="shrink-0 font-mono text-micro tabular-nums text-destructive">
+							<span className="shrink-0 font-mono text-xs tabular-nums text-destructive">
 								&minus;{singleEdit.deletions}
 							</span>
 						) : null}
@@ -2067,8 +2067,8 @@ function GenericActivityRow({
 					// Verb and target sit as close together as a file edit's verb and name.
 					// The space is not drawn in the flex row, but it keeps the accessible
 					// name "Read README.md" rather than "ReadREADME.md".
-					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
-						<strong className="activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground">
+					<span className="flex min-w-0 items-center gap-1 text-control font-normal">
+						<strong className="activity-row-label shrink-0 text-control font-normal text-muted-foreground group-hover/activity:text-foreground">
 							<ActivityTitle text={label} />
 						</strong>
 						{" "}
@@ -2078,7 +2078,7 @@ function GenericActivityRow({
 					<strong
 						className={cn(
 							compactSummary
-								? "activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground"
+								? "activity-row-label shrink-0 text-control font-normal text-muted-foreground group-hover/activity:text-foreground"
 								: "min-w-0 truncate font-medium",
 							!compactSummary &&
 								(activity.status === "failed"
@@ -2319,7 +2319,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 
 			{command ? (
 				<div data-command-line="" className="flex min-w-0 items-center gap-2 pr-[7px]">
-					<pre data-no-swipe-nav="" className="min-w-0 flex-1 truncate font-mono text-caption leading-relaxed text-muted-foreground" title={command}>
+					<pre data-no-swipe-nav="" className="min-w-0 flex-1 truncate font-mono text-xs leading-normal text-muted-foreground" title={command}>
 						<span aria-hidden="true" className="select-none text-passive">$ </span>
 						{command}
 					</pre>
@@ -2332,7 +2332,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 					<div className="flex min-h-8 items-center gap-2 pr-1.5 pl-3 pt-1">
 						<SquareTerminal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 						<span className="flex-1 text-xs text-muted-foreground">Shell</span>
-						{detail?.output ? <CopyButton compact size="icon-xs" text={outputText} label="Copy output" /> : null}
+						{detail?.output ? <CopyButton compact size="icon-xs" text={outputText} label="Copy output" className="[&_svg]:size-3" /> : null}
 					</div>
 					{detail?.terminalInput ? (
 						<div className={cn("px-3 py-2", detail?.output && "pb-0")}>
@@ -2454,10 +2454,10 @@ function CommandOutput({
 				ref={pre}
 				aria-live={streaming ? "polite" : undefined}
 				className={cn(
-					"scrollbar-none max-h-64 overflow-auto font-mono leading-relaxed text-muted-foreground",
+					"scrollbar-none max-h-64 overflow-auto font-mono text-xs leading-normal text-muted-foreground",
 					embedded
-						? "cursor-chat-explore-output px-3 py-2 text-caption"
-						: "border border-border bg-background px-2.5 py-2 text-caption",
+						? "cursor-chat-explore-output px-3 pt-0.5 pb-2"
+						: "border border-border bg-background px-2.5 py-2",
 				)}
 			>
 				{preview}
@@ -2564,7 +2564,7 @@ function ActivityState({
 		const additions = files.reduce((sum, file) => sum + file.additions, 0);
 		const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
 		return (
-			<span className="shrink-0 font-mono text-micro tabular-nums text-muted-foreground/70">
+			<span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/70">
 				<span className="text-success">+{additions}</span>{" "}
 				<span className="text-destructive">&minus;{deletions}</span>
 			</span>
@@ -2574,7 +2574,7 @@ function ActivityState({
 		return (
 			<span
 				className={cn(
-					"shrink-0 font-mono text-micro tabular-nums",
+					"shrink-0 font-mono text-xs tabular-nums",
 					isNonzeroCommandExit(activity) ? "text-muted-foreground/70" : "text-destructive",
 				)}
 			>
@@ -2584,14 +2584,14 @@ function ActivityState({
 	}
 	if (status === "recovered") {
 		return (
-			<span className="shrink-0 font-mono text-micro text-muted-foreground/70">
+			<span className="shrink-0 font-mono text-xs text-muted-foreground/70">
 				outcome unknown
 			</span>
 		);
 	}
 	if (status === "cancelled") {
 		return (
-			<span className="shrink-0 font-mono text-micro text-muted-foreground/70">
+			<span className="shrink-0 font-mono text-xs text-muted-foreground/70">
 				stopped
 			</span>
 		);
@@ -2640,14 +2640,14 @@ function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 	const line = (
 		<>
 			<span className="sr-only">{status.label}</span>
-			<span className="shrink-0 text-xs text-muted-foreground">
+			<span className="shrink-0 text-control text-muted-foreground">
 				{fileChangeVerb(file.status ?? "modified")}
 			</span>
-			<FileLocationLabel path={file.path} oldPath={file.oldPath} />
-			<span className="shrink-0 font-mono text-micro tabular-nums text-success">
+			<FileLocationLabel path={file.path} oldPath={file.oldPath} chip />
+			<span className="shrink-0 font-mono text-xs tabular-nums text-success">
 				+{file.additions}
 			</span>
-			<span className="shrink-0 font-mono text-micro tabular-nums text-destructive">
+			<span className="shrink-0 font-mono text-xs tabular-nums text-destructive">
 				&minus;{file.deletions}
 			</span>
 		</>
@@ -2657,7 +2657,7 @@ function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 	// nothing when pressed is worse than plain text.
 	if (!hasPatch) {
 		return (
-			<li className="flex items-center gap-1.5 py-0.5 pr-1" aria-label={accessibleName}>
+			<li className="flex min-h-7 items-center gap-1.5 py-0.5 pr-1" aria-label={accessibleName}>
 				{line}
 			</li>
 		);
@@ -2669,7 +2669,7 @@ function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 				onClick={() => setOpen((prev) => !prev)}
 				aria-expanded={open}
 				aria-label={accessibleName}
-				className="flex items-center gap-1.5 rounded-sm py-0.5 pr-1 text-left"
+				className="flex min-h-7 items-center gap-1.5 rounded-sm py-0.5 pr-1 text-left"
 			>
 				{line}
 				<ChevronRight
@@ -2847,13 +2847,13 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 					!hasBody && "cursor-default",
 				)}
 			>
-				{StepMark ? <StepMark aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" /> : null}
+				{StepMark ? <StepMark aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" /> : null}
 				{step?.target ? (
 					// Laid out like a command step: verb, then what it acted on.
-					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
+					<span className="flex min-w-0 items-center gap-1 text-control font-normal">
 						<strong
 							className={cn(
-								"activity-row-label shrink-0 text-xs font-normal",
+								"activity-row-label shrink-0 text-control font-normal",
 								failed ? "text-destructive" : "text-muted-foreground group-hover/activity:text-foreground",
 							)}
 						>
@@ -2865,7 +2865,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 				) : (
 					<strong
 						className={cn(
-							"activity-row-label min-w-0 truncate text-xs font-normal",
+							"activity-row-label min-w-0 truncate text-control font-normal",
 							failed ? "text-destructive" : "text-muted-foreground",
 						)}
 						title={tool}
@@ -2874,7 +2874,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 					</strong>
 				)}
 				{sourceLabel ? (
-					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground group-hover/activity:text-foreground">
+					<span className="min-w-0 flex-1 truncate text-control text-muted-foreground group-hover/activity:text-foreground">
 						{sourceLabel}
 					</span>
 				) : null}
@@ -2984,7 +2984,7 @@ function AOToolRow({ view }: { view: AOToolView }) {
 			>
 				<strong
 					className={cn(
-						"activity-row-label min-w-0 truncate text-xs font-normal",
+						"activity-row-label min-w-0 truncate text-control font-normal",
 						failed ? "text-destructive" : "text-muted-foreground",
 					)}
 					title={view.label}
@@ -4471,7 +4471,7 @@ function StepTarget({ text, title, file }: { text: string; title?: string; /** S
 			<span className="min-w-0 truncate">{text}</span>
 		</span>
 	) : (
-		<span className="min-w-0 truncate text-xs text-foreground/65 outline-none" title="">{text}</span>
+		<span className="min-w-0 truncate text-control text-foreground/65 outline-none" title="">{text}</span>
 	);
 	// A short target that is shown whole needs no tooltip repeating it.
 	if ((!title || title === text) && text.length <= 48) return label;

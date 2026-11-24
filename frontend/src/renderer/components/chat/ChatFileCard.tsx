@@ -72,17 +72,17 @@ function FileCard({
 			data-chat-file-card={kind}
 			className="chat-code mt-1 mb-1 flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-surface"
 		>
-			<div className="flex min-h-9 min-w-0 items-center gap-2 pr-1.5 pl-3 pt-1">
+			<div className="flex min-h-8 min-w-0 items-center gap-2 pr-1.5 pl-3 pt-1">
 				<ChatFileIcon path={path} />
 				<span className="flex min-w-0 flex-1 text-xs" title={label}>
 					<WorkspacePathSegments path={label} nameClassName="text-foreground/85" />
 				</span>
 				{additions !== undefined && deletions !== undefined ? (
-					<ChangeCounts additions={additions} deletions={deletions} className="text-caption" />
+					<ChangeCounts additions={additions} deletions={deletions} className="text-xs" />
 				) : null}
-				<CopyButton compact text={copyText} label={copyLabel} />
+				<CopyButton compact size="icon-xs" text={copyText} label={copyLabel} className="[&_svg]:size-3" />
 			</div>
-			<div data-no-swipe-nav="" className="scrollbar-none max-h-80 overflow-auto pt-0.5 pb-2 font-mono text-xs leading-[1.6]">
+			<div data-no-swipe-nav="" className="scrollbar-none max-h-80 overflow-auto pt-0.5 pb-2 font-mono text-xs leading-normal">
 				<div className="w-max min-w-full">{children}</div>
 			</div>
 			{footer}
@@ -237,7 +237,7 @@ export function FileDiffCard({
 						<span aria-hidden="true" className="shrink-0 select-none pr-4 pl-3 text-right" style={{ minWidth: gutter }}>
 							⋯
 						</span>
-						<span className="whitespace-pre pr-4 font-sans text-caption leading-[1.9]">
+						<span className="whitespace-pre pr-4 font-sans text-caption">
 							{skipped && skipped > 0 ? `${skipped} unchanged ${skipped === 1 ? "line" : "lines"}` : ""}
 						</span>
 					</div>,

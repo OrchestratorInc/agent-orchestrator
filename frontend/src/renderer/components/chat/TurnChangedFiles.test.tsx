@@ -366,14 +366,15 @@ describe("ActivityRow command output", () => {
 				)}
 			/>,
 		);
-		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false");
+		const row = container.querySelector(".activity-row-toggle")!;
+		expect(row).toHaveAttribute("aria-expanded", "false");
 		expect(container.querySelector("pre")).toBeNull();
 
-		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
-		// Read off the <pre> rather than via getByText, which normalizes the runs of
-		// whitespace that real command output is full of.
-		expect(container.querySelector("pre")?.textContent).toBe("ok  pkg/a\n");
+		await userEvent.click(row);
+		expect(row).toHaveAttribute("aria-expanded", "true");
+		// Read off the Shell card's <pre> rather than via getByText, which normalizes
+		// the runs of whitespace that real command output is full of.
+		expect(container.querySelector("[data-command-shell] pre")?.textContent).toBe("ok  pkg/a\n");
 	});
 
 	it("does not add provider provenance below streamed output", async () => {
@@ -610,14 +611,14 @@ describe("ActivityRow command labels", () => {
 		const row = screen.getByRole("button");
 		expect(row).toHaveClass("py-0.5", "gap-2", "select-none");
 		expect(screen.getByText("Checked git status")).toHaveClass(
-			"text-xs",
+			"text-control",
 			"font-normal",
 			"text-muted-foreground",
 		);
 		expect(screen.getByText("exit 1")).toHaveClass("text-muted-foreground/70");
 		expect(screen.getByText("exit 1")).not.toHaveClass("text-destructive");
 		// One small mark for what the step did, not the bordered rows' icon column.
-		expect(container.querySelector(".icon-git-branch")).toHaveClass("size-3", "text-muted-foreground/70");
+		expect(container.querySelector(".icon-git-branch")).toHaveClass("size-3.5", "text-muted-foreground/70");
 		expect(container.querySelector(".icon-square-terminal")).toBeNull();
 		expect(row.querySelector(".flex-1")).toBeNull();
 		expect(row.textContent).toMatch(/^Checked git statusexit 1/);
