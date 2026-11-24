@@ -1507,6 +1507,7 @@ function ChatWorkspaceContent({
 				if (!currentEdit || currentEdit.turnId !== queueEdit.turnId || currentEdit.ownerId !== queueEdit.ownerId) {
 					throw new Error("chat.draft.queueReplaced");
 				}
+				const firstAttempt = !currentEdit.clientMessageId;
 				const prepared = updateQueueDraft({
 					...currentEdit,
 					saving: true,
@@ -1525,13 +1526,17 @@ function ChatWorkspaceContent({
 					// These outcomes follow the daemon's atomic receipt lookup, so even
 					// a recovered retry proves this exact edit was never accepted. A
 					// Cloud control plane's refusal of the edit proves it too.
+					const code = apiErrorCode(error) ?? "";
 					if ([
 						"CHAT_TURN_NOT_QUEUED",
 						"CHAT_QUEUED_EDIT_CONFLICT",
 						"CHAT_QUEUED_CONTENT_INVALID",
 						"CHAT_QUEUED_TEXT_REQUIRED",
 						"CHAT_QUEUED_EDIT_REFUSED",
-					].includes(apiErrorCode(error) ?? "")) {
+					].includes(code) ||
+						// A staged image the daemon cannot read is refused before that lookup,
+						// so only a first attempt proves the edit was never accepted.
+						(firstAttempt && ["INVALID_ATTACHMENT_PATH", "ATTACHMENT_NOT_FOUND", "ATTACHMENT_PATH_UNSUPPORTED"].includes(code))) {
 						updateQueueDraft({
 							...prepared.draft.queuedEdit,
 							clientMessageId: undefined, saving: undefined, nativeImages: undefined,

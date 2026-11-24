@@ -121,6 +121,30 @@ describe("queued message attachments", () => {
 		expect(readChatSessionDraft(chatFixture.sessionId).queuedEdit).toBeUndefined();
 	});
 
+	it("unlocks a queued edit whose first attempt is refused for a staged image the daemon cannot read", async () => {
+		const { edit } = setup();
+		edit.mockRejectedValueOnce({ code: "ATTACHMENT_NOT_FOUND", message: "staged attachment not found" });
+		await beginEdit();
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await screen.findByText("staged attachment not found");
+		expect(readChatSessionDraft(chatFixture.sessionId).queuedEdit?.clientMessageId).toBeUndefined();
+		expect(screen.getByRole("button", { name: "Cancel edit" })).toBeEnabled();
+	});
+
+	it("keeps a recovered queued edit locked when its retry is refused for a staged image", async () => {
+		const { edit } = setup();
+		edit.mockRejectedValueOnce(new Error("response lost"));
+		await beginEdit();
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await screen.findByText("response lost");
+		// The first attempt may have been accepted before its answer was lost.
+		edit.mockRejectedValueOnce({ code: "ATTACHMENT_NOT_FOUND", message: "staged attachment not found" });
+		await userEvent.click(screen.getByRole("button", { name: "Retry edit safely" }));
+		await screen.findByText("staged attachment not found");
+		expect(readChatSessionDraft(chatFixture.sessionId).queuedEdit?.clientMessageId).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Cancel edit" })).toBeDisabled();
+	});
+
 	it.each(["cancel", "escape", "replace", "delete"])("preserves an unresolved queued receipt through %s and remount", async (exit) => {
 		const { edit, cancel, unmount } = setup();
 		edit.mockRejectedValue(new Error("response lost"));
