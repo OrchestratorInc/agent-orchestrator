@@ -1806,6 +1806,34 @@ describe("agent picker effort names", () => {
 		expect(shown).toBe("Extra high");
 	});
 
+	it("offers Claude Code's Ultracode as a mode, not an effort level", () => {
+		agentPicker.current = undefined;
+		const onChangeConfigOption = vi.fn();
+		const ultracode = { on: false, onChange: vi.fn() };
+		const choices = ["high", "xhigh", "max"].map((value) => ({ value, name: "" }));
+		render(<TurnSettingsBar harness="claude-code" models={[]} settings={{}}
+			configOptions={[options(choices)[0], { ...options(choices)[1], currentValue: "high" }]}
+			onChangeConfigOption={onChangeConfigOption} agentSwitch={{ projectId: "p", onPendingChange: vi.fn(), ultracode }} />);
+		const source = agentPicker.current!;
+		expect(source.efforts.map((effort) => effort.value)).toEqual(["high", "xhigh", "max"]);
+		expect(source.ultracode).toBe(false);
+		// On, it runs at Extra high.
+		act(() => source.onToggleUltracode?.(true));
+		expect(ultracode.onChange).toHaveBeenLastCalledWith(true);
+		expect(onChangeConfigOption).toHaveBeenLastCalledWith("effort", { value: "xhigh" });
+		// Another level turns it off.
+		act(() => source.onPickEffort?.("max"));
+		expect(ultracode.onChange).toHaveBeenLastCalledWith(false);
+		expect(onChangeConfigOption).toHaveBeenLastCalledWith("effort", { value: "max" });
+	});
+
+	it("offers no Ultracode on a model without Extra high", () => {
+		agentPicker.current = undefined;
+		render(<TurnSettingsBar harness="claude-code" models={[]} settings={{}} configOptions={options([{ value: "high", name: "High" }])}
+			onChangeConfigOption={vi.fn()} agentSwitch={{ projectId: "p", onPendingChange: vi.fn(), ultracode: { on: false, onChange: vi.fn() } }} />);
+		expect(agentPicker.current!.ultracode).toBeUndefined();
+	});
+
 	it("keeps the names a provider gives its levels", () => {
 		const { rows, shown } = efforts([{ value: "default", name: "Default" }, { value: "high", name: "High" }, { value: "xhigh", name: "Xhigh" }]);
 		expect(rows.map((effort) => effort.label)).toEqual(["High", "Xhigh"]);

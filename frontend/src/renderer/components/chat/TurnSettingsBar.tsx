@@ -409,24 +409,30 @@ export function TurnSettingsBar({
 			onPickModel: primaryModelOption && onChangeConfigOption
 				? (id) => { if (!choiceUnavailable(id)) applyOption(primaryModelOption.id, { value: id }); }
 				: undefined,
-			efforts: [
-				...(acpEffortOption?.choices ?? [])
-					.filter((choice) => choice.value && choice.value !== "default")
-					// A level the provider leaves unnamed is named as AO names it, never left blank.
-					.map((choice) => ({ value: choice.value, label: choice.name || formatEffortLabel(choice.value, t) })),
-				...(offersUltracode ? [{ value: ULTRACODE, label: "Ultracode" }] : []),
-			],
-			effort: offersUltracode && ultracode?.on
-				? ULTRACODE
-				: acpEffortOption?.currentValue && acpEffortOption.currentValue !== "default"
-					? acpEffortOption.currentValue
-					: undefined,
+			efforts: (acpEffortOption?.choices ?? [])
+				.filter((choice) => choice.value && choice.value !== "default")
+				// A level the provider leaves unnamed is named as AO names it, never left blank.
+				.map((choice) => ({ value: choice.value, label: choice.name || formatEffortLabel(choice.value, t) })),
+			effort: acpEffortOption?.currentValue && acpEffortOption.currentValue !== "default"
+				? acpEffortOption.currentValue
+				: undefined,
 			onPickEffort: acpEffortOption && onChangeConfigOption
 				? (value) => {
-					ultracode?.onChange(value === ULTRACODE);
-					applyOption(acpEffortOption.id, { value: value === ULTRACODE ? "xhigh" : value });
+					// Ultracode runs only at Extra High: another level turns it off.
+					if (value !== ULTRACODE_EFFORT) ultracode?.onChange(false);
+					applyOption(acpEffortOption.id, { value });
 				}
 				: undefined,
+			// A mode beside Fast mode, not an effort level: on, it sets Extra High.
+			...(offersUltracode && acpEffortOption && ultracode
+				? {
+					ultracode: ultracode.on,
+					onToggleUltracode: (on: boolean) => {
+						ultracode.onChange(on);
+						if (on && acpEffortOption.currentValue !== ULTRACODE_EFFORT) applyOption(acpEffortOption.id, { value: ULTRACODE_EFFORT });
+					},
+				}
+				: {}),
 			...fastControls,
 			...(thinkingOption && onChangeConfigOption
 				? { thinking: optionIsEnabled(thinkingOption), onToggleThinking: (on: boolean) => setConfigToggle(thinkingOption, on, applyOption) }
@@ -1488,7 +1494,8 @@ export function ComposerMenuRow({
 	);
 }
 
-const ULTRACODE = "ultracode";
+// The effort level Ultracode runs at.
+const ULTRACODE_EFFORT = "xhigh";
 
 /** Claude Code turns Ultracode on for a turn when the user's message names it. */
 export function withUltracode(text: string): string {

@@ -2,10 +2,10 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { cn } from "../../lib/utils";
 import { OptionMenuItem } from "../ui/option-menu";
 
-// A small upright rounded square, a little taller than the squared bar it sits on.
+// A small upright rounded square, as tall as the squared bar it sits on.
 const THUMB_W = 14;
 const THUMB_H = 22;
-const TRACK_H = 16;
+const TRACK_H = THUMB_H;
 // How long a sent level is held on screen while the agent has not reported it.
 const SENT_HOLD_MS = 2500;
 
@@ -94,7 +94,9 @@ export function EffortSlider({
 			}}
 			// No hover or highlight fill like the other rows: the slider is not picked by clicking the row.
 			// A keyboard visit rings the thumb instead.
-			className="group/effort flex-col items-stretch gap-0.5 py-1 text-xs text-foreground focus:before:bg-transparent data-highlighted:before:bg-transparent"
+			// Less padding above than below: the label's line height already leaves room over its letters,
+			// so the bar gets a little more room below it than the text has above.
+			className="group/effort flex-col items-stretch gap-0.5 pt-0.5 pb-2 text-xs text-foreground focus:before:bg-transparent data-highlighted:before:bg-transparent"
 		>
 			<span className="flex items-baseline justify-between gap-3">
 				<span>{label}</span>

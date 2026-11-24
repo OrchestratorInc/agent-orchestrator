@@ -7,7 +7,7 @@
 // that tests and styles can target without depending on the library.
 //
 // Generated from the lucide names the app used; add new icons by hand.
-import { forwardRef, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from "react";
+import { forwardRef, useId, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from "react";
 import {
 	Activity as MynaActivity,
 	Archive as MynaArchive,
@@ -508,6 +508,51 @@ export const X = fromMyna(MynaX, "x", "full");
 export const XCircle = fromMyna(MynaXCircle, "xcircle");
 export const XIcon = fromMyna(MynaX, "x", "full");
 export const Zap = fromMyna(MynaZap, "zap");
+
+// Myna's bolt, for drawing it twice.
+const BOLT = "M12.748 3.572c.059-.503-.532-.777-.835-.388L4.111 13.197c-.258.33-.038.832.364.832h6.988c.285 0 .506.267.47.57l-.68 5.83c-.06.502.53.776.834.387l7.802-10.013c.258-.33.038-.832-.364-.832h-6.988c-.285 0-.506-.267-.47-.57z";
+// How far the back bolt sits to the right of the front one, in Myna's units.
+const BOLT_OFFSET = 5;
+const DOUBLE_ZAP_WIDTH = 21.6 + BOLT_OFFSET;
+
+/**
+ * Claude Code's Ultracode: two bolts, each as big as Fast mode's, one layered over the other. The
+ * front one sits where Zap's does and the icon widens to the right for the back one, so give it a
+ * height and let the width follow (h-3.5 w-auto). The back bolt is cut away around the front one.
+ */
+export const DoubleZap: AppIcon = forwardRef<SVGSVGElement, AppIconProps>(({ absoluteStrokeWidth: _ignored, className, strokeWidth, size, style, ...rest }, ref) => {
+	// React's ids hold characters (":", "«") a url(#…) reference cannot name, which would hide the back bolt.
+	const mask = `double-zap-${useId().replace(/[^\w-]/g, "")}`;
+	const stroke = Number(strokeWidth ?? STROKE) * MYNA_CROP;
+	return (
+		<svg
+			ref={ref}
+			xmlns="http://www.w3.org/2000/svg"
+			{...(size === undefined ? {} : { height: size })}
+			viewBox={`1.2 1.2 ${DOUBLE_ZAP_WIDTH} 21.6`}
+			fill="none"
+			stroke="currentColor"
+			strokeWidth={stroke}
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden={rest["aria-label"] ? undefined : true}
+			style={{ aspectRatio: `${DOUBLE_ZAP_WIDTH} / 21.6`, ...style }}
+			{...rest}
+			className={cn("icon", "icon-double-zap", className)}
+		>
+			<mask id={mask} maskUnits="userSpaceOnUse" x="0" y="0" width="32" height="24">
+				<rect x="0" y="0" width="32" height="24" fill="white" />
+				<path d={BOLT} fill="black" stroke="black" strokeWidth={stroke * 3} />
+			</mask>
+			{/* The mask goes on a group, not the shifted bolt: on the bolt it would shift too and cut all of it away. */}
+			<g mask={`url(#${mask})`}>
+				<path d={BOLT} transform={`translate(${BOLT_OFFSET} 0)`} />
+			</g>
+			<path d={BOLT} />
+		</svg>
+	);
+});
+DoubleZap.displayName = "Icon(double-zap)";
 
 // Added by hand (no lucide equivalent was in use): inspector tab icons.
 export const Chat = fromMyna(MynaChat, "chat");

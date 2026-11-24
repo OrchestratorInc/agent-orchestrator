@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import claudeCodeLogo from "../../assets/agents/claude-code.svg";
@@ -35,6 +35,8 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 							{ id: "fireworks/accounts/fireworks/models/kimi", label: "kimi" },
 							{ id: "fireworks/accounts/team/models/kimi", label: "team/kimi" },
 						]
+						: agent === "claude-code"
+						? [{ id: "opus", label: "Opus", isDefault: true, efforts: ["high", "xhigh", "max"], defaultEffort: "high" }]
 						: [],
 		}),
 	}),
@@ -217,12 +219,12 @@ describe("AgentModelPicker", () => {
 		expect(screen.getByRole("slider", { name: "Effort" })).toBeInTheDocument();
 	});
 
-	it.each(["Fast mode", "Thinking"])("keeps the parent menu open after toggling %s", async (label) => {
+	it.each([["menuitemcheckbox", "Fast mode"], ["switch", "Thinking"]] as const)("keeps the parent menu open after toggling a %s named %s", async (role, label) => {
 		const user = userEvent.setup();
 		const onToggle = vi.fn();
 		open(undefined, false, "cursor", { fast: false, thinking: false, onToggleFast: onToggle, onToggleThinking: onToggle });
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.click(screen.getByRole("switch", { name: label }));
+		await user.click(screen.getByRole(role, { name: label }));
 		expect(onToggle).toHaveBeenCalledExactlyOnceWith(true);
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 	});
@@ -660,6 +662,66 @@ describe("AgentModelPicker", () => {
 		expect(await screen.findByRole("menuitemradio", { name: /^Opus/ })).toBeInTheDocument();
 	});
 
+	describe("Ultracode", () => {
+		it("is a mode beside Fast mode, not a level on the effort slider", async () => {
+			const user = userEvent.setup();
+			const onToggleUltracode = vi.fn();
+			open(undefined, false, "claude-code", { fast: false, onToggleFast: vi.fn(), ultracode: false, onToggleUltracode });
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			const ultracode = screen.getByRole("menuitemcheckbox", { name: "Ultracode" });
+			expect(ultracode).toHaveAttribute("aria-checked", "false");
+			expect(ultracode.parentElement).toContainElement(screen.getByRole("menuitemcheckbox", { name: "Fast mode" }));
+			expect(screen.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuemax", "1");
+			await user.click(ultracode);
+			expect(onToggleUltracode).toHaveBeenCalledExactlyOnceWith(true);
+			expect(screen.queryAllByRole("menu")).toHaveLength(1);
+		});
+
+		it("says on hover what it and Fast mode do", async () => {
+			const user = userEvent.setup();
+			open(undefined, false, "claude-code", { fast: false, onToggleFast: vi.fn(), ultracode: false, onToggleUltracode: vi.fn() });
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			await user.hover(screen.getByRole("menuitemcheckbox", { name: "Ultracode" }));
+			expect(await screen.findByRole("tooltip")).toHaveTextContent("Claude Code's own workflows, at Extra high effort");
+			await user.hover(screen.getByRole("menuitemcheckbox", { name: "Fast mode" }));
+			await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("Faster replies from the same model"));
+		});
+
+		it("is marked on the trigger beside the effort", () => {
+			open(undefined, false, "claude-code", { ultracode: true, onToggleUltracode: vi.fn() });
+			const trigger = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+			expect(within(trigger).getByLabelText("Ultracode")).toBeInTheDocument();
+			expect(trigger).toHaveTextContent("High");
+		});
+
+		it("is absent for an agent without it", async () => {
+			const user = userEvent.setup();
+			open(undefined, false, "codex", { fast: false, onToggleFast: vi.fn() });
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			expect(screen.getByRole("menuitemcheckbox", { name: "Fast mode" })).toBeInTheDocument();
+			expect(screen.queryByRole("menuitemcheckbox", { name: "Ultracode" })).not.toBeInTheDocument();
+		});
+
+		it("sets Extra high on a switch to Claude Code, and another level turns it off", async () => {
+			const user = userEvent.setup();
+			const { onPendingChange } = open({ harness: "claude-code" }, false, "codex");
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			await user.click(await screen.findByRole("menuitemcheckbox", { name: "Ultracode" }));
+			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ harness: "claude-code", effort: "xhigh", ultracode: true }));
+			expect(screen.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuemax", "2");
+		});
+
+		it("turns off when a switch to Claude Code picks another level", async () => {
+			const user = userEvent.setup();
+			const { onPendingChange } = open({ harness: "claude-code", effort: "xhigh", ultracode: true }, false, "codex");
+			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+			expect(await screen.findByRole("menuitemcheckbox", { name: "Ultracode" })).toHaveAttribute("aria-checked", "true");
+			act(() => screen.getByRole("slider", { name: "Effort" }).focus());
+			await user.keyboard("{ArrowRight}");
+			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ effort: "max", ultracode: undefined }));
+		});
+	});
+
 	it("puts Fast mode and auto-compact in one row", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();
@@ -675,7 +737,7 @@ describe("AgentModelPicker", () => {
 		);
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 		const compact = screen.getByRole("radiogroup", { name: "Auto-compact" });
-		expect(compact.parentElement).toContainElement(screen.getByRole("switch", { name: "Fast mode" }));
+		expect(compact.parentElement).toContainElement(screen.getByRole("menuitemcheckbox", { name: "Fast mode" }));
 		await user.click(within(compact).getByRole("radio", { name: "1M" }));
 		expect(onChange).toHaveBeenCalledWith("1m");
 	});
@@ -692,9 +754,10 @@ describe("AgentModelPicker", () => {
 			</QueryClientProvider>,
 		);
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		const fast = screen.getByRole("switch", { name: "Fast mode" });
-		expect(fast).not.toBeChecked();
-		expect(fast.closest("[role='menuitem']")).toHaveAttribute("data-disabled");
+		const fast = screen.getByRole("menuitemcheckbox", { name: "Fast mode" });
+		expect(fast).toHaveAttribute("aria-checked", "false");
+		expect(fast).toHaveAttribute("data-disabled");
+		expect(fast).toHaveAttribute("aria-description", "Not available for this model");
 		const compact = screen.getByRole("radiogroup", { name: "Auto-compact" });
 		expect(compact).toHaveAttribute("aria-disabled", "true");
 		expect(within(compact).getAllByRole("radio").map((radio) => radio.textContent)).toEqual(["Auto"]);

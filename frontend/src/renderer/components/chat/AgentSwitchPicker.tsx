@@ -6,7 +6,7 @@
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { Brain, ChevronRight, Loader2, Settings2, TriangleAlert, Zap } from "@/components/app-icons";
+import { Brain, ChevronRight, DoubleZap, Loader2, Settings2, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
 import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -160,6 +160,12 @@ export interface PickerSource {
 	/** Undefined when the model has no thinking choice. */
 	thinking?: boolean;
 	onToggleThinking?: (next: boolean) => void;
+	/**
+	 * Claude Code's Ultracode: a mode, not an effort level. It runs at Extra High with Claude Code's own
+	 * workflows, so turning it on sets that level. Undefined where it is not offered.
+	 */
+	ultracode?: boolean;
+	onToggleUltracode?: (next: boolean) => void;
 }
 
 const TRIGGER_CLASS = cn(
@@ -368,11 +374,13 @@ export function AgentModelPicker({
 	const shownModel = pending
 		? pending.modelLabel ?? (source.modelId ? source.modelLabel : pendingDefaultModel) ?? agentLabel(pending.harness)
 		: savedLabel ?? currentSource.modelLabel;
-	const pendingEffort = pending?.ultracode ? "ultracode" : pending?.effort ?? pending?.shownEffort ?? (pending ? source.effort : undefined);
+	const pendingEffort = pending?.effort ?? pending?.shownEffort ?? (pending ? source.effort : undefined);
 	const shownEffort = pending
 		? pendingEffort ? source.efforts.find((effort) => effort.value === pendingEffort)?.label ?? formatEffortLabel(pendingEffort, t) : undefined
 		: currentSource.efforts.find((effort) => effort.value === currentSource.effort)?.label;
-	const shownUltra = isUltraEffort(pending ? pendingEffort : currentSource.effort);
+	const ultraEffort = isUltraEffort(pending ? pendingEffort : currentSource.effort);
+	const shownUltracode = pending ? Boolean(pending.ultracode && source.ultracode !== undefined) : Boolean(currentSource.ultracode);
+	const shownUltra = ultraEffort || shownUltracode;
 	const shownFast = pending ? pending.fast || pending.fastMode || source.fast : currentSource.fast;
 	const shownThinking = pending ? pending.thinking ?? source.thinking : currentSource.thinking;
 	// A row is named by its id or the variant it sends; either names the current model.
@@ -513,14 +521,27 @@ export function AgentModelPicker({
 		settingsRows.length > 0 ? settingsRows : null,
 		showToggles ? (
 			<>
-				<div className="flex items-center gap-2">
-					<ToggleRow
+				<div className="flex items-center gap-1">
+					<IconToggle
+						icon={Zap}
 						label={t("agentSwitch.fastMode")}
 						checked={source.fast ?? false}
 						onChange={source.fast === undefined ? undefined : withPick(source.onToggleFast)}
-						title={source.fast === undefined ? notOffered : undefined}
-						className="shrink-0 gap-2"
+						hint={t("agentSwitch.fastModeHint")}
+						note={source.fast === undefined ? notOffered : undefined}
 					/>
+					{/* Claude Code's Ultracode is a mode beside Fast mode, not a level on the effort slider. */}
+					{source.ultracode !== undefined ? (
+						<IconToggle
+							icon={DoubleZap}
+							iconClassName="h-3.5 w-auto"
+							label={t("agentSwitch.ultracode")}
+							checked={source.ultracode}
+							onChange={withPick(source.onToggleUltracode)}
+							hint={t("agentSwitch.ultracodeHint")}
+							onClassName="ultra-icon"
+						/>
+					) : null}
 					<AutoCompactChoices {...(compact ?? { onChange: () => {}, disabled: true, unavailable: true, title: notOffered })} className="ml-auto mr-2" />
 				</div>
 				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={withPick(source.onToggleThinking)} />
@@ -562,8 +583,9 @@ export function AgentModelPicker({
 				{terminal ? <ChevronRight aria-hidden="true" className="ml-auto size-icon-sm shrink-0 text-muted-foreground" /> : (
 					<>
 						{shownFast ? <Zap aria-label={t("agentSwitch.fastMode")} className="size-3 shrink-0 fill-current" /> : null}
+						{shownUltracode ? <DoubleZap aria-label={t("agentSwitch.ultracode")} className="ultra-icon h-3 w-auto shrink-0 fill-current" /> : null}
 						{shownThinking ? <Brain aria-label={t("agentSwitch.thinking")} className="size-3 shrink-0" /> : null}
-						{shownEffort ? <span className={cn("shrink-0", shownUltra ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
+						{shownEffort ? <span className={cn("shrink-0", ultraEffort ? "ultra-text" : "text-muted-foreground")}>{shownEffort}</span> : null}
 						{mark}
 					</>
 				)}
@@ -826,6 +848,58 @@ export function ToggleRow({ label, checked, onChange, title, className }: { labe
 	);
 }
 
+/**
+ * A mode as an icon button (Fast mode's lightning, Ultracode's double bolt): filled and lit when on, an
+ * outline when off. It is still a menu row, so the arrow keys reach it and Enter toggles it without
+ * closing the menu.
+ */
+/**
+ * A mode switched on and off by its icon alone. Hovering names it and says what it does,
+ * since the icon by itself does not.
+ */
+function IconToggle({ icon: Icon, label, hint, note, checked, onChange, onClassName = "text-foreground", iconClassName = "size-3.5" }: {
+	icon: AppIcon;
+	/** The icon's size: square by default; a wider icon gives a height and lets its width follow. */
+	iconClassName?: string;
+	label: string;
+	/** What the mode does, under its name in the tooltip. */
+	hint: string;
+	/** Why it cannot be switched here, if it cannot. */
+	note?: string;
+	checked: boolean;
+	onChange?: (next: boolean) => void;
+	/** The icon's colour when on. */
+	onClassName?: string;
+}) {
+	return (
+		<TooltipProvider delayDuration={300}>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<OptionMenuItem
+						role="menuitemcheckbox"
+						aria-checked={checked}
+						aria-label={label}
+						aria-description={note ?? hint}
+						disabled={!onChange}
+						onSelect={(event) => { event.preventDefault(); onChange?.(!checked); }}
+						className={cn(
+							"size-7 shrink-0 justify-center p-0 data-disabled:opacity-50",
+							checked ? cn(onClassName, "before:bg-interactive-active") : "text-muted-foreground",
+						)}
+					>
+						<Icon aria-hidden="true" className={cn(iconClassName, checked && "fill-current")} />
+					</OptionMenuItem>
+				</TooltipTrigger>
+				<TooltipContent side="top" sideOffset={4} hideArrow className="max-w-60">
+					<span className="block font-medium text-foreground">{label}</span>
+					<span className="block text-muted-foreground">{hint}</span>
+					{note ? <span className="mt-1 block text-muted-foreground">{note}</span> : null}
+				</TooltipContent>
+			</Tooltip>
+		</TooltipProvider>
+	);
+}
+
 /** Why a catalog has no models, from its refresh error or warning: the first line, kept short. */
 export function catalogProblem(catalog: Pick<AgentModelCatalog, "refreshError" | "warning"> | undefined): string | undefined {
 	const text = (catalog?.refreshError || catalog?.warning)?.trim().split("\n")[0]?.trim();
@@ -893,6 +967,7 @@ function otherAgentSource(
 	const levels = (effortSource?.efforts ?? []).filter((value) => value && value.toLowerCase() !== "default");
 	// Ultracode runs at Extra High, so it is only for models that have that level.
 	const offersUltracode = harness === "claude-code" && levels.includes("xhigh");
+	const ultracodeOn = offersUltracode && Boolean(pending?.ultracode);
 	const keep = { harness, model: pending?.model, modelLabel: pending?.modelLabel, shownEffort: defaultEffort, fastMode: fastOn || undefined, autoCompactWindow: pending?.autoCompactWindow };
 	return {
 		// The plain row is only for an agent that lists no models.
@@ -910,14 +985,14 @@ function otherAgentSource(
 				fastMode: Boolean(next?.supportsFast && pending?.fastMode) || undefined,
 			});
 		},
-		efforts: [
-			...levels.map((value) => ({ value, label: formatEffortLabel(value, t) })),
-			...(offersUltracode ? [{ value: "ultracode", label: "Ultracode" }] : []),
-		],
-		effort: offersUltracode && pending?.ultracode ? "ultracode" : pending?.effort ?? defaultEffort,
-		onPickEffort: (effort) => onPick(effort === "ultracode" ? { ...keep, effort: "xhigh", ultracode: true } : { ...keep, effort }),
+		efforts: levels.map((value) => ({ value, label: formatEffortLabel(value, t) })),
+		effort: pending?.effort ?? defaultEffort,
+		// Ultracode runs only at Extra High: another level turns it off.
+		onPickEffort: (effort) => onPick({ ...keep, effort, ultracode: (ultracodeOn && effort === "xhigh") || undefined }),
 		fast: offersFast ? fastOn : undefined,
 		onToggleFast: (fast) => onPick({ ...keep, effort: pending?.effort, ultracode: pending?.ultracode, fastMode: fast || undefined }),
+		ultracode: offersUltracode ? ultracodeOn : undefined,
+		onToggleUltracode: (on) => onPick({ ...keep, effort: on ? "xhigh" : pending?.effort, ultracode: on || undefined }),
 	};
 }
 
@@ -957,7 +1032,7 @@ const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive,
 	);
 });
 
-/** The top level some agents have past Max: Codex's "ultra", Claude Code's "ultracode". */
+/** The top level some agents have past Max, such as Codex's and Hermes' "ultra". */
 function isUltraEffort(value: string | undefined): boolean {
 	return Boolean(value?.toLowerCase().startsWith("ultra"));
 }
