@@ -552,6 +552,28 @@ describe("live browser frames", () => {
 		expect(source()).toBe(encoded(4));
 	});
 
+	it("keeps the new stream's frame waiting when the last stream's image loads late", async () => {
+		await render();
+		await open();
+		await showFrame();
+		// The last stream's image, still loading when the stream fails.
+		const lateLoad = nodes("Image")[0].props.onLoad as () => void;
+		await act(async () => client().handlers.onStatus("error", "The browser stream ended."));
+		const alert = screen.root.find((node) => node.props.accessibilityRole === "alert");
+		await act(async () => alert.findByType("Button" as never).props.onPress());
+		await open();
+		await act(async () => {
+			client().handlers.onFrame({ sequence: 2n, capturedAtMs: 2n, width: 1280, height: 800, jpeg: jpeg(2) });
+			client().handlers.onFrame({ sequence: 3n, capturedAtMs: 3n, width: 1280, height: 800, jpeg: jpeg(3) });
+		});
+		expect(source()).toBe(encoded(2));
+		// The old image's load must not release the new stream's queue.
+		await act(async () => { lateLoad(); });
+		expect(source()).toBe(encoded(2));
+		await act(async () => { nodes("Image")[0].props.onLoad(); });
+		expect(source()).toBe(encoded(3));
+	});
+
 	it("moves on when a frame fails to decode", async () => {
 		await render();
 		await open();

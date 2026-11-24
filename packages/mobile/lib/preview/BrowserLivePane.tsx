@@ -140,6 +140,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	}, []);
 	// The Image finished with its source, loaded or not: the next frame may go.
 	const frameDone = useCallback((uri: string) => {
+		// A late load of an image that is no longer shown (the last stream's,
+		// after a reconnect) must not release this stream's queue.
+		if (uri !== shownURI.current) return;
 		frameShown(uri);
 		frames.current?.decoded();
 	}, [frameShown]);
