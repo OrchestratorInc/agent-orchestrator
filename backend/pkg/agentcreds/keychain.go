@@ -145,10 +145,26 @@ func keychainCredential(out []byte) (storedOAuth, bool) {
 	if stored, ok := oauthTokenFromCredentialsJSON([]byte(value)); ok {
 		return stored, true
 	}
-	if !strings.HasPrefix(value, "sk-ant-") {
+	if !isBareClaudeToken(value) {
 		return storedOAuth{}, false
 	}
 	return storedOAuth{token: value, kind: kindForToken(value)}, true
+}
+
+// isBareClaudeToken reports whether value is a single sk-ant- token. Any
+// whitespace or non-printable byte means the item holds more than the token
+// (a refresh token on another line, trailing notes), so it is rejected rather
+// than sent whole.
+func isBareClaudeToken(value string) bool {
+	if !strings.HasPrefix(value, "sk-ant-") {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] <= ' ' || value[i] >= 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // kindForToken selects the auth header from the token prefix. Claude Code

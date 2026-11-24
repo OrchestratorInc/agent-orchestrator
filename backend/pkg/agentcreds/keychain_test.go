@@ -205,6 +205,9 @@ func TestKeychainValueFormats(t *testing.T) {
 		{"API key in credentials item", "Claude Code-credentials", "sk-ant-api03-managed", "sk-ant-api03-managed", KindAPIKey},
 		{"unrecognised value", "Claude Code-credentials", "not-a-credential", "", ""},
 		{"unrecognised managed value", "Claude Code", "not-a-credential", "", ""},
+		{"multi-line token printed as hex", "Claude Code-credentials", hex.EncodeToString([]byte("sk-ant-oat01-x\nrefresh: sk-ant-ort01-y")), "", ""},
+		{"token with trailing text", "Claude Code-credentials", "sk-ant-oat01-x extra junk with spaces", "", ""},
+		{"managed key with trailing text", "Claude Code", "sk-ant-api03-x\tnote", "", ""},
 		{"JSON without a token", "Claude Code-credentials", hex.EncodeToString([]byte("{\n}")), "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
