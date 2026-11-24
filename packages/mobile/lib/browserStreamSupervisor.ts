@@ -61,6 +61,9 @@ export class BrowserStreamSupervisor {
 	private healthy = false;
 	private stale = false;
 	private everOpen = false;
+	// This supervisor's own stream opened: its address is now where the stream
+	// lives, so a "sharing is off" from it is the host's answer.
+	private openedHere = false;
 	private running = false;
 	// The connection now running has already failed: its error and the close
 	// that follows count once.
@@ -169,6 +172,7 @@ export class BrowserStreamSupervisor {
 				if (!live()) return;
 				if (status === "open") {
 					this.everOpen = true;
+					this.openedHere = true;
 					this.lastAlive = Date.now();
 					this.startWatchdog();
 					this.events.onStatus("open", message);
@@ -183,7 +187,7 @@ export class BrowserStreamSupervisor {
 			// even from a connection a retry has replaced.
 			onDisabled: () => {
 				if (!this.running || this.away || this.disabled) return;
-				if (this.deps.disabledIsFinal === false) {
+				if (this.deps.disabledIsFinal === false && !this.openedHere) {
 					this.fail("Reconnecting to this machine…");
 					return;
 				}

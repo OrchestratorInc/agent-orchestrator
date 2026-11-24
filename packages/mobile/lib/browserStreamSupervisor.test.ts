@@ -168,6 +168,18 @@ describe("network and app state", () => {
 		expect(s.made).toHaveLength(2);
 	});
 
+	it("a failover stream that opened is the host's own: its 'sharing is off' is final", () => {
+		const s = setup({ disabledIsFinal: false, resumed: true });
+		s.supervisor.start();
+		s.last().open();
+		s.last().alive();
+		s.last().fail();
+		s.last().handlers?.onDisabled?.();
+		expect(s.events.onDisabled).toHaveBeenCalledTimes(1);
+		vi.advanceTimersByTime(60_000);
+		expect(s.made).toHaveLength(1);
+	});
+
 	it("stops for good when the host says streaming is disabled", () => {
 		const s = setup();
 		s.supervisor.start();

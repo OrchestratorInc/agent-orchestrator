@@ -604,6 +604,24 @@ describe("transport contract", () => {
 		}
 	});
 
+	it("once the stream opens on the new address, that address saying sharing is off is final", async () => {
+		const onDisabled = vi.fn();
+		const primary = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+		const other = { host: "10.0.0.9", httpPort: "61498", muxPort: "61498", password: "test" };
+		const view = () => <BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} onDisabled={onDisabled} />;
+		fixtures.config = primary;
+		await act(async () => { screen = create(view()); });
+		await open();
+		fixtures.config = other;
+		await act(async () => { screen.update(view()); });
+		// B opens: it is now where the stream lives.
+		await open();
+		await showFrame();
+		// The person turns sharing off on the desktop while B is selected.
+		await act(async () => { client().handlers.onStatus("error"); client().handlers.onDisabled?.(); });
+		expect(onDisabled).toHaveBeenCalledTimes(1);
+	});
+
 	it("the primary itself saying sharing is off still stops for good", async () => {
 		const onDisabled = vi.fn();
 		await act(async () => { screen = create(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} onDisabled={onDisabled} />); });
