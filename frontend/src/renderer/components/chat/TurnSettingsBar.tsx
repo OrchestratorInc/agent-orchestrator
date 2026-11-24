@@ -368,7 +368,10 @@ export function TurnSettingsBar({
 	const { ultracode, autoCompact } = agentSwitch ?? {};
 	// Ultracode works at any effort level, so it is not tied to one.
 	const offersUltracode = Boolean(ultracode && harness === "claude-code");
-	const compactKind = autoCompact ? autoCompactKind(harness, primaryModelOption?.currentValue) : undefined;
+	const compactKind = autoCompact
+		? autoCompactKind(harness, nativeModelMenu ? settings.model ?? fallback?.id : primaryModelOption?.currentValue)
+		: undefined;
+	const ultracodeControls = offersUltracode && ultracode ? { ultracode: ultracode.on, onToggleUltracode: ultracode.onChange } : {};
 	// A model the installed CLI is too old for is shown, disabled, but never sent.
 	const nativeUnavailable = (id: string) => Boolean(displayModels.find((model) => model.id === id)?.unavailableReason);
 	const choiceUnavailable = (id: string) => Boolean(primaryModelOption?.choices.find((choice) => choice.value === id)?.unavailableReason);
@@ -391,6 +394,7 @@ export function TurnSettingsBar({
 			efforts: efforts.map((value) => ({ value, label: formatEffortLabel(value, t) })),
 			effort: effortLabel,
 			onPickEffort: (value) => onChange({ ...settings, reasoningEffort: value }),
+			...ultracodeControls,
 			...nativeFastControls,
 		}
 		: {
@@ -417,7 +421,7 @@ export function TurnSettingsBar({
 				? (value) => applyOption(acpEffortOption.id, { value })
 				: undefined,
 			// A mode beside Fast mode, not an effort level.
-			...(offersUltracode && ultracode ? { ultracode: ultracode.on, onToggleUltracode: ultracode.onChange } : {}),
+			...ultracodeControls,
 			...fastControls,
 			...(thinkingOption && onChangeConfigOption
 				? { thinking: optionIsEnabled(thinkingOption), onToggleThinking: (on: boolean) => setConfigToggle(thinkingOption, on, applyOption) }
@@ -427,7 +431,7 @@ export function TurnSettingsBar({
 	const hasPickerExtras = unified && Boolean(onChangeConfigOption) && (grouped.extra.length > 0 ||
 		(!nativeModelMenu && (grouped.model.length > 1 || grouped.effort.length > 1)));
 	// Handed to the picker on its own, so it can sit beside Fast mode.
-	const pickerAutoCompact = unified && onChangeConfigOption && compactKind && autoCompact
+	const pickerAutoCompact = unified && (onChangeConfigOption || nativeModelMenu) && compactKind && autoCompact
 		? {
 			...autoCompact,
 			kind: compactKind,
@@ -472,7 +476,7 @@ export function TurnSettingsBar({
 								savedModel={settings.model || lastModel}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								extras={pickerExtras}
-							autoCompact={pickerAutoCompact}
+								autoCompact={pickerAutoCompact}
 								onCloseAutoFocus={restoreComposerFocus}
 							/>
 						</>

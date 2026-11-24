@@ -333,8 +333,12 @@ export function AgentModelPicker({
 			t,
 		)
 		: undefined;
+	// Ultracode stays live: it only adds a word to the chat's next message and never touches the agent.
 	const currentSource: PickerSource = disabled || starting
-		? { ...(starting ?? live), onPickModel: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined, onToggleUltracode: undefined }
+		? {
+			...(starting ?? live), onPickModel: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined,
+			ultracode: live.ultracode, onToggleUltracode: live.onToggleUltracode,
+		}
 		: live;
 	// The other agents' model lists load once the menu is open, so search reaches every model.
 	const others = agents.filter((agent) => agent.id !== currentHarness);

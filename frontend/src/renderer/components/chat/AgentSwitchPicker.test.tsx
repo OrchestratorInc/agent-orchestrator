@@ -721,14 +721,16 @@ describe("AgentModelPicker", () => {
 			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ effort: "max", ultracode: true }));
 		});
 
-		it("cannot be switched while the agent's settings are locked", async () => {
+		it("can still be switched while the agent's settings are locked", async () => {
+			// It only changes the chat's next message, never the agent, so a starting agent does not lock it.
 			const user = userEvent.setup();
 			const onToggleUltracode = vi.fn();
+			const onPickModel = vi.fn();
 			render(
 				<QueryClientProvider client={new QueryClient()}>
 					<AgentModelPicker
 						currentHarness="claude-code"
-						current={{ models: [{ id: "opus", label: "Opus" }], modelId: "opus", modelLabel: "Opus", onPickModel: vi.fn(), efforts: [], ultracode: false, onToggleUltracode }}
+						current={{ models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }], modelId: "opus", modelLabel: "Opus", onPickModel, efforts: [], ultracode: false, onToggleUltracode }}
 						disabled
 						agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
 					/>
@@ -736,9 +738,10 @@ describe("AgentModelPicker", () => {
 			);
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			const ultracode = screen.getByRole("menuitemcheckbox", { name: "Ultracode" });
-			expect(ultracode).toHaveAttribute("aria-disabled", "true");
+			expect(ultracode).not.toHaveAttribute("aria-disabled", "true");
 			await user.click(ultracode);
-			expect(onToggleUltracode).not.toHaveBeenCalled();
+			expect(onToggleUltracode).toHaveBeenCalledExactlyOnceWith(true);
+			expect(onPickModel).not.toHaveBeenCalled();
 		});
 
 		it("keeps the permission mode picked for a switch", async () => {
