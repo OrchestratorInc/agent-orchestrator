@@ -646,7 +646,7 @@ export function WorkspaceReviewPane({
 							</Pressable>
 							{onOpenFile ? (
 								<HeaderActionTooltip label={t("files.openFullFileGeneric")}>
-									<Button aria-label={t("files.openFullFileGeneric")} className="shrink-0" onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-xs" type="button" variant="quiet"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
+									<Button aria-label={t("files.openFullFileGeneric")} className="shrink-0" disabled={!target.openable} onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-xs" type="button" variant="quiet"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
 								</HeaderActionTooltip>
 							) : null}
 							<HeaderActionTooltip label={isViewed ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })}>
@@ -823,12 +823,12 @@ export function WorkspaceReviewPane({
 														) : null}
 														{onOpenFile ? (
 															<HeaderActionTooltip label={t("files.openFullFileGeneric")}>
-																<Button aria-label={t("files.openFullFileGeneric")} onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-xs" type="button" variant="quiet"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
+																<Button aria-label={t("files.openFullFileGeneric")} disabled={!target.openable} onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="icon-xs" type="button" variant="quiet"><FileCode2 aria-hidden="true" className="size-icon-sm" /></Button>
 															</HeaderActionTooltip>
 														) : null}
 														{onOpenFile && canOpenInCenter ? (
 															<HeaderActionTooltip label={t("files.openDiffInCenter")}>
-																<Button aria-label={t("files.openDiffInCenter")} onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "diff", center:true })} size="icon-xs" type="button" variant="quiet"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm" /></Button>
+																<Button aria-label={t("files.openDiffInCenter")} disabled={!target.openable} onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "diff", center:true })} size="icon-xs" type="button" variant="quiet"><VscodeGoToFileIcon aria-hidden="true" className="size-icon-sm" /></Button>
 															</HeaderActionTooltip>
 														) : null}
 														<HeaderActionTooltip label={t("files.addFeedback")}>
