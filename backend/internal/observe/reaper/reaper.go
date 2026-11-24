@@ -160,7 +160,14 @@ func (r *Reaper) loop(ctx context.Context, done chan<- struct{}) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := r.Tick(ctx); err != nil {
+			// One session's probe must not stop liveness checks for every
+			// session: a panicking tick is reported and the next tick runs.
+			var err error
+			if sentryobs.RecoverIteration(func() { err = r.Tick(ctx) }) {
+				r.logger.Error("reaper: tick panicked; continuing with the next tick")
+				continue
+			}
+			if err != nil {
 				r.logger.Error("reaper: tick failed", "err", err)
 				sentryobs.CaptureBackground(ctx, err, "reaper", "reaper_tick", nil)
 			}

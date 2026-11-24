@@ -461,3 +461,44 @@ func (d *retryBudgetDelivery) Submit(context.Context, domain.SessionID, string, 
 	return d.err
 }
 func (*retryBudgetDelivery) Interrupt(context.Context, domain.SessionID) error { return nil }
+
+func TestReportStoreRequeuesOnlyClaimsPastTheirLease(t *testing.T) {
+	ctx := context.Background()
+	s, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	seedProject(t, s, "ao")
+	sess, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, id := range []string{"rpt_stale", "rpt_fresh"} {
+		rec := domain.ReportRecord{ID: id, SessionID: sess.ID, ProjectID: sess.ProjectID, Message: "information", CreatedAt: now.Add(-time.Hour), DeliveryState: domain.ReportPending, AvailableAt: now.Add(-time.Hour), RepeatCount: 1}
+		if _, err := s.CreateReport(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok, err := s.ClaimReport(ctx, "rpt_stale", "stale-token", now.Add(-20*time.Minute)); err != nil || !ok {
+		t.Fatalf("stale claim ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := s.ClaimReport(ctx, "rpt_fresh", "fresh-token", now.Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("fresh claim ok=%v err=%v", ok, err)
+	}
+	if count, err := s.RequeueStaleClaimedReports(ctx, now.Add(-10*time.Minute)); err != nil || count != 1 {
+		t.Fatalf("requeue count=%d err=%v, want only the stale claim", count, err)
+	}
+	stale, _, err := s.GetReport(ctx, "rpt_stale")
+	if err != nil || stale.DeliveryState != domain.ReportPending || stale.ClaimToken != "" || !stale.ClaimedAt.IsZero() || !strings.Contains(stale.LastError, "expired") {
+		t.Fatalf("stale=%+v err=%v", stale, err)
+	}
+	if _, ok, err := s.AcknowledgeReport(ctx, "rpt_stale", "stale-token", now); err != nil || ok {
+		t.Fatalf("expired token crossed fence ok=%v err=%v", ok, err)
+	}
+	fresh, _, err := s.GetReport(ctx, "rpt_fresh")
+	if err != nil || fresh.DeliveryState != domain.ReportClaimed || fresh.ClaimToken != "fresh-token" {
+		t.Fatalf("fresh=%+v err=%v", fresh, err)
+	}
+}

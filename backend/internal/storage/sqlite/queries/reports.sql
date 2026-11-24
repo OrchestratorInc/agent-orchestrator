@@ -133,6 +133,12 @@ SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
     last_error = 'delivery claim recovered after daemon restart'
 WHERE delivery_state = 'claimed';
 
+-- name: RequeueStaleClaimedReports :execrows
+UPDATE reports
+SET delivery_state = 'pending', claim_token = '', claimed_at = NULL,
+    last_error = 'delivery claim expired before acknowledgement'
+WHERE delivery_state = 'claimed' AND claimed_at < sqlc.arg(claimed_before);
+
 -- name: IncrementUnacknowledgedReportBatch :many
 UPDATE reports
 SET unacknowledged_attempts = unacknowledged_attempts + 1

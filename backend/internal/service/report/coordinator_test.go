@@ -70,6 +70,64 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	}
 }
 
+func TestCoordinatorRequeuesClaimAbandonedPastLease(t *testing.T) {
+	now := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("need", "worker", now, now, "decision"))
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	// A piggybacked send claims the batch and then never accepts or releases it.
+	if batch, err := c.PreparePiggyback(context.Background(), "orch"); err != nil || len(batch.Reports) != 1 {
+		t.Fatalf("piggyback batch = %#v, err = %v", batch, err)
+	}
+	now = now.Add(ReportClaimLease - time.Second)
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 0 || store.reports[0].DeliveryState != domain.ReportClaimed {
+		t.Fatalf("claim inside its lease was touched: state = %s, submissions = %#v", store.reports[0].DeliveryState, delivery.submissions)
+	}
+	now = now.Add(2 * time.Second)
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 1 || store.reports[0].DeliveryState != domain.ReportAcknowledged {
+		t.Fatalf("abandoned claim not redelivered: state = %s, submissions = %#v", store.reports[0].DeliveryState, delivery.submissions)
+	}
+}
+
+func TestCoordinatorLoopSurvivesPanickingPass(t *testing.T) {
+	now := time.Date(2026, 11, 24, 6, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.setSessions(
+		domain.SessionRecord{ID: "boom", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+		domain.SessionRecord{ID: "healthy", ProjectID: "q", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+	)
+	first := reportAt("first", "worker", now, now, "panics on submit")
+	second := reportAt("second", "other-worker", now.Add(time.Second), now, "still delivered")
+	second.ProjectID = "q"
+	store.add(first, second)
+	delivery := &coordinatorDelivery{panicFor: "boom"}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now.Add(time.Minute) }, RetryDelay: time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := c.Start(ctx)
+	deadline := time.After(5 * time.Second)
+	for len(delivery.submitted()) == 0 {
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("the loop stopped delivering after a panicking pass")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+	if got := delivery.submitted(); got[0].target != "healthy" {
+		t.Fatalf("submissions = %#v, want the healthy project's report", got)
+	}
+}
+
 func TestCoordinatorStuckInterruptRateLimitAndCoalescing(t *testing.T) {
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)
@@ -1079,6 +1137,19 @@ func (s *coordinatorStore) DeferReportBatch(ctx context.Context, project domain.
 	}
 	return count, nil
 }
+func (s *coordinatorStore) RequeueStaleClaimedReports(_ context.Context, claimedBefore time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var count int64
+	for i := range s.reports {
+		if s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimedAt.Before(claimedBefore) {
+			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportPending, "", time.Time{}
+			s.reports[i].LastError = "delivery claim expired before acknowledgement"
+			count++
+		}
+	}
+	return count, nil
+}
 func (s *coordinatorStore) AcquireReportInterrupt(_ context.Context, worker domain.SessionID, at time.Time, window time.Duration) (bool, time.Time, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1108,6 +1179,7 @@ type coordinatorDelivery struct {
 	interrupts   []domain.SessionID
 	submitErr    error
 	submitErrFor map[domain.SessionID]error
+	panicFor     domain.SessionID
 	attempts     int
 }
 
@@ -1115,6 +1187,9 @@ func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID,
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.attempts++
+	if d.panicFor != "" && target == d.panicFor {
+		panic("submit to " + string(target))
+	}
 	if d.submitErr != nil {
 		return d.submitErr
 	}

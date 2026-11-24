@@ -688,3 +688,33 @@ func TestErrorFingerprintDailyCapReportsDroppedOnNextSend(t *testing.T) {
 		t.Error("free-text cause passed the tag filter")
 	}
 }
+
+func TestRecoverIterationReportsPanicAndReturns(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
+	if RecoverIteration(func() {}) {
+		t.Fatal("a clean iteration reported a panic")
+	}
+	if !RecoverIteration(func() { panic("sweep session ai-sports-coach-113") }) {
+		t.Fatal("a panicking iteration was not reported as panicked")
+	}
+	select {
+	case event := <-transport.events:
+		if event.Message != "daemon loop iteration panic" || event.Tags["panic_kind"] != "string" {
+			t.Fatalf("iteration panic metadata = %+v", event)
+		}
+		if len(event.Exception) != 1 || len(event.Exception[0].Stacktrace.Frames) != 1 || !strings.Contains(event.Exception[0].Stacktrace.Frames[0].Function, "TestRecoverIterationReportsPanicAndReturns") {
+			t.Fatalf("iteration panic culprit = %+v", event)
+		}
+		encoded, err := event.MarshalJSON()
+		if err != nil || strings.Contains(string(encoded), "ai-sports-coach-113") {
+			t.Fatalf("iteration panic leaked private value: %s, error: %v", encoded, err)
+		}
+	default:
+		t.Fatal("iteration panic was not captured")
+	}
+}

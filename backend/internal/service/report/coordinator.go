@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 )
 
 // ReportInterruptWindow is the durable per-worker urgent interruption limit.
@@ -27,6 +28,13 @@ const OrchestratorBusyRetry = 30 * time.Second
 // DefaultMaxDeliveryAttempts is the upper bound on delivery attempts for a
 // report batch before transitioning it to a terminal failed state.
 const DefaultMaxDeliveryAttempts = 10
+
+// ReportClaimLease bounds how long a delivery claim may stay unresolved. A
+// claim normally ends within one delivery attempt; one left behind by a failed
+// acknowledgement or an abandoned piggyback is returned to pending after this
+// lease, so it no longer waits for the next daemon restart. It is far longer
+// than any single submission, which is bounded by seconds.
+const ReportClaimLease = 10 * time.Minute
 
 // DefaultReportExpiry is the time-based backstop after which an undelivered
 // report batch transitions to a terminal failed state.
@@ -64,6 +72,7 @@ type DeliveryStore interface {
 	FailReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
 	RetryUnacknowledgedReportBatch(context.Context, domain.ProjectID, string, time.Time, int, string) (int, error)
 	AcquireReportInterrupt(context.Context, domain.SessionID, time.Time, time.Duration) (bool, time.Time, error)
+	RequeueStaleClaimedReports(context.Context, time.Time) (int64, error)
 }
 
 // Delivery submits accepted semantic context and interrupts active work.
@@ -170,18 +179,28 @@ func (c *Coordinator) SessionActivityChanged(state domain.ActivityState, termina
 // Start runs delivery until ctx is cancelled and returns its completion signal.
 func (c *Coordinator) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
-	go func() { defer close(done); c.run(ctx) }()
+	go func() {
+		defer sentryobs.RecoverBackground()
+		defer close(done)
+		c.run(ctx)
+	}()
 	return done
 }
 
 func (c *Coordinator) run(ctx context.Context) {
 	for {
-		delay, err := c.RunDue(ctx)
-		if err != nil {
+		var delay time.Duration
+		var err error
+		// A panic in one pass must not stop report delivery for every project.
+		// RunDue re-reads its schedule from the store, and a claim the pass
+		// left behind returns to pending after ReportClaimLease.
+		if sentryobs.RecoverIteration(func() { delay, err = c.RunDue(ctx) }) || err != nil {
 			delay = c.retryDelay
 		}
-		if delay < 0 {
-			delay = time.Hour
+		// Never sleep past the claim lease, so a claim stranded while nothing
+		// else is due is still recovered on time.
+		if delay < 0 || delay > ReportClaimLease {
+			delay = ReportClaimLease
 		}
 		timer := time.NewTimer(delay)
 		select {
@@ -209,6 +228,9 @@ func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if _, err := c.store.RequeueStaleClaimedReports(ctx, c.now().UTC().Add(-ReportClaimLease)); err != nil {
+		return c.retryDelay, err
+	}
 	for {
 		pending, err := c.store.ListPendingReportSchedule(ctx, 1)
 		if err != nil {
