@@ -68,6 +68,10 @@ type ChatBackgroundTaskOutput struct {
 	// holds this run's output, because another writer has taken it over since
 	// the run ended. Text then holds only what the task printed itself.
 	LogOmitted bool
+	// RunID names the run this output belongs to, when the provider gives
+	// runs their own ID, so a reader of an earlier run under a reused task ID
+	// can tell the output isn't that run's.
+	RunID string
 }
 
 // ChatBackgroundTaskOutputReader reads one task's recent output. Like a

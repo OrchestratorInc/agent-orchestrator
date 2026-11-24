@@ -679,6 +679,20 @@ describe("background tasks side panel", () => {
 		expect(panel().seenFailedTasks).toEqual([failedTaskKey(done(1))]);
 	});
 
+	it("prunes finished rows once a reading stops listing them, even when none of them changed", () => {
+		const store = useUiStore.getState();
+		const finished = Array.from({ length: FINISHED_TASK_TABS_KEPT + 1 }, (_, n) => task(`done-${n}`, { state: "succeeded", endedAt: `2026-11-14T10:${String(n).padStart(2, "0")}:00Z` }));
+		store.syncTaskTabs(id, finished);
+		expect(panel().taskTabs).toHaveLength(FINISHED_TASK_TABS_KEPT + 1);
+		store.syncTaskTabs(id, []);
+		const ids = panel().taskTabs?.map((tab) => tab.task.id) ?? [];
+		expect(ids).toHaveLength(FINISHED_TASK_TABS_KEPT);
+		expect(ids).not.toContain("done-0");
+		const before = panel();
+		store.syncTaskTabs(id, []);
+		expect(panel()).toBe(before);
+	});
+
 	it("drops the finished rows that ended longest ago, not the first seen", () => {
 		const store = useUiStore.getState();
 		const at = (minute: number) => `2026-11-14T10:${String(minute).padStart(2, "0")}:00Z`;

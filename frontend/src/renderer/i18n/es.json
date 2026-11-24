@@ -5547,8 +5547,6 @@
 	"backgroundTasks.stale": "desactualizado",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Tarea en segundo plano",
-	"backgroundTasks.state.running": "En ejecución",
-	"backgroundTasks.state.paused": "En pausa",
 	"backgroundTasks.state.failed": "Fallida",
 	"backgroundTasks.shells_many": "{{count}} shells siguen en ejecución",
 	"backgroundTasks.agents_many": "{{count}} agentes en segundo plano en ejecución",

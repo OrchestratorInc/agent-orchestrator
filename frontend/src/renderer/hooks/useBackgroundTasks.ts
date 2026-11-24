@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { apiClient } from "../lib/api-client";
 
 export type BackgroundTaskReading = components["schemas"]["BackgroundTasksResponse"];
@@ -119,11 +120,17 @@ export function useBackgroundTaskOutput(
 			});
 			if (error) throw error;
 			if (!data || typeof data.output !== "string" || (data.availability !== "ready" && data.availability !== "unavailable")) {
-				throw new Error("Invalid background task output response");
+				throw new AoError("BACKGROUND_TASK_OUTPUT_INVALID", "Invalid background task output response");
 			}
 			const previous = queryClient.getQueryData<BackgroundTaskOutput>(queryKey);
+			// The task ID names a newer run now: its output isn't this run's, so
+			// this run keeps what it read, or shows none.
+			if (runId && data.runId && data.runId !== runId) {
+				const none: BackgroundTaskOutput = { sessionId, taskId, availability: "unavailable", output: "" };
+				return previous ?? none;
+			}
 			if (data.availability === "unavailable" && previous?.availability === "ready" && previous.output) {
-				if (!over) throw new Error("Background task output unavailable");
+				if (!over) throw new AoError("BACKGROUND_TASK_OUTPUT_UNAVAILABLE", "Background task output unavailable");
 				return previous.lastRead ? previous : { ...previous, lastRead: true };
 			}
 			// The daemon left out a log another writer took over: keep the log read

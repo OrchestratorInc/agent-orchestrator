@@ -5380,7 +5380,5 @@
 	"backgroundTasks.stale": "오래된 정보",
 	"backgroundTasks.kind.shell": "셸",
 	"backgroundTasks.kind.other": "백그라운드 작업",
-	"backgroundTasks.state.running": "실행 중",
-	"backgroundTasks.state.paused": "일시 중지됨",
 	"backgroundTasks.state.failed": "실패"
 }

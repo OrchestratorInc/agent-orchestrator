@@ -60,6 +60,15 @@ func TestStdoutFileFollowsWhereACommandSendsItsOutput(t *testing.T) {
 		{`npm run dev 2>&1 | tee dev.log`, ""},
 		{`npm run dev > /dev/null 2>&1`, ""},
 		{`npm run dev >&2`, ""},
+		// Moving stdout onto another descriptor, or closing it, after a file
+		// redirect leaves the file behind; 2>&1 does not.
+		{`./server > out.log 1>&2`, ""},
+		{`./server > out.log >&-`, ""},
+		{`./server > out.log >&1`, "/work/out.log"},
+		{`./server > out.log 2>&1`, "/work/out.log"},
+		// A background command that prints its own output: a later file is not it.
+		{`./server & echo $! > server.pid`, ""},
+		{`(cd app && ./server) & echo $! > server.pid`, ""},
 		{`echo "npm run dev > dev.log"`, ""},
 		{`echo 'a > b.log'`, ""},
 		{`echo a\>b.log`, ""},
@@ -118,17 +127,22 @@ func TestRedirectedOutputRefusesWhatIsNotARegularLog(t *testing.T) {
 	if err := os.WriteFile(secret, []byte("token"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(secret, filepath.Join(dir, "link.log")); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
 	if err := os.Mkdir(filepath.Join(dir, "logs"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, command := range []string{"./run > link.log", "./run > logs", "./run > missing.log", "./run"} {
+	for _, command := range []string{"./run > logs", "./run > missing.log", "./run"} {
 		if got, ok := RedirectedOutput(command, dir, &started); ok {
 			t.Errorf("%q read %+v", command, got)
 		}
 	}
+	t.Run("symlink", func(t *testing.T) {
+		if err := os.Symlink(secret, filepath.Join(dir, "link.log")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if got, ok := RedirectedOutput("./run > link.log", dir, &started); ok {
+			t.Errorf("read through a symlink: %+v", got)
+		}
+	})
 }
 
 func TestRedirectedOutputReadsOnlyInsideTheWorkspace(t *testing.T) {
@@ -148,8 +162,12 @@ func TestRedirectedOutputReadsOnlyInsideTheWorkspace(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, "logs")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if got, ok := RedirectedOutput("./run > logs/notes.txt", dir, &started); ok {
-		t.Errorf("read through a symlinked parent: %+v", got)
+	if got, ok := RedirectedOutput("./run > logs/notes.txt", dir, &started); ok || !got.LogOutsideWorkspace {
+		t.Errorf("read through a symlinked parent: %+v, %v", got, ok)
+	}
+	// Not there yet, the log under that parent would still be outside.
+	if got, ok := RedirectedOutput("./run > logs/later.txt", dir, &started); ok || !got.LogOutsideWorkspace {
+		t.Errorf("missing log through a symlinked parent: %+v, %v", got, ok)
 	}
 	if got, ok := RedirectedOutput("cd logs && ./run > notes.txt", dir, &started); ok {
 		t.Errorf("read after cd into a symlinked parent: %+v", got)
@@ -171,6 +189,72 @@ func TestRedirectedOutputKeepsTheTailOfALargeLog(t *testing.T) {
 	if !ok || !got.Truncated || !strings.HasSuffix(got.Text, "the newest line") ||
 		!strings.HasPrefix(got.Text, "a fairly long log line") || len(got.Text) > MaxOutputBytes {
 		t.Fatalf("truncated=%v len=%d ok=%v", got.Truncated, len(got.Text), ok)
+	}
+}
+
+func TestRedirectedOutputKeepsTheEndOfANewestLineLongerThanTheBound(t *testing.T) {
+	dir := t.TempDir()
+	line := strings.Repeat("x", MaxOutputBytes+6*1024) + "END"
+	if err := os.WriteFile(filepath.Join(dir, "big.log"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().Add(-time.Minute)
+	got, ok := RedirectedOutput("./run > big.log", dir, &started)
+	if !ok || !got.Truncated || !strings.HasSuffix(got.Text, "END") || len(got.Text) == 0 || len(got.Text) > MaxOutputBytes {
+		t.Fatalf("truncated=%v len=%d ok=%v", got.Truncated, len(got.Text), ok)
+	}
+}
+
+func TestFinalRedirectedOutputTellsAPassingFailureFromAnotherRunsLog(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "dev.log")
+	if err := os.WriteFile(logPath, []byte("done\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started, ended := time.Now().Add(-time.Minute), time.Now()
+	if got, ok, retry := FinalRedirectedOutput("./run > dev.log", dir, &started, &ended); !ok || retry || got.Text != "done" {
+		t.Fatalf("final = %+v, %v, %v", got, ok, retry)
+	}
+	// Written after the run ended: another writer's, and no retry makes it the run's.
+	early := started.Add(10 * time.Second)
+	if got, ok, retry := FinalRedirectedOutput("./run > dev.log", dir, &started, &early); ok || retry || !got.LogOmitted {
+		t.Fatalf("later writer = %+v, %v, %v", got, ok, retry)
+	}
+	if got, ok, retry := FinalRedirectedOutput("./run > missing.log", dir, &started, &ended); ok || retry || got.LogOmitted {
+		t.Fatalf("missing = %+v, %v, %v", got, ok, retry)
+	}
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		return
+	}
+	// A file that can't be opened right now is worth another read.
+	if err := os.Chmod(logPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(logPath, 0o600) })
+	if got, ok, retry := FinalRedirectedOutput("./run > dev.log", dir, &started, &ended); ok || !retry {
+		t.Fatalf("unreadable = %+v, %v, %v", got, ok, retry)
+	}
+}
+
+func TestSharesLogComparesTheFileNotItsSpelling(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "logs"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "logs", "dev.log"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !SharesLog("./a > logs/dev.log", []string{"./b > logs/dev.log"}, dir) {
+		t.Error("same path not shared")
+	}
+	if SharesLog("./a > logs/dev.log", []string{"./b > logs/other.log", "./c"}, dir) {
+		t.Error("different logs shared")
+	}
+	if err := os.Symlink(filepath.Join(dir, "logs"), filepath.Join(dir, "alias")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !SharesLog("./a > logs/dev.log", []string{"./b > alias/dev.log"}, dir) {
+		t.Error("an alias of the same log not shared")
 	}
 }
 
@@ -236,6 +320,8 @@ func TestStdoutFileReadsACmdLine(t *testing.T) {
 		{`cd app & npm run dev > dev.log`, "/work/app/dev.log"},
 		{`cd app && npm run dev > logs/dev.log 2>&1`, "/work/app/logs/dev.log"},
 		{`npm run dev > %TEMP%/dev.log`, ""},
+		{`npm run dev > "%LOGDIR%/dev.log"`, ""},
+		{`npm run dev > "logs/my app.log"`, "/work/logs/my app.log"},
 		{`npm run dev > NUL 2>&1`, ""},
 		{`npm run dev > nul`, ""},
 		{`echo it's > out.log`, "/work/out.log"},

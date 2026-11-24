@@ -143,6 +143,24 @@ describe("a background task's output", () => {
 		client.clear();
 	});
 
+	it("never stores a newer run's output under the run it was read for", async () => {
+		getMock.mockResolvedValueOnce({ data: { ...reply("ready", "first run ready").data, runId: "r1" } });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Output over={false} /></QueryClientProvider>);
+		await screen.findByText("ready:first run ready:live");
+		// The provider reused the task ID: the daemon now reads run r2.
+		getMock.mockResolvedValue({ data: { ...reply("ready", "second run ready").data, runId: "r2" } });
+		await client.refetchQueries();
+		await screen.findByText("ready:first run ready:live");
+		view.unmount();
+		client.clear();
+		// Never read before, the earlier run shows none of it.
+		const fresh = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={fresh}><Output /></QueryClientProvider>);
+		await screen.findByText("unavailable::live");
+		fresh.clear();
+	});
+
 	it("keeps the log read before when the daemon leaves it out, followed by what the task printed", async () => {
 		getMock.mockResolvedValueOnce(reply("ready", "first run ready"));
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

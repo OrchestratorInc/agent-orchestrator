@@ -960,8 +960,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 				changed = true;
 				return { ...tab, ended: true };
 			});
-			if (!changed) return state;
-			const pruned = pruneTaskTabs([...taskTabs, ...added], current.activeTaskTab, current.seenFailedTasks, new Set(listed.map((task) => task.id)));
+			// Prune even when no task changed: finished tabs a reading stops listing become eligible then.
+			const pruned = pruneTaskTabs(changed ? [...taskTabs, ...added] : known, current.activeTaskTab, current.seenFailedTasks, new Set(listed.map((task) => task.id)));
+			if (!changed && pruned.taskTabs === known) return state;
 			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, ...pruned } } };
 		}),
 	acknowledgeFailedTask: (sessionId, task) =>

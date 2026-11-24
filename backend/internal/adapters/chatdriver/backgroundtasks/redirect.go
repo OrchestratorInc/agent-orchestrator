@@ -3,6 +3,7 @@ package backgroundtasks
 import (
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,96 +31,177 @@ const logClockSlack = 5 * time.Second
 // from an earlier run, or an existing file the command opened without writing
 // to, is not shown.
 func RedirectedOutput(command, dir string, startedAt *time.Time) (ports.ChatBackgroundTaskOutput, bool) {
-	return redirectedOutput(command, dir, startedAt, nil)
+	output, ok, _ := redirectedOutput(command, dir, startedAt, nil)
+	return output, ok
 }
 
-// RedirectedOutputUntil is RedirectedOutput for a run that ended at endedAt.
+// FinalRedirectedOutput is RedirectedOutput for a run that ended at endedAt.
 // A log written after that, beyond the clock slack, holds another writer's
-// output now: it is not read, and the result says so with LogOmitted.
-func RedirectedOutputUntil(command, dir string, startedAt, endedAt *time.Time) (ports.ChatBackgroundTaskOutput, bool) {
+// output now: it is not read, and the result says so with LogOmitted. retry
+// reports a read that failed in a way a later read can get past, such as a
+// file its writer still holds open on Windows, rather than a log that is not
+// the run's.
+func FinalRedirectedOutput(command, dir string, startedAt, endedAt *time.Time) (output ports.ChatBackgroundTaskOutput, ok, retry bool) {
 	return redirectedOutput(command, dir, startedAt, endedAt)
 }
 
-func redirectedOutput(command, dir string, startedAt, endedAt *time.Time) (ports.ChatBackgroundTaskOutput, bool) {
+func redirectedOutput(command, dir string, startedAt, endedAt *time.Time) (ports.ChatBackgroundTaskOutput, bool, bool) {
 	if startedAt == nil || !filepath.IsAbs(dir) {
-		return ports.ChatBackgroundTaskOutput{}, false
+		return ports.ChatBackgroundTaskOutput{}, false, false
 	}
 	home, _ := os.UserHomeDir()
 	path, ok := stdoutFile(command, dir, home)
 	if !ok {
-		return ports.ChatBackgroundTaskOutput{}, false
+		return ports.ChatBackgroundTaskOutput{}, false, false
 	}
 	rel, err := filepath.Rel(dir, path)
 	if err != nil || !filepath.IsLocal(rel) {
-		return ports.ChatBackgroundTaskOutput{LogOutsideWorkspace: true}, false
+		return ports.ChatBackgroundTaskOutput{LogOutsideWorkspace: true}, false, false
 	}
 	var notAfter time.Time
 	if endedAt != nil {
 		notAfter = endedAt.Add(logClockSlack)
 	}
-	raw, dropped, ok, newer := readLogTail(dir, rel, startedAt.Add(-logClockSlack), notAfter)
-	if !ok {
-		return ports.ChatBackgroundTaskOutput{LogOmitted: newer}, false
+	tail := readLogTail(dir, rel, startedAt.Add(-logClockSlack), notAfter)
+	switch {
+	case tail.ok:
+		return TailOutput(tail.raw, tail.dropped), true, false
+	case tail.escapes || (!tail.newer && leavesDir(dir, path)):
+		// A symlinked directory on the way leads out of dir: os.Root refused it.
+		return ports.ChatBackgroundTaskOutput{LogOutsideWorkspace: true}, false, false
 	}
-	return TailOutput(raw, dropped), true
+	return ports.ChatBackgroundTaskOutput{LogOmitted: tail.newer}, false, tail.retry
 }
 
-// RedirectTarget returns the log file a command writes to, as RedirectedOutput
-// resolves it from dir, or "" when it names none that can be followed. Two
-// runs with the same target share a log.
-func RedirectTarget(command, dir string) string {
-	if !filepath.IsAbs(dir) {
-		return ""
+// leavesDir reports a path that, once its symlinks are resolved, is not inside
+// dir's resolved form. It only explains a refused read: the read itself stays
+// with os.Root.
+func leavesDir(dir, path string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		// A missing log may still sit under a symlinked parent that leaves dir.
+		if resolved, err = filepath.EvalSymlinks(filepath.Dir(path)); err != nil {
+			return false
+		}
+	}
+	base, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(base, resolved)
+	return err == nil && rel != "." && !filepath.IsLocal(rel)
+}
+
+// SharesLog reports whether any of others writes its output to the log file
+// command writes to, as RedirectedOutput resolves both from dir: the same
+// path, or another spelling of it, such as one through a symlinked directory,
+// that reaches the same file.
+func SharesLog(command string, others []string, dir string) bool {
+	if !filepath.IsAbs(dir) || len(others) == 0 {
+		return false
 	}
 	home, _ := os.UserHomeDir()
-	path, _ := stdoutFile(command, dir, home)
-	return path
+	path, ok := stdoutFile(command, dir, home)
+	if !ok {
+		return false
+	}
+	var info os.FileInfo
+	statted := false
+	for _, other := range others {
+		target, ok := stdoutFile(other, dir, home)
+		if !ok {
+			continue
+		}
+		if target == path {
+			return true
+		}
+		if !statted {
+			info, _ = os.Stat(path)
+			statted = true
+		}
+		if info == nil {
+			continue
+		}
+		if seen, err := os.Stat(target); err == nil && os.SameFile(info, seen) {
+			return true
+		}
+	}
+	return false
+}
+
+// logTail is what readLogTail found. ok: raw holds the log's bounded tail, and
+// dropped says older output was left out. Otherwise newer: the log was written
+// after notAfter; escapes: os.Root refused a path leaving dir; retry: the read
+// failed in a way a later one can get past.
+type logTail struct {
+	raw                                string
+	dropped, ok, newer, escapes, retry bool
 }
 
 // readLogTail reads at most MaxOutputBytes from the end of the log at rel
-// inside dir, starting on a whole line. dropped says older output was left out.
-// os.Root keeps every step of rel, symlinked parents included, inside dir.
-// A non-zero notAfter refuses a log last written after it, and says so with
-// newer.
-func readLogTail(dir, rel string, notBefore, notAfter time.Time) (raw string, dropped, ok, newer bool) {
+// inside dir, starting on a whole line. os.Root keeps every step of rel,
+// symlinked parents included, inside dir. A non-zero notAfter refuses a log
+// last written after it, checked on the opened file after the read too, so a
+// rewrite during the read is never returned as the earlier run's log.
+func readLogTail(dir, rel string, notBefore, notAfter time.Time) logTail {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return "", false, false, false
+		return logTail{retry: !errors.Is(err, fs.ErrNotExist)}
 	}
 	defer func() { _ = root.Close() }()
 	info, err := root.Lstat(rel)
-	if err != nil || !info.Mode().IsRegular() || info.ModTime().Before(notBefore) {
-		return "", false, false, false
-	}
-	if !notAfter.IsZero() && info.ModTime().After(notAfter) {
-		return "", false, false, true
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return logTail{}
+	case err != nil:
+		return logTail{escapes: escapesRoot(err), retry: !escapesRoot(err)}
+	case !info.Mode().IsRegular() || info.ModTime().Before(notBefore):
+		return logTail{}
+	case !notAfter.IsZero() && info.ModTime().After(notAfter):
+		return logTail{newer: true}
 	}
 	file, err := root.Open(rel)
 	if err != nil {
-		return "", false, false, false
+		return logTail{retry: !errors.Is(err, fs.ErrNotExist)}
 	}
 	defer func() { _ = file.Close() }()
 	// The path must still name the file checked above, not one swapped in since.
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(info, opened) {
-		return "", false, false, false
+		return logTail{retry: true}
 	}
 	start := max(0, opened.Size()-MaxOutputBytes)
 	buffer := make([]byte, opened.Size()-start)
 	n, err := file.ReadAt(buffer, start)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return "", false, false, false
+		return logTail{retry: true}
 	}
-	raw = string(buffer[:n])
-	if start > 0 {
-		// The cut can land mid-line; that partial first line is not output.
-		if at := strings.IndexByte(raw, '\n'); at >= 0 {
-			raw = raw[at+1:]
-		} else {
-			raw = ""
+	if !notAfter.IsZero() {
+		// Written while it was read: what was read may be another run's.
+		after, err := file.Stat()
+		if err != nil {
+			return logTail{retry: true}
+		}
+		if after.ModTime().After(notAfter) {
+			return logTail{newer: true}
 		}
 	}
-	return raw, start > 0, true, false
+	raw := string(buffer[:n])
+	if start > 0 {
+		// The cut can land mid-line; that partial first line is not output,
+		// unless the newest line alone is longer than the bound: then its
+		// bounded end is all there is to show.
+		if at := strings.IndexByte(raw, '\n'); at >= 0 && at+1 < len(raw) {
+			raw = raw[at+1:]
+		}
+	}
+	return logTail{raw: raw, dropped: start > 0, ok: true}
+}
+
+// escapesRoot reports os.Root refusing a path that leaves its directory,
+// rather than failing to read it.
+func escapesRoot(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "path escapes from parent")
 }
 
 // stdoutFile finds the log file a shell command line sends its standard
@@ -188,6 +270,7 @@ func stdoutFileAs(command, dir, home string, cmd bool) (string, bool) {
 			if len(words) > 0 && words[0].text == "cd" && !words[0].quoted {
 				cwd.dir, cwd.known = changeDir(cwd.dir, cwd.known, words[1:], home)
 			}
+			hadWords := len(words) > 0
 			words = nil
 			ran := current
 			hadGroup := lastGroup
@@ -221,6 +304,13 @@ func stdoutFileAs(command, dir, home string, cmd bool) (string, bool) {
 							break
 						}
 					}
+					if background == nil {
+						background = &redirect{set: true}
+					}
+				case hadWords:
+					// `./server & echo $! > server.pid`: the background command
+					// prints its own output; the PID file is not it.
+					background = &redirect{set: true}
 				}
 			}
 		case tokenRedirect:
@@ -232,8 +322,13 @@ func stdoutFileAs(command, dir, home string, cmd bool) (string, bool) {
 			if token.input || (token.fd != 1 && token.fd != -1) {
 				continue
 			}
-			// `>&2` copies a descriptor; only `>&file` names a file.
+			// `>&2` copies a descriptor; only `>&file` names a file. Copying
+			// another descriptor onto stdout, or closing it, moves it off any file
+			// named before (`> out.log 1>&2` ends at stderr); `>&1` leaves it.
 			if token.dup && (to.text == "-" || allDigits(to.text)) {
+				if to.text != "1" {
+					current = redirect{set: true}
+				}
 				continue
 			}
 			// The command's last redirect decides, even one that can't be followed.
@@ -420,6 +515,11 @@ func lexShell(line string, cmd bool) ([]shellToken, bool) {
 					}
 				case '$', '`':
 					current.literal = false
+				case '%':
+					// cmd.exe expands %VAR% inside double quotes too.
+					if cmd {
+						current.literal = false
+					}
 				}
 				word.WriteByte(line[j])
 			}

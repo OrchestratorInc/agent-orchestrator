@@ -234,6 +234,9 @@ type Controller struct {
 	backgroundErr          error
 	backgroundCommands     map[string]backgroundCommand
 	backgroundCommandOrder []string
+	// backgroundRuns hands out run tokens: never reused, so a log read for an
+	// evicted entry can't land in a later entry for the same task ID.
+	backgroundRuns         uint64
 	store                  Store
 	continuationReader     SnapshotReader
 	activity               ActivityRecorder

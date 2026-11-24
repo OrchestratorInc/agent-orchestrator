@@ -117,7 +117,7 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 				controller.backgroundErr = readErr
 				controller.backgroundTasks = append([]ports.ChatBackgroundTask(nil), sample...)
 				if readErr == nil {
-					over = controller.rememberBackgroundCommands(sample)
+					over = controller.rememberBackgroundCommands(sample, controller.backgroundPartial)
 				}
 				controller.backgroundSampledAt = s.now()
 			}
@@ -227,11 +227,16 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 	logged, ok := controller.redirectedBackgroundOutput(taskID)
 	switch {
 	case ok:
+		// The log leads; the provider's own text and its Stale and Truncated
+		// flags still describe what it printed.
+		truncated := logged.Truncated || output.Truncated
 		if own := strings.Trim(output.Text, "\n"); own != "" {
-			output = backgroundtasks.TailOutput(logged.Text+"\n"+own, logged.Truncated || output.Truncated)
+			merged := backgroundtasks.TailOutput(logged.Text+"\n"+own, truncated)
+			output.Text, truncated = merged.Text, merged.Truncated
 		} else {
-			output = logged
+			output.Text = logged.Text
 		}
+		output.Truncated = truncated
 		err = nil
 	case logged.LogOmitted && !readFailed:
 		// Say that the log was left out, so the panel can keep the one it read.
@@ -248,7 +253,16 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 	if current, err := s.attachedChatController(ctx, id); err != nil || current != controller {
 		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	}
+	output.RunID = controller.backgroundRunID(taskID)
 	return output, nil
+}
+
+// backgroundRunID returns the provider's run ID for the latest run the
+// readings report under taskID, or "" when there is none.
+func (c *Controller) backgroundRunID(taskID string) string {
+	c.backgroundMu.Lock()
+	defer c.backgroundMu.Unlock()
+	return c.backgroundCommands[taskID].task.RunID
 }
 
 // attachedChatController returns the session's live controller for its
@@ -275,9 +289,11 @@ func (s *Service) attachedChatController(ctx context.Context, id domain.SessionI
 // redirectedBackgroundOutput reads the log file a background task's command
 // sends its output to. The command comes from the controller's task readings,
 // so it is known only once the task has been read, and stays known after the
-// task leaves the inventory. A run that is over shows the log as it was when a
-// reading first saw it end or leave, not whatever a later run wrote to that
-// path. A log outside the workspace is not read, and the result says so.
+// task leaves the inventory. A run that is over shows the log as it was when it
+// ended, never the file as it is now: until that final log is kept it shows
+// the tail read while it ran, or none. A log a later run also writes to is no
+// longer this run's. A log outside the workspace is not read, and the result
+// says so.
 func (c *Controller) redirectedBackgroundOutput(taskID string) (ports.ChatBackgroundTaskOutput, bool) {
 	c.backgroundMu.Lock()
 	entry, ok := c.backgroundCommands[taskID]
@@ -285,11 +301,33 @@ func (c *Controller) redirectedBackgroundOutput(taskID string) (ports.ChatBackgr
 	if !ok {
 		return ports.ChatBackgroundTaskOutput{}, false
 	}
+	if entry.over && !entry.frozen {
+		// A reading saw the run end but its final log isn't kept yet: keep it
+		// now, bounded by the run's end, rather than read the live file.
+		c.keepFinalLogs([]string{taskID})
+		c.backgroundMu.Lock()
+		entry, ok = c.backgroundCommands[taskID]
+		c.backgroundMu.Unlock()
+		switch {
+		case !ok:
+			return ports.ChatBackgroundTaskOutput{}, false
+		case entry.over && !entry.frozen && entry.hasLive:
+			// The final read failed for now and a later poll tries again.
+			return entry.liveLog, true
+		case entry.over && !entry.frozen:
+			return ports.ChatBackgroundTaskOutput{LogOmitted: true}, false
+		}
+	}
 	if entry.frozen {
 		return entry.finalLog, entry.hasLog
 	}
+	if c.laterRunSharesLog(entry.task) {
+		// Listed live again after a later run took over its log: what is in
+		// the file now is that run's.
+		return ports.ChatBackgroundTaskOutput{LogOmitted: true}, false
+	}
 	logged, ok := backgroundtasks.RedirectedOutput(entry.task.Command, c.workspacePath, entry.task.StartedAt)
-	if ok && !entry.over {
+	if ok {
 		// The tail seen while the run is live: what it keeps if, by the time a
 		// reading sees it end, its log is no longer its own.
 		c.backgroundMu.Lock()
@@ -309,12 +347,16 @@ type backgroundCommand struct {
 	// over: a reading saw the run settle, or leave the readings while live.
 	// vanished: the latter, which a reading listing it live again undoes.
 	over, vanished bool
-	// run changes whenever the entry is marked over or starts a new run, so a
-	// log read for an earlier state is not stored under a later one.
+	// run is a token from Controller.backgroundRuns, replaced whenever the
+	// entry is marked over or starts a new run, so a log read for an earlier
+	// state is never stored under a later one, even after eviction.
 	run uint64
 	// liveLog: the last tail read while the run was live.
 	liveLog ports.ChatBackgroundTaskOutput
 	hasLive bool
+	// finalTries counts final log reads that failed in a way a later read can
+	// get past, such as a file still locked by its writer.
+	finalTries int
 	// frozen: finalLog and hasLog hold the log as the run left it.
 	frozen   bool
 	finalLog ports.ChatBackgroundTaskOutput
@@ -325,14 +367,26 @@ type backgroundCommand struct {
 // command; every listed task keeps its own.
 const backgroundCommandsKept = 32
 
+// finalLogTries bounds how often a run's final log read is tried again after
+// a failure that may pass; the run then keeps what it has.
+const finalLogTries = 3
+
+// nextBackgroundRun returns a run token no entry has had. Caller holds backgroundMu.
+func (c *Controller) nextBackgroundRun() uint64 {
+	c.backgroundRuns++
+	return c.backgroundRuns
+}
+
 // rememberBackgroundCommands keeps each read task's command after the task
 // leaves the 30-second inventory, so an open tab keeps showing its log file.
 // Listed tasks always keep theirs; of the others, the oldest goes first. It
 // returns the tasks whose run is now over, whose final log keepFinalLogs reads
 // once backgroundMu is released. A task that leaves the readings while live is
 // over too: Codex drops a vanished terminal, and a task can settle and age out
-// between two readings. Caller holds backgroundMu.
-func (c *Controller) rememberBackgroundCommands(tasks []ports.ChatBackgroundTask) []string {
+// between two readings. A partial reading can leave out a task that still
+// runs, so only a complete one ends the tasks it doesn't list. Caller holds
+// backgroundMu.
+func (c *Controller) rememberBackgroundCommands(tasks []ports.ChatBackgroundTask, partial bool) []string {
 	if c.backgroundCommands == nil {
 		c.backgroundCommands = make(map[string]backgroundCommand)
 	}
@@ -340,36 +394,46 @@ func (c *Controller) rememberBackgroundCommands(tasks []ports.ChatBackgroundTask
 	listed := make(map[string]bool, len(tasks))
 	for _, task := range tasks {
 		listed[task.ID] = true
+		entry, ok := c.backgroundCommands[task.ID]
 		if task.Command == "" {
+			// A sparse update of the remembered run keeps its command. A new run
+			// under the same ID, whose command isn't known yet, drops the last
+			// run's: its log is not this run's.
+			if ok && !sameRun(entry.task, task) {
+				c.backgroundCommands[task.ID] = backgroundCommand{task: task, run: c.nextBackgroundRun()}
+			}
 			continue
 		}
-		entry, ok := c.backgroundCommands[task.ID]
-		if !ok {
+		switch {
+		case !ok:
 			c.backgroundCommandOrder = append(c.backgroundCommandOrder, task.ID)
-		} else if !sameRun(entry.task, task) {
+			entry = backgroundCommand{run: c.nextBackgroundRun()}
+		case !sameRun(entry.task, task):
 			// The provider reused the ID for a new run: nothing of the last
 			// run's log is this one's.
-			entry = backgroundCommand{run: entry.run + 1}
+			entry = backgroundCommand{run: c.nextBackgroundRun()}
 		}
 		entry.task = task
 		live := task.State == "running" || task.State == "paused"
 		switch {
 		case entry.vanished && live:
 			// Listed live again: its log is its own to follow again.
-			entry = backgroundCommand{task: task, run: entry.run + 1, liveLog: entry.liveLog, hasLive: entry.hasLive}
+			entry = backgroundCommand{task: task, run: c.nextBackgroundRun(), liveLog: entry.liveLog, hasLive: entry.hasLive}
 		case !entry.over && !live:
-			entry.over, entry.run = true, entry.run+1
+			entry.over, entry.run = true, c.nextBackgroundRun()
 			over = append(over, task.ID)
 		}
 		c.backgroundCommands[task.ID] = entry
 	}
-	for id, entry := range c.backgroundCommands {
-		if listed[id] || entry.over {
-			continue
+	if !partial {
+		for id, entry := range c.backgroundCommands {
+			if listed[id] || entry.over {
+				continue
+			}
+			entry.over, entry.vanished, entry.run = true, true, c.nextBackgroundRun()
+			c.backgroundCommands[id] = entry
+			over = append(over, id)
 		}
-		entry.over, entry.vanished, entry.run = true, true, entry.run+1
-		c.backgroundCommands[id] = entry
-		over = append(over, id)
 	}
 	// Bound only the tasks no longer listed, oldest first.
 	unlisted := 0
@@ -405,68 +469,63 @@ func sameRun(a, b ports.ChatBackgroundTask) bool {
 // that ended. It reads files, so the caller must not hold backgroundMu.
 //
 // The file is the run's only while nothing else has written it since: no
-// later run of the same path is known, a settled run's log was last written
-// by its end, and a vanished run's log still holds the last line read while it
-// ran. Otherwise the run keeps the tail read while it ran, or, never read, no
-// log (LogOmitted): what is in the file now is not its output.
+// later run writes to the same file, and a settled run's log was last written
+// by its end. A run that left the readings without an end time has no such
+// bound, so once its log was read while it ran it keeps that tail: matching
+// text in the file now would not prove the bytes are its own. Otherwise the
+// run keeps the tail read while it ran, or, never read, no log (LogOmitted).
+// A read that failed in a way that may pass is tried again by a later output
+// poll, up to finalLogTries times.
 func (c *Controller) keepFinalLogs(ids []string) {
 	for _, id := range ids {
 		c.backgroundMu.Lock()
 		entry, ok := c.backgroundCommands[id]
-		superseded := ok && c.laterRunWritesTo(entry.task)
 		c.backgroundMu.Unlock()
 		if !ok || !entry.over || entry.frozen {
 			continue
 		}
 		var logged ports.ChatBackgroundTaskOutput
-		has := false
-		if !superseded {
-			logged, has = backgroundtasks.RedirectedOutputUntil(entry.task.Command, c.workspacePath, entry.task.StartedAt, entry.task.EndedAt)
-			if has && entry.task.EndedAt == nil && entry.hasLive && !continuesLog(logged.Text, entry.liveLog.Text) {
-				logged, has = ports.ChatBackgroundTaskOutput{LogOmitted: true}, false
-			}
-		} else {
+		has, retry := false, false
+		switch {
+		case c.laterRunSharesLog(entry.task):
 			logged.LogOmitted = true
+		case entry.task.EndedAt == nil && entry.hasLive:
+			// Keeps the live tail, below.
+		default:
+			logged, has, retry = backgroundtasks.FinalRedirectedOutput(entry.task.Command, c.workspacePath, entry.task.StartedAt, entry.task.EndedAt)
 		}
 		if !has && entry.hasLive {
-			logged, has = entry.liveLog, true
+			logged, has, retry = entry.liveLog, true, false
 		}
 		c.backgroundMu.Lock()
 		if current, ok := c.backgroundCommands[id]; ok && current.over && !current.frozen && current.run == entry.run {
-			current.frozen, current.finalLog, current.hasLog = true, logged, has
+			if retry && current.finalTries+1 < finalLogTries {
+				current.finalTries++
+			} else {
+				current.frozen, current.finalLog, current.hasLog = true, logged, has
+			}
 			c.backgroundCommands[id] = current
 		}
 		c.backgroundMu.Unlock()
 	}
 }
 
-// continuesLog reports whether a log read now still holds the last line read
-// while the run was live: a restart that truncated the file has lost it.
-func continuesLog(now, seen string) bool {
-	seen = strings.TrimRight(seen, "\n")
-	last := seen[strings.LastIndexByte(seen, '\n')+1:]
-	return last == "" || strings.Contains(now, last)
-}
-
-// laterRunWritesTo reports a remembered task that started after task and
-// sends its output to the same log. Caller holds backgroundMu.
-func (c *Controller) laterRunWritesTo(task ports.ChatBackgroundTask) bool {
+// laterRunSharesLog reports a remembered task that started after task and
+// writes its output to the same log file, however its command spells the
+// path. It stats files, so the caller must not hold backgroundMu.
+func (c *Controller) laterRunSharesLog(task ports.ChatBackgroundTask) bool {
 	if task.StartedAt == nil {
 		return false
 	}
-	path := backgroundtasks.RedirectTarget(task.Command, c.workspacePath)
-	if path == "" {
-		return false
-	}
+	var later []string
+	c.backgroundMu.Lock()
 	for id, other := range c.backgroundCommands {
-		if id == task.ID || other.task.StartedAt == nil || !other.task.StartedAt.After(*task.StartedAt) {
-			continue
-		}
-		if backgroundtasks.RedirectTarget(other.task.Command, c.workspacePath) == path {
-			return true
+		if id != task.ID && other.task.StartedAt != nil && other.task.StartedAt.After(*task.StartedAt) {
+			later = append(later, other.task.Command)
 		}
 	}
-	return false
+	c.backgroundMu.Unlock()
+	return backgroundtasks.SharesLog(task.Command, later, c.workspacePath)
 }
 
 // ListBackgroundTasks inspects only already attached controllers. Sessions

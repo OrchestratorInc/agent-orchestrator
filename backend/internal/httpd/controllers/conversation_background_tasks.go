@@ -97,7 +97,7 @@ func (c *ConversationsController) backgroundTaskOutput(w http.ResponseWriter, r 
 		return
 	default:
 		out.Output, out.Truncated, out.Stale = output.Text, output.Truncated, output.Stale
-		out.LogOutsideWorkspace, out.LogOmitted = output.LogOutsideWorkspace, output.LogOmitted
+		out.LogOutsideWorkspace, out.LogOmitted, out.RunID = output.LogOutsideWorkspace, output.LogOmitted, output.RunID
 	}
 	envelope.WriteJSON(w, http.StatusOK, out)
 }

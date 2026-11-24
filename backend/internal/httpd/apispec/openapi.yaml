@@ -17761,6 +17761,11 @@ components:
           description: 'The most recent output: at most the last 200 lines and 64
             KB, with terminal escapes and control characters removed.'
           type: string
+        runId:
+          description: The run this output belongs to, when the provider gives runs
+            their own ID. Output for another run of a reused task ID is not the requested
+            run's.
+          type: string
         sessionId:
           type: string
         stale:

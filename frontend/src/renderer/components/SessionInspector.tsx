@@ -251,7 +251,8 @@ export const SessionInspector = memo(function SessionInspector({
 	useReleaseTaskOutputs(session?.id ?? "", taskTabs);
 	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
 	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
-	const tasksWatchable = Boolean(session && supportsLocalBackgroundTasks(session));
+	// Only a local chat reports tasks: a session on another host (`hostId` prop or field) never polls this daemon.
+	const tasksWatchable = Boolean(session && !hostId && supportsLocalBackgroundTasks(session));
 	// Polls every 2 s only while the tab shows; each reading asks the provider.
 	const tasksQuery = useBackgroundTasks(session?.id ?? "", tasksWatchable, requestedView === "task" && isInspectorVisible);
 	const tasksReading = tasksQuery.data;
@@ -307,10 +308,12 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
+	// The orchestrator's rail also offers its chat's Subagents panel while it lists
+	// any, and Background tasks once its composer strip has opened one.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"
 		|| (entry.id === "subagents" && subagentsView !== undefined)
+		|| (entry.id === "task" && Boolean(taskTabs?.length))
 		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.

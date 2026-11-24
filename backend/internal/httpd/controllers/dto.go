@@ -2521,7 +2521,8 @@ type BackgroundTaskOutputResponse struct {
 	// LogOutsideWorkspace explains an output without the task's log.
 	LogOutsideWorkspace bool `json:"logOutsideWorkspace,omitempty" description:"True when the task's command writes its output to a log file outside the session's workspace, which is not read."`
 	// LogOmitted marks output without the task's log, which another writer took over.
-	LogOmitted bool `json:"logOmitted,omitempty" description:"True when the task's command writes a log that another writer has taken over since the task ended, so output holds only what the task printed itself."`
+	LogOmitted bool   `json:"logOmitted,omitempty" description:"True when the task's command writes a log that another writer has taken over since the task ended, so output holds only what the task printed itself."`
+	RunID      string `json:"runId,omitempty" description:"The run this output belongs to, when the provider gives runs their own ID. Output for another run of a reused task ID is not the requested run's."`
 }
 
 // BackgroundTaskIDParam names one provider-owned background task.
