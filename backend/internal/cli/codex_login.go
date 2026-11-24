@@ -175,20 +175,31 @@ func (c *commandContext) checkOpenAIKey(ctx context.Context, key []byte, out io.
 // itself be quoted, as in `"openai_base_url" = "…"`.
 var codexTopLevelKey = regexp.MustCompile(`^\s*["']?(model_provider|openai_base_url|profile)["']?\s*=\s*["']([^"']+)["']`)
 
-// codexKeyGoesElsewhere reports whether Codex's config.toml, at its top level
-// (before any [table]), selects another model_provider than openai, points the
-// built-in openai provider at another openai_base_url, or picks a profile,
-// which can do either.
+// codexSystemConfig is the system-wide config.toml Codex also loads; a
+// variable so tests never read the host's.
+var codexSystemConfig = "/etc/codex/config.toml"
+
+// codexKeyGoesElsewhere reports whether Codex's user or system config.toml, at
+// its top level (before any [table]), selects another model_provider than
+// openai, points the built-in openai provider at another openai_base_url, or
+// picks a profile, which can do either. Either file is enough: the user file
+// can only override a system setting, so a key that might not reach OpenAI is
+// saved unchecked rather than judged by it.
 func codexKeyGoesElsewhere() bool {
 	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
 	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return false
+		if userHome, err := os.UserHomeDir(); err == nil {
+			home = filepath.Join(userHome, ".codex")
 		}
-		home = filepath.Join(userHome, ".codex")
 	}
-	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if home != "" && codexConfigRoutesElsewhere(filepath.Join(home, "config.toml")) {
+		return true
+	}
+	return codexConfigRoutesElsewhere(codexSystemConfig)
+}
+
+func codexConfigRoutesElsewhere(path string) bool {
+	data, err := os.ReadFile(path) //nolint:gosec // Codex's own config files.
 	if err != nil {
 		return false
 	}

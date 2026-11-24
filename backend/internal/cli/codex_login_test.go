@@ -33,6 +33,9 @@ func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
 	t.Cleanup(openAI.Close)
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_BASE_URL", "")
+	prevSystem := codexSystemConfig
+	codexSystemConfig = filepath.Join(t.TempDir(), "config.toml")
+	t.Cleanup(func() { codexSystemConfig = prevSystem })
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout bytes.Buffer
@@ -235,6 +238,7 @@ func TestCodexLoginChecksAnAPIKeyWithOpenAIFirst(t *testing.T) {
 		status     int // what OpenAI answers; 0 means unreachable
 		provider   string
 		config     string // a raw config.toml
+		system     string // a raw system-wide /etc/codex/config.toml
 		wantErr    string
 		wantSaved  bool
 		wantAsked  bool
@@ -251,6 +255,7 @@ func TestCodexLoginChecksAnAPIKeyWithOpenAIFirst(t *testing.T) {
 		{name: "single-quoted openai_base_url", status: http.StatusUnauthorized, config: "'openai_base_url' = 'https://proxy.example.invalid/v1'\n", wantSaved: true, wantOutput: "Saved without checking"},
 		{name: "quoted profile", status: http.StatusUnauthorized, config: "\"profile\" = \"work\"\n", wantSaved: true, wantOutput: "Saved without checking"},
 		{name: "single-quoted profile", status: http.StatusUnauthorized, config: "'profile' = 'work'\n", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "system openai_base_url", status: http.StatusUnauthorized, system: "openai_base_url = \"https://proxy.example.invalid/v1\"\n", wantSaved: true, wantOutput: "Saved without checking"},
 		{name: "openai provider named", status: http.StatusUnauthorized, config: "model_provider = \"openai\"\n", wantErr: "OpenAI refused this API key (HTTP 401)", wantAsked: true},
 		{name: "unreachable", wantSaved: true, wantOutput: "Couldn't reach OpenAI to check the key"},
 	} {
@@ -258,6 +263,15 @@ func TestCodexLoginChecksAnAPIKeyWithOpenAIFirst(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("CODEX_HOME", home)
 			t.Setenv("OPENAI_BASE_URL", "")
+			system := filepath.Join(t.TempDir(), "config.toml")
+			if tc.system != "" {
+				if err := os.WriteFile(system, []byte(tc.system), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			prevSystem := codexSystemConfig
+			codexSystemConfig = system
+			t.Cleanup(func() { codexSystemConfig = prevSystem })
 			config := tc.config
 			if tc.provider != "" {
 				config = "model_provider = \"" + tc.provider + "\"\n\n[model_providers." + tc.provider + "]\nbase_url = \"https://example.invalid/openai/v1\"\n"
