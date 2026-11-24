@@ -18,7 +18,7 @@ function setup() {
 	const made: FakeTransport[] = [];
 	let appState: ((state: string) => void) | null = null;
 	let network: ((connected: boolean) => void) | null = null;
-	const events: SupervisorEvents = { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onStale: vi.fn() };
+	const events: SupervisorEvents = { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onStale: vi.fn(), onDisabled: vi.fn() };
 	const supervisor = new BrowserStreamSupervisor({
 		create: () => { const t = new FakeTransport(); made.push(t); return t; },
 		subscribeAppState: (listener) => { appState = listener; return () => { appState = null; }; },
@@ -44,6 +44,9 @@ describe("reconnect backoff", () => {
 		expect(s.made).toHaveLength(1);
 		vi.advanceTimersByTime(1);
 		expect(s.made).toHaveLength(2);
+		// Kept a while for its probe, then closed.
+		expect(s.made[0].closed).toBe(false);
+		vi.advanceTimersByTime(6_000);
 		expect(s.made[0].closed).toBe(true);
 		s.last().fail();
 		vi.advanceTimersByTime(1999);
@@ -110,6 +113,47 @@ describe("network and app state", () => {
 		s.network(true);
 		vi.advanceTimersByTime(60_000);
 		expect(s.made).toHaveLength(1);
+	});
+
+	it("a probe slower than the first retry still stops it: the retry doesn't cancel the failed transport", () => {
+		const s = setup();
+		s.supervisor.start();
+		const first = s.last();
+		first.fail();
+		vi.advanceTimersByTime(1_000);
+		expect(s.made).toHaveLength(2);
+		// Its socket is already dead; closing it would discard the probe.
+		expect(first.closed).toBe(false);
+		first.handlers?.onDisabled?.();
+		expect(s.events.onDisabled).toHaveBeenCalledTimes(1);
+		expect(s.made[1].closed).toBe(true);
+		expect(first.closed).toBe(true);
+		vi.advanceTimersByTime(60_000);
+		expect(s.made).toHaveLength(2);
+	});
+
+	it("lets a failed handshake finish asking why: a late 'disabled' still stops it", () => {
+		const s = setup();
+		s.supervisor.start();
+		const first = s.last();
+		first.fail();
+		// The local transport probes the route after its error, asynchronously.
+		first.handlers?.onDisabled?.();
+		expect(s.events.onDisabled).toHaveBeenCalledTimes(1);
+		vi.advanceTimersByTime(60_000);
+		expect(s.made).toHaveLength(1);
+		expect(first.closed).toBe(true);
+	});
+
+	it("counts an error and the close that follows it as one failure", () => {
+		const s = setup();
+		s.supervisor.start();
+		s.last().fail();
+		s.last().handlers?.onStatus("closed");
+		vi.advanceTimersByTime(1_000);
+		expect(s.made).toHaveLength(2);
+		vi.advanceTimersByTime(60_000);
+		expect(s.made).toHaveLength(2);
 	});
 
 	it("stops for good when the host says streaming is disabled", () => {

@@ -316,7 +316,10 @@ describe("live browser states", () => {
 		expect(alert.findByType("EmptyState" as never).props).toMatchObject({ title: "Couldn't connect to the browser", message: "Another phone is controlling this browser." });
 		await act(async () => alert.findByType("Button" as never).props.onPress());
 		expect(fixtures.clients).toHaveLength(2);
-		expect(fixtures.clients[0].closed).toBe(true);
+		// The failed stream is kept a moment for its probe; leaving the pane closes both.
+		act(() => { screen.unmount(); });
+		expect(fixtures.clients.every((record) => record.closed)).toBe(true);
+		screen = create(<></>);
 	});
 
 	it("offers Open URL when nothing is open on the desktop", async () => {

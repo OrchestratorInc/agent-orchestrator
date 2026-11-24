@@ -4,6 +4,9 @@ import type { BrowserDialog, BrowserFrame, BrowserTransport, BrowserViewState } 
 export const STALE_AFTER_MS = 3_000;
 const FIRST_RETRY_MS = 1_000;
 const MAX_RETRY_MS = 15_000;
+// A failed transport may still be asking why (the local probe gives up after
+// 5 s); it is closed after this, so its own listeners don't outlive it.
+const RETIRE_AFTER_MS = 6_000;
 
 /** Wait before reconnect attempt `failures` (0-based): 1 s, doubling, capped at 15 s. */
 export function reconnectDelayMs(failures: number): number {
@@ -50,10 +53,14 @@ export class BrowserStreamSupervisor {
 	private stale = false;
 	private everOpen = false;
 	private running = false;
+	// The connection now running has already failed: its error and the close
+	// that follows count once.
+	private failed = false;
 	private away = false;
 	private offline = false;
 	private disabled = false;
 	private unsubscribes: Array<() => void> = [];
+	private retired = new Map<BrowserTransport, ReturnType<typeof setTimeout>>();
 
 	constructor(private readonly deps: SupervisorDeps, private readonly events: SupervisorEvents) {}
 
@@ -80,6 +87,23 @@ export class BrowserStreamSupervisor {
 		for (const unsubscribe of this.unsubscribes) unsubscribe();
 		this.unsubscribes = [];
 		this.drop();
+		this.closeRetired();
+	}
+
+	private retire(transport: BrowserTransport): void {
+		this.transport = null;
+		this.retired.set(transport, setTimeout(() => {
+			this.retired.delete(transport);
+			transport.close();
+		}, RETIRE_AFTER_MS));
+	}
+
+	private closeRetired(): void {
+		for (const [transport, timer] of this.retired) {
+			clearTimeout(timer);
+			transport.close();
+		}
+		this.retired.clear();
 	}
 
 	/** The stream running now, if any: commands go to it. */
@@ -97,6 +121,7 @@ export class BrowserStreamSupervisor {
 	private goAway(): void {
 		this.away = true;
 		this.drop();
+		this.closeRetired();
 	}
 
 	private comeBack(): void {
@@ -115,11 +140,15 @@ export class BrowserStreamSupervisor {
 	}
 
 	private connect(): void {
+		// A transport that already failed has a dead socket. It is let go, not
+		// closed: the local one may still be asking the daemon why it failed.
+		if (this.failed && this.transport) this.retire(this.transport);
 		this.drop();
 		if (!this.running || this.disabled || this.away) return;
 		const generation = this.generation;
 		const live = () => generation === this.generation;
 		this.heartbeat = false;
+		this.failed = false;
 		this.lastAlive = Date.now();
 		const transport = this.deps.create();
 		this.transport = transport;
@@ -139,9 +168,13 @@ export class BrowserStreamSupervisor {
 			onState: (state) => { if (live()) { this.markAlive(false); this.events.onState(state); } },
 			onFrame: (frame) => { if (live()) { this.markAlive(false); this.events.onFrame(frame); } },
 			onDialog: (dialog) => { if (live()) this.events.onDialog?.(dialog); },
+			// Sharing being off is the host's answer, not one socket's: it counts
+			// even from a connection a retry has replaced.
 			onDisabled: () => {
-				if (!live()) return;
+				if (!this.running || this.away || this.disabled) return;
 				this.disabled = true;
+				this.drop();
+				this.closeRetired();
 				this.events.onDisabled?.();
 			},
 			onAlive: ({ heartbeat }) => { if (live()) this.markAlive(heartbeat); },
@@ -158,8 +191,19 @@ export class BrowserStreamSupervisor {
 		this.setStale(false);
 	}
 
-	private fail(message?: string): void {
-		this.drop();
+	/**
+	 * The connection failed. A transport that errored is kept until the retry
+	 * replaces it: the local one asks the daemon why its handshake failed, and a
+	 * "sharing is off" answer must still reach onDisabled. A stream that went
+	 * silent is closed at once (`close`).
+	 */
+	private fail(message?: string, close = false): void {
+		if (close) this.drop();
+		if (this.failed && !close) return;
+		this.failed = true;
+		this.clearRetry();
+		this.stopWatchdog();
+		this.healthy = false;
 		if (this.disabled || this.away) return;
 		this.setStale(true);
 		this.events.onStatus(this.everOpen ? "reconnecting" : "error", message);
@@ -176,7 +220,7 @@ export class BrowserStreamSupervisor {
 	private startWatchdog(): void {
 		this.stopWatchdog();
 		this.watchdog = setInterval(() => {
-			if (this.heartbeat && Date.now() - this.lastAlive > STALE_AFTER_MS) this.fail("The browser stopped answering. Reconnecting…");
+			if (this.heartbeat && Date.now() - this.lastAlive > STALE_AFTER_MS) this.fail("The browser stopped answering. Reconnecting…", true);
 		}, 500);
 	}
 
