@@ -2044,6 +2044,8 @@
 	"settings.notifications.kind.prMerged.description": "Ein Pull Request wurde gemergt.",
 	"settings.notifications.kind.prClosed": "Pull Request geschlossen",
 	"settings.notifications.kind.prClosed.description": "Ein Pull Request wurde ohne Merge geschlossen.",
+	"settings.notifications.kind.automations": "Automatisierungen",
+	"settings.notifications.kind.automations.description": "Wenn ein Lauf einer AO Cloud-Automatisierung abgeschlossen ist, fehlschlägt oder übersprungen wird.",
 	"settings.notifications.kind.other": "Alles andere",
 	"settings.notifications.kind.other.description": "Jede andere Art von Benachrichtigung, auch neue.",
 	"settings.project.trackerIntake": "Tracker-Intake",

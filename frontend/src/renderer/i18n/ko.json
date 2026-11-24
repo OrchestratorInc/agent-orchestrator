@@ -2044,6 +2044,8 @@
 	"settings.notifications.kind.prMerged.description": "풀 리퀘스트가 병합되었습니다.",
 	"settings.notifications.kind.prClosed": "풀 리퀘스트 닫힘",
 	"settings.notifications.kind.prClosed.description": "풀 리퀘스트가 병합되지 않고 닫혔습니다.",
+	"settings.notifications.kind.automations": "자동화",
+	"settings.notifications.kind.automations.description": "AO Cloud 자동화 실행이 완료되거나 실패하거나 건너뛰어졌을 때.",
 	"settings.notifications.kind.other": "그 밖의 모든 알림",
 	"settings.notifications.kind.other.description": "새로운 종류를 포함한 그 밖의 모든 알림입니다.",
 	"settings.project.trackerIntake": "트래커 인테이크",

@@ -2,6 +2,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	Bell,
+	CalendarClock,
 	CheckCheck,
 	ChevronLeft,
 	ChevronRight,
@@ -91,6 +92,11 @@ const KIND_COPY: Record<NotificationKindId, { icon: AppIcon; label: MessageKey; 
 		icon: GitPullRequestClosed,
 		label: "settings.notifications.kind.prClosed",
 		description: "settings.notifications.kind.prClosed.description",
+	},
+	automations: {
+		icon: CalendarClock,
+		label: "settings.notifications.kind.automations",
+		description: "settings.notifications.kind.automations.description",
 	},
 	other: {
 		icon: Bell,

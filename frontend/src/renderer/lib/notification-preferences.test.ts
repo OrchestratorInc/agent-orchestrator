@@ -29,6 +29,9 @@ describe("notification preferences", () => {
 					"merge_requested",
 					"merge_request_merged",
 					"merge_request_rejected",
+					"automation_run_completed",
+					"automation_run_failed",
+					"automation_run_skipped",
 				].map((type) => [type, notificationKind(type)]),
 			),
 		).toEqual({
@@ -46,6 +49,9 @@ describe("notification preferences", () => {
 			merge_requested: "merge_requests",
 			merge_request_merged: "merge_requests",
 			merge_request_rejected: "merge_requests",
+			automation_run_completed: "automations",
+			automation_run_failed: "automations",
+			automation_run_skipped: "automations",
 		});
 	});
 

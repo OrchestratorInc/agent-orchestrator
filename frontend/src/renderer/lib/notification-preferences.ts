@@ -7,8 +7,9 @@ import type { NotificationFilters } from "../../shared/ui-locale";
  * three places the bell reads from:
  *
  * - The daemon, local or remote (`backend/internal/domain/notification.go`).
- * - AO Cloud agent events (needs input, completed, failed) and its pull
- *   request and merge request rows, whose `type` is a free string.
+ * - AO Cloud agent events (needs input, completed, failed), its pull
+ *   request and merge request rows, and its automation runs, whose `type`
+ *   is a free string.
  *
  * A type no kind names falls under "other", so a kind added later still
  * notifies until the person turns "other" off.
@@ -25,6 +26,7 @@ export const NOTIFICATION_KINDS = [
 	{ id: "merge_requests", types: ["merge_requested", "merge_request_merged", "merge_request_rejected"] },
 	{ id: "pr_merged", types: ["pr_merged"] },
 	{ id: "pr_closed", types: ["pr_closed_unmerged"] },
+	{ id: "automations", types: ["automation_run_completed", "automation_run_failed", "automation_run_skipped"] },
 	{ id: "other", types: [] },
 ] as const satisfies readonly { id: string; types: readonly string[] }[];
 

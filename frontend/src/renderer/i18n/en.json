@@ -2422,6 +2422,8 @@
 	"settings.notifications.kind.prMerged.description": "A pull request was merged.",
 	"settings.notifications.kind.prClosed": "Pull request closed",
 	"settings.notifications.kind.prClosed.description": "A pull request closed without merging.",
+	"settings.notifications.kind.automations": "Automations",
+	"settings.notifications.kind.automations.description": "When an AO Cloud automation run finishes, fails or is skipped.",
 	"settings.notifications.kind.other": "Everything else",
 	"settings.notifications.kind.other.description": "Any other kind of notification, including new ones.",
 	"settings.project.trackerIntake": "Tracker intake",

@@ -2026,6 +2026,8 @@
 	"settings.notifications.kind.prMerged.description": "拉取请求已合并。",
 	"settings.notifications.kind.prClosed": "拉取请求已关闭",
 	"settings.notifications.kind.prClosed.description": "拉取请求未合并即被关闭。",
+	"settings.notifications.kind.automations": "自动化",
+	"settings.notifications.kind.automations.description": "AO Cloud 自动化运行完成、失败或被跳过时。",
 	"settings.notifications.kind.other": "其他所有通知",
 	"settings.notifications.kind.other.description": "任何其他类型的通知，包括新类型。",
 	"settings.project.trackerIntake": "议题接入",

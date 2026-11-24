@@ -2044,6 +2044,8 @@
 	"settings.notifications.kind.prMerged.description": "プルリクエストがマージされました。",
 	"settings.notifications.kind.prClosed": "プルリクエストがクローズされた",
 	"settings.notifications.kind.prClosed.description": "プルリクエストがマージされずにクローズされました。",
+	"settings.notifications.kind.automations": "自動化",
+	"settings.notifications.kind.automations.description": "AO Cloud の自動化の実行が完了、失敗、またはスキップされたとき。",
 	"settings.notifications.kind.other": "その他すべて",
 	"settings.notifications.kind.other.description": "その他の種類の通知 (新しい種類も含む)。",
 	"settings.project.trackerIntake": "トラッカーインテーク",

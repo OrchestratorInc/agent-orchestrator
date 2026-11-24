@@ -2076,6 +2076,8 @@
 	"settings.notifications.kind.prMerged.description": "Une pull request a été fusionnée.",
 	"settings.notifications.kind.prClosed": "Pull request fermée",
 	"settings.notifications.kind.prClosed.description": "Une pull request a été fermée sans fusion.",
+	"settings.notifications.kind.automations": "Automatisations",
+	"settings.notifications.kind.automations.description": "Quand une exécution d'automatisation AO Cloud se termine, échoue ou est ignorée.",
 	"settings.notifications.kind.other": "Tout le reste",
 	"settings.notifications.kind.other.description": "Tout autre type de notification, y compris les nouveaux.",
 	"settings.project.trackerIntake": "Intake du tracker",

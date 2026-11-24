@@ -2422,6 +2422,8 @@
 	"settings.notifications.kind.prMerged.description": "Bir pull request birleştirildi.",
 	"settings.notifications.kind.prClosed": "Pull request kapatıldı",
 	"settings.notifications.kind.prClosed.description": "Bir pull request birleştirilmeden kapatıldı.",
+	"settings.notifications.kind.automations": "Otomasyonlar",
+	"settings.notifications.kind.automations.description": "Bir AO Cloud otomasyon çalışması tamamlandığında, başarısız olduğunda veya atlandığında.",
 	"settings.notifications.kind.other": "Diğer her şey",
 	"settings.notifications.kind.other.description": "Yeni türler dahil diğer tüm bildirimler.",
 	"settings.project.trackerIntake": "Takip alımı",

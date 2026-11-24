@@ -2498,6 +2498,8 @@
 	"settings.notifications.kind.prMerged.description": "Пул-реквест был слит.",
 	"settings.notifications.kind.prClosed": "Пул-реквест закрыт",
 	"settings.notifications.kind.prClosed.description": "Пул-реквест закрыт без слияния.",
+	"settings.notifications.kind.automations": "Автоматизации",
+	"settings.notifications.kind.automations.description": "Когда запуск автоматизации AO Cloud завершается, завершается ошибкой или пропускается.",
 	"settings.notifications.kind.other": "Всё остальное",
 	"settings.notifications.kind.other.description": "Любые другие типы уведомлений, включая новые.",
 	"settings.project.trackerIntake": "Приём задач из трекера",

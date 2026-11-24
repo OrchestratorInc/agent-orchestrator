@@ -2076,6 +2076,8 @@
 	"settings.notifications.kind.prMerged.description": "Um pull request foi mesclado.",
 	"settings.notifications.kind.prClosed": "Pull request fechado",
 	"settings.notifications.kind.prClosed.description": "Um pull request foi fechado sem mesclar.",
+	"settings.notifications.kind.automations": "Automações",
+	"settings.notifications.kind.automations.description": "Quando uma execução de automação do AO Cloud termina, falha ou é ignorada.",
 	"settings.notifications.kind.other": "Todo o resto",
 	"settings.notifications.kind.other.description": "Qualquer outro tipo de notificação, incluindo os novos.",
 	"settings.project.trackerIntake": "Intake do tracker",
