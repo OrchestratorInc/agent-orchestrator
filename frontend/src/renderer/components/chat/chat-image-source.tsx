@@ -37,11 +37,12 @@ export function useChatImageSrc(src: string | undefined): string | undefined {
 
 /**
  * The daemon's copy of a file the open chat staged (.ao/attachments/…), or
- * undefined outside a chat or while a remote host has no route to it.
+ * undefined outside a chat, while a remote host has no route to it, or for a
+ * reference the daemon does not hold (an AO Cloud attachment).
  */
 export function useChatStagedFileUrl(path: string | undefined): string | undefined {
 	const source = useContext(ChatImageSourceContext);
-	if (!source || !path || source.baseUrl === undefined) return undefined;
+	if (!source || !path?.startsWith(".ao/attachments/") || source.baseUrl === undefined) return undefined;
 	return attachmentURL(source.baseUrl, source.sessionId, path);
 }
 

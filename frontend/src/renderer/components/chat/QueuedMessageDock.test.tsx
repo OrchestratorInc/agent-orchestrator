@@ -459,6 +459,22 @@ describe("QueuedMessageDock attachments", () => {
 		expect(row).not.toHaveTextContent("Attached files");
 	});
 
+	it("reads a staged image from the daemon but leaves a Cloud reference to its plain chip", () => {
+		const [message] = queuedMessages(["compare"]);
+		const cloud = "ao-cloud-attachment:6f1c2a8e-0b1d-4c3e-9f5a-2d7e8b9c0a11/shot.png";
+		render(
+			<QueuedMessageDock
+				imageSource={{ sessionId: "s-1", assetBaseUrl: "http://127.0.0.1:3001" }}
+				messages={[{ ...message!, pending: true, uploadingImages: [{ path: shot }, { path: cloud }] }]}
+			/>,
+		);
+		const images = screen.getByTestId("queued-message-queued-1").querySelectorAll("img");
+		// The local daemon cannot serve a Cloud reference: no broken picture, just "Image 2".
+		expect(images).toHaveLength(1);
+		expect(images[0]).toHaveAttribute("src", expect.stringContaining("/preview/files/.ao/attachments/attachment-1367e3e6.png"));
+		expect(screen.getByTestId("queued-message-queued-1")).toHaveTextContent("Image 2");
+	});
+
 	it("says a message is still uploading and shows its picture meanwhile", () => {
 		const [message] = queuedMessages(["then i got this"]);
 		render(<QueuedMessageDock messages={[{ ...message!, pending: true, uploadingImages: [{ src: "blob:local-shot" }] }]} />);
