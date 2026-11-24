@@ -576,6 +576,24 @@ describe("stream stats HUD", () => {
 		}
 	});
 
+	it("measures a release build made for measuring (EXPO_PUBLIC_AO_STREAM_STATS=1)", async () => {
+		vi.stubEnv("EXPO_PUBLIC_AO_STREAM_STATS", "1");
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: MeasuredPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<MeasuredPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			await showFrame();
+			await act(async () => { nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(nodes("Text").map((node) => node.props.children).join("")).toMatch(/^first \d+ms · /);
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("shows debug builds the first frame, frame rate and input latency", async () => {
 		vi.stubGlobal("__DEV__", true);
 		vi.useFakeTimers();

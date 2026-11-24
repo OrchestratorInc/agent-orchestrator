@@ -32,8 +32,12 @@ type NavigateAction = "back" | "forward" | "reload" | "stop";
 const DRAG_SLOP = 7;
 /** A held finger still clicks when it lifts, as it always has here. */
 const TAP_MAX_MS = 10_000;
-/** Debug builds measure the stream (StreamStats). */
-const MEASURE_STREAM = typeof __DEV__ !== "undefined" && __DEV__;
+/**
+ * Debug builds measure the stream (StreamStats HUD and log), and so does a
+ * release build made for measuring with EXPO_PUBLIC_AO_STREAM_STATS=1 at build
+ * time (Expo inlines it). Store builds measure only what quality needs.
+ */
+const MEASURE_STREAM = (typeof __DEV__ !== "undefined" && __DEV__) || process.env.EXPO_PUBLIC_AO_STREAM_STATS === "1";
 /** The Hermes JS heap in KB, for the debug log's 10-minute heap check; null off Hermes. */
 function hermesHeapKB(): number | null {
 	const stats = (globalThis as { HermesInternal?: { getInstrumentedStats?: () => { js_heapSize?: number } } }).HermesInternal?.getInstrumentedStats?.();
