@@ -3200,7 +3200,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description How many open threads are unread for the caller, for the threads view's badge: the threads listMyCommentThreads lists with status open and unread true. Resolved and muted threads are not counted. */
+        /** @description How many open threads are unread for the caller, for the threads view's badge: the threads listMyCommentThreads lists with status open and unread true. Resolved and muted threads, and threads on ended sessions, are not counted. */
         get: operations["countMyUnreadCommentThreads"];
         put?: never;
         post?: never;
@@ -12811,7 +12811,7 @@ export interface operations {
     listMyCommentThreads: {
         parameters: {
             query?: {
-                /** @description `open` (the default): threads not resolved. `resolved`: resolved threads. */
+                /** @description `open` (the default): threads not resolved, on sessions that have not ended. `resolved`: resolved threads, and every thread on a session that has ended (sessionTerminated), which can no longer be resolved; a restored session's threads are open again. */
                 status?: "open" | "resolved";
                 /** @description true lists only unread threads ("Unread only"). */
                 unread?: boolean;
