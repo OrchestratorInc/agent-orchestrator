@@ -1,6 +1,5 @@
 import { Search } from "@/components/app-icons";
 import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
-import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 
@@ -150,7 +149,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 			root.style.removeProperty("--model-menu-held");
 		};
 	}, [holdsHeight]);
-	useEdgeFade(scrollRef);
 	// The header's own tab stop (the rail's chosen agent), if it has one.
 	const focusHeader = () => {
 		const target = headerRef.current?.querySelector<HTMLElement>('[tabindex="0"]');
@@ -297,7 +295,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 			>
 				<div
 					ref={scrollRef}
-					className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
+					className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 					onScroll={handleScroll}
 					onKeyDownCapture={(event) => {
 						// A submenu's keys bubble here through React, not the DOM; they are its own.
