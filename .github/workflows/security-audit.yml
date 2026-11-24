@@ -88,7 +88,11 @@ jobs:
           npm audit --json > "$RUNNER_TEMP/frontend-audit.json" || true
           node -e '
             const report = require(process.argv[1]);
-            const hit = report.vulnerabilities?.electron;
+            if (report.error || !report.vulnerabilities) {
+              console.log("::error::npm audit did not return a vulnerability report");
+              process.exit(1);
+            }
+            const hit = report.vulnerabilities.electron;
             if (hit) {
               console.log(`::error::electron ${hit.range} has a ${hit.severity} advisory`);
               process.exit(1);
