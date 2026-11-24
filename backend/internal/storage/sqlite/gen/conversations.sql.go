@@ -4999,7 +4999,11 @@ WHERE armed.id = (
   AND EXISTS (SELECT 1 FROM conversation_messages AS m
       WHERE m.turn_id = armed.id AND m.role = 'user' AND m.origin = 'automation' AND m.authored_by_user = 0)
   AND EXISTS (SELECT 1 FROM conversation_messages AS m
-      WHERE m.turn_id = newer.id AND m.role = 'user' AND m.origin = 'automation' AND m.authored_by_user = 0)
+      WHERE m.turn_id = newer.id AND m.role = 'user' AND m.origin = 'automation')
+  AND NOT EXISTS (SELECT 1 FROM conversation_messages AS m
+      JOIN conversation_turns AS member ON member.id = m.turn_id
+      WHERE (member.id = newer.id OR member.promoted_to_turn_id = newer.id)
+        AND m.role = 'user' AND (m.origin = 'human' OR m.authored_by_user = 1))
 `
 
 type SelectSupersededArmedEventTurnRow struct {

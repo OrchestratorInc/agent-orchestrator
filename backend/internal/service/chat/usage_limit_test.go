@@ -941,6 +941,48 @@ func TestUsageLimitAutoResumeKeepsTheKnownResetForANewerEvent(t *testing.T) {
 	}
 }
 
+func TestUsageLimitAutoResumeMovesOnlyToABatchOfEvents(t *testing.T) {
+	for name, authoredByUser := range map[string]bool{"events": false, "with a message the user relayed": true} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			running, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "CI is failing on PR 12", ClientMessageID: "running", Origin: domain.MessageOriginAutomation})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var lead domain.ConversationTurn
+			for i, text := range []string{"CI is failing on PR 13", "why this change?"} {
+				queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: text, ClientMessageID: uuid.NewString(),
+					Origin: domain.MessageOriginAutomation, AuthoredByUser: authoredByUser && i == 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i == 0 {
+					lead = queued
+				}
+			}
+			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running.ProviderTurnID,
+				TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+			failedTurnSnapshot(t, h, running.ID)
+			if err := h.svc.SetTurnAutoResume(ctx, testSession, running.ID, true); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "CI is failing on PR 14", ClientMessageID: "later", Origin: domain.MessageOriginAutomation}); err != nil {
+				t.Fatal(err)
+			}
+			drained, _ := turnByID(h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				turn, found := turnByID(s, lead.ID)
+				return found && turn.State == domain.TurnStateRunning && turn.ProviderTurnID != ""
+			}), lead.ID)
+			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: drained.ProviderTurnID,
+				TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+			if failed, _ := turnByID(failedTurnSnapshot(t, h, lead.ID), lead.ID); failed.UsageLimit.AutoResume == authoredByUser {
+				t.Fatalf("batch armed = %v, want %v", failed.UsageLimit.AutoResume, !authoredByUser)
+			}
+		})
+	}
+}
+
 func TestUsageLimitAutoResumeStaysOnTheLatestTurn(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
