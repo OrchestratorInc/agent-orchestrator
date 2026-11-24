@@ -1,5 +1,5 @@
-import { apiErrorException } from "../lib/api-error-exception";
 import { AoError } from "../../../../packages/shared/telemetry/ao-error";
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient, UseQueryOptions } from "@tanstack/react-query";
 import { useCallback, useEffect, useSyncExternalStore } from "react";
@@ -1040,7 +1040,7 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 						fetchWorkspaceFileRevision({ ...read, side: "before" }),
 						fetchWorkspaceFileRevision({ ...read, side: "after" }),
 					]);
-					if (before.binary || after.binary || before.truncated || after.truncated) throw new AoError("FILES_REVIEW_UNREADABLE", appI18n.t("files.error.loadFile"));
+					if (before.binary || after.binary || before.truncated || after.truncated) throw new AoError("FILES_REVIEW_END_OF_FILE_UNREADABLE", appI18n.t("files.error.loadFile"));
 					return {
 						oldFile: { name: file.previousPath || file.path, contents: before.content, cacheKey: before.revision },
 						newFile: { name: file.path, contents: after.content, cacheKey: after.revision },

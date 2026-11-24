@@ -694,7 +694,7 @@ heatmap and no session replay.
 - `surface` is one of `sidebar`, `topbar` (the top bar and its tabs), `chat`
   (the transcript), `composer`, `new_chat`, `board`, `pr_tab`,
   `inspector_summary`, `inspector_reviews`, `inspector_browser`,
-  `inspector_files`, `inspector_artifacts`, `inspector_side_chat`,
+  `inspector_device`, `inspector_files`, `inspector_artifacts`, `inspector_side_chat`,
   `inspector_subagents`, `inspector_background_tasks`, `cmdk`,
   `notifications_panel`, `archive_modal`,
   `model_picker`, `slash_menu`, `mention_menu`, `split_view`, `terminal`,
@@ -713,8 +713,8 @@ heatmap and no session replay.
   `attachment`, `steer`, `queue`, `keyboard_send`, `split_pane`,
   `terminal_tab`, `side_chat`, `board`, `pin_session`, `archive_modal`,
   `dictation`, `swipe_navigation`, `notifications_panel`, `inspector_summary`,
-  `inspector_reviews`, `inspector_browser`, `inspector_files`,
-  `inspector_artifacts`, `inspector_subagents`, or
+  `inspector_reviews`, `inspector_browser`, `inspector_device`,
+  `inspector_files`, `inspector_artifacts`, `inspector_subagents`, or
   `inspector_background_tasks`. Opening a surface counts as
   using its feature only when you opened it (`opened_by` is not `restore` or
   `auto`). The marker is kept in the app's local storage, so an install that
@@ -816,7 +816,7 @@ label:
   `composer.model_picker`, `composer.dictation`
 - Chat: `chat.retry`
 - Inspector tabs: `inspector.tab_summary`, `inspector.tab_reviews`,
-  `inspector.tab_browser`, `inspector.tab_files`, `inspector.tab_artifacts`,
+  `inspector.tab_browser`, `inspector.tab_device`, `inspector.tab_files`, `inspector.tab_artifacts`,
   `inspector.tab_side_chat`, `inspector.tab_subagents`,
   `inspector.tab_background_tasks`
 - Board: `board.card`
