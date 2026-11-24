@@ -46,9 +46,51 @@ func (f *fakeCreator) Create(_ context.Context, in CreateInput) (domain.ReportRe
 	return domain.ReportRecord{}, nil
 }
 
+type fakeTimer struct {
+	f       func()
+	stopped bool
+}
+
+func (t *fakeTimer) Stop() bool {
+	was := !t.stopped
+	t.stopped = true
+	return was
+}
+
+type fakeClock struct{ timers []*fakeTimer }
+
+func (c *fakeClock) AfterFunc(_ time.Duration, f func()) Stopper {
+	timer := &fakeTimer{f: f}
+	c.timers = append(c.timers, timer)
+	return timer
+}
+
+// elapse runs every scheduled function that was not stopped, as if the quiet
+// period passed.
+func (c *fakeClock) elapse() {
+	timers := c.timers
+	c.timers = nil
+	for _, timer := range timers {
+		if !timer.stopped {
+			timer.stopped = true
+			timer.f()
+		}
+	}
+}
+
 func newTestReporter(store *fakeReporterStore, now time.Time) (*WorkerReporter, *fakeCreator) {
+	r, creator, _ := newClockedReporter(store, now)
+	return r, creator
+}
+
+func newClockedReporter(store *fakeReporterStore, now time.Time) (*WorkerReporter, *fakeCreator, *fakeClock) {
 	creator := &fakeCreator{}
-	return NewWorkerReporter(WorkerReporterDeps{Store: store, Reports: creator, Now: func() time.Time { return now }}), creator
+	clock := &fakeClock{}
+	r := NewWorkerReporter(WorkerReporterDeps{
+		Store: store, Reports: creator, Now: func() time.Time { return now },
+		AfterFunc: clock.AfterFunc, Spawn: func(f func()) { f() },
+	})
+	return r, creator, clock
 }
 
 func workerStore() *fakeReporterStore {
@@ -63,48 +105,88 @@ func workerStore() *fakeReporterStore {
 	}
 }
 
-func TestWorkerReporterTransitions(t *testing.T) {
-	now := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
-	cases := []struct {
-		name       string
-		steps      []domain.ActivityState
+func states(created []CreateInput) []domain.ReportState {
+	out := make([]domain.ReportState, 0, len(created))
+	for _, in := range created {
+		out = append(out, in.State)
+	}
+	return out
+}
+
+func TestWorkerReporterObserve(t *testing.T) {
+	type step struct {
+		activity   domain.ActivityState
 		terminated bool
-		want       domain.ReportState
+		elapse     bool
+	}
+	active := step{activity: domain.ActivityActive}
+	idle := step{activity: domain.ActivityIdle}
+	wait := step{elapse: true}
+	cases := []struct {
+		name  string
+		steps []step
+		want  []domain.ReportState
 	}{
-		{"idle after work is done", []domain.ActivityState{domain.ActivityActive, domain.ActivityIdle}, false, domain.ReportDone},
-		{"waiting after work needs input", []domain.ActivityState{domain.ActivityActive, domain.ActivityWaitingInput}, false, domain.ReportNeedsInput},
-		{"blocked after work needs input", []domain.ActivityState{domain.ActivityActive, domain.ActivityBlocked}, false, domain.ReportNeedsInput},
-		{"exit after work is stuck", []domain.ActivityState{domain.ActivityActive, domain.ActivityExited}, false, domain.ReportStuck},
-		{"idle never seen active is ignored", []domain.ActivityState{domain.ActivityIdle}, false, ""},
-		{"termination is ignored", []domain.ActivityState{domain.ActivityActive, domain.ActivityExited}, true, ""},
+		{"idle after work is done once quiet", []step{active, idle, wait}, []domain.ReportState{domain.ReportDone}},
+		{"idle without quiet period writes nothing yet", []step{active, idle}, nil},
+		{"waiting after work needs input", []step{active, {activity: domain.ActivityWaitingInput}}, []domain.ReportState{domain.ReportNeedsInput}},
+		{"blocked after work needs input", []step{active, {activity: domain.ActivityBlocked}}, []domain.ReportState{domain.ReportNeedsInput}},
+		{"exit after work is stuck", []step{active, {activity: domain.ActivityExited}}, []domain.ReportState{domain.ReportStuck}},
+		{"idle never seen active is ignored", []step{idle, wait}, nil},
+		{"termination is ignored", []step{active, {activity: domain.ActivityExited, terminated: true}, wait}, nil},
+		{"termination cancels a pending done", []step{active, idle, {activity: domain.ActivityExited, terminated: true}, wait}, nil},
+		{"idle gaps between steps give one done", []step{active, idle, active, idle, active, idle, wait}, []domain.ReportState{domain.ReportDone}},
+		{"repeated idle gives one done", []step{active, idle, idle, wait, idle, wait}, []domain.ReportState{domain.ReportDone}},
+		{"new work after a done gives another", []step{active, idle, wait, active, idle, wait}, []domain.ReportState{domain.ReportDone, domain.ReportDone}},
+		{"question right after finishing replaces done", []step{active, idle, {activity: domain.ActivityWaitingInput}, wait}, []domain.ReportState{domain.ReportNeedsInput}},
+		{"exit after finishing keeps done", []step{active, idle, {activity: domain.ActivityExited}, wait}, []domain.ReportState{domain.ReportDone}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r, _ := newTestReporter(workerStore(), now)
-			var got domain.ReportState
-			for i, step := range tc.steps {
-				last := i == len(tc.steps)-1
-				got, _ = r.Transition("w1", step, last && tc.terminated)
+			r, creator, clock := newClockedReporter(workerStore(), time.Now())
+			for _, s := range tc.steps {
+				if s.elapse {
+					clock.elapse()
+					continue
+				}
+				r.Observe(t.Context(), "w1", s.activity, s.terminated)
 			}
-			if got != tc.want {
-				t.Fatalf("Transition = %q, want %q", got, tc.want)
+			got := states(creator.created)
+			if len(got) != len(tc.want) {
+				t.Fatalf("reports = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("reports = %v, want %v", got, tc.want)
+				}
 			}
 		})
 	}
 }
 
-func TestWorkerReporterReportsOnceThenRearms(t *testing.T) {
-	r, _ := newTestReporter(workerStore(), time.Now())
-	r.Transition("w1", domain.ActivityActive, false)
-	if got, _ := r.Transition("w1", domain.ActivityIdle, false); got != domain.ReportDone {
-		t.Fatalf("first idle = %q, want done", got)
+func TestWorkerReporterResumedTaskKeepsItsStart(t *testing.T) {
+	start := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
+	now := start
+	store := workerStore()
+	store.conversation["w1"] = "c1"
+	store.messages["c1"] = []domain.ConversationMessage{
+		{Role: domain.MessageRoleAssistant, Text: "step one done", CreatedAt: start.Add(time.Second)},
+		{Role: domain.MessageRoleAssistant, Text: "", CreatedAt: start.Add(2 * time.Second)},
 	}
-	if got, _ := r.Transition("w1", domain.ActivityIdle, false); got != "" {
-		t.Fatalf("repeated idle = %q, want none", got)
-	}
-	r.Transition("w1", domain.ActivityActive, false)
-	if got, _ := r.Transition("w1", domain.ActivityIdle, false); got != domain.ReportDone {
-		t.Fatalf("idle after new work = %q, want done", got)
+	creator := &fakeCreator{}
+	clock := &fakeClock{}
+	r := NewWorkerReporter(WorkerReporterDeps{
+		Store: store, Reports: creator, Now: func() time.Time { return now },
+		AfterFunc: clock.AfterFunc, Spawn: func(f func()) { f() },
+	})
+	r.Observe(t.Context(), "w1", domain.ActivityActive, false)
+	now = start.Add(time.Minute)
+	r.Observe(t.Context(), "w1", domain.ActivityIdle, false)
+	r.Observe(t.Context(), "w1", domain.ActivityActive, false)
+	r.Observe(t.Context(), "w1", domain.ActivityIdle, false)
+	clock.elapse()
+	if len(creator.created) != 1 || creator.created[0].Note != "step one done" {
+		t.Fatalf("reports = %+v, want one done covering the whole task", creator.created)
 	}
 }
 
@@ -185,4 +267,29 @@ func TestWorkerReporterOlderAgentReportDoesNotSuppress(t *testing.T) {
 	if len(creator.created) != 1 || creator.created[0].State != domain.ReportNeedsInput {
 		t.Fatalf("reports = %+v", creator.created)
 	}
+}
+
+func TestWorkerReporterRealTimerWritesDone(t *testing.T) {
+	done := make(chan CreateInput, 1)
+	r := NewWorkerReporter(WorkerReporterDeps{
+		Store: workerStore(), Reports: creatorFunc(func(in CreateInput) { done <- in }),
+		QuietPeriod: 10 * time.Millisecond,
+	})
+	r.Observe(t.Context(), "w1", domain.ActivityActive, false)
+	r.Observe(t.Context(), "w1", domain.ActivityIdle, false)
+	select {
+	case in := <-done:
+		if in.State != domain.ReportDone {
+			t.Fatalf("state = %q, want done", in.State)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no done report after the quiet period")
+	}
+}
+
+type creatorFunc func(CreateInput)
+
+func (f creatorFunc) Create(_ context.Context, in CreateInput) (domain.ReportRecord, error) {
+	f(in)
+	return domain.ReportRecord{}, nil
 }

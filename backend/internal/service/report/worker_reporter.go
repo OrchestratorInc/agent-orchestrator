@@ -24,33 +24,59 @@ type ReportCreator interface {
 	Create(context.Context, CreateInput) (domain.ReportRecord, error)
 }
 
+// DoneQuietPeriod is how long a worker must stay idle before its done report
+// is written. A harness that reports idle between steps, or a worker that
+// picks up a queued message, resumes within it, so one task yields one done.
+const DoneQuietPeriod = 30 * time.Second
+
 // WorkerReporter writes worker reports from the signals the daemon already
 // observes, so agents do not have to restate them with `ao report` (ADR 0007):
 //
-//   - active then idle: done, with the worker's final assistant message
+//   - active then idle for DoneQuietPeriod: done, with the worker's final
+//     assistant message
 //   - active then waiting_input or blocked: needs_input
 //   - active then exited, without termination: stuck
 //
 // Only transitions out of observed live work produce a report. A session the
 // daemon never saw active since it started is left alone, and so is a killed
-// session. While `ao report` still exists, a report the agent filed itself
-// during the same stretch of work takes precedence and nothing is added.
+// session. Work that resumes during the quiet period continues the same task,
+// so its idle gaps never produce extra done reports. While `ao report` still
+// exists, a report the agent filed itself during the same stretch of work
+// takes precedence and nothing is added.
 type WorkerReporter struct {
-	store   WorkerReporterStore
-	reports ReportCreator
-	now     func() time.Time
-	log     *slog.Logger
+	store     WorkerReporterStore
+	reports   ReportCreator
+	now       func() time.Time
+	log       *slog.Logger
+	quiet     time.Duration
+	afterFunc func(time.Duration, func()) Stopper
+	spawn     func(func())
 
 	mu          sync.Mutex
 	activeSince map[domain.SessionID]time.Time
+	pendingDone map[domain.SessionID]pendingDone
+	nextGen     uint64
 }
 
-// WorkerReporterDeps configures a WorkerReporter. Now and Logger are optional.
+// Stopper cancels a scheduled function, as *time.Timer does.
+type Stopper interface{ Stop() bool }
+
+type pendingDone struct {
+	since time.Time
+	gen   uint64
+	timer Stopper
+}
+
+// WorkerReporterDeps configures a WorkerReporter. Only Store and Reports are
+// required; the rest exist for tests.
 type WorkerReporterDeps struct {
-	Store   WorkerReporterStore
-	Reports ReportCreator
-	Now     func() time.Time
-	Logger  *slog.Logger
+	Store       WorkerReporterStore
+	Reports     ReportCreator
+	Now         func() time.Time
+	Logger      *slog.Logger
+	QuietPeriod time.Duration
+	AfterFunc   func(time.Duration, func()) Stopper
+	Spawn       func(func())
 }
 
 // NewWorkerReporter constructs an idle reporter.
@@ -61,51 +87,101 @@ func NewWorkerReporter(d WorkerReporterDeps) *WorkerReporter {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
+	if d.QuietPeriod <= 0 {
+		d.QuietPeriod = DoneQuietPeriod
+	}
+	if d.AfterFunc == nil {
+		d.AfterFunc = func(wait time.Duration, f func()) Stopper { return time.AfterFunc(wait, f) }
+	}
+	if d.Spawn == nil {
+		d.Spawn = func(f func()) { go f() }
+	}
 	return &WorkerReporter{
 		store: d.Store, reports: d.Reports, now: d.Now, log: d.Logger,
+		quiet: d.QuietPeriod, afterFunc: d.AfterFunc, spawn: d.Spawn,
 		activeSince: make(map[domain.SessionID]time.Time),
+		pendingDone: make(map[domain.SessionID]pendingDone),
 	}
 }
 
-// Transition records one session activity change. It returns the report state
-// it will write, or "" when the change needs no report. Callers run Write with
-// the returned values off the event path.
-func (r *WorkerReporter) Transition(id domain.SessionID, activity domain.ActivityState, terminated bool) (domain.ReportState, time.Time) {
+// Observe records one session activity change, in feed order. Decisions are
+// made under the lock; store reads and writes run off the caller's path.
+func (r *WorkerReporter) Observe(ctx context.Context, id domain.SessionID, activity domain.ActivityState, terminated bool) {
 	if r == nil || id == "" {
-		return "", time.Time{}
+		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if activity == domain.ActivityActive && !terminated {
+	if terminated {
+		r.cancelDoneLocked(id)
+		delete(r.activeSince, id)
+		return
+	}
+	switch activity {
+	case domain.ActivityActive:
+		if pending, ok := r.cancelDoneLocked(id); ok {
+			// Resumed within the quiet period: still the same task.
+			r.activeSince[id] = pending.since
+			return
+		}
 		if _, ok := r.activeSince[id]; !ok {
 			r.activeSince[id] = r.now().UTC()
 		}
-		return "", time.Time{}
-	}
-	since, ok := r.activeSince[id]
-	if !ok {
-		return "", time.Time{}
-	}
-	if terminated {
-		delete(r.activeSince, id)
-		return "", time.Time{}
-	}
-	var state domain.ReportState
-	switch activity {
 	case domain.ActivityIdle:
-		state = domain.ReportDone
+		since, ok := r.activeSince[id]
+		if !ok {
+			return
+		}
+		delete(r.activeSince, id)
+		r.nextGen++
+		gen := r.nextGen
+		timer := r.afterFunc(r.quiet, func() { r.fireDone(ctx, id, gen) })
+		r.pendingDone[id] = pendingDone{since: since, gen: gen, timer: timer}
 	case domain.ActivityWaitingInput, domain.ActivityBlocked:
-		state = domain.ReportNeedsInput
+		since, ok := r.activeSince[id]
+		if pending, wasDone := r.cancelDoneLocked(id); wasDone {
+			// A question right after finishing replaces the done report.
+			since, ok = pending.since, true
+		}
+		if !ok {
+			return
+		}
+		delete(r.activeSince, id)
+		r.spawn(func() { r.Write(ctx, id, domain.ReportNeedsInput, since) })
 	case domain.ActivityExited:
-		state = domain.ReportStuck
-	default:
-		return "", time.Time{}
+		// An exit after a finished turn leaves its pending done in place.
+		since, ok := r.activeSince[id]
+		if !ok {
+			return
+		}
+		delete(r.activeSince, id)
+		r.spawn(func() { r.Write(ctx, id, domain.ReportStuck, since) })
 	}
-	delete(r.activeSince, id)
-	return state, since
 }
 
-// Write persists the report chosen by Transition for a project worker. It is
+func (r *WorkerReporter) cancelDoneLocked(id domain.SessionID) (pendingDone, bool) {
+	pending, ok := r.pendingDone[id]
+	if !ok {
+		return pendingDone{}, false
+	}
+	pending.timer.Stop()
+	delete(r.pendingDone, id)
+	return pending, true
+}
+
+func (r *WorkerReporter) fireDone(ctx context.Context, id domain.SessionID, gen uint64) {
+	r.mu.Lock()
+	pending, ok := r.pendingDone[id]
+	if !ok || pending.gen != gen {
+		r.mu.Unlock()
+		return
+	}
+	delete(r.pendingDone, id)
+	r.mu.Unlock()
+	r.Write(ctx, id, domain.ReportDone, pending.since)
+}
+
+// Write persists one report for a project worker. It is
 // best effort: failures are logged and never affect the session.
 func (r *WorkerReporter) Write(ctx context.Context, id domain.SessionID, state domain.ReportState, since time.Time) {
 	if r == nil || state == "" {

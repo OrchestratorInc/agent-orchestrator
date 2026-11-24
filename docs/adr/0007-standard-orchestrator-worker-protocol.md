@@ -79,9 +79,9 @@ final message is its result.
 - TUI workers have no ACP stream. The reporter uses their hook-derived
   activity (`idle`, `waiting_input`, `blocked`, `exited`) and points the
   orchestrator at `ao session history` instead of quoting a final message.
-- A worker that goes idle between steps now produces a done report. The
-  existing five-minute settlement window and early flush already absorb
-  quick follow-up turns; a later turn supersedes the earlier unsent report.
+- A done report waits until the worker has stayed idle for 30 seconds. Work
+  that resumes sooner, such as a harness that reports idle between steps or a
+  queued message, continues the same task, so one task yields one done.
 
 ## Rollout
 
