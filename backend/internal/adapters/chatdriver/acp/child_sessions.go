@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
+	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -120,8 +120,9 @@ func (c *conversation) childStateLocked() *childSessionState {
 			said:     map[string]*childSaying{},
 			messages: map[string]int{},
 			adopted:  map[string]struct{}{},
-			// Unique per attachment, across daemon restarts too.
-			attachment: strconv.FormatInt(time.Now().UnixNano(), 36),
+			// Random, not the clock, which can step back and name two
+			// attachments alike.
+			attachment: uuid.NewString(),
 		}
 	}
 	return c.children
