@@ -450,6 +450,16 @@ export function AgentModelPicker({
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
 	const showAccount = Boolean(agentSwitch.account && !pending && agentSwitch.account.options.length > 1);
+	// A setting changed in the menu is a choice too, so closing after it is not an abandon.
+	// It is not a model change.
+	const withPick = (toggle: ((next: boolean) => void) | undefined) => toggle && ((next: boolean) => {
+		markModelPick();
+		toggle(next);
+	});
+	const pickAccount = (id: string) => {
+		markModelPick();
+		agentSwitch.account?.onPick(id);
+	};
 
 	// The chosen agent's settings, under its models and kept in view while they scroll.
 	const settingsRows = [
@@ -470,6 +480,7 @@ export function AgentModelPicker({
 							radio
 							disabled={!source.onPickEffort}
 							onSelect={() => {
+								markModelPick();
 								if (choice.value !== source.effort) source.onPickEffort?.(choice.value);
 							}}
 							className="text-xs text-foreground"
@@ -487,14 +498,14 @@ export function AgentModelPicker({
 			</OptionMenuSub>
 		) : null,
 		// One account has nothing to switch to, so the row is only for two or more.
-		showAccount && agentSwitch.account ? <AccountRows key="account" account={agentSwitch.account} /> : null,
+		showAccount && agentSwitch.account ? <AccountRows key="account" account={{ ...agentSwitch.account, onPick: pickAccount }} /> : null,
 	].filter(Boolean);
 	const settingsGroups = [
 		settingsRows.length > 0 ? settingsRows : null,
 		settable && !waiting && (source.fast !== undefined || source.thinking !== undefined) ? (
 			<>
-				<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={source.onToggleFast} />
-				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={source.onToggleThinking} />
+				<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={withPick(source.onToggleFast)} />
+				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={withPick(source.onToggleThinking)} />
 			</>
 		) : null,
 		extras && !pending ? extras : null,
