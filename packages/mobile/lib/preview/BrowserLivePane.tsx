@@ -99,6 +99,8 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	// When each recent frame source arrived, until its image loads: a newer
 	// frame can replace one before it shows.
 	const arrivedAt = useRef(new Map<string, number>());
+	// The source last handed to the Image: a repeat of it is the same request.
+	const lastSource = useRef<string | undefined>(undefined);
 	const [statsLine, setStatsLine] = useState("");
 	useEffect(() => {
 		if (!MEASURE_STREAM) return;
@@ -180,12 +182,17 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					setFrameSize({ width: frame.width, height: frame.height });
 					const uri = browserJPEGDataURI(frame.jpeg);
 					if (stats.current) {
-						// The same source still loading is one image request: it keeps
-						// the time it first arrived (its bytes still count above).
-						if (!arrivedAt.current.has(uri)) arrivedAt.current.set(uri, arrived);
+						// The same source again, still loading, is one image request: it
+						// keeps the time it first arrived (its bytes still count above).
+						// After another source it is a new request: timed afresh, last.
+						if (uri !== lastSource.current || !arrivedAt.current.has(uri)) {
+							arrivedAt.current.delete(uri);
+							arrivedAt.current.set(uri, arrived);
+						}
 						// Bounded: sources that never load are forgotten.
 						if (arrivedAt.current.size > 8) arrivedAt.current.delete(arrivedAt.current.keys().next().value!);
 					}
+					lastSource.current = uri;
 					setFrameURI(uri);
 					setFrameIsLive(true);
 				} catch {
