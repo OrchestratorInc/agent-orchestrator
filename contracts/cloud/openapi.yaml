@@ -5333,7 +5333,7 @@ paths:
       parameters:
         - name: status
           in: query
-          description: "`open` (the default): threads not resolved. `resolved`: resolved threads."
+          description: "`open` (the default): threads not resolved, on sessions that have not ended. `resolved`: resolved threads, and every thread on a session that has ended (sessionTerminated), which can no longer be resolved; a restored session's threads are open again."
           schema:
             type: string
             enum: [open, resolved]
@@ -5376,7 +5376,8 @@ paths:
       description: >-
         How many open threads are unread for the caller, for the threads
         view's badge: the threads listMyCommentThreads lists with status open
-        and unread true. Resolved and muted threads are not counted.
+        and unread true. Resolved and muted threads, and threads on ended
+        sessions, are not counted.
       responses:
         "200":
           description: The count.
