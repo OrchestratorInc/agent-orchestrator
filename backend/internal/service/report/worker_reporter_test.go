@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -380,5 +381,55 @@ func TestWorkerReporterSkipsTerminatedSession(t *testing.T) {
 	r.Write(t.Context(), "w1", domain.ReportNeedsInput, Stretch{Since: time.Now(), Until: time.Now().Add(time.Minute)})
 	if len(creator.created) != 0 {
 		t.Fatalf("reports = %+v, want none for a killed worker", creator.created)
+	}
+}
+
+// persistingCreator stores each report as the real service does, and can hold
+// a creation after persisting it, before it returns.
+type persistingCreator struct {
+	store   *fakeReporterStore
+	mu      sync.Mutex
+	created []CreateInput
+	hold    chan struct{}
+	held    chan struct{}
+}
+
+func (c *persistingCreator) Create(_ context.Context, in CreateInput) (domain.ReportRecord, error) {
+	c.mu.Lock()
+	c.created = append(c.created, in)
+	rec := domain.ReportRecord{ID: fmt.Sprintf("auto-%d", len(c.created)), SessionID: in.SessionID, CreatedAt: time.Date(2026, 11, 24, 5, 0, 3, 0, time.UTC)}
+	c.store.reports = append(c.store.reports, rec)
+	first := len(c.created) == 1
+	c.mu.Unlock()
+	if first && c.hold != nil {
+		close(c.held)
+		<-c.hold
+	}
+	return rec, nil
+}
+
+func TestWorkerReporterConcurrentWriteDoesNotMistakeOwnReport(t *testing.T) {
+	start := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
+	store := workerStore()
+	creator := &persistingCreator{store: store, hold: make(chan struct{}), held: make(chan struct{})}
+	r := NewWorkerReporter(WorkerReporterDeps{Store: store, Reports: creator})
+	first := make(chan struct{})
+	go func() {
+		r.Write(t.Context(), "w1", domain.ReportNeedsInput, Stretch{Since: start, Until: start.Add(time.Second)})
+		close(first)
+	}()
+	<-creator.held // persisted, not yet registered as the reporter's own
+	second := make(chan struct{})
+	go func() {
+		r.Write(t.Context(), "w1", domain.ReportDone, Stretch{Since: start.Add(2 * time.Second), Until: start.Add(time.Minute)})
+		close(second)
+	}()
+	close(creator.hold)
+	<-first
+	<-second
+	creator.mu.Lock()
+	defer creator.mu.Unlock()
+	if len(creator.created) != 2 {
+		t.Fatalf("reports = %+v, want both stretches reported", creator.created)
 	}
 }

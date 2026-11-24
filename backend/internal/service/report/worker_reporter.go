@@ -61,6 +61,9 @@ type WorkerReporter struct {
 	// `ao report`. It has its own lock because writes can run while mu is held.
 	ownMu sync.Mutex
 	own   map[string]struct{}
+	// writeMu serializes Write, so a report another Write has just persisted
+	// is registered in own before any other Write checks provenance.
+	writeMu sync.Mutex
 }
 
 // Stretch is one stretch of observed work: from the event that made the
@@ -217,6 +220,8 @@ func (r *WorkerReporter) Write(ctx context.Context, id domain.SessionID, state d
 	if err != nil || !ok || session.Kind != domain.KindWorker || session.ProjectID == "" || session.IsTerminated {
 		return
 	}
+	r.writeMu.Lock()
+	defer r.writeMu.Unlock()
 	if r.agentReported(ctx, session, stretch) {
 		return
 	}
