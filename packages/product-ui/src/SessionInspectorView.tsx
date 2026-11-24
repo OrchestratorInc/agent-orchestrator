@@ -290,13 +290,14 @@ export function InspectorSection({
 }
 
 export function SessionInspectorSummaryView({
-	activity,
-	activityTitle,
+	activity: _activity,
+	activityTitle: _activityTitle,
 	artifactCards,
 	artifactTitle,
 	branch,
 	completion,
 	context,
+	footer,
 	pullRequestCards,
 	pullRequestTitle,
 	reviews,
@@ -304,14 +305,16 @@ export function SessionInspectorSummaryView({
 	usage,
 	workers,
 }: {
-	activity: ReactNode;
-	activityTitle: string;
+	activity?: ReactNode;
+	activityTitle?: string;
 	/** Omit alongside {@link artifactTitle} to skip the artifacts section entirely. */
 	artifactCards?: ReactNode;
 	artifactTitle?: string;
 	branch?: ReactNode;
 	completion?: ReactNode;
 	context?: ReactNode;
+	/** Account summary and agent resume actions rendered beneath the summary sections. */
+	footer?: ReactNode;
 	/** Omit alongside {@link pullRequestTitle} to skip the PR section entirely (e.g. no known PR output). */
 	pullRequestCards?: ReactNode;
 	pullRequestTitle?: string;
@@ -343,7 +346,10 @@ export function SessionInspectorSummaryView({
 			{reviews}
 			{completion}
 			{scripts}
-			<InspectorSection title={activityTitle}>{activity}</InspectorSection>
+			{/* Activity section temporarily hidden — uncomment to restore:
+			{_activityTitle ? <InspectorSection title={_activityTitle}>{_activity}</InspectorSection> : null}
+			*/}
+			{footer}
 			{usage}
 		</div>
 	);

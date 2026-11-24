@@ -10,17 +10,19 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
+import { InspectorSection } from "@aoagents/product-ui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PRSummaryCard, resetPRFocus, SessionInspector } from "./SessionInspector";
+import { ActivityTimeline, PRSummaryCard, resetPRFocus, SessionInspector } from "./SessionInspector";
 import { subscribeChatComposerText } from "../lib/chat-context-bus";
 import { sessionUiKey } from "../lib/hosts";
+import { sessionPRDisplaySummaries } from "../lib/pr-display";
 import { resetPRMergeMethods } from "./PRActions";
 import { ADDED_TO_CHAT_MS } from "./PRComments";
 import { PRTabPane } from "./PRTabPane";
 import { resetPRTabs, usePRTabs } from "../lib/pr-tabs";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
+import { sessionScmSummaryQueryKey, useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import { settingsQueryKey } from "../hooks/useSettings";
 import { sessionWorkspaceFilesQueryKey } from "../hooks/useSessionWorkspaceFiles";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
@@ -2898,6 +2900,22 @@ describe("SessionInspector Activity section", () => {
       .closest("[data-testid='inspector-section']") as HTMLElement;
   const activitySection = () => within(activitySectionElement());
 
+  it("hides the Activity section while keeping Account and Resume agent visible", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([pr(7, "open")], {
+          status: "exited",
+          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
+        })}
+      />,
+    );
+
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("inspector-timeline-event")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
+  });
+
   it("offers a managed resume only for an exited, nonterminated agent", async () => {
     renderWithQuery(
       <SessionInspector
@@ -2909,7 +2927,7 @@ describe("SessionInspector Activity section", () => {
     );
 
     await userEvent.click(
-      activitySection().getByRole("button", { name: "Resume agent" }),
+      screen.getByRole("button", { name: "Resume agent" }),
     );
 
     await waitFor(() =>
@@ -2936,7 +2954,7 @@ describe("SessionInspector Activity section", () => {
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
     expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
+      screen.getByRole("tabpanel").querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
     ).not.toBeInTheDocument();
 
     live.unmount();
@@ -2975,7 +2993,7 @@ describe("SessionInspector Activity section", () => {
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
     expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
+      screen.getByRole("tabpanel").querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
     ).not.toBeInTheDocument();
   });
 
@@ -2994,13 +3012,54 @@ describe("SessionInspector Activity section", () => {
     );
 
     await userEvent.click(
-      activitySection().getByRole("button", { name: "Resume agent" }),
+      screen.getByRole("button", { name: "Resume agent" }),
     );
 
     expect(
-      await activitySection().findByText("agent restart failed"),
+      await screen.findByText("agent restart failed"),
     ).toBeInTheDocument();
   });
+
+  it("aligns summary section headings on one shared inset", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([pr(7, "open")], {
+          status: "working",
+          activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
+        })}
+      />,
+    );
+
+    for (const title of ["Pull request", "Session controls"]) {
+      expect(
+        screen.getByText(title).closest('[data-testid="inspector-section"]'),
+      ).toBeInTheDocument();
+    }
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+  });
+
+	it("keeps execution context out of the summary", () => {
+		renderWithQuery(<SessionInspector session={session([], { branch: "feature/session" })} />);
+
+		expect(screen.queryByTestId("execution-context")).not.toBeInTheDocument();
+	});
+
+  describe("Activity timeline (rendered directly while sidebar section is commented out)", () => {
+  function ActivityTimelineSection({ hostId, session: target }: { hostId?: string; session: WorkspaceSession }) {
+    const query = useSessionScmSummary(
+      target.id,
+      true,
+      target.cloud?.orgId,
+      target.cloud ? target.autoInjectCI === true : false,
+      hostId,
+    );
+    const prSummaries = sessionPRDisplaySummaries(target, query.data?.prs);
+    return (
+      <InspectorSection title="Activity">
+        <ActivityTimeline hostId={hostId} prs={prSummaries} session={target} />
+      </InspectorSection>
+    );
+  }
 
   it.each([
     ["idle", "Idle"],
@@ -3009,7 +3068,7 @@ describe("SessionInspector Activity section", () => {
     ["exited", "Exited"],
   ] as const)("renders %s from raw session activity", (state, label) => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session([pr(7, "open")], {
           status: "review_pending",
           activity: { state, lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -3022,7 +3081,7 @@ describe("SessionInspector Activity section", () => {
 
   it("renders unknown activity through the shared activity label", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session([], {
           status: "working",
           activity: {
@@ -3041,7 +3100,7 @@ describe("SessionInspector Activity section", () => {
 
   it("falls back to unknown when no activity has been reported", () => {
     renderWithQuery(
-      <SessionInspector session={session([], { status: "working" })} />,
+      <ActivityTimelineSection session={session([], { status: "working" })} />,
     );
 
     expect(activitySection().getByText("Unknown")).toBeInTheDocument();
@@ -3049,7 +3108,7 @@ describe("SessionInspector Activity section", () => {
 
   it("keeps the last known activity visible when the daemon reports no signal", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session([], {
           status: "no_signal",
           activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -3065,7 +3124,7 @@ describe("SessionInspector Activity section", () => {
 
   it("does not derive the Activity label from PR-oriented session status", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session([], {
           status: "review_pending",
           activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -3087,7 +3146,7 @@ describe("SessionInspector Activity section", () => {
     "renders %s as an SCM state in the current Activity row",
     (status, label) => {
       renderWithQuery(
-        <SessionInspector
+        <ActivityTimelineSection
           session={session([], {
             status,
             activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -3104,7 +3163,7 @@ describe("SessionInspector Activity section", () => {
 
   it("keeps an unresolved, non-blocking review comment visible as Commented feedback while the agent is working (#5765)", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session(
           [pr(5765, "open", { review: "review_required", reviewComments: true })],
           {
@@ -3124,7 +3183,7 @@ describe("SessionInspector Activity section", () => {
 
   it("does not show Commented for a stale unresolved comment on a merged PR", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session(
           [pr(5765, "merged", { review: "review_required", reviewComments: true })],
           {
@@ -3143,7 +3202,7 @@ describe("SessionInspector Activity section", () => {
 
   it("ignores stale failing CI from a merged PR when the open PR is passing", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session(
           [pr(5753, "open", { ci: "passing" }), pr(5754, "merged", { ci: "failing" })],
           {
@@ -3162,7 +3221,7 @@ describe("SessionInspector Activity section", () => {
 
   it("renders PR conflicts as an SCM state in the current Activity row", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session([pr(7, "open", { mergeability: "conflicting" })], {
           status: "working",
           activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -3186,7 +3245,7 @@ describe("SessionInspector Activity section", () => {
     { name: "an orchestrator", overrides: { kind: "orchestrator" as const }, expected: "Created workspace" },
   ])("labels $name's creation as $expected", ({ overrides, expected }) => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session([], {
           ...overrides,
           status: "idle",
@@ -3201,7 +3260,7 @@ describe("SessionInspector Activity section", () => {
 
   it.each(["closed", "merged"] as const)("ignores a conflict and changes requested left on a %s PR when the open PR is clean", (state) => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session(
           [pr(5134, state, { mergeability: "conflicting", review: "changes_requested" }), pr(5135, "open", { mergeability: "mergeable" })],
           {
@@ -3221,7 +3280,7 @@ describe("SessionInspector Activity section", () => {
 
   it.each(["open", "draft"] as const)("keeps a %s PR's conflict and requested changes beside a clean closed PR", (state) => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session(
           [pr(7, state, { mergeability: "conflicting", review: "changes_requested" }), pr(8, "closed", { mergeability: "mergeable" })],
           {
@@ -3244,7 +3303,7 @@ describe("SessionInspector Activity section", () => {
     vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
 
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session([], {
           status: "working",
           updatedAt: "2026-06-15T11:55:00Z",
@@ -3263,7 +3322,7 @@ describe("SessionInspector Activity section", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session([pr(7, "open")], {
           status: "working",
           createdAt: "2026-06-15T09:00:00Z",
@@ -3302,7 +3361,7 @@ describe("SessionInspector Activity section", () => {
         }
         : respond(path),
     );
-    renderWithQuery(<SessionInspector session={session([])} />);
+    renderWithQuery(<ActivityTimelineSection session={session([])} />);
 
     expect(await activitySection().findByText("commit 0")).toBeInTheDocument();
     expect(activitySection().getAllByText("Committed")).toHaveLength(5);
@@ -3311,7 +3370,7 @@ describe("SessionInspector Activity section", () => {
 
   it("uses the timeline node as the single live activity indicator", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session([], {
           status: "working",
           activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -3331,32 +3390,9 @@ describe("SessionInspector Activity section", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("aligns summary section headings on one shared inset", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([pr(7, "open")], {
-          status: "working",
-          activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
-        })}
-      />,
-    );
-
-    for (const title of ["Pull request", "Session controls", "Activity"]) {
-      expect(
-        screen.getByText(title).closest('[data-testid="inspector-section"]'),
-      ).toBeInTheDocument();
-    }
-  });
-
-	it("keeps execution context out of the summary", () => {
-		renderWithQuery(<SessionInspector session={session([], { branch: "feature/session" })} />);
-
-		expect(screen.queryByTestId("execution-context")).not.toBeInTheDocument();
-	});
-
   it("keeps workspace, PR, and SCM context rows in the Activity timeline", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session(
           [pr(7, "open", { ci: "failing", review: "changes_requested" })],
           {
@@ -3409,7 +3445,7 @@ describe("SessionInspector Activity section", () => {
     });
 
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session(
           [
             pr(8, "draft", {
@@ -3496,7 +3532,7 @@ describe("SessionInspector Activity section", () => {
     ];
 
     renderWithQuery(
-      <SessionInspector
+      <ActivityTimelineSection
         session={session(
           [
             pr(42, "draft", {
@@ -3538,6 +3574,7 @@ describe("SessionInspector Activity section", () => {
       "Draft PR #424h ago",
     ]);
 
+  });
   });
 });
 
@@ -3632,8 +3669,8 @@ describe("SessionInspector tabs", () => {
   });
 
   it("collapses and expands a section from its heading", async () => {
-    renderWithQuery(<SessionInspector session={session([])} />);
-    const heading = screen.getByRole("button", { name: "Activity" });
+    renderWithQuery(<SessionInspector session={session([], { branch: "feature/session" })} />);
+    const heading = screen.getByRole("button", { name: "Branch" });
     await userEvent.click(heading);
     expect(heading).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(heading);
@@ -6012,7 +6049,7 @@ describe("SessionInspector summary reviews", () => {
       "true",
     );
     expect(screen.queryByRole("tab", { name: "Reviews" })).not.toBeInTheDocument();
-    expect(screen.getByText("Activity")).toBeInTheDocument();
+    expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
     await waitFor(() => expect(onViewChange).toHaveBeenCalledWith("summary"));
   });
 });
