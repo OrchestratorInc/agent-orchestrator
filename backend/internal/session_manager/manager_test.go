@@ -48,6 +48,7 @@ func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 }
 
 type fakeStore struct {
+	skippedChildren                    map[domain.SessionID]map[string]string
 	cleanupMu                          sync.Mutex
 	cleanupFacts                       map[domain.SessionID]domain.SessionCleanupRecord
 	sessions                           map[domain.SessionID]domain.SessionRecord
@@ -276,6 +277,22 @@ func (f *fakeStore) ClearSessionBranchNaming(context.Context) error {
 		f.sessions[id] = rec
 	}
 	return nil
+}
+
+func (f *fakeStore) RecordTaskPreparationSkippedChild(_ context.Context, id domain.SessionID, name, path string) error {
+	if f.sessions[id].IsTaskPreparation {
+		if f.skippedChildren == nil {
+			f.skippedChildren = make(map[domain.SessionID]map[string]string)
+		}
+		if f.skippedChildren[id] == nil {
+			f.skippedChildren[id] = make(map[string]string)
+		}
+		f.skippedChildren[id][name] = path
+	}
+	return nil
+}
+func (f *fakeStore) ListTaskPreparationSkippedChildren(_ context.Context, id domain.SessionID) (map[string]string, error) {
+	return f.skippedChildren[id], nil
 }
 
 func (f *fakeStore) SetTaskPreparationBase(_ context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error) {

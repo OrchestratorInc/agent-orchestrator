@@ -475,6 +475,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		outputPath: rootPath,
 		baseBranch: cfg.BaseBranch,
 	})
+	var skipped map[string]string
 	for _, child := range cfg.Repos {
 		repoPath, err := physicalAbs(child.RepoPath)
 		if err != nil {
@@ -493,6 +494,10 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		gitDir := filepath.Join(repoPath, ".git")
 		if _, err := os.Lstat(gitDir); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
+				if skipped == nil {
+					skipped = make(map[string]string)
+				}
+				skipped[child.Name] = outPath
 				w.logf("gitworktree: skipping unavailable child repo %q at %q", child.Name, repoPath)
 				continue
 			}
@@ -585,7 +590,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	}
 	created := make([]workspaceProjectRepo, 0, len(repos))
 	touched := make([]ports.WorkspaceRepoInfo, 0, len(repos))
-	out := ports.WorkspaceProjectInfo{Worktrees: make([]ports.WorkspaceRepoInfo, 0, len(repos))}
+	out := ports.WorkspaceProjectInfo{SkippedChildren: skipped, Worktrees: make([]ports.WorkspaceRepoInfo, 0, len(repos))}
 	fail := func(cause error) (ports.WorkspaceProjectInfo, error) {
 		if cfg.FreshBranch {
 			return w.rollbackWorkspaceProjectPreparation(ctx, out, touched, cause)

@@ -699,8 +699,10 @@ type WorkspaceProjectRepoConfig struct {
 // WorkspaceProjectInfo returns the root worktree plus every child worktree.
 // Worktrees are ordered root first, then children in creation order.
 type WorkspaceProjectInfo struct {
-	Root      WorkspaceInfo
-	Worktrees []WorkspaceRepoInfo
+	// SkippedChildren maps deliberately omitted repositories to their managed output paths.
+	SkippedChildren map[string]string
+	Root            WorkspaceInfo
+	Worktrees       []WorkspaceRepoInfo
 }
 
 // WorkspaceRepoInfo describes one materialized repo worktree in a workspace

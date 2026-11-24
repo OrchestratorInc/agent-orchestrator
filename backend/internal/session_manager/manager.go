@@ -418,6 +418,8 @@ type Store interface {
 	ClearSessionBranchNaming(ctx context.Context) error
 	SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error)
 	SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error)
+	RecordTaskPreparationSkippedChild(context.Context, domain.SessionID, string, string) error
+	ListTaskPreparationSkippedChildren(context.Context, domain.SessionID) (map[string]string, error)
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)

@@ -288,6 +288,7 @@ var shippedMigrations = map[int64]string{
 	20261118180603285: "20261118180603285_report_unacknowledged_attempts.sql",
 	20261119090000000: "20261119090000000_allow_mastra_code_harness.sql",
 	20261121120000000: "20261121120000000_pr_merge_queue.sql",
+	20261124032142084: "20261124032142084_task_preparation_skipped_children.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
