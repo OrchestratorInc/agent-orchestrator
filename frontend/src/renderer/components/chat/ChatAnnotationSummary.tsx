@@ -75,12 +75,9 @@ export function ChatAnnotationSummary({
 					ref={triggerRef}
 					disabled={disabled}
 					aria-label={label}
-					className="flex h-full min-w-0 select-none items-center gap-2.5 rounded-[inherit] pr-3 text-left leading-tight focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+					className="flex h-full min-w-0 select-none items-center rounded-[inherit] px-3.5 text-left leading-tight focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
 				>
-					<span aria-hidden="true" className="flex size-14 shrink-0 items-center justify-center">
-						<MessageSquareQuote className="size-5 text-muted-foreground" />
-					</span>
-					<span className="flex min-w-0 flex-col gap-0.5">
+					<span className="flex min-w-0 flex-col gap-1">
 						<span className="truncate text-sm text-foreground">{annotationQuote(annotations[0]!, t)}</span>
 						<span className="truncate text-xs text-muted-foreground">
 							{annotations.length > 1 ? t("browser.annotationCount", { count: annotations.length }) : annotationSource(annotations[0]!, t)}
