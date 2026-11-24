@@ -195,22 +195,22 @@ describe("ChatMarkdown", () => {
 		expect(code).toHaveClass("text-markdown-code");
 	});
 
-	it("uses the AO logo colour for file paths and inline notation", () => {
+	it("gives a folder path its icon and keeps inline notation in the code colour", () => {
 		render(
 			<ChatMarkdown
 				text={"See `backend/internal/adapters/agent/` and then pass `--resume` to `ao`."}
 			/>,
 		);
 
-		expect(screen.getByText("backend/internal/adapters/agent/")).toHaveClass("text-markdown-code");
+		expect(screen.getByText("backend/internal/adapters/agent/").closest("[data-named-path]")).toHaveAttribute("data-named-path", "dir");
 		expect(screen.getByText("--resume")).toHaveClass("text-markdown-code");
 		expect(screen.getByText("ao")).toHaveClass("text-markdown-code");
 	});
 
 	it("recognizes standalone filenames and paths with line locations", () => {
 		render(<ChatMarkdown text={"Compare `README.md` with `backend/service.go:42`."} />);
-		expect(screen.getByText("README.md")).toHaveClass("text-markdown-code");
-		expect(screen.getByText("backend/service.go:42")).toHaveClass("text-markdown-code");
+		expect(screen.getByText("README.md").closest("[data-named-path]")?.querySelector("[data-file-icon]")).toHaveAttribute("data-file-icon", "markdown");
+		expect(screen.getByText("backend/service.go:42").closest("[data-named-path]")?.querySelector("[data-file-icon]")).toHaveAttribute("data-file-icon", "go");
 	});
 
 	it("opens a known inline-code file path in Files", async () => {
@@ -232,9 +232,29 @@ describe("ChatMarkdown", () => {
 		renderWithLinkHandler("Open `backend/service.go:42` but keep `--resume` as code.", vi.fn(), ["backend/service.go"], vi.fn());
 
 		const button = screen.getByRole("button", { name: "Open backend/service.go in Files" });
-		expect(button.querySelector("code")).toHaveClass("text-chat-file-foreground");
+		// Primary text at rest; the file tint comes back on hover.
+		expect(button.querySelector("code")).toHaveClass("text-card-foreground", "group-hover:text-chat-file-foreground");
 		expect(button.querySelector("svg")).toHaveAttribute("data-file-icon", "go");
 		expect(screen.getByText("--resume")).toHaveClass("text-markdown-code");
+	});
+
+	it("gives a file or folder name its icon even when it opens nothing", () => {
+		renderWithLinkHandler(
+			"`client.ts` opens; `middleware.ts` is two files, `error.tsx` is missing, `photo-1416…jpg` is cut short, `src/lib/supabase/` and `public/catalog` are folders, `process.env` is code.",
+			vi.fn(),
+			["src/lib/supabase/client.ts", "src/middleware.ts", "src/lib/supabase/middleware.ts", "public/catalog/a.jpg"],
+			vi.fn(),
+		);
+		expect(screen.getByRole("button", { name: "Open src/lib/supabase/client.ts in Files" })).toBeInTheDocument();
+		for (const name of ["middleware.ts", "error.tsx", "photo-1416…jpg"]) {
+			const chip = screen.getByText(name).closest("[data-named-path]");
+			expect(chip).toHaveAttribute("data-named-path", "file");
+			expect(chip?.querySelector("[data-file-icon]")).not.toBeNull();
+			expect(screen.getByText(name).closest("button")).toBeNull();
+		}
+		expect(screen.getByText("src/lib/supabase/").closest("[data-named-path]")).toHaveAttribute("data-named-path", "dir");
+		expect(screen.getByText("public/catalog").closest("[data-named-path]")).toHaveAttribute("data-named-path", "dir");
+		expect(screen.getByText("process.env").closest("[data-named-path]")).toBeNull();
 	});
 
 	it("reveals filename matches in clickable inline code using the same offsets as search", () => {

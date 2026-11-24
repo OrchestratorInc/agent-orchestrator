@@ -79,12 +79,15 @@ import {
 	normalizeWorkspaceFileReference,
 	workspaceFileOpenTarget,
 	workspaceFileReferenceLine,
+	createWorkspaceDirLookup,
+	namedPath,
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
 import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
-import { FileChip } from "./ChatFileIcon";
+import { ChatFileIcon, FileChip } from "./ChatFileIcon";
+import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
 
@@ -126,7 +129,8 @@ const OpenChatLink = createContext<{
 	openSession?: (url: string) => void;
 	workspacePaths: string[];
 	findFile: (reference: string) => string | undefined;
-}>({ workspacePaths: [], findFile: () => undefined });
+	findDir: (reference: string) => boolean;
+}>({ workspacePaths: [], findFile: () => undefined, findDir: () => false });
 const EMPTY_WORKSPACE_PATHS: string[] = [];
 const EMPTY_LINK_WORKSPACES: WorkspaceSummary[] = [];
 /**
@@ -175,12 +179,13 @@ export function ChatLinkProvider({
 	const openFile = useLatestCallback((path: string, line?: number) => line == null ? onFileOpen?.(path) : onFileOpen?.(path, line));
 	const openSession = useLatestCallback((url: string) => onSessionLinkOpen?.(url));
 	const findFile = useMemo(() => createWorkspaceFileLookup(workspacePaths), [workspacePaths]);
+	const findDir = useMemo(() => createWorkspaceDirLookup(workspacePaths), [workspacePaths]);
 	const canOpenLink = Boolean(onLinkOpen);
 	const canOpenFile = Boolean(onFileOpen);
 	const canOpenSession = Boolean(onSessionLinkOpen);
 	const value = useMemo(
-		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile }),
-		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile],
+		() => ({ sessionId, open: canOpenLink ? openLink : undefined, openFile: canOpenFile ? openFile : undefined, openSession: canOpenSession ? openSession : undefined, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile, findDir }),
+		[sessionId, canOpenLink, canOpenFile, canOpenSession, openLink, openFile, openSession, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile, findDir],
 	);
 	const pathMenuValue = useMemo(
 		() => ({ sessionId, remote: Boolean(remoteHost || sessionLinkHostId || sessionLinkSourceKind === "cloud") }),
@@ -797,9 +802,27 @@ function InlineSessionReference({ id, node, fallback }: { id: string; node?: Has
 	}, [href, title, id, fallback, node]);
 }
 
+/**
+ * A named file or folder this chat cannot open: its icon and name on the plain code
+ * surface, in the primary text colour. Not a button, and never the file tint, which
+ * marks a name that opens.
+ */
+function NamedPathChip({ named, children }: { named: NonNullable<ReturnType<typeof namedPath>>; children: ReactNode }) {
+	return (
+		<span data-named-path={named.kind} className="mx-0.5 rounded bg-surface py-[2px] pr-[5px] pl-1 font-mono text-xs text-card-foreground">
+			{named.kind === "dir" ? (
+				<WorkspaceEntryIcon kind="dir" name={named.name} className="mr-[5px] inline-block size-3.5 align-[-2px]" />
+			) : (
+				<ChatFileIcon path={named.iconPath} className="mr-[5px] align-[-2px]" />
+			)}
+			{children}
+		</span>
+	);
+}
+
 function InlineCode({ children, className, node }: { children?: ReactNode; className?: string; node?: HastElement }) {
 	const positions = excerptElementProps(node);
-	const { openSession } = useContext(OpenChatLink);
+	const { openSession, findDir } = useContext(OpenChatLink);
 	const safeOrigin = useContext(SafeOriginContent);
 	const insideLink = useContext(InsideMarkdownLink);
 	const insideArtifactLink = useContext(InsideArtifactLink);
@@ -818,9 +841,13 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 	if (insideLink) return code;
 	if (!file) {
 		if (!safeOrigin && openSession && text && /^[^\s/\\]+-\d+$/u.test(text)) return <InlineSessionReference id={text} node={node} fallback={code} />;
-		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={code}>{name}</ArtifactPathCode>;
+		// A file or folder name that opens nothing here (missing, shared by two
+		// files, cut short, a folder) still wears its icon, on a plain chip.
+		const named = text ? namedPath(text, findDir) : undefined;
+		const plain = named ? <NamedPathChip named={named}><code {...positions} data-excerpt-kind="inline-code">{children}</code></NamedPathChip> : code;
+		if (text?.includes("/") && openSession) return <ArtifactPathCode text={text} unlisted={plain}>{name}</ArtifactPathCode>;
 		const path = text ? explicitWorkspaceFilePath(text) : undefined;
-		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
+		return path ? <ChatPathMenu path={path}>{plain}</ChatPathMenu> : plain;
 	}
 	const openFile = () => file.open(workspaceFileReferenceLine(text ?? ""));
 	// A file this chat can open gets its Files-tree icon on a faint brand wash,
@@ -838,7 +865,7 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 				    button's box follows the line height and would grow it). Its icon stays
 				    outside the code element, whose text alone carries the excerpt offsets. */}
 				<FileChip path={file.filePath}>
-					<code {...positions} data-excerpt-kind="inline-code" className="text-chat-file-foreground">
+					<code {...positions} data-excerpt-kind="inline-code" className="text-card-foreground transition-colors group-hover:text-chat-file-foreground">
 						{children}
 					</code>
 				</FileChip>

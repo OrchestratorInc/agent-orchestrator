@@ -67,12 +67,14 @@ export function ChatFileIcon({ path, className }: { path: string; className?: st
 
 /**
  * A workspace file's chip: its Files-tree icon on the accent tint, then `children`
- * as the visible text. Sized like a plain inline-code chip; a `group` ancestor
- * deepens the tint on hover.
+ * as the visible text in the primary text colour. Sized like a plain inline-code
+ * chip; a `group` ancestor deepens the tint and tints the text on hover.
+ * `text-card-foreground` rather than `text-foreground`, which the light theme's chat
+ * override would hold over the hover colour.
  */
 export function FileChip({ path, children }: { path: string; children: ReactNode }) {
 	return (
-		<span className="rounded bg-chat-file py-[2px] pr-[5px] pl-1 font-mono text-xs text-chat-file-foreground transition-colors group-hover:bg-chat-file-hover">
+		<span className="rounded bg-chat-file py-[2px] pr-[5px] pl-1 font-mono text-xs text-card-foreground transition-colors group-hover:bg-chat-file-hover group-hover:text-chat-file-foreground">
 			<ChatFileIcon path={path} className="mr-[5px] align-[-2px]" />
 			{children}
 		</span>
