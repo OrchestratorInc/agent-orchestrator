@@ -62,6 +62,7 @@ import { startSerialPoll } from "../session/serialPoll";
 import { STARTUP_POLL_MS } from "../session/startupPoll";
 import { useStartupSession } from "../session/useStartupSession";
 import { useSessionPreview } from "../session/useSessionPreview";
+import { useSessionDevice } from "../useSessionDevice";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
@@ -652,6 +653,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuArtifactCount = "projectName" in session ? undefined : deliverableArtifacts(session.artifacts ?? []).length;
 	const menuHasPullRequest = !("projectName" in session) && Boolean(session.prs?.length || session.pr);
 	const previewReady = useSessionPreview(config, session.id);
+	// Only a local worker can hold a simulator or emulator.
+	const menuDeviceName = useSessionDevice("projectName" in session ? undefined : config, session.id)?.device.name;
 	// Offered only where the agent can carry the conversation on in Terminal UI.
 	const menuCanSwitch = Boolean(interfaceSwitch.status?.supported);
 	const menuSwitching = interfaceSwitch.starting || switchingToTerminal;
@@ -676,6 +679,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	}), [agentAccounts.accounts, limitedTurnId, retryTurn, setTurnAutoResume]);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
+		deviceName: menuDeviceName,
 		artifactCount: menuArtifactCount,
 		hasPullRequest: menuHasPullRequest,
 		// Orchestrators are not pinned or archived from here; the board owns their lifecycle.
@@ -690,7 +694,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		turnInFlight: turnActive,
 		contextPercent: menuContextPercent,
 		account: menuAccountName ? { name: menuAccountName, moving: accountMoving, canMove: menuAccountCanMove } : undefined,
-	}) : undefined, [accountMoving, menuAccountCanMove, menuAccountName, isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
+	}) : undefined, [accountMoving, menuAccountCanMove, menuAccountName, isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuDeviceName, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
 	// The actions sheet follows what it shows while it is up (see `ConversationActionsEntry`).
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
@@ -709,6 +713,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// A local chat's sheet never offers the cloud-only actions (see conversationMenuSections).
 	const menuActions: Record<Exclude<ConversationMenuAction, CloudConversationMenuAction>, () => void> = {
 		preview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
+		device: () => router.push({ pathname: "/device/[id]", params: { id: session.id, hostId: currentHostId } }),
 		shell: () => void openShell(),
 		artifacts: () => router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId: session.id, title: sessionName, hostId: currentHostId } }),
 		pull_requests: () => {
@@ -793,6 +798,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		});
 		return () => navigation.setOptions({ headerRight: undefined });
 	}, [menuReady, navigation, openActions]);
+	// The device the session holds opens from its chip over the composer and from
+	// the actions sheet, like the PR and the changed files.
+	const openDevice = useCallback(() => router.push({ pathname: "/device/[id]", params: { id: session.id, hostId: currentHostId } }), [currentHostId, router, session.id]);
 	const headerItems = useMemo(() => menuReady && !PILL_HEADER ? (
 		<Stack.Toolbar placement="right">
 			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
@@ -1057,6 +1065,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					machine={machine}
 					snapshot={composerSnapshot ?? snapshot}
 					changes={composerChanges}
+					device={menuDeviceName ? { name: menuDeviceName, onOpen: openDevice } : undefined}
 					onOpenUsage={openUsage}
 					request={request}
 					requestDismissed={requestDismissed}

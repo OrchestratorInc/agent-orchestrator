@@ -5091,3 +5091,96 @@ type CreateAccessTokenResponse struct {
 type AccessTokenIDParam struct {
 	TokenID string `path:"tokenId" description:"Agent token id or name."`
 }
+
+// DevicePlatformStatus says whether this machine can run a platform's
+// simulators or emulators, and why not.
+type DevicePlatformStatus struct {
+	Platform  string `json:"platform" enum:"ios,android"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// DeviceSummary is one iOS Simulator or Android Emulator.
+type DeviceSummary struct {
+	ID       string `json:"id" description:"Simulator UDID or emulator serial (AVD name while stopped)."`
+	Name     string `json:"name"`
+	Platform string `json:"platform" enum:"ios,android"`
+	Version  string `json:"version,omitempty"`
+	Booted   bool   `json:"booted"`
+}
+
+// DeviceAgentControl is the agent-device invocation pinned to a session's
+// device: run Command with a subcommand, then Args.
+type DeviceAgentControl struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
+// DeviceLease is the device a session holds.
+type DeviceLease struct {
+	SessionID   domain.SessionID   `json:"sessionId"`
+	Provider    string             `json:"provider" description:"Provider serving the device, e.g. local."`
+	Device      DeviceSummary      `json:"device"`
+	Reason      string             `json:"reason" description:"Why the resolver picked this provider."`
+	AgentDevice DeviceAgentControl `json:"agentDevice"`
+	OpenedAt    time.Time          `json:"openedAt"`
+}
+
+// DeviceStatusResponse is the body of GET /api/v1/devices.
+type DeviceStatusResponse struct {
+	Available bool                   `json:"available" description:"Whether devices are available: the desktop app's Developer mode is on. While false, only status, a session's lease and releasing a device are served."`
+	Enabled   bool                   `json:"enabled" description:"Whether the user turned device support on."`
+	State     string                 `json:"state" enum:"off,installing,ready,error"`
+	Error     string                 `json:"error,omitempty"`
+	Platforms []DevicePlatformStatus `json:"platforms"`
+	Devices   []DeviceSummary        `json:"devices"`
+	Leases    []DeviceLease          `json:"leases"`
+}
+
+// DeviceAvailabilityRequest turns devices on or off; the desktop app sends its
+// Developer mode.
+type DeviceAvailabilityRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// DeviceAvailabilityResponse is whether devices are now available.
+type DeviceAvailabilityResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
+// SessionDeviceResponse carries a session's lease, null when it has none.
+type SessionDeviceResponse struct {
+	Lease *DeviceLease `json:"lease"`
+}
+
+// OpenSessionDeviceRequest narrows the device a session wants. Both fields
+// are optional: the resolver picks from the project and this machine.
+type OpenSessionDeviceRequest struct {
+	Platform string `json:"platform,omitempty" enum:"ios,android"`
+	DeviceID string `json:"deviceId,omitempty" description:"Simulator UDID, emulator serial, or device name."`
+}
+
+// InstallSessionDeviceRequest installs a built app on the session's device.
+type InstallSessionDeviceRequest struct {
+	Path string `json:"path" minLength:"1" description:"Absolute path to a .app bundle (iOS) or .apk (Android)."`
+}
+
+// LaunchSessionDeviceRequest starts an installed app.
+type LaunchSessionDeviceRequest struct {
+	AppID string `json:"appId" minLength:"1" description:"Bundle identifier (iOS) or package name (Android)."`
+}
+
+// SetSessionDeviceQualityRequest sets how much the session's device stream costs the link.
+type SetSessionDeviceQualityRequest struct {
+	Quality string `json:"quality" description:"high, balanced or low."`
+}
+
+// PressSessionDeviceButtonRequest presses a hardware button on the session's device.
+type PressSessionDeviceButtonRequest struct {
+	Button string `json:"button" description:"home, back or recents."`
+}
+
+// CloseSessionDeviceRequest releases the session's device.
+type CloseSessionDeviceRequest struct {
+	Shutdown bool `json:"shutdown,omitempty" description:"Also power the simulator or emulator off."`
+}

@@ -613,6 +613,10 @@ type Manager struct {
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
 	computerUseMu sync.Mutex
 	computerUse   func(context.Context) bool
+	// devicesOffered reports whether devices are on (Developer mode) and the
+	// user opted in; nil is off.
+	devicesMu      sync.Mutex
+	devicesOffered func() bool
 	// commitAttribution reports the Orchestrator attribution beta; nil is off.
 	commitAttributionMu sync.Mutex
 	commitAttribution   func(context.Context) bool
@@ -7073,6 +7077,21 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	return buildSystemPromptText(cfg), nil
 }
 
+// SetDevicesOffered supplies whether new sessions are told about `ao device`.
+// Sessions already running keep the prompt they started with.
+func (m *Manager) SetDevicesOffered(offered func() bool) {
+	m.devicesMu.Lock()
+	defer m.devicesMu.Unlock()
+	m.devicesOffered = offered
+}
+
+func (m *Manager) devicesAreOffered() bool {
+	m.devicesMu.Lock()
+	offered := m.devicesOffered
+	m.devicesMu.Unlock()
+	return offered != nil && offered()
+}
+
 // aoSkillPointer is appended to every agent system prompt. It points the agent
 // at the using-ao skill the daemon installs under the data dir, rather than
 // inlining the whole CLI catalog. The path is absolute so it resolves from any
@@ -7107,6 +7126,17 @@ func (m *Manager) aoSkillPointer(chat bool) string {
 	pointer := "\n\n" + "## Using the ao CLI\n\n" +
 		"When using `ao`, read `" + skillFile + "` and only the relevant file under `" + commandsGlob + "`. To report Orchestrator bugs, read `" + bugTriageFile + "`.\n\n" +
 		browserSection
+	// Device tools are described only while devices are on (the desktop's
+	// Developer mode) and the user turned device support on: describing tools
+	// that refuse every call would steer the agent away from the simctl/adb it
+	// still has.
+	if m.devicesAreOffered() {
+		deviceFile := filepath.ToSlash(filepath.Join(dir, "commands", "device.md"))
+		pointer += "\n\n## AO Device panel\n\n" +
+			"For mobile app work, read `" + deviceFile + "` and use `ao device open` to get an iOS Simulator or Android Emulator for this session; the user watches and taps it in the Device tab. " +
+			"Build with the project's own tools, then drive the device with the agent-device command `ao device open` prints; it is already bound to this session's device, so run it with a subcommand and nothing else. " +
+			"Do not boot simulators or emulators directly with `xcrun simctl boot` or `emulator`: a device opened outside `ao device` is invisible to the user and may belong to another session."
+	}
 	if !chat {
 		return pointer
 	}
