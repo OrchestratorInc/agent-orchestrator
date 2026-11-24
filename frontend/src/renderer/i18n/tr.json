@@ -2107,6 +2107,8 @@
 	"settings.diagnosticsToggleHint": "Oturum kartlarında, panoda ve Tanılama sayfasında bellek ve CPU kullanımını gösterir.",
 	"settings.splitPanes": "Bölünmüş paneller",
 	"settings.splitPanesHint": "Bir sekmeyi mevcut sekmenin yanında göstermek için orta panelin bir kenarına sürükleyin. İstediğinizde oturumlarınızdaki aracılar da panelleri bölebilir ve terminallerde komut çalıştırabilir.",
+	"settings.newDesktopUi": "Yeni masaüstü arayüzü",
+	"settings.newDesktopUiHint": "Daha koyu orta panel, düz sekmeler ve açılır menüler, kenarlıklı yazma alanı, anında vurgulama ve menüler.",
 	"settings.prView": "PR görünümü",
 	"settings.prViewHint": "Bir çekme isteğini açıklaması, yorumları, denetimleri ve PR zinciriyle kendi sekmesinde açar.",
 	"settings.chromeAgents.label": "Chrome tarayıcımda aracıları kullan",

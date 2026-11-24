@@ -2107,6 +2107,8 @@
 	"settings.diagnosticsToggleHint": "Show memory and CPU usage on session cards and the board, and the Diagnostics page.",
 	"settings.splitPanes": "Split panes",
 	"settings.splitPanesHint": "Drag a tab to an edge of the center pane to show it beside the current one. When you ask, agents in your sessions can also split panes and run commands in terminals.",
+	"settings.newDesktopUi": "New desktop UI",
+	"settings.newDesktopUiHint": "A darker center pane, flat tabs and dropdowns, a bordered composer, and instant hovers and menus.",
 	"settings.prView": "PR view",
 	"settings.prViewHint": "Open a pull request in its own tab, with its description, comments, checks and stack.",
 	"settings.chromeAgents.label": "Use agents in my Chrome",
