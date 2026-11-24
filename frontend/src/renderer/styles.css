@@ -7262,6 +7262,12 @@ html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-composer {
 	transition: none;
 }
 
+/* Composer icon buttons (add, dictate, send) share the pills' corner radius
+ * (the model and permission pickers beside them) instead of being circles. */
+html[data-new-desktop-ui] .cursor-chat-composer button.rounded-full {
+	border-radius: var(--radius-lg);
+}
+
 /* Sidebar row actions (project and session rows, section "+") get no hover,
  * press or open-menu fill: only the icon brightens. The pill still shows for
  * keyboard focus, its only focus indicator. */
