@@ -3644,6 +3644,8 @@
 	"chat.render.remoteHost": "Abre esta sesión en su host para ver la página.",
 	"chat.artifact.openInPanel": "Abrir en la pestaña Artefactos",
 	"chat.artifact.label": "Artifact",
+	"chat.artifact.unavailable": "Esta página ya no está entre los artefactos de la sesión.",
+	"chat.artifact.notInline": "Este archivo no se puede mostrar aquí. Ábrelo en la pestaña Artefactos.",
 	"chat.image.numbered": "Imagen {{index}}",
 	"chat.edit.cancel": "Cancelar edición",
 	"chat.edit.cancelAction": "Cancelar",

@@ -1,7 +1,7 @@
 import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { Stack, useIsFocused, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { useSharedValue } from "react-native-reanimated";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
@@ -32,6 +32,10 @@ import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, resol
 import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
+import { useComposerSnapshot } from "./composerSnapshot";
+import { useChatPushTiming } from "./chatPushTiming";
+import { useKeepUnchanged } from "../keepUnchanged";
+import { useStableFunctionProps } from "../useStableFunctionProps";
 import { KeyboardFollower } from "./KeyboardFollower";
 import { KeyboardMotionScope } from "./keyboardMotion";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -61,7 +65,6 @@ import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
-import { usePushSettled } from "../usePushSettled";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { space } from "../tokens";
@@ -118,10 +121,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, machine, session.id);
-	// See `awaitingConversation`: only a conversation the page opened without is held.
-	const pushSettled = usePushSettled();
-	const [openedWithSnapshot] = useState(() => Boolean(conversation.snapshot));
-	const holdArrivingSnapshot = !pushSettled && !openedWithSnapshot && Boolean(conversation.snapshot);
+	// When the conversation may draw during the push: an uncached one is held
+	// until the slide settles (see `awaitingConversation`), a small cached one
+	// mounts its timeline a frame after the push starts, a large cached one once
+	// the slide settles. See useChatPushTiming.
+	const { holdArrivingSnapshot, timelineMounted } = useChatPushTiming(conversation.snapshot);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
 	// The catalog is asked for again too if it has none of its own yet: a page
 	// cached as ready loads it before the wake, and that load can fail unseen.
@@ -307,8 +311,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	// Loaded again when the provider comes up: a chat opened while hibernated or
 	// connecting has no catalog to give, and the composer would otherwise keep the
-	// empty one until the screen was reopened.
-	const providerLive = conversation.snapshot ? providerCatalogLive(conversation.snapshot) : undefined;
+	// empty one until the screen was reopened. A page saved on the phone says
+	// nothing of the provider now (savedPageView shows a busy one as ready), so the
+	// load waits for the live read: one made from it was never asked again.
+	const providerLive = conversation.snapshot && !conversation.saved ? providerCatalogLive(conversation.snapshot) : undefined;
 	useEffect(() => {
 		const load = turnOptionsLoadFor(turnOptionsRequestedFor.current, session.id, providerLive);
 		if (!load) return;
@@ -401,10 +407,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The blocking request. It takes the composer's place until it is answered.
 	// Computed here rather than at render because the back-swipe below is a hook
 	// and cannot sit after this screen's early returns.
-	const request = requestDockModel(conversation.snapshot, {
+	// Kept by identity while its data is the same, so the composer (which shows
+	// it) is not re-rendered by every snapshot.
+	const request = useKeepUnchanged(requestDockModel(conversation.snapshot, {
 		approval: conversation.pendingActions.includes("approval"),
 		input: conversation.pendingActions.includes("input"),
-	});
+	}));
 	const requestDismissed = request ? dismissedRequest === request.sequence : false;
 	// The timeline collapses a request the card is answering to a record of what
 	// was asked — one live set of controls, never two.
@@ -541,6 +549,13 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		[conversation.snapshot, session],
 	);
 	const startupShown = startupVisible(startupView, conversation.snapshot);
+	// The composer's view of the conversation: unchanged while a reply streams,
+	// so the composer does not re-render with every word (see composerSnapshot).
+	const composerSnapshot = useComposerSnapshot(conversation.snapshot, startupView?.openingTurnId);
+	const composerChanges = useMemo(
+		() => changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined,
+		[changeSummary, filesNavigation.openChanges],
+	);
 	// The agent coming up is not a conversation event, so over the direct link
 	// nothing tells the screen. With an opening brief the turn's own events cover
 	// it; a promptless start stayed on "Connecting to the agent…". Once
@@ -838,7 +853,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// A conversation that arrives while the page is still sliding in waits for
 	// the slide to finish: mounting the timeline mid-push stalled the UI thread
 	// for hundreds of milliseconds, so the slide froze and then jumped to its
-	// end. One already cached renders with the page, before the slide starts.
+	// end. One already cached renders the page at once and its timeline after:
+	// a frame later if small, once the slide settles if large (see
+	// useChatPushTiming).
 	const awaitingConversation = (conversation.loading && !conversation.snapshot) || holdArrivingSnapshot;
 	if (awaitingConversation && startupView && !startupView.failed) {
 		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
@@ -947,7 +964,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<TurnArtifactsContext.Provider value={turnArtifacts}>
 				<TurnRecoveryContext.Provider value={turnRecovery}>
-				<ChatTimeline
+				{timelineMounted ? <ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
 					onLoadOlder={conversation.loadOlder}
@@ -955,10 +972,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					inputPending={conversation.pendingActions.includes("input")}
 					onDecide={conversation.resolveApproval}
 					onResolveInput={conversation.resolveInput}
-					onRollback={conversation.rollback}
-					onFork={forkOptions?.allowed ? forkTurn : undefined}
+					// A page saved on the phone is a record until the live read lands: its
+					// turns may have moved on, so none can be rolled back, forked or edited.
+					onRollback={conversation.saved ? undefined : conversation.rollback}
+					onFork={forkOptions?.allowed && !conversation.saved ? forkTurn : undefined}
 					forkAnyTurn={forkOptions?.anyTurn === true}
-					onEditMessage={conversation.editMessage}
+					onEditMessage={conversation.saved ? undefined : conversation.editMessage}
 					onEditingChange={setEditingMessage}
 					jumpToSequence={jumpToSequence}
 					onJumpHandled={clearJumpToSequence}
@@ -970,7 +989,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					keyboardOffset={chatKeyboard.listKeyboardOffset}
 					composerGrowth={composerFieldGrowth}
 					jumpHidden={composerOpen}
-				/>
+				/> : null}
 				</TurnRecoveryContext.Provider>
 				</TurnArtifactsContext.Provider>
 				</FilesNavigationContext.Provider>
@@ -1025,7 +1044,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			    transcript; the daemon's own marker replaces it once it lands. */}
 			{agentSwitchSending ? <View style={styles.switchingLine}><ProviderSwitchLine switching /></View> : null}
 			<View style={editingMessage ? styles.composerHidden : undefined}>
-				<ChatComposer
+				<StableChatComposer
 					key={composerKey}
 					quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
 					onQuoteHandled={quoteHandled}
@@ -1036,8 +1055,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					sessionId={session.id}
 					config={config}
 					machine={machine}
-					snapshot={snapshot}
-					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
+					snapshot={composerSnapshot ?? snapshot}
+					changes={composerChanges}
 					onOpenUsage={openUsage}
 					request={request}
 					requestDismissed={requestDismissed}
@@ -1079,6 +1098,17 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		</View>
 		</KeyboardMotionScope>
 	);
+}
+
+const MemoChatComposer = memo(ChatComposer);
+
+/**
+ * The composer, rendered again only when something it shows changes. Its
+ * handlers are passed as stable forwarders to the newest ones, so the screen's
+ * inline handlers neither force a render nor go stale.
+ */
+function StableChatComposer(props: ComponentProps<typeof ChatComposer>) {
+	return <MemoChatComposer {...useStableFunctionProps(props)} />;
 }
 
 function ConversationBanners({ snapshot, startFailure, starting, resuming, resumeError, terminated, onResume, onOpenShell, dismissed, onDismiss }: { snapshot: NonNullable<ReturnType<typeof useMobileConversation>["snapshot"]>; startFailure?: string; starting: boolean; resuming: boolean; resumeError?: string; terminated: boolean; onResume(): void; onOpenShell(): void; dismissed: ReadonlySet<string>; onDismiss(key: string): void }) {

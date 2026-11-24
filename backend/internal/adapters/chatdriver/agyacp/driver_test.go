@@ -527,6 +527,26 @@ func TestSplitModelVariantMapsCLIIDsOntoServer14Options(t *testing.T) {
 	}
 }
 
+// `agy acp` 1.5 lists these variant ids while its model option offers only the
+// bases, so each splits into the base and its reasoning level.
+func TestSplitModelVariantMapsAgyACP15IDs(t *testing.T) {
+	for model, want := range map[string]string{
+		"claude-opus-5-5-low":      "claude-opus-5-5",
+		"claude-sonnet-5-5-high":   "claude-sonnet-5-5",
+		"gemini-4-neon-xhigh":      "gemini-4-neon",
+		"gemini-4-hydrogen-medium": "gemini-4-hydrogen",
+	} {
+		base, variant, ok := splitModelVariant(model)
+		if !ok || base != want || variant.ID != thinkingLevelOption || !variant.Optional ||
+			model != base+"-"+variant.Value {
+			t.Errorf("split(%q) = %q, %+v, %v; want %q at its level", model, base, variant, ok, want)
+		}
+	}
+	if _, _, ok := splitModelVariant("gemini-pro-orchestrator-neon"); ok {
+		t.Error("gemini-pro-orchestrator-neon split, want it left alone")
+	}
+}
+
 func TestInstallCheckReportsAMissingServerWithoutStartingIt(t *testing.T) {
 	r := resolver{
 		getenv: func(string) string { return "" }, isFile: func(string) bool { return false },

@@ -25,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -583,8 +584,9 @@ type Manager struct {
 	sendConfirm sendConfirmConfig
 	// interfaceTransition bounds only contradictory stale-idle proof. Turns and
 	// user-paced waits reported through the activity boundary remain unbounded.
-	interfaceTransition interfaceTransitionConfig
-	logger              *slog.Logger
+	interfaceTransition       interfaceTransitionConfig
+	logger                    *slog.Logger
+	terminateOnPRMergeDefault *bool
 
 	// shellTerminalsMu guards shellTerminals: it is late-bound (see
 	// ShellTerminalCloser) after Manager already exists, so a setter mutates it
@@ -995,6 +997,9 @@ type Deps struct {
 	// Logger receives spawn-time diagnostics (e.g. when the session PATH
 	// cannot be pinned to the daemon binary). Nil defaults to slog.Default().
 	Logger *slog.Logger
+	// TerminateOnPRMerge is the daemon-wide default for whether sessions auto-terminate
+	// when their PR is merged. Nil falls back to env var / hardcoded false.
+	TerminateOnPRMerge *bool
 }
 
 func (m *Manager) beginAgentSwitchAttempt() error {
@@ -1068,8 +1073,9 @@ func New(d Deps) *Manager {
 			idleSettle:     interfaceTransitionIdleSettle,
 			staleIdleLimit: interfaceTransitionStaleIdleLimit,
 		},
-		logger:         d.Logger,
-		workspaceGates: make(map[domain.ProjectID]*sync.Mutex),
+		logger:                    d.Logger,
+		terminateOnPRMergeDefault: d.TerminateOnPRMerge,
+		workspaceGates:            make(map[domain.ProjectID]*sync.Mutex),
 	}
 	if m.clock == nil {
 		// UTC so spawn-stamped CreatedAt/UpdatedAt match every other session
@@ -1209,6 +1215,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 
+	// Keep the caller's policy separate from inherited settings. The merge below
+	// and the TUI and chat resolvers copy project and role values into cfg.AgentConfig.
+	if cfg.TerminateOnPRMerge == nil && cfg.AgentConfig.TerminateOnPRMerge != nil {
+		explicit := *cfg.AgentConfig.TerminateOnPRMerge
+		cfg.TerminateOnPRMerge = &explicit
+	}
+
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
 	// model the harness cannot honor should not leave a seed row behind.
@@ -1315,7 +1328,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	if prep != nil {
 		rec = prep.record
 	} else {
-		seed := seedRecord(cfg, project.Config, m.clock())
+		seed := m.seedRecord(cfg, project.Config, m.clock())
 		if mode == domain.SessionModeChat {
 			seed.Metadata.Model = cfg.AgentConfig.Model
 			seed.Metadata.Effort = cfg.AgentConfig.Effort
@@ -1437,7 +1450,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 			}
 		}
-		seed := seedRecord(cfg, project.Config, m.clock())
+		seed := m.seedRecord(cfg, project.Config, m.clock())
 		seed.ID = id
 		seed.Metadata.ArtifactDir = artifactDir
 		if mode == domain.SessionModeChat {
@@ -2880,6 +2893,9 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	if override.Permissions != "" {
 		merged.Permissions = override.Permissions
 	}
+	if override.TerminateOnPRMerge != nil {
+		merged.TerminateOnPRMerge = override.TerminateOnPRMerge
+	}
 	// A project may carry a model from its previous worker harness. Memcode
 	// accepts only its native catalog; leave an incompatible inherited choice
 	// to the TUI instead of making every launch and restore fail.
@@ -2952,6 +2968,9 @@ func applySpawnAgentConfig(base, override ports.AgentConfig) ports.AgentConfig {
 	}
 	if override.Permissions != "" {
 		base.Permissions = override.Permissions
+	}
+	if override.TerminateOnPRMerge != nil {
+		base.TerminateOnPRMerge = override.TerminateOnPRMerge
 	}
 	if base.Permissions == "" {
 		base.Permissions = ports.PermissionModeAuto
@@ -6677,7 +6696,43 @@ func normalizeWorkspacePath(p string) string {
 
 // ---- helpers ----
 
-func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+// resolveTerminateOnPRMerge resolves whether a newly created session should auto-terminate
+// when its PR merges. The precedence order is:
+// explicit per-session value > project default > user/global default > hardcoded FALSE.
+// Once created, the per-session toggle in the UI/API overrides.
+func resolveTerminateOnPRMerge(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, defaultPolicy *bool) bool {
+	// 1. Explicit per-session value
+	if cfg.TerminateOnPRMerge != nil {
+		return *cfg.TerminateOnPRMerge
+	}
+
+	// 2. Project default
+	role := roleOverride(cfg.Kind, projectConfig)
+	if role.AgentConfig.TerminateOnPRMerge != nil {
+		return *role.AgentConfig.TerminateOnPRMerge
+	}
+	if projectConfig.TerminateOnPRMerge != nil {
+		return *projectConfig.TerminateOnPRMerge
+	}
+	if projectConfig.AgentConfig.TerminateOnPRMerge != nil {
+		return *projectConfig.AgentConfig.TerminateOnPRMerge
+	}
+
+	// 3. User / global default
+	if defaultPolicy != nil {
+		return *defaultPolicy
+	}
+	if raw, present := os.LookupEnv(config.EnvTerminateOnPRMerge); present && strings.TrimSpace(raw) != "" {
+		if v, err := config.ParseToggle(config.EnvTerminateOnPRMerge, raw); err == nil {
+			return v
+		}
+	}
+
+	// 4. Hardcoded FALSE
+	return false
+}
+
+func seedRecordWithDefault(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, defaultPolicy *bool, now time.Time) domain.SessionRecord {
 	return domain.SessionRecord{
 		ProjectID:           cfg.ProjectID,
 		IssueID:             cfg.IssueID,
@@ -6693,14 +6748,27 @@ func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now t
 		Activity:            domain.Activity{State: domain.ActivityIdle, LastActivityAt: now},
 		// Resolved before this point and persisted here. There is no UPDATE
 		// statement that can change it afterwards.
-		Mode:              domain.NormalizeSessionMode(cfg.RequestedMode),
-		Metadata:          domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
-		RequestedOutput:   cfg.RequestedOutput,
-		OutputType:        domain.SessionOutputNone,
-		AutoReviewEnabled: projectConfig.AutoReview,
-		AutoInjectReview:  true,
-		AutoInjectCI:      true,
+		Mode:               domain.NormalizeSessionMode(cfg.RequestedMode),
+		Metadata:           domain.SessionMetadata{Permissions: applySpawnAgentConfig(effectiveAgentConfig(cfg.Harness, cfg.Kind, projectConfig), cfg.AgentConfig).Permissions},
+		RequestedOutput:    cfg.RequestedOutput,
+		OutputType:         domain.SessionOutputNone,
+		TerminateOnPRMerge: resolveTerminateOnPRMerge(cfg, projectConfig, defaultPolicy),
+		AutoReviewEnabled:  projectConfig.AutoReview,
+		AutoInjectReview:   true,
+		AutoInjectCI:       true,
 	}
+}
+
+func seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+	return seedRecordWithDefault(cfg, projectConfig, nil, now)
+}
+
+func (m *Manager) seedRecord(cfg ports.SpawnConfig, projectConfig domain.ProjectConfig, now time.Time) domain.SessionRecord {
+	var globalDefault *bool
+	if m != nil {
+		globalDefault = m.terminateOnPRMergeDefault
+	}
+	return seedRecordWithDefault(cfg, projectConfig, globalDefault, now)
 }
 
 func defaultSessionBranch(id domain.SessionID, kind domain.SessionKind, prefix, branchNamespace string) string {
