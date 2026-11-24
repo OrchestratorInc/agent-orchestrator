@@ -16,6 +16,7 @@
  */
 
 import path from "node:path";
+import { isUnplayableShareVideo } from "../shared/cloud-share";
 import { CloudShareError, resolveShareFile, type ResolvedShareFile } from "./cloud-share";
 
 /** The most files a link serves beside its own (the control plane's limit). */
@@ -23,8 +24,12 @@ export const MAX_PAGE_FILES = 200;
 
 /** Why a file the page uses is not included. */
 export type PageFileSkipReason =
-	/** Video is not shared yet. */
+	/** A video the control plane refused: it does not serve videos yet. */
 	| "video"
+	/** A video in a format browsers do not play (isUnplayableShareVideo). */
+	| "video_format"
+	/** A video over the control plane's size limit. */
+	| "too_large"
 	/** Outside the page's folder, by "..", or an absolute path. */
 	| "outside"
 	/** Not a file in the session's artifacts. */
@@ -65,15 +70,9 @@ export interface PageReference {
 	svgUse?: true;
 }
 
-const VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv"]);
-
 /** Whether a file is shared as a page whose files go with it. */
 export function isSharePage(name: string): boolean {
 	return /\.html?$/i.test(name);
-}
-
-export function isShareVideo(name: string): boolean {
-	return VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase());
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
@@ -237,8 +236,9 @@ export async function collectPageFiles(
 			continue;
 		}
 		const served = result.path;
-		if (isShareVideo(served)) {
-			skipped.push({ reference, reason: "video" });
+		// A playable video goes to the control plane, which may still refuse it.
+		if (isUnplayableShareVideo(served)) {
+			skipped.push({ reference, reason: "video_format" });
 			continue;
 		}
 		const relative = folder === "." ? served : `${folder}/${served}`;

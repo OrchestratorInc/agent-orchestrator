@@ -37,7 +37,10 @@ type PRFacts struct {
 	// review-feedback loop is on.
 	ExternalApproved         bool
 	ExternalChangesRequested bool
-	ExternalComments         bool
+	// StaleChangesRequested is evidence of a GitHub request on an older head
+	// with no current-head request from any reviewer, including bots.
+	StaleChangesRequested bool
+	ExternalComments      bool
 	// StackParent is the number of the open PR, in any live session, whose
 	// source branch this PR targets; 0 when its base branch has no open PR AO
 	// still polls. The parent is in this PR's Host and Repo.

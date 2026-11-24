@@ -1,7 +1,8 @@
 /**
  * Cursor lists one entry per model, effort, thinking and speed ("Claude Opus 4.7 1M High
- * Thinking Fast" and ~250 siblings). Pickers show each model once with the settings as
- * controls; the variant id is still what is sent to the agent.
+ * Thinking Fast" and ~250 siblings), and Antigravity one per model and effort ("Claude
+ * Opus 5.5 (High)"). Pickers show each model once with the settings as controls; the
+ * variant id is still what is sent to the agent.
  */
 
 export interface ModelVariant {
@@ -27,12 +28,17 @@ export interface ModelFamily {
 }
 
 const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
-/** A setting word at the end of a label. The two-word ones come first so they are taken whole. */
-const LABEL_SUFFIX = / (no thinking|extra high|thinking|fast|high|medium|low|max|none|minimal)$/i;
+/**
+ * A setting word at the end of a label. The two-word ones come first so they are taken whole.
+ * Antigravity puts its effort in parentheses: "Gemini 4 Neon (XHigh)".
+ */
+const LABEL_SUFFIX = / (\((?:xhigh|high|medium|low|minimal)\)|no thinking|extra high|thinking|fast|high|medium|low|max|none|minimal)$/i;
 const VENDORS: Array<[RegExp, string]> = [
 	[/^claude\b/i, "Anthropic"],
 	[/^(gpt|codex|o\d)\b/i, "OpenAI"],
 	[/^gemini\b/i, "Google"],
+	// Antigravity's gemini-pro-orchestrator models.
+	[/^orchestrator\b/i, "Google"],
 	[/^grok\b/i, "xAI"],
 	[/^(composer|auto)\b/i, "Cursor"],
 	[/^glm\b/i, "Z.ai"],
@@ -44,7 +50,7 @@ const VENDORS: Array<[RegExp, string]> = [
 
 /** Agents whose catalogs fold settings into the model id. */
 export function listsModelVariants(harness: string | undefined): boolean {
-	return harness === "cursor";
+	return harness === "cursor" || harness === "agy";
 }
 
 /** The vendor a model belongs to, read from the start of its name. */

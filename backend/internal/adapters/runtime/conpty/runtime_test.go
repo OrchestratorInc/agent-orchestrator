@@ -3,6 +3,7 @@ package conpty
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -234,10 +235,20 @@ func TestRuntimeRejectsStyledOutputFromARecoveredLegacyHost(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.Close() }()
+		// A legacy host ignores MsgControlReq; record the request after it.
 		header := make([]byte, 5)
-		if _, readErr := io.ReadFull(conn, header); readErr != nil {
-			serverDone <- readErr
-			return
+		for {
+			if _, readErr := io.ReadFull(conn, header); readErr != nil {
+				serverDone <- readErr
+				return
+			}
+			if _, readErr := io.CopyN(io.Discard, conn, int64(binary.BigEndian.Uint32(header[1:]))); readErr != nil {
+				serverDone <- readErr
+				return
+			}
+			if header[0] != MsgControlReq {
+				break
+			}
 		}
 		requestType <- header[0]
 		payload := []byte(fmt.Sprintf(`{"alive":true,"pid":%d}`, livePID()))

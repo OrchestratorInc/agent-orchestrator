@@ -20,7 +20,7 @@ function setup(cloud: boolean, save = vi.fn().mockResolvedValue({}), values = in
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	const editor = (selectedSection: "general" | "agents") => <QueryClientProvider client={client}><TooltipProvider>
 		<ProjectSettingsEditor initialValues={values} section={selectedSection} saveUnchanged={saveUnchanged}
-			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredAgents: !cloud, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud }}
+			capabilities={{ workflow: true, sessionPrefix: !cloud, intake: !cloud, reviewer: true, requiredAgents: !cloud, requiredBranch: cloud, nameLimit: cloud ? 120 : 100, runtimeDefaults: cloud, attribution: true }}
 			details={[]} modelScope={() => ""} renderAgent={() => null} save={save} onSaveState={onSaveState} />
 	</TooltipProvider></QueryClientProvider>;
 	const view = render(editor(section));
@@ -106,6 +106,17 @@ describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 		expect(screen.getByText("Draft name")).toBeInTheDocument();
 		expect(screen.getByRole("switch", { name: "Auto review PRs" })).not.toBeChecked();
 		expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
+	});
+
+	it("marks a refused attribution toggle unsaved", async () => {
+		const save = vi.fn().mockRejectedValue(new Error("Save rejected"));
+		const { onSaveState } = setup(cloud, save);
+		await userEvent.click(screen.getByRole("switch", { name: "Credit Orchestrator on commits" }));
+		fireEvent.submit(document.getElementById("project-settings-form")!);
+		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "failed", error: "Save rejected" })));
+		expect(save).toHaveBeenCalledWith(expect.objectContaining({ attributionCommitTrailer: false }));
+		expect(within(screen.getByTestId("setting-attribution")).getByText(/Unsaved changes.*Save rejected/)).toHaveAttribute("aria-live", "polite");
+		expect(within(screen.getByTestId("setting-autoReview")).queryByText(/Unsaved changes/)).not.toBeInTheDocument();
 	});
 
 	it("reopens with saved values after a refused change", async () => {

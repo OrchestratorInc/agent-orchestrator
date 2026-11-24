@@ -67,6 +67,7 @@ export function ComposerSuggestMenu({
 	return (
 		<div
 			className="absolute bottom-full left-0 z-overlay mb-1.5 flex w-full max-w-md flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-overlay p-1 text-popover-foreground shadow-(--shadow-popover)"
+			data-telemetry-surface={kind === "skill" ? "slash_menu" : "mention_menu"}
 			// The composer owns the keyboard; a pointerdown here must not pull focus
 			// out of the textarea on its way to the click.
 			onMouseDown={(event) => event.preventDefault()}
