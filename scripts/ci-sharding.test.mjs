@@ -21,7 +21,8 @@ function runStep(block, name) {
   const run = step.match(/^        run: (.*)$/m);
   assert.ok(run, `missing command for ${name}`);
   if (run[1] !== '|') return run[1];
-  return step.slice(run.index + run[0].length + 1)
+  // A block scalar ends where the next step in the job begins.
+  return step.slice(run.index + run[0].length + 1).split(/\n      - /)[0]
     .split('\n').map(line => line.replace(/^          /, '')).join('\n').trim();
 }
 
