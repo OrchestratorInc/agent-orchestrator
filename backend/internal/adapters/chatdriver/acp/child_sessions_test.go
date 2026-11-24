@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -226,7 +227,7 @@ func TestChildSessionFilesItsWorkUnderItsLaunch(t *testing.T) {
 	}
 
 	read := nextChildActivity(t, conv)
-	if read.ProviderItemID != "call-read" || read.ProviderTurnID != "" ||
+	if read.ProviderItemID != conv.childItemID("child-1", "call-read") || read.ProviderTurnID != "" ||
 		childDetail(t, read)["parentProviderItemId"] != "call-launch" {
 		t.Fatalf("child step = %#v %s", read, read.Detail)
 	}
@@ -297,7 +298,7 @@ func TestChildSessionAlreadyStreamingIsFiledUnderItsLaunch(t *testing.T) {
 	records.record("child-2", "call-inner", "child-3")
 	childSessionUpdate(t, agent, "child-3", childSendsMessage("call-send", "child-2", "inner done"))
 	handback := nextChildActivity(t, conv)
-	if childDetail(t, handback)["parentProviderItemId"] != "call-inner" {
+	if childDetail(t, handback)["parentProviderItemId"] != conv.childItemID("child-2", "call-inner") {
 		t.Fatalf("grandchild hand-back = %s", handback.Detail)
 	}
 }
@@ -310,7 +311,7 @@ func TestChildSessionGrandchildStreamingBeforeItsParentIsFiledUnderItsLaunch(t *
 	records.record("child-2", "call-inner", "child-3")
 	agent, conv, _ := startWithChildSessions(t, records.sessions())
 	childSessionUpdate(t, agent, "child-3", childRead("call-read"))
-	if read := nextChildActivity(t, conv); childDetail(t, read)["parentProviderItemId"] != "call-inner" {
+	if read := nextChildActivity(t, conv); childDetail(t, read)["parentProviderItemId"] != conv.childItemID("child-2", "call-inner") {
 		t.Fatalf("grandchild step = %#v %s", read, read.Detail)
 	}
 	childSessionUpdate(t, agent, "child-2", childRead("call-read-2"))
@@ -358,7 +359,7 @@ func TestChildSessionFailedReportShowsAsAFailedStep(t *testing.T) {
 	}})
 	step := nextChildActivity(t, conv)
 	d := childDetail(t, step)
-	if step.ProviderItemID != "call-send" || step.ActivityStatus != domain.ActivityStatusFailed ||
+	if step.ProviderItemID != conv.childItemID("child-1", "call-send") || step.ActivityStatus != domain.ActivityStatusFailed ||
 		d["parentProviderItemId"] != "call-launch" || d["providerToolName"] == childSessionHandbackTool {
 		t.Fatalf("failed report = %#v %s", step, step.Detail)
 	}
@@ -402,5 +403,79 @@ func TestChildSessionAToolCallWithoutLaunchShapeIsAPlainTool(t *testing.T) {
 	d := childDetail(t, read)
 	if _, ok := d["background"]; ok || d["providerToolName"] != nil || read.ProviderTurnID != "turn-1" {
 		t.Fatalf("plain tool = %#v %s", read, read.Detail)
+	}
+}
+
+// ACP keeps a tool call id unique only within its session, so two children can
+// use the same one; each keeps its own call.
+func TestChildSessionToolCallsKeepApartAcrossSessions(t *testing.T) {
+	records := newChildSessionRecords()
+	records.record(childTestParent, "call-launch-a", "child-a")
+	records.record(childTestParent, "call-launch-b", "child-b")
+	agent, conv, _ := startWithChildSessions(t, records.sessions())
+	start := func(session, path string) ports.ChatEvent {
+		childSessionUpdate(t, agent, session, acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
+			SessionUpdate: "tool_call", ToolCallId: "call-1", Title: "File " + path,
+			Kind: acpsdk.ToolKindRead, Status: acpsdk.ToolCallStatusInProgress,
+			RawInput: map[string]any{"Path": path},
+		}})
+		return nextChildActivity(t, conv)
+	}
+	a, b := start("child-a", "a.txt"), start("child-b", "b.txt")
+	if a.ProviderItemID == b.ProviderItemID {
+		t.Fatalf("both children's call-1 are %q", a.ProviderItemID)
+	}
+	done := acpsdk.ToolCallStatusCompleted
+	childSessionUpdate(t, agent, "child-a", acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+		SessionUpdate: "tool_call_update", ToolCallId: "call-1", Status: &done,
+	}})
+	finished := nextChildActivity(t, conv)
+	d := childDetail(t, finished)
+	input, _ := d["input"].(map[string]any)
+	if finished.ProviderItemID != a.ProviderItemID || d["parentProviderItemId"] != "call-launch-a" ||
+		input["Path"] != "a.txt" || finished.ActivityStatus != domain.ActivityStatusCompleted {
+		t.Fatalf("child-a's completion = %#v %s", finished, finished.Detail)
+	}
+}
+
+// A child an earlier attachment loaded can stream while the launch that
+// started it is looked up. Its history was shown then, and a replay now would
+// run into what it says live, so it is not loaded again.
+func TestChildSessionFoundStreamingWhileItsLaunchIsLookedUpIsNotLoaded(t *testing.T) {
+	records := newChildSessionRecords()
+	records.record(childTestParent, "call-launch", "child-1")
+	sessions := records.sessions()
+	var agent *fakeAgent
+	var conv *conversation
+	lookup := sessions.LaunchOf
+	var calls atomic.Int32
+	sessions.LaunchOf = func(env map[string]string, child string) (string, string, bool) {
+		if calls.Add(1) == 1 {
+			// The finder's lookup: the child speaks before it returns.
+			_ = agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+				SessionId: "child-1", Update: childSays("live"),
+			})
+			for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				conv.mu.Lock()
+				_, known := conv.childStateLocked().launchOf["child-1"]
+				conv.mu.Unlock()
+				if known {
+					break
+				}
+			}
+		}
+		return lookup(env, child)
+	}
+	agent, conv, _ = startWithChildSessions(t, sessions)
+	childSessionUpdate(t, agent, childTestParent, invokeSubagentCall("call-launch", acpsdk.ToolCallStatusCompleted))
+	_ = nextChildActivity(t, conv)
+	if said := nextChildActivity(t, conv); said.Text != "live" {
+		t.Fatalf("live message = %#v", said)
+	}
+	time.Sleep(2 * childSessionFindEvery)
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.loadCalls != 0 {
+		t.Fatalf("loaded the child %d times", agent.loadCalls)
 	}
 }

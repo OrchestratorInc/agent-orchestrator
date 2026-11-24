@@ -82,17 +82,19 @@ const (
 // childSessionState is what the conversation knows about its children. It
 // outlives turns, as the children do, and is guarded by conversation.mu.
 type childSessionState struct {
-	// finding holds launches whose child is being looked for, or was found.
+	// finding holds launches whose child is being looked for, or was found, by
+	// the launch's item id.
 	finding map[string]struct{}
-	// launchOf maps a child session to its launch, and parentOf to the session
-	// that made the launch: the conversation's, or another child's.
+	// launchOf maps a child session to its launch's item id, and parentOf to
+	// the session that made the launch: the conversation's, or another child's.
 	launchOf map[string]string
 	parentOf map[string]string
 	// notChild holds sessions already looked up and found not to be ours.
 	notChild map[string]struct{}
-	// tools are the children's tool calls, kept apart from the turn's own so
-	// the end of the parent's turn does not settle a child's work.
-	tools map[string]*toolState
+	// tools are each child's tool calls, by child, kept apart from the turn's
+	// own so the end of the parent's turn does not settle a child's work. A
+	// tool call id is unique only within its session.
+	tools map[string]map[string]*toolState
 	// said is each child's message so far, and messages counts the messages a
 	// child has sent since it was loaded, which names them stably across loads.
 	said     map[string]*childSaying
@@ -114,7 +116,7 @@ func (c *conversation) childStateLocked() *childSessionState {
 			launchOf: map[string]string{},
 			parentOf: map[string]string{},
 			notChild: map[string]struct{}{},
-			tools:    map[string]*toolState{},
+			tools:    map[string]map[string]*toolState{},
 			said:     map[string]*childSaying{},
 			messages: map[string]int{},
 			adopted:  map[string]struct{}{},
@@ -127,6 +129,22 @@ func (c *conversation) childStateLocked() *childSessionState {
 
 func childCallView(tool *toolState) ChildToolCall {
 	return ChildToolCall{Title: tool.title, Kind: tool.kind, Status: tool.status, RawInput: tool.rawInput}
+}
+
+// childItemID names a child's tool call. ACP keeps a tool call id unique only
+// within its session, so two children, or a child and the conversation, can
+// use the same one.
+func (c *conversation) childItemID(session, toolID string) string {
+	return c.providerItemID("subagent-tool:" + lengthPrefixedTuple(session, toolID))
+}
+
+// launchItemLocked names the launch toolID made on session: one of the
+// conversation's own tool calls, or a child's. The caller holds c.mu.
+func (c *conversation) launchItemLocked(session, toolID string) string {
+	if session == c.sessionID {
+		return c.providerItemID(toolID)
+	}
+	return c.childItemID(session, toolID)
 }
 
 // decorateSubagentLaunch marks a launch in its activity detail: the renderer's
@@ -163,18 +181,19 @@ func (c *conversation) observeChildLaunch(tool *toolState, session string) {
 	}
 	c.mu.Lock()
 	s := c.childStateLocked()
-	if _, seen := s.finding[tool.id]; seen || len(s.finding) >= maxChildSessions {
+	item := c.launchItemLocked(session, tool.id)
+	if _, seen := s.finding[item]; seen || len(s.finding) >= maxChildSessions {
 		c.mu.Unlock()
 		return
 	}
-	s.finding[tool.id] = struct{}{}
+	s.finding[item] = struct{}{}
 	c.mu.Unlock()
-	go c.findChildSession(session, tool.id)
+	go c.findChildSession(session, tool.id, item)
 }
 
 // findChildSession waits for the agent to record the session launchID started,
-// then loads it so its work streams here.
-func (c *conversation) findChildSession(session, launchID string) {
+// then loads it so its work streams here. item is the launch's item id.
+func (c *conversation) findChildSession(session, launchID, item string) {
 	deadline := time.NewTimer(childSessionFindTimeout)
 	defer deadline.Stop()
 	tick := time.NewTicker(childSessionFindEvery)
@@ -193,7 +212,14 @@ func (c *conversation) findChildSession(session, launchID string) {
 			}
 			c.mu.Lock()
 			s := c.childStateLocked()
-			s.launchOf[child] = launchID
+			if _, adopted := s.launchOf[child]; adopted {
+				// Found streaming while its launch was looked up, so its history
+				// was shown by the attachment that loaded it, and a replay would
+				// run into what it says live.
+				c.mu.Unlock()
+				return
+			}
+			s.launchOf[child] = item
 			s.parentOf[child] = session
 			delete(s.notChild, child)
 			c.mu.Unlock()
@@ -295,20 +321,23 @@ func (c *conversation) adoptChild(child string) (string, bool) {
 		}
 		if ours {
 			for _, l := range chain {
-				s.launchOf[l.session], s.parentOf[l.session] = l.launch, l.parent
-				s.finding[l.launch] = struct{}{}
+				item := c.launchItemLocked(l.parent, l.launch)
+				s.launchOf[l.session], s.parentOf[l.session] = item, l.parent
+				s.finding[item] = struct{}{}
 				s.adopted[l.session] = struct{}{}
 				delete(s.notChild, l.session)
 			}
+			launch := s.launchOf[child]
 			c.mu.Unlock()
-			return chain[0].launch, true
+			return launch, true
 		}
 		c.mu.Unlock()
 		session = parent
 	}
 }
 
-// childUpdate turns what a child did into steps under its launch. Only its tool
+// childUpdate turns what a child did into steps under its launch, the launch's
+// item id. Only its tool
 // calls and what it says are steps: its plan, usage, modes, commands and
 // session details describe the child's session, and applied here they would
 // replace the parent's. Its reasoning is left out, as Claude's subagent
@@ -320,17 +349,25 @@ func (c *conversation) childUpdate(child, launch string, params acpsdk.SessionNo
 	case update.ToolCall != nil, update.ToolCallUpdate != nil:
 		c.mu.Lock()
 		s := c.childStateLocked()
+		tools := s.tools[child]
+		if tools == nil {
+			tools = map[string]*toolState{}
+			s.tools[child] = tools
+		}
 		var stored *toolState
 		if update.ToolCall != nil {
 			stored = newToolState(update.ToolCall)
-			s.tools[stored.id] = stored
+			tools[stored.id] = stored
 		} else {
-			stored = mergeToolState(s.tools, update.ToolCallUpdate)
+			stored = mergeToolState(tools, update.ToolCallUpdate)
 		}
 		snapshot := *stored
 		tool := &snapshot
 		if toolTerminal(tool.status) {
-			delete(s.tools, tool.id)
+			delete(tools, tool.id)
+			if len(tools) == 0 {
+				delete(s.tools, child)
+			}
 		}
 		parent := s.parentOf[child]
 		// A tool call ends what the child was saying; its next text is a new message.
@@ -347,7 +384,9 @@ func (c *conversation) childUpdate(child, launch string, params acpsdk.SessionNo
 				return
 			}
 		}
-		emit(withParentItem(c.toolEvent("", tool, toolTerminal(tool.status)), c.providerItemID(launch)))
+		event := c.toolEvent("", tool, toolTerminal(tool.status))
+		event.ProviderItemID = c.childItemID(child, tool.id)
+		emit(withParentItem(event, launch))
 		// A child can start a child of its own.
 		c.observeChildLaunch(tool, child)
 
@@ -374,7 +413,7 @@ func (c *conversation) childUpdate(child, launch string, params acpsdk.SessionNo
 		c.mu.Unlock()
 		// Nothing on the wire says a child's message is over, so each piece settles
 		// it with the text so far: a message the child stops at stays complete.
-		detail, _ := json.Marshal(map[string]any{"parentProviderItemId": c.providerItemID(launch), "nestedAgent": true})
+		detail, _ := json.Marshal(map[string]any{"parentProviderItemId": launch, "nestedAgent": true})
 		emit(ports.ChatEvent{
 			Kind: ports.ChatEventActivityCompleted, ProviderItemID: id,
 			ActivityKind: domain.ActivityKindMCPTool, ActivityStatus: domain.ActivityStatusCompleted,
@@ -383,11 +422,12 @@ func (c *conversation) childUpdate(child, launch string, params acpsdk.SessionNo
 	}
 }
 
-// childHandbackEvent is a child's report to the launch that started it. A
-// child that reports again replaces its report, so the latest one stands.
+// childHandbackEvent is a child's report to the launch that started it, named
+// by its item id. A child that reports again replaces its report, so the
+// latest one stands.
 func (c *conversation) childHandbackEvent(launch, message string) ports.ChatEvent {
 	detail := map[string]any{
-		"parentProviderItemId": c.providerItemID(launch),
+		"parentProviderItemId": launch,
 		"providerToolName":     childSessionHandbackTool,
 	}
 	if message = strings.TrimSpace(message); message != "" {
