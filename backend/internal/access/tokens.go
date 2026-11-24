@@ -140,18 +140,23 @@ func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, strin
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	active := 0
+	for _, existing := range r.tokens {
+		if !existing.Active(now) {
+			continue
+		}
+		active++
+		if strings.EqualFold(existing.Name, name) {
+			return Token{}, "", fmt.Errorf("a token named %q already exists; revoke it first", existing.Name)
+		}
+	}
+	if active >= maxTokens {
+		return Token{}, "", ErrTooManyTokens
+	}
 	for id, expired := range r.tokens {
 		if !expired.Active(now) {
 			delete(r.tokens, id)
 			delete(r.byHash, expired.TokenHash)
-		}
-	}
-	if len(r.tokens) >= maxTokens {
-		return Token{}, "", ErrTooManyTokens
-	}
-	for _, existing := range r.tokens {
-		if strings.EqualFold(existing.Name, name) {
-			return Token{}, "", fmt.Errorf("a token named %q already exists; revoke it first", existing.Name)
 		}
 	}
 	r.tokens[token.ID] = token

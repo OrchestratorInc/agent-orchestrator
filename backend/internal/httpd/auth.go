@@ -124,7 +124,7 @@ func (a *authState) noteUse(credential requestscope.Credential, now time.Time) {
 		a.devices.TouchShared(mobilebridge.SharedPassword, now)
 	case requestscope.CredentialAccount:
 		a.devices.TouchShared(mobilebridge.SharedAccount, now)
-	case requestscope.CredentialPairingCode, requestscope.CredentialAgent:
+	case requestscope.CredentialPairingCode:
 	}
 }
 

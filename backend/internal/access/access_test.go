@@ -258,6 +258,12 @@ func TestCreateCountsNameCharactersAndMarksAFailedSave(t *testing.T) {
 	if _, _, err := registry.Create("nightly", short, testNow); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := registry.Create(strings.Repeat("बॉट", 20), grant, testNow.Add(25*time.Hour)); err == nil {
+		t.Fatal("want a create refused for a name that is taken")
+	}
+	if len(registry.List()) != 2 {
+		t.Errorf("a refused create must not drop an expired token from the list: %d tokens, want 2", len(registry.List()))
+	}
 	if _, _, err := registry.Create("nightly", mustGrant(t, LevelRead, nil, testNow.Add(26*time.Hour)), testNow.Add(25*time.Hour)); err != nil {
 		t.Errorf("an expired token must not keep its name or its place: %v", err)
 	}
