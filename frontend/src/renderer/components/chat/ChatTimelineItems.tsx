@@ -141,6 +141,7 @@ import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { FileDiffCard, FileReadCard, fileCardPath, readFileLines } from "./ChatFileCard";
 import { ChatFileIcon } from "./ChatFileIcon";
+import { MESSAGE_LINKS_MIN, MessageLinksButton, MessageLinksList, messageWebLinks } from "./MessageLinks";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
@@ -887,8 +888,9 @@ interface TurnActionsProps {
 }
 
 /**
- * The row a turn closes on: retry, copy, roll back, then the time on hover. How
- * long the turn ran heads it instead, in "Worked for".
+ * The row a turn closes on: retry, copy, roll back, fork, the "N links" button when
+ * the answer cites two or more web pages (its list opens under the row), then the
+ * time on hover. How long the turn ran heads it instead, in "Worked for".
  *
  * Every ending shares it — a finished answer, a tool-only turn, a stopped or failed
  * one — so the controls are always in the same place. The negative margin is on the
@@ -903,8 +905,11 @@ export function TurnActions({
 	timestamp,
 	className,
 }: TurnActionsProps & { className?: string }) {
+	const links = useMemo(() => (copyText ? messageWebLinks(copyText) : []), [copyText]);
+	const [linksOpen, setLinksOpen] = useState(false);
 	if (!retry && copyText === undefined && !onRollback) return null;
 	const time = timestamp ? formatMessageTimestamp(timestamp) : "";
+	const showLinks = links.length >= MESSAGE_LINKS_MIN;
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
@@ -936,6 +941,7 @@ export function TurnActions({
 					</Tooltip>
 				) : null}
 				<TurnForkButton />
+				{showLinks ? <MessageLinksButton links={links} open={linksOpen} onToggle={() => setLinksOpen((open) => !open)} /> : null}
 				{time ? (
 					<span
 						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
@@ -945,6 +951,7 @@ export function TurnActions({
 					</span>
 				) : null}
 			</div>
+			{showLinks && linksOpen ? <MessageLinksList links={links} /> : null}
 			{retry?.error ? (
 				<p role="alert" className="text-pretty text-xs leading-snug text-destructive">
 					{retry.error}

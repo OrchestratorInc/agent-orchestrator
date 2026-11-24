@@ -87,6 +87,7 @@ import { MermaidBlock } from "./MermaidBlock";
 import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
 import { ChatFileIcon, FileChip } from "./ChatFileIcon";
+import { LinkSiteChipContent, linkSiteLabel } from "./MessageLinks";
 import { WorkspaceEntryIcon } from "../WorkspaceEntryIcon";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
@@ -562,6 +563,12 @@ function InlineLinkFavicon({ href }: { href: string }) {
 	);
 }
 
+/** Whether a link's text is just its address (`https://a.com/x`, `a.com/x/`), not words of its own. */
+function isBareLinkText(href: string, text: string): boolean {
+	const bare = (value: string) => value.trim().replace(/^https?:\/\//i, "").replace(/\/$/, "").toLowerCase();
+	return bare(text) !== "" && bare(text) === bare(href);
+}
+
 function MarkdownLinkTarget({ href, children, className, menuPath, node, labelText }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
@@ -592,6 +599,11 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 	const pullRequest = href && !sessionLink && !linksImage(node) ? parsePullRequestLink(href) : undefined;
 	const text = labelText ?? hastLinkText(node);
 	const chip = pullRequest && href && text !== undefined ? pullRequestChipLabel(href, text) : undefined;
+	// A bare web address reads as its site, in the same chip as a pull request:
+	// `anthropic.com`, `localhost:3000`. A link with its own words keeps them.
+	const site = href && !chip && !sessionLink && isWebLink(href) && !linksImage(node) && text !== undefined && isBareLinkText(href, text)
+		? linkSiteLabel(href)
+		: undefined;
 	return (
 		<AppLink
 			href={href}
@@ -627,9 +639,11 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 			}}
 			target="_blank"
 			rel="noreferrer noopener"
-			className={chip ? PULL_REQUEST_CHIP_CLASS : className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
+			className={chip || site ? PULL_REQUEST_CHIP_CLASS : className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
-			{chip && href ? <PullRequestChipContent href={href} repo={chip.repo} number={chip.number} /> : (
+			{chip && href ? <PullRequestChipContent href={href} repo={chip.repo} number={chip.number} /> : site && href ? (
+				<LinkSiteChipContent url={href} />
+			) : (
 				<>
 					{href && !sessionLink && isWebLink(href) && !linksImage(node) ? <InlineLinkFavicon href={href} /> : null}
 					<ChatImageLinkScope>
