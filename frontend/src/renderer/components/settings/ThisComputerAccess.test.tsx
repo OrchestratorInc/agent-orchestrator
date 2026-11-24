@@ -27,6 +27,7 @@ const fake = vi.hoisted(() => {
 		linked: false,
 		// Status reads left while the daemon downloads its own cloudflared.
 		downloadReads: 0,
+		publicTunnelRejects: false,
 	};
 	const cloud = {
 		hosts: new Map<string, { label: string; url: string; token: string }>(),
@@ -98,6 +99,7 @@ const fake = vi.hoisted(() => {
 				daemon.noPublicTunnel = true;
 				return { data: snapshot() };
 			case "/api/v1/mobile/public-tunnel":
+				if (daemon.publicTunnelRejects) throw new TypeError("Failed to fetch");
 				daemon.noPublicTunnel = !init?.body?.enabled;
 				return { data: snapshot() };
 			case "/api/v1/mobile/disable":
@@ -198,7 +200,7 @@ beforeEach(() => {
 afterEach(() => {
 	vi.useRealTimers();
 	cloudBridge().request = originalCloudRequest;
-	Object.assign(fake.daemon, { enabled: false, password: "", noPublicTunnel: false, connector: true, tunnelHost: "", tunnelError: "", readsUntilTunnel: 0, passwordsIssued: 0, linked: false, downloadReads: 0 });
+	Object.assign(fake.daemon, { enabled: false, password: "", noPublicTunnel: false, connector: true, tunnelHost: "", tunnelError: "", readsUntilTunnel: 0, passwordsIssued: 0, linked: false, downloadReads: 0, publicTunnelRejects: false });
 	fake.cloud.hosts.clear();
 	fake.cloud.failPut = false;
 	fake.cloud.failDelete = false;
@@ -415,6 +417,16 @@ it("keeps Reach from anywhere off when turning on from a stopped bridge fails", 
 
 	expect(await screen.findByRole("alert")).toBeVisible();
 	expect(fake.daemon).toMatchObject({ enabled: false, noPublicTunnel: true });
+});
+
+it("still stops remote access when keeping Reach from anywhere off fails after a failed turn-on", async () => {
+	Object.assign(fake.daemon, { noPublicTunnel: true, publicTunnelRejects: true });
+	fake.cloud.failPut = true;
+	renderAccess();
+	fireEvent.click(await readySwitch());
+
+	expect(await screen.findByRole("alert")).toBeVisible();
+	expect(fake.daemon.enabled).toBe(false);
 });
 
 it("leaves remote access that was already on running when linking fails", async () => {

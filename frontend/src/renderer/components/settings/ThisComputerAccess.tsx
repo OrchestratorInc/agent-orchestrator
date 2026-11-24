@@ -24,9 +24,14 @@ async function disableRemoteAccess() {
 /** Puts remote access back the way it was before a turn-on that did not link this computer. */
 async function restoreRemoteAccess(before: MobileStatus) {
 	if (!before.enabled) {
-		const kept = before.noPublicTunnel ? await apiClient.POST("/api/v1/mobile/public-tunnel", { body: { enabled: false } }) : undefined;
-		await disableRemoteAccess();
-		if (kept?.error) throw apiErrorException(kept.error);
+		try {
+			if (before.noPublicTunnel) {
+				const kept = await apiClient.POST("/api/v1/mobile/public-tunnel", { body: { enabled: false } });
+				if (kept.error) throw apiErrorException(kept.error);
+			}
+		} finally {
+			await disableRemoteAccess();
+		}
 		return;
 	}
 	// Remote access that was already on stays on. A LAN-only bridge loses the
