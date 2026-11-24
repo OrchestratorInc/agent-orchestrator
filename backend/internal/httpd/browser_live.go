@@ -221,7 +221,14 @@ func (h *BrowserLiveHub) serve(w http.ResponseWriter, r *http.Request) {
 	go h.watchPreview(ctx, sessionID)
 
 	writeDone := make(chan error, 1)
-	go func() { writeDone <- h.writeBrowserEvents(ctx, c, sub.Events, sub.Frames) }()
+	// The desktop acks its next screencast frame once the phone has this one
+	// (backpressure): a hint only, so a slow or failed report is not an error.
+	written := func(sequence uint64) {
+		reportCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		_ = h.broker.Send(reportCtx, sessionID, "frameWritten", map[string]uint64{"sequence": sequence})
+	}
+	go func() { writeDone <- h.writeBrowserEvents(ctx, c, sub.Events, sub.Frames, written) }()
 	readDone := make(chan error, 1)
 	go func() { readDone <- h.readBrowserCommands(ctx, c, sessionID) }()
 	select {
@@ -263,7 +270,7 @@ func (h *BrowserLiveHub) watchPreview(ctx context.Context, sessionID string) {
 	}
 }
 
-func (h *BrowserLiveHub) writeBrowserEvents(ctx context.Context, c *websocket.Conn, events, frames <-chan browserstream.Event) error {
+func (h *BrowserLiveHub) writeBrowserEvents(ctx context.Context, c *websocket.Conn, events, frames <-chan browserstream.Event, written func(sequence uint64)) error {
 	heartbeat := time.NewTicker(browserLiveHeartbeat)
 	defer heartbeat.Stop()
 	for {
@@ -303,6 +310,9 @@ func (h *BrowserLiveHub) writeBrowserEvents(ctx context.Context, c *websocket.Co
 			copy(packet[22:], frame.JPEG)
 			if err := writeBrowserMessage(ctx, c, websocket.MessageBinary, packet); err != nil {
 				return err
+			}
+			if written != nil {
+				written(frame.Sequence)
 			}
 			continue
 		}
@@ -350,7 +360,9 @@ func (h *BrowserLiveHub) readBrowserCommands(ctx context.Context, c *websocket.C
 		if err := json.Unmarshal(payload, &command); err != nil {
 			return c.Close(websocket.StatusInvalidFramePayloadData, "invalid browser command")
 		}
-		if command.Type != "input" && command.Type != "navigate" && command.Type != "tab" {
+		switch command.Type {
+		case "input", "navigate", "tab", "quality":
+		default:
 			return c.Close(websocket.StatusPolicyViolation, "unsupported browser command")
 		}
 		commandCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
