@@ -105,18 +105,26 @@ export function PRMergeOutsideAO({ pr, route }: { pr: SessionPRSummary; route: E
 			</Button>
 		);
 	}
+	// As compact as Merge, so the status beside it keeps its width; why the
+	// person can't merge it is PRMaintainerMergeNotice, under the status.
 	return (
-		<div className="flex min-w-0 flex-wrap items-center justify-end gap-2" data-testid="pr-merge-maintainer">
-			<span className="text-xs text-muted-foreground" title={t("pr.merge.noWriteAccess", { repository })}>
-				{t("pr.merge.waitingForMaintainer")}
-			</span>
-			<Button asChild className="gap-1 px-2" size="sm" variant="secondary">
-				<ProductExternalLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={prBrowserUrl(pr)}>
-					{t("pr.merge.openOnGitHub")}
-					<ArrowUpRight aria-hidden="true" className="size-icon-xs" />
-				</ProductExternalLink>
-			</Button>
-		</div>
+		<Button asChild className="gap-1 px-2" data-testid="pr-merge-maintainer-open" size="sm" variant="secondary">
+			<ProductExternalLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={prBrowserUrl(pr)} title={t("pr.merge.noWriteAccess", { repository })}>
+				{t("pr.merge.openOnGitHub")}
+				<ArrowUpRight aria-hidden="true" className="size-icon-xs" />
+			</ProductExternalLink>
+		</Button>
+	);
+}
+
+/** Under an open PR's merge status: a maintainer has to merge it, since the person has no write access. */
+export function PRMaintainerMergeNotice({ pr }: { pr: SessionPRSummary }) {
+	const { t } = useTranslation();
+	return (
+		// pl-4 lines it up with the merge status's own text above it.
+		<p className="mt-1 pl-4 text-xs leading-normal text-muted-foreground" data-testid="pr-merge-maintainer" title={t("pr.merge.noWriteAccess", { repository: pr.repo || prBrowserUrl(pr) })}>
+			{t("pr.merge.waitingForMaintainer")}
+		</p>
 	);
 }
 

@@ -74,7 +74,7 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, useOtherPRConflictStep, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
-import { CloudPRGitStepButton, PRActionButton, PRMergeOutsideAO } from "./PRActions";
+import { CloudPRGitStepButton, PRActionButton, PRMaintainerMergeNotice, PRMergeOutsideAO } from "./PRActions";
 import { PRDescriptionDrawer } from "./PRDescriptionDrawer";
 import { PRPills, prFocusKey, prStateIcon, sortSessionPRs } from "./PRPills";
 import { PRChecksGroups, PRLabelsAndReviewers } from "./PRCardDetails";
@@ -1238,6 +1238,7 @@ function PRViewSummaryCard({
 				) : undefined
 			}
 			mergeError={mergeError}
+			statusNotice={cloudMaintainerMergeNotice(pr, cloudOrgId)}
 			openLabel={t("inspector.openPR", { number: pr.number })}
 			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}
@@ -1349,6 +1350,11 @@ function cloudMergeOutsideAO(pr: SessionPRSummary, canMerge: boolean, cloudOrgId
 	if (route === "maintainer" && pr.state === "open") return <PRMergeOutsideAO pr={pr} route="maintainer" />;
 	if (route === "github" && canMerge) return <PRMergeOutsideAO pr={pr} route="github" />;
 	return undefined;
+}
+
+/** Why an open Cloud PR's merge is a maintainer's: the line under its merge status. */
+function cloudMaintainerMergeNotice(pr: SessionPRSummary, cloudOrgId?: string): ReactNode {
+	return cloudOrgId && pr.state === "open" && prMergeRoute(pr) === "maintainer" ? <PRMaintainerMergeNotice pr={pr} /> : undefined;
 }
 
 /** The card as it was before the PR view; shown while that preview is off. Delete with the prView flag. */
@@ -1485,6 +1491,7 @@ function ClassicPRSummaryCard({
 				) : undefined
 			}
 			mergeError={mergeError}
+			statusNotice={cloudMaintainerMergeNotice(pr, cloudOrgId)}
 			openLabel={t("inspector.openPR", { number: pr.number })}
 			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}

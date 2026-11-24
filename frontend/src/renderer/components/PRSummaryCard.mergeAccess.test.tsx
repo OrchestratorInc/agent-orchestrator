@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
@@ -69,9 +69,10 @@ describe.each([
 	it("tells a person without write access a maintainer has to merge it, checks and reviews still shown", () => {
 		renderCard({ ...ready, ci: { ...ready.ci, state: "failing" }, mergeAccess: { permission: "read", via: "none" } });
 		expect(screen.queryByRole("button", { name: "Merge PR #7" })).toBeNull();
-		expect(screen.getByText("Waiting for a maintainer to merge")).toBeTruthy();
-		const notice = screen.getByTestId("pr-merge-maintainer");
-		const open = within(notice).getByRole("link", { name: "Open PR #7" });
+		// The note is its own line under the merge status; the action beside it is one button, as compact as Merge.
+		expect(screen.getByTestId("pr-merge-maintainer").textContent).toBe("Waiting for a maintainer to merge");
+		const open = screen.getByTestId("pr-merge-maintainer-open");
+		expect(open.getAttribute("aria-label")).toBe("Open PR #7");
 		expect(open.textContent).toContain("Open on GitHub");
 		expect(open.getAttribute("href")).toBe(prUrl);
 		expect(screen.getAllByText(/check/i).length).toBeGreaterThan(0);
