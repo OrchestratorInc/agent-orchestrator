@@ -1104,6 +1104,33 @@ func TestSpawnPermissionPrecedence(t *testing.T) {
 	}
 }
 
+func TestSpawnTerminateOnPRMergePrecedence(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {
+		for _, tc := range []struct {
+			name                    string
+			base, role, spawn, want *bool
+		}{
+			{"unset", nil, nil, nil, nil},
+			{"project", boolPtr(true), nil, nil, boolPtr(true)},
+			{"role", boolPtr(false), boolPtr(true), nil, boolPtr(true)},
+			{"spawn", boolPtr(false), boolPtr(true), boolPtr(false), boolPtr(false)},
+		} {
+			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
+				cfg := domain.ProjectConfig{
+					AgentConfig:  domain.AgentConfig{TerminateOnPRMerge: tc.base},
+					Worker:       domain.RoleOverride{AgentConfig: domain.AgentConfig{TerminateOnPRMerge: tc.role}},
+					Orchestrator: domain.RoleOverride{AgentConfig: domain.AgentConfig{TerminateOnPRMerge: tc.role}},
+				}
+				got := applySpawnAgentConfig(effectiveAgentConfig(domain.HarnessCodex, kind, cfg), domain.AgentConfig{TerminateOnPRMerge: tc.spawn})
+				if (got.TerminateOnPRMerge == nil && tc.want != nil) || (got.TerminateOnPRMerge != nil && tc.want == nil) || (got.TerminateOnPRMerge != nil && *got.TerminateOnPRMerge != *tc.want) {
+					t.Fatalf("got %v want %v", got.TerminateOnPRMerge, tc.want)
+				}
+			})
+		}
+	}
+}
+
 func TestRunPostCreateFailureSaysWhatFailedAndWhereToFixIt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh-only step")

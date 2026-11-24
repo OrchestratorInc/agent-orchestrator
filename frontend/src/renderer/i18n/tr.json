@@ -3571,6 +3571,8 @@
 	"chat.render.remoteHost": "Sayfayı görmek için bu oturumu barındırıldığı makinede açın.",
 	"chat.artifact.openInPanel": "Çıktılar sekmesinde aç",
 	"chat.artifact.label": "Çıktı",
+	"chat.artifact.unavailable": "Bu sayfa artık oturumun çıktıları arasında değil.",
+	"chat.artifact.notInline": "Bu dosya burada gösterilemiyor. Çıktılar sekmesinde açın.",
 	"chat.image.numbered": "Görsel {{index}}",
 	"chat.edit.cancel": "Düzenlemeyi iptal et",
 	"chat.edit.cancelAction": "İptal",
