@@ -147,7 +147,7 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 				</>
 			) : null}
 			{open && src && kind === "video" ? (
-				<AttachmentLightbox open onOpenChange={setOpen} kind="video" src={src} name={name} details={type} />
+				<AttachmentLightbox open onOpenChange={setOpen} kind="video" src={src} name={name} details={type} onError={onError} />
 			) : open && src ? (
 				<Dialog open onOpenChange={setOpen}>
 					<DialogContent aria-describedby={undefined} className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">

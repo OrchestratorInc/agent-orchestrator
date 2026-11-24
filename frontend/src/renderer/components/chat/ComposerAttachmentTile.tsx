@@ -89,14 +89,17 @@ export function ComposerAttachmentTile({
 }) {
 	const remove = <ComposerTileRemove label={removeLabel} disabled={removeDisabled} onRemove={onRemove} />;
 	const previewKind = attachmentPreviewKind(name);
-	const localUrl = useFileObjectUrl(!imageSrc && (previewKind === "video" || previewKind === "pdf") ? file : undefined);
-	const src = localUrl ?? mediaUrl;
+	const previewsLocally = Boolean(file) && !imageSrc && (previewKind === "video" || previewKind === "pdf");
+	const localUrl = useFileObjectUrl(previewsLocally ? file : undefined);
+	// The picked file wins while it is in memory, even before its object URL exists; the staged copy is for after.
+	const src = previewsLocally ? localUrl : mediaUrl;
 	const details = [attachmentTypeLabel(name), bytes === undefined ? undefined : formatAttachmentSize(bytes)].filter(Boolean).join(" · ") || undefined;
 	if (imageSrc) return <ImageTile src={imageSrc} name={name} details={details}>{remove}</ImageTile>;
-	if (previewKind === "video" && src) return <VideoTile src={src} name={name} details={details}>{remove}</VideoTile>;
+	// Keyed by source: a new source gets its own load attempt, failure state and duration.
+	if (previewKind === "video" && src) return <VideoTile key={src} src={src} name={name} details={details}>{remove}</VideoTile>;
 	return (
 		<FileCard name={name} bytes={bytes}>
-			{previewKind === "pdf" && src ? <PdfThumbnail src={src} name={name} /> : null}
+			{previewKind === "pdf" && src ? <PdfThumbnail key={src} src={src} name={name} /> : null}
 			{previewKind === "text" ? <TextThumbnail file={file} url={mediaUrl} /> : null}
 			{remove}
 		</FileCard>
@@ -226,10 +229,7 @@ function TextThumbnail({ file, url }: { file?: File; url?: string }) {
 				? fetch(`${url}${url.includes("?") ? "&" : "?"}raw=true`, {
 					signal: controller.signal,
 					headers: { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` },
-				}).then((response) => {
-					if (!response.ok) throw new Error(`Preview failed: ${response.status}`);
-					return readTextPrefix(response);
-				})
+				}).then((response) => (response.ok ? readTextPrefix(response) : undefined))
 				: undefined;
 		void read?.then((value) => {
 			if (!controller.signal.aborted) setText(value);
