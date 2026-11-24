@@ -11,6 +11,7 @@ import { playH264, playMjpeg } from "../lib/device-stream";
 import { deviceStreamRoutes, encodeButton, encodeTouch, normalizedPoint, type DeviceButton, type TouchPhase } from "../lib/device-input";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
+import { DeviceFrame, deviceFrameKind } from "./DeviceFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
 type DeviceStatus = components["schemas"]["DeviceStatusResponse"];
@@ -259,6 +260,8 @@ function DeviceLive({
 	const platform = device.platform;
 	const routes = deviceStreamRoutes(getApiBaseUrl(), sessionId, platform, device.id);
 	const [hasFrame, setHasFrame] = useState(false);
+	// The screen's shape, from the stream, so the frame around it fits.
+	const [screenAspect, setScreenAspect] = useState<number>();
 	const [state, setState] = useState<StreamState>("connecting");
 	const socketRef = useRef<WebSocket | null>(null);
 	const screenRef = useRef<HTMLCanvasElement | null>(null);
@@ -273,7 +276,10 @@ function DeviceLive({
 	useEffect(() => {
 		const canvas = screenRef.current;
 		if (!watching || !canvas) return;
-		const shown = () => setHasFrame(true);
+		const shown = () => {
+			setHasFrame(true);
+			if (canvas.width > 0 && canvas.height > 0) setScreenAspect(canvas.width / canvas.height);
+		};
 		const player = routes.video ? playH264(routes.video, canvas, shown) : playMjpeg(routes.frames, canvas, shown);
 		if (player) {
 			return () => {
@@ -397,7 +403,8 @@ function DeviceLive({
 					</DropdownMenuContent>
 				</DropdownMenu>
 			</div>
-			<div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-3">
+			{/* A size container, so the device frame can be as large as fits both ways. */}
+			<div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4 [container-type:size]">
 				{/* Shut down outside AO: say so rather than hold the last frame. */}
 				{device.booted ? null : (
 					<div className="flex flex-col items-center gap-2">
@@ -405,10 +412,11 @@ function DeviceLive({
 						<Button disabled={starting} onClick={onStart} size="sm" type="button" variant="outline">{t("device.start")}</Button>
 					</div>
 				)}
-				{hasFrame || !device.booted ? null : <p className="text-xs text-muted-foreground">{t("device.connecting")}</p>}
-				<canvas
+				<DeviceFrame className={cn(!device.booted && "hidden")} kind={deviceFrameKind(platform, device.name, screenAspect)} screenAspect={screenAspect}>
+					{hasFrame ? null : <p className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">{t("device.connecting")}</p>}
+					<canvas
 						aria-label={t("device.screenAlt", { name: device.name })}
-						className={cn("max-h-full max-w-full cursor-pointer touch-none select-none rounded-lg bg-black", (!hasFrame || !device.booted) && "hidden")}
+						className={cn("block size-full cursor-pointer touch-none select-none", !hasFrame && "invisible")}
 						role="img"
 						onPointerCancel={(event) => {
 							if (!pointerDown.current) return;
@@ -430,6 +438,7 @@ function DeviceLive({
 						}}
 						ref={screenRef}
 					/>
+				</DeviceFrame>
 			</div>
 			<div className="flex shrink-0 flex-col items-center gap-1 px-3 pb-3">
 				{state === "live" ? null : <p className="text-xs text-muted-foreground">{state === "reconnecting" ? t("device.reconnecting") : t("device.connecting")}</p>}
