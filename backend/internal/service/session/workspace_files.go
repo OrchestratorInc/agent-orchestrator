@@ -1052,7 +1052,7 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 		}
 		sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 		result := WorkspaceFiles{SessionID: rec.ID, CompareBaseSHA: compare.BaseSHA, CompareBaseRef: compare.BaseRef, CompareMode: compare.Mode, Files: files, Truncated: truncated}
-		uncommitted, err := workspaceUncommittedFiles(ctx, rec.Metadata.WorkspacePath, "", nil)
+		uncommitted, committed, err := workspaceProjectRepoSections(ctx, rec.Metadata.WorkspacePath, "", nil, compare.gitBase())
 		if err != nil {
 			if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
 				return WorkspaceFiles{}, err
@@ -1062,14 +1062,15 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 			return result, nil
 		}
 		result.Sections.Uncommitted = uncommitted
+		result.Sections.Committed = committed
 		return result, nil
 	}
 
 	prefixes := workspaceProjectPrefixes(rec.Metadata.WorkspacePath, rows)
 	childPrefixes := nonEmptyWorkspacePrefixes(prefixes)
 	defaultBranch := defaultBranchForProject(project, true)
-	var files, uncommitted []WorkspaceFileSummary
-	var uncommittedErr error
+	var files, uncommitted, committed []WorkspaceFileSummary
+	var sectionsErr error
 	truncated := false
 	compares := make([]workspaceCompareTarget, 0, len(rows))
 	for _, row := range rows {
@@ -1100,10 +1101,11 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 		compares = append(compares, compare)
 		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated)
 		truncated = truncated || repoTruncated
-		if uncommittedErr == nil {
-			var repoUncommitted []WorkspaceFileSummary
-			repoUncommitted, uncommittedErr = workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
+		if sectionsErr == nil {
+			var repoUncommitted, repoCommitted []WorkspaceFileSummary
+			repoUncommitted, repoCommitted, sectionsErr = workspaceProjectRepoSections(ctx, row.WorktreePath, prefix, exclude, compare.gitBase())
 			uncommitted = append(uncommitted, repoUncommitted...)
+			committed = append(committed, repoCommitted...)
 		}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
@@ -1116,16 +1118,18 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 		Files:          files,
 		Truncated:      truncated,
 	}
-	if uncommittedErr != nil {
-		if errors.Is(uncommittedErr, ports.ErrWorkspaceRepoUnavailable) {
-			return WorkspaceFiles{}, uncommittedErr
+	if sectionsErr != nil {
+		if errors.Is(sectionsErr, ports.ErrWorkspaceRepoUnavailable) {
+			return WorkspaceFiles{}, sectionsErr
 		}
 		result.Degraded = true
-		result.DegradedCode = workspaceDegradedCode(uncommittedErr)
+		result.DegradedCode = workspaceDegradedCode(sectionsErr)
 		return result, nil
 	}
 	sort.Slice(uncommitted, func(i, j int) bool { return uncommitted[i].Path < uncommitted[j].Path })
+	sort.Slice(committed, func(i, j int) bool { return committed[i].Path < committed[j].Path })
 	result.Sections.Uncommitted = uncommitted
+	result.Sections.Committed = committed
 	return result, nil
 }
 
@@ -2046,8 +2050,8 @@ func mergeUncommittedFiles(tracked, untracked []WorkspaceFileSummary) []Workspac
 
 // workspaceUncommittedFiles computes one workspace-project worktree's
 // Uncommitted section, with paths carrying the repository's display prefix.
-// Workspace projects have no other sections, so this runs its own untracked
-// listing instead of sharing workspaceGitSections' one.
+// Workspace projects have no staged, unstaged or untracked sections, so this
+// runs its own untracked listing instead of sharing workspaceGitSections' one.
 func workspaceUncommittedFiles(ctx context.Context, root, prefix string, excludePrefixes []string) ([]WorkspaceFileSummary, error) {
 	var tracked, untracked []WorkspaceFileSummary
 	g, gctx := errgroup.WithContext(ctx)
@@ -2069,6 +2073,53 @@ func workspaceUncommittedFiles(ctx context.Context, root, prefix string, exclude
 	merged := mergeUncommittedFiles(tracked, untracked)
 	files := make([]WorkspaceFileSummary, 0, len(merged))
 	for _, file := range merged {
+		if workspacePathExcluded(file.Path, excludePrefixes) {
+			continue
+		}
+		file.Path = joinWorkspaceRelative(prefix, file.Path)
+		file.PreviousPath = joinWorkspaceRelative(prefix, file.PreviousPath)
+		files = append(files, file)
+	}
+	return files, nil
+}
+
+// workspaceProjectRepoSections computes one workspace-project worktree's
+// Uncommitted and Committed sections, with paths carrying the repository's
+// display prefix. Committed is the repository's base..HEAD range, so a child
+// repository's commits are listed as well as counted (#8172). Per-commit
+// history stays with single-repository projects: each repository has its own
+// commits, so a workspace project reviews its committed range as a whole.
+func workspaceProjectRepoSections(ctx context.Context, root, prefix string, excludePrefixes []string, base string) (uncommitted, committed []WorkspaceFileSummary, err error) {
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) {
+		uncommitted, err = workspaceUncommittedFiles(gctx, root, prefix, excludePrefixes)
+		return err
+	})
+	g.Go(func() (err error) {
+		committed, err = workspaceCommittedFiles(gctx, root, prefix, excludePrefixes, base)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return nil, nil, err
+	}
+	return uncommitted, committed, nil
+}
+
+// workspaceCommittedFiles is one workspace-project worktree's base..HEAD
+// changes, with paths carrying the repository's display prefix. A repository
+// compared against HEAD has no committed range.
+func workspaceCommittedFiles(ctx context.Context, root, prefix string, excludePrefixes []string, base string) ([]WorkspaceFileSummary, error) {
+	base = strings.TrimSpace(base)
+	if base == "" || base == "HEAD" {
+		return nil, nil
+	}
+	statuses, previous, counts, err := workspaceDiffStats(ctx, root, base, "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	summaries := buildSectionSummaries(root, statuses, counts, previous)
+	files := make([]WorkspaceFileSummary, 0, len(summaries))
+	for _, file := range summaries {
 		if workspacePathExcluded(file.Path, excludePrefixes) {
 			continue
 		}

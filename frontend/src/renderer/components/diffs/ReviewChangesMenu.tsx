@@ -55,6 +55,8 @@ export type ReviewChangesCommits = {
 	rangeMode?: "since_base" | "recent";
 	/** The ref a since-base view compares with; named when it has no commits of its own. */
 	baseRef?: string;
+	/** Only All commits can be picked: a workspace project's repositories each have their own commits, so none are listed. */
+	rangeOnly?: boolean;
 	allStats?: ReviewChangeStats;
 	onToggleAll: () => void;
 	onToggle: (sha: string) => void;
@@ -152,7 +154,7 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 	// pick stays, so the menu always shows what the trigger names.
 	const shownScopes = scopes.filter(({ scope, empty }) => !empty || value.kind === scope);
 	// With no commits to list, All commits would select an empty review, so only the reason shows.
-	const noCommits = commits.state === "ready" && commits.rows.length === 0;
+	const noCommits = commits.state === "ready" && commits.rows.length === 0 && !commits.rangeOnly;
 	const commitBlock = (
 		<>
 			{noCommits ? null : (
@@ -161,7 +163,7 @@ export function ReviewChangesMenu({ mode, value, stats, scopes, commitsAvailable
 					{commits.allStats ? <ChangeStats muted={!allTicked} stats={commits.allStats} /> : null}
 				</DropdownMenuCheckboxItem>
 			)}
-			{commits.state === "loading" ? (
+			{commits.rangeOnly ? null : commits.state === "loading" ? (
 				<DropdownMenuItem className={REVIEW_MENU_ROW} disabled>{t("files.changes.loadingCommits")}</DropdownMenuItem>
 			) : commits.state === "error" ? (
 				<>
