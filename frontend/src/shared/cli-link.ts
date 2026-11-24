@@ -11,7 +11,6 @@ export const CLI_LINK_MARKER_FILE = "cli-link.json";
 const SYSTEM_LINK_DIRECTORIES = new Set(["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"]);
 
 export type CliLinkCode =
-	| "developer-mode"
 	| "unsupported"
 	| "missing-app"
 	| "permission"
@@ -22,7 +21,7 @@ export type CliLinkCode =
 
 export type CliLinkCurrent =
 	| { kind: "missing" }
-	| { kind: "linked"; target: string; version: string }
+	| { kind: "linked"; target: string; version: string; managed?: boolean }
 	| { kind: "stale"; target: string | null }
 	| { kind: "foreign"; target: string | null };
 
@@ -73,7 +72,6 @@ export type CliLinkIo = {
 };
 
 export type CliLinkRequest = {
-	developerMode: boolean;
 	platform: NodeJS.Platform;
 	isPackaged: boolean;
 	appImage?: string;
@@ -134,9 +132,6 @@ export function cliLinkSupport(input: {
 }
 
 function guard(io: CliLinkIo, request: CliLinkRequest): CliLinkFailure | ReadyLink {
-	if (!request.developerMode) {
-		return failure("developer-mode", "Turn on Developer mode to link the global ao command.");
-	}
 	const resolvedDir = io.resolve(request.linkDirectory);
 	if (!request.allowSystemLinkDir && SYSTEM_LINK_DIRECTORIES.has(resolvedDir)) {
 		throw new Error("refusing to inspect or change a real global CLI directory");
@@ -212,7 +207,11 @@ async function classify(io: CliLinkIo, linkPath: string, appCliPath: string, mar
 	const appReal = await io.realpath(appCliPath);
 	const linkReal = await io.realpath(linkPath);
 	const sameAsApp = Boolean(appReal && linkReal && appReal === linkReal) || absolute === io.resolve(appCliPath);
-	if (!markerOwns) return { kind: "foreign", target: absolute, managed: false };
+	if (!markerOwns) {
+		return linkReal && sameAsApp
+			? { kind: "linked", target: absolute, version: "", managed: false }
+			: { kind: "foreign", target: absolute, managed: false };
+	}
 	if (!linkReal || !sameAsApp) return { kind: "stale", target: absolute, managed: true };
 	return { kind: "linked", target: absolute, version: "", managed: true };
 }
@@ -384,7 +383,7 @@ export async function unlinkCli(io: CliLinkIo, request: CliLinkRequest): Promise
 		return failure("io", `No ao command exists at ${status.linkPath}.`, { linkPath: status.linkPath });
 	}
 	const latest = await classify(io, status.linkPath, request.appCliPath, await readMarker(io, request.dataDir));
-	if (latest.kind === "foreign" || latest.kind === "missing" || latest.target !== status.current.target) {
+	if (latest.kind === "foreign" || latest.kind === "missing" || !latest.managed || latest.target !== status.current.target) {
 		return failure("foreign", `The command at ${status.linkPath} is not an Orchestrator link. It was left unchanged.`, {
 			linkPath: status.linkPath,
 		});

@@ -6,21 +6,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { SettingsRow } from "./SettingsRow";
 
-export function CliLinkSettings({ enabled }: { enabled: boolean }) {
-	const [ready, setReady] = useState(false);
-	useEffect(() => {
-		let active = true;
-		setReady(false);
-		void aoBridge.cliLink.setEnabled(enabled).then(() => {
-			if (active) setReady(enabled);
-		});
-		return () => { active = false; };
-	}, [enabled]);
-	if (!enabled) return null;
-	return ready ? <CliLinkSettingsRow /> : null;
-}
-
-function CliLinkSettingsRow() {
+export function CliLinkSettings() {
 	const { t } = useTranslation();
 	const [view, setView] = useState<CliLinkView | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -59,11 +45,12 @@ function CliLinkSettingsRow() {
 		void refresh();
 	}, []);
 
+	if (view ? !view.ok : !error) return null;
 	const status: CliLinkStatus | null = view?.ok ? view.status : null;
 	const foreign = status?.current.kind === "foreign";
 	const linked = status?.current.kind === "linked";
 	const canLink = Boolean(status && !foreign && !linked && !status.pathIssue && status.proposedTarget);
-	const canUnlink = status?.current.kind === "linked" || status?.current.kind === "stale";
+	const canUnlink = (status?.current.kind === "linked" && status.current.managed !== false) || status?.current.kind === "stale";
 	const detail = linked && !status?.message && !status?.pathIssue && !error ? t("settings.cliLink.linked") : describeStatus((key, options) => String(t(key as never, options as never)), view, error);
 
 	return (

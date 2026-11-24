@@ -122,7 +122,7 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "analytics", section: "general", label: "settings.analytics.label", keywords: ["telemetry", "tracking", "opt out", "posthog"] },
 	{ id: "error-events", section: "general", label: "settings.telemetryEvents.label", keywords: ["crash reports", "sentry", "telemetry"] },
 	{ id: "developer-mode", section: "general", label: "settings.developerMode", keywords: ["advanced", "debug", "experimental"] },
-	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "install"], when: "developerMode" },
+	{ id: "cli-link", section: "general", label: "settings.cliLink.label", keywords: ["cli", "terminal command", "install"] },
 	{ id: "split-panes", section: "general", label: "settings.splitPanes", keywords: ["split", "side by side", "panes", "drag tabs"], when: "developerMode" },
 	{ id: "harness", section: "harness", label: "settings.harness", keywords: [] },
 	{ id: "harness-logins", section: "harness", label: "settings.harness.viewLabel", keywords: ["login", "agent login", "api key", "provider key", "environment variable", "anthropic", "openai", "openrouter"] },

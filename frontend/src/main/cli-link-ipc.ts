@@ -5,12 +5,6 @@ import { nodeCliLinkIo } from "./cli-link-fs";
 import { CLI_LINK_DIRECTORY, inspectCliLink, linkCli, selectCliLinkDirectory, unlinkCli, type CliLinkRequest } from "../shared/cli-link";
 import { bundledDaemonBinaryName } from "../shared/daemon-launch";
 
-let developerMode = false;
-
-export function setCliLinkDeveloperMode(enabled: boolean): void {
-	developerMode = enabled;
-}
-
 export function registerCliLinkIpc(input: {
 	isPackaged: () => boolean;
 	resourcesPath: string;
@@ -23,7 +17,6 @@ export function registerCliLinkIpc(input: {
 	const request = async (confirmReplacement = false, expectedTarget?: string | null): Promise<CliLinkRequest> => {
 		const shellPath = input.shellPath();
 		return {
-			developerMode,
 			platform: process.platform,
 			isPackaged: input.isPackaged(),
 			appImage: input.appImage,
@@ -42,9 +35,6 @@ export function registerCliLinkIpc(input: {
 			expectedTarget,
 		};
 	};
-	ipcMain.handle("cliLink:setEnabled", (_event, enabled: unknown) => {
-		setCliLinkDeveloperMode(enabled === true);
-	});
 	ipcMain.handle("cliLink:inspect", async () => inspectCliLink(io, await request()));
 	ipcMain.handle("cliLink:link", async (_event, confirm: unknown, target: unknown) => linkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined)));
 	ipcMain.handle("cliLink:unlink", async (_event, confirm: unknown, target: unknown) => unlinkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined)));

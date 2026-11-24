@@ -44,7 +44,6 @@ async function executable(directory: string, name: string, version: string): Pro
 
 function request(partial: Partial<CliLinkRequest> & Pick<CliLinkRequest, "appCliPath" | "linkDirectory" | "dataDir">): CliLinkRequest {
 	return {
-		developerMode: true,
 		platform: "darwin",
 		isPackaged: true,
 		...partial,
@@ -67,21 +66,6 @@ function counting(io: CliLinkIo): CliLinkIo & { symlinks: number } {
 const countedHolder = { symlinks: 0 };
 
 describe("cli link", () => {
-	it("refuses the action when developer mode is off without touching the filesystem", async () => {
-		const io: CliLinkIo = {
-			...nodeCliLinkIo(),
-			lstat: () => Promise.reject(new Error("filesystem touched")),
-			version: () => Promise.reject(new Error("filesystem touched")),
-		};
-		const result = await inspectCliLink(io, request({
-			developerMode: false,
-			appCliPath: "/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao",
-			linkDirectory: CLI_LINK_DIRECTORY,
-			dataDir: "/tmp/does-not-matter",
-		}));
-		expect(result).toMatchObject({ ok: false, code: "developer-mode" });
-	});
-
 	it("refuses to inspect a real global bin directory from tests", async () => {
 		await expect(inspectCliLink(nodeCliLinkIo(), request({
 			appCliPath: "/tmp/ao",
@@ -192,13 +176,14 @@ describe("cli link", () => {
 		expect(result).toMatchObject({ ok: false, code: "missing-app" });
 	});
 
-	it("never claims a user made symlink to the app CLI", async () => {
+	it("shows a user made symlink to the app CLI as linked and never claims it", async () => {
 		const { linkDirectory, dataDir, apps } = await layout();
 		const appCliPath = await executable(apps, "ao", "1.0.0");
 		const linkPath = path.join(linkDirectory, "ao");
 		await symlink(appCliPath, linkPath);
 		const req = request({ appCliPath, linkDirectory, dataDir, confirmReplacement: true, expectedTarget: appCliPath });
-		expect(await linkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: false, code: "foreign" });
+		expect(await inspectCliLink(nodeCliLinkIo(), req)).toMatchObject({ ok: true, status: { current: { kind: "linked", managed: false } } });
+		expect(await linkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: true, changed: false });
 		expect(await unlinkCli(nodeCliLinkIo(), req)).toMatchObject({ ok: false, code: "foreign" });
 		expect(await readlink(linkPath)).toBe(appCliPath);
 		expect(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE)).catch(() => null)).toBeNull();

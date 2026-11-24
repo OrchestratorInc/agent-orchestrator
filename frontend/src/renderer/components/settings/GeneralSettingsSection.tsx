@@ -520,7 +520,7 @@ export function GeneralSettingsSection({
 					/>
 				</SettingsRow>
 				{developerMode && <DiagnosticsRow />}
-				<CliLinkSettings enabled={developerMode} />
+				<CliLinkSettings />
 				<CliShadowSettingsRow />
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <PRViewRow />}
