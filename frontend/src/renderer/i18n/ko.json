@@ -5381,5 +5381,10 @@
 	"backgroundTasks.stale": "오래된 정보",
 	"backgroundTasks.kind.shell": "셸",
 	"backgroundTasks.kind.other": "백그라운드 작업",
-	"backgroundTasks.state.failed": "실패"
+	"backgroundTasks.state.failed": "실패",
+	"chat.compaction.running": "대화 압축 중",
+	"chat.compaction.done": "대화 압축됨",
+	"chat.compaction.failed": "대화를 압축하지 못했습니다",
+	"chat.compaction.stopped": "중지됨",
+	"chat.compaction.full": "{{percent}}% 사용"
 }

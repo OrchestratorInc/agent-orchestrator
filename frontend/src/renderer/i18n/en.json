@@ -5361,5 +5361,10 @@
 	"backgroundTasks.stale": "stale",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Background task",
-	"backgroundTasks.state.failed": "Failed"
+	"backgroundTasks.state.failed": "Failed",
+	"chat.compaction.running": "Compacting conversation",
+	"chat.compaction.done": "Compacted conversation",
+	"chat.compaction.failed": "Couldn't compact conversation",
+	"chat.compaction.stopped": "Stopped",
+	"chat.compaction.full": "{{percent}}% full"
 }

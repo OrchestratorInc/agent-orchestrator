@@ -6327,7 +6327,13 @@ const TurnGroup = memo(function TurnGroup({
 	// hands its copy and undo down to the outcome's action row: one row per turn.
 	// An account switch shows its own marker instead of an outcome, so its turn keeps
 	// the answer's row (or the tool-only fallback) like a finished one.
-	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
+	// A compaction that could not run says why on its own row ("Couldn't compact
+	// conversation · reason"), so the turn does not tell the same failure again.
+	const compactionToldFailure = group.outcome?.state === "failed" && Boolean(group.outcome.error?.trim()) &&
+		group.items.some((item) =>
+			item.kind === "activity" && isCompaction(item) && item.status === "failed" &&
+			item.detail?.error?.trim() === group.outcome?.error?.trim());
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !compactionToldFailure);
 	// A message refused for its login, in a turn that did nothing else, says what
 	// happens to it under its own bubble, so the turn needs no outcome of its own.
 	const loginNoteMessageId = login?.align === "end"
@@ -6388,8 +6394,16 @@ const TurnGroup = memo(function TurnGroup({
 						item.activityKind !== "plan" &&
 						item.activityKind !== "approval" &&
 						item.activityKind !== "user_input" &&
-						item.detail?.event !== "provider.failure",
+						item.detail?.event !== "provider.failure" &&
+						!isCompaction(item),
 				)
+		: undefined;
+	// A compaction under way takes over the live row ("Compacting conversation 1m")
+	// instead of drawing a row of its own; its row joins the turn when it settles.
+	const liveCompaction = group.live
+		? [...group.items]
+				.reverse()
+				.find((item): item is ConversationActivity => item.kind === "activity" && isCompaction(item) && item.status === "running")
 		: undefined;
 	// The step in progress shows once, on the live row next to the loader, which
 	// opens onto its command and output; its own row joins the steps above when it
@@ -6413,6 +6427,7 @@ const TurnGroup = memo(function TurnGroup({
 				/>
 			);
 		}
+		if (run.kind === "single" && liveCompaction && run.items[0]?.id === liveCompaction.id) return null;
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
 			(item): item is ConversationActivity => item.kind === "activity" && item.id !== liveStep?.id,
@@ -6533,6 +6548,7 @@ const TurnGroup = memo(function TurnGroup({
 				// writing, so both keep the timer alone.
 				task={liveTask ? liveTaskLabel(liveTask) : group.live && !group.blocked && !tailIsReply ? "Thinking" : undefined}
 				step={liveStep}
+				compaction={liveCompaction}
 				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
@@ -6652,7 +6668,7 @@ const TurnGroup = memo(function TurnGroup({
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId && !compactionToldFailure ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -8065,7 +8081,8 @@ function isNoticeItem(item: ConversationItem | undefined): boolean {
 	// A run holding a failed call stays out of the fold, so the failure shows under it.
 	if (isOrdinaryActivity(item) && isFailedCall(item)) return true;
 	if (item.activityKind === "user_input") return item.status !== "pending";
-	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
+	// A compaction stays too: it is where the agent's earlier history was summarized.
+	return item.detail?.event !== undefined && !isSteer(item) && item.activityKind !== "plan";
 }
 
 const NO_BATCHED_REPORTS: BatchedReports = { under: new Map(), moved: new Set() };

@@ -6989,6 +6989,82 @@ func TestCompactionReplayDoesNotDuplicateTheRow(t *testing.T) {
 	}
 }
 
+// A compaction a driver sees start is one row that runs, then settles in place.
+// While it runs the history is still what it was, so the conversation is not
+// marked compacted until the row settles.
+func TestCompactionRowRunsThenSettlesInPlace(t *testing.T) {
+	conv := newCompactingConversation()
+	h := newHarnessWithConversation(t, conv)
+
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderItemID: "cc-1",
+		ActivityStatus: domain.ActivityStatusRunning,
+		Detail:         []byte(`{"tokensBefore":180000,"contextWindow":200000}`),
+	})
+	running := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 1 })
+	if row := running.Activities[0]; row.Status != domain.ActivityStatusRunning || row.Summary != "Compacting the conversation history" {
+		t.Fatalf("running row = %q %q", row.Status, row.Summary)
+	}
+	if running.Conversation.CompactedAt != nil {
+		t.Fatal("conversation marked compacted while its compaction runs")
+	}
+
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderItemID: "cc-1",
+		Summary: "Compacted history, freeing 156.0k tokens of context",
+		Detail:  []byte(`{"tokensBefore":180000,"tokensAfter":24000,"tokensReclaimed":156000,"contextWindow":200000}`),
+	})
+	settled := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Activities) == 1 && s.Activities[0].Status == domain.ActivityStatusCompleted && s.Conversation.CompactedAt != nil
+	})
+	var detail struct {
+		Event           string `json:"event"`
+		TokensReclaimed int64  `json:"tokensReclaimed"`
+	}
+	if err := json.Unmarshal(settled.Activities[0].Detail, &detail); err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+	if detail.Event != "compaction" || detail.TokensReclaimed != 156000 {
+		t.Fatalf("detail = %+v", detail)
+	}
+}
+
+// A failed compaction left the history as it was. Its row keeps the provider's
+// reason apart from its label, and the conversation is not marked compacted.
+func TestFailedCompactionKeepsItsReasonAndTheHistory(t *testing.T) {
+	conv := newCompactingConversation()
+	h := newHarnessWithConversation(t, conv)
+
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderItemID: "cc-1",
+		ActivityStatus: domain.ActivityStatusFailed, Summary: "Conversation too long",
+	})
+	// A marker after it, so the flag is checked after the compaction projected.
+	conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventActivityCompleted, ProviderItemID: "exec-1",
+		ActivityKind: domain.ActivityKindCommand, ActivityStatus: domain.ActivityStatusCompleted,
+		Summary: "date -u",
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 2 })
+	row := snapshot.Activities[0]
+	if row.Status != domain.ActivityStatusFailed || row.Summary != "Could not compact the conversation history: Conversation too long" {
+		t.Fatalf("failed row = %q %q", row.Status, row.Summary)
+	}
+	var detail struct {
+		Event string `json:"event"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(row.Detail, &detail); err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+	if detail.Event != "compaction" || detail.Error != "Conversation too long" {
+		t.Fatalf("detail = %+v", detail)
+	}
+	if snapshot.Conversation.CompactedAt != nil {
+		t.Fatal("a failed compaction marked the conversation compacted")
+	}
+}
+
 func TestCompactReportsWhatIsAboutToBeReclaimed(t *testing.T) {
 	conv := newCompactingConversation()
 	h := newHarnessWithConversation(t, conv)

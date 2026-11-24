@@ -5381,5 +5381,10 @@
 	"backgroundTasks.stale": "veraltet",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "Hintergrundaufgabe",
-	"backgroundTasks.state.failed": "Fehlgeschlagen"
+	"backgroundTasks.state.failed": "Fehlgeschlagen",
+	"chat.compaction.running": "Unterhaltung wird komprimiert",
+	"chat.compaction.done": "Unterhaltung komprimiert",
+	"chat.compaction.failed": "Unterhaltung konnte nicht komprimiert werden",
+	"chat.compaction.stopped": "Gestoppt",
+	"chat.compaction.full": "{{percent}} % belegt"
 }

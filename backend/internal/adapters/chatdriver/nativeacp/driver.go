@@ -95,6 +95,8 @@ type Config struct {
 	QuickStop bool
 	// HideCommand: see acpdriver.Config.HideCommand.
 	HideCommand func(acpsdk.AvailableCommand) bool
+	// CompactionMessage: see acpdriver.Config.CompactionMessage.
+	CompactionMessage func(text string, meta map[string]any) (acpdriver.CompactionReport, bool)
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -208,5 +210,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
 		QuickStop:                    cfg.QuickStop,
 		HideCommand:                  cfg.HideCommand,
+		CompactionMessage:            cfg.CompactionMessage,
 	}
 }

@@ -19,6 +19,7 @@ import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
 import { agentLabel } from "../../lib/agent-options";
 import { recordedModelName } from "../../lib/agent-model-choices";
@@ -74,6 +75,7 @@ import {
 	Pencil,
 	Plug,
 	RotateCw,
+	ScrollText,
 	Search,
 	ShieldCheck,
 	ShieldQuestion,
@@ -494,19 +496,57 @@ function TwoRowTimelineMarker({
 	);
 }
 
+/**
+ * Where the agent summarized earlier history to free context: the summary mark, what
+ * happened, and what it freed ("−41.2k · 12% full"), or why it could not.
+ *
+ * While a compaction runs in a live turn the live row says so (see
+ * LiveResponseStatus); this row is what stays in the turn. It has the live row's
+ * height, slot and type, so the handoff between the two moves nothing.
+ */
 export function CompactionMarker({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const running = activity.status === "running";
+	const failed = activity.status === "failed" || activity.status === "cancelled";
+	const label = running
+		? t("chat.compaction.running")
+		: failed
+			? t("chat.compaction.failed")
+			: t("chat.compaction.done");
+	const detail = running
+		? undefined
+		: failed
+			? activity.detail?.error || (activity.status === "cancelled" ? t("chat.compaction.stopped") : undefined)
+			: compactionFigures(activity, t);
+	return (
+		<div
+			data-chat-activity-id={activity.id}
+			data-testid="compaction-row"
+			className="-mx-1 flex h-7 min-w-0 select-none items-center gap-2 px-1 text-sm text-muted-foreground"
+		>
+			<span aria-hidden="true" className={STEP_MARK_SLOT_CLASS}>
+				<ScrollText className="size-3" />
+			</span>
+			<span className="shrink-0">{label}</span>
+			{detail ? (
+				<span className="min-w-0 truncate tabular-nums text-muted-foreground/70" title={detail}>
+					{detail}
+				</span>
+			) : null}
+		</div>
+	);
+}
+
+/** "−41.2k · 12% full": what a compaction freed and how full the context is now, as far as known. */
+function compactionFigures(activity: ConversationActivity, t: TFunction): string | undefined {
 	const reclaimed = activity.detail?.tokensReclaimed;
 	const after = activity.detail?.tokensAfter;
 	const contextWindow = activity.detail?.contextWindow;
-	const detail = reclaimed ? `−${formatTokens(reclaimed)}` : undefined;
-	const fullness = after && contextWindow ? `${Math.round((after / contextWindow) * 100)}% full` : undefined;
-
-	return (
-		<TwoRowTimelineMarker
-			message="The conversation history was compacted"
-			detail={[detail, fullness].filter(Boolean).join(" · ") || undefined}
-		/>
-	);
+	const parts = [
+		reclaimed ? `−${formatTokens(reclaimed)}` : undefined,
+		after && contextWindow ? t("chat.compaction.full", { percent: Math.round((after / contextWindow) * 100) }) : undefined,
+	].filter(Boolean);
+	return parts.length > 0 ? parts.join(" · ") : undefined;
 }
 
 /** The remote host a chat's session runs on, whose catalogs name its models. */
@@ -1597,7 +1637,7 @@ const LIVE_RECONNECT_CHIP =
  * when the turn settles this row fades out where it is and "Worked for" opens at the
  * top of the turn, so nothing appears to travel between the two.
  */
-export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, failed = false, task, step, reconnect, children }: {
+export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, failed = false, task, step, compaction, reconnect, children }: {
 	/** Names this row across remounts (windowing), so its label's entrance plays once. */
 	entranceKey?: string;
 	startedAt?: string;
@@ -1611,37 +1651,48 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 	 * row then opens onto the step's command and output, as that row would.
 	 */
 	step?: ConversationActivity;
+	/**
+	 * A compaction under way. The loader stays in front and the row says
+	 * "Compacting conversation" with the compaction's own time in place of the
+	 * task and the turn's timer; the compaction's row joins the turn when it
+	 * settles, and the loader carries on under it.
+	 */
+	compaction?: ConversationActivity;
 	/** The provider is retrying; the row says so in place of the task. */
 	reconnect?: { label: string; detail?: string };
 	children?: ReactNode;
 }) {
+	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const labelId = useId();
+	// Setup and a provider retry still say so first; a compaction is the work.
+	const compacting = Boolean(compaction && !startupLabel && !reconnect);
 	// Per step: the row stays one line, even while the step prints, until the reader
 	// opens it. The next step starts closed again.
 	const [stepChoice, setStepChoice] = useState<{ id: string; open: boolean } | null>(null);
 	const stepChoices = useContext(LiveStepChoices);
-	const expandable = Boolean(step && !startupLabel && !reconnect && liveStepHasDetail(step));
+	const expandable = Boolean(step && !startupLabel && !reconnect && !compacting && liveStepHasDetail(step));
 	const stepOpen = expandable && stepChoice?.id === step?.id && stepChoice!.open;
 	// A finished step stays on the row for a moment before it moves up. It says what
 	// it did ("Read a.ts"), and the shimmer that means "under way" stops.
 	const stepSettled = Boolean(step && isLiveStepKind(step) && !stepInProgress(step));
+	const timedFrom = compacting ? compaction?.createdAt : startedAt;
 	const started = useMemo(() => {
-		const parsed = startedAt ? Date.parse(startedAt) : Date.now();
+		const parsed = timedFrom ? Date.parse(timedFrom) : Date.now();
 		return Number.isFinite(parsed) ? parsed : Date.now();
-	}, [startedAt]);
+	}, [timedFrom]);
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		const timer = window.setInterval(() => setNow(Date.now()), 1000);
 		return () => window.clearInterval(timer);
 	}, []);
 	const elapsedMs = Math.max(0, now - started);
-	const label = startupLabel ?? reconnect?.label ?? task;
+	const label = startupLabel ?? reconnect?.label ?? (compacting ? t("chat.compaction.running") : task);
 	// The provider re-saves its retry on every attempt, and the step label changes
 	// with every tool call. Keyed by its text the label would remount, and replay its
 	// entrance, each time; keyed by kind it updates in place and crossfades only when
 	// the row changes what it is showing.
-	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
+	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : compacting ? "compaction" : task ? "task" : undefined;
 	// A row that mounts with its chat (a switch to a working session) shows the
 	// label it opened with in place; any label after that fades in.
 	const labelEnters = useChatEntrance(entranceKey ?? labelId);
@@ -1679,8 +1730,9 @@ export function LiveResponseStatus({ entranceKey, startedAt, startupLabel, faile
 						)}
 					</span>
 				) : null}
-				{/* "Waiting 6s · 10s": the dot keeps the step's own numbers apart from the timer's. */}
-				{label && labelKind && !startupLabel ? (
+				{/* "Waiting 6s · 10s": the dot keeps the step's own numbers apart from the timer's.
+				    "Compacting conversation 1m" has no numbers of its own, and the time is its own. */}
+				{label && labelKind && !startupLabel && !compacting ? (
 					<span aria-hidden="true" className="shrink-0 text-muted-foreground/50">
 						·
 					</span>

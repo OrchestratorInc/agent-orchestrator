@@ -5381,5 +5381,10 @@
 	"backgroundTasks.stale": "古い情報",
 	"backgroundTasks.kind.shell": "シェル",
 	"backgroundTasks.kind.other": "バックグラウンドタスク",
-	"backgroundTasks.state.failed": "失敗"
+	"backgroundTasks.state.failed": "失敗",
+	"chat.compaction.running": "会話を圧縮中",
+	"chat.compaction.done": "会話を圧縮しました",
+	"chat.compaction.failed": "会話を圧縮できませんでした",
+	"chat.compaction.stopped": "停止しました",
+	"chat.compaction.full": "{{percent}}% 使用"
 }

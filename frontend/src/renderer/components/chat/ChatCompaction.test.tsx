@@ -78,12 +78,15 @@ const assistantSaid: ConversationItem = {
 };
 
 describe("compaction in the timeline", () => {
-	it("shows the message above a full-width rule", () => {
-		render(<ChatWorkspace snapshot={snapshot([assistantSaid, compaction()])} />);
+	it("shows the summary mark, what happened and what it freed, with no rule", () => {
+		const { container } = render(<ChatWorkspace snapshot={snapshot([assistantSaid, compaction()])} />);
 
-		expect(screen.getByText("The conversation history was compacted")).toBeInTheDocument();
-		expect(screen.getByText("−11.0k · 2% full")).toBeInTheDocument();
-		expect(screen.getByText("−11.0k · 2% full")).toHaveClass("text-muted-foreground/70");
+		const row = screen.getByTestId("compaction-row");
+		expect(within(row).getByText("Compacted conversation")).toBeInTheDocument();
+		expect(within(row).getByText("−11.0k · 2% full")).toHaveClass("text-muted-foreground/70");
+		expect(row.querySelector(".icon-scroll-text")).not.toBeNull();
+		expect(screen.queryByText("The conversation history was compacted")).not.toBeInTheDocument();
+		expect(container.querySelector(".h-px.w-full.bg-border")).toBeNull();
 	});
 
 	// A compaction right after a daemon restart genuinely does not know what it
@@ -102,20 +105,111 @@ describe("compaction in the timeline", () => {
 			/>,
 		);
 
-		expect(screen.getByText("The conversation history was compacted")).toBeInTheDocument();
+		expect(screen.getByTestId("compaction-row")).toHaveTextContent(/^Compacted conversation$/);
 		expect(screen.queryByText(/0 tokens/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/% full/)).not.toBeInTheDocument();
 	});
 
-	it("does not render a centered label inside the rule", () => {
-		const { container } = render(
-			<ChatWorkspace snapshot={snapshot([assistantSaid, compaction()])} />,
+	it("says why a compaction could not run, in the row's own muted tone", () => {
+		render(
+			<ChatWorkspace
+				snapshot={snapshot([
+					assistantSaid,
+					compaction({
+						status: "failed",
+						summary: "Could not compact the conversation history: Conversation too long",
+						detail: { event: "compaction", error: "Conversation too long" },
+					}),
+				])}
+			/>,
 		);
 
-		expect(container.querySelector('[data-compaction="true"]')).toBeNull();
-		expect(
-			screen.queryByRole("button", { name: /Compacted history/ }),
-		).not.toBeInTheDocument();
+		const row = screen.getByTestId("compaction-row");
+		expect(within(row).getByText("Couldn't compact conversation")).toBeInTheDocument();
+		expect(within(row).getByText("Conversation too long")).toBeInTheDocument();
+		expect(row.querySelector(".text-destructive")).toBeNull();
+		expect(row).not.toHaveClass("text-destructive");
+	});
+
+	it("says a stopped compaction stopped", () => {
+		render(<ChatWorkspace snapshot={snapshot([assistantSaid, compaction({ status: "cancelled", detail: { event: "compaction" } })])} />);
+
+		expect(screen.getByTestId("compaction-row")).toHaveTextContent(/^Couldn't compact conversationStopped$/);
+	});
+});
+
+describe("a compaction under way", () => {
+	const turnId = "compacting-turn";
+	const at = "2026-08-02T10:00:00Z";
+	const prompt: ConversationItem = {
+		kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+		role: "user", origin: "human", text: "Read the remaining API handlers",
+		streaming: false, createdAt: at,
+	};
+	const said: ConversationItem = { ...assistantSaid, id: "said", turnId, sequence: 2, text: "Next I'll read the orders route." };
+	const liveTurn = (items: ConversationItem[], state: ConversationTurn["state"] = "running"): ConversationSnapshot =>
+		snapshot(items, [{ id: turnId, state, requestedAt: at, startedAt: at }], { controller: { state: state === "running" ? "busy" : "ready" } });
+
+	it("takes over the live row: the loader in front, the label and its own time, with no second row", () => {
+		const running = compaction({
+			id: "cc-live", turnId, sequence: 3, status: "running", summary: "Compacting the conversation history",
+			detail: { event: "compaction", tokensBefore: 180000, contextWindow: 200000 },
+			createdAt: new Date(Date.now() - 65_000).toISOString(),
+		});
+		const { container } = render(<ChatWorkspace snapshot={liveTurn([prompt, said, running])} />);
+
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Compacting conversation$/);
+		// "Compacting conversation 1m": the compaction's own time, no dot between.
+		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Compacting conversation1m/);
+		// The loader stays in front while it compacts; the summary mark is the settled row's.
+		const liveRow = screen.getByTestId("live-working-label").parentElement;
+		expect(liveRow?.querySelector(".icon-scroll-text")).toBeNull();
+		expect(liveRow?.querySelector("[data-testid='response-spinner']")).not.toBeNull();
+		expect(screen.queryByTestId("compaction-row")).not.toBeInTheDocument();
+		expect(screen.getAllByText("Compacting conversation")).toHaveLength(1);
+		expect(container.textContent).not.toMatch(/Compacting\.\.\./);
+	});
+
+	it("settles in place, and the live row goes back to the turn's work", () => {
+		const settled = compaction({ id: "cc-live", turnId, sequence: 3 });
+		render(<ChatWorkspace snapshot={liveTurn([prompt, said, settled])} />);
+
+		expect(screen.getByTestId("compaction-row")).toHaveTextContent("Compacted conversation");
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Thinking$/);
+	});
+
+	// Where the agent's earlier history was summarized explains why it may have
+	// lost details, so the row stays out of the turn's folded steps.
+	it("stays visible after the turn folds its steps", () => {
+		const read: ConversationItem = {
+			kind: "activity", id: "read", turnId, sequence: 3, revision: 0,
+			activityKind: "command", status: "completed", summary: "sed -n '1,40p' orders.ts",
+			detail: { command: "sed -n '1,40p' orders.ts" }, createdAt: at,
+		};
+		const settled = compaction({ id: "cc-live", turnId, sequence: 4 });
+		const answer: ConversationItem = { ...assistantSaid, id: "answer", turnId, sequence: 5, text: "The orders route is done." };
+		render(<ChatWorkspace snapshot={liveTurn([prompt, said, read, settled, answer], "completed")} />);
+
+		expect(screen.queryByRole("button", { name: /^Read orders\.ts/ })).not.toBeInTheDocument();
+		expect(screen.getByTestId("compaction-row")).toHaveTextContent("Compacted conversation");
+	});
+
+	it("tells a failed compaction once, on its row", () => {
+		const failedTurn = "compact-only";
+		const failed = compaction({
+			id: "cc-failed", turnId: failedTurn, sequence: 2, status: "failed",
+			detail: { event: "compaction", error: "Conversation too long" },
+		});
+		render(
+			<ChatWorkspace
+				snapshot={snapshot([assistantSaid, failed], [{
+					id: failedTurn, state: "failed", requestedAt: at, startedAt: at, completedAt: at, errorMessage: "Conversation too long",
+				}])}
+			/>,
+		);
+
+		expect(within(screen.getByTestId("compaction-row")).getByText("Conversation too long")).toBeInTheDocument();
+		expect(screen.getAllByText("Conversation too long")).toHaveLength(1);
 	});
 });
 

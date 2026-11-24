@@ -238,6 +238,8 @@ type conversation struct {
 	backgroundTaskOutput         func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId, string) (ports.ChatBackgroundTaskOutput, error)
 	historyNotice                func(string) bool
 	hideCommand                  func(acpsdk.AvailableCommand) bool
+	// compactionMessage: see Config.CompactionMessage.
+	compactionMessage func(string, map[string]any) (CompactionReport, bool)
 	// promptErrorFailure: see Config.PromptErrorFailure.
 	promptErrorFailure func(error, bool) error
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
@@ -293,6 +295,20 @@ type conversation struct {
 	compactionSummary string
 	compactionFailure string
 	compactedTurn     string
+	// providerCompaction is a compaction the agent started on its own inside a
+	// turn, reported through its compaction status; providerCompactions numbers
+	// them so each gets a row of its own.
+	providerCompaction  *providerCompaction
+	providerCompactions int
+	// settledCompaction is the last one that settled without the agent's own
+	// figures, so figures that arrive just after it still reach its row.
+	settledCompaction *providerCompaction
+	// compactionReport holds the figures the agent gave for AO's own
+	// compaction turn, which settleCompaction prefers to the token bracket.
+	compactionReport *CompactionReport
+	// usageReports counts the agent's token reports, so a finished compaction
+	// can tell whether a newer context figure arrived.
+	usageReports int
 
 	claudeRejectedLimits map[string]time.Time
 
@@ -1286,7 +1302,23 @@ func (c *conversation) finishPrompt(
 			c.preambleSpent = false
 		}
 	}
+	if c.settledCompaction != nil && c.settledCompaction.turnID == turnID {
+		c.settledCompaction = nil
+	}
+	settleFinished := false
+	if c.providerCompaction != nil && c.providerCompaction.turnID == turnID {
+		if c.providerCompaction.finished {
+			settleFinished = true
+		} else {
+			// A compaction still open when its turn ends never reported how it
+			// went. Settling the turn settles its row with the turn's outcome.
+			c.providerCompaction = nil
+		}
+	}
 	c.mu.Unlock()
+	if settleFinished {
+		c.settleFinishedCompaction(c.emit)
+	}
 	if isCompaction {
 		if state == domain.TurnStateCompleted {
 			c.settleCompaction(turnID)
@@ -1296,11 +1328,20 @@ func (c *conversation) finishPrompt(
 			c.compactionBefore = 0
 			c.compactionSummary = ""
 			c.compactionFailure = ""
+			c.compactionReport = nil
 			c.mu.Unlock()
-			if turnErr != nil {
-				// A compaction turn has no prompt or reply. Without this row the
-				// timeline leaves the turn out and the failure is never shown.
+			switch {
+			case turnErr == nil:
+				// Stopped: settling the turn settles the running row with it.
+			case errors.Is(turnErr, ports.ErrChatAuthRequired):
+				// Needs its own row: the account, not the compaction, has to be fixed.
 				c.emit(ports.ChatEvent{Kind: ports.ChatEventError, ProviderTurnID: turnID, Err: turnErr})
+			default:
+				c.emit(ports.ChatEvent{
+					Kind: ports.ChatEventCompacted, ProviderTurnID: turnID,
+					ProviderItemID: c.compactionItemID(turnID),
+					ActivityStatus: domain.ActivityStatusFailed, Summary: turnErr.Error(),
+				})
 			}
 		}
 	}
@@ -1374,6 +1415,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 		return ports.ChatCompactionResult{}, errors.New("ACP session is not open")
 	}
 	before := c.contextTokens
+	window := c.contextWindow
 	id := uuid.NewString()
 	cycle := c.detachProviderCycleLocked()
 	c.activeTurn = id
@@ -1400,6 +1442,12 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 		c.settleEndedCycle(cycle)
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id})
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventControllerState, ControllerState: ports.ChatControllerBusy})
+		// The row says the compaction is under way; settling the turn settles
+		// the same row with what was reclaimed, or why it could not be.
+		c.emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: id, ProviderItemID: c.compactionItemID(id),
+			ActivityStatus: domain.ActivityStatusRunning, Detail: compactionFigures(before, 0, window),
+		})
 	}
 	if cycle == nil {
 		start()
@@ -1441,6 +1489,14 @@ func (c *conversation) settleCompaction(turnID string) {
 	c.compactionSummary = ""
 	c.compactionFailure = ""
 	c.compactedTurn = turnID
+	if reported := c.compactionReport; reported != nil {
+		// The agent's own figures, when it gave them, beat the bracket.
+		after = reported.TokensAfter
+		if reported.TokensBefore > 0 {
+			before = reported.TokensBefore
+		}
+	}
+	c.compactionReport = nil
 	c.mu.Unlock()
 
 	if before > after && after > 0 {
@@ -1449,6 +1505,221 @@ func (c *conversation) settleCompaction(turnID string) {
 		summary = "Compacted the conversation history"
 	}
 
+	c.emit(ports.ChatEvent{
+		Kind:           ports.ChatEventCompacted,
+		ProviderTurnID: turnID,
+		ProviderItemID: c.compactionItemID(turnID),
+		Summary:        summary,
+		Detail:         compactionFigures(before, after, window),
+	})
+}
+
+// compactionItemID names the row of AO's own compaction turn. It is derived
+// from the turn so a controller that reattaches to a running compaction
+// settles the row the first one opened.
+func (c *conversation) compactionItemID(turnID string) string {
+	return c.providerItemID("compaction:" + turnID)
+}
+
+// providerCompaction is a compaction the agent started inside a turn.
+type providerCompaction struct {
+	turnID string
+	itemID string
+	before int64
+	// finished is set when the agent said it finished without saying what it
+	// freed. Claude reports its result just before the boundary that carries
+	// its figures. The row settles on those figures, or on the next token
+	// report, the agent's next output or the turn's end, whichever comes first.
+	finished bool
+	// usageAtFinish is usageReports when it finished.
+	usageAtFinish int
+}
+
+// CompactionReport is one step of a compaction the agent reported.
+type CompactionReport struct {
+	// Status is "started", "completed" or "failed".
+	Status string
+	// TokensBefore and TokensAfter are the agent's own figures, when it gives
+	// them. Without them the row brackets the compaction from the token reports
+	// either side of it.
+	TokensBefore int64
+	TokensAfter  int64
+	// Reason is why a failed compaction gave up.
+	Reason string
+}
+
+// trackCompactionStatus follows the compaction status an agent reports in
+// `_meta`: OpenCode as "opencode/compaction", Claude (patched by AO's ACP
+// runtime build) as "ao/compaction", both {status, error: {message}}. Claude's
+// also sends a second "completed" with tokensBefore/tokensAfter, its own
+// figures, from the compaction's boundary.
+func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any, emit func(ports.ChatEvent)) {
+	compaction := nestedMap(meta, "ao/compaction")
+	if compaction == nil {
+		compaction = nestedMap(meta, "opencode/compaction")
+	}
+	if compaction == nil {
+		return
+	}
+	report := CompactionReport{}
+	if before, ok := compaction["tokensBefore"].(float64); ok && before > 0 {
+		report.TokensBefore = int64(before)
+	}
+	if after, ok := compaction["tokensAfter"].(float64); ok && after > 0 {
+		report.TokensAfter = int64(after)
+	}
+	switch status, _ := compaction["status"].(string); status {
+	case "started", "completed":
+		report.Status = status
+	case "failed":
+		report.Status = status
+		report.Reason, _ = nestedMap(compaction, "error")["message"].(string)
+	default:
+		// Only the three statuses above are sent. Leave the recorded outcome
+		// alone rather than guess what a new one means.
+		return
+	}
+	c.reportCompaction(turnID, report, emit)
+}
+
+// reportCompaction applies one step of a compaction the agent reported.
+//
+// On AO's own compaction turn it only records a failure: OpenCode ends a failed
+// compaction with a normal end_turn, so the status is the only sign that the
+// history was left as it was. Inside any other turn the agent compacted on its
+// own, and the steps drive a row that runs and then settles in place.
+func (c *conversation) reportCompaction(turnID string, report CompactionReport, emit func(ports.ChatEvent)) {
+	failure := ""
+	if report.Status == "failed" {
+		if failure = strings.TrimSpace(report.Reason); failure == "" {
+			failure = "Compaction failed"
+		}
+	}
+	hasFigures := report.Status == "completed" && report.TokensAfter > 0
+	replaying := c.historyReplayActive()
+	c.mu.Lock()
+	if c.compactingTurnID == turnID {
+		c.compactionFailure = failure
+		if hasFigures {
+			c.compactionReport = &report
+		}
+		c.mu.Unlock()
+		return
+	}
+	if replaying {
+		// The live run already stored this compaction's row.
+		c.mu.Unlock()
+		return
+	}
+	open := c.providerCompaction
+	if open != nil && open.turnID != turnID {
+		open = nil
+	}
+	switch {
+	case report.Status == "started":
+		if open != nil {
+			// Claude repeats the status while it works.
+			c.mu.Unlock()
+			return
+		}
+		c.providerCompactions++
+		open = &providerCompaction{
+			turnID: turnID,
+			itemID: c.providerItemID(fmt.Sprintf("compaction:%s:%d", turnID, c.providerCompactions)),
+			before: c.contextTokens,
+		}
+		if report.TokensBefore > 0 {
+			open.before = report.TokensBefore
+		}
+		c.providerCompaction = open
+		c.settledCompaction = nil
+		window := c.contextWindow
+		c.mu.Unlock()
+		emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
+			ActivityStatus: domain.ActivityStatusRunning, Detail: compactionFigures(open.before, 0, window),
+		})
+		return
+	case report.Status == "completed" && !hasFigures && open != nil && !(c.contextTokens > 0 && c.contextTokens < open.before):
+		// Done, but the context figure has not dropped yet: wait for what it
+		// freed rather than settle "freed nothing". One that already dropped
+		// (the agent reported it first) settles below.
+		if !open.finished {
+			open.finished = true
+			open.usageAtFinish = c.usageReports
+		}
+		if report.TokensBefore > 0 {
+			open.before = report.TokensBefore
+		}
+		c.mu.Unlock()
+		return
+	}
+	c.providerCompaction = nil
+	if open == nil && hasFigures && c.settledCompaction != nil && c.settledCompaction.turnID == turnID {
+		// The figures for the row that just settled without them.
+		open = c.settledCompaction
+	}
+	if open == nil {
+		// No start was seen: an agent that reports only the outcome, or a
+		// reattach mid-compaction. The outcome still gets a row of its own.
+		c.providerCompactions++
+		open = &providerCompaction{
+			turnID: turnID,
+			itemID: c.providerItemID(fmt.Sprintf("compaction:%s:%d", turnID, c.providerCompactions)),
+		}
+	}
+	c.settledCompaction = nil
+	before, after, window := open.before, c.contextTokens, c.contextWindow
+	if report.TokensBefore > 0 {
+		before = report.TokensBefore
+	}
+	if report.TokensAfter > 0 {
+		after = report.TokensAfter
+	}
+	c.mu.Unlock()
+	if report.Status == "failed" {
+		emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
+			ActivityStatus: domain.ActivityStatusFailed, Summary: failure,
+			Detail: compactionFigures(before, 0, window),
+		})
+		return
+	}
+	emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
+		Summary: compactionSummary(before, after),
+		Detail:  compactionFigures(before, after, window),
+	})
+}
+
+// settleFinishedCompaction settles a compaction that finished without saying
+// what it freed, once a newer context figure arrives or the agent moves on
+// without one. A compaction still under way is left alone.
+func (c *conversation) settleFinishedCompaction(emit func(ports.ChatEvent)) {
+	c.mu.Lock()
+	open := c.providerCompaction
+	if open == nil || !open.finished {
+		c.mu.Unlock()
+		return
+	}
+	c.providerCompaction = nil
+	after, window := c.contextTokens, c.contextWindow
+	if c.usageReports == open.usageAtFinish {
+		// Nothing newer than the finish: the figure is from before it.
+		after = 0
+		c.settledCompaction = open
+	}
+	c.mu.Unlock()
+	emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderTurnID: open.turnID, ProviderItemID: open.itemID,
+		Summary: compactionSummary(open.before, after),
+		Detail:  compactionFigures(open.before, after, window),
+	})
+}
+
+// compactionFigures is what a compaction reclaimed, as far as the token reports
+// either side of it show. Zero means unknown and is left out.
+func compactionFigures(before, after, window int64) []byte {
 	detail := map[string]any{}
 	if before > 0 {
 		detail["tokensBefore"] = before
@@ -1462,22 +1733,17 @@ func (c *conversation) settleCompaction(turnID string) {
 	if window > 0 {
 		detail["contextWindow"] = window
 	}
-	var detailBytes []byte
-	if encoded, err := json.Marshal(detail); err == nil {
-		detailBytes = encoded
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		return nil
 	}
-
-	c.emit(ports.ChatEvent{
-		Kind:           ports.ChatEventCompacted,
-		ProviderTurnID: turnID,
-		Summary:        summary,
-		Detail:         detailBytes,
-	})
+	return encoded
 }
 
 func (c *conversation) trackContext(used, window int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.usageReports++
 	c.contextTokens = used
 	if window > 0 {
 		c.contextWindow = window

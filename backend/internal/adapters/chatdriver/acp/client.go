@@ -759,6 +759,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		update.Plan != nil
 	if providerOutputResumed {
 		c.completeProviderFailure(turnID, emit)
+		c.settleFinishedCompaction(emit)
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
@@ -766,6 +767,12 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			// The agent's note that it took a steer prompt; the "↳ Steered" mark
 			// already says so.
 			break
+		}
+		if turnID != "" && c.compactionMessage != nil && parentToolUseID(update.AgentMessageChunk.Meta) == "" {
+			if report, ok := c.compactionMessage(contentText(update.AgentMessageChunk.Content), update.AgentMessageChunk.Meta); ok {
+				c.reportCompaction(turnID, report, emit)
+				break
+			}
 		}
 		c.mu.Lock()
 		isCompacting := c.compactingTurnID != "" && c.compactingTurnID == turnID
@@ -869,7 +876,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 					emit(event)
 				}
 			}
-			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
+			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta, emit)
 		}
 	case update.ConfigOptionUpdate != nil:
 		// The update is a complete replacement, not a delta. Model changes can
@@ -882,6 +889,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		c.replaceAvailableCommands(update.AvailableCommandsUpdate.AvailableCommands)
 	case update.UsageUpdate != nil:
 		c.trackContext(int64(update.UsageUpdate.Used), int64(update.UsageUpdate.Size))
+		c.settleFinishedCompaction(emit)
 		usage := &ports.ChatUsage{
 			ContextUsed: int64(update.UsageUpdate.Used), ContextWindow: int64(update.UsageUpdate.Size),
 			ContextKnown: true,
@@ -1372,34 +1380,6 @@ func (c *conversation) sessionFailureEvent(
 	c.providerFailure = &event
 	c.mu.Unlock()
 	return event, true
-}
-
-// trackCompactionStatus records the outcome OpenCode reports for a /compact turn.
-// OpenCode ends a failed compaction with a normal end_turn, so this update is the
-// only sign that the history was left as it was.
-func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any) {
-	compaction := nestedMap(meta, "opencode/compaction")
-	if compaction == nil {
-		return
-	}
-	failure := ""
-	switch status, _ := compaction["status"].(string); status {
-	case "started", "completed":
-	case "failed":
-		failure, _ = nestedMap(compaction, "error")["message"].(string)
-		if failure = strings.TrimSpace(failure); failure == "" {
-			failure = "Compaction failed"
-		}
-	default:
-		// OpenCode only sends the three statuses above. Leave the recorded
-		// outcome alone rather than guess what a new one means.
-		return
-	}
-	c.mu.Lock()
-	if c.compactingTurnID == turnID {
-		c.compactionFailure = failure
-	}
-	c.mu.Unlock()
 }
 
 func sessionFailure(meta map[string]any) map[string]any {

@@ -115,10 +115,16 @@ type conversation struct {
 	// its own provider turn, so the figure captured at that turn's start is the
 	// context position the compaction is about to shrink.
 	contextAtTurnStart int64
-	// compactedTurn is the last turn a compaction was reported for, so a provider
-	// build that emits both the notification and the item reports one compaction
-	// once.
+	// compactedTurn and compactedItem are the last compaction reported settled,
+	// so a provider build that emits both the notification and the item reports
+	// one compaction once.
 	compactedTurn string
+	compactedItem string
+	// compactingItem is the compaction item under way, and compactingFrom the
+	// context position it started from: the "before" of a compaction the agent
+	// runs inside a longer turn.
+	compactingItem string
+	compactingFrom int64
 
 	pumpDone     chan struct{}
 	eventsMu     sync.RWMutex
@@ -286,6 +292,10 @@ func (c *conversation) pump() {
 				if c.activeTurn == ev.ProviderTurnID {
 					c.activeTurn = ""
 				}
+				// A compaction still under way ended with its turn; the turn's
+				// settlement settles its row.
+				c.compactingItem = ""
+				c.compactingFrom = 0
 				c.mu.Unlock()
 			}
 			if ev.Kind == ports.ChatEventCompacted {
@@ -699,14 +709,42 @@ func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bo
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if ev.ProviderTurnID != "" && ev.ProviderTurnID == c.compactedTurn {
+	if ev.ActivityStatus == domain.ActivityStatusRunning {
+		if ev.ProviderItemID != "" && ev.ProviderItemID == c.compactingItem {
+			return ports.ChatEvent{}, false
+		}
+		c.compactingItem = ev.ProviderItemID
+		c.compactingFrom = c.contextTokens
+		ev.Detail = compactionFigures(c.compactingFrom, 0, c.contextWindow)
+		return ev, true
+	}
+	if ev.ProviderItemID == "" {
+		// The deprecated notification names no item: it settles the one under way.
+		ev.ProviderItemID = c.compactingItem
+	}
+	if ev.ProviderTurnID != "" && ev.ProviderTurnID == c.compactedTurn &&
+		(ev.ProviderItemID == "" || c.compactedItem == "" || ev.ProviderItemID == c.compactedItem) {
 		return ports.ChatEvent{}, false
 	}
 	c.compactedTurn = ev.ProviderTurnID
+	c.compactedItem = ev.ProviderItemID
 
 	before, after, window := c.contextAtTurnStart, c.contextTokens, c.contextWindow
+	if c.compactingFrom > 0 && (ev.ProviderItemID == "" || ev.ProviderItemID == c.compactingItem) {
+		before = c.compactingFrom
+	}
+	if ev.ProviderItemID == c.compactingItem {
+		c.compactingItem = ""
+		c.compactingFrom = 0
+	}
 	ev.Summary = compactionSummary(before, after)
+	ev.Detail = compactionFigures(before, after, window)
+	return ev, true
+}
 
+// compactionFigures is what a compaction reclaimed, as far as the token reports
+// either side of it show. Zero means unknown and is left out.
+func compactionFigures(before, after, window int64) []byte {
 	detail := map[string]any{}
 	if before > 0 {
 		detail["tokensBefore"] = before
@@ -720,10 +758,11 @@ func (c *conversation) settleCompaction(ev ports.ChatEvent) (ports.ChatEvent, bo
 	if window > 0 {
 		detail["contextWindow"] = window
 	}
-	if encoded, err := json.Marshal(detail); err == nil {
-		ev.Detail = encoded
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		return nil
 	}
-	return ev, true
+	return encoded
 }
 
 // compactionSummary labels the reclaim for a timeline row.

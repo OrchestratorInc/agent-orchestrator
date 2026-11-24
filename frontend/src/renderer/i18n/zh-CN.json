@@ -5363,5 +5363,10 @@
 	"backgroundTasks.stale": "已过期",
 	"backgroundTasks.kind.shell": "Shell",
 	"backgroundTasks.kind.other": "后台任务",
-	"backgroundTasks.state.failed": "失败"
+	"backgroundTasks.state.failed": "失败",
+	"chat.compaction.running": "正在压缩对话",
+	"chat.compaction.done": "已压缩对话",
+	"chat.compaction.failed": "无法压缩对话",
+	"chat.compaction.stopped": "已停止",
+	"chat.compaction.full": "已用 {{percent}}%"
 }
