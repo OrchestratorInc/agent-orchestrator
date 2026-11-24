@@ -31,6 +31,7 @@ export interface AppStateMarker {
 	installSource: string;
 	migration?: MigrationState;
 	firstRunProjectPrompt?: "pending" | "seen";
+	cliLinkFirstLaunch?: "pending" | "done";
 	/**
 	 * Keys this writer does not own (for example the onboarding answer
 	 * acq_channel_self_reported) are carried through every launch write.
@@ -139,6 +140,7 @@ export async function writeAppStateMarker(opts: WriteAppStateOptions): Promise<v
 		// Preserve a migration block written before this launch write.
 		...(existing?.migration !== undefined ? { migration: existing.migration } : {}),
 		firstRunProjectPrompt: existing?.firstRunProjectPrompt ?? (existing ? "seen" : "pending"),
+		cliLinkFirstLaunch: existing?.cliLinkFirstLaunch ?? (existing ? "done" : "pending"),
 	};
 
 	await atomicWriteMarker(opts.stateDir, marker);
@@ -191,6 +193,13 @@ export async function claimFirstRunExperimentExposure(stateDir: string): Promise
 		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
 		throw error;
 	}
+}
+
+export async function claimCliLinkFirstLaunch(stateDir: string): Promise<boolean> {
+	const existing = await readExisting(path.join(stateDir, APP_STATE_FILE_NAME));
+	if (existing?.cliLinkFirstLaunch !== "pending") return false;
+	await atomicWriteMarker(stateDir, { ...existing, cliLinkFirstLaunch: "done" });
+	return true;
 }
 
 export async function markFirstRunProjectPromptSeen(stateDir: string): Promise<void> {

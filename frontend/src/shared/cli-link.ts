@@ -370,6 +370,15 @@ export async function linkCli(io: CliLinkIo, request: CliLinkRequest): Promise<C
 	return { ok: true, changed: true, linkPath: status.linkPath, targetPath: status.proposedTarget, version: status.proposedVersion };
 }
 
+export async function linkCliOnFirstLaunch(io: CliLinkIo, request: CliLinkRequest, claim: () => Promise<boolean>): Promise<CliLinkResult | null> {
+	if (!cliLinkSupport(request).ok || !(await claim())) return null;
+	const directories = (request.shellPath?.split(":") ?? []).filter((directory) => directory.startsWith("/"));
+	for (const directory of directories) {
+		if (await io.lstat(io.join(directory, CLI_LINK_NAME))) return null;
+	}
+	return directories.length ? linkCli(io, { ...request, confirmReplacement: false }) : null;
+}
+
 export async function unlinkCli(io: CliLinkIo, request: CliLinkRequest): Promise<CliLinkResult> {
 	const view = await inspectCliLink(io, request);
 	if (!view.ok) return view;

@@ -8,6 +8,7 @@ import {
 	CLI_LINK_MARKER_FILE,
 	inspectCliLink,
 	linkCli,
+	linkCliOnFirstLaunch,
 	selectCliLinkDirectory,
 	unlinkCli,
 	type CliLinkIo,
@@ -289,6 +290,33 @@ describe("cli link", () => {
 		expect(await inspectCliLink(nodeCliLinkIo(), request({ appCliPath, linkDirectory: later, dataDir, shellPath })))
 			.toMatchObject({ ok: true, status: { current: { kind: "linked", managed: false } } });
 		expect(await selectCliLinkDirectory(nodeCliLinkIo(), dataDir, shellPath, [linkDirectory, later])).toBe(linkDirectory);
+	});
+
+	it("links on a first launch only when the login shell PATH has no ao", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const other = path.join(root, "other");
+		await executable(other, "ao", "9.9.9");
+		const io = nodeCliLinkIo();
+		const base = request({ appCliPath, linkDirectory, dataDir });
+		const link = path.join(linkDirectory, "ao");
+		let claims = 0;
+		const claim = async () => {
+			claims += 1;
+			return true;
+		};
+
+		expect(await linkCliOnFirstLaunch(io, { ...base, isPackaged: false, shellPath: linkDirectory }, claim)).toBeNull();
+		expect(claims).toBe(0);
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: linkDirectory }, async () => false)).toBeNull();
+		expect(await linkCliOnFirstLaunch(io, base, claim)).toBeNull();
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: `${linkDirectory}:${other}` }, claim)).toBeNull();
+		expect(await lstat(link).catch(() => null)).toBeNull();
+		expect(await readFile(path.join(other, "ao"), "utf8")).toContain("9.9.9");
+
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: linkDirectory }, claim)).toMatchObject({ ok: true, changed: true, linkPath: link });
+		expect(await readlink(link)).toBe(appCliPath);
+		expect(JSON.parse(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE), "utf8"))).toMatchObject({ linkPath: link, targetPath: appCliPath });
 	});
 
 	it("keeps an existing AO managed link in its original directory for repair and unlink", async () => {
