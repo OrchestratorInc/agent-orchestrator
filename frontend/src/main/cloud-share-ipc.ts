@@ -32,6 +32,10 @@ import {
 	CloudShareError,
 	type CloudShareApi,
 	cloudSessionArtifactVersion,
+	type CloudSessionArtifact,
+	type CloudSessionShareFileRef,
+	listCloudSessionArtifacts,
+	readCloudSessionArtifactText,
 	type HostFetch,
 	hostShareFileUrl,
 	inspectHostShareFile,
@@ -129,9 +133,9 @@ async function pageFilesChanged(dataDir: string, sessionId: string, recorded: Re
 	return false;
 }
 
-/** A page's files as they were copied for upload, and what it left out. */
-interface PageFilesTaken {
-	files: PageFileSnapshot[];
+/** A page's files as they were copied for upload (or listed, for a cloud session's page), and what it left out. */
+interface PageFilesTaken<F = PageFileSnapshot> {
+	files: F[];
 	skipped: PageFileSkip[];
 	/** Which file the page names by each included path. */
 	referenced: Map<string, string>;
@@ -143,7 +147,7 @@ interface PageFilesTaken {
  * missing file is; onRefusedVideo gets each one refused for being a video,
  * by its path in the session's artifacts.
  */
-function pageFilesOutcome(page: PageFilesTaken, uploaded: PageFilesOutcome | undefined, onRefusedVideo?: (relativePath: string) => void): CloudSharePageFiles | undefined {
+function pageFilesOutcome(page: PageFilesTaken<unknown>, uploaded: PageFilesOutcome | undefined, onRefusedVideo?: (relativePath: string) => void): CloudSharePageFiles | undefined {
 	if (!uploaded) return undefined;
 	const left = [
 		...uploaded.refusedVideos.map((refused) => [refused, "video"] as const),
@@ -390,18 +394,69 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		};
 	};
 
+	// The files a cloud session's HTML page uses, found in the page as the
+	// session committed it and looked up in the session's artifact list; the
+	// control plane copies them beside the page. Null when the session
+	// committed another version of the page than the one the person was shown;
+	// undefined for a page too large to look in.
+	const findCloudPageFiles = async (file: CloudSessionShareFile & { fingerprint: string }, signal?: AbortSignal): Promise<PageFilesTaken<CloudSessionShareFileRef> | null | undefined> => {
+		const listed = await listCloudSessionArtifacts(deps, file.baseUrl, file, signal);
+		const page = listed.find((artifact) => artifact.path === file.path);
+		if (!page || page.sha256 !== file.fingerprint) return null;
+		if (page.size > MAX_SCANNED_PAGE) return undefined;
+		const html = await readCloudSessionArtifactText(deps, file.baseUrl, { ...file, sha256: file.fingerprint }, signal);
+		if (html === null) return null;
+		const byPath = new Map(listed.map((artifact) => [artifact.path, artifact]));
+		const found = await findPageFiles(file.path, html, async (relative): Promise<CloudSessionArtifact & { relativePath: string }> => {
+			const artifact = byPath.get(relative);
+			if (!artifact) throw new CloudShareError("file_missing", "The file is no longer available.");
+			return { ...artifact, relativePath: relative };
+		});
+		return {
+			files: found.files.map((used) => ({ path: used.path, artifactPath: used.referencedPath })),
+			skipped: [...found.skipped],
+			referenced: new Map(found.files.map((used) => [used.path, used.referencedPath])),
+		};
+	};
+
 	const publishCloudFile = async (file: CloudSessionShareFile): Promise<CloudSharePublishResult> => {
 		if (isUnplayableShareVideo(file.path)) return { status: "unsupported", message: UNPLAYABLE_VIDEO_MESSAGE };
 		if (!(await deps.getToken())) return { status: "signed_out" };
 		if (!file.fingerprint) return { status: "changed", inspection: await inspectCloudFile(file, true) };
+		const sha256 = file.fingerprint;
 		try {
-			// The control plane copies the file inside its bucket in one quick
-			// request, so there is nothing to cancel: stopping the wait could
-			// leave a public link the person was told was cancelled.
-			const result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256: file.fingerprint });
+			// Finding a page's files reads only the session's list and the page.
+			const pageFiles = isSharePage(file.path) ? await findCloudPageFiles({ ...file, fingerprint: sha256 }) : undefined;
+			if (pageFiles === null) return { status: "changed", inspection: await inspectCloudFile(file, true) };
+			// The control plane copies the files inside its bucket, so there is
+			// nothing to cancel: stopping the wait could leave a public link the
+			// person was told was cancelled.
+			let result: Awaited<ReturnType<typeof shareCloudSessionArtifact>>;
+			let unsupported = false;
+			try {
+				result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256, ...(pageFiles ? { files: pageFiles.files } : {}) });
+			} catch (error) {
+				// A control plane that predates a page's files refuses the request
+				// before it does anything: the page is published alone.
+				if (!(pageFiles && error instanceof CloudShareError && error.status === 400 && error.code === "invalid_request")) throw error;
+				unsupported = true;
+				result = await shareCloudSessionArtifact(deps, file.baseUrl, { ...file, sha256 });
+			}
+			if (pageFiles) {
+				for (const missing of result.pageFiles?.missing ?? []) {
+					const relativePath = pageFiles.referenced.get(missing);
+					pageFiles.skipped.push({ reference: missing, reason: "missing", ...(relativePath ? { relativePath } : {}) });
+				}
+			}
+			const outcome = pageFiles ? pageFilesOutcome(pageFiles, {
+				included: result.pageFiles?.included ?? 0,
+				unsupported: unsupported || !result.pageFiles,
+				refusedVideos: result.pageFiles?.refusedVideos ?? [],
+				tooLargeVideos: result.pageFiles?.tooLargeVideos ?? [],
+			}) : undefined;
 			const key = await cloudRecordKey(deps.records, file.baseUrl, file);
-			await deps.records.set(key, result.share.id, file.fingerprint, artifactShareUrl(result.share), shareAccess(result.share));
-			return { status: "published", share: result.share, replaced: result.replaced };
+			await deps.records.set(key, result.share.id, sha256, artifactShareUrl(result.share), shareAccess(result.share));
+			return { status: "published", share: result.share, replaced: result.replaced, ...(outcome ? { pageFiles: outcome } : {}) };
 		} catch (error) {
 			// Another version was committed since: offer the newest.
 			if (error instanceof CloudShareError && error.code === "artifact_share_source_changed") {
