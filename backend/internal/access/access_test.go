@@ -273,7 +273,11 @@ func TestCreateCountsNameCharactersAndMarksAFailedSave(t *testing.T) {
 	if err := os.WriteFile(filepath.Dir(path), []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := registry.Create("ci", grant, testNow); !errors.Is(err, ErrNotSaved) {
+	listed := len(registry.List())
+	if _, _, err := registry.Create("ci", grant, testNow.Add(27*time.Hour)); !errors.Is(err, ErrNotSaved) {
 		t.Errorf("a token that cannot be written: %v, want ErrNotSaved", err)
+	}
+	if len(registry.List()) != listed {
+		t.Errorf("a create that could not be saved must leave the list as it was: %d tokens, want %d", len(registry.List()), listed)
 	}
 }

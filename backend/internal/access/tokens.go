@@ -153,8 +153,10 @@ func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, strin
 	if active >= maxTokens {
 		return Token{}, "", ErrTooManyTokens
 	}
+	var ended []Token
 	for id, expired := range r.tokens {
 		if !expired.Active(now) {
+			ended = append(ended, expired)
 			delete(r.tokens, id)
 			delete(r.byHash, expired.TokenHash)
 		}
@@ -164,6 +166,10 @@ func (r *Registry) Create(name string, grant Grant, now time.Time) (Token, strin
 	if err := r.persistLocked(); err != nil {
 		delete(r.tokens, token.ID)
 		delete(r.byHash, token.TokenHash)
+		for _, expired := range ended {
+			r.tokens[expired.ID] = expired
+			r.byHash[expired.TokenHash] = expired.ID
+		}
 		return Token{}, "", fmt.Errorf("%w: %w", ErrNotSaved, err)
 	}
 	return token, value, nil

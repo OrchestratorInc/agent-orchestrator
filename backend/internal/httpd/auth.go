@@ -384,9 +384,9 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				conn.owner.mu.Unlock()
 			}
 			if authenticated {
-				lock.reset(src)
 				state.noteUse(credential, lock.now())
 				if credential.Kind != requestscope.CredentialAgent {
+					lock.reset(src)
 					connected.report(remoteSrc)
 					maybeSetPreviewAuthCookie(w, r, tok)
 				}

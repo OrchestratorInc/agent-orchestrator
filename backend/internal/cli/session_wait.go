@@ -26,7 +26,10 @@ type sessionWaitOptions struct {
 	after             map[string]time.Time
 }
 
-const startupGrace = 2 * time.Minute
+const (
+	startupGrace = 2 * time.Minute
+	restartGrace = 2 * time.Minute
+)
 
 func settledState(session sessionDTO) string {
 	switch {
@@ -98,7 +101,8 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 		ids[i] = id
 	}
 	started := c.deps.Now()
-	idleSince, worked, polled := map[string]time.Time{}, map[string]bool{}, map[string]bool{}
+	idleSince, failingSince := map[string]time.Time{}, map[string]time.Time{}
+	worked, polled := map[string]bool{}, map[string]bool{}
 	waitCtx, cancel := context.WithTimeout(cmd.Context(), opts.timeout)
 	defer cancel()
 	emit := func(result sessionWaitResult) error {
@@ -132,7 +136,13 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 	passing := func(id string, err error) bool {
 		var down daemonUnavailableError
 		var failed apiResponseError
-		return polled[id] && (errors.As(err, &down) || errors.As(err, &failed) && failed.StatusCode >= http.StatusInternalServerError)
+		if !polled[id] || !errors.As(err, &down) && (!errors.As(err, &failed) || failed.StatusCode < http.StatusInternalServerError) {
+			return false
+		}
+		if failingSince[id].IsZero() {
+			failingSince[id] = c.deps.Now()
+		}
+		return c.deps.Now().Sub(failingSince[id]) < restartGrace
 	}
 	for {
 		for _, id := range ids {
@@ -144,6 +154,7 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 				return err
 			}
 			polled[id] = true
+			delete(failingSince, id)
 			state := settledState(res.Session)
 			before, sent := opts.after[id]
 			moved := sent && res.Session.Activity.LastActivityAt.After(before)
@@ -153,7 +164,7 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 			if _, seen := idleSince[id]; state == "idle" && !seen {
 				idleSince[id] = c.deps.Now()
 			}
-			if state == "idle" && !moved && !worked[id] && c.deps.Now().Sub(idleSince[id]) < startupGrace {
+			if state == "idle" && !sent && !worked[id] && c.deps.Now().Sub(idleSince[id]) < startupGrace {
 				var history sessionHistoryResponse
 				if err := get(id, "/history?limit=1", &history); err != nil {
 					if passing(id, err) {

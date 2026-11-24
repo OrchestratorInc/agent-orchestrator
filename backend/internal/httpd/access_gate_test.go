@@ -399,6 +399,21 @@ func TestRemoteListenerAcceptsAnAgentTokenAndKeepsItGated(t *testing.T) {
 	if w := call(http.MethodPost, "/api/v1/access/tokens", "secret12"); w.Code != 404 {
 		t.Errorf("token management over the remote listener: status %d, want 404", w.Code)
 	}
+	guess := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/access/whoami", http.NoBody)
+		req.RemoteAddr = "192.168.1.77:4444"
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		lan.dispatch().ServeHTTP(w, req)
+		return w
+	}
+	for range 8 {
+		guess("wrong-password")
+		guess(secret)
+	}
+	if w := guess("wrong-password"); !strings.Contains(w.Body.String(), "LOCKED_OUT") {
+		t.Errorf("a valid agent token must not clear the count of failed attempts from its address, or its holder can guess the pairing password without limit: %d %s", w.Code, w.Body)
+	}
 	if _, _, err := registry.Revoke("remote-bot"); err != nil {
 		t.Fatal(err)
 	}

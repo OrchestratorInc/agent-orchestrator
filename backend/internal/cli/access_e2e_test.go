@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +143,25 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 	}
 }
 
+func TestTriageSnapshotPresentsTheAgentToken(t *testing.T) {
+	var seen string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("Authorization")
+		_, _ = io.WriteString(w, `{"sessions":[]}`)
+	}))
+	t.Cleanup(server.Close)
+	address, _ := url.Parse(server.URL)
+	port, _ := strconv.Atoi(address.Port())
+	t.Setenv("AO_SESSION_ID", "")
+	t.Setenv(agentTokenEnv, access.TokenPrefix+"feed")
+	if err := (&commandContext{deps: Deps{}.withDefaults()}).triageSessions(context.Background(), port, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "Bearer "+access.TokenPrefix+"feed" {
+		t.Errorf("the snapshot read sessions with Authorization %q: every request to the daemon must present the agent token", seen)
+	}
+}
+
 func TestActionRequestSplitsInput(t *testing.T) {
 	spawn := accessActionDTO{ID: "session.send", Method: http.MethodPost, Path: "/api/v1/sessions/{sessionId}/send",
 		Parameters: []map[string]any{{"name": "sessionId", "in": "path"}}, Body: map[string]any{"type": "object"}}
@@ -171,7 +193,7 @@ func TestActionRequestSplitsInput(t *testing.T) {
 func TestSessionWaitExitCodes(t *testing.T) {
 	cfg := setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "")
-	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "api-4": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}, "stuck": {"idle"}, "failed-start": {"idle"}, "silent": {"idle"}, "no-record": {"active", "idle"}, "flaky": {"active", "active", "idle"}}
+	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "api-4": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}, "stuck": {"idle"}, "failed-start": {"idle"}, "silent": {"idle"}, "no-record": {"active", "idle"}, "flaky": {"active", "active", "idle"}, "down": {"active"}}
 	polls := map[string]int{}
 	created := time.Date(2026, 11, 23, 11, 59, 50, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +209,11 @@ func TestSessionWaitExitCodes(t *testing.T) {
 		sequence, ok := states[id]
 		if !ok {
 			http.NotFound(w, r)
+			return
+		}
+		if id == "down" && polls[id] >= 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":"internal","code":"STORE_FAILED","message":"the store failed"}`)
 			return
 		}
 		if id == "flaky" && polls[id] == 1 {
@@ -270,6 +297,9 @@ func TestSessionWaitExitCodes(t *testing.T) {
 	}
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "flaky"); err != nil || !strings.Contains(out, "flaky: idle") {
 		t.Errorf("one failed check in the middle of a wait, such as a daemon restart, must not end the wait: %q %v", out, err)
+	}
+	if _, _, err = executeCLI(t, deps(), "session", "wait", "down", "--timeout", "30m"); ExitCode(err) != 1 || !strings.Contains(err.Error(), "STORE_FAILED") {
+		t.Errorf("a daemon that keeps failing must end the wait with its error, not read as a session still working: exit %d, %v", ExitCode(err), err)
 	}
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "failed-start"); ExitCode(err) != 1 || !strings.Contains(out, "failed-start: failed") {
 		t.Errorf("a failed start that the daemon also marked terminated: exit %d, out %q, want exit 1 and failed", ExitCode(err), out)
