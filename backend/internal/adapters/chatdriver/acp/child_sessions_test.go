@@ -481,40 +481,80 @@ func TestChildSessionFoundStreamingWhileItsLaunchIsLookedUpIsNotLoaded(t *testin
 	}
 }
 
+// heldAdoption holds the first launch lookup, an adoption's, until release,
+// and fails it when fail is set. lookedAgain closes on the next lookup but
+// one: the finder's second, which it makes only when it found the adoption
+// under way and kept looking.
+type heldAdoption struct {
+	adopting, lookedAgain chan struct{}
+	release               func()
+}
+
+func holdAdoptionLookup(t *testing.T, sessions *ChildSessions, fail bool) *heldAdoption {
+	t.Helper()
+	released := make(chan struct{})
+	h := &heldAdoption{
+		adopting: make(chan struct{}), lookedAgain: make(chan struct{}),
+		release: sync.OnceFunc(func() { close(released) }),
+	}
+	t.Cleanup(h.release)
+	lookup := sessions.LaunchOf
+	var calls atomic.Int32
+	sessions.LaunchOf = func(env map[string]string, child string) (string, string, bool) {
+		switch calls.Add(1) {
+		case 1:
+			close(h.adopting)
+			<-released
+			if fail {
+				return "", "", false
+			}
+		case 3:
+			close(h.lookedAgain)
+		}
+		return lookup(env, child)
+	}
+	return h
+}
+
+// findWhileAdopting runs the finder for the launch with the adoption held,
+// releases the adoption once the finder has looked twice, and returns when
+// the finder is done.
+func (h *heldAdoption) findWhileAdopting(t *testing.T, conv *conversation) {
+	t.Helper()
+	<-h.adopting
+	found := make(chan struct{})
+	go func() {
+		defer close(found)
+		conv.findChildSession(childTestParent, "call-launch", "call-launch")
+	}()
+	select {
+	case <-h.lookedAgain:
+	case <-found:
+		t.Fatal("the finder stopped looking while the adoption was under way")
+	case <-time.After(3 * time.Second):
+		t.Fatal("the finder did not look again while the adoption was under way")
+	}
+	h.release()
+	select {
+	case <-found:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the finder did not stop once the adoption settled")
+	}
+}
+
 // The finder can also look the child up while an adoption of it is under
 // way, before the adoption files it: it leaves the child to the adoption.
 func TestChildSessionAdoptionUnderWayIsNotLoadedByTheFinder(t *testing.T) {
 	records := newChildSessionRecords()
 	records.record(childTestParent, "call-launch", "child-1")
 	sessions := records.sessions()
-	lookup := sessions.LaunchOf
-	var calls atomic.Int32
-	adopting, finderLooked, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	sessions.LaunchOf = func(env map[string]string, child string) (string, string, bool) {
-		switch calls.Add(1) {
-		case 1:
-			// The adoption's lookup, held until the finder has looked too.
-			close(adopting)
-			<-release
-		case 2:
-			close(finderLooked)
-		}
-		return lookup(env, child)
-	}
+	held := holdAdoptionLookup(t, sessions, false)
 	agent, conv, _ := startWithChildSessions(t, sessions)
 	childSessionUpdate(t, agent, "child-1", childSays("live"))
-	<-adopting
-	found := make(chan struct{})
-	go func() {
-		defer close(found)
-		conv.findChildSession(childTestParent, "call-launch", "call-launch")
-	}()
-	<-finderLooked
-	close(release)
+	held.findWhileAdopting(t, conv)
 	if said := nextChildActivity(t, conv); said.Text != "live" {
 		t.Fatalf("live message = %#v", said)
 	}
-	<-found
 	agent.mu.Lock()
 	defer agent.mu.Unlock()
 	if agent.loadCalls != 0 {
@@ -529,32 +569,10 @@ func TestChildSessionAdoptionThatFailsLeavesTheChildToTheFinder(t *testing.T) {
 	records := newChildSessionRecords()
 	records.record(childTestParent, "call-launch", "child-1")
 	sessions := records.sessions()
-	lookup := sessions.LaunchOf
-	var calls atomic.Int32
-	adopting, finderLooked, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	sessions.LaunchOf = func(env map[string]string, child string) (string, string, bool) {
-		switch calls.Add(1) {
-		case 1:
-			// The adoption's lookup, which finds no record.
-			close(adopting)
-			<-release
-			return "", "", false
-		case 2:
-			close(finderLooked)
-		}
-		return lookup(env, child)
-	}
+	held := holdAdoptionLookup(t, sessions, true)
 	agent, conv, _ := startWithChildSessions(t, sessions)
 	childSessionUpdate(t, agent, "child-1", childSays("lost"))
-	<-adopting
-	found := make(chan struct{})
-	go func() {
-		defer close(found)
-		conv.findChildSession(childTestParent, "call-launch", "call-launch")
-	}()
-	<-finderLooked
-	close(release)
-	<-found
+	held.findWhileAdopting(t, conv)
 	childSessionUpdate(t, agent, "child-1", childRead("call-read"))
 	read := nextChildActivity(t, conv)
 	if read.ProviderItemID != conv.childItemID("child-1", "call-read") ||
