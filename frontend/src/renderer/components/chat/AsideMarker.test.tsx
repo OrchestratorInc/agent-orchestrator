@@ -221,6 +221,8 @@ describe("quoted passages", () => {
 
 	it("keeps an excerpt to the message's first line", () => {
 		expect(messageExcerpt("\n  First line here\nsecond")).toBe("First line here");
+		// An answer that starts with a code block: its first line of code, not the fence.
+		expect(messageExcerpt("```python\ndef retry_delay(attempt):\n    return 2\n```")).toBe("def retry_delay(attempt):");
 		expect(messageExcerpt("x".repeat(250))).toHaveLength(200);
 	});
 });

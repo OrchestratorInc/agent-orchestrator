@@ -215,9 +215,13 @@ export function commentDraftForSelection(range: Range): CommentDraft | undefined
 	return { anchor: { sequence, kind }, quote, excerpt: messageExcerpt(body.textContent ?? ""), ...(authorName ? { authorName } : {}) };
 }
 
-/** The first line of a message's text, to show what a comment is about. */
+/**
+ * The first line of a message's text, to show what a comment is about. A
+ * markdown code fence ("```python") is markup, not a line: an answer that
+ * starts with code shows its first line of code.
+ */
 export function messageExcerpt(text: string): string {
-	const line = text.split(/\r?\n/).find((candidate) => candidate.trim() !== "")?.trim() ?? "";
+	const line = text.split(/\r?\n/).find((candidate) => candidate.trim() !== "" && !/^\s*(```|~~~)/.test(candidate))?.trim() ?? "";
 	return line.length > 200 ? `${line.slice(0, 199).trimEnd()}…` : line;
 }
 
