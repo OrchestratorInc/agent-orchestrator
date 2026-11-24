@@ -240,6 +240,48 @@ function ReviewPRBlockView({
 		}
 	};
 
+	const toolbar = (
+		<>
+			<ReviewersMenu actions={cardActions} block={block} />
+			<PRActionsMenu
+				block={block}
+				onOpenInBrowser={actions.onOpenInBrowser}
+				onSendAll={actions.onSendAll && unsent.length > 0 ? () => void sendAll() : undefined}
+				sendAllError={sendAllError}
+				sendingAll={sendingAll}
+			/>
+		</>
+	);
+	// The PR's threads could not be read: say so above whatever the summary already gave,
+	// which stays while Retry runs.
+	const detailsFailedRow = detailsFailed ? (
+		<div className={cn("flex min-w-0 items-center justify-between gap-2 px-3 py-2", comments.length > 0 ? "border-b border-border/60" : "border-t border-border/60")}>
+			<p className={cn(inspectorEmptyClass, "m-0")} role="status">{t("pr.description.unavailable")}</p>
+			<Button onClick={retryDetails} size="xs" variant="quiet">{t("inspector.review.retry")}</Button>
+		</div>
+	) : null;
+
+	// Nothing to read: one row, the PR and its menus, with no list to open.
+	if (comments.length === 0) {
+		return (
+			<article className="min-w-0 rounded-lg border border-border/60" data-testid="review-pr-block">
+				<div className="flex w-full min-w-0 select-none items-center gap-2 py-2.5 pr-2 pl-3" data-testid="review-pr-row">
+					{/* Holds the chevron's place, so titles line up with the cards that open. */}
+					<span aria-hidden="true" className="size-icon-xs shrink-0" />
+					<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+						<span className="break-words text-sm-md font-semibold leading-snug text-foreground">{block.title}</span>
+						<span className="text-micro tabular-nums text-passive">
+							{meta}
+							{detailsFailed ? null : ` · ${t("inspector.review.noComments")}`}
+						</span>
+					</span>
+					<span className="flex shrink-0 items-center gap-1">{toolbar}</span>
+				</div>
+				{detailsFailedRow}
+			</article>
+		);
+	}
+
 	return (
 		<article className="min-w-0 rounded-lg border border-border/60" data-testid="review-pr-block">
 			<Pressable
@@ -255,7 +297,7 @@ function ReviewPRBlockView({
 					<span className="text-micro tabular-nums text-passive transition-colors group-hover:text-muted-foreground">{meta}</span>
 				</span>
 				{/* Open, the tabs carry the counts; folded, the header says what is waiting. */}
-				{!open && comments.length > 0 ? (
+				{!open ? (
 					<span className={cn("mt-0.5 shrink-0 whitespace-nowrap text-2xs", openComments.length > 0 ? "font-medium text-status-in-review" : "text-passive")}>
 						{openComments.length > 0 ? t("inspector.review.openCount", { count: openComments.length }) : t("inspector.review.allResolved")}
 					</span>
@@ -268,70 +310,50 @@ function ReviewPRBlockView({
 					value={view}
 				>
 					<div className="flex min-w-0 select-none items-center gap-1 border-b border-border/60 pr-2 pb-1.5 pl-3">
-						{comments.length > 0 ? (
-							<TabsPrimitive.List aria-label={t("inspector.review.comments")} className="flex items-center gap-0.5">
-								<TabsPrimitive.Trigger asChild value="open">
-									<Button data-active={view === "open"} size="xs" variant="quiet">
-										{t("inspector.review.tabOpen")}
-										<span className="tabular-nums text-passive">{openComments.length}</span>
-									</Button>
-								</TabsPrimitive.Trigger>
-								<TabsPrimitive.Trigger asChild value="resolved">
-									<Button data-active={view === "resolved"} size="xs" variant="quiet">
-										{t("inspector.review.tabResolved")}
-										<span className="tabular-nums text-passive">{resolvedComments.length}</span>
-									</Button>
-								</TabsPrimitive.Trigger>
-							</TabsPrimitive.List>
-						) : null}
+						<TabsPrimitive.List aria-label={t("inspector.review.comments")} className="flex items-center gap-0.5">
+							<TabsPrimitive.Trigger asChild value="open">
+								<Button data-active={view === "open"} size="xs" variant="quiet">
+									{t("inspector.review.tabOpen")}
+									<span className="tabular-nums text-passive">{openComments.length}</span>
+								</Button>
+							</TabsPrimitive.Trigger>
+							<TabsPrimitive.Trigger asChild value="resolved">
+								<Button data-active={view === "resolved"} size="xs" variant="quiet">
+									{t("inspector.review.tabResolved")}
+									<span className="tabular-nums text-passive">{resolvedComments.length}</span>
+								</Button>
+							</TabsPrimitive.Trigger>
+						</TabsPrimitive.List>
 						<span className="ml-auto" />
-						<ReviewersMenu actions={cardActions} block={block} />
-						<PRActionsMenu
-							block={block}
-							onOpenInBrowser={actions.onOpenInBrowser}
-							onSendAll={actions.onSendAll && unsent.length > 0 ? () => void sendAll() : undefined}
-							sendAllError={sendAllError}
-							sendingAll={sendingAll}
-						/>
+						{toolbar}
 					</div>
-					{detailsFailed ? (
-						// The PR's threads could not be read: say so above whatever the summary already gave,
-						// which stays while Retry runs. With nothing listed, it replaces "No comments yet".
-						<div className={cn("flex min-w-0 items-center justify-between gap-2 px-3 py-2", comments.length > 0 && "border-b border-border/60")}>
-							<p className={cn(inspectorEmptyClass, "m-0")} role="status">{t("pr.description.unavailable")}</p>
-							<Button onClick={retryDetails} size="xs" variant="quiet">{t("inspector.review.retry")}</Button>
-						</div>
-					) : null}
-					{comments.length === 0 ? (
-						detailsFailed ? null : <p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")}>{t("pr.comments.none")}</p>
-					) : (
-						(["open", "resolved"] as const).map((tab) => (
-							<TabsPrimitive.Content className="outline-none" key={tab} value={tab}>
-								{shown.length > 0 ? (
-									<div className="divide-y divide-border/60">
-										{shown.map((comment) => (
-											<ReviewCommentRow
-												actions={cardActions}
-												block={block}
-												comment={comment}
-												expanded={isExpanded(comment)}
-												key={comment.key}
-												onExpandedChange={(next) => setExpandedHere((current) => new Map(current).set(comment.key, next))}
-												onResolved={() => onResolved(comment)}
-												onSend={() => sendOne(comment)}
-												sending={sending.current.has(comment.sentKey)}
-												sent={isSent(comment)}
-											/>
-										))}
-									</div>
-								) : (
-									<p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")}>
-										{view === "open" ? t("inspector.review.noOpenComments") : t("inspector.review.nothingResolved")}
-									</p>
-								)}
-							</TabsPrimitive.Content>
-						))
-					)}
+					{detailsFailedRow}
+					{(["open", "resolved"] as const).map((tab) => (
+						<TabsPrimitive.Content className="outline-none" key={tab} value={tab}>
+							{shown.length > 0 ? (
+								<div className="divide-y divide-border/60">
+									{shown.map((comment) => (
+										<ReviewCommentRow
+											actions={cardActions}
+											block={block}
+											comment={comment}
+											expanded={isExpanded(comment)}
+											key={comment.key}
+											onExpandedChange={(next) => setExpandedHere((current) => new Map(current).set(comment.key, next))}
+											onResolved={() => onResolved(comment)}
+											onSend={() => sendOne(comment)}
+											sending={sending.current.has(comment.sentKey)}
+											sent={isSent(comment)}
+										/>
+									))}
+								</div>
+							) : (
+								<p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")}>
+									{view === "open" ? t("inspector.review.noOpenComments") : t("inspector.review.nothingResolved")}
+								</p>
+							)}
+						</TabsPrimitive.Content>
+					))}
 				</TabsPrimitive.Root>
 			) : null}
 		</article>

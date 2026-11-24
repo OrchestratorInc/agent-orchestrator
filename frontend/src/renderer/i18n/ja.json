@@ -1171,6 +1171,7 @@
 	"inspector.review.comments": "コメント",
 	"inspector.review.openCount": "{{count}} 件未解決",
 	"inspector.review.allResolved": "すべて解決済み",
+	"inspector.review.noComments": "コメントはまだありません",
 	"inspector.review.tabOpen": "未解決",
 	"inspector.review.tabResolved": "解決済み",
 	"inspector.review.noOpenComments": "未解決のコメントはありません。",

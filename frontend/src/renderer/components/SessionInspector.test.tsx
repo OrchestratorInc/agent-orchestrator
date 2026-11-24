@@ -3870,7 +3870,11 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getByText("Not reviewed yet")).toBeInTheDocument();
     const block = await screen.findByTestId("review-pr-block");
     expect(block).toHaveTextContent("Reviewable change 3");
-    expect(within(block).getByText("No comments yet.")).toBeInTheDocument();
+    // One row: the PR, "No comments yet" under its title, and its menus. No tabs, nothing to open.
+    expect(within(block).getByTestId("review-pr-row")).toHaveTextContent("#3 · No comments yet");
+    expect(within(block).getByTestId("review-pr-row")).not.toHaveAttribute("aria-expanded");
+    expect(within(block).queryByRole("tablist")).not.toBeInTheDocument();
+    expect(within(block).getByRole("button", { name: "Pull request actions" })).toBeInTheDocument();
     expect(screen.queryByTestId("review-comment")).not.toBeInTheDocument();
   });
 
@@ -4156,7 +4160,7 @@ describe("SessionInspector summary reviews", () => {
 
     const block = await screen.findByTestId("review-pr-block");
     expect(await within(block).findByText("Couldn't load this PR's details.")).toBeInTheDocument();
-    expect(within(block).queryByText("No comments yet.")).not.toBeInTheDocument();
+    expect(block).not.toHaveTextContent("No comments yet");
     const detailsCalls = () => postMock.mock.calls.filter(([path]) => path === "/api/v1/prs/{id}/details").length;
     const before = detailsCalls();
     await userEvent.click(within(block).getByRole("button", { name: "Retry" }));
@@ -5299,15 +5303,20 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.queryByText(/Reviewing #3/)).not.toBeInTheDocument();
   });
 
-  it("opens every PR's comments by default, even one with nothing open", async () => {
-    mockCommonGets([], "reviewer-pane", [reviewState(3, "needs_review", "sha-a"), reviewState(4, "needs_review", "sha-b")]);
+  it("opens a PR's comments by default and keeps a PR with none to one row", async () => {
+    serveProviderPR(
+      prSummary(3, "open", { threads: [mayaThread("t1", "src/search.ts", 12, "Rename this.")] }),
+      [reviewState(3, "needs_review", "sha-a"), reviewState(4, "needs_review", "sha-b")],
+    );
 
     renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "open")])} />);
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
 
-    const rows = await screen.findAllByTestId("review-pr-row");
-    expect(rows).toHaveLength(2);
-    for (const row of rows) expect(row).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(screen.getAllByTestId("review-pr-row")[0]).toHaveAttribute("aria-expanded", "true"));
+    const [withComments, empty] = screen.getAllByTestId("review-pr-row");
+    expect(withComments).not.toHaveTextContent("No comments yet");
+    expect(empty).toHaveTextContent("No comments yet");
+    expect(empty).not.toHaveAttribute("aria-expanded");
   });
 
   it("locks the reviewer choice while one is running", async () => {

@@ -1170,6 +1170,7 @@
 	"inspector.review.comments": "评论",
 	"inspector.review.openCount": "{{count}} 条未解决",
 	"inspector.review.allResolved": "全部已解决",
+	"inspector.review.noComments": "暂无评论",
 	"inspector.review.tabOpen": "未解决",
 	"inspector.review.tabResolved": "已解决",
 	"inspector.review.noOpenComments": "没有未解决的评论。",

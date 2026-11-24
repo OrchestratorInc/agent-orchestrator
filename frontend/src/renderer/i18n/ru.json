@@ -1189,6 +1189,7 @@
 	"inspector.review.comments": "Комментарии",
 	"inspector.review.openCount": "Открыто: {{count}}",
 	"inspector.review.allResolved": "Всё решено",
+	"inspector.review.noComments": "Комментариев пока нет",
 	"inspector.review.tabOpen": "Открытые",
 	"inspector.review.tabResolved": "Решённые",
 	"inspector.review.noOpenComments": "Нет открытых комментариев.",

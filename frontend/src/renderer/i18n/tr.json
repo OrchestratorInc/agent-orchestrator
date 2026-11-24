@@ -1167,6 +1167,7 @@
 	"inspector.review.comments": "Yorumlar",
 	"inspector.review.openCount": "{{count}} açık",
 	"inspector.review.allResolved": "Tümü çözüldü",
+	"inspector.review.noComments": "Henüz yorum yok",
 	"inspector.review.tabOpen": "Açık",
 	"inspector.review.tabResolved": "Çözüldü",
 	"inspector.review.noOpenComments": "Açık yorum yok.",

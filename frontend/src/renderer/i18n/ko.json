@@ -1171,6 +1171,7 @@
 	"inspector.review.comments": "댓글",
 	"inspector.review.openCount": "{{count}}개 열림",
 	"inspector.review.allResolved": "모두 해결됨",
+	"inspector.review.noComments": "아직 댓글이 없습니다",
 	"inspector.review.tabOpen": "열림",
 	"inspector.review.tabResolved": "해결됨",
 	"inspector.review.noOpenComments": "열린 댓글이 없습니다.",

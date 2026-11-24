@@ -1167,6 +1167,7 @@
 	"inspector.review.comments": "Comments",
 	"inspector.review.openCount": "{{count}} open",
 	"inspector.review.allResolved": "All resolved",
+	"inspector.review.noComments": "No comments yet",
 	"inspector.review.tabOpen": "Open",
 	"inspector.review.tabResolved": "Resolved",
 	"inspector.review.noOpenComments": "No open comments.",

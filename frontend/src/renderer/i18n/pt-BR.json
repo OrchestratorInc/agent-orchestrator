@@ -1186,6 +1186,7 @@
 	"inspector.review.comments": "Comentários",
 	"inspector.review.openCount": "{{count}} abertos",
 	"inspector.review.allResolved": "Tudo resolvido",
+	"inspector.review.noComments": "Nenhum comentário ainda",
 	"inspector.review.tabOpen": "Abertos",
 	"inspector.review.tabResolved": "Resolvidos",
 	"inspector.review.noOpenComments": "Nenhum comentário aberto.",
