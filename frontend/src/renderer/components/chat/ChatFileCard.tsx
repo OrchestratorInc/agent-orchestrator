@@ -70,19 +70,19 @@ function FileCard({
 	return (
 		<div
 			data-chat-file-card={kind}
-			className="chat-code mt-1 mb-1 flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-surface"
+			className="chat-code mt-1 mb-1 flex min-w-0 flex-col overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface"
 		>
-			<div className="flex min-h-8 min-w-0 items-center gap-2 pr-1.5 pl-3 pt-1">
-				<ChatFileIcon path={path} />
-				<span className="flex min-w-0 flex-1 text-xs" title={label}>
-					<WorkspacePathSegments path={label} nameClassName="text-foreground/85" />
+			<div className="flex min-h-10 min-w-0 items-center gap-2.5 pr-2 pl-3 pt-1">
+				<ChatFileIcon path={path} className="size-4" />
+				<span data-chat-file-card-name="" className="flex min-w-0 flex-1 text-control leading-5" title={label}>
+					<WorkspacePathSegments path={label} nameClassName="text-foreground/90" />
 				</span>
 				{additions !== undefined && deletions !== undefined ? (
 					<ChangeCounts additions={additions} deletions={deletions} className="text-xs" />
 				) : null}
-				<CopyButton compact size="icon-xs" text={copyText} label={copyLabel} className="[&_svg]:size-3" />
+				<CopyButton compact size="icon-xs" text={copyText} label={copyLabel} className="[&_svg]:size-3.5" />
 			</div>
-			<div data-no-swipe-nav="" className="scrollbar-none max-h-80 overflow-auto pt-0.5 pb-2 font-mono text-xs leading-normal">
+			<div data-no-swipe-nav="" className="scrollbar-none max-h-80 overflow-auto pt-1 pb-3 font-mono text-xs leading-normal">
 				<div className="w-max min-w-full">{children}</div>
 			</div>
 			{footer}
