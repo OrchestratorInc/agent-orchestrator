@@ -3575,6 +3575,15 @@ describe("SessionInspector tabs", () => {
     expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
   });
 
+  it("offers the Device tab to local worker sessions only with Developer mode on", async () => {
+    mockCommonGets([], "", [reviewState(1, "needs_review")]);
+    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} />);
+    expect(screen.queryByRole("tab", { name: "Device" })).not.toBeInTheDocument();
+
+    act(() => useUiStore.setState({ developerMode: true }));
+    expect(screen.getAllByRole("tab").map((el) => el.textContent?.trim())).toEqual(["Summary", "Files", "Reviews", "Browser", "Device"]);
+  });
+
   it("offers a Subagents tab after Side chat while the chat passes its panel", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
     renderWithQuery(
