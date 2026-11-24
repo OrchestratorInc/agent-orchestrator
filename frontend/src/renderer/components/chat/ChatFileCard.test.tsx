@@ -265,4 +265,25 @@ describe("file cards in the timeline", () => {
 		const chip = container.querySelector("[data-step-file-chip]")!;
 		expect(chip.className).not.toMatch(/chat-file/);
 	});
+
+	it("indents a nested edit's diff under its row instead of lining it up with the row's text", () => {
+		const { container } = render(
+			<ActivityRow
+				activity={activity({
+					activityKind: "file_change",
+					summary: "Edit demo/math.js",
+					detail: {
+						files: [
+							{ path: "demo/math.js", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b" },
+							{ path: "demo/math.js", status: "modified", additions: 1, deletions: 1, patch: "@@ -5 +5 @@\n-c\n+d" },
+						],
+					},
+				})}
+			/>,
+		);
+		fireEvent.click(container.querySelector(".activity-row-toggle")!);
+		fireEvent.click(container.querySelectorAll("li button")[0]!);
+		const card = container.querySelector('[data-chat-file-card="edit"]')!;
+		expect(card.parentElement).toHaveClass("pl-[22px]");
+	});
 });

@@ -845,24 +845,31 @@ export function useFreshFailureReport(state: string | undefined, failedAt: strin
 }
 
 function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
+	// Icon-only like copy and roll back beside it; the tooltip names it the same way.
+	const tip = retry.pending ? "Retrying…" : retry.disabled ? "Wait for the current turn to finish" : "Retry this turn";
 	return (
-		<Button
-			type="button"
-			variant="quiet"
-			size="sm"
-			onClick={retry.onRetry}
-			disabled={retry.pending || retry.disabled}
-			aria-label="Retry this turn"
-			data-telemetry-id="chat.retry"
-			title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
-			data-testid="retry-turn"
-		>
-			<RotateCw
-				aria-hidden="true"
-				className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
-			/>
-			{retry.pending ? "Retrying…" : "Retry"}
-		</Button>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					variant="quiet"
+					size="icon-sm"
+					onClick={retry.onRetry}
+					disabled={retry.pending || retry.disabled}
+					aria-label="Retry this turn"
+					aria-busy={retry.pending || undefined}
+					data-telemetry-id="chat.retry"
+					data-testid="retry-turn"
+				>
+					<RotateCw
+						aria-hidden="true"
+						className={cn("size-3.5", retry.pending && "animate-spin motion-reduce:animate-none")}
+					/>
+					{retry.pending ? <span className="sr-only">Retrying…</span> : null}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{tip}</TooltipContent>
+		</Tooltip>
 	);
 }
 
@@ -2733,7 +2740,12 @@ function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 					)}
 				/>
 			</Pressable>
-			{open ? <FileChangePatchCard file={file} hints={{ cwd }} /> : null}
+			{/* Indented under the row like any opened step, not flush with "Edited". */}
+			{open ? (
+				<ActivityStepBody>
+					<FileChangePatchCard file={file} hints={{ cwd }} />
+				</ActivityStepBody>
+			) : null}
 		</li>
 	);
 }
