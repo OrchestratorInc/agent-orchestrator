@@ -95,7 +95,7 @@ export function CloudAdditionalReposEditor({
 	return (
 		<div className="space-y-2">
 			{value.map((url, index) => (
-				// eslint-disable-next-line react/no-array-index-key -- rows are positional; a URL can be blank while it is being picked.
+				// Index keys are deliberate: rows are positional; a URL can be blank while it is being picked.
 				<div key={index} className="flex min-w-0 items-center gap-2">
 					<SearchablePicker
 						ariaLabel={t("cloudRepos.additionalRepository", { defaultValue: "Additional repository {{number}}", number: index + 1 })}

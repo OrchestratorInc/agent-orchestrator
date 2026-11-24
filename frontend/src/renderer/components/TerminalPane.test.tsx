@@ -70,6 +70,7 @@ const {
 	}),
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
+let terminalInitErrorHandler: ((err: unknown) => void) | undefined;
 // What the pane hands the terminal for dropped files, and the session organization's attachment limit.
 const dropSetup = vi.hoisted(() => ({
 	maxAttachmentBytes: undefined as number | undefined,
@@ -116,12 +117,14 @@ vi.mock("./XtermTerminal", () => ({
 		isVisible?: boolean;
 		onVisibleContent?: () => void;
 		onLinkOpen?: (uri: string) => void;
+		onError?: (err: unknown) => void;
 		onReady?: (terminal: AttachableTerminal) => void;
 		supportsCursorColorScheme?: boolean;
 		saveDroppedFile?: unknown;
 		droppedFileMaxBytes?: number;
 	}) => {
 		terminalLinkHandler = props.onLinkOpen;
+		terminalInitErrorHandler = props.onError;
 		dropSetup.props = { saveDroppedFile: props.saveDroppedFile, droppedFileMaxBytes: props.droppedFileMaxBytes };
 		visibleContentCallback.value = props.onVisibleContent;
 		const instance = useRef(0);
@@ -208,6 +211,7 @@ beforeEach(() => {
 	replaySettled.value = true;
 	hasAttached.value = false;
 	terminalLinkHandler = undefined;
+	terminalInitErrorHandler = undefined;
 	terminalSessionOptions.length = 0;
 	cloudMuxOptions.length = 0;
 	cloudTicketMock.mockClear();
@@ -1559,6 +1563,19 @@ describe("terminal restore", () => {
 			expect(screen.getByText("Session terminated")).toBeInTheDocument();
 			expect(screen.getByRole("button", { name: "Restore session" })).toHaveTextContent("Restore session");
 		} finally { view.restore(); }
+	});
+
+	it("swaps to the init-failure message when xterm fails after mounting", async () => {
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		const view = renderPane({ ...worker, terminalHandleId: "term-1" });
+		try {
+			await waitFor(() => expect(terminalInitErrorHandler).toBeTypeOf("function"), { timeout: 10_000 });
+			act(() => terminalInitErrorHandler?.(new Error("webgl context lost")));
+			expect(screen.getByText("Terminal failed to initialize on this GPU/driver. Restart the app to retry.")).toBeInTheDocument();
+		} finally {
+			view.restore();
+			consoleError.mockRestore();
+		}
 	});
 
 	it("shows the recorded startup failure rather than guessing an exit reason", () => {

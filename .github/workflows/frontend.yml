@@ -175,6 +175,9 @@ jobs:
       - name: Typecheck E2E suite
         run: npm run typecheck:e2e
 
+      - name: Lint
+        run: npm run lint
+
   vitest:
     if: contains(fromJSON(inputs.lanes), 'frontend')
     runs-on: ubuntu-latest

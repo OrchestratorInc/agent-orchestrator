@@ -1375,6 +1375,13 @@ function AttachedTerminal({
 		};
 	}, [terminal, handleId, attach, attachSession?.id]);
 
+	// Refs read by the cover logic below. They are declared ahead of the
+	// initFailed early return so every render calls the same hooks in order.
+	const cloudTerminalIdentity = `${handleId ?? ""}`;
+	const cloudRevealedIdentityRef = useRef(cloudTerminalIdentity);
+	const cloudRevealedRef = useRef(false);
+	const switchingHeldRef = useRef<string | undefined>(undefined);
+
 	if (initFailed) {
 		return (
 			<div className="terminal-surface grid h-full place-items-center p-4 font-mono text-xs text-muted-foreground">
@@ -1437,9 +1444,6 @@ function AttachedTerminal({
 	// outright, giving a fresh latch anyway. Cloud only; local panes keep their
 	// existing messageless replay cover and reattaching banner. The top-right timer
 	// lives in SessionView's CloudLifecycleStatus.
-	const cloudTerminalIdentity = `${handleId ?? ""}`;
-	const cloudRevealedIdentityRef = useRef(cloudTerminalIdentity);
-	const cloudRevealedRef = useRef(false);
 	if (cloudRevealedIdentityRef.current !== cloudTerminalIdentity) {
 		cloudRevealedIdentityRef.current = cloudTerminalIdentity;
 		cloudRevealedRef.current = false;
@@ -1459,7 +1463,6 @@ function AttachedTerminal({
 	// A terminal the move covered stays covered until the agent draws its first
 	// frame, even after the move commits. ponytail: no timeout; an agent that
 	// never draws exits, and the exited state ends the cover.
-	const switchingHeldRef = useRef<string | undefined>(undefined);
 	if (switchingLabel && !hasVisibleContent) switchingHeldRef.current = switchingLabel;
 	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
 	const coverLabel = switchingLabel ?? switchingHeldRef.current;

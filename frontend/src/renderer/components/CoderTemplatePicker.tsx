@@ -157,7 +157,7 @@ export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: 
 						<div className="overflow-hidden rounded-md" aria-label={t("coder.repos.label", { defaultValue: "Additional repositories" })}>
 							<div className="flex transition-transform duration-300 ease-out motion-reduce:transition-none" style={{ transform: `translateX(-${activeRepoIndex * 100}%)` }}>
 								{extraRepos.map((repo, index) => (
-									// eslint-disable-next-line react/no-array-index-key
+									// Index keys are deliberate: the carousel is positional.
 									<div key={index} className="flex w-full shrink-0 items-center gap-2 rounded-md border border-border bg-[var(--color-bg-import-card)] p-2">
 										{repos.length > 0 ? (
 											<SearchablePicker

@@ -73,7 +73,6 @@ export function TitlebarNav({
     if (showBrand) window.dispatchEvent(new Event("resize"));
   }, [showBrand, isFullScreen, zoomFactor]);
 
-  if (!isMac && !isLinux) return null;
   // Native fullscreen changes only the horizontal traffic-light reserve.
   // Sidebar and route state must never move the navigation centerline.
   const leftClass = !isMac
@@ -120,6 +119,9 @@ export function TitlebarNav({
       window.removeEventListener("resize", fit);
     };
   }, [showBrand]);
+
+  // After every hook, so the hook order is the same on every platform.
+  if (!isMac && !isLinux) return null;
 
   return (
     <div

@@ -644,8 +644,9 @@ export function SessionLabelLink({ href, children, className }: { href: string; 
 }
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
-	if (useContext(SafeOriginContent)) return <span className="text-muted-foreground">{alt || (typeof src === "string" ? src : "")}</span>;
+	const safeOrigin = useContext(SafeOriginContent);
 	const { remoteHost } = useContext(OpenChatLink);
+	if (safeOrigin) return <span className="text-muted-foreground">{alt || (typeof src === "string" ? src : "")}</span>;
 	if (remoteHost && typeof src === "string" && isHostLocalWebLink(src)) {
 		return <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>{alt || src}</span>;
 	}
