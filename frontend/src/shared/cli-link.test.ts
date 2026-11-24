@@ -292,6 +292,20 @@ describe("cli link", () => {
 		expect(await selectCliLinkDirectory(nodeCliLinkIo(), dataDir, shellPath, [linkDirectory, later])).toBe(linkDirectory);
 	});
 
+	function firstLaunch() {
+		const state = { pending: true, asked: 0 };
+		return {
+			state,
+			pending: async () => {
+				state.asked += 1;
+				return state.pending;
+			},
+			spend: async () => {
+				state.pending = false;
+			},
+		};
+	}
+
 	it("links on a first launch only when the login shell PATH has no ao", async () => {
 		const { root, linkDirectory, dataDir, apps } = await layout();
 		const appCliPath = await executable(apps, "ao", "1.0.0");
@@ -300,24 +314,51 @@ describe("cli link", () => {
 		const io = nodeCliLinkIo();
 		const base = request({ appCliPath, linkDirectory, dataDir });
 		const link = path.join(linkDirectory, "ao");
-		let claims = 0;
-		const claim = async () => {
-			claims += 1;
-			return true;
-		};
 
-		expect(await linkCliOnFirstLaunch(io, { ...base, isPackaged: false, shellPath: linkDirectory }, claim)).toBeNull();
-		expect(await linkCliOnFirstLaunch(io, base, claim)).toBeNull();
-		expect(claims).toBe(0);
-		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: linkDirectory }, async () => false)).toBeNull();
-		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: `${linkDirectory}:${other}` }, claim)).toBeNull();
-		expect(claims).toBe(1);
+		const idle = firstLaunch();
+		expect(await linkCliOnFirstLaunch(io, { ...base, isPackaged: false, shellPath: linkDirectory }, idle)).toBeNull();
+		expect(await linkCliOnFirstLaunch(io, base, idle)).toBeNull();
+		expect(idle.state).toEqual({ pending: true, asked: 0 });
+
+		const taken = firstLaunch();
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: `${linkDirectory}:${other}` }, taken)).toBeNull();
+		expect(taken.state.pending).toBe(false);
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: linkDirectory }, taken)).toBeNull();
 		expect(await lstat(link).catch(() => null)).toBeNull();
 		expect(await readFile(path.join(other, "ao"), "utf8")).toContain("9.9.9");
 
-		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: `${appCliPath}:${linkDirectory}` }, claim)).toMatchObject({ ok: true, changed: true, linkPath: link });
+		const fresh = firstLaunch();
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: `${appCliPath}:${linkDirectory}` }, fresh)).toMatchObject({ ok: true, changed: true, linkPath: link });
+		expect(fresh.state.pending).toBe(false);
 		expect(await readlink(link)).toBe(appCliPath);
 		expect(JSON.parse(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE), "utf8"))).toMatchObject({ linkPath: link, targetPath: appCliPath });
+	});
+
+	it("keeps the first launch attempt when the app CLI does not answer", async () => {
+		const { linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = path.join(apps, "ao");
+		await writeFile(appCliPath, "#!/bin/sh\nexit 3\n");
+		await chmod(appCliPath, 0o755);
+		const attempt = firstLaunch();
+		expect(await linkCliOnFirstLaunch(nodeCliLinkIo(), { ...request({ appCliPath, linkDirectory, dataDir }), shellPath: linkDirectory }, attempt)).toMatchObject({ ok: false, code: "version" });
+		expect(attempt.state.pending).toBe(true);
+		expect(await lstat(path.join(linkDirectory, "ao")).catch(() => null)).toBeNull();
+	});
+
+	it.skipIf(process.getuid?.() === 0)("does not link on a first launch beside a PATH folder it cannot read", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		const closed = path.join(root, "closed");
+		await mkdir(closed);
+		await chmod(closed, 0o000);
+		const attempt = firstLaunch();
+		try {
+			expect(await linkCliOnFirstLaunch(nodeCliLinkIo(), { ...request({ appCliPath, linkDirectory, dataDir }), shellPath: `${closed}:${linkDirectory}` }, attempt)).toBeNull();
+		} finally {
+			await chmod(closed, 0o755);
+		}
+		expect(attempt.state.pending).toBe(false);
+		expect(await lstat(path.join(linkDirectory, "ao")).catch(() => null)).toBeNull();
 	});
 
 	it("keeps an existing AO managed link in its original directory for repair and unlink", async () => {

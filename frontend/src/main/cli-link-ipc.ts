@@ -2,7 +2,7 @@ import { ipcMain } from "electron";
 import { homedir } from "node:os";
 import path from "node:path";
 import { nodeCliLinkIo } from "./cli-link-fs";
-import { CLI_LINK_DIRECTORY, inspectCliLink, linkCli, linkCliOnFirstLaunch, selectCliLinkDirectory, unlinkCli, type CliLinkRequest, type CliLinkResult } from "../shared/cli-link";
+import { CLI_LINK_DIRECTORY, inspectCliLink, linkCli, linkCliOnFirstLaunch, selectCliLinkDirectory, unlinkCli, type CliLinkFirstLaunch, type CliLinkRequest, type CliLinkResult } from "../shared/cli-link";
 import { bundledDaemonBinaryName } from "../shared/daemon-launch";
 
 export function registerCliLinkIpc(input: {
@@ -12,7 +12,7 @@ export function registerCliLinkIpc(input: {
 	dataDir: string;
 	appVersion: string;
 	shellPath: () => string | undefined;
-	claimFirstLaunch: () => Promise<boolean>;
+	firstLaunch: CliLinkFirstLaunch;
 }): (loginShellPath: string | undefined) => Promise<CliLinkResult | null> {
 	const io = nodeCliLinkIo();
 	const request = async (confirmReplacement = false, expectedTarget?: string | null): Promise<CliLinkRequest> => {
@@ -41,8 +41,8 @@ export function registerCliLinkIpc(input: {
 	ipcMain.handle("cliLink:link", async (_event, confirm: unknown, target: unknown) => linkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined)));
 	ipcMain.handle("cliLink:unlink", async (_event, confirm: unknown, target: unknown) => {
 		const result = await unlinkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined));
-		if (result.ok) await input.claimFirstLaunch().catch(() => false);
+		if (result.ok) await input.firstLaunch.spend().catch(() => undefined);
 		return result;
 	});
-	return async (loginShellPath) => linkCliOnFirstLaunch(io, { ...(await request()), shellPath: loginShellPath }, input.claimFirstLaunch);
+	return async (loginShellPath) => linkCliOnFirstLaunch(io, { ...(await request()), shellPath: loginShellPath }, input.firstLaunch);
 }

@@ -10,7 +10,8 @@ import {
 	readFirstRunProjectPrompt,
 	markFirstRunProjectPromptSeen,
 	claimFirstRunExperimentExposure,
-	claimCliLinkFirstLaunch,
+	cliLinkFirstLaunchPending,
+	spendCliLinkFirstLaunch,
 	updateMigration,
 	type AppStateMarker,
 } from "./app-state";
@@ -58,22 +59,27 @@ describe("writeAppStateMarker", () => {
 		const options = { stateDir: dir, appPath: "/AO.app", version: "1", now: () => new Date() };
 		await writeAppStateMarker(options);
 		await writeAppStateMarker(options);
-		expect(await claimCliLinkFirstLaunch(dir)).toBe(true);
+		expect(await cliLinkFirstLaunchPending(dir)).toBe(true);
+		await spendCliLinkFirstLaunch(dir);
+		await spendCliLinkFirstLaunch(dir);
 		await writeAppStateMarker(options);
-		expect(await claimCliLinkFirstLaunch(dir)).toBe(false);
-
+		expect(await cliLinkFirstLaunchPending(dir)).toBe(false);
 		expect((await readMarker(dir)).cliLinkFirstLaunch).toBe("eligible");
 	});
 
-	it("leaves an install from an earlier build out of the first launch ao link", async () => {
+	it("leaves an install from an earlier build, or one with a damaged marker, out of the first launch ao link", async () => {
 		const options = { stateDir: dir, appPath: "/AO.app", version: "1", now: () => new Date() };
 		await writeAppStateMarker(options);
 		const { cliLinkFirstLaunch: _dropped, ...older } = await readMarker(dir);
 		await writeFile(path.join(dir, APP_STATE_FILE_NAME), JSON.stringify(older));
 		await writeAppStateMarker(options);
 		expect((await readMarker(dir)).cliLinkFirstLaunch).toBe("skip");
-		expect(await claimCliLinkFirstLaunch(dir)).toBe(false);
-		expect(await readdir(dir)).not.toContain("cli-link-first-launch");
+		expect(await cliLinkFirstLaunchPending(dir)).toBe(false);
+
+		await writeFile(path.join(dir, APP_STATE_FILE_NAME), "{");
+		await writeAppStateMarker(options);
+		expect((await readMarker(dir)).cliLinkFirstLaunch).toBe("skip");
+		expect(await cliLinkFirstLaunchPending(dir)).toBe(false);
 	});
 
 	it("keeps the first run prompt seen across later launch writes", async () => {

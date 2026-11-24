@@ -370,13 +370,19 @@ export async function linkCli(io: CliLinkIo, request: CliLinkRequest): Promise<C
 	return { ok: true, changed: true, linkPath: status.linkPath, targetPath: status.proposedTarget, version: status.proposedVersion };
 }
 
-export async function linkCliOnFirstLaunch(io: CliLinkIo, request: CliLinkRequest, claim: () => Promise<boolean>): Promise<CliLinkResult | null> {
+export type CliLinkFirstLaunch = { pending(): Promise<boolean>; spend(): Promise<unknown> };
+
+export async function linkCliOnFirstLaunch(io: CliLinkIo, request: CliLinkRequest, attempt: CliLinkFirstLaunch): Promise<CliLinkResult | null> {
 	const directories = (request.shellPath?.split(":") ?? []).filter((directory) => directory.startsWith("/"));
-	if (!directories.length || !cliLinkSupport(request).ok || !(await claim())) return null;
+	if (!directories.length || !cliLinkSupport(request).ok || !(await attempt.pending())) return null;
+	let taken = false;
 	for (const directory of directories) {
-		if (await io.lstat(io.join(directory, CLI_LINK_NAME)).catch(() => null)) return null;
+		taken = Boolean(await io.lstat(io.join(directory, CLI_LINK_NAME)).catch((error: { code?: string }) => error?.code !== "ENOTDIR"));
+		if (taken) break;
 	}
-	return linkCli(io, { ...request, confirmReplacement: false });
+	const result = taken ? null : await linkCli(io, { ...request, confirmReplacement: false });
+	if (!result || result.ok || result.code !== "version") await attempt.spend();
+	return result;
 }
 
 export async function unlinkCli(io: CliLinkIo, request: CliLinkRequest): Promise<CliLinkResult> {

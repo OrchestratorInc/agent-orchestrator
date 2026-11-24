@@ -267,7 +267,7 @@ import { planDaemonScope, raiseOomScoreAdj, type DaemonScopePlan } from "./main/
 import { createLifecycleLog, linuxProcessContext, markRunStarted, observeUnhandledRejections, type LifecycleRecord } from "./main/lifecycle-log";
 import { planDaemonAutoRestart, daemonExitWasUngraceful } from "./main/daemon-auto-restart";
 import { readProcessStartMs } from "./main/process-start";
-import { claimCliLinkFirstLaunch, claimFirstRunExperimentExposure, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
+import { claimFirstRunExperimentExposure, cliLinkFirstLaunchPending, markFirstRunProjectPromptSeen, readFirstRunProjectPrompt, readMigrationState, spendCliLinkFirstLaunch, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import { coercePrivacyGuideRequest, CUA_DRIVER_APP_PATH, isPrivacyGuideTarget, PRIVACY_GUIDE_HEIGHT, PrivacyGuide, type PrivacyGuideApp, type PrivacyPane } from "./main/privacy-guide";
 import { appBundlePath, readAppPrivacy, requestAppPrivacy, type AppPrivacyGrants } from "./main/app-privacy";
@@ -3186,9 +3186,15 @@ const linkCliOnFirstLaunch = registerCliLinkIpc({
 	dataDir: desktopDataDir,
 	appVersion: app.getVersion(),
 	shellPath: () => cachedShellEnv?.PATH ?? process.env.PATH,
-	claimFirstLaunch: async () => {
-		const runFile = runFilePath();
-		return runFile ? claimCliLinkFirstLaunch(path.dirname(runFile)) : false;
+	firstLaunch: {
+		pending: async () => {
+			const runFile = runFilePath();
+			return runFile ? cliLinkFirstLaunchPending(path.dirname(runFile)) : false;
+		},
+		spend: async () => {
+			const runFile = runFilePath();
+			if (runFile) await spendCliLinkFirstLaunch(path.dirname(runFile));
+		},
 	},
 });
 

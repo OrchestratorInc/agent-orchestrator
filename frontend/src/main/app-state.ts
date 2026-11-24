@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type InstallSource, resolveInstallSource } from "../shared/install-environment";
@@ -44,6 +45,8 @@ const SCHEMA_VERSION = 2;
 
 /** File name of the marker under the ~/.ao state dir. */
 export const APP_STATE_FILE_NAME = "app-state.json";
+
+const CLI_LINK_FIRST_LAUNCH_FILE = "cli-link-first-launch";
 
 export interface WriteAppStateOptions {
 	updateRestartProtocol?: 1;
@@ -140,7 +143,7 @@ export async function writeAppStateMarker(opts: WriteAppStateOptions): Promise<v
 		// Preserve a migration block written before this launch write.
 		...(existing?.migration !== undefined ? { migration: existing.migration } : {}),
 		firstRunProjectPrompt: existing?.firstRunProjectPrompt ?? (existing ? "seen" : "pending"),
-		cliLinkFirstLaunch: existing?.cliLinkFirstLaunch ?? (existing ? "skip" : "eligible"),
+		cliLinkFirstLaunch: existing?.cliLinkFirstLaunch ?? (existing || existsSync(file) ? "skip" : "eligible"),
 	};
 
 	await atomicWriteMarker(opts.stateDir, marker);
@@ -189,9 +192,13 @@ export async function claimFirstRunExperimentExposure(stateDir: string): Promise
 	return claimOnce(path.join(stateDir, "first-run-project-experiment-exposed"));
 }
 
-export async function claimCliLinkFirstLaunch(stateDir: string): Promise<boolean> {
+export async function cliLinkFirstLaunchPending(stateDir: string): Promise<boolean> {
 	const existing = await readExisting(path.join(stateDir, APP_STATE_FILE_NAME));
-	return existing?.cliLinkFirstLaunch === "eligible" && claimOnce(path.join(stateDir, "cli-link-first-launch"));
+	return existing?.cliLinkFirstLaunch === "eligible" && !existsSync(path.join(stateDir, CLI_LINK_FIRST_LAUNCH_FILE));
+}
+
+export async function spendCliLinkFirstLaunch(stateDir: string): Promise<void> {
+	await claimOnce(path.join(stateDir, CLI_LINK_FIRST_LAUNCH_FILE));
 }
 
 async function claimOnce(file: string): Promise<boolean> {

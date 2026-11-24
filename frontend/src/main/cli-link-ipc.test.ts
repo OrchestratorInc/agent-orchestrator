@@ -38,12 +38,13 @@ describe.skipIf(process.platform === "win32")("registerCliLinkIpc", () => {
 	it("links once on a first launch and does not link again after Unlink", async () => {
 		const bin = path.join(state.home, ".local", "bin");
 		const link = path.join(bin, "ao");
-		let claimed = false;
-		const claimFirstLaunch = vi.fn(async () => {
-			const first = !claimed;
-			claimed = true;
-			return first;
-		});
+		let pending = true;
+		const firstLaunch = {
+			pending: vi.fn(async () => pending),
+			spend: vi.fn(async () => {
+				pending = false;
+			}),
+		};
 		const linkOnFirstLaunch = registerCliLinkIpc({
 			isPackaged: () => true,
 			resourcesPath: path.join(root, "resources"),
@@ -51,11 +52,11 @@ describe.skipIf(process.platform === "win32")("registerCliLinkIpc", () => {
 			dataDir: path.join(root, "data"),
 			appVersion: "1.0.0",
 			shellPath: () => bin,
-			claimFirstLaunch,
+			firstLaunch,
 		});
 
 		expect(await linkOnFirstLaunch(undefined)).toBeNull();
-		expect(claimFirstLaunch).not.toHaveBeenCalled();
+		expect(firstLaunch.pending).not.toHaveBeenCalled();
 		expect(await linkOnFirstLaunch(bin)).toMatchObject({ ok: true, changed: true, linkPath: link });
 		const target = await readlink(link);
 
@@ -68,7 +69,7 @@ describe.skipIf(process.platform === "win32")("registerCliLinkIpc", () => {
 
 	it("spends the first launch attempt when a link made by hand in Settings is removed", async () => {
 		const bin = path.join(state.home, ".local", "bin");
-		const claimFirstLaunch = vi.fn(async () => true);
+		const firstLaunch = { pending: vi.fn(async () => true), spend: vi.fn(async () => undefined) };
 		registerCliLinkIpc({
 			isPackaged: () => true,
 			resourcesPath: path.join(root, "resources"),
@@ -76,11 +77,11 @@ describe.skipIf(process.platform === "win32")("registerCliLinkIpc", () => {
 			dataDir: path.join(root, "data"),
 			appVersion: "1.0.0",
 			shellPath: () => bin,
-			claimFirstLaunch,
+			firstLaunch,
 		});
 		expect(await state.handlers.get("cliLink:link")?.({}, false, null)).toMatchObject({ ok: true, changed: true });
-		expect(claimFirstLaunch).not.toHaveBeenCalled();
+		expect(firstLaunch.spend).not.toHaveBeenCalled();
 		expect(await state.handlers.get("cliLink:unlink")?.({}, true, await readlink(path.join(bin, "ao")))).toMatchObject({ ok: true });
-		expect(claimFirstLaunch).toHaveBeenCalledTimes(1);
+		expect(firstLaunch.spend).toHaveBeenCalledTimes(1);
 	});
 });

@@ -66,7 +66,7 @@ brew install --cask agent-orchestrator
 alias ao='"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"'
 ```
 
-在 macOS 上，或在通过 `.deb` 或 `.rpm` 安装的 Linux 上，不使用 cask 也想用简短的 `ao` 命令，请打开 **Settings → General**，然后选择 **Global ao command** 旁边的 **Link**。全新安装会在首次启动时自动创建此链接，前提是 `PATH` 中还没有 `ao`，并且 `/usr/local/bin`、`/opt/homebrew/bin`、`~/.local/bin` 或 `~/bin` 之一在 `PATH` 中且无需密码即可写入。请参阅[运行 CLI](/cli#run-the-cli)。AppImage 安装无法链接。
+在 macOS 上，或在通过 `.deb` 或 `.rpm` 安装的 Linux 上，不使用 cask 也想用简短的 `ao` 命令，请打开 **Settings → General**，然后选择 **Global ao command** 旁边的 **Link**。全新安装会在首次启动时自动创建此链接，前提是 `PATH` 中还没有 `ao`，并且 `/usr/local/bin`、`/opt/homebrew/bin`（macOS）、`~/.local/bin` 或 `~/bin` 之一在 `PATH` 中且无需密码即可写入。请参阅[运行 CLI](/cli#run-the-cli)。AppImage 安装无法链接。
 
 运行 `ao status` 确认它可以使用。操作项目和会话的命令需要桌面应用处于打开状态，因为这些命令连接的守护进程由应用运行。要从编程代理操作 Orchestrator，请参阅[从你的编程代理使用 Orchestrator](/agent-setup)。
 
