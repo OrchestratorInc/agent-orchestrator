@@ -1330,7 +1330,7 @@ describe("shell application shortcut subscriptions", () => {
 		});
 	});
 
-	it("lists pinned sessions first, once", async () => {
+	it("lists each project's pinned sessions first within that project, once", async () => {
 		setWorkspaces([
 			{
 				...workspaces[0],
@@ -1339,12 +1339,15 @@ describe("shell application shortcut subscriptions", () => {
 					{ id: "sess-3", workspaceId: "proj-1", status: "idle", isPinned: true, pinnedAt: "2026-10-10T00:00:00Z" },
 				],
 			},
-			workspaces[1],
+			{
+				...workspaces[1],
+				sessions: [{ id: "sess-cross", workspaceId: "proj-2", status: "working", isPinned: true, pinnedAt: "2026-10-11T00:00:00Z" }],
+			},
 		] as unknown as WorkspaceSummary[]);
 		shellMocks.state.routeParams = { sessionId: "sess-3" };
 		await renderShell();
 
-		// Pinned sess-3 is first; its project row would list it again at the end.
+		// Pinned sess-3 leads its own project; proj-2's newer pin stays in proj-2.
 		emitAppShortcut({ id: "jump-to-session", index: 0 });
 		expect(shellMocks.navigate).toHaveBeenLastCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",

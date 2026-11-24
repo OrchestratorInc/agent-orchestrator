@@ -22,6 +22,7 @@ export const UI_SURFACES = [
 	"inspector_artifacts",
 	"inspector_side_chat",
 	"inspector_subagents",
+	"inspector_background_tasks",
 	"cmdk",
 	"notifications_panel",
 	"archive_modal",
