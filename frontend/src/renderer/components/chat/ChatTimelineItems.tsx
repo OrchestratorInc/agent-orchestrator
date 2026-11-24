@@ -2064,6 +2064,10 @@ function GenericActivityRow({
 						: "group/activity border-t border-border first:border-t-0",
 			)}
 		>
+			{/* A row titled with its command keeps copy beside the command: a button
+			    cannot hold another, so the row is its button, then copy, then the
+			    chevron and the rest of the line, which toggle it too. */}
+			<div className={commandTitle ? "group/cmdrow flex min-w-0 items-center" : "contents"}>
 			<Pressable
 				onClick={() => toggle(!open)}
 				disabled={!hasBody}
@@ -2075,6 +2079,7 @@ function GenericActivityRow({
 							? "flex min-h-7 w-full min-w-0 select-none items-center gap-2 py-1 text-left text-xs"
 							: "flex min-h-[35px] w-full min-w-0 select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
 					"activity-row-toggle",
+					commandTitle && "w-auto min-w-0 flex-initial",
 					hasBody && !compactSummary && "hover:text-foreground",
 					!hasBody && "cursor-default",
 				)}
@@ -2172,7 +2177,7 @@ function GenericActivityRow({
 					showDisclosure={!compactSummary}
 				/>
 				</span>
-				{compactSummary && hasBody ? (
+				{compactSummary && hasBody && !commandTitle ? (
 					<ChevronRight
 						aria-hidden="true"
 						className={cn(
@@ -2182,6 +2187,29 @@ function GenericActivityRow({
 					/>
 				) : null}
 			</Pressable>
+			{commandTitle ? (
+				<>
+					<CommandCopyReveal text={commandTitle} scope="row" />
+					<Pressable
+						tabIndex={-1}
+						aria-hidden="true"
+						onClick={() => toggle(!open)}
+						disabled={!hasBody}
+						className={cn("flex min-h-7 flex-1 items-center self-stretch pl-2", !hasBody && "cursor-default")}
+					>
+						{hasBody ? (
+							<ChevronRight
+								aria-hidden="true"
+								className={cn(
+									"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/cmdrow:text-muted-foreground",
+									open && "rotate-90",
+								)}
+							/>
+						) : null}
+					</Pressable>
+				</>
+			) : null}
+			</div>
 
 			<AnimatePresence initial={false}>
 				{open && hasBody ? (
@@ -2389,12 +2417,12 @@ function CommandExploreBody({ activity, showCommand = true }: { activity: Conver
 			) : null}
 
 			{command && showCommand ? (
-				<div data-command-line="" className="flex min-w-0 items-center gap-2 pr-[7px]">
-					<pre data-no-swipe-nav="" className="min-w-0 flex-1 truncate font-mono text-xs leading-normal text-muted-foreground" title={command}>
+				<div data-command-line="" className="group/cmdline flex min-w-0 items-center">
+					<pre data-no-swipe-nav="" className="min-w-0 truncate font-mono text-xs leading-normal text-muted-foreground" title={command}>
 						<span aria-hidden="true" className="select-none text-passive">$ </span>
 						{command}
 					</pre>
-					<CopyButton compact size="icon-xs" text={command} label="Copy command" className="shrink-0 [&_svg]:size-3" />
+					<CommandCopyReveal text={command} scope="line" />
 				</div>
 			) : null}
 
@@ -2417,6 +2445,27 @@ function CommandExploreBody({ activity, showCommand = true }: { activity: Conver
 				</div>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * A command's copy button, shown while its row or line is hovered, or while it has
+ * keyboard focus. It sits where the command ends: beside a short command, and over
+ * the end of a long one, which gives up that much of its line.
+ */
+function CommandCopyReveal({ text, scope }: { text: string; scope: "row" | "line" }) {
+	return (
+		<span
+			data-command-copy=""
+			className={cn(
+				"flex w-0 shrink-0 justify-end overflow-hidden opacity-0 transition-[width,opacity] duration-150 focus-within:w-7 focus-within:opacity-100 motion-reduce:transition-none",
+				scope === "row"
+					? "group-hover/cmdrow:w-7 group-hover/cmdrow:opacity-100"
+					: "group-hover/cmdline:w-7 group-hover/cmdline:opacity-100",
+			)}
+		>
+			<CopyButton compact size="icon-xs" text={text} label="Copy command" className="shrink-0 [&_svg]:size-3" />
+		</span>
 	);
 }
 

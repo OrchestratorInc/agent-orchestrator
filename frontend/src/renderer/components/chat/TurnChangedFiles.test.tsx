@@ -605,7 +605,7 @@ describe("ActivityRow command labels", () => {
 				)}
 			/>,
 		);
-		const row = screen.getByRole("button");
+		const row = screen.getByRole("button", { expanded: false });
 		expect(row).toHaveClass("py-0.5", "gap-2", "select-none");
 		expect(screen.getByText("git status --short")).toHaveClass("font-mono", "truncate", "text-muted-foreground");
 		expect(screen.getByText("exit 1")).toHaveClass("text-muted-foreground/70");
@@ -614,6 +614,10 @@ describe("ActivityRow command labels", () => {
 		expect(container.querySelector(".icon-square-terminal")).toHaveClass("size-3.5", "text-muted-foreground/70");
 		expect(row.querySelector(".flex-1")).toBeNull();
 		expect(row.textContent).toMatch(/^git status --shortexit 1/);
+		// Copy sits right where the command ends, outside the row's own button.
+		const copy = screen.getByRole("button", { name: "Copy command" });
+		expect(row.nextElementSibling).toContainElement(copy);
+		expect(row.nextElementSibling).toHaveClass("w-0", "opacity-0", "group-hover/cmdrow:w-7");
 	});
 
 	it("does not claim the result of a step that failed", () => {
@@ -621,11 +625,11 @@ describe("ActivityRow command labels", () => {
 			<ActivityRow activity={commandActivity({ command: "git push", output: "rejected", exitCode: 1 }, "failed")} />,
 		);
 		// The command and its exit say what happened; no "Pushed" or "Pushing" claim.
-		expect(screen.getByRole("button").textContent).toMatch(/^git pushexit 1/);
+		expect(screen.getByRole("button", { expanded: false }).textContent).toMatch(/^git pushexit 1/);
 		unmount();
 
 		render(<ActivityRow activity={commandActivity({ command: "npm test", output: "1 failed", exitCode: 1 }, "failed")} />);
-		expect(screen.getByRole("button").textContent).toMatch(/^npm testexit 1/);
+		expect(screen.getByRole("button", { expanded: false }).textContent).toMatch(/^npm testexit 1/);
 	});
 
 	it("keeps command failures without exit metadata destructive", () => {
