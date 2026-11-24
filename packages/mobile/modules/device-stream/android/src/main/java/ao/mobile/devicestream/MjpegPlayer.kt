@@ -19,8 +19,10 @@ import java.io.IOException
 class MjpegPlayer(
   private val client: OkHttpClient,
   private val holder: () -> SurfaceHolder?,
-  private val onSize: (Int, Int) -> Unit,
-  private val onFrame: () -> Unit,
+  /** The picture's size changed; [connection] is the number its start was given. */
+  private val onSize: (connection: Int, width: Int, height: Int) -> Unit,
+  /** The connection's first frame is on screen. */
+  private val onFrame: (connection: Int) -> Unit,
   /** The live connection ended on its own; [connection] is the number its start was given. */
   private val onEnded: (connection: Int) -> Unit,
 ) {
@@ -55,7 +57,7 @@ class MjpegPlayer(
     val live = client.newCall(request)
     call = live
     reader = Thread({ read(live, gen, connection) }, "device-mjpeg-read").also { it.isDaemon = true; it.start() }
-    decoder = Thread({ decode(gen) }, "device-mjpeg-decode").also { it.isDaemon = true; it.start() }
+    decoder = Thread({ decode(gen, connection) }, "device-mjpeg-decode").also { it.isDaemon = true; it.start() }
   }
 
   fun stop() {
@@ -152,7 +154,7 @@ class MjpegPlayer(
     stats
   }
 
-  private fun decode(gen: Long) {
+  private fun decode(gen: Long, connection: Int) {
     var reusable: Bitmap? = null
     var first = true
     while (current(gen)) {
@@ -174,15 +176,17 @@ class MjpegPlayer(
         runCatching { BitmapFactory.decodeByteArray(data, 0, data.size) }.getOrNull()
       } ?: continue
       reusable = bitmap
+      // A slow decode can finish after this connection was replaced.
+      if (!current(gen)) return
       if (bitmap.width != width || bitmap.height != height) {
         width = bitmap.width
         height = bitmap.height
-        onSize(width, height)
+        onSize(connection, width, height)
       }
       if (!draw(bitmap, gen)) return
       if (first) {
         first = false
-        onFrame()
+        onFrame(connection)
       }
     }
   }

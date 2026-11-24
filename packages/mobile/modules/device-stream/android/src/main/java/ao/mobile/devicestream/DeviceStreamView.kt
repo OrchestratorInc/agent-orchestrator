@@ -34,8 +34,18 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
   private val mjpeg = MjpegPlayer(
     client = CLIENT,
     holder = { if (surfaceReady) surfaceView.holder else null },
-    onSize = { w, h -> main.post { onSize(mapOf("width" to w, "height" to h)) } },
-    onFrame = { gotFrame = true; failures = 0; emitState("streaming") },
+    // Size and first frame, like a connection's end, count only while their
+    // connection is still the live one: checked on the main thread, where
+    // connections are replaced.
+    onSize = { connection, w, h -> main.post { if (connection == generation) onSize(mapOf("width" to w, "height" to h)) } },
+    onFrame = { connection ->
+      main.post {
+        if (connection != generation) return@post
+        gotFrame = true
+        failures = 0
+        onState(mapOf("state" to "streaming"))
+      }
+    },
     onEnded = { connection -> lostFrom(connection) },
   )
   private val decoder = H264Decoder(
