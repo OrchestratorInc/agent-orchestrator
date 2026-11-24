@@ -25,10 +25,10 @@ const (
 // SessionSpawner is the existing user-facing session launch boundary.
 type SessionSpawner interface {
 	Spawn(context.Context, ports.SpawnConfig) (domain.Session, int, int, error)
-	Kill(context.Context, domain.SessionID) (bool, error)
 	// RequestKill returns once the controller is closed and termination is
 	// durable. Untimed cleanup commands continue on background workers, which
 	// hold the session's operation guard, so Tick and Reconcile never wait on them.
+	// The scheduler has no blocking Kill, so no close path can wait on cleanup.
 	RequestKill(context.Context, domain.SessionID) (sessionmanager.KillResult, error)
 }
 
@@ -160,7 +160,7 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 				return errors.Join(spawnErr, markErr)
 			}
 			if !session.IsTerminated {
-				_, killErr := s.spawner.Kill(context.WithoutCancel(ctx), session.ID)
+				_, killErr := s.spawner.RequestKill(context.WithoutCancel(ctx), session.ID)
 				if killErr != nil {
 					return errors.Join(spawnErr, killErr)
 				}

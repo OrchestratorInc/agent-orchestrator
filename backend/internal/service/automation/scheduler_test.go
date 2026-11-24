@@ -160,7 +160,6 @@ type recordingSpawner struct {
 	store          *schedulerMemoryStore
 	calls          []ports.SpawnConfig
 	kills          []domain.SessionID
-	requested      []domain.SessionID
 	killErr        error
 	killFreed      bool
 	spawnErr       error
@@ -181,24 +180,18 @@ func (s *recordingSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (doma
 	return domain.Session{SessionRecord: rec}, 0, 0, nil
 }
 
-func (s *recordingSpawner) Kill(_ context.Context, id domain.SessionID) (bool, error) {
+// RequestKill records a close that leaves cleanup commands in the background.
+func (s *recordingSpawner) RequestKill(_ context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.kills = append(s.kills, id)
 	if s.killErr != nil {
-		return false, s.killErr
+		return sessionmanager.KillResult{}, s.killErr
 	}
 	rec, ok := s.store.sessions[id]
 	if ok {
 		rec.IsTerminated = true
 		s.store.sessions[id] = rec
 	}
-	return s.killFreed, nil
-}
-
-// RequestKill records a close that leaves cleanup commands in the background.
-func (s *recordingSpawner) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
-	s.requested = append(s.requested, id)
-	freed, err := s.Kill(ctx, id)
-	return sessionmanager.KillResult{Freed: freed}, err
+	return sessionmanager.KillResult{Freed: s.killFreed}, nil
 }
 
 // Catch-up dispatches the newest due occurrence without replaying stale work.
@@ -303,8 +296,8 @@ func TestReconcileRollsBackIncompleteAutomationSession(t *testing.T) {
 	if err := svc.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(spawner.requested) != 1 || spawner.requested[0] != sessionID {
-		t.Fatalf("closed sessions = %v, want [%s] without waiting for cleanup", spawner.requested, sessionID)
+	if len(spawner.kills) != 1 || spawner.kills[0] != sessionID {
+		t.Fatalf("killed sessions = %v, want [%s]", spawner.kills, sessionID)
 	}
 	if got := store.runs[runID].Status; got != domain.AutomationRunFailed {
 		t.Fatalf("run status = %s, want failed", got)
@@ -503,7 +496,7 @@ func TestFinishedScheduledWorkerReleasesNextRun(t *testing.T) {
 				t.Fatalf("spawns=%d want=%d", len(spawner.calls), wantSpawns)
 			}
 			if tc.wantComplete {
-				if !store.sessions[sid].IsTerminated || len(spawner.requested) != 1 {
+				if !store.sessions[sid].IsTerminated || len(spawner.kills) != 1 {
 					t.Fatal("session not closed before releasing run")
 				}
 				if got := store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor; !got.Equal(now) {
@@ -573,8 +566,8 @@ func TestUnfinishedRunReleasesAtNextOccurrence(t *testing.T) {
 			if got.Status != tc.wantRelease || (got.Status == domain.AutomationRunFailed) != (got.ErrorMessage == "Did not finish before the next scheduled run") {
 				t.Fatalf("run=%+v, want %s", got, tc.wantRelease)
 			}
-			if closed := store.sessions[sid].IsTerminated; closed != (tc.kind == domain.KindOrchestrator) || len(spawner.requested) != len(spawner.kills) {
-				t.Fatalf("session closed=%v kills=%v requested=%v", closed, spawner.kills, spawner.requested)
+			if closed := store.sessions[sid].IsTerminated; closed != (tc.kind == domain.KindOrchestrator) {
+				t.Fatalf("session closed=%v kills=%v", closed, spawner.kills)
 			}
 			if len(spawner.calls) != 1 || *spawner.calls[0].AutomationRunID != "today" {
 				t.Fatalf("spawns=%+v, want today's run", spawner.calls)
