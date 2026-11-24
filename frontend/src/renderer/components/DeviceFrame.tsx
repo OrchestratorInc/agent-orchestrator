@@ -4,12 +4,15 @@ import { cn } from "../lib/utils";
 export type DeviceFrameKind = "iphone" | "ipad" | "android-phone" | "android-tablet";
 
 /**
- * The hardware drawn around a device's screen: flat, the device's own black,
- * with its side buttons. Sizes are fractions of the frame's width so the frame
- * scales with the panel; the screen keeps its own aspect ratio.
+ * The hardware drawn around a device's screen, flat: a metal band, the black
+ * bezel inside it, and the side buttons. Sizes are fractions of the frame's
+ * width so the frame scales with the panel; the screen keeps its own aspect
+ * ratio.
  */
 type FrameSpec = {
-	/** Bezel around the screen. */
+	/** The metal band around the bezel. */
+	band: number;
+	/** Black bezel between the band and the screen. */
 	bezel: number;
 	/** Screen corner radius, as a fraction of the screen's width. */
 	screenRadius: number;
@@ -21,7 +24,8 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 	// A recent iPhone: a thin even bezel, deep screen corners, the action
 	// button and volume keys on the left, the side button on the right.
 	iphone: {
-		bezel: 0.032,
+		band: 0.012,
+		bezel: 0.026,
 		screenRadius: 0.13,
 		buttons: [
 			{ edge: "left", at: 0.17, length: 0.045 },
@@ -32,7 +36,8 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 	},
 	// An iPad: a wider even bezel, gentle corners, the top button and volume keys.
 	ipad: {
-		bezel: 0.045,
+		band: 0.009,
+		bezel: 0.04,
 		screenRadius: 0.035,
 		buttons: [
 			{ edge: "top", at: 0.78, length: 0.09 },
@@ -43,7 +48,8 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 	// An Android phone (Pixel-like): thin bezel, rounder corners than a
 	// tablet, power and volume on the right.
 	"android-phone": {
-		bezel: 0.03,
+		band: 0.01,
+		bezel: 0.024,
 		screenRadius: 0.085,
 		buttons: [
 			{ edge: "right", at: 0.2, length: 0.065 },
@@ -51,7 +57,8 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 		],
 	},
 	"android-tablet": {
-		bezel: 0.045,
+		band: 0.009,
+		bezel: 0.04,
 		screenRadius: 0.03,
 		buttons: [
 			{ edge: "top", at: 0.12, length: 0.08 },
@@ -62,6 +69,13 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 
 /** How thick a side button stands out, as a fraction of the frame's width. */
 const BUTTON_DEPTH = 0.011;
+
+/**
+ * The band and buttons: the theme's muted text tone over its background, so
+ * the frame stands out on the dark canvas (where the device's black would
+ * vanish) and stays a quiet grey on the light one.
+ */
+const METAL = "color-mix(in oklab, var(--color-text-muted) 45%, var(--color-bg-primary))";
 
 /** Screen width ÷ height to assume until the first frame says otherwise. */
 const DEFAULT_SCREEN_ASPECT: Record<DeviceFrameKind, number> = {
@@ -98,13 +112,19 @@ export function DeviceFrame({
 }) {
 	const spec = FRAMES[kind];
 	const screen = screenAspect ?? DEFAULT_SCREEN_ASPECT[kind];
-	const { bezel } = spec;
-	// Frame width W: the screen is W(1 - 2·bezel) wide, so its height is that
-	// over the screen's aspect, and the frame adds a bezel above and below.
-	const frameAspect = 1 / ((1 - 2 * bezel) / screen + 2 * bezel);
-	// Corner radii as percentages of each side, so they stay circular at any size.
-	const screenRadius = spec.screenRadius * (1 - 2 * bezel);
-	const outerRadius = screenRadius + bezel;
+	const { band, bezel } = spec;
+	const edge = band + bezel;
+	// Frame width W: the screen is W(1 - 2·edge) wide, so its height is that
+	// over the screen's aspect, and the band and bezel add an edge above and below.
+	const frameAspect = 1 / ((1 - 2 * edge) / screen + 2 * edge);
+	// Corner radii as fractions of W, then as percentages of each box's own
+	// sides so they stay circular at any size.
+	const screenRadius = spec.screenRadius * (1 - 2 * edge);
+	const bezelRadius = screenRadius + bezel;
+	const outerRadius = bezelRadius + band;
+	// The bezel box is W(1 - 2·band) wide and H - 2·band·W tall.
+	const bezelBoxWidth = 1 - 2 * band;
+	const bezelBoxHeight = 1 / frameAspect - 2 * band;
 	const frameStyle: CSSProperties = {
 		aspectRatio: frameAspect,
 		// As large as fits the panel, both ways (the panel is a size container).
@@ -113,20 +133,30 @@ export function DeviceFrame({
 	return (
 		<div className={cn("relative", className)} data-device-frame={kind} style={frameStyle}>
 			{spec.buttons.map((button, index) => (
-				<span aria-hidden="true" className="absolute rounded-xs bg-black ring-1 ring-[var(--color-border-strong)]" key={index} style={buttonStyle(button, frameAspect)} />
+				<span aria-hidden="true" className="absolute rounded-xs" key={index} style={{ ...buttonStyle(button, frameAspect), background: METAL }} />
 			))}
 			<div
-				className="absolute inset-0 bg-black ring-1 ring-[var(--color-border-strong)]"
+				className="absolute inset-0"
 				style={{
+					background: METAL,
 					borderRadius: `${outerRadius * 100}% / ${outerRadius * frameAspect * 100}%`,
-					padding: `${bezel * 100}%`,
+					padding: `${band * 100}%`,
 				}}
 			>
 				<div
-					className="relative size-full overflow-hidden bg-black"
-					style={{ borderRadius: `${spec.screenRadius * 100}% / ${spec.screenRadius * screen * 100}%` }}
+					className="size-full bg-black"
+					style={{
+						borderRadius: `${(bezelRadius / bezelBoxWidth) * 100}% / ${(bezelRadius / bezelBoxHeight) * 100}%`,
+						// Padding percentages are of this box's containing block, the band's content box.
+						padding: `${(bezel / bezelBoxWidth) * 100}%`,
+					}}
 				>
-					{children}
+					<div
+						className="relative size-full overflow-hidden bg-black"
+						style={{ borderRadius: `${spec.screenRadius * 100}% / ${spec.screenRadius * screen * 100}%` }}
+					>
+						{children}
+					</div>
 				</div>
 			</div>
 		</div>
