@@ -220,7 +220,7 @@ const FOOTER_ICON_BUTTON_CLASS = cn(
 // and session rows.
 const SIDEBAR_ROW_CLASS = "h-8 gap-2 [&_svg]:size-icon-md";
 
-// Search + Pinned/Projects section chrome: same type, icon, and row size.
+// Search + Sessions/Projects section chrome: same type, icon, and row size.
 const SECTION_ROW_CLASS =
 	"flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-sm font-medium text-muted-foreground [&_svg]:size-icon-md [&_svg]:shrink-0";
 
@@ -960,22 +960,18 @@ export const Sidebar = memo(function Sidebar({
 		};
 	}, [t, workspaces]);
 	const projectAvatars = useProjectAvatars(projectWorkspaces);
+	// A pinned session lives under its project, so a project that holds one
+	// stays listed rather than hiding behind Show more.
+	const projectLimit = useMemo(() => Math.max(SIDEBAR_INITIAL_SECTION_LIMIT, projectWorkspaces.reduce(
+		(count, workspace, index) => workspace.sessions.some((session) => isPinnedWorker(session) && session.isTerminated !== true) ? index + 1 : count,
+		0,
+	)), [projectWorkspaces]);
 	const {
 		listed: visibleWorkspaces,
 		hiddenCount: hiddenProjectCount,
 		showAll: showAllProjects,
 		toggleShowAll: toggleShowAllProjects,
-	} = useShowMoreCap(
-		projectWorkspaces,
-		// A pinned session lives under its project, so a project that holds one
-		// stays listed rather than hiding behind Show more.
-		Math.max(SIDEBAR_INITIAL_SECTION_LIMIT, projectWorkspaces.reduce(
-			(count, workspace, index) => workspace.sessions.some((session) => isPinnedWorker(session) && session.isTerminated !== true) ? index + 1 : count,
-			0,
-		)),
-		selection.activeProjectId,
-		isIconRail,
-	);
+	} = useShowMoreCap(projectWorkspaces, projectLimit, selection.activeProjectId, isIconRail);
 	const projectContentOpen = (projectWorkspaces.length > 0 || remoteHosts.length > 0) && (projectsOpen || isIconRail);
 	const projectIds = useMemo(
 		() => projectWorkspaces.map((workspace) => workspace.id),
