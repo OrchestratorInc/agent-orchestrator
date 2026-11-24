@@ -175,6 +175,9 @@ const SURFACE_STATE_KEYS = [...SURFACE_STAT_KEYS, "visible_ms", "focused_ms"] as
 /** Saved rows with only known names and numeric stats, so a damaged entry cannot stop a flush. */
 function cleanRows(parsed: Partial<PersistedState>): Pick<PersistedState, "counters" | "surfaces" | "controls" | "shortcuts"> {
 	const counters = (numbersOf(parsed.counters, USAGE_SUMMARY_COUNTERS) ?? {}) as PersistedState["counters"];
+	// A window saved before shortcuts were counted by id (it has no `shortcuts`)
+	// counted every key chord as one. Dropped, so it is never sent as schema 2.
+	if (!parsed.shortcuts) delete counters.shortcut_count;
 	const surfaces: PersistedState["surfaces"] = {};
 	for (const [surface, stats] of Object.entries(parsed.surfaces ?? {})) {
 		if (!isUiSurface(surface)) continue;

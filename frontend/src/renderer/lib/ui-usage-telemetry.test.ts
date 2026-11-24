@@ -374,6 +374,24 @@ describe("UiUsageRuntime", () => {
 		expect(controlRow(properties, "sidebar.session_row")).toMatchObject({ shortcut_count: 1 });
 	});
 
+	it("drops the old chord count from a window saved before shortcuts were counted by id", async () => {
+		// As an older build saved it: no `shortcuts`, and every key chord in shortcut_count.
+		localStorage.setItem("ao.telemetry.uiUsage.v1", JSON.stringify({
+			version: 1,
+			windowId: "11111111-1111-4111-8111-111111111111",
+			windowStartedAt: START,
+			windowFlushAt: START + 60_000,
+			activeMs: 0,
+			counters: { shortcut_count: 7, send_count: 2 },
+			surfaces: {},
+			controls: {},
+		}));
+		runtime = make();
+		const properties = await summary();
+		expect(properties.shortcut_count).toBeUndefined();
+		expect(properties.send_count).toBe(2);
+	});
+
 	it("keeps shortcut counts saved before a restart, and drops unknown ones", async () => {
 		runtime.shortcutUsed("toggle-sidebar", "key");
 		runtime.checkpoint();
