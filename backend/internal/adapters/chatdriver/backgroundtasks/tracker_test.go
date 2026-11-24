@@ -1,6 +1,8 @@
 package backgroundtasks
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -244,5 +246,26 @@ func TestStartedAtStaysUnsetWhenNoStartTimeAvailable(t *testing.T) {
 	}
 	if tasks[0].StartedAt != nil {
 		t.Fatalf("expected StartedAt to stay nil, got %v", tasks[0].StartedAt)
+	}
+}
+
+func TestFileStoreRollsBackCacheOnSaveFailure(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+	// Create a regular file where the chat-hosts directory would be, causing save to fail.
+	blocker := filepath.Join(dir, "chat-hosts")
+	if err := os.WriteFile(blocker, []byte("blocker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Now().UTC()
+	err := store.SetStartedAt("ses-fail", "task-1", "run-1", at)
+	if err == nil {
+		t.Fatal("expected save error")
+	}
+
+	// Verify cache does not retain the failed write.
+	if _, ok := store.GetStartedAt("ses-fail", "task-1", "run-1"); ok {
+		t.Fatal("cache retained entry after save failure")
 	}
 }

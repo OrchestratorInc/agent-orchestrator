@@ -27,11 +27,18 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 		if !errors.Is(err, ports.ErrBackgroundTasksUnsupported) {
 			if err == nil && c.backgroundObserved.Store != nil {
 				for i := range tasks {
-					if tasks[i].StartedAt == nil && tasks[i].ID != "" {
-						runID := tasks[i].RunID
-						if stored, ok := c.backgroundObserved.Store.GetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID); ok {
+					if tasks[i].ID == "" {
+						continue
+					}
+					runID := tasks[i].RunID
+					if stored, ok := c.backgroundObserved.Store.GetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID); ok && !stored.IsZero() {
+						if tasks[i].StartedAt == nil || stored.Before(*tasks[i].StartedAt) {
 							tasks[i].StartedAt = &stored
+						} else if tasks[i].StartedAt != nil && tasks[i].StartedAt.Before(stored) {
+							_ = c.backgroundObserved.Store.SetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID, *tasks[i].StartedAt)
 						}
+					} else if tasks[i].StartedAt != nil && !tasks[i].StartedAt.IsZero() {
+						_ = c.backgroundObserved.Store.SetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID, *tasks[i].StartedAt)
 					}
 				}
 			}

@@ -40,6 +40,7 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{entries: make(map[string]time.Time)}
 }
 
+// GetStartedAt returns the recorded start time for the given task and run identity.
 func (m *MemoryStore) GetStartedAt(sessionID, taskID, runID string) (time.Time, bool) {
 	if sessionID == "" || taskID == "" {
 		return time.Time{}, false
@@ -50,6 +51,7 @@ func (m *MemoryStore) GetStartedAt(sessionID, taskID, runID string) (time.Time, 
 	return t, ok
 }
 
+// SetStartedAt records the start time for the given task and run identity.
 func (m *MemoryStore) SetStartedAt(sessionID, taskID, runID string, at time.Time) error {
 	if sessionID == "" || taskID == "" || at.IsZero() {
 		return nil
@@ -181,10 +183,19 @@ func (f *fileStore) SetStartedAt(sessionID, taskID, runID string, at time.Time) 
 	if existing, ok := m[k]; ok && !existing.StartedAt.IsZero() && !at.Before(existing.StartedAt) {
 		return nil
 	}
+	previous, hadPrevious := m[k]
 	m[k] = persistedTaskRecord{
 		TaskID:    taskID,
 		RunID:     runID,
 		StartedAt: at.UTC(),
 	}
-	return f.saveLocked(sessionID)
+	if err := f.saveLocked(sessionID); err != nil {
+		if hadPrevious {
+			m[k] = previous
+		} else {
+			delete(m, k)
+		}
+		return err
+	}
+	return nil
 }

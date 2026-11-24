@@ -415,3 +415,43 @@ func TestBackgroundTasksACPRestoresStartTimeAcrossRestartAndReconnect(t *testing
 		t.Fatalf("new run did not reset start time: got %+v, want %v", tasks3, newLaunchTime)
 	}
 }
+
+func TestBackgroundTasksACPNativeReadPersistsStartTime(t *testing.T) {
+	store := backgroundtasks.NewMemoryStore()
+	start := time.Now().Add(-20 * time.Minute).Truncate(time.Millisecond).UTC()
+	c := &conversation{
+		sessionID: "native-session",
+		backgroundObserved: backgroundtasks.Tracker{
+			SessionID: "native-session",
+			Store:     store,
+		},
+		backgroundTasks: func(_ context.Context, _ *acpsdk.ClientSideConnection, _ acpsdk.SessionId) ([]ports.ChatBackgroundTask, error) {
+			return []ports.ChatBackgroundTask{
+				{ID: "native-task-1", RunID: "run-1", StartedAt: &start},
+			}, nil
+		},
+	}
+
+	tasks, err := c.BackgroundTasks(context.Background())
+	if err != nil || len(tasks) != 1 || tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(start) {
+		t.Fatalf("first native read failed: tasks=%+v err=%v", tasks, err)
+	}
+
+	// Stored time is persisted in store.
+	stored, ok := store.GetStartedAt("native-session", "native-task-1", "run-1")
+	if !ok || !stored.Equal(start) {
+		t.Fatalf("stored start time = %v, want %v", stored, start)
+	}
+
+	// Later native read where provider omits optional StartedAt restores stored time.
+	c.backgroundTasks = func(_ context.Context, _ *acpsdk.ClientSideConnection, _ acpsdk.SessionId) ([]ports.ChatBackgroundTask, error) {
+		return []ports.ChatBackgroundTask{
+			{ID: "native-task-1", RunID: "run-1", StartedAt: nil},
+		}, nil
+	}
+
+	tasks2, err := c.BackgroundTasks(context.Background())
+	if err != nil || len(tasks2) != 1 || tasks2[0].StartedAt == nil || !tasks2[0].StartedAt.Equal(start) {
+		t.Fatalf("re-read did not restore stored start time: %+v, err=%v", tasks2, err)
+	}
+}
