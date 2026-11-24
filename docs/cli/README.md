@@ -37,6 +37,7 @@ Product commands use daemon HTTP routes. The offline `ao triage` diagnostic laun
 | `ao daemon`                   | Run the daemon in the foreground (normally supervised by the desktop app or an OS service manager).                               |
 | `ao remote-host status/enable/disable` | Inspect or toggle this machine's authenticated remote listener through the local daemon. |
 | `ao remote-host link` | Add this machine to your AO account by signing in from another device; it then gets a fixed address. |
+| `ao webhook add/list/set/remove/test` | POST questions, finished orchestrator turns, agent exits and PR news to webhooks such as a chat bot. `add` reads the URL and Authorization line from stdin; the routes are loopback only. |
 
 For a self-hosted machine, use the [host setup command](../self-hosted-remote.md)
 to install the daemon with its Claude Chat runtime and start the OS user

@@ -96,6 +96,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
+	"github.com/aoagents/agent-orchestrator/backend/internal/webhook"
 )
 
 // usageReconcileTick is the safety-net interval for the usage pipeline
@@ -1281,6 +1282,21 @@ func Run(buildVersion string) (retErr error) {
 			dispatcher.Run(ctx)
 		}()
 	}
+	var webhookHooks controllers.WebhookStore
+	var webhookDelivery controllers.WebhookDelivery
+	if hooks, err := webhook.OpenStore(cfg.DataDir); err != nil {
+		log.Warn("webhooks unavailable", "err", err)
+	} else {
+		dispatcher := webhook.NewDispatcher(webhook.Deps{
+			Store: hooks, Notifications: notificationHub, Changes: cdcPipe.Broadcaster,
+			Sessions: store, History: chatSvc, Turns: store, HostID: hostIdentity.HostID, Log: log,
+		})
+		webhookHooks, webhookDelivery = hooks, dispatcher
+		go func() {
+			defer sentryobs.RecoverBackground()
+			dispatcher.Run(ctx)
+		}()
+	}
 	if mobilebridge.KeepAwakeSupported() {
 		ka := mobilebridge.NewKeepAwake(os.Getpid())
 		ka.SetLidController(mobilebridge.NewLidAwake(os.Getpid(), os.Getenv("AO_WAKE_HELPER"), cfg.DataDir))
@@ -1332,6 +1348,8 @@ func Run(buildVersion string) (retErr error) {
 		Reports:            reportSvc,
 		NotificationStream: notificationHub,
 		Push:               pushRegistry,
+		Webhooks:           webhookHooks,
+		WebhookDelivery:    webhookDelivery,
 		Presence:           presenceTracker,
 		ClientTimeZone:     clienttz.NewRecorder(ctx, cfg.DataDir),
 		DeviceRoster:       deviceRoster,

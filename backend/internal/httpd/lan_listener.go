@@ -64,7 +64,8 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // through Cua Driver under /api/v1/computer-use and the switch that hands it to
 // new chat sessions at /api/v1/settings/computer-use, and personal
 // Codex account-management routes under /api/v1/agents/codex/accounts and
-// /api/v1/agents/codex/account-switches (the harmless read-only Codex model
+// /api/v1/agents/codex/account-switches, and outbound webhooks under
+// /api/v1/webhooks, which hold webhook keys (the harmless read-only Codex model
 // routes stay reachable so mobile can pick a model). Some routes
 // are gated in the shared router by localControlRequest, which trusts the
 // client-supplied Host header. That header is spoofable by any LAN client. The
@@ -85,6 +86,7 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/settings/computer-use",
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/account-switches",
+	"/api/v1/webhooks",
 }
 
 // lanControlBlock returns 404 for any request whose path is, or is nested
