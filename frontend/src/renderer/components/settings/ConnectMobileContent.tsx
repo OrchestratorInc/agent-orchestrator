@@ -1058,7 +1058,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			>
 				<Switch
 					aria-label={t("mobile.publicTunnel.label", "Reach from anywhere")}
-					disabled={busy || status.loopbackOnly === true}
+					disabled={busy || (status.enabled && status.loopbackOnly === true)}
 					checked={status.noPublicTunnel !== true}
 					onCheckedChange={(next) => {
 						clearActionErrors();

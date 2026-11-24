@@ -60,7 +60,7 @@ On macOS, **Quit / Cmd+Q** closes the desktop window and removes AO from the Doc
 
 ## Tailscale
 
-To keep Connect Mobile off the public internet, turn off **Reach from anywhere** in **Settings → Mobile**. Orchestrator then starts no Cloudflare tunnel and does not download `cloudflared`; the code carries only this network's and the computer's Tailscale addresses, so a phone connects on the same Wi-Fi or over Tailscale. The choice is kept while Connect Mobile is off, and switching it does not change the password or unpair phones.
+To keep Connect Mobile off the public internet, turn off **Reach from anywhere** in **Settings → Mobile**. Orchestrator then starts no Cloudflare tunnel and does not download `cloudflared`; the code carries only this network's and the computer's Tailscale addresses, so a phone connects on the same Wi-Fi, or over Tailscale within the iPhone limit below. The choice is kept while Connect Mobile is off, and switching it does not change the password or unpair phones.
 
 iPhones cannot connect through the current raw Tailscale endpoint. Use a managed HTTPS endpoint instead. iOS blocks cleartext requests to `100.64.0.0/10`, and the current v2 offer does not advertise Tailscale HTTPS endpoints. The current desktop panel has no connection-method selector or separate visible TLS control, and automatic TLS setup is incomplete. Android behavior for a raw Tailscale endpoint is unverified.
 
