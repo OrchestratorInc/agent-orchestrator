@@ -1178,11 +1178,7 @@ WHERE conversations.id = sqlc.arg(conversation_id)
       WHERE conversation_messages.turn_id = sqlc.arg(turn_id)
         AND conversation_messages.role = 'user'
         AND conversation_messages.origin = 'human'
-  )
-  AND (conversations.scope <> 'project' OR conversations.current_session_id = (
-      SELECT conversation_turns.handled_by_session_id FROM conversation_turns
-      WHERE conversation_turns.id = sqlc.arg(turn_id)
-  ));
+  );
 
 -- name: ReleaseConversationQueue :exec
 UPDATE conversations SET queue_held_at = NULL
