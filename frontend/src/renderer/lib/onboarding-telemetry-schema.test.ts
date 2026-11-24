@@ -37,6 +37,11 @@ describe("onboarding telemetry allowlist", () => {
 		}
 	});
 
+	it("keeps the work defaults page's choices as booleans only", () => {
+		expect(sanitizeOnboardingProperties("ao.onboarding.step_completed", { step: "work_defaults", archive_on_merge: true, auto_review: false, assigned_issues: "yes" }))
+			.toEqual({ step: "work_defaults", step_index: 10, archive_on_merge: true, auto_review: false });
+	});
+
 	it("keeps only closed values on step events", () => {
 		expect(sanitizeOnboardingProperties("ao.onboarding.step_viewed", {
 			step: "tools",

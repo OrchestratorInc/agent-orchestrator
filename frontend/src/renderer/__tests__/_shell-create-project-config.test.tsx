@@ -27,4 +27,30 @@ describe("createProjectConfig", () => {
 			trackerIntake: { enabled: true, provider: "github", assignee: "octocat" },
 		});
 	});
+
+	it("adds how agents finish their work, as chosen in onboarding", () => {
+		expect(
+			createProjectConfig(
+				{ workerAgent: "codex", orchestratorAgent: "claude-code" },
+				{ archiveOnMerge: true, review: true, reviewerAgent: "claude-code", assignedIssues: false },
+			),
+		).toEqual({
+			worker: { agent: "codex" },
+			orchestrator: { agent: "claude-code" },
+			terminateOnPrMerge: true,
+			autoReview: true,
+			reviewers: [{ harness: "claude-code" }],
+		});
+		expect(
+			createProjectConfig(
+				{ workerAgent: "codex", orchestratorAgent: "claude-code", reviewerAgent: "opencode" },
+				{ archiveOnMerge: false, review: false, assignedIssues: false },
+			),
+		).toEqual({
+			worker: { agent: "codex" },
+			orchestrator: { agent: "claude-code" },
+			reviewers: [{ harness: "opencode" }],
+			terminateOnPrMerge: false,
+		});
+	});
 });

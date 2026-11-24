@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ChevronDown, ChevronUp, Cloud, LoaderCircle, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
+import { Archive, ArrowLeft, ChevronDown, ChevronUp, CircleDot, Cloud, Eye, Info, LoaderCircle, Monitor, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -36,7 +36,9 @@ import {
 } from "../../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../lib/agent-options";
-import { DEFAULT_AGENT_PRIORITY_RANK } from "../../lib/agent-select-options";
+import { DEFAULT_AGENT_PRIORITY_RANK, defaultProjectAgents } from "../../lib/agent-select-options";
+import { INITIAL_PROJECT_DEFAULTS, readProjectDefaults, saveProjectDefaults, type ProjectDefaults } from "../../lib/project-defaults";
+import { useSettings } from "../../hooks/useSettings";
 import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
@@ -74,18 +76,21 @@ import { dragStyle } from "../PageTopbar";
 import { HarnessAuthTerminalPanel } from "../settings/harness/HarnessAuthTerminalPanel";
 import { Button, type ButtonProps } from "../ui/button";
 import { Pressable } from "../ui/pressable";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { startFirstTaskFunnel } from "./FirstTaskFunnel";
 import { agentRowState, closeLoginWorkflow, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useLoginLifetime, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
-// Three pages: what Orchestrator is (with its three-part story playing in the
-// preview), the optional account, and the tools a worker needs (GitHub CLI and
-// a coding agent). Log in and Your tools are skipped when there is nothing to
+// Four pages: what Orchestrator is (with its three-part story playing in the
+// preview), the optional account, the tools a worker needs (GitHub CLI and a
+// coding agent), and how agents finish their work (review, archive on merge,
+// assigned issues). Log in and Your tools are skipped when there is nothing to
 // do on them. Then the real app takes over with Add Project open: no tour, the
 // app has to make the first project and task obvious on its own
 // (FirstTaskFunnel only measures whether it does).
-const STEPS = ["welcome", "signin", "tools"] as const;
+const STEPS = ["welcome", "signin", "tools", "defaults"] as const;
 type Step = (typeof STEPS)[number];
 // Where a step stored by the earlier seven-page flow resumes.
 const LEGACY_STEPS: Record<string, Step> = {
@@ -96,7 +101,7 @@ const LEGACY_STEPS: Record<string, Step> = {
 	project: "tools",
 };
 /** Each page's step in the onboarding funnel (onboarding-steps.ts). */
-const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools" };
+const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools", defaults: "work_defaults" };
 // Resume on the same page after a relaunch mid-setup (per-viewer convenience).
 const STEP_STORAGE_KEY = "ao.firstRun.step";
 /** Longest the Tools page's view waits for its checks before reporting what it knows. */
@@ -132,6 +137,8 @@ const POINT_HOLD_MS = [4200, 3800, 10200] as const;
  * board held a moment once it's all sorted. */
 const SORT_ORDER = [3, 2, 0, 1] as const;
 const SORT_BEAT_MS = 2200;
+/** The last page holds its sorted board this long before the trips play again. */
+const FINISH_HOLD_MS = 3500;
 
 
 function readStoredStep(): Step {
@@ -357,6 +364,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		const timer = window.setTimeout(() => setToolsWaitOver(true), TOOLS_VIEW_WAIT_MS);
 		return () => window.clearTimeout(timer);
 	}, [step, toolsWaitOver]);
+	useOnboardingStep("work_defaults", step === "defaults", { autoComplete: false });
 	useOnboardingStep("tools", step === "tools", {
 		autoComplete: false,
 		viewReady: toolsChecksAnswered || toolsWaitOver,
@@ -382,8 +390,15 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	// trip to GitHub reads on its own.
 	// The beat is keyed to the loop and point it belongs to, so a new run starts
 	// from 0 on its first frame instead of flashing the previous run's board.
-	const sorting = step === "welcome" && point === CI_POINT;
-	const sortKey = `${cycle}:${point}`;
+	// The last page plays the same trips on a loop: how a worker's PR finishes.
+	const [finishCycle, setFinishCycle] = useState(0);
+	useEffect(() => {
+		if (step !== "defaults") return;
+		const timer = window.setInterval(() => setFinishCycle((current) => current + 1), SORT_ORDER.length * SORT_BEAT_MS + FINISH_HOLD_MS);
+		return () => window.clearInterval(timer);
+	}, [step]);
+	const sorting = (step === "welcome" && point === CI_POINT) || step === "defaults";
+	const sortKey = step === "defaults" ? `defaults:${finishCycle}` : `${cycle}:${point}`;
 	const [sort, setSort] = useState({ key: "", beat: 0 });
 	useEffect(() => {
 		if (!sorting) return;
@@ -401,6 +416,10 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	function pageCompletion(): Record<string, unknown> {
 		if (step === "welcome") return { story_points_seen: cycle > 0 ? STORY_POINTS : point + 1, story_completed: cycle > 0 };
 		if (step === "tools") return { agents_ready: readyAgentCount, gh_ready: ghReady };
+		if (step === "defaults") {
+			const chosen = readProjectDefaults();
+			return chosen ? { archive_on_merge: chosen.archiveOnMerge, auto_review: chosen.review, assigned_issues: chosen.assignedIssues } : {};
+		}
 		return {};
 	}
 	const toolAgents = useToolAgents();
@@ -409,6 +428,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 			step={step}
 			point={point}
 			cycle={cycle}
+			finishCycle={finishCycle}
 			sortBeat={sortBeat}
 			pickerAgents={toolAgents.pickerAgents}
 			selectedAgentId={toolAgents.selectedId}
@@ -463,6 +483,7 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 									login={harnessLogin}
 								/>
 							) : null}
+							{step === "defaults" ? <WorkDefaultsStep onNext={() => goNext()} /> : null}
 						</motion.div>
 					</AnimatePresence>
 				</div>
@@ -630,14 +651,14 @@ const ROW_LIST = "overflow-hidden rounded-xl border border-border bg-(--schemati
 /** CheckRows as an open list, without the box or the lines between rows. */
 const OPEN_ROW_LIST = "[&>li]:!border-t-0 [&>li]:!px-0";
 
-function CheckRow({ icon, label, detail, trailing, below }: { icon?: ReactNode; label: ReactNode; detail?: ReactNode; trailing?: ReactNode; below?: ReactNode }) {
+function CheckRow({ icon, label, detail, trailing, below, wrap = false }: { icon?: ReactNode; label: ReactNode; detail?: ReactNode; trailing?: ReactNode; below?: ReactNode; /** Let the label and detail wrap instead of truncating (a sentence of detail). */ wrap?: boolean }) {
 	return (
 		<li className="px-4 py-3 [&+&]:border-t [&+&]:border-border">
-			<div className="flex items-center gap-3">
-				{icon ? <span className="flex shrink-0" aria-hidden="true">{icon}</span> : null}
+			<div className={cn("flex gap-3", wrap ? "items-start" : "items-center")}>
+				{icon ? <span className={cn("flex shrink-0", wrap && "pt-0.5")} aria-hidden="true">{icon}</span> : null}
 				<span className="min-w-0 flex-1">
-					<span className="block truncate text-sm text-foreground">{label}</span>
-					{detail ? <span className="block truncate text-xs text-muted-foreground">{detail}</span> : null}
+					<span className={cn("block text-sm text-foreground", wrap ? "text-pretty" : "truncate")}>{label}</span>
+					{detail ? <span className={cn("block text-xs text-muted-foreground", wrap ? "text-pretty pt-0.5 leading-relaxed" : "truncate")}>{detail}</span> : null}
 				</span>
 				<span className="flex h-control-md shrink-0 items-center">{trailing}</span>
 			</div>
@@ -764,6 +785,7 @@ function OnboardingScene({
 	step,
 	point,
 	cycle,
+	finishCycle,
 	sortBeat,
 	pickerAgents,
 	selectedAgentId,
@@ -774,6 +796,8 @@ function OnboardingScene({
 	step: Step;
 	point: number;
 	cycle: number;
+	/** The last page's loop of trips to GitHub, so each one's cards arrive again. */
+	finishCycle: number;
 	sortBeat: number;
 	pickerAgents: Array<{ id: string; label: string; dimmed?: boolean }>;
 	selectedAgentId?: string;
@@ -787,12 +811,13 @@ function OnboardingScene({
 	const welcome = step === "welcome";
 	const stage: WorkStage = welcome ? (point === 0 ? "none" : point === 1 ? "working" : "sorted") : "sorted";
 	const page: ScenePage = welcome && point === 0 ? "chat" : step === "tools" ? "new" : "board";
-	const cards = exampleCards(tasks, stage, welcome ? sortBeat : undefined);
+	const finishing = step === "defaults";
+	const cards = exampleCards(tasks, stage, welcome || finishing ? sortBeat : undefined);
 	// While the chat leads a new loop, the board (fading out behind it) keeps
 	// the last loop's work instead of flashing empty; the next loop's board
 	// mounts fresh so its cards arrive again.
 	const boardCards = stage === "none" ? exampleCards(tasks, "sorted") : cards;
-	const boardKey = stage === "none" ? `${cycle}-previous` : `${cycle}`;
+	const boardKey = finishing ? `finish-${finishCycle}` : stage === "none" ? `${cycle}-previous` : `${cycle}`;
 	const sidebarCards = cards
 		.slice()
 		.sort((a, b) => tasks.findIndex((task) => task.id === a.id) - tasks.findIndex((task) => task.id === b.id));
@@ -811,7 +836,7 @@ function OnboardingScene({
 			phoneShown={phoneShown}
 			phoneDelay={phoneDelay}
 			githubShown={githubShown}
-			focus={welcome ? STORY_FOCUS[point]! : step === "tools" ? "new" : step === "signin" ? "devices" : "overview"}
+			focus={welcome ? STORY_FOCUS[point]! : step === "tools" ? "new" : step === "signin" ? "devices" : finishing ? "ci" : "overview"}
 		/>
 	);
 }
@@ -1357,6 +1382,91 @@ function ToolsStep({ onNext, onSkip, login }: {
 				onConfirm={onSkip}
 				onOpenChange={setConfirmingSkip}
 			/>
+		</StepSplit>
+	);
+}
+
+// ── 3. How agents finish their work ─────────────────────────────────────────
+
+/**
+ * Defaults every project added from here starts with (project-defaults.ts):
+ * archive a chat once its PR merges, a second agent reviews each PR, and
+ * agents pick up issues assigned to you. The preview plays the PRs' trips
+ * through CI and review meanwhile.
+ */
+function WorkDefaultsStep({ onNext }: { onNext: () => void }) {
+	const { t } = useTranslation();
+	const readiness = useAgentReadinessQuery();
+	const { settings } = useSettings();
+	const intakeAvailable = settings?.trackerIntakeEnabled === true;
+	const [choices, setChoices] = useState<ProjectDefaults>(() => readProjectDefaults() ?? INITIAL_PROJECT_DEFAULTS);
+	const change = (patch: Partial<ProjectDefaults>) => setChoices((current) => ({ ...current, ...patch }));
+	// Reviewers: the agents ready on this machine, the usual pick first.
+	const agents = readiness.data?.agents ?? [];
+	const ready = agents.filter((agent) => agent.effectiveReadiness === "ready");
+	const suggested = agents.length ? defaultProjectAgents(agents).reviewerAgent : undefined;
+	const reviewerIds = [...new Set([...(suggested ? [suggested] : []), ...ready.map((agent) => agent.id)])];
+	const reviewer = choices.reviewerAgent && reviewerIds.includes(choices.reviewerAgent) ? choices.reviewerAgent : reviewerIds[0];
+	const labelFor = (id: string) => agents.find((agent) => agent.id === id)?.label ?? id;
+	const finish = () => {
+		saveProjectDefaults({ ...choices, reviewerAgent: choices.review ? reviewer : undefined, assignedIssues: intakeAvailable && choices.assignedIssues });
+		onNext();
+	};
+	const toggle = (id: string, checked: boolean, onChange: (checked: boolean) => void) => (
+		<Switch id={id} checked={checked} onCheckedChange={onChange} />
+	);
+	return (
+		<StepSplit title={t("firstRun.defaultsTitle")} body={t("firstRun.defaultsBody")}>
+			<ul className={ROW_LIST}>
+				<CheckRow
+					icon={<Archive className="size-icon-md text-muted-foreground" />}
+					label={<label htmlFor="onboarding-archive-on-merge">{t("firstRun.defaultsArchive")}</label>}
+					detail={t("firstRun.defaultsArchiveDetail")}
+					wrap
+					trailing={toggle("onboarding-archive-on-merge", choices.archiveOnMerge, (archiveOnMerge) => change({ archiveOnMerge }))}
+				/>
+				<CheckRow
+					icon={<Eye className="size-icon-md text-muted-foreground" />}
+					label={<label htmlFor="onboarding-review">{t("firstRun.defaultsReview")}</label>}
+					detail={t("firstRun.defaultsReviewDetail")}
+					wrap
+					trailing={toggle("onboarding-review", choices.review, (review) => change({ review }))}
+					below={choices.review && reviewer ? (
+						<div className="flex items-center justify-between gap-3">
+							<span id="onboarding-reviewer" className="text-xs text-muted-foreground">{t("firstRun.defaultsReviewer")}</span>
+							<Select value={reviewer} onValueChange={(reviewerAgent) => change({ reviewerAgent })}>
+								<SelectTrigger size="sm" aria-labelledby="onboarding-reviewer" className="min-w-36">
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent align="end">
+									{reviewerIds.map((id) => (
+										<SelectItem key={id} value={id}>
+											<AgentAvatar provider={id} className="size-icon-base" decorative />
+											{labelFor(id)}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+					) : undefined}
+				/>
+				{intakeAvailable ? (
+					<CheckRow
+						icon={<CircleDot className="size-icon-md text-muted-foreground" />}
+						label={<label htmlFor="onboarding-assigned-issues">{t("firstRun.defaultsIssues")}</label>}
+						detail={t("firstRun.defaultsIssuesDetail")}
+						wrap
+						trailing={toggle("onboarding-assigned-issues", choices.assignedIssues, (assignedIssues) => change({ assignedIssues }))}
+					/>
+				) : null}
+			</ul>
+			<p className="flex gap-2 px-1 text-xs leading-relaxed text-muted-foreground">
+				<Info className="mt-0.5 size-icon-sm shrink-0" aria-hidden="true" />
+				{t("firstRun.defaultsNote")}
+			</p>
+			<StepAction>
+				<NextButton onClick={finish}>{t("firstRun.continue")}</NextButton>
+			</StepAction>
 		</StepSplit>
 	);
 }

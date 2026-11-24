@@ -970,7 +970,8 @@ users move through first-run onboarding, so we can see where they stop and
 why. The flow is: the startup dependency dialog (only when git, tmux or a
 coding agent is missing, before onboarding), the welcome page and its three-part story (the last
 part shows CI and code review on GitHub), the optional AO Cloud sign-in, Your
-tools (the GitHub CLI and coding agents), then the real app with Add Project
+tools (the GitHub CLI and coding agents), how agents finish their work
+(defaults for the projects added next), then the real app with Add Project
 open: adding a project lands on its orchestrator's chat, where the person
 sends the first message. There is no guided tour; the last three steps only
 measure whether the app gets people there on its own.
@@ -985,7 +986,9 @@ GitHub CLI is signed in and `ao_cloud_user_id` when signed in to AO Cloud.
 ### Steps
 
 The funnel to read is the pages and then the app: `welcome` → `sign_in` →
-`tools` → `tour_project` → `tour_orchestrator` → `first_task`. The `tour_*`
+`tools` → `work_defaults` → `tour_project` → `tour_orchestrator` →
+`first_task`. `work_defaults` was added after the others, so its
+`step_index` (10) is out of flow order. The `tour_*`
 names are from the guided tour that used to cover those steps; they are kept so
 the funnel reads across versions.
 Three steps are conditional sub-steps, not stages every run passes through,
@@ -1016,11 +1019,12 @@ Every step is identified by `step` and its position in the flow,
 | 7 | `tour_orchestrator` | A chat is showing; adding a project lands on its orchestrator's |
 | 8 | `first_task` | The first message is sent, from any chat |
 | 9 | `finish` | The guided tour's closing note. Not sent since the tour was removed |
+| 10 | `work_defaults` | How agents finish their work: archive chats on merge, review every PR, work on assigned issues |
 
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.step_viewed` | A step is shown | `step`, `step_index`, `run_kind`, `missing` (dependencies, tools), `agents_ready` (tools), `chats_found_bucket` (import_chats) |
-| `ao.onboarding.step_completed` | A step is done: Continue on a page, the app reaching the next step, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `project_source` (tour_project) |
+| `ao.onboarding.step_completed` | A step is done: Continue on a page, the app reaching the next step, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `archive_on_merge`, `auto_review` and `assigned_issues` (work_defaults, booleans); `project_source` (tour_project) |
 | `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Skip on Sign in, Skip setup, Skip on the import step), or, in versions with the tour, by closing it | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
 | `ao.onboarding.step_abandoned` | The window closes while the step is showing. Sent at once with `sendBeacon` | `step`, `step_index`, `run_kind`, `time_on_step_ms` |
 | `ao.onboarding.back_clicked` | Back is clicked | `step`, `step_index`, `to_step`, `run_kind` |
@@ -1042,7 +1046,7 @@ was known. Its `time_on_step_ms` runs from when it opened.
 | `ao.onboarding.started` | Onboarding opens for the first time on this installation, or a replay starts | `step`, `step_index`, `run_kind` |
 | `ao.onboarding.resumed` | Onboarding opens on a later launch after the app was quit mid-flow | `step`, `step_index`, `run_kind`, `away_ms`, `away_bucket`, `launch_count` |
 | `ao.onboarding.abandoned` | The window closes mid-flow. At most once per launch. Sent at once with `sendBeacon` | `step` (the page showing), `step_index`, `run_kind`, `duration_ms`, `duration_bucket`, `launch_count` |
-| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown: `welcome`, `sign_in` or `tools`), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
+| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown: `welcome`, `sign_in`, `tools` or `work_defaults`), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
 | `ao.onboarding.activated` | The first chat message delivered after a first run finished, within 7 days. Once per installation | `milestone`, `time_since_completed_ms`, `time_bucket`, `during_tour` |
 
 PostHog sends its queue from its own `pagehide` handler before the app's run,

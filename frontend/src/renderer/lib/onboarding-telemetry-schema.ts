@@ -157,6 +157,9 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 			set(safe, "project_source", oneOf(p?.project_source, ONBOARDING_PROJECT_SOURCES));
 			set(safe, "agents_ready", boundedInt(p?.agents_ready, 0, 100));
 			if (typeof p?.gh_ready === "boolean") safe.gh_ready = p.gh_ready;
+			for (const key of ["archive_on_merge", "auto_review", "assigned_issues"] as const) {
+				if (typeof p?.[key] === "boolean") safe[key] = p[key];
+			}
 			break;
 		case "ao.onboarding.step_abandoned":
 			set(safe, "time_on_step_ms", duration(p?.time_on_step_ms));

@@ -18,6 +18,8 @@ import {
 	unknownAgentReadiness,
 } from "../lib/agent-select-options";
 import { cn } from "../lib/utils";
+import { aoBridge } from "../lib/bridge";
+import { readProjectDefaults } from "../lib/project-defaults";
 import { useAgentManagementMenu } from "../hooks/useAgentManagementMenu";
 import { AgentAvatar } from "./AgentAvatar";
 import { FieldDefaultHint } from "./FieldDefaultHint";
@@ -157,7 +159,18 @@ export function CreateProjectAgentSheet({
 	const wasOpen = useRef(false);
 
 	useEffect(() => {
-		if (open && !wasOpen.current) setIntake(EMPTY_INTAKE);
+		if (open && !wasOpen.current) {
+			setIntake(EMPTY_INTAKE);
+			// Onboarding's "Start work on issues assigned to me" starts it on,
+			// for the signed-in GitHub user when the app knows who that is.
+			if (readProjectDefaults()?.assignedIssues) {
+				setIntake({ ...EMPTY_INTAKE, enabled: true });
+				void Promise.resolve()
+					.then(() => aoBridge.telemetry.getGithubLogin())
+					.then((login) => { if (login) setIntake((current) => (current.assignee ? current : { ...current, assignee: login })); })
+					.catch(() => undefined);
+			}
+		}
 		wasOpen.current = open;
 	}, [open]);
 
