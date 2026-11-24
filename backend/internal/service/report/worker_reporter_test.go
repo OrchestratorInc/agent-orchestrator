@@ -408,22 +408,46 @@ func (c *persistingCreator) Create(_ context.Context, in CreateInput) (domain.Re
 	return rec, nil
 }
 
+// listingStore signals each report listing, so a test can tell whether a
+// write checked provenance.
+type listingStore struct {
+	*fakeReporterStore
+	mu     *sync.Mutex
+	listed chan struct{}
+}
+
+func (s listingStore) ListReportsByProject(_ context.Context, _ domain.ProjectID) ([]domain.ReportRecord, error) {
+	s.mu.Lock()
+	reports := append([]domain.ReportRecord(nil), s.reports...)
+	s.mu.Unlock()
+	s.listed <- struct{}{}
+	return reports, nil
+}
+
 func TestWorkerReporterConcurrentWriteDoesNotMistakeOwnReport(t *testing.T) {
 	start := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
-	store := workerStore()
-	creator := &persistingCreator{store: store, hold: make(chan struct{}), held: make(chan struct{})}
+	creator := &persistingCreator{store: workerStore(), hold: make(chan struct{}), held: make(chan struct{})}
+	store := listingStore{fakeReporterStore: creator.store, mu: &creator.mu, listed: make(chan struct{}, 4)}
 	r := NewWorkerReporter(WorkerReporterDeps{Store: store, Reports: creator})
 	first := make(chan struct{})
 	go func() {
 		r.Write(t.Context(), "w1", domain.ReportNeedsInput, Stretch{Since: start, Until: start.Add(time.Second)})
 		close(first)
 	}()
+	<-store.listed // the first write's own provenance check
 	<-creator.held // persisted, not yet registered as the reporter's own
 	second := make(chan struct{})
 	go func() {
 		r.Write(t.Context(), "w1", domain.ReportDone, Stretch{Since: start.Add(2 * time.Second), Until: start.Add(time.Minute)})
 		close(second)
 	}()
+	// While the first write is paused, the second must not check provenance:
+	// it would see the first report before it is known to be the reporter's.
+	select {
+	case <-store.listed:
+		t.Fatal("second write checked provenance while the first was still registering its report")
+	case <-time.After(200 * time.Millisecond):
+	}
 	close(creator.hold)
 	<-first
 	<-second
