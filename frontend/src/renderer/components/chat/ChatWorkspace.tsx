@@ -3670,10 +3670,10 @@ export function Timeline({
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
 	const annotationHighlightTimer = useRef<number | undefined>(undefined);
 	const annotationRetryCount = useRef(0);
-	// Group count when navigation last asked for older history. A finished load
-	// that adds nothing (a failed page or a source outside this branch) must end
+	// Oldest loaded sequence when navigation last asked for older history. A finished
+	// load that adds nothing (a failed page or a source outside this branch) must end
 	// the search instead of requesting the same page again.
-	const annotationOlderRequestGroups = useRef<number | undefined>(undefined);
+	const annotationOlderRequestCursor = useRef<number | undefined>(undefined);
 	// A search match in a tool call or command: the activity whose folds open, and
 	// the history window asked for around it (done once its request settled).
 	const [revealedActivity, setRevealedActivity] = useState<string>();
@@ -3688,7 +3688,7 @@ export function Timeline({
 		releaseFollow();
 		setAnnotationNavigationError(undefined);
 		annotationRetryCount.current = 0;
-		annotationOlderRequestGroups.current = undefined;
+		annotationOlderRequestCursor.current = undefined;
 		annotationWindow.current = undefined;
 		if (!annotation.messageId) {
 			const source = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-message-id]") ?? [])
@@ -4550,10 +4550,10 @@ export function Timeline({
 		const cleaned = spawnedIds.size === 0 ? placed : placed
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
 			.filter((group) => group.items.length > 0);
-		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under);
+		const folded = foldBackground(cleaned, workerUpdateIndex, new Set(snapshot.turns.map((turn) => turn.id)), runKeys.current, batchedReports.under, find.gapBeforeSequence);
 		runKeys.current = new Map(folded.flatMap((group) => group.folded ? group.folded.members.map((member) => [member.key, group.key] as const) : []));
 		return folded;
-	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
+	}, [batchedReports, controllerStopped, find.gapBeforeSequence, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, pendingTurnLabel, snapshot, timelineItems, workerUpdateIndex, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	// Read from every group, not the mounted ones: the timeline is virtualized, and the
 	// panel lists a child whose turn has scrolled far out of view.
@@ -4812,8 +4812,8 @@ export function Timeline({
 		const index = groups.findIndex((group) => group.items.some((item) => item.id === annotationTarget.messageId));
 		if (index < 0) {
 			if (loadingOlder) return;
-			if (hasOlder && onLoadOlder && annotationOlderRequestGroups.current !== groups.length) {
-				annotationOlderRequestGroups.current = groups.length;
+			if (hasOlder && onLoadOlder && annotationOlderRequestCursor.current !== sourceSnapshot.oldestSequence) {
+				annotationOlderRequestCursor.current = sourceSnapshot.oldestSequence;
 				onLoadOlder();
 				return;
 			}
@@ -4912,7 +4912,7 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt, openSubagent, openSubagentId, subagentPanel?.container]);
+	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, sourceSnapshot.oldestSequence, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt, openSubagent, openSubagentId, subagentPanel?.container]);
 	useEffect(() => {
 		const node = scroller.current;
 		const content = virtualized ? virtualContent.current
@@ -7046,7 +7046,7 @@ function bannerOf(group: TimelineGroup): TimelineGroup | undefined {
 	return last && isAccountFailure(last) ? last : undefined;
 }
 
-function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>): TimelineGroup[] {
+function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateIndex | null, known: ReadonlySet<string>, prior: ReadonlyMap<string, string>, carried: ReadonlyMap<string, readonly WorkerUpdate[]>, gap?: number): TimelineGroup[] {
 	const out: TimelineGroup[] = [];
 	const used = new Set<string>();
 	const held: TimelineGroup[] = [];
@@ -7067,7 +7067,9 @@ function foldBackground(groups: readonly TimelineGroup[], index: WorkerUpdateInd
 	};
 	const segments = new Map<string, number>();
 	for (const group of groups) if (group.turnId) segments.set(group.turnId, (segments.get(group.turnId) ?? 0) + 1);
+	const afterGap = gap === undefined ? undefined : groups.find((group) => group.items.some((item) => item.sequence >= gap));
 	for (const group of groups) {
+		if (group === afterGap) close();
 		if (run?.kind === "background" && isLooseNotices(group)) {
 			held.push(group);
 			continue;

@@ -5,7 +5,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import { ChatLinkProvider, useChatLinkWorkspaces } from "./ChatMarkdown";
 import { usePlainReferences } from "./WorkerUpdates";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { chatFixtureEmpty } from "../../lib/chat-fixture";
+import { clientForSessionHost } from "../../lib/host-clients";
 import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
 import type { WorkspaceSummary } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
@@ -802,6 +803,49 @@ describe("background turns in the orchestrator chat", () => {
 		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
 		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider error: {"time":"2026-11-22T10:0${index}:00Z","status":${index ? 500 : 429}}` })) });
 		expect(screen.queryByRole("button", { name: /failed the same way/ })).not.toBeInTheDocument();
+	});
+
+	it("keeps paging back to a quote while an older page folds into the first line", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, []);
+		const onLoadOlder = vi.fn();
+		const request = { id: "quote:1", text: "Ship it?", messageId: "t1-human" };
+		const turn = (minute: number) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`), reply(`t${minute}`, minute, "Noted.")];
+		const page = (minutes: number[]): ConversationSnapshot => ({ ...snapshot(minutes.flatMap(turn)), hasMoreBefore: true, oldestSequence: minutes[0]! * 10 });
+		const view = (value: ConversationSnapshot) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ChatWorkspace snapshot={value} sessionRole="orchestrator" hasOlder onLoadOlder={onLoadOlder} annotationNavigationRequest={request} />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const { rerender } = render(view(page([30, 31])));
+		await waitFor(() => expect(onLoadOlder).toHaveBeenCalledTimes(1));
+		rerender(view(page([20, 21, 30, 31])));
+		await waitFor(() => expect(onLoadOlder).toHaveBeenCalledTimes(2));
+		expect(screen.queryByText(/no longer available/)).not.toBeInTheDocument();
+	});
+
+	it("ends a background line at the gap before a distant find result", async () => {
+		const turn = (minute: number, text = "Noted.") => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`), reply(`t${minute}`, minute, text)];
+		const old = snapshot(turn(1, "Found the needle."));
+		const recent: ConversationSnapshot = { ...snapshot([...turn(5), ...turn(6)]), hasMoreBefore: true, oldestSequence: 50 };
+		const hit = { messageId: "t1-reply", revision: 0, sequence: 12, block: 0, start: 10, end: 16 };
+		const get = vi.fn(async (path: string) => ({ data: path.endsWith("find-window")
+			? { ...old, controller: "ready", messages: old.items.filter((item) => item.kind === "message"), activities: old.items.filter((item) => item.kind === "activity") }
+			: { conversationId: recent.conversationId, transcriptRevision: "gap", occurrences: [hit], total: 1 }, response: new Response() }));
+		try {
+			vi.spyOn(clientForSessionHost(), "GET").mockImplementation(get as never);
+			vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{ top: 0, bottom: 100 }] as unknown as DOMRectList);
+			vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue({ top: 20, bottom: 30, height: 10 } as DOMRect);
+			renderSnapshot(recent);
+			const log = screen.getByRole("log");
+			log.focus();
+			fireEvent.keyDown(log, { key: "f", ctrlKey: true });
+			fireEvent.change(await screen.findByRole("searchbox"), { target: { value: "needle" } });
+			await screen.findByText("Messages in between aren't loaded");
+			expect(screen.getAllByTestId("background-updates")).toHaveLength(2);
+		} finally { vi.restoreAllMocks(); }
 	});
 
 	it("leaves a turn whose loaded part starts at a worker steer in view", () => {
