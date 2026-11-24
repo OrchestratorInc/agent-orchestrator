@@ -1134,3 +1134,32 @@ func TestBackgroundTaskOutputShowsTheLiveTailWhileAFinalReadIsTriedAgain(t *test
 		t.Fatalf("final output=%+v err=%v", got, err)
 	}
 }
+
+func TestBackgroundTaskOutputKeepsTheRunOfASparseUpdateThatOmitsItsIdentity(t *testing.T) {
+	ctx := context.Background()
+	started := time.Now().Add(-time.Minute)
+	task := ports.ChatBackgroundTask{ID: "build", RunID: "r1", Kind: "shell", State: "running", Command: "npm run build > build.log 2>&1", StartedAt: &started}
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}}
+	h := newHarnessWithConversation(t, conv)
+	logPath := filepath.Join(h.workspace, "build.log")
+	if err := os.WriteFile(logPath, []byte("error TS2322\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now()
+	if err := os.Chtimes(logPath, ended, ended); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	// The end arrives without the command, run ID or start time.
+	sparse := ports.ChatBackgroundTask{ID: "build", Kind: "shell", State: "failed", EndedAt: &ended}
+	conv.tasks = []ports.ChatBackgroundTask{sparse}
+	h.advance(2 * time.Second)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "build"); err != nil || got.Text != "error TS2322" || got.RunID != "r1" {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}

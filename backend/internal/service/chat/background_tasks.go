@@ -411,12 +411,21 @@ func (c *Controller) rememberBackgroundCommands(tasks []ports.ChatBackgroundTask
 	for _, task := range tasks {
 		listed[task.ID] = true
 		entry, ok := c.backgroundCommands[task.ID]
-		// A sparse update of the remembered run keeps its command and still
+		// A sparse update of the remembered run keeps what it leaves out (the
+		// command, run ID and start time, which the log is read by) and still
 		// moves its state. A new run under the same ID whose command isn't known
 		// yet starts with none: the last run's log is not its. A task with no
 		// command at all is remembered too, for its run ID.
-		if task.Command == "" && ok && sameRun(entry.task, task) {
-			task.Command = entry.task.Command
+		if ok && sameRun(entry.task, task) {
+			if task.Command == "" {
+				task.Command = entry.task.Command
+			}
+			if task.RunID == "" {
+				task.RunID = entry.task.RunID
+			}
+			if task.StartedAt == nil {
+				task.StartedAt = entry.task.StartedAt
+			}
 		}
 		switch {
 		case !ok:
