@@ -272,19 +272,22 @@ func Run(buildVersion string) (retErr error) {
 	//
 	// A desktop takeover spawns this daemon as soon as the old one's /healthz
 	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout
-	// and I = installerShutdownTimeout, capped shutdown takes at most 9T+I+33s:
-	//   - the HTTP drain and seven stages capped at T each: failure dispatcher,
+	// and I = installerShutdownTimeout, capped shutdown takes at most
+	// 8T+max(T,30s)+I+33s:
+	//   - the HTTP drain and six stages capped at T each: failure dispatcher,
 	//     computer use, background workers, agent-switch workers, Codex
-	//     account-switch workers, chat StopAll, LAN listener; the harness
-	//     installer gets I;
+	//     account-switch workers, LAN listener; the harness installer gets I;
+	//   - the chat stop gets T, or max(T,30s) on a desktop quit that stops
+	//     agents;
 	//   - one shared budget of T for the goroutine joins with no timeout of
 	//     their own: usage-limit resume, startup reconcile, preview poller,
-	//     usage pipeline, pricing, lifecycle stack and store sweeps;
+	//     report coordinator, usage pipeline, pricing, lifecycle stack and
+	//     store sweeps;
 	//   - fixed caps: 5s agent-switch fault enqueue, 3s `tailscale serve off`,
 	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake),
 	//     15s device support (10s agent-device stop plus 5s hub exit), and a
 	//     2s Sentry flush.
-	// Wait 10T+I+33s (417s by default), one stage of margin. Managed preview
+	// Wait 9T+max(T,30s)+I+33s (437s by default), one stage of margin. Managed preview
 	// server and chat side stops are still uncapped: a predecessor stuck in one
 	// past the wait still makes this daemon exit 75.
 	installerShutdownTimeout := max(cfg.ShutdownTimeout, cmp.Or(cfg.InstallerShutdownTimeout, systeminstall.DefaultShutdownTimeout()))
@@ -875,10 +878,15 @@ func Run(buildVersion string) (retErr error) {
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
 	reportDeliveryDone, unsubscribeReportActivity := startReportCoordinator(ctx, cdcPipe.Broadcaster, reportCoordinator)
+	// reportJoined is set once the shutdown drain has taken over this join, so
+	// a delivery stuck past the budget does not hold Run here without a bound.
+	reportJoined := false
 	defer func() {
 		unsubscribeReportActivity()
 		stop()
-		<-reportDeliveryDone
+		if !reportJoined {
+			<-reportDeliveryDone
+		}
 	}()
 	lcStack.trackerDone = startTrackerIntake(ctx, cfg, store, sessionSvc, tracker, log)
 
@@ -1746,6 +1754,10 @@ func Run(buildVersion string) (retErr error) {
 		chatSvc.StopAll(chatStopCtx)
 	}
 	chatCancel()
+	// After the chat stop: a report sent to a Chat orchestrator can be queued
+	// behind that controller's send lock, which the stop releases.
+	reportJoined = true
+	drain.wait("report coordinator", reportDeliveryDone)
 	drain.wait("usage pipeline", usageDone)
 	if usagePricing != nil {
 		pricingJoined = true
@@ -2006,10 +2018,10 @@ func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
 }
 
 // dataDirTakeoverWait covers the capped shutdown stages, the shared drain
-// budget, plus one ordinary stage of margin. Installer draining can outlast an
-// ordinary shutdown stage.
+// budget, plus one ordinary stage of margin. Installer draining and the
+// desktop-quit chat stop can outlast an ordinary shutdown stage.
 func dataDirTakeoverWait(shutdownTimeout, installerShutdownTimeout time.Duration) time.Duration {
-	return 10*shutdownTimeout + max(shutdownTimeout, installerShutdownTimeout) + 33*time.Second
+	return 9*shutdownTimeout + max(shutdownTimeout, 30*time.Second) + max(shutdownTimeout, installerShutdownTimeout) + 33*time.Second
 }
 
 // lockDataDir takes the data-dir lock. When another AO process holds it, as a
