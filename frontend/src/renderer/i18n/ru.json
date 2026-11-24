@@ -5604,7 +5604,7 @@
 	"moveSession.step.copy": "Копирование разговора",
 	"moveSession.step.receive": "Запуск на {{host}}",
 	"moveSession.step.commit": "Завершение",
-	"moveSession.failed": "Не удалось перенести: {{message}}.",
+	"moveSession.failed": "Не удалось перенести на {{host}}: {{message}}",
 	"moveSession.resumed": "Сессия продолжает работать там же.",
 	"moveSession.notResumed": "Агент остановлен; откройте сессию, чтобы возобновить его.",
 	"moveSession.movedHeading": "Перенесено на {{host}}",

@@ -5288,7 +5288,7 @@
 	"moveSession.step.copy": "会話をコピー中",
 	"moveSession.step.receive": "{{host}} で開始中",
 	"moveSession.step.commit": "仕上げ中",
-	"moveSession.failed": "移動できませんでした: {{message}}。",
+	"moveSession.failed": "{{host}} に移動できませんでした: {{message}}",
 	"moveSession.resumed": "セッションはそのまま実行中です。",
 	"moveSession.notResumed": "エージェントは停止しています。セッションを開くと再開します。",
 	"moveSession.movedHeading": "{{host}} に移動しました",

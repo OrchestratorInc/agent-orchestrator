@@ -5268,7 +5268,7 @@
 	"moveSession.step.copy": "Copying the conversation",
 	"moveSession.step.receive": "Starting on {{host}}",
 	"moveSession.step.commit": "Finishing up",
-	"moveSession.failed": "Couldn't move: {{message}}.",
+	"moveSession.failed": "Couldn't move to {{host}}: {{message}}",
 	"moveSession.resumed": "The session keeps running where it is.",
 	"moveSession.notResumed": "Its agent is stopped; open the session to resume it.",
 	"moveSession.movedHeading": "Moved to {{host}}",

@@ -90,7 +90,7 @@ export function MoveBanner({ session }: { session: WorkspaceSession }) {
 		);
 	}
 	return (
-		<Row alert icon={alert} title={t("moveSession.failed", { message: error?.message ?? "" })} detail={error?.resumedSource ? t("moveSession.resumed") : t("moveSession.notResumed")}>
+		<Row alert icon={alert} title={t("moveSession.failed", { host, message: error?.message ?? "" })} detail={error?.resumedSource ? t("moveSession.resumed") : t("moveSession.notResumed")}>
 			{error?.code && FINAL_REFUSALS.has(error.code) ? null : <Button size="sm" variant="secondary" onClick={() => actions.retry()}>{t("moveSession.retry")}</Button>}
 			{dismiss}
 		</Row>

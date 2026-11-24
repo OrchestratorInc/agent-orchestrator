@@ -5270,7 +5270,7 @@
 	"moveSession.step.copy": "正在复制对话",
 	"moveSession.step.receive": "正在 {{host}} 上启动",
 	"moveSession.step.commit": "正在收尾",
-	"moveSession.failed": "无法移动：{{message}}。",
+	"moveSession.failed": "无法移动到 {{host}}：{{message}}",
 	"moveSession.resumed": "会话仍在原处运行。",
 	"moveSession.notResumed": "它的代理已停止；打开会话即可恢复。",
 	"moveSession.movedHeading": "已移到 {{host}}",

@@ -5450,7 +5450,7 @@
 	"moveSession.step.copy": "Copie de la conversation",
 	"moveSession.step.receive": "Démarrage sur {{host}}",
 	"moveSession.step.commit": "Finalisation",
-	"moveSession.failed": "Impossible de déplacer : {{message}}.",
+	"moveSession.failed": "Impossible de déplacer vers {{host}} : {{message}}",
 	"moveSession.resumed": "La session continue de tourner là où elle est.",
 	"moveSession.notResumed": "Son agent est arrêté ; ouvrez la session pour le reprendre.",
 	"moveSession.movedHeading": "Déplacée vers {{host}}",

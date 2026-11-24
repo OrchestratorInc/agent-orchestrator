@@ -5288,7 +5288,7 @@
 	"moveSession.step.copy": "Unterhaltung kopieren",
 	"moveSession.step.receive": "Auf {{host}} starten",
 	"moveSession.step.commit": "Abschließen",
-	"moveSession.failed": "Verschieben nicht möglich: {{message}}.",
+	"moveSession.failed": "Verschieben nach {{host}} nicht möglich: {{message}}",
 	"moveSession.resumed": "Die Sitzung läuft unverändert weiter.",
 	"moveSession.notResumed": "Der Agent ist gestoppt; öffnen Sie die Sitzung, um ihn fortzusetzen.",
 	"moveSession.movedHeading": "Verschoben auf {{host}}",

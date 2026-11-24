@@ -5288,7 +5288,7 @@
 	"moveSession.step.copy": "대화 복사 중",
 	"moveSession.step.receive": "{{host}}에서 시작 중",
 	"moveSession.step.commit": "마무리 중",
-	"moveSession.failed": "이동하지 못했습니다: {{message}}.",
+	"moveSession.failed": "{{host}}(으)로 이동하지 못했습니다: {{message}}",
 	"moveSession.resumed": "세션은 그대로 실행 중입니다.",
 	"moveSession.notResumed": "에이전트가 멈춰 있습니다. 세션을 열어 다시 시작하세요.",
 	"moveSession.movedHeading": "{{host}}(으)로 이동함",

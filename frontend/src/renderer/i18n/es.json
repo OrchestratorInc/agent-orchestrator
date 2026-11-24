@@ -5450,7 +5450,7 @@
 	"moveSession.step.copy": "Copiando la conversación",
 	"moveSession.step.receive": "Iniciando en {{host}}",
 	"moveSession.step.commit": "Terminando",
-	"moveSession.failed": "No se pudo mover: {{message}}.",
+	"moveSession.failed": "No se pudo mover a {{host}}: {{message}}",
 	"moveSession.resumed": "La sesión sigue ejecutándose donde está.",
 	"moveSession.notResumed": "Su agente está detenido; abre la sesión para reanudarlo.",
 	"moveSession.movedHeading": "Movida a {{host}}",
