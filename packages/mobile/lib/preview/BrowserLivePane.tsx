@@ -1,11 +1,13 @@
 import { Stack } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { Image, StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { addNetworkStateListener } from "expo-network";
+import { AppState, Image, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { LocalBrowserTransport } from "../browserLive";
+import { BrowserStreamSupervisor } from "../browserStreamSupervisor";
 import { commandSupported, type BrowserCommand, type BrowserFrame, type BrowserTransport, type BrowserViewState } from "../browserTransport";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
 import { machineState, rejectedMachineLine } from "../hostRoute";
@@ -13,7 +15,7 @@ import { useApp } from "../store";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import type { Theme } from "../theme";
 import { ToastHost } from "../Toast";
-import { duration, radius, space } from "../tokens";
+import { duration, radius, space, type } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
 import { useToast } from "../useToast";
@@ -22,7 +24,7 @@ import { FRAME_ZOOM_SNAP, pinchZoom, unzoomed, unzoomPoint, type FramePoint, typ
 import { LoadingBar } from "./LoadingBar";
 import { OpenURLPrompt } from "./OpenURLPrompt";
 
-type BrowserStatus = "connecting" | "open" | "error";
+type BrowserStatus = "connecting" | "open" | "reconnecting" | "error";
 type NavigateAction = "back" | "forward" | "reload" | "stop";
 
 /** How far a finger may wander before a tap becomes a scroll. */
@@ -34,6 +36,15 @@ const TOUCH_MARK = 36;
 const ignoreActivation = () => {};
 const BROWSER_UNPAIRED_COPY = "Pair this phone with the desktop app first.";
 const BROWSER_OFFLINE_COPY = "This machine is offline. The browser connects once the app reconnects.";
+
+const subscribeAppState = (listener: (state: string) => void) => {
+	const subscription = AppState.addEventListener("change", listener);
+	return () => subscription.remove();
+};
+const subscribeNetwork = (listener: (connected: boolean) => void) => {
+	const subscription = addNetworkStateListener((state) => listener(state.isConnected !== false));
+	return () => subscription.remove();
+};
 
 export type BrowserLivePaneProps = {
 	sessionID: string;
@@ -79,9 +90,12 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const reduceMotion = useReducedMotion();
 	const toast = useToast();
 	const showNotice = toast.show;
-	const client = useRef<BrowserTransport | null>(null);
+	const client = useRef<BrowserStreamSupervisor | null>(null);
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState<BrowserStatus>("connecting");
+	// The frame on screen may be out of date: the stream went quiet, or it is
+	// reconnecting. It stays up, untouchable, under "Reconnecting…".
+	const [stale, setStale] = useState(false);
 	const [error, setError] = useState<string>();
 	const [page, setPage] = useState<BrowserViewState | null>(null);
 	const [frameURI, setFrameURI] = useState<string>();
@@ -126,11 +140,15 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		let disposed = false;
 		setStatus("connecting");
 		setError(undefined);
-		const live = transport ? transport() : new LocalBrowserTransport(localConfig!, sessionID);
-		live.connect({
+		setStale(false);
+		const supervisor = new BrowserStreamSupervisor({
+			create: () => transport ? transport() : new LocalBrowserTransport(localConfig!, sessionID),
+			subscribeAppState,
+			subscribeNetwork,
+		}, {
 			onStatus: (next, message) => {
 				if (disposed) return;
-				setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
+				setStatus(next);
 				if (next === "open") {
 					setError(undefined);
 					// A refused command leaves the stream open: say why, and keep the page up.
@@ -139,6 +157,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					setError(message);
 				}
 			},
+			onStale: (value) => { if (!disposed) setStale(value); },
 			onDisabled: () => { if (!disposed) onDisabled?.(); },
 			onState: (state) => {
 				if (disposed) return;
@@ -158,12 +177,13 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				}
 			},
 		});
-		client.current = live;
+		client.current = supervisor;
+		supervisor.start();
 
 		return () => {
 			disposed = true;
-			live?.close();
-			if (client.current === live) client.current = null;
+			supervisor.stop();
+			if (client.current === supervisor) client.current = null;
 		};
 	}, [attempt, away, localConfig, onDisabled, rejection, sessionID, showNotice, transport]);
 
@@ -176,7 +196,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 
 	// A command the stream can't carry is dropped here, so no transport has to.
 	const send = useCallback((command: BrowserCommand) => {
-		const live = client.current;
+		const live = client.current?.current;
 		if (live && commandSupported(live.capabilities, command)) live.send(command);
 	}, []);
 	const navigate = useCallback((action: NavigateAction) => send({ type: "navigate", payload: { action } }), [send]);
@@ -246,7 +266,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const markY = useSharedValue(0);
 	const markScale = useSharedValue(1);
 	const markOpacity = useSharedValue(0);
-	const interactive = status === "open" && Boolean(frameURI) && frameIsLive && !blank;
+	const interactive = status === "open" && !stale && Boolean(frameURI) && frameIsLive && !blank;
+	// The last frame stays up while the stream comes back, so the page doesn't blank.
+	const reconnecting = Boolean(frameURI) && !blank && (status === "reconnecting" || (status === "open" && stale));
 	// Another session's page starts at its fitted size.
 	useEffect(() => {
 		zoomScale.value = 1;
@@ -318,7 +340,10 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		viewport.value = { width, height };
 	}, [viewport]);
 
-	const retry = () => setAttempt((value) => value + 1);
+	const retry = () => {
+		if (client.current) client.current.reconnectNow();
+		else setAttempt((value) => value + 1);
+	};
 	// The frame stays clear of the bottom toolbar, and notices sit above it.
 	const toolbarClearance = toolbarShown ? insets.bottom + bottomToolbarHeight() : 0;
 
@@ -350,7 +375,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				<EmptyState icon="desktop" title={`Nothing is open in the ${browserName} yet`} action={<Button title="Open URL…" icon="globe" onPress={controls.onOpenURL} />} />
 			</View> : null}
 			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title={`Waiting for the ${browserName}…`} /></View> : null}
-			{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
+			{reconnecting ? <View pointerEvents="none" style={styles.reconnectingWrap}>
+				<View accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.reconnecting}>
+					<Text style={styles.reconnectingText}>Reconnecting…</Text>
+				</View>
+			</View> : status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
 			<LoadingBar loading={status === "open" && loading} accessibilityLabel="Loading page" />
 		</View>
 		{bottomBar}
@@ -377,8 +406,8 @@ function capitalized(text: string): string {
 function BrowserState({ status, error, retry }: { status: BrowserStatus; error?: string; retry(): void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	if (status === "connecting") {
-		return <View style={[styles.overlay, styles.opaque]}><EmptyState busy title="Connecting to browser…" /></View>;
+	if (status === "connecting" || status === "reconnecting") {
+		return <View style={[styles.overlay, styles.opaque]}><EmptyState busy title={status === "reconnecting" ? "Reconnecting…" : "Connecting to browser…"} message={status === "reconnecting" ? error : undefined} /></View>;
 	}
 	return <View accessibilityRole="alert" style={[styles.overlay, styles.opaque]}>
 		<EmptyState
@@ -401,6 +430,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	frameImage: { width: "100%", height: "100%" },
 	overlay: { ...StyleSheet.absoluteFill },
 	opaque: { backgroundColor: t.bgBase },
+	reconnectingWrap: { ...StyleSheet.absoluteFill, alignItems: "center", paddingTop: space.md },
+	reconnecting: { borderRadius: radius.pill, backgroundColor: t.bgElevated, paddingHorizontal: space.md, paddingVertical: space.xs },
+	reconnectingText: { ...type.footnote, color: t.textSecondary },
 	touchMark: {
 		position: "absolute",
 		top: 0,

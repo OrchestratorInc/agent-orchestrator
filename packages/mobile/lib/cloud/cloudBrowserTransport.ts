@@ -31,9 +31,12 @@ export type CloudBrowserTransportOptions = {
 };
 
 const OPEN = 1;
-// The host's own viewer pings every 2 s. Without traffic a still page sends
-// nothing after its first frame, and a proxy on the way closes the socket as idle.
-const PING_MS = 5_000;
+// The host's own viewer pings every 2 s, and so does this one. Without
+// traffic a still page sends nothing after its first frame, and a proxy on the
+// way closes the socket as idle; the host's pong also tells the phone the
+// stream is alive (see BrowserStreamSupervisor). The pings stop with the
+// socket, which closes in the background.
+const PING_MS = 2_000;
 // The host's own defaults: the phone shows the desktop layout and doesn't
 // resize the agent's page to its own screen (phone layout is a later option).
 const HELLO = { t: "hello", w: 1280, h: 800, dpr: 1, quality: 60, maxInFlight: 0 };
@@ -265,6 +268,9 @@ export class CloudBrowserTransport implements BrowserTransport {
 
 	private async receive(socket: SocketLike, data: unknown): Promise<void> {
 		if (this.socket !== socket) return;
+		// Every message counts: the host answers each ping, so silence means
+		// the stream is gone even on a still page.
+		this.handlers.onAlive?.({ heartbeat: true });
 		if (typeof data === "string") {
 			let message: Record<string, unknown>;
 			try { message = JSON.parse(data) as Record<string, unknown>; } catch { return; }

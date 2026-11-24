@@ -58,15 +58,15 @@ describe("cloud browser transport", () => {
 		expect(handlers.onStatus).toHaveBeenLastCalledWith("open");
 	});
 
-	it("pings the host while open, so a still page doesn't look idle to proxies", async () => {
+	it("pings the host every 2 s while open, as its own viewer does, and stops when closed", async () => {
 		vi.useFakeTimers();
 		try {
 			const { transport, socket } = await connected();
 			const pings = () => socket.sent.filter((m) => (m as { t: string }).t === "ping").length;
 			expect(pings()).toBe(0);
-			vi.advanceTimersByTime(5_000);
+			vi.advanceTimersByTime(2_000);
 			expect(pings()).toBe(1);
-			vi.advanceTimersByTime(10_000);
+			vi.advanceTimersByTime(4_000);
 			expect(pings()).toBe(3);
 			transport.close();
 			vi.advanceTimersByTime(20_000);
@@ -74,6 +74,45 @@ describe("cloud browser transport", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("never keeps a Cloud browser awake from the background: the socket closes and the pings stop", async () => {
+		vi.useFakeTimers();
+		try {
+			let appState: ((state: string) => void) | undefined;
+			let socket!: FakeSocket;
+			const transport = new CloudBrowserTransport({
+				baseUrl: "https://api.example.dev", orgId: "o", sessionId: "s", getToken: async () => "tok",
+				createSocket: (url, headers) => (socket = new FakeSocket(url, headers)),
+				subscribeAppState: (listener) => { appState = listener; return () => { appState = undefined; }; },
+			});
+			transport.connect({ onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn() });
+			await vi.waitFor(() => expect(socket).toBeDefined());
+			socket.open();
+			appState?.("background");
+			expect(socket.closed).toBe(true);
+			const sent = socket.sent.length;
+			vi.advanceTimersByTime(60_000);
+			expect(socket.sent.length).toBe(sent);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("reports every message as alive, a heartbeat because the host answers pings", async () => {
+		const onAlive = vi.fn();
+		let socket!: FakeSocket;
+		const transport = new CloudBrowserTransport({
+			baseUrl: "https://api.example.dev", orgId: "o", sessionId: "s", getToken: async () => "tok",
+			createSocket: (url, headers) => (socket = new FakeSocket(url, headers)),
+		});
+		transport.connect({ onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onAlive });
+		await vi.waitFor(() => expect(socket).toBeDefined());
+		socket.open();
+		socket.message({ t: "pong", c: 1, s: 2 });
+		expect(onAlive).toHaveBeenLastCalledWith({ heartbeat: true });
+		socket.onmessage?.({ data: viewerFrame({ seq: 1 }) });
+		await vi.waitFor(() => expect(onAlive).toHaveBeenCalledTimes(2));
 	});
 
 	it("keeps the connection error when the failed socket then closes", async () => {

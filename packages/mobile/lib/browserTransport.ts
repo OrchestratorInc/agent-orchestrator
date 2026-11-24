@@ -36,6 +36,12 @@ export type BrowserTransportHandlers = {
 	onDialog?(dialog: BrowserDialog): void;
 	// Also used when an older desktop does not support browser streaming.
 	onDisabled?(): void;
+	/**
+	 * Any message arrived. `heartbeat` is true for a host that sends one on a
+	 * schedule (a Cloud pong, the daemon's heartbeat): only then does silence
+	 * mean the stream is gone, since a still page sends nothing.
+	 */
+	onAlive?(info: { heartbeat: boolean }): void;
 };
 
 export interface BrowserTransport {
