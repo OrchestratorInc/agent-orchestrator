@@ -1005,20 +1005,22 @@ func TestUsageLimitContinueKeepsEarlierAttachments(t *testing.T) {
 	caps[ports.ChatCapabilityImages] = true
 	h.conv.setCapabilities(caps)
 	ctx := context.Background()
-	human, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "match this mockup", ClientMessageID: "mockup", Origin: domain.MessageOriginHuman,
-		Content: []ports.ChatContent{{Type: "image", Data: "aW1hZ2U=", MIMEType: "image/png"}}})
-	if err != nil {
-		t.Fatal(err)
+	for _, image := range []string{"Zmlyc3Q=", "Zmlyc3Q=", "c2Vjb25k"} {
+		human, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "match this mockup", ClientMessageID: uuid.NewString(), Origin: domain.MessageOriginHuman,
+			Content: []ports.ChatContent{{Type: "image", Data: image, MIMEType: "image/png"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: human.ProviderTurnID,
+			TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+		failedTurnSnapshot(t, h, human.ID)
 	}
-	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: human.ProviderTurnID,
-		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
-	failedTurnSnapshot(t, h, human.ID)
 	event := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
 	if _, err := h.svc.RetryTurn(ctx, testSession, event.ID); err != nil {
 		t.Fatal(err)
 	}
-	if sent := h.conv.sentMessages()[2]; len(sent.Content) != 1 || sent.Content[0].Data != "aW1hZ2U=" {
-		t.Fatalf("sent content = %+v, want the user's image", sent.Content)
+	if sent := h.conv.sentMessages()[4]; len(sent.Content) != 2 || sent.Content[0].Data != "Zmlyc3Q=" || sent.Content[1].Data != "c2Vjb25k" {
+		t.Fatalf("sent content = %+v, want each of the user's images once", sent.Content)
 	}
 }
 

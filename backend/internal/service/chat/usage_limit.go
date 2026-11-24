@@ -263,7 +263,7 @@ func (c *Controller) usageLimitEventContinuation(ctx context.Context, source dom
 	if err != nil {
 		return domain.RetryPrompt{}, fmt.Errorf("read limited conversation: %w", err)
 	}
-	var requests []string
+	var requests, seen []string
 	var blocks []ports.ChatContent
 	var startID string
 	size := 0
@@ -282,9 +282,11 @@ func (c *Controller) usageLimitEventContinuation(ctx context.Context, source dom
 			continue
 		}
 		request := cmp.Or(refused.ProviderInputText, refused.Text)
-		if slices.Contains(requests, request) {
+		key := request + "\x00" + refused.DeliveryContentJSON
+		if slices.Contains(seen, key) {
 			continue
 		}
+		seen = append(seen, key)
 		size += len(request)
 		if len(requests) > 0 && size > refusedRequestsBudget {
 			break
