@@ -200,7 +200,14 @@ surface (`npm run sqlc`, `npm run api`).
   history and worktrees available for resume. Unexpected desktop exit also stops
   those agents after the supervisor grace period. Planned updates and restarts
   preserve them. Desktop browser targets stop with the window. Updates and system
-  shutdown still exit the app; Windows/Linux quit behavior is unchanged.
+  shutdown still exit the app; Linux quit behavior is unchanged.
+- Windows also keeps the tray, daemon, and agents alive after window close,
+  Alt+F4, or ordinary in-app Quit, provided the tray initialized successfully.
+  Tray click or relaunch recreates the dashboard on the same daemon; **Quit
+  Orchestrator Completely** stops desktop-owned agents without deleting sessions
+  or worktrees. Updates retain agent-preservation behavior. Missing/failed tray
+  setup falls back to close-to-exit. As on macOS, no first-close notice or
+  window-independent session-attention polling is added.
 - Shell: sidebar (projects + sessions, add/remove project), sessions board,
   session view + inspector, project settings, pull-requests page,
   spawn-orchestrator flow.

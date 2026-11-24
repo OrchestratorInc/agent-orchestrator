@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TraySessionEntry } from "../shared/tray";
 
 type MenuItem = {
@@ -11,14 +12,19 @@ type MenuItem = {
 	submenu?: MenuItem[];
 };
 
-const { FakeTray, trayInstances } = vi.hoisted(() => {
+const { FakeTray, trayInstances, failures, appMock } = vi.hoisted(() => {
+	const failures = { missingIcon: false, emptyIcon: false, construct: false, menu: false };
+	const appMock = { isPackaged: false, getVersion: () => "0.0.0-test" };
 	const trayInstances: FakeTray[] = [];
 	class FakeTray {
 		title = "";
 		tooltip = "";
 		template: MenuItem[] = [];
 		destroyed = false;
+		destroyCalls = 0;
+		listeners = new Map<string, () => void>();
 		constructor(public icon: unknown) {
+			if (failures.construct) throw new Error("native tray unavailable");
 			trayInstances.push(this);
 		}
 		setImage(icon: unknown) {
@@ -31,28 +37,33 @@ const { FakeTray, trayInstances } = vi.hoisted(() => {
 			this.tooltip = tooltip;
 		}
 		setContextMenu(menu: { template: MenuItem[] }) {
+			if (failures.menu) throw new Error("menu unavailable");
 			this.template = menu.template;
 		}
 		destroy() {
+			this.destroyCalls++;
 			this.destroyed = true;
 		}
+		on(event: string, listener: () => void) {
+			this.listeners.set(event, listener);
+		}
+		removeAllListeners() {
+			this.listeners.clear();
+		}
 	}
-	return { FakeTray, trayInstances };
+	return { FakeTray, trayInstances, failures, appMock };
 });
 
 const setTemplateImage = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
-	app: { isPackaged: false, getVersion: () => "0.0.0-test" },
-	nativeImage: { createFromPath: (path: string) => ({ path, isEmpty: () => false, setTemplateImage }) },
+	app: appMock,
+	nativeImage: { createFromPath: (path: string) => ({ path, isEmpty: () => failures.emptyIcon, setTemplateImage }) },
 	Tray: FakeTray,
 	Menu: { buildFromTemplate: (template: MenuItem[]) => ({ template }) },
 }));
 
-vi.mock("node:fs", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:fs")>();
-	return { ...actual, existsSync: () => true };
-});
+vi.mock("node:fs", () => ({ existsSync: () => !failures.missingIcon }));
 
 import { createTrayController } from "./tray";
 
@@ -78,12 +89,47 @@ const sessionItems = (tray: { template: MenuItem[] }) =>
 			item.label !== "Quit Orchestrator Completely",
 	);
 
+beforeEach(() => {
+	vi.stubGlobal("process", { ...process, platform: "darwin" });
+	appMock.isPackaged = false;
+	Object.assign(failures, { missingIcon: false, emptyIcon: false, construct: false, menu: false });
+});
+
 afterEach(() => {
 	trayInstances.length = 0;
 	vi.clearAllMocks();
+	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
 });
 
 describe("createTrayController", () => {
+	it.each([false, true])("uses the Windows ICO and click action (packaged=%s)", (isPackaged) => {
+		vi.stubGlobal("process", { ...process, platform: "win32", resourcesPath: "C:/ao/resources" });
+		appMock.isPackaged = isPackaged;
+		const { tray, controller, focusWindow } = setup();
+		expect(tray.icon).toMatchObject({ path: expect.stringMatching(/icon\.ico$/) });
+		if (isPackaged) expect(tray.icon).toMatchObject({ path: expect.stringContaining("resources") });
+		expect(setTemplateImage).not.toHaveBeenCalled();
+		controller.setState({ sessions: [entry({ sessionId: "s1" })] });
+		controller.setAwakeState(true);
+		expect(tray.title).toBe("");
+		expect(tray.tooltip).toBe("1 session needs attention");
+		tray.listeners.get("click")?.();
+		expect(focusWindow).toHaveBeenCalledOnce();
+		controller.dispose();
+		controller.dispose();
+		expect(tray.listeners.size).toBe(0);
+		expect(tray.destroyCalls).toBe(1);
+		controller.clear();
+	});
+
+	it.each(["missingIcon", "emptyIcon", "construct", "menu"] as const)("falls back when tray setup fails: %s", (failure) => {
+		failures[failure] = true;
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		expect(createTrayController({ focusWindow: vi.fn(), openSession: vi.fn(), quitCompletely: vi.fn(), locale: "en" })).toBeNull();
+		if (failure === "menu") expect(trayInstances[0].destroyed).toBe(true);
+	});
+
 	it("keeps the awake indicator independent of attention counts and renderer resets", () => {
 		const { controller, tray } = setup();
 		controller.setAwakeState(true);

@@ -58,6 +58,8 @@ If `ao` is missing from your Mac's PATH or points to an old install, use the cur
 
 On macOS, **Quit / Cmd+Q** closes the desktop window and removes AO from the Dock while its tray, daemon, and enabled remote access keep running. Use the tray's **Quit AO Completely** to stop the app-owned server. The host must stay awake and reachable; closing the window does not enable remote access by itself.
 
+On Windows, closing the window, pressing **Alt+F4**, or choosing ordinary in-app **Quit** leaves Orchestrator running in the system tray when its tray icon is available. The icon may be inside the overflow menu beside the clock. Click it, choose **Show Orchestrator**, or launch Orchestrator again from Start to reopen the dashboard. Choose **Quit Orchestrator Completely** from the tray to stop the app-owned server and its agents; session history and working files remain available for resume. If the tray cannot initialize, closing the window exits the app. Closing the dashboard does not keep the computer awake, and desktop browser targets close with it.
+
 ## Tailscale
 
 iPhones cannot connect through the current raw Tailscale endpoint. Use a managed HTTPS endpoint instead. iOS blocks cleartext requests to `100.64.0.0/10`, and the current v2 offer does not advertise Tailscale HTTPS endpoints. The current desktop panel has no connection-method selector or separate visible TLS control, and automatic TLS setup is incomplete. Android behavior for a raw Tailscale endpoint is unverified.

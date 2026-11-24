@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -83,10 +84,15 @@ func Write(path string, info Info) error {
 // Read loads running.json. A missing file returns (nil, nil) — that is the
 // normal "no daemon recorded" state, not an error.
 func Read(path string) (*Info, error) {
-	data, err := os.ReadFile(path)
+	file, err := openRunFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, fmt.Errorf("read run-file: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, fmt.Errorf("read run-file: %w", err)
 	}
