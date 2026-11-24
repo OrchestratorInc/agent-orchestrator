@@ -211,13 +211,16 @@ func remoteBrowserFilesDir() (string, error) {
 }
 
 // remoteBrowserNamedPath returns the argument that names the reported path,
-// if the command named it (`screenshot /tmp/page.png`).
+// if the command named it as an operand (`screenshot /tmp/page.png`). Only
+// tokens after the subcommand count, so neither the subcommand itself nor a
+// global flag's value (`--session work`) can authorize a write.
 func remoteBrowserNamedPath(args []string, reported string) (string, bool) {
-	if reported == "" {
+	at := remoteBrowserCommandIndex(args)
+	if reported == "" || at < 0 {
 		return "", false
 	}
 	clean := filepath.Clean(reported)
-	for _, arg := range args {
+	for _, arg := range args[at+1:] {
 		if strings.HasPrefix(arg, "-") || arg == "" {
 			continue
 		}

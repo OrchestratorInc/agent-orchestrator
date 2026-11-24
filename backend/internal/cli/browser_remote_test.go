@@ -348,6 +348,28 @@ func TestBrowserRemoteKeepsNamedFileWhenRelocatedNameCollides(t *testing.T) {
 	}
 }
 
+func TestBrowserRemoteDoesNotTreatCommandOrFlagValueAsNamedPath(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	t.Chdir(t.TempDir())
+	var errOut bytes.Buffer
+	files := map[string]string{
+		"screenshot": base64.StdEncoding.EncodeToString([]byte("cmd")),
+		"work":       base64.StdEncoding.EncodeToString([]byte("flag")),
+	}
+	if err := writeRemoteBrowserFiles(&errOut, []string{"--session", "work", "screenshot"}, files); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"screenshot", "work"} {
+		if _, err := os.Stat(name); !os.IsNotExist(err) {
+			t.Fatalf("%s written to the working directory (err=%v)", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(dataDir, "browser-files", name)); err != nil {
+			t.Fatalf("%s not confined: %v", name, err)
+		}
+	}
+}
+
 func TestBrowserRemoteRefusesRedirectOffMachine(t *testing.T) {
 	var offMachineHit bool
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
