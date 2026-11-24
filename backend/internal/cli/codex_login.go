@@ -171,8 +171,9 @@ func (c *commandContext) checkOpenAIKey(ctx context.Context, key []byte, out io.
 }
 
 // codexTopLevelKey is a top-level `key = "…"` in Codex's config.toml that can
-// send an API key somewhere other than api.openai.com.
-var codexTopLevelKey = regexp.MustCompile(`^\s*(model_provider|openai_base_url|profile)\s*=\s*["']([^"']+)["']`)
+// send an API key somewhere other than api.openai.com. TOML lets the key name
+// itself be quoted, as in `"openai_base_url" = "…"`.
+var codexTopLevelKey = regexp.MustCompile(`^\s*["']?(model_provider|openai_base_url|profile)["']?\s*=\s*["']([^"']+)["']`)
 
 // codexKeyGoesElsewhere reports whether Codex's config.toml, at its top level
 // (before any [table]), selects another model_provider than openai, points the

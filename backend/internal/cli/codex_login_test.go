@@ -247,6 +247,10 @@ func TestCodexLoginChecksAnAPIKeyWithOpenAIFirst(t *testing.T) {
 		{name: "forbidden", status: http.StatusForbidden, wantSaved: true, wantAsked: true, wantOutput: "OpenAI answered HTTP 403, so Codex saves the key unchecked."},
 		{name: "openai_base_url", status: http.StatusUnauthorized, config: "openai_base_url = \"https://proxy.example.invalid/v1\"\n", wantSaved: true, wantOutput: "Saved without checking"},
 		{name: "profile", status: http.StatusUnauthorized, config: "profile = \"work\"\n\n[profiles.work]\nmodel_provider = \"azure\"\n", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "quoted openai_base_url", status: http.StatusUnauthorized, config: "\"openai_base_url\" = \"https://proxy.example.invalid/v1\"\n", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "single-quoted openai_base_url", status: http.StatusUnauthorized, config: "'openai_base_url' = 'https://proxy.example.invalid/v1'\n", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "quoted profile", status: http.StatusUnauthorized, config: "\"profile\" = \"work\"\n", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "single-quoted profile", status: http.StatusUnauthorized, config: "'profile' = 'work'\n", wantSaved: true, wantOutput: "Saved without checking"},
 		{name: "openai provider named", status: http.StatusUnauthorized, config: "model_provider = \"openai\"\n", wantErr: "OpenAI refused this API key (HTTP 401)", wantAsked: true},
 		{name: "unreachable", wantSaved: true, wantOutput: "Couldn't reach OpenAI to check the key"},
 	} {
