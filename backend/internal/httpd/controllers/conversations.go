@@ -1173,7 +1173,9 @@ func (c *ConversationsController) stagedImages(ctx context.Context, sessionID st
 
 // inlineImageBytes is the decoded size of an inline base64 image, counted the
 // way the decoder reads it: CR and LF anywhere are skipped, and trailing "="
-// is padding. Malformed data gets a rough size; conversationContent refuses it.
+// is padding. Malformed data, more than two "=" included, counts at its full
+// length, never less: conversationContent refuses it, and until then it must
+// not make room in the budget.
 func inlineImageBytes(data string) int {
 	data = strings.TrimSpace(data)
 	chars, padding := 0, 0
@@ -1188,7 +1190,7 @@ func inlineImageBytes(data string) int {
 			padding = 0
 		}
 	}
-	if chars%4 != 0 {
+	if chars%4 != 0 || padding > 2 {
 		return chars / 4 * 3
 	}
 	return chars/4*3 - padding

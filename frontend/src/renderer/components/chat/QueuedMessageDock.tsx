@@ -25,6 +25,7 @@ import { withoutAnnotationPlaceholder } from "./ChatTimelineItems";
 import { ChatImageSourceProvider, useChatStagedFileUrl } from "./chat-image-source";
 import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { readAttachmentNames } from "../../lib/chat-attachment-names";
+import { mediaCrossOrigin } from "../../lib/file-media";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from "../../../shared/browser-annotations";
 import { formatFileChatReference } from "../../../shared/file-annotations";
 
@@ -47,7 +48,7 @@ function QueuedImageChip({ path, src, label }: { path?: string; src?: string; la
 	return (
 		<span className={CHIP_CLASS}>
 			{url ? (
-				<img src={url} alt="" onError={local.onError} className="size-3.5 shrink-0 rounded-[3px] object-cover" />
+				<img crossOrigin={mediaCrossOrigin(url)} src={url} alt="" onError={local.onError} className="size-3.5 shrink-0 rounded-[3px] object-cover" />
 			) : (
 				<ImageIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
 			)}

@@ -32,6 +32,29 @@ describe("useFileAttachments", () => {
 		expect(result.current.error).toBeNull();
 	});
 
+	it("makes pending previews only for the images that can still be attached", async () => {
+		const createObjectURL = vi.fn((blob: Blob) => `blob:${(blob as File).name}`);
+		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+		URL.createObjectURL = createObjectURL;
+		URL.revokeObjectURL = vi.fn();
+		try {
+			let release!: () => void;
+			const prepareAttachments = vi.fn((attachments: FileAttachment[]) =>
+				new Promise<FileAttachment[]>((resolve) => { release = () => resolve(attachments); }));
+			const { result } = renderHook(() => useFileAttachments({ prepareAttachments }));
+			const drop = Array.from({ length: MAX_ATTACHMENTS + 2 }, (_, index) => file(`shot-${index}.png`, 8, "image/png"));
+			let added!: Promise<FileAttachment[]>;
+			act(() => { added = result.current.addFiles(drop); });
+			// The two files past the limit are refused, so they load no picture.
+			expect(createObjectURL.mock.calls.map(([blob]) => (blob as File).name)).toEqual(drop.slice(0, MAX_ATTACHMENTS).map((f) => f.name));
+			await waitFor(() => expect(prepareAttachments).toHaveBeenCalled());
+			await act(async () => { release(); await added; });
+		} finally {
+			URL.createObjectURL = original.createObjectURL;
+			URL.revokeObjectURL = original.revokeObjectURL;
+		}
+	});
+
 	it("keeps the whole read-and-stage window pending and serializes concurrent batches", async () => {
 		const releases: Array<() => void> = [];
 		let activePreparations = 0;

@@ -873,8 +873,9 @@ export const ChatComposer = memo(function ChatComposer({
 		maxAttachmentBytes: cloudAttachments?.maxBytes,
 		prepareEach: Boolean(cloudAttachments),
 	});
-	// A message waiting on its uploads already shows them in the queue.
-	const pendingAttachments = awaitingUploads ? [] : fileAttachments.pendingAttachments;
+	// Files still uploading keep their tiles, and so a way to cancel one, even
+	// once the message they belong to waits in the queue.
+	const { pendingAttachments } = fileAttachments;
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
 	useEffect(() => {
 		if (!holdAttachments || !onHeldAttachmentsChange) return;

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
@@ -258,4 +259,23 @@ func TestStagedImageBudgetCountsInlineBytesAsDecoded(t *testing.T) {
 	if len(stub.sent.Content) != 3 {
 		t.Fatalf("content = %d blocks, want 3", len(stub.sent.Content))
 	}
+}
+
+// Malformed padding must not make room in the budget before the inline image
+// is refused: three staged 9 MiB images stay over 25 MiB beside it.
+func TestStagedImageBudgetIgnoresMalformedPadding(t *testing.T) {
+	const nineMiB = 9 << 20
+	staged := "attachment-0123abd1.png"
+	stub := &stagedImagesStub{fakeConversationService: &fakeConversationService{}}
+	server := stagedImagesServerWith(t, stub, map[string][]byte{staged: make([]byte, nineMiB)})
+	path := stagedImage(".ao/attachments/" + staged)
+	status, body := postStagedImageJSON(t, server, "/api/v1/sessions/p1-1/conversation/messages", map[string]any{
+		"text": "inspect",
+		"attachments": []map[string]string{
+			// Counted as padding this would subtract 3 MiB and let all 27 MiB be read.
+			{"mimeType": "image/png", "data": strings.Repeat("=", 12<<20)},
+			path, path, path,
+		},
+	})
+	assertErrorCode(t, body, status, http.StatusBadRequest, "ATTACHMENTS_TOO_LARGE")
 }

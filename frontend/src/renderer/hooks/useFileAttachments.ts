@@ -603,9 +603,12 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		const sharedKey = initialKey;
 		const generation = generationRef.current;
 		// An image shows its own picture while it uploads, not a placeholder: the
-		// bytes are already here, and only their upload can take a while.
-		const pending = batch.map((file): PendingFileAttachment => {
-			const previewUrl = isSupportedImageAttachment(file.type) ? fileObjectUrl(file) : undefined;
+		// bytes are already here, and only their upload can take a while. Only files
+		// that can still be attached get one, so a large drop loads no extra pictures.
+		const slots = MAX_ATTACHMENTS - attachmentsRef.current.length;
+		const pending = batch.map((file, index): PendingFileAttachment => {
+			const fits = index < slots && (maxAttachmentBytes === undefined || file.size <= maxAttachmentBytes);
+			const previewUrl = fits && isSupportedImageAttachment(file.type) ? fileObjectUrl(file) : undefined;
 			return { id: crypto.randomUUID(), name: file.name, ...(previewUrl ? { previewUrl } : {}) };
 		});
 		for (const file of pending) pendingFileControllers.set(file.id, new AbortController());
@@ -641,7 +644,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			});
 		addQueueRef.current = settled;
 		return settled;
-	}, [initialKey, processFiles]);
+	}, [initialKey, maxAttachmentBytes, processFiles]);
 
 	/**
 	 * Clear the notice about files that were not attached. Their files are gone,

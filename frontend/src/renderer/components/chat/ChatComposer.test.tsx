@@ -2900,6 +2900,8 @@ describe("attachments", () => {
 		const uploading = onUploadingSendChange.mock.calls[0]![0] as UploadingSend;
 		expect(field).toHaveClass("invisible");
 		expect(onSend).not.toHaveBeenCalled();
+		// A stalled upload can still be cancelled from its tile.
+		expect(screen.getByRole("button", { name: "Cancel attaching shot.png" })).toBeEnabled();
 
 		staging.resolve([".ao/attachments/attachment-shot.png"]);
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
