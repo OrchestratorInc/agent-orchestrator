@@ -24,6 +24,15 @@ describe("device stream parsing", () => {
 		expect(framePayload(payload)).toBe(payload);
 	});
 
+	it("strips the header of a short v1 message by its own length, not a fixed size", () => {
+		const header = new Uint8Array(16);
+		new DataView(header.buffer).setUint32(0, 0x53454d55);
+		header[4] = 1;
+		const payload = bytes(0, 0, 0, 1, 0x65, 1, 2, 3);
+		expect(Array.from(framePayload(new Uint8Array([...header, ...payload])))).toEqual(Array.from(payload));
+		expect(framePayload(header).length).toBe(0);
+	});
+
 	it("parses multipart parts by Content-Length, across chunk boundaries", () => {
 		const part = (body: string) => `--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ${body.length}\r\n\r\n${body}\r\n`;
 		const stream = new TextEncoder().encode(part("AAAA") + part("BBBBBB"));

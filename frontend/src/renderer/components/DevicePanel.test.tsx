@@ -225,7 +225,7 @@ describe("DevicePanel", () => {
 		expect(screen.getByRole("button", { name: "Home" })).toBeEnabled();
 	});
 
-	it("sends iOS Home on the socket only when the daemon says to, and says any other failure", async () => {
+	it("sends iOS Home on the socket only when the daemon says to, and says any other failure, unanswered ones included", async () => {
 		mockApi({ lease: iosLease });
 		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
 		const socket = await liveSocket();
@@ -238,6 +238,13 @@ describe("DevicePanel", () => {
 		postMock.mockResolvedValueOnce({ error: { code: "DEVICE_BUTTON_FAILED", message: "The simulator did not respond." } });
 		await userEvent.click(screen.getByRole("button", { name: "Recents" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("The simulator did not respond.");
+		expect(socket.sent).toHaveLength(1);
+
+		// No answer at all: the daemon may have pressed it already, so it is said,
+		// not pressed again on the socket.
+		postMock.mockRejectedValueOnce(new Error("Failed to fetch"));
+		await userEvent.click(screen.getByRole("button", { name: "Home" }));
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Failed to fetch"));
 		expect(socket.sent).toHaveLength(1);
 	});
 

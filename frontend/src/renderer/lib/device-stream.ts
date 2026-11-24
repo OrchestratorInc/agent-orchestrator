@@ -27,9 +27,13 @@ const SEMU = 0x53454d55;
 
 /** Strips the hub's SEMU header (v1: 16 bytes, v2: 24) from a video message; raw Annex-B passes through. */
 export function framePayload(bytes: Uint8Array): Uint8Array {
-	if (bytes.length > 24) {
+	if (bytes.length >= 8) {
 		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-		if (view.getUint32(0) === SEMU) return bytes.subarray(view.getUint8(4) === 1 ? 16 : 24);
+		if (view.getUint32(0) === SEMU) {
+			const header = view.getUint8(4) === 1 ? 16 : 24;
+			// A SEMU message too short for its own header carries no video.
+			return bytes.length > header ? bytes.subarray(header) : new Uint8Array(0);
+		}
 	}
 	return bytes;
 }

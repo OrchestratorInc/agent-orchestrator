@@ -193,7 +193,7 @@ function DevicePicker({
 			{devices.length === 0 ? (
 				status.error ? null : <PanelMessage compact>{t("device.noDevices")}</PanelMessage>
 			) : (
-				<ul className="divide-y divide-border overflow-hidden rounded-md bg-settings-row">
+				<ul className="shrink-0 divide-y divide-border overflow-hidden rounded-md bg-settings-row">
 					{devices.map((device) => {
 						const owner = heldBy.get(device.id);
 						const takenByOther = owner !== undefined && owner !== sessionId;
@@ -359,8 +359,9 @@ function DeviceLive({
 		setPressError(undefined);
 		// The simulator's Home and app switcher buttons do nothing on a Face ID
 		// iPhone; the daemon makes the home indicator swipe instead. Only its
-		// "send it on the socket" answer falls back there; any other failure is
-		// said, not swallowed.
+		// "send it on the socket" answer falls back there; any other failure,
+		// including a request that never got an answer (the daemon may have pressed
+		// it already), is said rather than pressed a second time.
 		if (platform === "ios" && (button === "recents" || button === "home")) {
 			void apiClient
 				.POST("/api/v1/sessions/{sessionId}/device/button", { params: { path: { sessionId } }, body: { button } })
@@ -369,7 +370,7 @@ function DeviceLive({
 					if (error.code === "DEVICE_BUTTON_UNSUPPORTED") viaSocket();
 					else setPressError(apiErrorException(error, "The button press failed.").message);
 				})
-				.catch(viaSocket);
+				.catch((cause: unknown) => setPressError(cause instanceof Error && cause.message ? cause.message : "The button press failed."));
 			return;
 		}
 		viaSocket();

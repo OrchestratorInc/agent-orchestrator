@@ -1783,10 +1783,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Browser: a lease opened while this session is on screen opens the tab once;
 	// entering a session that already holds one does not.
 	const deviceAvailable = devicesEnabled && Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
+	// A maximized Files or Browser would cover the revealed tab, so both go back
+	// to the inspector first, as opening an artifact does.
 	const revealDevice = useCallback(() => {
+		setBrowserPopOutState({ sessionId, phase: "docked" });
+		setFilesPoppedOut(false);
 		transitionInspectorView("device");
 		setInspectorOpenForSession(uiSessionId, true);
-	}, [setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
+	}, [sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.

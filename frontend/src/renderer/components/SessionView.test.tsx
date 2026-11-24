@@ -5525,6 +5525,19 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("device");
 	});
 
+	it("dismisses maximized Files when an agent's device reveals the Device tab", () => {
+		useUiStore.setState({ developerMode: true });
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(within(screen.getByTestId("panel-inspector")).getByRole("button", { name: "files rail" }));
+		expect(document.querySelector(".files-popout-overlay")).toBeInTheDocument();
+
+		act(() => deviceRevealWatcherProps.current!.onReveal());
+
+		expect(document.querySelector(".files-popout-overlay")).not.toBeInTheDocument();
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("device");
+	});
+
 	it("keeps the device watcher off for cloud sessions", () => {
 		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
 		(worker as { cloud?: unknown }).cloud = { orgId: "cloud-org" };
