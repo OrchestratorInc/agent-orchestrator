@@ -100,6 +100,8 @@
 	"chat.excerpt.selectedText": "所选文本：",
 	"chat.excerpt.flowchartAttached": "已附加流程图",
 	"chat.excerpt.quoted": "“{{text}}”",
+	"chat.excerpt.fromAgent": "智能体的回复",
+	"chat.excerpt.fromUser": "你的消息",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 准备期间可先排队发送消息",
 	"chat.controller.openElsewhere": "已在其他地方打开",

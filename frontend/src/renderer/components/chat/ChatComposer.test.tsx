@@ -318,7 +318,7 @@ describe("send keys", () => {
 		fireEvent.paste(field, { clipboardData: clipboardData([png()]) });
 		const removeImage = await screen.findByRole("button", { name: "Remove shot.png" });
 		const row = screen.getByTestId("composer-attachments-and-annotations");
-		expect(row).toHaveClass("flex", "flex-wrap", "items-center");
+		expect(row).toHaveClass("flex", "flex-wrap", "items-start");
 		expect(row).toContainElement(removeImage);
 		expect(row).toContainElement(screen.getByRole("button", { name: "1 annotation" }));
 		await userEvent.click(screen.getByRole("button", { name: "Remove all annotations" }));

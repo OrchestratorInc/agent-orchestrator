@@ -100,6 +100,8 @@
 	"chat.excerpt.selectedText": "選択したテキスト:",
 	"chat.excerpt.flowchartAttached": "フローチャート添付",
 	"chat.excerpt.quoted": "「{{text}}」",
+	"chat.excerpt.fromAgent": "エージェントの返信",
+	"chat.excerpt.fromUser": "あなたのメッセージ",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} の準備中にメッセージを追加できます",
 	"chat.controller.openElsewhere": "別の場所で開かれています",

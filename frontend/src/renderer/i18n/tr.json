@@ -100,6 +100,8 @@
 	"chat.excerpt.selectedText": "Seçili metin:",
 	"chat.excerpt.flowchartAttached": "Akış şeması eklendi",
 	"chat.excerpt.quoted": "“{{text}}”",
+	"chat.excerpt.fromAgent": "Ajanın yanıtı",
+	"chat.excerpt.fromUser": "Mesajınız",
 	"chat.removeAnnotation": "{{count}} numaralı açıklama notunu kaldır",
 	"chat.startup.queuePlaceholder": "{{agent}} hazırlanırken sonraki mesajınızı sıraya ekleyin",
 	"chat.controller.openElsewhere": "Başka bir yerde açık",

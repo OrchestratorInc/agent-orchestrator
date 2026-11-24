@@ -1,13 +1,15 @@
 import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
-import type { ChatFileReference } from "../../../shared/chat-file-reference";
+import { fileReferenceLabel, type ChatFileReference } from "../../../shared/chat-file-reference";
 import { MessageSquareQuote, X } from "@/components/app-icons";
 import { useId, useLayoutEffect, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
+import { ComposerTileRemove } from "./ComposerAttachmentTile";
 
 export interface ChatAnnotationSummaryItem {
 	snapshot?: ChatExcerptSnapshot;
@@ -20,6 +22,8 @@ export interface ChatAnnotationSummaryItem {
 	id?: string;
 	messageId?: string;
 	revision?: number;
+	/** Who wrote the message a chat excerpt quotes. */
+	role?: "user" | "assistant";
 }
 
 interface ChatAnnotationSummaryProps {
@@ -29,6 +33,8 @@ interface ChatAnnotationSummaryProps {
 	onRemoveAll?: () => void;
 	disabled?: boolean;
 	className?: string;
+	/** `card` draws the composer's attachment card: the quote and where it came from. */
+	appearance?: "chip" | "card";
 }
 
 /** Compact, keyboard-accessible annotation count with an interactive list. */
@@ -39,6 +45,7 @@ export function ChatAnnotationSummary({
 	onRemoveAll,
 	disabled = false,
 	className,
+	appearance = "chip",
 }: ChatAnnotationSummaryProps) {
 	const [open, setOpen] = useState(false);
 	annotations = [...annotations].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || Number(Boolean(a.fileReference)) - Number(Boolean(b.fileReference)));
@@ -59,8 +66,40 @@ export function ChatAnnotationSummary({
 	const label = `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
 	const removeClass = "absolute right-1 top-1/2 -translate-y-1/2";
 
-	return (
-		<Popover open={open} onOpenChange={setOpen}>
+	const trigger = appearance === "card" ? (
+		<div
+			className={cn("relative flex h-14 w-fit max-w-72 min-w-0 shrink-0 self-start rounded-lg border border-border bg-interactive-hover transition-colors", !disabled && "has-[>button:first-child:hover]:bg-interactive-active", className)}
+		>
+			<PopoverTrigger asChild>
+				<Pressable
+					ref={triggerRef}
+					disabled={disabled}
+					aria-label={label}
+					className="flex h-full min-w-0 select-none items-center gap-2.5 rounded-[inherit] pr-3 text-left leading-tight focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					<span aria-hidden="true" className="flex size-14 shrink-0 items-center justify-center">
+						<MessageSquareQuote className="size-5 text-muted-foreground" />
+					</span>
+					<span className="flex min-w-0 flex-col gap-0.5">
+						<span className="truncate text-sm text-foreground">{annotationQuote(annotations[0]!, t)}</span>
+						<span className="truncate text-xs text-muted-foreground">
+							{annotations.length > 1 ? t("browser.annotationCount", { count: annotations.length }) : annotationSource(annotations[0]!, t)}
+						</span>
+					</span>
+				</Pressable>
+			</PopoverTrigger>
+			{onRemoveAll ? (
+				<ComposerTileRemove
+					label={t("chat.removeAllAnnotations")}
+					disabled={disabled}
+					onRemove={() => {
+						setOpen(false);
+						onRemoveAll();
+					}}
+				/>
+			) : null}
+		</div>
+	) : (
 			<div
 				className={cn("relative inline-flex w-fit max-w-full min-w-0 self-start rounded-md bg-interactive-hover transition-colors", !disabled && "has-[>button:first-child:hover]:bg-interactive-active", className)}
 			>
@@ -95,6 +134,11 @@ export function ChatAnnotationSummary({
 					</Button>
 				) : null}
 			</div>
+	);
+
+	return (
+		<Popover open={open} onOpenChange={setOpen}>
+			{trigger}
 			<PopoverContent
 				onClick={(event) => event.stopPropagation()}
 				align="start"
@@ -139,6 +183,21 @@ export function ChatAnnotationSummary({
 			</PopoverContent>
 		</Popover>
 	);
+}
+
+/** The card's first line: the start of what was selected, in quotes. */
+function annotationQuote(annotation: ChatAnnotationSummaryItem, t: TFunction): string {
+	const text = annotation.fileReference
+		? annotation.fileReference.lines.map((row) => row.text.trim()).find(Boolean) ?? ""
+		: annotation.snapshot?.badgeOnly ? "" : annotation.text;
+	const line = text.split("\n").map((part) => part.trim()).find(Boolean);
+	return line ? t("chat.excerpt.quoted", { text: line }) : t("chat.excerpt.flowchartAttached");
+}
+
+/** The card's second line: whose message, or which file, the selection came from. */
+function annotationSource(annotation: ChatAnnotationSummaryItem, t: TFunction): string {
+	if (annotation.fileReference) return fileReferenceLabel(annotation.fileReference);
+	return annotation.role === "user" ? t("chat.excerpt.fromUser") : t("chat.excerpt.fromAgent");
 }
 
 function ChatExcerptPreview({ annotation, index, disabled, onNavigate }: { annotation: ChatAnnotationSummaryItem; index: number; disabled: boolean; onNavigate: () => void }) {

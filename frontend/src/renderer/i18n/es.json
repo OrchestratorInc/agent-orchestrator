@@ -101,6 +101,8 @@
 	"chat.excerpt.selectedText": "Texto seleccionado:",
 	"chat.excerpt.flowchartAttached": "Diagrama de flujo adjunto",
 	"chat.excerpt.quoted": "«{{text}}»",
+	"chat.excerpt.fromAgent": "Respuesta del agente",
+	"chat.excerpt.fromUser": "Tu mensaje",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Añade un mensaje mientras {{agent}} se prepara",
 	"chat.controller.openElsewhere": "Está abierto en otro lugar",
