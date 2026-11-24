@@ -54,6 +54,10 @@ func (fakeMobileBridge) SetBrowserRemoteAccess(on bool) (controllers.MobileStatu
 	return controllers.MobileStatusResponse{}, nil
 }
 
+func (fakeMobileBridge) SetPublicTunnel(on bool) (controllers.MobileStatusResponse, error) {
+	return controllers.MobileStatusResponse{}, nil
+}
+
 func (fakeMobileBridge) SetKeepAwakeLid(bool, bool) (controllers.MobileStatusResponse, error) {
 	return controllers.MobileStatusResponse{}, nil
 }

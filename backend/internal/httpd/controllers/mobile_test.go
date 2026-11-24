@@ -55,6 +55,11 @@ func (f *fakeBridge) SetBrowserRemoteAccess(on bool) (MobileStatusResponse, erro
 	r.BrowserRemoteAccess = on
 	return r, nil
 }
+func (f *fakeBridge) SetPublicTunnel(on bool) (MobileStatusResponse, error) {
+	r := f.Status()
+	r.NoPublicTunnel = !on
+	return r, nil
+}
 
 func TestMobileBrowserRemoteAccess(t *testing.T) {
 	c := &MobileController{Bridge: &fakeBridge{}}

@@ -1326,6 +1326,8 @@
 	"mobile.getApp": "アプリを入手",
 	"mobile.scanHint": "Orchestrator モバイルアプリでスキャン",
 	"mobile.remoteAccessOn": "リモートアクセス有効",
+	"mobile.publicTunnel.label": "どこからでも接続",
+	"mobile.publicTunnel.help": "Cloudflare トンネルを使用します。トンネルは通信内容を読み取れます。オフ: このネットワークまたは Tailscale 上のデバイスのみ接続できます。",
 	"mobile.hideQR": "App Store の QR コードを隠す",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "App Store で Orchestrator を入手",

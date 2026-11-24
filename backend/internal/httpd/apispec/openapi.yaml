@@ -4732,6 +4732,44 @@ paths:
       summary: Make a one-time code a new device exchanges for its own token
       tags:
       - mobile
+  /api/v1/mobile/public-tunnel:
+    post:
+      operationId: setMobilePublicTunnel
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPublicTunnelRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileStatusResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Publish the mobile bridge through the public tunnel, or keep it to
+        this network and Tailscale
+      tags:
+      - mobile
   /api/v1/mobile/regenerate:
     post:
       operationId: regenerateMobile
@@ -25661,6 +25699,13 @@ components:
           type: string
       required:
       - permissions
+      type: object
+    SetPublicTunnelRequest:
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
       type: object
     SetReviewActivityRequest:
       properties:
