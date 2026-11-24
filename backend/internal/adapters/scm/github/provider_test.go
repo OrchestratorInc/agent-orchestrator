@@ -857,6 +857,51 @@ func contains(ss []string, x string) bool {
 	return false
 }
 
+// TestListPRsByRepoReusesOneCacheEntryAcrossPolls catches the listing growing
+// the response cache by one full page per poll. A since parameter that changed
+// every poll gave each page a new cache key, so a long-running daemon filled the
+// cache with up to cacheMaxEntries copies of a multi-megabyte listing.
+func TestListPRsByRepoReusesOneCacheEntryAcrossPolls(t *testing.T) {
+	f := newFakeGH(t)
+	var conditional int
+	f.on(http.MethodGet, "/repos/acme/widgets/pulls", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("since") {
+			t.Errorf("listing sent since=%q, which GitHub ignores", r.URL.Query().Get("since"))
+		}
+		if r.Header.Get("If-None-Match") == `W/"list-v1"` {
+			conditional++
+			w.Header().Set("ETag", `W/"list-v1"`)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `W/"list-v1"`)
+		_, _ = w.Write([]byte(`[{"number":7,"state":"open","updated_at":"2026-11-17T10:00:00Z"}]`))
+	})
+	p := newProviderForTest(t, f)
+	repo := ports.SCMRepo{Provider: "github", Owner: "acme", Name: "widgets"}
+
+	cursor := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
+	for poll := range 3 {
+		pulls, err := p.ListPRsByRepo(ctx(), repo, cursor.Add(time.Duration(poll)*time.Minute))
+		if err != nil {
+			t.Fatalf("poll %d: %v", poll, err)
+		}
+		if len(pulls) != 1 || pulls[0].Number != 7 {
+			t.Fatalf("poll %d pulls = %+v, want PR 7", poll, pulls)
+		}
+	}
+	if conditional != 2 {
+		t.Fatalf("conditional requests = %d, want 2 revalidations of one cached page", conditional)
+	}
+	p.client.mu.Lock()
+	entries := len(p.client.bodyOut)
+	p.client.mu.Unlock()
+	if entries != 1 {
+		t.Fatalf("cached bodies = %d, want 1 for one page polled three times", entries)
+	}
+}
+
 func TestObserve_ETag304Cached(t *testing.T) {
 	// Second call to the REST pull endpoint must send If-None-Match and
 	// reuse the cached body, while still completing the rest of the

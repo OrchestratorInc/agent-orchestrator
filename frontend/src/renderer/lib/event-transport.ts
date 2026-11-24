@@ -6,17 +6,19 @@ import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversationOnce } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, forgetRemoteConversationRereads, refreshLocalConversationTail, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
 } from "../hooks/useReviewerConversation";
 import { sessionReviewsQueryKey } from "./session-reviews";
 import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
+import { backgroundTasksQueryRoot } from "../hooks/useBackgroundTasks";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { shellTerminalsQueryKey, shellTerminalsQueryKeyForHost } from "../hooks/useShellTerminals";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
+import { persistLocalChats } from "./local-chat-cache";
 import { persistRemoteCache } from "./remote-chat-cache";
 
 export type EventTransport = {
@@ -73,6 +75,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
 			let workspaceInvalidationPending = false;
+			let backgroundMembershipInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
 			// Reviews, interface transitions and model catalogs are otherwise only
@@ -101,6 +104,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					.finally(() => controller.abort());
 			};
 			const stopPersistingRemoteCache = persistRemoteCache(queryClient);
+			const stopPersistingLocalChats = persistLocalChats(queryClient);
 			let disposed = false;
 			type RemoteConnection = {
 				base: string;
@@ -152,12 +156,50 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				};
 				void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }).then(settled, settled);
 			};
+			// An open local chat with nothing loading reads only the rows that can still
+			// change, as a remote chat does, so a streaming turn stops refetching the
+			// whole history on every event. A closed chat, one still loading, and every
+			// tail that cannot be merged take the full invalidation above. Both share the
+			// one-in-flight, one-catch-up bookkeeping.
+			const refreshLocalChat = (sessionId: string) => {
+				if (disposed) return;
+				const queryKey = conversationQueryKey(sessionId);
+				const key = JSON.stringify(queryKey);
+				const running = refreshes.get(key);
+				if (running) {
+					running.dirty = true;
+					return;
+				}
+				if (!queryClient.getQueryCache().find({ queryKey, type: "active" }) || queryClient.isFetching({ queryKey }) > 0) {
+					invalidate(queryKey);
+					return;
+				}
+				const state = { dirty: false };
+				refreshes.set(key, state);
+				const settled = () => {
+					refreshes.delete(key);
+					if (state.dirty && !disposed) refreshLocalChat(sessionId);
+				};
+				void refreshLocalConversationTail(queryClient, sessionId)
+					.then((merged) => {
+						if (disposed) return undefined;
+						// A query fetch that started during the tail read (an older page, a
+						// mount) may predate this event, or write back the live page it
+						// captured before the merge. Catch up once it has finished.
+						if (queryClient.isFetching({ queryKey }) > 0) state.dirty = true;
+						if (merged) return undefined;
+						return queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+					})
+					.then(settled, settled);
+			};
 			const refreshRemote = (hostId: string, reconnect = false) => {
 				const connection = remoteSources.get(hostId);
 				if (connection) connection.lastRefreshAt = Date.now();
 				invalidate(["remote-workspaces", hostId]);
 				invalidate(["project", hostId]);
 				invalidate(["project-config", hostId]);
+				// A reconnect may follow a host restart, which settles stranded rows.
+				if (reconnect) forgetRemoteConversationRereads(queryClient, hostId);
 				if (reconnect) invalidate(["remote-conversation", hostId]);
 				if (reconnect) invalidate(["reviewer-conversation", hostId]);
 				invalidate(["session-scm-summary", hostId]);
@@ -282,6 +324,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(reviewerConversationQueryRoot);
 					allConversationsInvalidationPending = false;
 				}
+				if (backgroundMembershipInvalidationPending) {
+					invalidate(backgroundTasksQueryRoot);
+					backgroundMembershipInvalidationPending = false;
+				}
 				if (workspaceInvalidationPending) {
 					invalidate(workspaceQueryKey);
 					// A deleted session or removed project changes what is kept.
@@ -309,7 +355,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					pendingEditorHandoffSessions.clear();
 				}
 				for (const sessionId of pendingConversationSessions) {
-					invalidate(conversationQueryKey(sessionId));
+					refreshLocalChat(sessionId);
 				}
 				pendingConversationSessions.clear();
 				for (const sessionId of pendingReviewSessions) {
@@ -375,6 +421,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
 				let idOnlySessionUpdate = false;
+				if (event === undefined || event.type === "session_created" || event.type === "session_deleted") backgroundMembershipInvalidationPending = true;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
@@ -393,6 +440,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							type?: unknown;
 							payload?: unknown;
 						};
+						if (decoded.type === "session_created" || decoded.type === "session_deleted") backgroundMembershipInvalidationPending = true;
 						// The SSE endpoint sends the complete durable CDC event. Routing
 						// fields such as sessionId live on that envelope, while trigger-built
 						// details such as conversationId live inside its payload. Do not
@@ -630,6 +678,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				remoteSources.clear();
 				stopPersistingRemoteCache();
+				stopPersistingLocalChats();
 				setEventsConnectionState("idle");
 			};
 		},

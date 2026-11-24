@@ -75,6 +75,38 @@ export interface CloudShareGrant {
 	createdAt: string;
 }
 
+/**
+ * One team, or a whole workspace, a link is shared with. Only a team
+ * workspace on a paid Cloud plan takes them. teamId is unset for a workspace;
+ * name is empty, and memberCount 0, when the owner has left the workspace.
+ */
+export interface CloudShareSubjectGrant {
+	id: string;
+	orgId: string;
+	teamId?: string;
+	name: string;
+	memberCount: number;
+	createdAt: string;
+}
+
+/** Everyone a link is shared with: people by email, teams, and workspaces. */
+export interface CloudShareGrants {
+	people: CloudShareGrant[];
+	teams: CloudShareSubjectGrant[];
+	workspaces: CloudShareSubjectGrant[];
+}
+
+/**
+ * Who to share a link with at once. teamIds and workspace name teams of, or
+ * everyone in, the team workspace orgId, which either needs.
+ */
+export interface CloudShareInvite {
+	emails?: string[];
+	orgId?: string;
+	teamIds?: string[];
+	workspace?: boolean;
+}
+
 /** One committed file of a cloud session. */
 export interface CloudSessionShareFile extends CloudShareFile {
 	source: "cloud";
@@ -151,6 +183,18 @@ export interface CloudShareLinks {
 	privateLinks: boolean;
 }
 
+const UNPLAYABLE_VIDEO = /\.(avi|mkv|ogv)$/i;
+
+/**
+ * Whether a file is a video in a format browsers do not play. A share link
+ * has no download, so its viewer could show nothing of one: it is never
+ * published. The control plane refuses it too. .ogv is Theora, which Chrome
+ * and Firefox no longer play.
+ */
+export function isUnplayableShareVideo(name: string): boolean {
+	return UNPLAYABLE_VIDEO.test(name);
+}
+
 /**
  * What the share popover and the Publish button know about a file, read
  * without opening it: from this computer's publish record and the file's
@@ -160,7 +204,7 @@ export interface CloudShareInspection {
 	name: string;
 	/** Known for a local file, and for a cloud file whose list was read. */
 	size?: number;
-	/** Video is not shared yet. */
+	/** A video in a format browsers do not play (see isUnplayableShareVideo). */
 	unsupported: boolean;
 	/** The link this file was last published to from this computer, if any. */
 	shareId?: string;
@@ -172,6 +216,11 @@ export interface CloudShareInspection {
 	 * not checked: a different value means the file changed since publishing.
 	 */
 	publishedFingerprint?: string;
+	/**
+	 * An HTML page published with the files it uses: whether any of them
+	 * changed, appeared or went since, though the page did not.
+	 */
+	pageFilesChanged?: boolean;
 }
 
 /**
@@ -191,11 +240,12 @@ export interface CloudSharePageFiles {
 	/** How many the link serves beside the page now. */
 	included: number;
 	/**
-	 * How many the page uses that were left out: video (not shared yet), a
-	 * file outside the page's folder or missing, or past the link's limit.
+	 * How many the page uses that were left out: a video the control plane
+	 * does not publish or browsers cannot play, a file outside the page's
+	 * folder or missing, or past the link's limit.
 	 */
 	skipped: number;
-	/** How many of skipped are video. */
+	/** How many of skipped are video the control plane does not publish yet. */
 	videos: number;
 	/** The control plane predates included files: the page was published alone. */
 	unsupported: boolean;

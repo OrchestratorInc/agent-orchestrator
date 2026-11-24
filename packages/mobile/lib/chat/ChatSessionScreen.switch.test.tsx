@@ -25,6 +25,7 @@ const fixtures = vi.hoisted(() => {
 			items: [] as unknown[],
 			controller: { state: "running" } as { state: string; error?: string },
 		},
+		saved: false,
 		loading: false,
 		error: undefined as string | undefined,
 		unavailable: undefined,
@@ -39,6 +40,8 @@ const fixtures = vi.hoisted(() => {
 		models: [],
 		refresh: vi.fn(async () => {}),
 		loadTurnOptions: vi.fn(async () => {}),
+		rollback: vi.fn(async () => 0),
+		editMessage: vi.fn(async () => {}),
 	});
 	return {
 		interfaceSwitch: interfaceSwitch(),
@@ -46,6 +49,7 @@ const fixtures = vi.hoisted(() => {
 		conversation: conversation(),
 		freshConversation: conversation,
 		refreshBoard: vi.fn(async () => {}),
+		agentSwitchMenu: vi.fn((_args: { enabled: boolean }) => undefined as unknown),
 		navigation: { setOptions: vi.fn(), addListener: vi.fn(() => () => {}) },
 		router: { push: vi.fn(), back: vi.fn(), replace: vi.fn(), canGoBack: () => true },
 	};
@@ -70,7 +74,8 @@ vi.mock("expo-router", async () => {
 	return { Stack: { Toolbar }, useIsFocused: () => true, useNavigation: () => fixtures.navigation, useRouter: () => fixtures.router };
 });
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 0 }));
-vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView") }));
+vi.mock("react-native-reanimated", () => ({ useSharedValue: <T,>(value: T) => ({ value }), runOnJS: <F,>(fn: F) => fn }));
+vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView"), useKeyboardHandler: () => {}, useReanimatedFocusedInput: () => ({ input: { value: null } }) }));
 vi.mock("../api", () => ({ ApiError: class ApiError extends Error {}, apiRequest: vi.fn(() => new Promise(() => {})), mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
@@ -115,6 +120,8 @@ vi.mock("./ChatComposer", async () => ({ ChatComposer: await host("ChatComposer"
 vi.mock("./KeyboardFollower", async () => ({ KeyboardFollower: await host("KeyboardFollower") }));
 vi.mock("./ChatMarkdown", async () => ({ ChatLinkProvider: await host("ChatLinkProvider") }));
 vi.mock("./ChatTimeline", async () => ({ ChatTimeline: await host("ChatTimeline") }));
+// The transcript's one-frame deferral is not under test here.
+vi.mock("../useAfterPush", () => ({ useAfterPush: () => true }));
 vi.mock("./McpServerNotice", async () => ({ McpServerNotice: await host("McpServerNotice") }));
 vi.mock("./ProviderSwitchMarker", async () => ({ ProviderSwitchLine: await host("ProviderSwitchLine") }));
 vi.mock("./useChatKeyboard", () => ({
@@ -134,10 +141,9 @@ vi.mock("./conversationBanners", () => ({
 	threadBanner: () => undefined,
 }));
 vi.mock("./conversationErrors", () => ({ conversationActionError: () => undefined, conversationActionUnsupported: () => false }));
-vi.mock("./turnOptionsCatalog", () => ({ providerCatalogLive: () => false, turnOptionsLoadFor: () => undefined }));
 vi.mock("./types", () => ({ brokenMcpServers: () => [], can: () => false }));
 vi.mock("./useConversation", () => ({ useMobileConversation: () => fixtures.conversation }));
-vi.mock("./useAgentSwitchMenu", () => ({ useAgentSwitchMenu: () => undefined }));
+vi.mock("./useAgentSwitchMenu", () => ({ useAgentSwitchMenu: fixtures.agentSwitchMenu }));
 vi.mock("../useLastVerifiedConfig", () => ({ useLastVerifiedConfig: () => undefined }));
 vi.mock("./SessionStartup", async () => ({ SessionStartupStatus: await host("SessionStartupStatus") }));
 vi.mock("../session/sessionStartup", () => ({ sessionStartupView: () => undefined, startupVisible: () => false }));
@@ -162,6 +168,10 @@ vi.mock("./TurnArtifacts", async () => {
 	const React = await import("react");
 	return { TurnArtifactsContext: React.createContext(null), useTurnArtifactSourceFor: () => null };
 });
+vi.mock("./UsageLimitNotice", async () => {
+	const React = await import("react");
+	return { TurnRecoveryContext: React.createContext(null) };
+});
 vi.mock("./automationMessages", () => ({ sessionLink: () => undefined }));
 vi.mock("./sessionLookup", () => ({ readSession: vi.fn(async () => undefined) }));
 
@@ -176,6 +186,7 @@ beforeEach(() => {
 	fixtures.interfaceSwitch = fixtures.freshInterfaceSwitch();
 	fixtures.conversation = fixtures.freshConversation();
 	fixtures.refreshBoard.mockReset().mockResolvedValue(undefined);
+	fixtures.agentSwitchMenu.mockReset().mockReturnValue(undefined);
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -191,9 +202,9 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-async function mount() {
+async function mount(shown: never = session) {
 	await act(async () => {
-		renderer = create(<ChatSessionScreen session={session} />);
+		renderer = create(<ChatSessionScreen session={shown} />);
 	});
 }
 async function rerender() {
@@ -271,5 +282,73 @@ describe("Chat while it switches to Terminal", () => {
 		expect(find("InterfaceSwitchCard")).toHaveLength(0);
 		expect(bannerTitles()).toEqual(["The agent stopped"]);
 		expect(composer().props.disabled).toBe(false);
+	});
+});
+
+// After the phone closed the app, a chat opens on the page saved on the phone
+// until the first live read replaces it (see savedConversations.ts).
+describe("A chat showing its page saved on the phone", () => {
+	const timeline = () => find("ChatTimeline")[0];
+
+	it("offers no edit or rollback until the live read lands", async () => {
+		fixtures.conversation.saved = true;
+		await mount();
+		expect(timeline().props.onEditMessage).toBeUndefined();
+		expect(timeline().props.onRollback).toBeUndefined();
+		expect(timeline().props.onFork).toBeUndefined();
+
+		fixtures.conversation = { ...fixtures.conversation, saved: false, snapshot: { ...fixtures.conversation.snapshot } };
+		await rerender();
+		expect(timeline().props.onEditMessage).toBe(fixtures.conversation.editMessage);
+		expect(timeline().props.onRollback).toBe(fixtures.conversation.rollback);
+	});
+
+	it("loads the model catalog from the live read, not from the saved page", async () => {
+		// The saved page shows the agent ready, but the provider may not be up:
+		// a load made then could come back empty, and the live read reporting
+		// ready too would never ask again.
+		fixtures.conversation.saved = true;
+		fixtures.conversation.snapshot.controller = { state: "ready" };
+		await mount();
+		expect(fixtures.conversation.loadTurnOptions).not.toHaveBeenCalled();
+
+		fixtures.conversation = { ...fixtures.conversation, saved: false, snapshot: { ...fixtures.conversation.snapshot, controller: { state: "ready" } } };
+		await rerender();
+		expect(fixtures.conversation.loadTurnOptions).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("Switching the chat's agent", () => {
+	const menu = { agents: [{ id: "codex", label: "Codex" }], models: {} };
+	// The board lists a project's orchestrator as a link of its own, not a worker.
+	const orchestrator = { id: "orch-1", projectId: "project-1", projectName: "Project", harness: "claude-code", status: "exited", mode: "chat", hasRuntime: true } as never;
+	const lastEnabled = () => fixtures.agentSwitchMenu.mock.calls.at(-1)?.[0].enabled;
+
+	it("offers a worker's other agents", async () => {
+		fixtures.agentSwitchMenu.mockReturnValue(menu);
+		await mount();
+		expect(lastEnabled()).toBe(true);
+		expect(composer().props.otherAgents).toMatchObject({ agents: menu.agents, disabled: false });
+	});
+
+	it("offers an orchestrator's other agents, as desktop does", async () => {
+		fixtures.agentSwitchMenu.mockReturnValue(menu);
+		await mount(orchestrator);
+		expect(lastEnabled()).toBe(true);
+		expect(composer().props.otherAgents).toMatchObject({ agents: menu.agents, disabled: false });
+	});
+
+	it("still offers them once the orchestrator's agent stopped at a usage limit", async () => {
+		fixtures.agentSwitchMenu.mockReturnValue(menu);
+		fixtures.conversation.snapshot.controller = { state: "stopped", error: "You've hit your weekly limit" };
+		fixtures.conversation.snapshot.turns = [{ id: "turn-1", state: "failed" }];
+		await mount(orchestrator);
+		expect(lastEnabled()).toBe(true);
+		expect(composer().props.otherAgents).toMatchObject({ agents: menu.agents, disabled: false });
+	});
+
+	it("offers none to a terminated orchestrator, which must be restarted first", async () => {
+		await mount({ ...(orchestrator as object), isTerminal: true } as never);
+		expect(lastEnabled()).toBe(false);
 	});
 });

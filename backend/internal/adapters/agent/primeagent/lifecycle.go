@@ -26,6 +26,11 @@ type primeListResponse struct {
 type primeSessionSummary struct {
 	SessionID       string `json:"sessionId"`
 	ActiveSessionID string `json:"activeSessionId"`
+	Activity        string `json:"activity"`
+	CWD             string `json:"cwd"`
+	Created         string `json:"created"`
+	RLMDepth        int    `json:"rlmDepth"`
+	RuntimeKind     string `json:"runtimeKind"`
 }
 
 func runPrimeCommand(ctx context.Context, binary, workingDir string, env map[string]string, args ...string) ([]byte, error) {

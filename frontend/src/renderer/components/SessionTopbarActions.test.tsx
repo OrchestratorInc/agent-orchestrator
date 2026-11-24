@@ -18,6 +18,7 @@ import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
+import { OrchestratorSpawnError } from "../lib/spawn-orchestrator";
 
 const { locationMock, navigateMock, onKilledMock, paramsMock, postMock, spawnMock, useWorkspaceQueryMock } = vi.hoisted(() => ({
 	locationMock: { pathname: "/" },
@@ -69,6 +70,8 @@ vi.mock("../lib/api-client", () => ({
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
 	subscribeApiBaseUrl: () => () => undefined,
 	hasTrustedApiBaseUrl: () => false,
+	apiErrorCode: (error: unknown) =>
+		typeof error === "object" && error !== null && "code" in error ? String((error as { code: unknown }).code) : undefined,
 	apiErrorMessage: (error: unknown, fallback = "Request failed") => {
 		if (error instanceof Error) return error.message;
 		if (typeof error === "object" && error !== null && "message" in error) {
@@ -535,7 +538,8 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		expect(screen.queryByRole("button", { name: "Archive session" })).not.toBeInTheDocument();
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("starts the orchestrator of a project with no orchestrator agent instead of opening settings", async () => {
+		spawnMock.mockResolvedValue("orch-new");
 		useWorkspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -560,9 +564,34 @@ describe("SessionTopbarActions orchestrator actions", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
+		await waitFor(() => expect(spawnMock).toHaveBeenCalled());
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("opens local project agent settings when the daemon cannot fill a missing agent", async () => {
+		spawnMock.mockRejectedValueOnce(new OrchestratorSpawnError("Configure an orchestrator agent", "AGENT_REQUIRED"));
+		renderTopbarSessions([worker], worker.id);
+
+		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
+
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({
+			scope: "project", projectId: "proj-1", section: "agents",
+		}));
 		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	it("opens remote project agent settings when the daemon cannot fill a missing agent", async () => {
+		paramsMock.hostId = "box-a";
+		spawnMock.mockRejectedValueOnce(new OrchestratorSpawnError("Configure an orchestrator agent", "AGENT_REQUIRED"));
+		renderTopbarSessions([{ ...worker, hostId: "box-a" }], worker.id);
+
+		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
+
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({
+			scope: "project", projectId: "proj-1", hostId: "box-a", section: "agents",
+		}));
+		expect(spawnMock).toHaveBeenCalledWith("proj-1", "topbar", false, undefined, undefined, "box-a");
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("opens the project orchestrator from the open-orchestrator shortcut", () => {

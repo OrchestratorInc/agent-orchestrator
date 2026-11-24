@@ -113,3 +113,28 @@ func TestOpenHandsProviderPublishesKeyAndModel(t *testing.T) {
 		t.Fatalf("OpenHands config = %v, published %v, %v", keys, published, err)
 	}
 }
+
+// Mastra Code's google provider reads GOOGLE_API_KEY first, so its saved
+// Google key must use that name: injected over the session environment, it
+// beats an inherited GOOGLE_API_KEY, and without a conflict it is still set.
+func TestMastraCodeGoogleKeyIsTheNameMastraReadsFirst(t *testing.T) {
+	name, ok := environmentMethod("mastra-code", "env_GOOGLE_API_KEY")
+	if !ok || name != "GOOGLE_API_KEY" {
+		t.Fatalf("Mastra Code Google method = %q, %v; want GOOGLE_API_KEY", name, ok)
+	}
+	if _, ok := environmentMethod("mastra-code", "env_GOOGLE_GENERATIVE_AI_API_KEY"); ok {
+		t.Fatal("Mastra Code still saves the Google key under a name it reads second")
+	}
+	saved := map[string]string{name: "ao-saved"}
+	for _, inherited := range [][]string{{"PATH=/bin", "GOOGLE_API_KEY=inherited"}, {"PATH=/bin"}} {
+		var got []string
+		for _, entry := range providerkeys.EnvList(inherited, saved) {
+			if len(entry) > len("GOOGLE_API_KEY=") && entry[:len("GOOGLE_API_KEY=")] == "GOOGLE_API_KEY=" {
+				got = append(got, entry)
+			}
+		}
+		if len(got) != 1 || got[0] != "GOOGLE_API_KEY=ao-saved" {
+			t.Fatalf("session GOOGLE_API_KEY from %v = %v; want only the AO-saved key", inherited, got)
+		}
+	}
+}

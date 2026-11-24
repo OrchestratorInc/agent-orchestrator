@@ -236,14 +236,31 @@ func (p *Plugin) resolveProviderContext(
 		WorkingDir:    workingDir,
 		CommandEnv:    env,
 	}).WithClaudeSettings(ctx)
-	report, cliOK := reportFn(ctx, binary, workingDir, opts.CommandEnv)
+	// `claude auth status` renews an expired stored login on its own, and a
+	// refused renewal wipes the login (#8724). Every Claude Code process that
+	// finds the token expired tries that renewal, and the refresh token is
+	// single-use, so checks racing the user's sessions sign the account out
+	// about eight hours after sign-in. For such a login the CLI is not asked:
+	// the network probe and model discovery already wait for it, and the next
+	// session renews it once.
+	firstParty, firstPartyFound := agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, opts)
+	report, cliOK := claudeAuthReport{}, false
+	if !firstPartyFound || !firstParty.ExpiredButRenewable(claudeNow()) {
+		report, cliOK = reportFn(ctx, binary, workingDir, opts.CommandEnv)
+		// The CLI can renew a token that expired since the read above; read the
+		// login it left, not the one before it.
+		firstParty, firstPartyFound = agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, opts)
+	}
 	reported := ""
 	if cliOK {
 		reported = report.APIProvider
 	}
 	provider, providerOK := agentcreds.ResolveProvider(reported, opts)
 	credential, found := agentcreds.Credential{}, false
-	if providerOK {
+	switch {
+	case providerOK && provider == agentcreds.ProviderFirstParty:
+		credential, found = firstParty, firstPartyFound
+	case providerOK:
 		credential, found = agentcreds.ResolveLocal(ctx, provider, opts)
 	}
 	return claudeProviderContext{
@@ -583,13 +600,21 @@ var claudeModelAuthReport = func(ctx context.Context, binary, workingDir string,
 	return (&Plugin{}).claudeCLIAuthReport(ctx, binary, workingDir, env)
 }
 
+// claudeModelProbeTimeout bounds the provider request that lists models. It
+// covers only that request: the CLI report and the keychain read carry their
+// own timeouts.
+var claudeModelProbeTimeout = agentcreds.DefaultTimeout
+
 // ProviderCatalogFingerprint returns the local identity inputs that scope a
 // Claude provider catalog. It includes the CLI-reported provider and the
 // resolved credential identity without exposing the credential itself.
+//
+// The CLI report and the credential lookup each bound themselves, so a slow
+// `claude auth status` cannot leave the lookup an expired deadline and drop
+// the credential from the fingerprint. With no caller deadline, a hung CLI
+// can take its timeout plus the keychain read's timeout (up to about 6s).
 func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, env map[string]string) string {
-	probeCtx, cancel := context.WithTimeout(ctx, claudeAuthProbeTimeout)
-	defer cancel()
-	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, claudeModelAuthReport)
+	resolved := (&Plugin{}).resolveProviderContext(ctx, binary, workingDir, env, claudeModelAuthReport)
 	reported := ""
 	if resolved.cliOK {
 		reported = strings.TrimSpace(resolved.report.APIProvider)
@@ -613,10 +638,16 @@ func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, 
 // An error means the provider could not be asked. Callers must fall back to
 // their static list rather than presenting an empty picker. Its message is the
 // bare reason: the model catalog already names the agent and the step.
+//
+// The provider request gets its own deadline, started after the credential is
+// resolved. Sharing one deadline let a slow or stale `claude auth status` (an
+// old CLI earlier on the daemon's PATH treats it as a prompt) spend the whole
+// budget, so the keychain read failed and a signed-in user saw "no credential
+// could be resolved" (#7672).
 func ProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) ([]ports.AgentModelInfo, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
+	resolved := (&Plugin{}).resolveProviderContext(ctx, binary, workingDir, env, claudeModelAuthReport)
+	probeCtx, cancel := context.WithTimeout(ctx, claudeModelProbeTimeout)
 	defer cancel()
-	resolved := (&Plugin{}).resolveProviderContext(probeCtx, binary, workingDir, env, claudeModelAuthReport)
 	return providerModelsFor(probeCtx, resolved)
 }
 

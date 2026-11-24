@@ -54,7 +54,6 @@ function editor(patch: Partial<MachineEditor> = {}): MachineEditor {
 		setHost: vi.fn(),
 		setPort: vi.fn(),
 		setPassword: vi.fn(),
-		setSecure: vi.fn(),
 		save: vi.fn(async () => true),
 		...patch,
 	};

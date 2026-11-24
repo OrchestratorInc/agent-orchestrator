@@ -584,6 +584,55 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "DELETE" });
   });
 
+  it("reads and changes the signed-in user's data retention, dry run first", async () => {
+    const retention = {
+      retentionDays: 180,
+      defaultDays: 180,
+      followsDefault: true,
+      options: [30, 60, 90, 180, 365],
+      updatedAt: null,
+    };
+    const chosen = { ...retention, retentionDays: 30, followsDefault: false, updatedAt: "2026-11-15T10:00:00Z", sessionsToDelete: 12 };
+    const fetchMock = vi
+      .fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(retention))
+      .mockResolvedValueOnce(jsonResponse(retention))
+      .mockResolvedValueOnce(jsonResponse({ ...retention, sessionsToDelete: 12 }))
+      .mockResolvedValueOnce(jsonResponse(chosen))
+      .mockResolvedValueOnce(jsonResponse({ ...retention, updatedAt: "2026-11-16T10:00:00Z", sessionsToDelete: 0 }));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+
+    await expect(client.getDataRetention()).resolves.toEqual(retention);
+    await expect(client.putDataRetention({ retentionDays: 30, dryRun: true }))
+      .resolves.toMatchObject({ retentionDays: 180, sessionsToDelete: 12 });
+    await expect(client.putDataRetention({ retentionDays: 30, dryRun: false }))
+      .resolves.toMatchObject({ retentionDays: 30, followsDefault: false, updatedAt: "2026-11-15T10:00:00Z", sessionsToDelete: 12 });
+    // null goes back to the deployment's default.
+    await expect(client.putDataRetention({ retentionDays: null }))
+      .resolves.toMatchObject({ retentionDays: 180, followsDefault: true, sessionsToDelete: 0 });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/me/data-retention");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://cloud.test/api/cloud/v1/me/data-retention");
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ retentionDays: 30, dryRun: true }) });
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ retentionDays: 30, dryRun: false }) });
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "PUT", body: JSON.stringify({ retentionDays: null }) });
+  });
+
+  it("surfaces a refused data retention change as a typed error", async () => {
+    const fetchMock = vi
+      .fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse({ error: "Bad Request", code: "invalid_retention", message: "Choose one of 30, 60, 90, 180 or 365 days.", requestId: "r-1" }, 400))
+      .mockResolvedValueOnce(jsonResponse({ error: "Unauthorized", code: "unauthorized", message: "Sign in again.", requestId: "r-2" }, 401));
+    const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+
+    await expect(client.putDataRetention({ retentionDays: 45 })).rejects.toMatchObject({
+      name: "CloudApiError", status: 400, code: "invalid_retention",
+    });
+    await expect(client.getDataRetention()).rejects.toMatchObject({
+      name: "CloudApiError", status: 401, code: "unauthorized",
+    });
+  });
+
   it("throws a typed error with the standard error envelope", async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>

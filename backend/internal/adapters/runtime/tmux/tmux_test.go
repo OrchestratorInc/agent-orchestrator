@@ -441,7 +441,7 @@ func TestCreateLaunchCommandContainsKeepAliveShell(t *testing.T) {
 	// The launch command is the last argument to new-session (after shellPath -c).
 	args := fr.calls[0].args
 	launchCmd := args[len(args)-1]
-	if !strings.Contains(launchCmd, `exec "${SHELL:-/bin/sh}" -i`) {
+	if !strings.Contains(launchCmd, `exec "$SHELL" -i; else exec '/bin/sh' -i`) {
 		t.Fatalf("launch command missing keep-alive shell: %q", launchCmd)
 	}
 	if !strings.HasPrefix(launchCmd, "cd '/tmp/ws' || exit; ") {
@@ -449,6 +449,39 @@ func TestCreateLaunchCommandContainsKeepAliveShell(t *testing.T) {
 	}
 	if !strings.Contains(launchCmd, "'myagent'") {
 		t.Fatalf("launch command missing quoted argv: %q", launchCmd)
+	}
+}
+
+func TestLaunchPreludeUsesPOSIXShellWithNonPOSIXUserShell(t *testing.T) {
+	for _, userShell := range []string{"/usr/bin/fish", "/bin/zsh", "/bin/bash"} {
+		t.Run(filepath.Base(userShell), func(t *testing.T) {
+			r, fr := newTestRuntime(0)
+			r.shell = userShell
+			fr.outputs = [][]byte{nil, []byte("/tmp/ws\n"), nil, nil, nil, nil, nil}
+			cfg := ports.RuntimeConfig{SessionID: "sess-1", WorkspacePath: "/tmp/ws", Argv: []string{"myagent"}}
+			if _, err := r.Create(context.Background(), cfg); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			args := fr.calls[0].args
+			if got := args[len(args)-3]; got != "/bin/sh" {
+				t.Fatalf("Create prelude shell = %q, want /bin/sh", got)
+			}
+			if !strings.Contains(args[len(args)-1], `exec "$SHELL" -i; else exec '`+userShell+`' -i`) {
+				t.Fatalf("Create lost interactive shell preference: %q", args[len(args)-1])
+			}
+			if _, err := r.Restart(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, cfg); err != nil {
+				t.Fatalf("Restart: %v", err)
+			}
+			for _, call := range fr.calls {
+				if len(call.args) > 0 && call.args[0] == "respawn-pane" {
+					if got := call.args[len(call.args)-3]; got != "/bin/sh" {
+						t.Fatalf("Restart prelude shell = %q, want /bin/sh", got)
+					}
+					return
+				}
+			}
+			t.Fatal("Restart did not respawn pane")
+		})
 	}
 }
 
@@ -470,7 +503,7 @@ func TestCreateCommandTerminalExitsWhenCommandCompletes(t *testing.T) {
 	if !strings.HasSuffix(launchCmd, "; exit $?") {
 		t.Fatalf("command terminal launch = %q, want command exit propagation", launchCmd)
 	}
-	if strings.Contains(launchCmd, `exec "${SHELL:-/bin/sh}" -i`) || strings.Contains(launchCmd, `exec cat >/dev/null`) {
+	if strings.Contains(launchCmd, `exec "$SHELL" -i`) || strings.Contains(launchCmd, `exec cat >/dev/null`) {
 		t.Fatalf("command terminal launch unexpectedly keeps the pane alive: %q", launchCmd)
 	}
 }
@@ -623,7 +656,7 @@ func TestBuildLaunchCommandPreservesExplicitNoColor(t *testing.T) {
 		Argv:          []string{"myagent"},
 		Env:           map[string]string{"NO_COLOR": "1"},
 	}
-	launchCmd := buildLaunchCommand(cfg, "/tmp/env")
+	launchCmd := buildLaunchCommand(cfg, "/tmp/env", "/bin/sh")
 	script := launchEnvScript(cfg)
 
 	if !strings.Contains(script, "export NO_COLOR='1'\n") {
