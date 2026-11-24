@@ -1245,6 +1245,19 @@ func anyCommentItem(items []nudgeItem) bool {
 	return false
 }
 
+// anyRelayItem reports whether one of the items was already carried by a Chat
+// relay for its current signature. Such an item is settled through that relay's
+// turn even when no comment is left in the batch (for example after the
+// comment sharing its relay was resolved), so it is not sent a second time.
+func (m *Manager) anyRelayItem(items []nudgeItem) bool {
+	for _, it := range items {
+		if r, ok := m.react.relays[it.key]; ok && r.Sig == it.sig && r.ID != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // sendBatchOnce sends one message covering every item that is still due -- not
 // yet stored with its signature and within its attempt budget -- and then
 // records each of those items as sent. build renders the message from the due
@@ -1262,7 +1275,7 @@ func (m *Manager) sendBatchOnce(ctx context.Context, id domain.SessionID, prURL 
 		}
 		m.react.loaded[prURL] = true
 	}
-	if chat, ok := m.store.(reviewNoticeChatStore); ok && anyCommentItem(items) {
+	if chat, ok := m.store.(reviewNoticeChatStore); ok && (anyCommentItem(items) || m.anyRelayItem(items)) {
 		rec, found, err := m.store.GetSession(ctx, id)
 		if err != nil {
 			return sendOnceSuppressed, err

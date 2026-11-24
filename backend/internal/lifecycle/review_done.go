@@ -281,6 +281,21 @@ func reviewFeedbackClientID(key, sig string, attempt int) string {
 	return fmt.Sprintf("review-feedback:%x:%d", sha256.Sum256([]byte(key+"\x00"+sig)), attempt)
 }
 
+// reviewFeedbackRelayID names one relay by every item it carries, not by its
+// first item alone. Attempt counts are not always durable, so two different
+// batches can start from the same lead item and attempt; the batch membership
+// keeps their ids apart, and a turn read back by this id can only be the one
+// that carried exactly these items.
+func reviewFeedbackRelayID(items []nudgeItem, due []bool, attempt int) string {
+	h := sha256.New()
+	for i, it := range items {
+		if due[i] {
+			_, _ = fmt.Fprintf(h, "%d:%s\x00%d:%s\x00", len(it.key), it.key, len(it.sig), it.sig)
+		}
+	}
+	return fmt.Sprintf("review-feedback:%x:%d", h.Sum(nil), attempt)
+}
+
 // relayID is the client message id of the relay that carried the item's
 // current signature. State written before relays were recorded has none; the
 // id the one-comment relay used then is the fallback.
@@ -358,14 +373,24 @@ func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewN
 		}
 		return sendOnceAccounted, nil
 	}
-	leadItem := items[lead]
-	relay := reviewFeedbackClientID(leadItem.key, leadItem.sig, m.react.attempts[leadItem.key])
+	relay := reviewFeedbackRelayID(items, due, m.react.attempts[items[lead].key])
 	outcome, sendErr := m.guard.Nudge(ports.WithClientMessageID(ctx, relay), id, build(due))
 	if outcome != sessionguard.Sent {
 		if changed {
 			sendErr = errors.Join(sendErr, m.persistPRSignaturesLocked(ctx, prURL))
 		}
 		return sendOnceSuppressed, sendErr
+	}
+	if sendErr != nil {
+		// Chat did not take the relay. Count the attempt against the budget, but
+		// record no relay and settle nothing: reading this id back could find an
+		// older turn and mark items delivered that never reached the worker.
+		for i, it := range items {
+			if due[i] {
+				m.react.attempts[it.key]++
+			}
+		}
+		return sendOnceSuppressed, errors.Join(sendErr, m.persistPRSignaturesLocked(ctx, prURL))
 	}
 	for i, it := range items {
 		if due[i] {
@@ -381,7 +406,7 @@ func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewN
 			}
 		}
 	}
-	if err := errors.Join(sendErr, readErr, m.persistPRSignaturesLocked(ctx, prURL)); err != nil {
+	if err := errors.Join(readErr, m.persistPRSignaturesLocked(ctx, prURL)); err != nil {
 		return sendOnceAccounted, err
 	}
 	if delivered {

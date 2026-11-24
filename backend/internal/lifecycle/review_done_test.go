@@ -552,6 +552,118 @@ func TestChatReviewFeedbackSettlesEachRelayOnItsOwnState(t *testing.T) {
 	}
 }
 
+// A review that shared a still-queued relay with a comment keeps settling
+// through that relay once the comment leaves the batch (its thread resolved):
+// it is neither sent a second time nor marked delivered while the relay waits.
+func TestChatReviewOnlyBatchSettlesThroughItsStoredRelay(t *testing.T) {
+	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateQueued)
+	st.runs = nil
+	comment := nudgeItem{key: "comment:" + donePR + ":c", sig: "sig-c"}
+	review := nudgeItem{key: "review:" + donePR + ":r", sig: "changes_requested"}
+	build := func([]bool) string { return "batch" }
+
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, []nudgeItem{comment, review}, build, reviewMaxNudge, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(relay.ids) != 1 {
+		t.Fatalf("shared relay sends = %v, want one", relay.ids)
+	}
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, []nudgeItem{review}, build, reviewMaxNudge, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(relay.ids) != 1 || m.react.seen[review.key] == review.sig {
+		t.Fatalf("review alone resent or settled while its relay is queued: sends=%v seen=%v", relay.ids, m.react.seen)
+	}
+
+	st.turns[relay.ids[0]], st.started[relay.ids[0]] = domain.TurnStateRunning, true
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, []nudgeItem{review}, build, reviewMaxNudge, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(relay.ids) != 1 || m.react.seen[review.key] != review.sig {
+		t.Fatalf("review should settle through the started relay: sends=%v seen=%v", relay.ids, m.react.seen)
+	}
+}
+
+// strictRelay behaves like Chat's client message ids: an id that already names
+// a turn is rejected, and a rejected message creates no turn.
+type strictRelay struct {
+	store    *chatNoticeStore
+	accepted map[string]string
+	failWith error
+}
+
+func (r *strictRelay) Send(ctx context.Context, _ domain.SessionID, msg string) error {
+	id := ports.ClientMessageIDFromContext(ctx)
+	if r.failWith != nil {
+		return r.failWith
+	}
+	if _, taken := r.store.turns[id]; taken {
+		return errors.New("client message id already names another turn")
+	}
+	r.store.turns[id] = domain.TurnStateRunning
+	r.accepted[id] = msg
+	return nil
+}
+
+func newStrictRelayManager(t *testing.T) (*Manager, *chatNoticeStore, *strictRelay) {
+	t.Helper()
+	st := &chatNoticeStore{noticeStore: &noticeStore{fakeStore: newFakeStore()}, turns: map[string]domain.TurnState{}, errs: map[string]string{}, started: map[string]bool{}}
+	rec := working("w-1")
+	rec.Mode = domain.SessionModeChat
+	rec.Activity.State = domain.ActivityIdle
+	st.sessions["w-1"] = rec
+	relay := &strictRelay{store: st, accepted: map[string]string{}}
+	return New(st, relay), st, relay
+}
+
+// Attempt counts are not always durable. After a restart that lost them, a new
+// batch can start from the same lead item and attempt as an earlier relay. Its
+// id must still differ, or Chat rejects it and the earlier turn read back would
+// mark items delivered that never reached the worker.
+func TestChatReviewRelayIDChangesWithBatchMembership(t *testing.T) {
+	m, st, relay := newStrictRelayManager(t)
+	x := nudgeItem{key: "comment:" + donePR + ":x", sig: "sig-x"}
+	y := nudgeItem{key: "comment:" + donePR + ":y", sig: "sig-y"}
+
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, []nudgeItem{x}, func([]bool) string { return "only X" }, reviewMaxNudge, false); err != nil {
+		t.Fatal(err)
+	}
+	st.signatures = nil // the daemon restarts without the dedup state of that send
+	m = New(st, relay)
+	_, _ = m.sendBatchOnce(ctx, "w-1", donePR, []nudgeItem{x, y}, func([]bool) string { return "X and Y" }, reviewMaxNudge, false) // the outcome is read from the relay below
+
+	delivered := false
+	for _, msg := range relay.accepted {
+		delivered = delivered || strings.Contains(msg, "Y")
+	}
+	if m.react.seen[y.key] == y.sig && !delivered {
+		t.Fatalf("Y was marked delivered but no accepted relay carried it: accepted=%v", relay.accepted)
+	}
+	if !delivered {
+		t.Fatalf("the batch with Y was rejected instead of sent under its own id: accepted=%v", relay.accepted)
+	}
+}
+
+// A relay Chat rejects records no relay id and settles nothing, but it still
+// counts against the item's attempt budget.
+func TestChatReviewRejectedRelaySettlesNothing(t *testing.T) {
+	m, _, relay := newStrictRelayManager(t)
+	relay.failWith = errors.New("chat rejected the message")
+	x := nudgeItem{key: "comment:" + donePR + ":x", sig: "sig-x"}
+	y := nudgeItem{key: "comment:" + donePR + ":y", sig: "sig-y"}
+
+	_, err := m.sendBatchOnce(ctx, "w-1", donePR, []nudgeItem{x, y}, func([]bool) string { return "X and Y" }, reviewMaxNudge, false)
+	if err == nil {
+		t.Fatal("a rejected relay must surface its error")
+	}
+	if len(m.react.seen) != 0 || len(m.react.relays) != 0 {
+		t.Fatalf("a rejected relay settled or recorded items: seen=%v relays=%v", m.react.seen, m.react.relays)
+	}
+	if m.react.attempts[x.key] != 1 || m.react.attempts[y.key] != 1 {
+		t.Fatalf("a rejected relay should count one attempt each: %v", m.react.attempts)
+	}
+}
+
 func TestReviewDoneNotice_FailedFeedbackLeavesCompletionNotice(t *testing.T) {
 	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateFailed)
 	st.runs = nil
