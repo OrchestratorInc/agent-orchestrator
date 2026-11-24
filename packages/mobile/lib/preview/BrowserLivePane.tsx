@@ -171,6 +171,8 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			return;
 		}
 		let disposed = false;
+		// The last stream's image stays up, but its load is not this stream's frame.
+		arrivedAt.current.clear();
 		stats.current?.connecting(performance.now());
 		// Only frames that reach the screen are encoded; one that arrives while
 		// another decodes replaces the one waiting (Review focus 4).

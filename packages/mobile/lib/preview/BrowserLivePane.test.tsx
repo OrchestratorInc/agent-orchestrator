@@ -594,6 +594,28 @@ describe("stream stats HUD", () => {
 		}
 	});
 
+	it("does not time a new connection's first frame from the last stream's image", async () => {
+		vi.stubGlobal("__DEV__", true);
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: DebugPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			// A frame arrives; its image has not loaded when the stream fails.
+			await showFrame();
+			await act(async () => client().handlers.onStatus("error", "The browser stream ended."));
+			const alert = screen.root.find((node) => node.props.accessibilityRole === "alert");
+			await act(async () => alert.findByType("Button" as never).props.onPress());
+			// The kept image finishes loading after the new connection started.
+			await act(async () => { nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(nodes("Text").map((node) => node.props.children).join("")).toMatch(/^first – · 0fps/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("shows debug builds the first frame, frame rate and input latency", async () => {
 		vi.stubGlobal("__DEV__", true);
 		vi.useFakeTimers();
