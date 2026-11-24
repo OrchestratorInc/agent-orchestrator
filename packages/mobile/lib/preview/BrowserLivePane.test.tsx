@@ -459,7 +459,7 @@ describe("transport contract", () => {
 	function fakeTransport(capabilities: Partial<BrowserCapabilities> = {}) {
 		const record = { handlers: null as Handlers | null, sent: [] as unknown[], closed: false };
 		const transport: BrowserTransport = {
-			capabilities: { text: false, keys: false, viewport: false, quality: false, control: false, dialogs: false, ...capabilities },
+			capabilities: { text: false, keys: false, viewport: false, quality: false, control: false, dialogs: false, auth: false, select: false, files: false, downloads: false, ...capabilities },
 			connect(handlers) { record.handlers = handlers as Handlers; handlers.onStatus("connecting"); },
 			send(command) { record.sent.push(command); },
 			close() { record.closed = true; },

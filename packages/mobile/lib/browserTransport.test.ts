@@ -13,8 +13,8 @@ const page = {
 	height: 800,
 };
 
-const none: BrowserCapabilities = { text: false, keys: false, viewport: false, quality: false, control: false, dialogs: false };
-const all: BrowserCapabilities = { text: true, keys: true, viewport: true, quality: true, control: true, dialogs: true };
+const none: BrowserCapabilities = { text: false, keys: false, viewport: false, quality: false, control: false, dialogs: false, auth: false, select: false, files: false, downloads: false };
+const all: BrowserCapabilities = { text: true, keys: true, viewport: true, quality: true, control: true, dialogs: true, auth: true, select: true, files: true, downloads: true };
 
 describe("transport contract", () => {
 	it("defaults control to none and focusedEditable to null for older desktops", () => {
@@ -38,6 +38,9 @@ describe("transport contract", () => {
 		["quality", { type: "quality", payload: { quality: 50, maxFps: 15 } }],
 		["control", { type: "control", payload: { action: "take" } }],
 		["dialogs", { type: "dialog", payload: { accept: true } }],
+		["auth", { type: "auth", payload: { origin: "https://a.example", cancel: true } }],
+		["select", { type: "select", payload: { id: "s1", index: 2 } }],
+		["files", { type: "files", payload: { files: [], folder: false } }],
 	];
 
 	it.each(gated)("treats a %s command as unsupported when the capability is false", (capability, command) => {
