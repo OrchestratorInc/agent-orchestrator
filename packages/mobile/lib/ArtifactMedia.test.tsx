@@ -5,21 +5,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
 const player = vi.hoisted(() => ({ status: "loading" as string, sources: [] as unknown[] }));
+const platform = vi.hoisted(() => ({ OS: "ios" as string }));
 
 vi.mock("react-native", () => ({
+	AccessibilityInfo: { isScreenReaderEnabled: () => Promise.resolve(false), addEventListener: () => ({ remove: () => {} }) },
 	ActivityIndicator: "ActivityIndicator",
+	Platform: platform,
 	Pressable: "Pressable",
-	StyleSheet: { create: (styles: unknown) => styles },
+	StyleSheet: { create: (styles: unknown) => styles, absoluteFill: {} },
 	Text: "Text",
 	View: "View",
 }));
+vi.mock("react-native-safe-area-context", () => ({ SafeAreaView: "SafeAreaView" }));
 vi.mock("expo", () => ({
 	useEvent: (_player: unknown, event: string, initial: object) => (event === "statusChange" ? { status: player.status } : initial),
 }));
 vi.mock("expo-video", () => ({
 	useVideoPlayer: (source: unknown) => {
 		player.sources.push(source);
-		return { pause: vi.fn(), play: vi.fn(), playing: false, currentTime: 0, duration: 0, status: player.status };
+		return { pause: vi.fn(), play: vi.fn(), seekBy: vi.fn(), playing: false, currentTime: 0, duration: 0, status: player.status };
 	},
 	VideoView: "VideoView",
 }));
@@ -39,6 +43,7 @@ afterEach(() => {
 	renderer = undefined;
 	player.status = "loading";
 	player.sources.length = 0;
+	platform.OS = "ios";
 });
 
 function element(props: { active: boolean; uri?: string; renew?: () => void }) {
@@ -87,5 +92,31 @@ describe("ArtifactMedia", () => {
 		player.status = "error";
 		const root = render({ active: true });
 		expect(titles(root)).toEqual(["This video can't play on the phone"]);
+	});
+
+	it("draws its own controls on iOS, where the platform player's never came up", () => {
+		player.status = "readyToPlay";
+		const root = render({ active: true });
+		const video = root.root.find((node) => (node.type as unknown) === "VideoView");
+		expect(video.props.nativeControls).toBe(false);
+		const labels = root.root.findAll((node) => (node.type as unknown) === "Pressable" && typeof node.props.accessibilityLabel === "string").map((node) => node.props.accessibilityLabel as string);
+		expect(labels).toEqual(expect.arrayContaining(["Play", "Position", "Full screen"]));
+	});
+
+	it("keeps the controls up when the picture of a paused video is tapped", () => {
+		player.status = "readyToPlay";
+		const root = render({ active: true });
+		const picture = root.root.find((node) => (node.type as unknown) === "Pressable" && node.props.accessible === false);
+		act(() => picture.props.onPress());
+		expect(root.root.findAll((node) => node.props.accessibilityLabel === "Play")).toHaveLength(1);
+		expect(root.root.findAll((node) => node.props.accessibilityLabel === "Full screen")).toHaveLength(1);
+	});
+
+	it("keeps the platform's controls on Android", () => {
+		platform.OS = "android";
+		player.status = "readyToPlay";
+		const root = render({ active: true });
+		expect(root.root.find((node) => (node.type as unknown) === "VideoView").props.nativeControls).toBe(true);
+		expect(root.root.findAll((node) => node.props.accessibilityLabel === "Play")).toHaveLength(0);
 	});
 });
