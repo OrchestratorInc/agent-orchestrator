@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -932,7 +932,7 @@ describe("automation starters", () => {
 		const cloudAutomation = {
 			id: "c1", projectId: "cloud-1", displayName: "Nightly debt", prompt: "List the top 10 debt items.", harness: "codex", mode: "trusted",
 			rrule: "FREQ=DAILY;BYHOUR=7;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true, nextRunAt: "2026-11-15T07:00:00Z", maxRuntimeMinutes: 60,
-			branch: "ao/automation-c1", runAs: { userId: "u2", displayName: "Priya" }, consecutiveFailures: 0, subscribed: false, canEdit: false,
+			deleteSessionOnComplete: false, branch: "ao/automation-c1", runAs: { userId: "u2", displayName: "Priya" }, consecutiveFailures: 0, subscribed: false, canEdit: false,
 			createdAt: "2026-11-14T00:00:00Z", updatedAt: "2026-11-14T00:00:00Z",
 			latestRun: { id: "r1", automationId: "c1", scheduledFor: "2026-11-14T07:00:00Z", trigger: "schedule", status: "skipped", attemptCount: 1, errorCode: "SANDBOX_QUOTA_EXCEEDED", errorMessage: "full", createdAt: "2026-11-14T07:00:00Z" },
 		};
@@ -983,7 +983,48 @@ describe("automation starters", () => {
 			expect(mocks.createCloud.mock.calls[0][0]).toMatchObject({
 				projectId: "cloud-1", displayName: "Nightly debt", prompt: "List the top 10 debt items.", harness: "claude-code",
 				rrule: "FREQ=DAILY;BYHOUR=7;BYMINUTE=0;BYSECOND=0", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+				// Off by default: the session stays, paused, for the next run.
+				deleteSessionOnComplete: false,
 			});
+		});
+
+		it("offers deleting the session after each run, explained, and saves only that change", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.createCloud.mockResolvedValue({});
+			renderView();
+			await openBlankCreate(user);
+			let dialog = within(screen.getByRole("dialog"));
+			// This computer's automations have no such setting.
+			expect(dialog.queryByRole("switch", { name: "Delete session after completing automation" })).toBeNull();
+			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
+			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
+			const toggle = dialog.getByRole("switch", { name: "Delete session after completing automation" });
+			expect(toggle).not.toBeChecked();
+			await user.hover(dialog.getByRole("button", { name: "About deleting the session" }));
+			expect((await screen.findAllByText(/the next run resumes in the same session/)).length).toBeGreaterThan(0);
+			await user.click(toggle);
+			await user.click(dialog.getByRole("combobox", { name: "Project" }));
+			await user.click(await screen.findByRole("option", { name: "Cloud app" }));
+			await user.type(dialog.getByRole("textbox", { name: "Name" }), "Nightly debt");
+			await user.type(dialog.getByRole("textbox", { name: "Prompt" }), "List the top 10 debt items.");
+			await pickTime(user, screen.getByRole("dialog"), "07", "00");
+			await user.click(dialog.getByRole("button", { name: "Create automation" }));
+			await waitFor(() => expect(mocks.createCloud).toHaveBeenCalled());
+			expect(mocks.createCloud.mock.calls[0][0]).toMatchObject({ deleteSessionOnComplete: true });
+			await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+			// An edit that flips only the toggle saves only the toggle.
+			mocks.cloudAutomations = [{ ...cloudAutomation, canEdit: true, runAs: { userId: "u1", displayName: "Me" } }];
+			mocks.updateCloud.mockResolvedValue({});
+			cleanup();
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Edit Nightly debt" }));
+			dialog = within(screen.getByRole("dialog", { name: "Edit automation" }));
+			await user.click(dialog.getByRole("switch", { name: "Delete session after completing automation" }));
+			await user.click(dialog.getByRole("button", { name: "Save changes" }));
+			await waitFor(() => expect(mocks.updateCloud).toHaveBeenCalledTimes(1));
+			expect(mocks.updateCloud).toHaveBeenCalledWith({ id: "c1", body: { deleteSessionOnComplete: true } });
 		});
 
 		it("offers only the agents logged in to AO Cloud", async () => {

@@ -33,7 +33,7 @@ describe("Cloud control-plane interface transitions", () => {
 		const fetchImpl = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ items: [], page: { hasMore: false }, automation: {}, run: {}, subscribed: true }), { status: 200, headers: { "Content-Type": "application/json" } }));
 		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
 		await client.listAutomations("org", { projectId: "p1", limit: 100 });
-		await client.createAutomation("org", { projectId: "p1", displayName: "Debt", prompt: "List debt.", harness: "codex", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "Asia/Kolkata", mode: "trusted", maxRuntimeMinutes: 60, enabled: true });
+		await client.createAutomation("org", { projectId: "p1", displayName: "Debt", prompt: "List debt.", harness: "codex", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "Asia/Kolkata", mode: "trusted", maxRuntimeMinutes: 60, deleteSessionOnComplete: false, enabled: true });
 		await client.updateAutomation("org", "a1", { enabled: false });
 		await client.runAutomationNow("org", "a1", { idempotencyKey: "run-1" });
 		await client.setAutomationSubscription("org", "a1", false);

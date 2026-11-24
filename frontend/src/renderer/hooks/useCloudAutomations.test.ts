@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "../lib/cloud-cp";
-import { cloudAutomationActiveRun, cloudAutomationPollInterval, cloudRunsPollInterval, useCloudAutomations, useRunCloudAutomationNow, type CloudAutomation, type CloudAutomationRun } from "./useCloudAutomations";
+import { cloudAutomationActiveRun, cloudAutomationErrorMessage, cloudAutomationPollInterval, cloudRunsPollInterval, useCloudAutomations, useRunCloudAutomationNow, type CloudAutomation, type CloudAutomationRun } from "./useCloudAutomations";
 
 const mocks = vi.hoisted(() => ({
 	client: {
@@ -27,7 +27,7 @@ const run = (status: string, overrides: Partial<CloudAutomationRun> = {}): Cloud
 });
 const automation = (overrides: Partial<CloudAutomation> = {}): CloudAutomation => ({
 	id: "a", projectId: "p", displayName: "Nightly debt", prompt: "List debt.", harness: "codex", mode: "trusted",
-	rrule: "FREQ=HOURLY", timezone: "UTC", enabled: true, maxRuntimeMinutes: 60, branch: "ao/automation-a",
+	rrule: "FREQ=HOURLY", timezone: "UTC", enabled: true, maxRuntimeMinutes: 60, deleteSessionOnComplete: false, branch: "ao/automation-a",
 	runAs: { userId: "4fa6d173-cp" }, consecutiveFailures: 0, subscribed: true, canEdit: true,
 	createdAt: "2026-11-16T00:00:00Z", updatedAt: "2026-11-16T00:00:00Z", ...overrides,
 });
@@ -44,6 +44,22 @@ beforeEach(() => {
 	mocks.client.me.mockResolvedValue({ user: { id: "4fa6d173-cp" } });
 	mocks.client.listAutomations.mockResolvedValue(page([]));
 	mocks.client.listAutomationRuns.mockResolvedValue(page([]));
+});
+
+// Saving checks what a run needs (the control plane's preflight): each
+// refusal reads as what to fix; a plan limit reads as one message whatever
+// its code, and a code this app does not know keeps the server's words.
+describe("cloudAutomationErrorMessage", () => {
+	const t = ((key: string) => key) as unknown as Parameters<typeof cloudAutomationErrorMessage>[1];
+	const refusal = (code: string) => new CloudCpError(`server says ${code}`, { status: 422, code });
+	it.each(["repository_not_accessible", "repository_unreachable", "SANDBOX_QUOTA_EXCEEDED", "PLAN_REQUIRED"])("names %s", (code) => {
+		expect(cloudAutomationErrorMessage(refusal(code), t)).toBe(`automations.cloud.error.${code}`);
+	});
+	it("reads every plan limit as one message, and keeps an unknown code's words", () => {
+		expect(cloudAutomationErrorMessage(refusal("WORKER_SLOTS_FULL"), t)).toBe("automations.cloud.error.PLAN_LIMIT");
+		expect(cloudAutomationErrorMessage(refusal("WEEKLY_LIMIT_REACHED"), t)).toBe("automations.cloud.error.PLAN_LIMIT");
+		expect(cloudAutomationErrorMessage(refusal("SOMETHING_NEW"), t)).toBe("server says SOMETHING_NEW");
+	});
 });
 
 describe("cloud automation polling", () => {

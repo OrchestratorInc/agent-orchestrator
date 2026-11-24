@@ -237,6 +237,11 @@ const ERROR_CODES = [
 	"AUTOMATION_RUN_ACTIVE",
 	"AUTOMATION_EDIT_FORBIDDEN",
 	"AUTOMATION_PROJECT_UNSUPPORTED",
+	// Saving checks what a run needs (the control plane's preflight).
+	"repository_not_accessible",
+	"repository_unreachable",
+	"SANDBOX_QUOTA_EXCEEDED",
+	"PLAN_REQUIRED",
 ] as const;
 
 /** A control-plane refusal as the person reads it; the server's own message for anything else. */
@@ -245,6 +250,7 @@ export function cloudAutomationErrorMessage(error: unknown, t: TFunction): strin
 	if (error instanceof CloudCpError && error.code && (ERROR_CODES as readonly string[]).includes(error.code)) {
 		return t(`automations.cloud.error.${error.code as (typeof ERROR_CODES)[number]}`);
 	}
+	if (error instanceof CloudCpError && error.code && PLAN_LIMIT_CODES.has(error.code)) return t("automations.cloud.error.PLAN_LIMIT");
 	return error instanceof Error ? error.message : String(error);
 }
 

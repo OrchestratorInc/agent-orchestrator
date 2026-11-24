@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, Bell, BellRing, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, Cloud, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Play, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
+import { ArrowDownUp, Bell, BellRing, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, Cloud, History, GitPullRequest, Info, ListChecks, FileText, Filter, Pencil, Play, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -358,7 +358,7 @@ export function AutomationsView() {
 			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t)} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async (input) => {
 				if (input.runsOn === "cloud") {
 					// A cloud run is unattended: trusted mode, the default time limit.
-					await createCloud.mutateAsync({ projectId: input.projectId!, displayName: input.displayName!, prompt: input.prompt!, harness: input.harness!, timezone: input.timezone!, rrule: input.rrule, mode: "trusted", maxRuntimeMinutes: 60, enabled: true });
+					await createCloud.mutateAsync({ projectId: input.projectId!, displayName: input.displayName!, prompt: input.prompt!, harness: input.harness!, timezone: input.timezone!, rrule: input.rrule, mode: "trusted", maxRuntimeMinutes: 60, deleteSessionOnComplete: input.deleteSessionOnComplete ?? false, enabled: true });
 				} else {
 					const { runsOn: _runsOn, ...body } = input;
 					await create.mutateAsync(body as CreateAutomationInput);
@@ -637,6 +637,7 @@ type CloudAutomationFormSubmit = {
 	prompt?: string;
 	harness?: CloudAutomation["harness"];
 	rrule?: string;
+	deleteSessionOnComplete?: boolean;
 };
 type AutomationFormSubmit = CloudAutomationFormSubmit | {
 	/** Where the automation runs: this computer's daemon. */
@@ -689,6 +690,7 @@ const AUTOMATION_FIELD_IDS: Record<AutomationField, string> = {
 	minute: "automation-minute",
 	monthDay: "automation-month-day",
 };
+const DELETE_SESSION_FIELD_ID = "automation-delete-session";
 
 function AutomationFormDialog({
 	open,
@@ -723,6 +725,8 @@ function AutomationFormDialog({
 	const [model, setModel] = useState("");
 	const [mode, setMode] = useState("");
 	const [effort, setEffort] = useState("");
+	// Off, a cloud run's session stays (paused while idle) and the next run continues in it.
+	const [deleteSessionOnComplete, setDeleteSessionOnComplete] = useState(false);
 	const [modelValid, setModelValid] = useState(true);
 	const [schedule, setSchedule] = useState<ScheduleFields>(() => ({
 		preset: "daily",
@@ -759,6 +763,7 @@ function AutomationFormDialog({
 		setModel(automation?.model ?? "");
 		setMode(automation?.mode ?? "");
 		setEffort(automation?.effort ?? "");
+		setDeleteSessionOnComplete(cloudAutomation?.deleteSessionOnComplete ?? false);
 		setModelValid(true);
 		const defaultTime = nowLocalHHMM();
 		const [defaultHour, defaultMinute] = defaultTime.split(":");
@@ -900,6 +905,7 @@ function AutomationFormDialog({
 					...(!cloudAutomation || prompt !== cloudAutomation.prompt ? { prompt } : {}),
 					...(!cloudAutomation || cloudHarness !== cloudAutomation.harness ? { harness: cloudHarness } : {}),
 					...(scheduleChanged ? { rrule: nextRRule } : {}),
+					...(!cloudAutomation || deleteSessionOnComplete !== cloudAutomation.deleteSessionOnComplete ? { deleteSessionOnComplete } : {}),
 				});
 				if (funnel) void captureRendererEvent("ao.renderer.automation_create_succeeded", funnel);
 				return;
@@ -1148,6 +1154,22 @@ function AutomationFormDialog({
 							</div>
 						) : null}
 						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
+						{isCloud ? (
+							<div className="flex items-center justify-between gap-3">
+								<span className="flex min-w-0 items-center gap-1">
+									<label htmlFor={DELETE_SESSION_FIELD_ID} className={onboardingFormLabelClass}>{t("automations.cloud.deleteSession")}</label>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<Button type="button" size="icon-xs" variant="quiet" aria-label={t("automations.cloud.deleteSession.info")}>
+												<Info className="size-icon-sm" aria-hidden="true" />
+											</Button>
+										</TooltipTrigger>
+										<TooltipContent className="max-w-sm">{t("automations.cloud.deleteSession.help")}</TooltipContent>
+									</Tooltip>
+								</span>
+								<Switch id={DELETE_SESSION_FIELD_ID} checked={deleteSessionOnComplete} disabled={busy} onCheckedChange={setDeleteSessionOnComplete} />
+							</div>
+						) : null}
 						{rebindsToEditor && cloudHarness ? <p className={onboardingFieldHintClass}>{t("automations.cloud.rebindNotice", { agent: agentLabel(cloudHarness) })}</p> : null}
 						{templateId !== "custom" ? <p className="text-xs leading-5 text-muted-foreground">{t("automations.templates.setup")}</p> : null}
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
