@@ -70,7 +70,10 @@ export function connectionOwner(table: string, peer: { address?: string; port?: 
 
 async function ownedByThisUser(socket: Socket): Promise<boolean> {
 	if (process.platform !== "linux") return true;
-	const table = await readFile("/proc/net/tcp", "utf8").catch(() => "");
+	const table = await readFile("/proc/net/tcp", "utf8").catch((error: unknown) => {
+		console.warn("Refusing a remote localhost connection: /proc/net/tcp is unreadable", error);
+		return "";
+	});
 	return connectionOwner(table, { address: socket.remoteAddress, port: socket.remotePort }, { address: socket.localAddress, port: socket.localPort }) === process.getuid?.();
 }
 
