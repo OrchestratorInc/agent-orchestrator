@@ -42,6 +42,7 @@ import type {
 	EditorHandoffStateOptions,
 	EditorId,
 	EditorPreferenceState,
+	NeovimTerminalId,
 	OpenArtifactInBrowserInput,
 	OpenSessionArtifactsInput,
 	ChatPathActionInput,
@@ -626,6 +627,7 @@ const api = {
 		getState: (sessionId: string, options?: EditorHandoffStateOptions) =>
 			ipcRenderer.invoke("editorHandoff:getState", sessionId, options) as Promise<EditorHandoffState>,
 		getEditors: () => ipcRenderer.invoke("editorHandoff:getEditors") as Promise<EditorPreferenceState>,
+		setNeovimTerminal: (terminal: NeovimTerminalId) => ipcRenderer.invoke("editorHandoff:setNeovimTerminal", terminal) as Promise<NeovimTerminalId>,
 		setPreferredEditor: (editorId: EditorId) =>
 			ipcRenderer.invoke("editorHandoff:setPreferredEditor", editorId) as Promise<EditorId>,
 		open: (input: OpenSessionTargetInput) =>

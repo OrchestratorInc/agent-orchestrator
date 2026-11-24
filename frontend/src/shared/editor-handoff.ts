@@ -25,6 +25,11 @@ export const EDITOR_IDS = [
 
 export type EditorId = (typeof EDITOR_IDS)[number];
 export const TERMINAL_IDS = ["terminal", "ghostty", "iterm2", "wezterm", "kitty", "alacritty", "gnome-terminal", "konsole", "xfce4-terminal", "windows-terminal"] as const;
+export const NEOVIM_TERMINAL_IDS = ["terminal", "iterm2", "ghostty"] as const;
+export type NeovimTerminalId = (typeof NEOVIM_TERMINAL_IDS)[number];
+export function isNeovimTerminalId(value: unknown): value is NeovimTerminalId {
+	return typeof value === "string" && (NEOVIM_TERMINAL_IDS as readonly string[]).includes(value);
+}
 export type TerminalId = (typeof TERMINAL_IDS)[number] | `terminal-app:${string}`;
 export type OpenTargetId = EditorId | "file-manager" | TerminalId;
 export type OpenTargetKind = "editor" | "file_manager" | "terminal";
@@ -50,6 +55,8 @@ export type EditorHandoffState = {
 
 /** The installed editors and the stored default, independent of any session. */
 export type EditorPreferenceState = {
+	/** macOS-only host selection; absent on other platforms and older desktops. */
+	neovimTerminal?: { selected: NeovimTerminalId; targets: OpenTarget[] };
 	editors: OpenTarget[];
 	preferredEditorId: EditorId;
 };

@@ -4,6 +4,7 @@ import {
 	isEditorId,
 	type EditorHandoffState,
 	type EditorId,
+	type NeovimTerminalId,
 	type EditorPreferenceState,
 	type OpenArtifactInBrowserInput,
 	type OpenSessionArtifactsInput,
@@ -203,6 +204,25 @@ export function useOpenArtifactInBrowser() {
 			} catch (error) {
 				throw new Error(editorHandoffErrorMessage(error) ?? String(error));
 			}
+		},
+	});
+}
+
+export function useSetNeovimTerminal() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (terminal: NeovimTerminalId) => {
+			try {
+				return await aoBridge.editorHandoff.setNeovimTerminal(terminal);
+			} catch (error) {
+				throw new Error(editorHandoffErrorMessage(error) ?? String(error));
+			}
+		},
+		onSuccess: async () => {
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: editorPreferenceQueryKey }),
+				queryClient.invalidateQueries({ queryKey: editorHandoffQueryRoot }),
+			]);
 		},
 	});
 }
