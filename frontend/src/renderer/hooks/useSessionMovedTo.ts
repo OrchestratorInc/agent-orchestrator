@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
+import { moveKey, useMoveStore } from "../lib/move-runner";
 import { cancelMove } from "../lib/move-session";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import type { WorkspaceSession } from "../types/workspace";
@@ -56,7 +57,9 @@ export function usePendingMove(session: WorkspaceSession | undefined) {
 	const { targets } = useMoveTargets(session, Boolean(pending));
 	const move = useMoveSession(session);
 	const [keeping, setKeeping] = useState(false);
-	if (!pending || !session || session.isTerminated) return undefined;
+	// The banner already shows this session's move, with its own way to finish it.
+	const inBanner = useMoveStore((store) => Boolean(session && store.moves[moveKey(session.hostId, session.id)]));
+	if (!pending || !session || session.isTerminated || inBanner) return undefined;
 	const source = { client: clientForSessionHost(session.hostId), hostId: session.hostId ?? LOCAL_HOST, sessionId: session.id, label: "" };
 	const target = targets.find((each) => each.hostId === (pending.hostId || LOCAL_HOST));
 	return {

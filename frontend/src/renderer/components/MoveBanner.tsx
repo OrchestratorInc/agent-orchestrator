@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowRightLeft, LoaderCircle, TriangleAlert } from "@/components/app-icons";
+import { useHarnessUpdateNoticeClearance } from "../hooks/useHarnessUpdateNoticeClearance";
 import { useMoveSession } from "../hooks/useMoveSession";
 import { cancelWaitingMove, moveKey, showMove, useMoveStore, type MoveState } from "../lib/move-runner";
 import { MOVE_PART_BYTES } from "../lib/move-session";
@@ -98,8 +99,10 @@ export function MoveBanner({ session }: { session: WorkspaceSession }) {
 }
 
 function Row({ icon, title, detail, alert = false, children }: { icon: ReactNode; title: string; detail?: string; alert?: boolean; children?: ReactNode }) {
+	const [row, setRow] = useState<HTMLElement | null>(null);
+	const clearance = useHarnessUpdateNoticeClearance(row);
 	return (
-		<div role={alert ? "alert" : "status"} aria-atomic="true" className="flex shrink-0 items-center gap-2.5 border-b border-border bg-surface px-4 py-2" data-testid="move-banner">
+		<div ref={setRow} role={alert ? "alert" : "status"} aria-atomic="true" style={clearance ? { paddingRight: clearance + 16 } : undefined} className="flex shrink-0 items-center gap-2.5 border-b border-border bg-surface px-4 py-2" data-testid="move-banner">
 			{icon}
 			<p className={alert ? "min-w-0 flex-1 text-xs leading-snug" : "min-w-0 flex-1 truncate text-xs"}>
 				<span className={alert ? "font-medium text-destructive" : "font-medium"}>{title}</span>
