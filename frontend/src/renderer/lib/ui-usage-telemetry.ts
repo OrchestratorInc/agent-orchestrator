@@ -98,6 +98,11 @@ const INTERACTIVE_SELECTOR = [
 	".xterm",
 	TELEMETRY_ID_SELECTOR,
 ].join(",");
+// An open menu, popover or list. A press outside one only closes it, so the
+// click that follows is not a dead click. Tooltips and hover cards are left out.
+const OPEN_LAYER_SELECTOR = "[data-radix-popper-content-wrapper] :is([role=menu],[role=dialog],[role=listbox])";
+// Fields where a second or third click moves the caret or selects text.
+const TEXT_FIELD_SELECTOR = "textarea, input:not([type=checkbox],[type=radio],[type=button],[type=submit],[type=reset],[type=range],[type=color],[type=file])";
 
 type SurfaceStats = Partial<Record<SurfaceStatKey | "visible_ms" | "focused_ms", number>>;
 type ControlStats = Partial<Record<ControlStatKey, number>>;
@@ -113,7 +118,10 @@ type PersistedState = {
 	controls: Partial<Record<UiControl, ControlStats>>;
 };
 
-type PendingDeadClick = { element: Element; surface: UiSurface; x: number; y: number };
+/** The click as dispatched; a listener after this one may still prevent its default. */
+type ClickEvent = Pick<MouseEvent, "target" | "detail" | "clientX" | "clientY"> & { readonly defaultPrevented?: boolean };
+
+type PendingDeadClick = { element: Element; surface: UiSurface; x: number; y: number; event: ClickEvent };
 
 type Intent = { kind: "click" | "keyboard" | "shortcut" | "cmdk" | "swipe"; surface?: UiSurface; at: number };
 
@@ -277,6 +285,8 @@ export class UiUsageRuntime {
 	private rage: { key: unknown; times: number[]; reported: boolean } | undefined;
 	private hover: { control: UiControl; element: Element; start: number; clicked: boolean } | undefined;
 	private pendingDeadClicks: PendingDeadClick[] = [];
+	/** The last press landed outside an open menu or popover, which closing it consumed. */
+	private pressClosedLayer = false;
 	/** Surfaces waiting out their one second on screen before a daily view, and how they opened. */
 	private readonly pendingViews = new Map<UiSurface, SurfaceOpenedBy>();
 	private dirty = false;
@@ -522,9 +532,17 @@ export class UiUsageRuntime {
 		}
 	}
 
-	click(event: Pick<MouseEvent, "target" | "detail" | "clientX" | "clientY">): void {
+	/** A pointer press. `closesLayer` says it landed outside an open menu or popover. */
+	pointerDown(closesLayer: boolean): void {
+		this.activity();
+		this.pressClosedLayer = closesLayer;
+	}
+
+	click(event: ClickEvent): void {
 		const now = this.now();
 		this.activity(now);
+		const closedLayer = this.pressClosedLayer;
+		this.pressClosedLayer = false;
 		if (this.optedOut()) return;
 		const target = event.target instanceof Element ? event.target : null;
 		if (!target) return;
@@ -551,15 +569,18 @@ export class UiUsageRuntime {
 			}
 		}
 		if (keyboard) return;
-		this.trackRage(controlElement ?? target, control, surface, now);
+		// Double and triple clicks that select text are not frustration: a burst of
+		// them would otherwise reach four clicks on one paragraph or field.
+		if (isTextSelectionClick(target, Boolean(control), event.detail)) this.rage = undefined;
+		else this.trackRage(controlElement ?? target, control, surface, now);
 		// detail > 1 is a double or triple click selecting text, never dead, and
 		// neither was the first click of it, still waiting to be judged.
 		if (event.detail > 1) {
 			this.pendingDeadClicks = this.pendingDeadClicks.filter((pending) => pending.element !== target);
 			return;
 		}
-		if (!surface || control || event.detail !== 1 || target.closest(INTERACTIVE_SELECTOR)) return;
-		const pending: PendingDeadClick = { element: target, surface, x: event.clientX, y: event.clientY };
+		if (!surface || control || closedLayer || event.detail !== 1 || target.closest(INTERACTIVE_SELECTOR)) return;
+		const pending: PendingDeadClick = { element: target, surface, x: event.clientX, y: event.clientY, event };
 		this.pendingDeadClicks.push(pending);
 		// Each click waits out its own settle time, so a later one is never judged early.
 		this.afterPaint(() => this.processDeadClick(pending));
@@ -570,7 +591,8 @@ export class UiUsageRuntime {
 		const index = this.pendingDeadClicks.indexOf(click);
 		if (index === -1) return;
 		this.pendingDeadClicks.splice(index, 1);
-		if (this.optedOut() || !isDeadClick(click.element, click.x, click.y)) return;
+		// A prevented click was handled, e.g. swallowed after it closed a menu.
+		if (this.optedOut() || click.event.defaultPrevented || !isDeadClick(click.element, click.x, click.y)) return;
 		this.bumpSurface(click.surface, "dead_click_count");
 		this.bumpCounter("dead_click_count");
 	}
@@ -862,9 +884,33 @@ function isEditable(target: EventTarget | null): boolean {
 }
 
 /**
- * Whether a click on a non-interactive element did nothing: no pointer cursor,
- * no text selected by it, and not on the element's own scrollbar. Runs after
- * paint, once per click that already passed the cheap DOM checks.
+ * Whether the second or later click of a burst is selecting text: in a text
+ * field or editor, or on plain text that the burst left selected. A named
+ * control or a button is never selecting text, so a burst on one stays a rage click.
+ */
+function isTextSelectionClick(target: Element, control: boolean, detail: number): boolean {
+	if (detail < 2 || control) return false;
+	if ((target instanceof HTMLElement && target.isContentEditable) || target.closest(TEXT_FIELD_SELECTOR)) return true;
+	if (target.closest(INTERACTIVE_SELECTOR)) return false;
+	const selection = typeof window === "undefined" ? null : window.getSelection();
+	return Boolean(selection && !selection.isCollapsed);
+}
+
+/** Whether a press lands outside every open menu, popover or list, so all it does is close them. */
+function pressClosesLayer(target: EventTarget | null): boolean {
+	if (typeof document === "undefined") return false;
+	const layers = document.querySelectorAll(OPEN_LAYER_SELECTOR);
+	if (layers.length === 0) return false;
+	const node = target instanceof Node ? target : null;
+	return !Array.from(layers).some((layer) => node !== null && layer.contains(node));
+}
+
+/**
+ * Whether a click on a non-interactive element did nothing: no pointer or text
+ * cursor, no text selected by it, and not on the element's own scrollbar. A
+ * text cursor marks a place that focuses a field when clicked, such as the
+ * composer's padding. Runs after paint, once per click that already passed the
+ * cheap DOM checks.
  */
 function isDeadClick(element: Element, x: number, y: number): boolean {
 	if (!element.isConnected) return false;
@@ -873,7 +919,8 @@ function isDeadClick(element: Element, x: number, y: number): boolean {
 	if (element instanceof HTMLElement) {
 		const rect = element.getBoundingClientRect();
 		if (x - rect.left > element.clientWidth || y - rect.top > element.clientHeight) return false;
-		if (getComputedStyle(element).cursor === "pointer") return false;
+		const cursor = getComputedStyle(element).cursor;
+		if (cursor === "pointer" || cursor === "text") return false;
 	}
 	return true;
 }
@@ -966,6 +1013,8 @@ export function startUiUsageTelemetry(): () => void {
 	const onClick = (event: MouseEvent) => current.click(event);
 	const onKeyDown = (event: KeyboardEvent) => current.keyDown(event);
 	const onActivity = () => current.activity();
+	// Captured on the document before a menu's own outside-press handler closes it.
+	const onPointerDown = (event: PointerEvent) => current.pointerDown(pressClosesLayer(event.target));
 	const onFocusIn = (event: FocusEvent) => current.focusChanged(surfaceOfElement(event.target));
 	const onFocusOut = (event: FocusEvent) => {
 		if (!event.relatedTarget) current.focusChanged(undefined);
@@ -993,7 +1042,7 @@ export function startUiUsageTelemetry(): () => void {
 	const onPageHide = () => current.checkpoint();
 	document.addEventListener("click", onClick, passiveCapture);
 	document.addEventListener("keydown", onKeyDown, passiveCapture);
-	document.addEventListener("pointerdown", onActivity, passiveCapture);
+	document.addEventListener("pointerdown", onPointerDown, passiveCapture);
 	document.addEventListener("wheel", onActivity, passiveCapture);
 	document.addEventListener("focusin", onFocusIn, passiveCapture);
 	document.addEventListener("focusout", onFocusOut, passiveCapture);
@@ -1032,7 +1081,7 @@ export function startUiUsageTelemetry(): () => void {
 		cancelAnimationFrame(hoverFrame);
 		document.removeEventListener("click", onClick, passiveCapture);
 		document.removeEventListener("keydown", onKeyDown, passiveCapture);
-		document.removeEventListener("pointerdown", onActivity, passiveCapture);
+		document.removeEventListener("pointerdown", onPointerDown, passiveCapture);
 		document.removeEventListener("wheel", onActivity, passiveCapture);
 		document.removeEventListener("focusin", onFocusIn, passiveCapture);
 		document.removeEventListener("focusout", onFocusOut, passiveCapture);

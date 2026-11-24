@@ -728,8 +728,9 @@ heatmap and no session replay.
   (`NOT_CONFIGURED`, `DAEMON_UNREACHABLE`, `BINARY_MISSING`, `SPAWN_FAILED`,
   `EXITED`, `PORT_UNCONFIRMED`, `NOT_READY`, `IDENTITY_MISMATCH`,
   `DATADIR_UNWRITABLE`) or a chat turn failure (`AUTH_REQUIRED`,
-  `PROVIDER_KEY_MISSING`). Any other code is dropped, and it is omitted when
-  there is none.
+  `PROVIDER_KEY_MISSING`, or `USAGE_LIMIT` when the agent's account hit its
+  usage limit). Any other code is dropped, and it is omitted when there is
+  none.
 - `surface` on `ao.ui.error_shown` is the surface that showed the error, or,
   for a toast, the surface you used in the 10 seconds before it. It is omitted
   when neither is known.
@@ -796,7 +797,7 @@ label:
 - Sidebar: `sidebar.home`, `sidebar.collapse`, `sidebar.new_project`,
   `sidebar.settings`, `sidebar.connect_mobile`, `sidebar.project_row`,
   `sidebar.project_toggle`, `sidebar.project_new_session`,
-  `sidebar.project_menu`, `sidebar.project_unpin`, `sidebar.session_row`,
+  `sidebar.project_orchestrator`, `sidebar.project_menu`, `sidebar.project_unpin`, `sidebar.session_row`,
   `sidebar.session_pin`, `sidebar.session_archive`,
   `sidebar.archived_sessions`
 - Tabs and top bar: `tab.select`, `tab.close`, `tab.new`,
@@ -818,12 +819,15 @@ Hover counts are kept for `sidebar.session_row`, `tab.select`, and
 ### Definitions
 
 - A rage click is the fourth pointer click on the same element within one
-  second. A burst is counted once, however long it lasts.
+  second. A burst is counted once, however long it lasts. Double and triple
+  clicks that select text, in a field or on text they leave selected, restart
+  the count, so selecting words quickly is not a rage click.
 - A dead click is a single pointer click inside a surface that lands on
   nothing interactive (no button, link, field, tab, menu item, terminal, named
-  control or other focusable element), shows no pointer cursor, does not
-  select text, and is not on a scrollbar. Double clicks are never dead, since
-  they usually select text.
+  control or other focusable element), shows neither a pointer nor a text
+  cursor, does not select text, and is not on a scrollbar. Double clicks are
+  never dead, since they usually select text. A click that only closes an open
+  menu, popover or list, or that the app handles and cancels, is not dead.
 - Visible and focused time stop counting after 5 minutes with no input, and
   while the window is hidden or not focused. A surface that is mounted but
   hidden, such as a chat kept alive in the background, is not on screen.
@@ -843,7 +847,9 @@ since several can be sent together at launch, and keep the daily cap.
 
 The listeners are passive and attached once to the document, so they cannot
 delay a click, scroll or key press. Telling which surface or control was used
-walks up the DOM from the event target and reads no layout. Hover is checked
+walks up the DOM from the event target and reads no layout. Each press looks
+up open menus and popovers with one selector query, also without reading
+layout. Hover is checked
 at most once per animation frame, for the last element the mouse entered. The
 only layout read is for a click on nothing interactive: the clicked element's
 box and cursor, read after the click's frame has painted, to tell a dead click

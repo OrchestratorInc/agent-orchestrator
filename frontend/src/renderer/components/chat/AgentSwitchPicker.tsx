@@ -29,6 +29,7 @@ import {
 	readableModelLabel,
 	type ModelVariant,
 } from "../../lib/model-variants";
+import { uiUsage, useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import { cn } from "../../lib/utils";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import type { ApprovalMode, TurnSettings } from "../../types/conversation";
@@ -300,6 +301,8 @@ export function AgentModelPicker({
 	);
 	const management = useAgentManagementMenu(undefined, hostId, agentSwitch.harnessView);
 	const [open, setOpen] = useState(false);
+	// The composer's model menu; a terminal's agent menu is not counted as one.
+	const markModelPick = useTelemetrySurface("model_picker", open && !terminal, { choice: true });
 	const favorites = useModelFavorites();
 	const keepCurrent = () => { if (pending) onPendingChange(undefined); };
 	// Cursor's command-line ids fold settings into the model; a running Cursor chat reports its own, kept as is.
@@ -368,12 +371,18 @@ export function AgentModelPicker({
 	const shownUltra = isUltraEffort(pending ? pendingEffort : currentSource.effort);
 	const shownFast = pending ? pending.fast || pending.fastMode || source.fast : currentSource.fast;
 	const shownThinking = pending ? pending.thinking ?? source.thinking : currentSource.thinking;
+	const countModelPick = (harness: string, id: string) => {
+		markModelPick();
+		if (harness !== currentHarness || id !== currentSource.modelId) uiUsage.modelChanged();
+	};
 	const pickModel = (harness: string, id: string) => {
+		countModelPick(harness, id);
 		if (harness !== currentHarness) return otherSource(harness, pending?.harness === harness ? pending : undefined).onPickModel?.(id);
 		keepCurrent();
 		currentSource.onPickModel?.(id);
 	};
 	const pickSetup = (favorite: ModelFavorite) => {
+		countModelPick(favorite.harness, favorite.model);
 		if (favorite.harness === currentHarness) {
 			keepCurrent();
 			if (currentSource.onPickSetup) currentSource.onPickSetup(favorite);
@@ -427,6 +436,7 @@ export function AgentModelPicker({
 	pickRef.current = (event, harness, id) => { stayOpen(event); pickModel(harness, id); };
 	const pickFromSearch = useCallback((event: Event, harness: string, id: string) => pickRef.current(event, harness, id), []);
 	const pickAgent = (id: string) => {
+		markModelPick();
 		if (id === currentHarness) keepCurrent();
 		else if (id !== pending?.harness) onPendingChange({ harness: id });
 	};
@@ -513,6 +523,7 @@ export function AgentModelPicker({
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
 				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
+				data-telemetry-id={terminal ? undefined : "composer.model_picker"}
 			>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
 				{loadingModels && !savedLabel && !pending && !terminal ? (

@@ -186,6 +186,59 @@ describe("UiUsageRuntime", () => {
 		expect(capture.mock.calls.filter(([event]) => event === "ao.ui.rage_clicked")).toEqual([["ao.ui.rage_clicked", { surface: "sidebar" }]]);
 	});
 
+	it("does not call quick double clicks that select text a rage click", async () => {
+		const input = document.getElementById("input")!;
+		const blank = document.getElementById("blank")!;
+		// Two double clicks in a field: four clicks inside a second.
+		for (const detail of [1, 2, 1, 2]) {
+			click(input, detail);
+			now += 100;
+		}
+		now += 5_000;
+		// The same on plain text, which each double click leaves selected.
+		for (const detail of [1, 2, 1, 2]) {
+			if (detail === 2) window.getSelection()?.selectAllChildren(blank);
+			click(blank, detail);
+			now += 100;
+		}
+		window.getSelection()?.removeAllRanges();
+		expect((await summary()).rage_click_count).toBeUndefined();
+	});
+
+	it("still calls a fast burst on a button a rage click, though the browser numbers it as a multi-click", async () => {
+		const home = document.getElementById("home")!;
+		for (const detail of [1, 2, 3, 4]) {
+			click(home, detail);
+			now += 100;
+		}
+		expect((await summary()).rage_click_count).toBe(1);
+	});
+
+	it("does not call a click that closes a menu, or that the app cancels, a dead click", async () => {
+		const blank = document.getElementById("blank")!;
+		box(blank, { left: 0, top: 200, width: 300, height: 100 });
+		// The press landed outside an open menu, so the click only closed it.
+		runtime.pointerDown(true);
+		click(blank, 1, 20, 250);
+		now += 2_000;
+		// A listener after this one handled the click and prevented its default.
+		runtime.click({ target: blank, detail: 1, clientX: 20, clientY: 250, defaultPrevented: true });
+		now += 2_000;
+		// With no menu open, the same click is dead.
+		runtime.pointerDown(false);
+		click(blank, 1, 20, 250);
+		expect((await summary()).dead_click_count).toBe(1);
+	});
+
+	it("does not call a click on a text cursor a dead click", async () => {
+		const blank = document.getElementById("blank")!;
+		box(blank, { left: 0, top: 200, width: 300, height: 100 });
+		// A place that focuses a field when clicked, such as the composer's padding.
+		blank.style.cursor = "text";
+		click(blank, 1, 20, 250);
+		expect((await summary()).dead_click_count).toBeUndefined();
+	});
+
 	it("does not call slow, spread-out clicks a rage click", async () => {
 		const home = document.getElementById("home")!;
 		for (let i = 0; i < 6; i += 1) {
