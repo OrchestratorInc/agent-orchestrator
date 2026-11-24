@@ -1980,9 +1980,13 @@ export function ActivityRail({ children, className }: { children: ReactNode; cla
  * An opened step's details, lined up with the step's text. Inside a run they share the
  * run's rail; a step on its own draws a rail under its icon.
  */
-function ActivityStepBody({ children }: { children: ReactNode }) {
+function ActivityStepBody({ children, list = false }: {
+	children: ReactNode;
+	/** A list of its own (an edit's files): it gets a rail even inside a run's. */
+	list?: boolean;
+}) {
 	const insideRail = useContext(InsideActivityRail);
-	if (insideRail) return <div className="pl-[22px]">{children}</div>;
+	if (insideRail && !list) return <div className="pl-[22px]">{children}</div>;
 	return <ActivityRail className="pl-[15px]">{children}</ActivityRail>;
 }
 
@@ -2014,8 +2018,9 @@ function GenericActivityRow({
 	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
 	const files = fileChangeFiles(activity);
-	const hasBody = genericActivityHasBody(activity);
 	const { label, path, pathTitle, icon: stepIconName, command: commandTitle } = splitSummary(activity);
+	const commandTitled = Boolean(commandTitle);
+	const hasBody = genericActivityHasBody(activity, commandTitled);
 	// A command that is not a file step reads as itself, with the terminal mark.
 	const StepMark = stepIcon[commandTitle ? "run" : stepIconName ?? "run"];
 	// Commands and file edits share the explore-style summary line: a small mark for
@@ -2169,20 +2174,20 @@ function GenericActivityRow({
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						<ActivityStepBody>
+						<ActivityStepBody list={files.length > 1}>
 							{repeats.length > 0 ? (
 								<div className="flex flex-col gap-1">
 									{/* The row itself is the last call's target; each earlier call's
 									    output is its own, so a reveal finds and marks that call. */}
 									{repeats.map((each) => (
 										<div key={each.id} className="min-w-0" data-chat-activity-id={each.id}>
-											<GenericActivityBody activity={each} />
+											<GenericActivityBody activity={each} commandTitled={commandTitled} />
 										</div>
 									))}
-									<GenericActivityBody activity={activity} />
+									<GenericActivityBody activity={activity} commandTitled={commandTitled} />
 								</div>
 							) : (
-								<GenericActivityBody activity={activity} />
+								<GenericActivityBody activity={activity} commandTitled={commandTitled} />
 							)}
 						</ActivityStepBody>
 					</motion.div>
@@ -2197,12 +2202,18 @@ function GenericActivityRow({
  * with no patch has nothing: the header already named the file. Multi-file edits
  * open onto a list, and a lone patch onto the diff itself.
  */
-function genericActivityHasBody(activity: ConversationActivity): boolean {
+function genericActivityHasBody(activity: ConversationActivity, commandTitled = false): boolean {
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const isFileChange = activity.activityKind === "file_change";
 	const hasFileBody =
 		files.length > 1 || (files.length === 1 && Boolean(fileChangePatch(files[0])));
+	// A row titled with its command has said it already; it opens only onto more.
+	if (commandTitled) {
+		const command = detail?.command?.trim();
+		const reason = (detail?.reason ?? detail?.text)?.trim();
+		return Boolean(detail?.output || detail?.terminalInput || (reason && reason !== command));
+	}
 	return Boolean(
 		detail?.command ||
 		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
@@ -2210,7 +2221,11 @@ function genericActivityHasBody(activity: ConversationActivity): boolean {
 }
 
 /** What a step's row opens onto: the command and its output, a patch, or a file list. */
-function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
+function GenericActivityBody({ activity, commandTitled = false }: {
+	activity: ConversationActivity;
+	/** The row above already shows the command, so the body leaves its `$` line out. */
+	commandTitled?: boolean;
+}) {
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const isFileChange = activity.activityKind === "file_change";
@@ -2220,8 +2235,10 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 	) {
 		const read = commandFileRead(activity);
 		if (read) return <FileReadCard path={read.path} label={read.label} file={read.file} />;
-		return <CommandExploreBody activity={activity} />;
+		return <CommandExploreBody activity={activity} showCommand={!commandTitled} />;
 	}
+	// Several files: their own list, hung on the row's rail by the caller.
+	if (files.length > 1) return <FileChangeList files={files} cwd={detail?.cwd} />;
 	// One file: open straight onto its card, which names the file. Listing the same
 	// name again under "Edited name" is noise.
 	if (isFileChange && files.length === 1 && fileChangePatch(files[0])) {
@@ -2229,7 +2246,6 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 	}
 	return (
 		<div className="flex flex-col gap-1.5 px-1 pb-1 pt-0.5">
-			{files.length > 1 ? <FileChangeList files={files} cwd={detail?.cwd} /> : null}
 			{!isFileChange && detail?.command ? (
 				// Said explicitly rather than implied by the label: "Ran command"
 				// alone never tells the reader what ran, and the collapsed row
@@ -2336,7 +2352,7 @@ const LiveStepDetail = memo(function LiveStepDetail({ activity }: { activity: Co
  * multi-line command stays one line and ends in an ellipsis; its title holds the
  * whole of it.
  */
-function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
+function CommandExploreBody({ activity, showCommand = true }: { activity: ConversationActivity; showCommand?: boolean }) {
 	const detail = activity.detail;
 	const command = detail?.command?.trim();
 	const reason = (detail?.reason ?? detail?.text)?.trim();
@@ -2354,7 +2370,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 				</p>
 			) : null}
 
-			{command ? (
+			{command && showCommand ? (
 				<div data-command-line="" className="flex min-w-0 items-center gap-2 pr-[7px]">
 					<pre data-no-swipe-nav="" className="min-w-0 flex-1 truncate font-mono text-xs leading-normal text-muted-foreground" title={command}>
 						<span aria-hidden="true" className="select-none text-passive">$ </span>
@@ -4499,11 +4515,12 @@ function FileLocationLabel({
  * Styled like a file edit's name. A shortened target keeps the whole one in a tooltip.
  */
 /**
- * A step's file target as a small neutral chip with its Files-panel icon. It takes the
- * chat's file tint only while the row is hovered, so a list of reads stays quiet.
+ * A step's file target as a small neutral chip with its Files-panel icon. It opens
+ * nothing, so it never takes the file tint that marks a chip you can click; its
+ * tooltip holds the whole path.
  */
 const STEP_FILE_CHIP_CLASS =
-	"inline-flex min-w-0 items-center gap-[5px] rounded bg-surface py-[2px] pr-[5px] pl-1 text-xs text-foreground/65 outline-none transition-colors group-hover/run:bg-chat-file group-hover/run:text-chat-file-foreground";
+	"inline-flex min-w-0 items-center gap-[5px] rounded bg-surface py-[2px] pr-[5px] pl-1 text-xs text-foreground/65 outline-none";
 
 function StepTarget({ text, title, file }: { text: string; title?: string; /** Set when the target is one file: the path its icon comes from. */ file?: string }) {
 	const label = file ? (

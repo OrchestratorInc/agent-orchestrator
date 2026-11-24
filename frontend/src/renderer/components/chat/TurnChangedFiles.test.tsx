@@ -583,20 +583,17 @@ describe("ActivityRow command labels", () => {
 		expect(screen.getByText("ok")).toBeInTheDocument();
 	});
 
-	it("keeps a command-only row expandable when the provider reports no output", async () => {
-		const user = userEvent.setup();
+	it("does not offer to open a command row that has nothing past its command", () => {
 		render(
 			<ActivityRow
 				activity={commandActivity({ command: `printf "%s" "hello world"` }, "completed")}
 			/>,
 		);
 
+		// The title is the whole command, and there is no output: opening would repeat it.
 		const row = screen.getByRole("button", { name: /printf "%s" "hello world"/ });
-		expect(row).toBeEnabled();
-
-		await user.click(row);
-		expect(row).toHaveAttribute("aria-expanded", "true");
-		expect(document.querySelector("[data-command-line]")).toHaveTextContent(`printf "%s" "hello world"`);
+		expect(row).toBeDisabled();
+		expect(row).not.toHaveAttribute("aria-expanded");
 	});
 
 	it("uses the same compact treatment as a grouped command summary", () => {

@@ -201,7 +201,9 @@ describe("file cards in the timeline", () => {
 		);
 		expect(container.querySelector("[data-activity-rail]")).toBeNull();
 		fireEvent.click(container.querySelector(".activity-row-toggle")!);
-		expect(container.querySelector("[data-activity-rail] [data-command-line]")).not.toBeNull();
+		// Titled with its command, it opens straight onto the Shell card, no $ line again.
+		expect(container.querySelector("[data-activity-rail] [data-command-shell]")).not.toBeNull();
+		expect(container.querySelector("[data-command-line]")).toBeNull();
 	});
 
 	it("marks a run with the kind of step it holds most of", () => {
@@ -226,5 +228,41 @@ describe("file cards in the timeline", () => {
 			/>,
 		);
 		expect(reads.container.querySelector("[data-run-kind]")).toHaveAttribute("data-run-kind", "read");
+	});
+
+	it("hangs an edit's list of files on its own rail inside a run", () => {
+		const { container } = render(
+			<ActivityRun
+				activities={[
+					activity({ id: "a", sequence: 1, summary: "npm", detail: { command: "npm test", output: "ok", exitCode: 0 } }),
+					activity({
+						id: "b",
+						sequence: 2,
+						activityKind: "file_change",
+						summary: "Edit demo/math.js",
+						detail: {
+							files: [
+								{ path: "demo/math.js", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-a\n+b" },
+								{ path: "demo/math.test.js", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-c\n+d" },
+							],
+						},
+					}),
+				]}
+			/>,
+		);
+		fireEvent.click(container.querySelector(".activity-run-toggle")!);
+		const edit = [...container.querySelectorAll(".activity-row-toggle")].find((row) => /Edit/.test(row.textContent ?? ""))!;
+		fireEvent.click(edit);
+		const rails = container.querySelectorAll("[data-activity-rail]");
+		expect(rails).toHaveLength(2);
+		expect(rails[1]!.querySelectorAll("li")).toHaveLength(2);
+	});
+
+	it("keeps a row's file chip neutral: it opens nothing, so it takes no file tint", () => {
+		const { container } = render(
+			<ActivityRow activity={activity({ summary: "cat", detail: { command: "cat -n src/app.ts", output: "     1\ta", exitCode: 0 } })} />,
+		);
+		const chip = container.querySelector("[data-step-file-chip]")!;
+		expect(chip.className).not.toMatch(/chat-file/);
 	});
 });
