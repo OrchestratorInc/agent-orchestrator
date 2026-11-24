@@ -4249,7 +4249,11 @@ export function createBrowserViewHost(
 		// one the desktop user opened gets the desktop's own.
 		const fromPhone = live?.asks && live.tabId === entry.tabId && Date.now() - (live.lastInputAt ?? 0) < PHONE_CHOOSER_MS;
 		if (!fromPhone) {
-			void options.showFileChooser?.({ multiple, folder: false }).then(setFiles).catch(() => undefined);
+			// The desktop user's own chooser keeps its folder mode.
+			void describeFileInput(entry, backendNodeId)
+				.then(({ folder }) => options.showFileChooser?.({ multiple, folder }))
+				.then((files) => setFiles(files ?? []))
+				.catch(() => undefined);
 			return;
 		}
 		void describeFileInput(entry, backendNodeId).then(({ accept, folder }) => {

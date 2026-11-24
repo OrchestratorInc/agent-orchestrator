@@ -5,7 +5,7 @@ import { StyleSheet } from "react-native";
 import type { BrowserCommand, BrowserDialog } from "../browserTransport";
 import { answerAuth, answerDialog, answerSelect, askTitle, authMessage } from "./browserAsk";
 import { browserAskCopy as copy, type BrowserAskSheetProps } from "./BrowserAskSheet.types";
-import { answerWithFiles, fileSources } from "./browserAskAlerts";
+import { answerWithFiles, fileSources, filesAnswer } from "./browserAskAlerts";
 
 export type { BrowserAskSheetProps } from "./BrowserAskSheet.types";
 
@@ -81,7 +81,7 @@ function Ask({ dialog, answer, pickers }: { dialog: BrowserDialog; answer: Answe
 				</Choices>
 			);
 		case "filechooser": {
-			const none = () => answer({ type: "files", payload: { files: [], folder: dialog.folder } });
+			const none = () => answer(filesAnswer(dialog, []));
 			return (
 				<Choices title={askTitle(dialog)} onDismiss={none}>
 					{fileSources(dialog).map((source) => (

@@ -59,8 +59,8 @@ function localAsk(payload: unknown): BrowserDialog | null {
 	if (ask.kind === "auth" && typeof ask.origin === "string" && ask.origin) {
 		return { kind: "auth", origin: ask.origin.slice(0, 200), ...(typeof ask.realm === "string" && ask.realm ? { realm: ask.realm.slice(0, 200) } : {}), failed: Boolean(ask.failed) };
 	}
-	if (ask.kind === "filechooser") {
-		return { kind: "filechooser", multiple: Boolean(ask.multiple), accept: typeof ask.accept === "string" ? ask.accept.slice(0, 200) : "", folder: Boolean(ask.folder) };
+	if (ask.kind === "filechooser" && typeof ask.id === "string" && ask.id) {
+		return { kind: "filechooser", id: ask.id.slice(0, 64), multiple: Boolean(ask.multiple), accept: typeof ask.accept === "string" ? ask.accept.slice(0, 200) : "", folder: Boolean(ask.folder) };
 	}
 	return null;
 }
@@ -133,7 +133,7 @@ export class LocalBrowserTransport implements BrowserTransport {
 	send(command: BrowserCommand): void {
 		if (!commandSupported(this.capabilities, command)) return;
 		if (command.type === "files") {
-			void this.sendFiles(command.payload.files);
+			void this.sendFiles(command.payload.files, command.payload.chooser ?? "");
 			return;
 		}
 		this.sendRaw(command);
@@ -146,9 +146,9 @@ export class LocalBrowserTransport implements BrowserTransport {
 	// The daemon takes a command of at most 64 KiB, so each file goes in base64
 	// chunks of 32 KiB, in order, then "done". A file that can't be read leaves
 	// the page's input as it was.
-	private async sendFiles(files: BrowserPickedFile[]): Promise<void> {
+	private async sendFiles(files: BrowserPickedFile[], chooser: string): Promise<void> {
 		const socket = this.socket;
-		const cancel = () => { if (this.socket === socket) this.sendRaw({ type: "files", payload: { action: "cancel" } }); };
+		const cancel = () => { if (this.socket === socket) this.sendRaw({ type: "files", payload: { action: "cancel", chooser } }); };
 		if (!files.length) return cancel();
 		const read = this.options.readFile ?? (async (uri: string) => new Uint8Array(await (await fetch(uri)).arrayBuffer()));
 		for (const [index, file] of files.entries()) {
@@ -161,10 +161,10 @@ export class LocalBrowserTransport implements BrowserTransport {
 			}
 			for (let offset = 0; offset === 0 || offset < bytes.length; offset += FILE_CHUNK_BYTES) {
 				if (this.socket !== socket) return;
-				this.sendRaw({ type: "files", payload: { action: "chunk", file: index, name: file.name, offset, data: toBase64(bytes.subarray(offset, offset + FILE_CHUNK_BYTES)) } });
+				this.sendRaw({ type: "files", payload: { action: "chunk", chooser, file: index, name: file.name, offset, data: toBase64(bytes.subarray(offset, offset + FILE_CHUNK_BYTES)) } });
 			}
 		}
-		if (this.socket === socket) this.sendRaw({ type: "files", payload: { action: "done", count: files.length } });
+		if (this.socket === socket) this.sendRaw({ type: "files", payload: { action: "done", chooser, count: files.length } });
 	}
 
 	close(): void {

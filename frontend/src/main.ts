@@ -1345,8 +1345,8 @@ async function createWindowInternal(): Promise<void> {
 		browserHistoryStore,
 		// A phone's files for a watched page's file input stay under AO's data dir.
 		liveUploadDir: path.join(desktopDataDir, "browser-uploads"),
-		showFileChooser: async ({ multiple }) => {
-			const options: Electron.OpenDialogOptions = { properties: multiple ? ["openFile", "multiSelections"] : ["openFile"] };
+		showFileChooser: async ({ multiple, folder }) => {
+			const options: Electron.OpenDialogOptions = { properties: folder ? ["openDirectory"] : multiple ? ["openFile", "multiSelections"] : ["openFile"] };
 			const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
 			return result.canceled ? [] : result.filePaths;
 		},

@@ -18,18 +18,21 @@ afterEach(async () => {
 });
 
 const b64 = (text: string) => Buffer.from(text).toString("base64");
+/** The chooser id the last ask carried, which every response must name. */
+const chooserId = () => (sink.ask.mock.lastCall![0] as { id: string }).id;
 
 describe("file choosers", () => {
 	it("asks the phone, then gives the page the files it sends", async () => {
 		const asks = new LiveAsks({ uploadDir: dir }, sink);
 		const setFiles = vi.fn(async (_paths: string[]) => undefined);
 		asks.chooserOpened({ setFiles }, { multiple: true, accept: "image/*", folder: false });
-		expect(sink.ask).toHaveBeenCalledWith({ kind: "filechooser", multiple: true, accept: "image/*", folder: false });
+		expect(sink.ask).toHaveBeenCalledWith({ kind: "filechooser", id: expect.stringMatching(/^[0-9a-f]{16}$/), multiple: true, accept: "image/*", folder: false });
+		const id = chooserId();
 
-		await asks.receiveFiles({ action: "chunk", file: 0, name: "a.txt", offset: 0, data: b64("hel") });
-		await asks.receiveFiles({ action: "chunk", file: 0, name: "a.txt", offset: 3, data: b64("lo") });
-		await asks.receiveFiles({ action: "chunk", file: 1, name: "../b.txt", offset: 0, data: b64("bee") });
-		await asks.receiveFiles({ action: "done", count: 2 });
+		await asks.receiveFiles({ action: "chunk", chooser: id, file: 0, name: "a.txt", offset: 0, data: b64("hel") });
+		await asks.receiveFiles({ action: "chunk", chooser: id, file: 0, name: "a.txt", offset: 3, data: b64("lo") });
+		await asks.receiveFiles({ action: "chunk", chooser: id, file: 1, name: "../b.txt", offset: 0, data: b64("bee") });
+		await asks.receiveFiles({ action: "done", chooser: id, count: 2 });
 
 		const [paths] = setFiles.mock.calls[0]!;
 		expect(paths.map((p) => path.basename(p))).toEqual(["a.txt", "b.txt"]);
@@ -42,17 +45,17 @@ describe("file choosers", () => {
 		const asks = new LiveAsks({ uploadDir: dir }, sink);
 		const setFiles = vi.fn(async () => undefined);
 		asks.chooserOpened({ setFiles }, { multiple: false, accept: "", folder: false });
-		await asks.receiveFiles({ action: "cancel" });
-		await asks.receiveFiles({ action: "done", count: 0 });
+		await asks.receiveFiles({ action: "cancel", chooser: chooserId() });
+		await asks.receiveFiles({ action: "done", chooser: chooserId(), count: 0 });
 		expect(setFiles).not.toHaveBeenCalled();
 	});
 
 	it("refuses files with no chooser open, out-of-order chunks and more than the cap", async () => {
 		const asks = new LiveAsks({ uploadDir: dir }, sink);
-		await expect(asks.receiveFiles({ action: "chunk", file: 0, name: "a", offset: 0, data: b64("x") })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+		await expect(asks.receiveFiles({ action: "chunk", chooser: "x", file: 0, name: "a", offset: 0, data: b64("x") })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
 
 		asks.chooserOpened({ setFiles: vi.fn(async () => undefined) }, { multiple: false, accept: "", folder: false });
-		await expect(asks.receiveFiles({ action: "chunk", file: 0, name: "a", offset: 5, data: b64("x") })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+		await expect(asks.receiveFiles({ action: "chunk", chooser: chooserId(), file: 0, name: "a", offset: 5, data: b64("x") })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
 
 		asks.chooserOpened({ setFiles: vi.fn(async () => undefined) }, { multiple: false, accept: "", folder: false });
 		const big = Buffer.alloc(32 << 10).toString("base64");
@@ -60,7 +63,7 @@ describe("file choosers", () => {
 		let refused: unknown;
 		try {
 			while (offset <= MAX_UPLOAD_BYTES) {
-				await asks.receiveFiles({ action: "chunk", file: 0, name: "big", offset, data: big });
+				await asks.receiveFiles({ action: "chunk", chooser: chooserId(), file: 0, name: "big", offset, data: big });
 				offset += 32 << 10;
 			}
 		} catch (error) {
@@ -70,23 +73,44 @@ describe("file choosers", () => {
 		expect(sink.notice).toHaveBeenCalledWith(expect.stringContaining("too large"));
 	});
 
-	it("drops a chooser's unfinished files when a newer chooser opens", async () => {
+	it("never gives a newer chooser the files picked for an older one", async () => {
 		const asks = new LiveAsks({ uploadDir: dir }, sink);
 		const first = vi.fn(async () => undefined);
 		const second = vi.fn(async () => undefined);
 		asks.chooserOpened({ setFiles: first }, { multiple: false, accept: "", folder: false });
-		await asks.receiveFiles({ action: "chunk", file: 0, name: "old", offset: 0, data: b64("o") });
+		const older = chooserId();
+		// The phone is still reading A's file when chooser B opens.
 		asks.chooserOpened({ setFiles: second }, { multiple: false, accept: "", folder: false });
-		await asks.receiveFiles({ action: "chunk", file: 0, name: "new", offset: 0, data: b64("n") });
-		await asks.receiveFiles({ action: "done", count: 1 });
+		const newer = chooserId();
+		expect(newer).not.toBe(older);
+		await asks.receiveFiles({ action: "chunk", chooser: older, file: 0, name: "old", offset: 0, data: b64("o") });
+		await asks.receiveFiles({ action: "done", chooser: older, count: 1 });
+		await asks.receiveFiles({ action: "cancel", chooser: older });
 		expect(first).not.toHaveBeenCalled();
+		expect(second).not.toHaveBeenCalled();
+		await asks.receiveFiles({ action: "chunk", chooser: newer, file: 0, name: "new", offset: 0, data: b64("n") });
+		await asks.receiveFiles({ action: "done", chooser: newer, count: 1 });
 		expect((second.mock.calls[0] as unknown as [string[]])[0].map((p) => path.basename(p))).toEqual(["new"]);
+	});
+
+	it("keeps every file, whatever names they share", async () => {
+		const asks = new LiveAsks({ uploadDir: dir }, sink);
+		const setFiles = vi.fn(async (_paths: string[]) => undefined);
+		asks.chooserOpened({ setFiles }, { multiple: true, accept: "", folder: false });
+		const id = chooserId();
+		const names = ["2-a.txt", "a.txt", "a.txt"];
+		for (const [file, name] of names.entries()) await asks.receiveFiles({ action: "chunk", chooser: id, file, name, offset: 0, data: b64(`file ${file}`) });
+		await asks.receiveFiles({ action: "done", chooser: id, count: 3 });
+		const [paths] = setFiles.mock.calls[0]!;
+		expect(new Set(paths).size).toBe(3);
+		expect(paths.map((p) => path.basename(p))).toEqual(names);
+		expect(await Promise.all(paths.map((p) => readFile(p, "utf8")))).toEqual(["file 0", "file 1", "file 2"]);
 	});
 
 	it("removes its files when it is disposed", async () => {
 		const asks = new LiveAsks({ uploadDir: dir }, sink);
 		asks.chooserOpened({ setFiles: vi.fn(async () => undefined) }, { multiple: false, accept: "", folder: false });
-		await asks.receiveFiles({ action: "chunk", file: 0, name: "a", offset: 0, data: b64("a") });
+		await asks.receiveFiles({ action: "chunk", chooser: chooserId(), file: 0, name: "a", offset: 0, data: b64("a") });
 		await asks.dispose();
 		expect(await readdir(dir)).toEqual([]);
 	});

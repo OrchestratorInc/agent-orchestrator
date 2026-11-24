@@ -7,7 +7,7 @@ import { useTheme, useThemeState } from "../ThemeProvider";
 import { font, stateOpacity } from "../tokens";
 import { answerAuth, answerDialog, answerSelect, askTitle, authMessage } from "./browserAsk";
 import { browserAskCopy as copy, type BrowserAskSheetProps } from "./BrowserAskSheet.types";
-import { answerWithFiles, fileSources } from "./browserAskAlerts";
+import { answerWithFiles, fileSources, filesAnswer } from "./browserAskAlerts";
 
 export type { BrowserAskSheetProps } from "./BrowserAskSheet.types";
 
@@ -108,7 +108,7 @@ function PageDialog({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind:
 }
 
 function FileSourceDialog({ dialog, answer, pickers }: { dialog: Extract<BrowserDialog, { kind: "filechooser" }>; answer: Answer; pickers: () => BrowserAskSheetProps["pickers"] }) {
-	const none = () => answer({ type: "files", payload: { files: [], folder: dialog.folder } });
+	const none = () => answer(filesAnswer(dialog, []));
 	return (
 		<Frame title={askTitle(dialog)} onDismiss={none} dismiss={<Button label={copy.cancel} onClick={none} />}>
 			<LazyColumn modifiers={[fillMaxWidth()]}>

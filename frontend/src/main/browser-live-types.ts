@@ -25,7 +25,8 @@ export type BrowserLiveState = {
 /** Something the page asks the person on the phone. */
 export type BrowserLiveAsk =
 	| { kind: "auth"; origin: string; realm?: string; failed: boolean }
-	| { kind: "filechooser"; multiple: boolean; accept: string; folder: boolean };
+	// `id` names this chooser; the phone's files must name it back.
+	| { kind: "filechooser"; id: string; multiple: boolean; accept: string; folder: boolean };
 
 export type BrowserLiveSink = {
 	frame(frame: BrowserLiveFrame): void;
@@ -43,9 +44,9 @@ export type BrowserRemoteAuth = { origin: string; username: string; password: st
 
 /** The phone's files for the page's file input, in base64 chunks of at most 32 KiB. */
 export type BrowserRemoteFiles =
-	| { action: "chunk"; file: number; name: string; offset: number; data: string }
-	| { action: "done"; count: number }
-	| { action: "cancel" };
+	| { action: "chunk"; chooser: string; file: number; name: string; offset: number; data: string }
+	| { action: "done"; chooser: string; count: number }
+	| { action: "cancel"; chooser: string };
 
 export type BrowserRemoteInput =
 	| { kind: "pointer"; phase: "move" | "down" | "up"; x: number; y: number; button?: "left" | "middle" | "right" }

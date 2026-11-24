@@ -6958,10 +6958,11 @@ describe("browser live asks", () => {
 		await host.startLiveStream("sess-1", 7, sink);
 		await host.handleRemoteInput("sess-1", { kind: "pointer", phase: "up", x: 0.5, y: 0.5, button: "left" });
 		pageEvent(debuggerListeners, "Page.fileChooserOpened", { backendNodeId: 42, mode: "selectMultiple" });
-		await vi.waitFor(() => expect(sink.ask).toHaveBeenCalledWith({ kind: "filechooser", multiple: true, accept: "image/*", folder: false }));
+		await vi.waitFor(() => expect(sink.ask).toHaveBeenCalledWith({ kind: "filechooser", id: expect.any(String), multiple: true, accept: "image/*", folder: false }));
+		const chooser = (sink.ask.mock.lastCall![0] as { id: string }).id;
 
-		await host.handleRemoteFiles("sess-1", { action: "chunk", file: 0, name: "cat.png", offset: 0, data: Buffer.from("png").toString("base64") });
-		await host.handleRemoteFiles("sess-1", { action: "done", count: 1 });
+		await host.handleRemoteFiles("sess-1", { action: "chunk", chooser, file: 0, name: "cat.png", offset: 0, data: Buffer.from("png").toString("base64") });
+		await host.handleRemoteFiles("sess-1", { action: "done", chooser, count: 1 });
 		const set = debuggerSendCommand.mock.calls.find(([method]) => method === "DOM.setFileInputFiles")!;
 		expect(set[1]).toMatchObject({ backendNodeId: 42 });
 		const [file] = (set[1] as { files: string[] }).files;
@@ -6971,6 +6972,18 @@ describe("browser live asks", () => {
 		// The stream ends: the phone's files go with it.
 		await host.stopLiveStream("sess-1", 7);
 		await vi.waitFor(async () => expect(await readdir(uploadDir)).toEqual([]));
+	});
+
+	it("keeps folder mode for the desktop user's own folder input", async () => {
+		const showFileChooser = vi.fn(async () => ["/Users/me/photos"]);
+		const { debuggerListeners, debuggerSendCommand, host } = setupHost(undefined, { liveUploadDir: uploadDir, showFileChooser });
+		const answer = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) =>
+			method === "DOM.describeNode" ? { node: { attributes: ["type", "file", "webkitdirectory", ""] } } : answer(method, params));
+		await host.startLiveStream("sess-1", 7, liveSink());
+		pageEvent(debuggerListeners, "Page.fileChooserOpened", { backendNodeId: 5, mode: "selectMultiple" });
+		await vi.waitFor(() => expect(showFileChooser).toHaveBeenCalledWith({ multiple: true, folder: true }));
+		await vi.waitFor(() => expect(debuggerSendCommand).toHaveBeenCalledWith("DOM.setFileInputFiles", { files: ["/Users/me/photos"], backendNodeId: 5 }));
 	});
 
 	it("gives the desktop user's own chooser the desktop's dialog", async () => {

@@ -30,7 +30,7 @@ export type BrowserCommand =
 	| { type: "auth"; payload: { origin: string; username: string; password: string } | { origin: string; cancel: true } }
 	| { type: "select"; payload: { id: string; index: number; ctx?: string } }
 	// The files the person picked for the page's file input; none cancels it.
-	| { type: "files"; payload: { files: BrowserPickedFile[]; folder: boolean } };
+	| { type: "files"; payload: { files: BrowserPickedFile[]; folder: boolean; chooser?: string } };
 export type BrowserPickedFile = { uri: string; name: string; type?: string };
 export type BrowserCapabilities = {
 	text: boolean; keys: boolean; viewport: boolean; quality: boolean; control: boolean; dialogs: boolean;
@@ -43,7 +43,8 @@ export type BrowserDialog =
 	| { kind: "prompt"; message: string; defaultPrompt?: string }
 	| { kind: "auth"; origin: string; realm?: string; failed: boolean }
 	| { kind: "select"; id: string; ctx?: string; options: Array<{ label: string; disabled?: boolean }>; selected: number }
-	| { kind: "filechooser"; multiple: boolean; accept: string; folder: boolean };
+	// `id` names the desktop's chooser; the files sent for it name it back.
+	| { kind: "filechooser"; id?: string; multiple: boolean; accept: string; folder: boolean };
 /** A file the page downloaded on the host. */
 export type BrowserDownload = { id: string; name: string; size: number };
 export type BrowserTransportHandlers = {

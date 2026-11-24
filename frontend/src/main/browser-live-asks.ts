@@ -14,7 +14,7 @@ const AUTH_RETRY_MS = 15_000;
 
 type AskSink = { ask?(ask: BrowserLiveAsk): void; askClosed?(): void; notice?(message: string): void };
 type Chooser = { setFiles(paths: string[]): Promise<void> };
-type PendingUpload = { chooser: Chooser; dir: string; files: Array<{ name: string; path: string; bytes: number }>; bytes: number };
+type PendingUpload = { id: string; chooser: Chooser; dir: string; files: Array<{ name: string; path: string; bytes: number }>; bytes: number };
 type PendingAuth = { origin: string; answer(username?: string, password?: string): void; timer: ReturnType<typeof setTimeout> };
 
 /** The name a phone gave a file: only its last part, and never one that leaves the folder. */
@@ -39,16 +39,20 @@ export class LiveAsks {
 	constructor(private readonly options: { uploadDir: string }, private readonly sink: AskSink) {}
 
 	chooserOpened(chooser: Chooser, ask: { multiple: boolean; accept: string; folder: boolean }): void {
-		this.upload = { chooser, dir: path.join(this.options.uploadDir, randomBytes(12).toString("hex")), files: [], bytes: 0 };
-		this.sink.ask?.({ kind: "filechooser", ...ask });
+		const id = randomBytes(8).toString("hex");
+		this.upload = { id, chooser, dir: path.join(this.options.uploadDir, randomBytes(12).toString("hex")), files: [], bytes: 0 };
+		this.sink.ask?.({ kind: "filechooser", id, ...ask });
 	}
 
 	async receiveFiles(payload: BrowserRemoteFiles): Promise<void> {
+		// Files picked for a chooser the page has since replaced never reach the newer one.
+		const current = this.upload && payload.chooser === this.upload.id ? this.upload : null;
 		if (payload.action === "cancel") {
-			this.upload = null;
+			if (current) this.upload = null;
 			return;
 		}
-		const upload = this.upload;
+		if (!current && this.upload) return;
+		const upload = current;
 		if (payload.action === "done") {
 			if (!upload || !upload.files.length || upload.files.length !== payload.count) return;
 			this.upload = null;
@@ -62,12 +66,12 @@ export class LiveAsks {
 			if (payload.file !== upload.files.length || payload.offset !== 0 || upload.files.length >= MAX_UPLOAD_FILES) {
 				throw new AoError("INVALID_ARGUMENT", "Files arrived out of order");
 			}
-			await mkdir(upload.dir, { recursive: true, mode: 0o700 });
+			// Each file in its own folder: names may repeat, and each keeps its own.
+			const fileDir = path.join(upload.dir, String(upload.files.length));
+			await mkdir(fileDir, { recursive: true, mode: 0o700 });
 			this.dirs.add(upload.dir);
-			// Two files may share a name: the second keeps its own.
 			const name = safeName(payload.name);
-			const taken = upload.files.some((existing) => path.basename(existing.path) === name);
-			file = { name, path: path.join(upload.dir, taken ? `${upload.files.length}-${name}` : name), bytes: 0 };
+			file = { name, path: path.join(fileDir, name), bytes: 0 };
 			upload.files.push(file);
 		} else if (payload.offset !== file.bytes) {
 			throw new AoError("INVALID_ARGUMENT", "File data arrived out of order");
