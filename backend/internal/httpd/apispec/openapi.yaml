@@ -4030,6 +4030,38 @@ paths:
         emulators, and leases'
       tags:
       - devices
+  /api/v1/devices/availability:
+    put:
+      operationId: setDeviceAvailability
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceAvailabilityRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceAvailabilityResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Turn devices on or off for every client; the desktop app sends its
+        Developer mode, and devices start off on every daemon boot
+      tags:
+      - devices
   /api/v1/devices/setup:
     post:
       operationId: setupDevices
@@ -21897,6 +21929,22 @@ components:
       - command
       - args
       type: object
+    DeviceAvailabilityRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
+    DeviceAvailabilityResponse:
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
+      type: object
     DeviceLease:
       properties:
         agentDevice:
@@ -21939,6 +21987,11 @@ components:
       type: object
     DeviceStatusResponse:
       properties:
+        available:
+          description: 'Whether devices are available: the desktop app''s Developer
+            mode is on. While false, only status, a session''s lease and releasing
+            a device are served.'
+          type: boolean
         devices:
           items:
             $ref: '#/components/schemas/DeviceSummary'
@@ -21964,6 +22017,7 @@ components:
           - error
           type: string
       required:
+      - available
       - enabled
       - state
       - platforms

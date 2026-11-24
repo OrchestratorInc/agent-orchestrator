@@ -91,6 +91,7 @@ func TestDevicesAPI_LeaseAndStreamProxy(t *testing.T) {
 	t.Cleanup(hub.Close)
 
 	svc := devices.New(devices.Config{DataDir: t.TempDir(), Provider: hubOnlyProvider{hub: hub.URL}})
+	svc.SetAvailable(true)
 	if _, err := svc.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -180,6 +181,7 @@ func TestDevicesAPI_LeaseAndStreamProxy(t *testing.T) {
 
 func TestDevicesAPI_OpenNeedsOptIn(t *testing.T) {
 	svc := devices.New(devices.Config{DataDir: t.TempDir(), Provider: hubOnlyProvider{hub: "http://127.0.0.1:1"}})
+	svc.SetAvailable(true)
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
 		httpd.APIDeps{Sessions: newFakeSessionService(), Devices: svc}, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
@@ -223,6 +225,7 @@ func TestDevicesAPI_StreamRepeatsOnlyForBrowsers(t *testing.T) {
 	}))
 	t.Cleanup(hub.Close)
 	svc := devices.New(devices.Config{DataDir: t.TempDir(), Provider: hubOnlyProvider{hub: hub.URL}})
+	svc.SetAvailable(true)
 	if _, err := svc.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -301,6 +304,7 @@ func TestDevicesAPI_PacedInputReplaysTouchSpacing(t *testing.T) {
 	t.Cleanup(hub.Close)
 
 	svc := devices.New(devices.Config{DataDir: t.TempDir(), Provider: hubOnlyProvider{hub: hub.URL}})
+	svc.SetAvailable(true)
 	if _, err := svc.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -359,5 +363,65 @@ func TestDevicesAPI_PacedInputReplaysTouchSpacing(t *testing.T) {
 		if gap := msgs[i].at.Sub(msgs[i-1].at); gap < 15*time.Millisecond {
 			t.Fatalf("message %d came %v after the last, want the phone's ~20 ms", i, gap)
 		}
+	}
+}
+
+// Devices start unavailable on every daemon boot. The desktop app's Developer
+// mode turns them on and off through PUT /devices/availability; while off, the
+// status says so and device work answers DEVICES_UNAVAILABLE.
+func TestDeviceAvailabilityFollowsDeveloperMode(t *testing.T) {
+	svc := devices.New(devices.Config{DataDir: t.TempDir(), Provider: hubOnlyProvider{hub: "http://127.0.0.1:1"}})
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil,
+		httpd.APIDeps{Sessions: newFakeSessionService(), Devices: svc, SessionCapabilities: fixedCapabilities{}}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+
+	do := func(method, path, body string) (int, []byte) {
+		t.Helper()
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Cookie", "ao_conn=host-password")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		raw, _ := io.ReadAll(res.Body)
+		return res.StatusCode, raw
+	}
+	available := func() bool {
+		t.Helper()
+		code, raw := do(http.MethodGet, "/api/v1/devices", "")
+		var st controllers.DeviceStatusResponse
+		if code != http.StatusOK || json.Unmarshal(raw, &st) != nil {
+			t.Fatalf("status = %d %s", code, raw)
+		}
+		return st.Available
+	}
+
+	if available() {
+		t.Fatal("devices available before the desktop turned them on")
+	}
+	if code, raw := do(http.MethodPost, "/api/v1/devices/setup", ""); code != http.StatusConflict || !strings.Contains(string(raw), "DEVICES_UNAVAILABLE") {
+		t.Fatalf("setup while unavailable = %d %s, want 409 DEVICES_UNAVAILABLE", code, raw)
+	}
+	if code, raw := do(http.MethodPut, "/api/v1/devices/availability", `{}`); code != http.StatusBadRequest {
+		t.Fatalf("availability without enabled = %d %s, want 400", code, raw)
+	}
+	if code, raw := do(http.MethodPut, "/api/v1/devices/availability", `{"enabled":true}`); code != http.StatusOK {
+		t.Fatalf("turn on = %d %s", code, raw)
+	}
+	if !available() {
+		t.Fatal("devices not available after turning on")
+	}
+	if code, raw := do(http.MethodPost, "/api/v1/devices/setup", ""); code != http.StatusAccepted {
+		t.Fatalf("setup = %d %s", code, raw)
+	}
+	if code, raw := do(http.MethodPut, "/api/v1/devices/availability", `{"enabled":false}`); code != http.StatusOK {
+		t.Fatalf("turn off = %d %s", code, raw)
+	}
+	if code, raw := do(http.MethodPost, "/api/v1/sessions/ao-1/device/open", `{"platform":"ios"}`); code != http.StatusConflict || !strings.Contains(string(raw), "DEVICES_UNAVAILABLE") {
+		t.Fatalf("open while unavailable = %d %s, want 409 DEVICES_UNAVAILABLE", code, raw)
+	}
+	if code, raw := do(http.MethodPost, "/api/v1/sessions/ao-1/device/close", `{}`); code >= 300 {
+		t.Fatalf("close while unavailable = %d %s, want success", code, raw)
 	}
 }
