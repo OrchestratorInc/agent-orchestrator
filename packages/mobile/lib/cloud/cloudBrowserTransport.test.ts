@@ -28,7 +28,10 @@ function viewerFrame(header: object, jpeg = [0xff, 0xd8, 0xff]): ArrayBuffer {
 	return buffer;
 }
 
-async function connected(upload = vi.fn(async (_url: string, _headers: Record<string, string>, _file: { uri: string; name: string; type?: string }) => undefined)) {
+async function connected(
+	upload = vi.fn(async (_url: string, _headers: Record<string, string>, _file: { uri: string; name: string; type?: string }) => undefined),
+	randomBytes: (count: number) => Uint8Array = (count) => new Uint8Array(count).map((_, i) => i * 17),
+) {
 	let socket!: FakeSocket;
 	const transport = new CloudBrowserTransport({
 		baseUrl: "https://api.example.dev",
@@ -37,6 +40,7 @@ async function connected(upload = vi.fn(async (_url: string, _headers: Record<st
 		getToken: async () => "tok",
 		createSocket: (url, headers) => (socket = new FakeSocket(url, headers)),
 		upload,
+		randomBytes,
 	});
 	const handlers = { onStatus: vi.fn(), onState: vi.fn(), onFrame: vi.fn(), onDialog: vi.fn(), onDialogClosed: vi.fn(), onDownload: vi.fn() };
 	transport.connect(handlers);
@@ -315,6 +319,15 @@ describe("cloud browser transport", () => {
 			socket.sent.length = 0;
 			transport.send({ type: "files", payload: { folder: false, files: [{ uri: "file:///a", name: "a" }] } });
 			await vi.waitFor(() => expect(handlers.onStatus).toHaveBeenLastCalledWith("open", expect.stringContaining("a")));
+			expect(socket.sent).toEqual([]);
+		});
+
+		it("says so when an upload can't even start", async () => {
+			const { socket, transport, handlers, upload } = await connected(undefined, () => { throw new TypeError("no random source"); });
+			socket.sent.length = 0;
+			transport.send({ type: "files", payload: { folder: false, files: [{ uri: "file:///a", name: "a.png" }] } });
+			await vi.waitFor(() => expect(handlers.onStatus).toHaveBeenLastCalledWith("open", "Couldn't send a.png to the page."));
+			expect(upload).not.toHaveBeenCalled();
 			expect(socket.sent).toEqual([]);
 		});
 
