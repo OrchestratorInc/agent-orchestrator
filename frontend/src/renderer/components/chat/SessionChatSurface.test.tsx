@@ -194,9 +194,7 @@ vi.mock("./ChatWorkspace", async () => {
 			importBlock,
 			findRequest,
 			onFindRequestHandled,
-			welcomeHeading,
 		}: {
-			welcomeHeading?: string;
 			importBlock?: string;
 			onSend: typeof sideMocks.workspaceSend;
 			onStageAttachments?: unknown;
@@ -252,7 +250,6 @@ vi.mock("./ChatWorkspace", async () => {
 					))}
 					{snapshot.harness === "claude-code" && <TurnSettingsBar models={models} settings={snapshot.settings} harness={snapshot.harness} configOptions={configOptions} onChangeConfigOption={() => {}} />}
 					<div data-testid="prompt-suggestion">{promptSuggestion?.text}</div>
-					<div data-testid="welcome-heading">{welcomeHeading}</div>
 					<div data-testid="conversation-id">{snapshot.conversationId}</div>
 					<div data-testid="find-request" data-request-id={findRequest?.id ?? ""}>{findRequest ? `${findRequest.query}@${findRequest.messageId ?? ""}` : ""}</div>
 					<button type="button" onClick={() => { if (findRequest) onFindRequestHandled?.(findRequest.id); }}>Apply find request</button>
@@ -784,25 +781,6 @@ describe("SessionChatSurface link routing", () => {
 		view.rerender(tree("ready"));
 		expect(screen.getByText(`Mounted ${session.id}`)).toBe(mounted);
 		expect(useUiStore.getState().provisioningProjectIds.has(session.workspaceId)).toBe(false);
-	});
-
-	it("asks an orchestrator for the project's first task until the project has a worker", async () => {
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const orchestrator = { ...session, id: "proj-1-orchestrator", kind: "orchestrator" as const };
-		const project = (sessions: WorkspaceSession[]) => [{ id: session.workspaceId, name: "proj", kind: "single_repo", path: "/tmp/proj", type: "main", sessions }];
-		conversationState.snapshot = snapshotFor(orchestrator.id);
-		queryClient.setQueryData(workspaceQueryKey, project([orchestrator]));
-		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={orchestrator} /></Wrapper>);
-		expect(screen.getByTestId("welcome-heading")).toHaveTextContent("Give your orchestrator its first task");
-
-		act(() => queryClient.setQueryData(workspaceQueryKey, project([orchestrator, session])));
-		await waitFor(() => expect(screen.getByTestId("welcome-heading")).toBeEmptyDOMElement());
-		view.unmount();
-
-		// A worker's chat keeps the chat's own heading.
-		conversationState.snapshot = snapshotFor(session.id);
-		render(<Wrapper client={queryClient}><SessionChatSurface session={session} /></Wrapper>);
-		expect(screen.getByTestId("welcome-heading")).toBeEmptyDOMElement();
 	});
 
 	it("releases project loading to show a failed orchestrator's retry UI", () => {

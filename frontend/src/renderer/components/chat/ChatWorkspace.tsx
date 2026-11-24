@@ -55,7 +55,7 @@ import {
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { ArrowDown, Bug, Columns2, FlaskConical, ListChecks, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
+import { ArrowDown, Bug, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles, Wrench } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, usePresence, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
@@ -2091,8 +2091,8 @@ function ChatWorkspaceContent({
 			? "Describe a task, or several at once"
 			: EMPTY_CHAT_PLACEHOLDERS[Math.floor(Math.random() * EMPTY_CHAT_PLACEHOLDERS.length)],
 	);
-	// An orchestrator's empty chat asks in orchestration terms; its surface can
-	// say more (the project's first task) through welcomeHeading.
+	// An orchestrator's empty chat always asks for its first task: one heading,
+	// so it doesn't change once the project list loads.
 	const emptyChatHeading = welcomeHeading ?? t(
 		artifactSession ? "chat.welcome.artifactHeading"
 		: sessionRole === "orchestrator" ? "chat.welcome.orchestratorHeading"
@@ -7949,7 +7949,7 @@ const CHAT_PROMPTS = [
 
 /** An orchestrator's: each one fans out into workers, so the first task shows what it does. */
 const ORCHESTRATOR_PROMPTS = [
-	{ prompt: "chat.welcome.orchestratorPrompt.improve", chip: "chat.welcome.chip.improve", icon: ListChecks },
+	{ prompt: "chat.welcome.orchestratorPrompt.improve", chip: "chat.welcome.chip.refine", icon: Wrench },
 	{ prompt: "chat.welcome.orchestratorPrompt.bug", chip: "chat.welcome.chip.bug", icon: Bug },
 	{ prompt: "chat.welcome.orchestratorPrompt.tests", chip: "chat.welcome.chip.tests", icon: FlaskConical },
 ] as const;

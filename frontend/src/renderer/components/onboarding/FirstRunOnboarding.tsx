@@ -77,6 +77,7 @@ import { dragStyle } from "../PageTopbar";
 import { HarnessAuthTerminalPanel } from "../settings/harness/HarnessAuthTerminalPanel";
 import { Button, type ButtonProps } from "../ui/button";
 import { Pressable } from "../ui/pressable";
+import { AgentSelectMenuItem } from "../settings/AgentSelectMenuItem";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { landAfterSetup } from "./FirstTaskFunnel";
@@ -651,7 +652,9 @@ function CheckRow({ icon, label, detail, trailing, below, wrap = false }: { icon
 	return (
 		<li className="px-4 py-3 [&+&]:border-t [&+&]:border-border">
 			<div className={cn("flex gap-3", wrap ? "items-start" : "items-center")}>
-				{icon ? <span className={cn("flex shrink-0", wrap && "pt-0.5")} aria-hidden="true">{icon}</span> : null}
+				{/* Wrapping rows centre the icon on the label's first line (a box one
+				    line of the label's text tall), not on the whole block. */}
+				{icon ? <span className={cn("flex shrink-0 items-center", wrap && "h-[1lh] text-sm")} aria-hidden="true">{icon}</span> : null}
 				<span className="min-w-0 flex-1">
 					<span className={cn("block text-sm text-foreground", wrap ? "text-pretty" : "truncate")}>{label}</span>
 					{detail ? <span className={cn("block text-xs text-muted-foreground", wrap ? "text-pretty pt-0.5 leading-relaxed" : "truncate")}>{detail}</span> : null}
@@ -1435,14 +1438,22 @@ function WorkDefaultsStep({ onNext }: { onNext: () => void }) {
 						<div className="flex items-center justify-between gap-3">
 							<span id="onboarding-reviewer" className="text-xs text-muted-foreground">{t("firstRun.defaultsReviewer")}</span>
 							<Select value={reviewer} onValueChange={(reviewerAgent) => change({ reviewerAgent })}>
-								<SelectTrigger size="sm" aria-labelledby="onboarding-reviewer" className="min-w-36">
-									<SelectValue />
+								<SelectTrigger size="sm" aria-labelledby="onboarding-reviewer" className="min-w-40">
+									{/* Only the avatar and name: Radix would otherwise copy the
+									    whole menu row, checkmark included, into the trigger. */}
+									<SelectValue>
+										<span className="flex min-w-0 items-center gap-2">
+											<AgentAvatar provider={reviewer} className="size-icon-base" decorative />
+											<span className="min-w-0 truncate">{labelFor(reviewer)}</span>
+										</span>
+									</SelectValue>
 								</SelectTrigger>
-								<SelectContent align="end">
+								{/* The Add Project sheet's agent menu: below the trigger, one row
+								    per agent, scrolling within its own height. */}
+								<SelectContent position="popper" side="bottom" align="end" sideOffset={4} showScrollButtons={false} className="max-h-select-menu-max! min-w-56">
 									{reviewerIds.map((id) => (
-										<SelectItem key={id} value={id}>
-											<AgentAvatar provider={id} className="size-icon-base" decorative />
-											{labelFor(id)}
+										<SelectItem key={id} value={id} className="[&>span:last-child]:w-full">
+											<AgentSelectMenuItem agentId={id} label={labelFor(id)} selected={id === reviewer} />
 										</SelectItem>
 									))}
 								</SelectContent>
