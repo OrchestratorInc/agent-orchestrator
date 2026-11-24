@@ -171,5 +171,10 @@ describe("file cards in the timeline", () => {
 		);
 		fireEvent.click(screen.getAllByRole("button")[0]!);
 		expect(document.querySelector("[data-chat-file-card]")).toBeNull();
+		// The command is one $ line with its own copy; the output sits in a Shell card.
+		expect(document.querySelector("[data-command-line]")).toHaveTextContent("$ cat src/app.ts | head");
+		expect(screen.getByRole("button", { name: "Copy command" })).toBeInTheDocument();
+		expect(document.querySelector("[data-command-shell]")).toHaveTextContent("Shell");
+		expect(screen.getByRole("button", { name: "Copy output" })).toBeInTheDocument();
 	});
 });

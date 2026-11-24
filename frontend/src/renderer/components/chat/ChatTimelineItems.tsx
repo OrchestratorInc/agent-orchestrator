@@ -2294,9 +2294,10 @@ const LiveStepDetail = memo(function LiveStepDetail({ activity }: { activity: Co
 });
 
 /**
- * Expanded command / explore body: one soft chat-surface card with the shell
- * line nested in its own chip, then muted monospace output underneath — the
- * same anatomy as the Cursor explore block, restated in AO chat tokens.
+ * Expanded command body: the command as one `$` line with its own copy button,
+ * then what it printed in a "Shell" card that copies its output. A long or
+ * multi-line command stays one line and ends in an ellipsis; its title holds the
+ * whole of it.
  */
 function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
@@ -2304,50 +2305,46 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 	const reason = (detail?.reason ?? detail?.text)?.trim();
 	const binary = command ? commandBinaryLabel(command) : undefined;
 	const showPrompt = Boolean(reason && reason !== command);
+	const hasShell = Boolean(detail?.output || detail?.terminalInput);
+	const outputText = () => stripAnsi(commandOutputText(detail?.output as unknown));
 
 	return (
-		<div className="cursor-chat-explore-box mt-1 flex min-w-0 flex-col overflow-hidden rounded-lg border">
+		<div className="mt-1 flex min-w-0 flex-col gap-1.5">
 			{showPrompt ? (
-				<div className="flex min-w-0 items-start gap-2 border-b border-border/60 px-3 py-2">
-					<span
-						aria-hidden="true"
-						className="shrink-0 select-none pt-px font-mono text-caption leading-relaxed text-muted-foreground/70"
-					>
-						&gt;_
-					</span>
-					<div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-						<span className="min-w-0 break-words text-xs leading-relaxed text-foreground/90">
-							{reason}
-						</span>
-						{binary ? (
-							<span className="shrink-0 font-mono text-caption text-muted-foreground/55">
-								{binary}
-							</span>
-						) : null}
-					</div>
-				</div>
+				<p className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs leading-relaxed text-foreground/90">
+					<span className="min-w-0 break-words">{reason}</span>
+					{binary ? <span className="shrink-0 font-mono text-caption text-muted-foreground/55">{binary}</span> : null}
+				</p>
 			) : null}
 
 			{command ? (
-				<pre data-no-swipe-nav=""
-					className={cn(
-						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
-						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
-					)}
-				>
-					{command}
-				</pre>
-			) : null}
-
-			{detail?.terminalInput ? (
-				<div className={cn("px-3 py-2", detail?.output && "border-b border-border/60")}>
-					<TerminalInput
-						text={detail.terminalInput}
-						truncated={detail.terminalInputTruncated}
-					/>
+				<div data-command-line="" className="flex min-w-0 items-center gap-2 pr-[7px]">
+					<pre data-no-swipe-nav="" className="min-w-0 flex-1 truncate font-mono text-caption leading-relaxed text-muted-foreground" title={command}>
+						<span aria-hidden="true" className="select-none text-passive">$ </span>
+						{command}
+					</pre>
+					<CopyButton compact size="icon-xs" text={command} label="Copy command" className="shrink-0 [&_svg]:size-3" />
 				</div>
 			) : null}
-			{detail?.output ? <CommandOutput activity={activity} embedded /> : null}
+
+			{hasShell ? (
+				<div data-command-shell="" className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-surface">
+					<div className="flex min-h-8 items-center gap-2 pr-1.5 pl-3 pt-1">
+						<SquareTerminal aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+						<span className="flex-1 text-xs text-muted-foreground">Shell</span>
+						{detail?.output ? <CopyButton compact size="icon-xs" text={outputText} label="Copy output" /> : null}
+					</div>
+					{detail?.terminalInput ? (
+						<div className={cn("px-3 py-2", detail?.output && "pb-0")}>
+							<TerminalInput
+								text={detail.terminalInput}
+								truncated={detail.terminalInputTruncated}
+							/>
+						</div>
+					) : null}
+					{detail?.output ? <CommandOutput activity={activity} embedded /> : null}
+				</div>
+			) : null}
 		</div>
 	);
 }

@@ -3589,31 +3589,18 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	background: color-mix(in srgb, var(--color-bg-secondary) 62%, transparent);
 }
 
-/* Explore / command expansion: one soft chat card; command and output share
-   the surface and split on a hairline — no nested near-black wells. */
-.cursor-chat-explore-box {
-	border-color: color-mix(in oklch, var(--color-border-strong) 55%, transparent);
-	background: color-mix(in srgb, var(--color-bg-elevated) 42%, var(--color-bg-secondary));
-}
-
-.cursor-chat-explore-command {
-	background: color-mix(in srgb, var(--color-bg-elevated) 28%, transparent);
-	color: color-mix(in oklch, var(--color-text-primary) 88%, transparent);
-}
-
+/* An opened command's output, inside its Shell card. */
 .cursor-chat-explore-output {
 	background: transparent;
 	color: color-mix(in oklch, var(--color-text-muted) 96%, var(--color-text-primary));
 }
 
-/* Long shell lines scroll horizontally; hide the native track so the explore card
+/* Long output lines scroll horizontally; hide the native track so the Shell card
    stays visually flat (wheel/trackpad scrolling still works). */
-.cursor-chat-explore-command,
 .cursor-chat-explore-output {
 	scrollbar-width: none;
 }
 
-.cursor-chat-explore-command::-webkit-scrollbar,
 .cursor-chat-explore-output::-webkit-scrollbar {
 	width: 0;
 	height: 0;
@@ -3688,15 +3675,6 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	border-color: color-mix(in oklch, var(--color-text-primary) 12%, transparent);
 }
 
-:root[data-theme="light"] .cursor-chat-explore-box {
-	border-color: color-mix(in oklch, var(--color-text-primary) 12%, transparent);
-	background: color-mix(in srgb, var(--color-bg-secondary) 82%, var(--color-bg-tertiary));
-}
-
-:root[data-theme="light"] .cursor-chat-explore-command {
-	background: color-mix(in srgb, var(--color-bg-tertiary) 55%, transparent);
-	color: color-mix(in oklch, var(--color-text-primary) 86%, transparent);
-}
 
 :root[data-theme="light"] .cursor-chat-explore-output {
 	background: transparent;
