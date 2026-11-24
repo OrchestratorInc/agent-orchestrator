@@ -1,3 +1,4 @@
+import { uiUsage } from "../lib/ui-usage-telemetry";
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
@@ -7,6 +8,7 @@ import type { TerminalTarget } from "../types/terminal";
 import type { TerminalClickMode } from "../lib/terminal-mouse";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
+import type { BackgroundTask } from "../hooks/useBackgroundTasks";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -80,7 +82,50 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
+
+/**
+ * A background task listed in the side panel's Background tasks tab. `task` is
+ * the latest reading of it, kept after the task leaves the reading so the panel
+ * still shows how it ended. `ended` marks a live task that left without a
+ * reported outcome.
+ */
+export type BackgroundTaskTab = { task: BackgroundTask; ended?: boolean };
+
+/** One run of a task: a rerun that fails again is a new failure. */
+export const failedTaskKey = (task: BackgroundTask) => `${task.id}\n${task.runId ?? ""}`;
+
+/**
+ * How many finished tasks the Background tasks tab keeps. The daemon remembers
+ * about this many tasks' commands and output, so an older row would open to
+ * nothing; running tasks and the open one always stay.
+ */
+export const FINISHED_TASK_TABS_KEPT = 32;
+
+/**
+ * Drops the oldest finished rows past the cap, and the failures seen on them.
+ * Oldest means ended longest ago (a row with no end time counts as oldest),
+ * then first seen. A row the latest reading still lists stays: dropping it
+ * would only bring it back as new on the next poll, raising its failure again.
+ */
+function pruneTaskTabs(tabs: BackgroundTaskTab[], active: string | undefined, seenFailedTasks: string[] | undefined, listed: ReadonlySet<string>) {
+	const finished = tabs.filter((tab) => tab.ended || (tab.task.state !== "running" && tab.task.state !== "paused"));
+	if (finished.length <= FINISHED_TASK_TABS_KEPT) return { taskTabs: tabs, seenFailedTasks };
+	const endedAt = (tab: BackgroundTaskTab) => {
+		const at = tab.task.endedAt ? Date.parse(tab.task.endedAt) : Number.NaN;
+		return Number.isNaN(at) ? -Infinity : at;
+	};
+	// Array.prototype.sort is stable, so equal end times keep first-seen order.
+	const oldestFirst = finished.filter((tab) => tab.task.id !== active && !listed.has(tab.task.id))
+		.sort((left, right) => endedAt(left) - endedAt(right) || 0);
+	const dropped = new Set(oldestFirst.slice(0, finished.length - FINISHED_TASK_TABS_KEPT).map((tab) => tab.task.id));
+	if (dropped.size === 0) return { taskTabs: tabs, seenFailedTasks };
+	const taskTabs = tabs.filter((tab) => !dropped.has(tab.task.id));
+	return {
+		taskTabs,
+		seenFailedTasks: seenFailedTasks?.filter((key) => !dropped.has(key.slice(0, key.indexOf("\n")))),
+	};
+}
 
 export type CloudReviewUiState = {
 	showChanges?: boolean;
@@ -117,6 +162,12 @@ export type InspectorSessionState = {
 	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
 	initialized?: boolean;
+	/** The background tasks the side panel lists, in the order first seen. In memory only: they go with the app. */
+	taskTabs?: BackgroundTaskTab[];
+	/** The task the Background tasks tab has open; unset shows the list. */
+	activeTaskTab?: string;
+	/** Failed task runs whose tab has been shown (`failedTaskKey`); the composer strip leaves them out. */
+	seenFailedTasks?: string[];
 };
 
 export type FileDisplayMode = "diff" | "file" | "rendered";
@@ -348,7 +399,7 @@ export type UiState = {
 	closeUpdateInstallPrompt: () => void;
 	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
-	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
+	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string; hostId?: string }) => void;
 	closeSettings: () => void;
 	loginReturn: LoginReturn | null;
 	/** Remember a chat whose agent refused its login while that login is fixed. */
@@ -370,6 +421,16 @@ export type UiState = {
 	setInspectorOpen: (sessionId: string, isOpen: boolean) => void;
 	toggleInspector: (sessionId: string) => void;
 	setInspectorView: (sessionId: string, view: InspectorView) => void;
+	/** Opens a background task in the side panel's Background tasks tab. */
+	openTaskTab: (sessionId: string, task: BackgroundTask) => void;
+	/** Opens a task the Background tasks list already holds, keeping how it ended. */
+	selectTaskTab: (sessionId: string, taskId: string) => void;
+	/** Leaves the open task for the Background tasks list. */
+	showTaskList: (sessionId: string) => void;
+	/** Lists the tasks in a background-task reading, and ends live ones that left it. */
+	syncTaskTabs: (sessionId: string, tasks: BackgroundTask[]) => void;
+	/** Records that a failed task run was shown in its tab, so the composer strip stops raising it. */
+	acknowledgeFailedTask: (sessionId: string, task: BackgroundTask) => void;
 	/**
 	 * Runs the "entering this session" defaults — Summary tab, baseline browser
 	 * reveal — exactly once per session's lifetime. Backed by persisted store
@@ -763,16 +824,19 @@ export const useUiStore = create<UiState>((set, get) => ({
 					: {}),
 		},
 	})),
-	openProjectSettings: (projectId, options) => set({
-		accountLogin: null,
-		settingsModal: {
-			scope: "project",
-			projectId,
-			...(typeof options === "string" && options !== "local" ? { hostId: options } : {}),
-			...(typeof options === "object" && options?.section ? { section: options.section } : {}),
-			...(typeof options === "object" && options?.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
-		},
-	}),
+	openProjectSettings: (projectId, options) => {
+		const hostId = typeof options === "string" ? options : options?.hostId;
+		set({
+			accountLogin: null,
+			settingsModal: {
+				scope: "project",
+				projectId,
+				...(hostId && hostId !== "local" ? { hostId } : {}),
+				...(typeof options === "object" && options.section ? { section: options.section } : {}),
+				...(typeof options === "object" && options.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
+			},
+		});
+	},
 	closeSettings: () => set((state) => ({
 		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
@@ -847,6 +911,69 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, view, browserUnseen, artifactsUnseen },
+				},
+			};
+		}),
+	openTaskTab: (sessionId, task) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const tabs = current.taskTabs ?? [];
+			const taskTabs = tabs.some((tab) => tab.task.id === task.id)
+				? tabs.map((tab) => (tab.task.id === task.id ? { task } : tab))
+				: [...tabs, { task }];
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, isOpen: true, view: "task", taskTabs, activeTaskTab: task.id },
+				},
+			};
+		}),
+	selectTaskTab: (sessionId, taskId) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (!current.taskTabs?.some((tab) => tab.task.id === taskId)) return state;
+			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, activeTaskTab: taskId } } };
+		}),
+	showTaskList: (sessionId) =>
+		set((state) => {
+			const current = state.inspectorSessions[sessionId];
+			if (!current?.activeTaskTab) return state;
+			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, activeTaskTab: undefined } } };
+		}),
+	syncTaskTabs: (sessionId, tasks) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			// Agents belong to Subagents; every other task the reading lists joins the list.
+			const listed = tasks.filter((task) => task.kind !== "agent");
+			const known = current.taskTabs ?? [];
+			const added = listed.filter((task) => !known.some((tab) => tab.task.id === task.id)).map((task) => ({ task }));
+			let changed = added.length > 0;
+			const taskTabs = known.map((tab) => {
+				const latest = tasks.find((task) => task.id === tab.task.id);
+				if (latest) {
+					if (!tab.ended && JSON.stringify(latest) === JSON.stringify(tab.task)) return tab;
+					changed = true;
+					return { task: latest };
+				}
+				// A live task that left the reading ended without saying how.
+				if (tab.ended || (tab.task.state !== "running" && tab.task.state !== "paused")) return tab;
+				changed = true;
+				return { ...tab, ended: true };
+			});
+			// Prune even when no task changed: finished tabs a reading stops listing become eligible then.
+			const pruned = pruneTaskTabs(changed ? [...taskTabs, ...added] : known, current.activeTaskTab, current.seenFailedTasks, new Set(listed.map((task) => task.id)));
+			if (!changed && pruned.taskTabs === known) return state;
+			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, ...pruned } } };
+		}),
+	acknowledgeFailedTask: (sessionId, task) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const key = failedTaskKey(task);
+			if (current.seenFailedTasks?.includes(key)) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, seenFailedTasks: [...(current.seenFailedTasks ?? []), key] },
 				},
 			};
 		}),
@@ -1057,7 +1184,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			}
 			return { orchestratorStartupErrors };
 		}),
-	showGlobalToast: (title, body, style) =>
+	showGlobalToast: (title, body, style) => {
 		set((state) => {
 			const nonce = state.globalToastSequence + 1;
 			const options = typeof style === "object" ? style : undefined;
@@ -1068,7 +1195,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)
 				: state.globalToasts;
 			return { globalToast: toast, globalToasts: [...globalToasts, toast], globalToastSequence: nonce };
-		}),
+		});
+		// Every error toast in the app passes through here, so this one line counts them all.
+		if (get().globalToast?.tone === "error") uiUsage.errorShown("toast", "toast");
+	},
 	dismissGlobalToast: (nonce) =>
 		set((state) => ({
 			globalToasts: state.globalToasts.filter((toast) => toast.nonce !== nonce),

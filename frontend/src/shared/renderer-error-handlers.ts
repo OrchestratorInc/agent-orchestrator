@@ -25,10 +25,18 @@ export function installRendererErrorHandlers(capture?: Handler): void {
 			if (!root.ao?.telemetry) return;
 			const object = error !== null && typeof error === "object" ? error : undefined;
 			if (object && state.early.has(object)) return;
-			if ((error instanceof Error || error instanceof DOMException) && error.name === "AbortError") return;
 			const types = new Set(["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "DOMException"]);
-			const message = (error instanceof Error || error instanceof DOMException ? error.message : typeof error === "string" ? error : event?.message) ?? "";
-			const type = error instanceof Error || error instanceof DOMException ? error.name : /^(?:Uncaught )?(\w+): /.exec(message)?.[1];
+			let message = typeof error === "string" ? error : event?.message ?? "";
+			let type = /^(?:Uncaught )?(\w+): /.exec(message)?.[1];
+			let stack = "";
+			try {
+				if (error instanceof Error || error instanceof DOMException) {
+					type = error.name;
+					if (type === "AbortError") return;
+					if (typeof error.message === "string") message = error.message;
+					if (typeof error.stack === "string") stack = error.stack;
+				}
+			} catch { /* A proxy or throwing getter can still be reported. */ }
 			const name = type && types.has(type) ? type : "Error";
 			const location = event?.filename?.replace(/^app:\/\/renderer\//, "");
 			const filename = location && /^assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,80}-[A-Za-z0-9_-]{8,16}\.(?:js|mjs)$/.test(location) ? location : undefined;
@@ -53,7 +61,6 @@ export function installRendererErrorHandlers(capture?: Handler): void {
 				if (asset) assets.set(asset, id);
 			}
 			const frames = [];
-			const stack = error instanceof Error && typeof error.stack === "string" ? error.stack : "";
 			for (const frame of stack.split("\n")) {
 				const match = /^\s*at\s+(?:.*?\()?app:\/\/renderer\/(assets\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,80}-[A-Za-z0-9_-]{8,16}\.(?:js|mjs))(?:[?#][^\s)]*)?:(\d+):(\d+)\)?$/.exec(frame);
 				if (!match) continue;
@@ -68,9 +75,29 @@ export function installRendererErrorHandlers(capture?: Handler): void {
 				const debugId = filename && assets.get(filename);
 				frames.push({ function: "renderer_frame", ...(filename ? { filename } : {}), ...(lineno ? { lineno } : {}), ...(colno ? { colno } : {}), ...(debugId ? { debug_id: debugId } : {}) });
 			}
+			// Keep this bounded walk inside the serialized installer.
+			let errorCode: string | undefined;
+			let fallbackCode: string | undefined;
+			let candidate = error;
+			for (let depth = 0; depth < 16 && candidate !== null && typeof candidate === "object"; depth++) {
+				try {
+					const value = candidate as { code?: unknown; cause?: unknown; telemetryCode?: unknown; expected?: unknown };
+					if (value.expected === true) return;
+					const { code, telemetryCode } = value;
+					if (!errorCode && typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code)) {
+						errorCode = code;
+					}
+					if (!fallbackCode && typeof telemetryCode === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(telemetryCode)) fallbackCode = telemetryCode;
+					candidate = value.cause;
+				} catch {
+					break;
+				}
+			}
+			errorCode ??= fallbackCode;
 			void root.ao.telemetry.capture({
 				kind: "exception", message: message.length <= 4096 ? message : "", level: "error",
 				tags: { category: source === "unhandledrejection" ? "renderer_rejection" : "renderer_exception",
+					...(errorCode ? { error_code: errorCode } : {}),
 					code: source === "unhandledrejection" ? "UNHANDLED_REJECTION" : source === "script-load" ? "RENDERER_SCRIPT_LOAD_FAILED" : "WINDOW_ERROR" },
 				exception: { type: name, frames: frames.reverse() },
 			}).catch(() => undefined);

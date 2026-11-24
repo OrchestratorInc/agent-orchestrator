@@ -402,6 +402,7 @@ export function SessionCardView({
 	return (
 		<div
 			onClick={interactive ? onOpen : undefined}
+			data-telemetry-id={interactive ? "board.card" : undefined}
 			role={interactive || still ? undefined : "listitem"}
 			className={cn(
 				still

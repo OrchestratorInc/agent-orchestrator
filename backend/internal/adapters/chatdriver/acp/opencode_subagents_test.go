@@ -319,7 +319,7 @@ func TestOpenCodeV2SettledTurnReleasesHeldChildWork(t *testing.T) {
 	// The child updates are read off the wire before the turn settles.
 	time.Sleep(50 * time.Millisecond)
 
-	conv.settleOpenItems("turn-1")
+	conv.settleOpenItems("turn-1", nil)
 	var stepStarted, messageCompleted bool
 	launchStatus := domain.ActivityStatus("")
 	for quiet := time.After(300 * time.Millisecond); ; {

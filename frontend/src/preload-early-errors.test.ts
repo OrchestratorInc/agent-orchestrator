@@ -1,3 +1,4 @@
+import { AoError } from "../../packages/shared/telemetry/ao-error";
 import { afterEach, expect, it, vi } from "vitest";
 import { sanitizeRendererCapture } from "./main/sentry-main";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
@@ -49,15 +50,15 @@ function fail(error = new TypeError("private error, token and project")): Error 
 	return error;
 }
 
-it("captures an entry-module failure before the renderer runs, using main-owned consent and no private text", async () => {
+it("captures an entry-module failure before the renderer runs, using main-owned consent and bounded message text", async () => {
 	const { controller, capture, resolvePolicy } = await setup(true);
 	const error = fail();
 	expect(capture).not.toHaveBeenCalled();
 	expect(mocks.invoke).toHaveBeenCalledWith("telemetry:getPolicy");
 	resolvePolicy(controller.snapshot());
 	await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
-	expect(capture.mock.calls[0][0]).toMatchObject({ consentGeneration: "generation-1", kind: "exception", message: "", tags: { category: "renderer_exception", code: "WINDOW_ERROR" }, exception: { type: "TypeError" } });
-	expect(JSON.stringify(capture.mock.calls)).not.toMatch(/private|token|project|Users/);
+	expect(capture.mock.calls[0][0]).toMatchObject({ consentGeneration: "generation-1", kind: "exception", message: error.message, tags: { category: "renderer_exception", code: "WINDOW_ERROR" }, exception: { type: "TypeError" } });
+	expect(JSON.stringify(capture.mock.calls[0][0].exception)).not.toContain("Users");
 	// Runtime and preload use one listener. Re-observing the same early error
 	// through another boundary cannot send it a second time.
 	const { bindRendererErrorHandlers, captureRendererException } = await import("./renderer/lib/telemetry");
@@ -113,7 +114,7 @@ it("keeps an early rejection's minified frame and debug ID", async () => {
 	const debugId = "8a1f4c2e-1b3d-4e5f-9a6b-7c8d9e0f1a2b";
 	vi.stubGlobal("_sentryDebugIds", { [`Error\n    at app://renderer/${filename}:1:2`]: debugId });
 	try {
-		const error = new TypeError("Cannot read properties of undefined (reading 'id')");
+		const error = new TypeError("Cannot read properties of undefined (reading 'id')", { cause: new AoError("RENDERER_INIT_FAILED", "Import failed") });
 		error.stack = `TypeError: ${error.message}\n    at a (app://renderer/${filename}:17:99)`;
 		const rejection = new Event("unhandledrejection");
 		Object.defineProperty(rejection, "reason", { value: error });
@@ -122,10 +123,68 @@ it("keeps an early rejection's minified frame and debug ID", async () => {
 		await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
 		expect(capture.mock.calls[0][0]).toMatchObject({
 			message: error.message,
-			tags: { category: "renderer_rejection", code: "UNHANDLED_REJECTION" },
+			tags: { category: "renderer_rejection", code: "UNHANDLED_REJECTION", error_code: "RENDERER_INIT_FAILED" },
 			exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename, lineno: 17, colno: 99, debug_id: debugId }] },
 		});
 	} finally {
 		vi.unstubAllGlobals();
 	}
+});
+
+it("preserves a remotes:list code across the preload bridge without changing its displayed error", async () => {
+	const { controller, resolvePolicy } = await setup(true);
+	resolvePolicy(controller.snapshot());
+	mocks.invoke.mockImplementation(async (channel: string) => channel === "remotes:list"
+		? { code: "REMOTES_READ_FAILED", message: "Error: Could not read remote hosts" }
+		: null);
+	const { listRemoteHosts } = await import("./renderer/lib/remote-host-list");
+	await expect(listRemoteHosts()).rejects.toMatchObject({
+		code: "REMOTES_READ_FAILED",
+		message: "Error invoking remote method 'remotes:list': Error: Could not read remote hosts",
+	});
+	expect(mocks.invoke).toHaveBeenCalledWith("remotes:list", true);
+});
+
+it("still captures an early rejection whose code getter throws", async () => {
+	const { controller, resolvePolicy } = await setup(true);
+	resolvePolicy(controller.snapshot());
+	const error = Object.defineProperty(new Error("An early failure"), "code", {
+		get() { throw new Error("getter failed"); },
+	});
+	const event = new Event("unhandledrejection");
+	Object.defineProperty(event, "reason", { value: error });
+	window.dispatchEvent(event);
+	await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("telemetry:capture", expect.objectContaining({
+		message: "An early failure", tags: expect.objectContaining({ code: "UNHANDLED_REJECTION" }),
+	})));
+});
+
+it.each([
+	["EXPECTED_IPC_ERROR", "Sign in to Orchestrator Cloud"],
+	["LOCAL_IDENTITY_UNAVAILABLE_ERROR", "Local Orchestrator identity is unavailable; remote connection is offline"],
+])("preserves the expected %s rejection without reporting it", async (code, message) => {
+	const { controller, resolvePolicy } = await setup(true);
+	resolvePolicy(controller.snapshot());
+	mocks.invoke.mockImplementation(async (channel: string) => channel === "remotes:list"
+		? { code, message: "Error: " + message, expected: true }
+		: null);
+	const { listRemoteHosts } = await import("./renderer/lib/remote-host-list");
+	const error = await listRemoteHosts().catch((reason: unknown) => reason);
+	expect(error).toMatchObject({ code, expected: true, message: "Error invoking remote method 'remotes:list': Error: " + message });
+	const wrapped = new AoError("REMOTE_WRAPPER", "wrapped", { cause: error });
+	const event = new Event("unhandledrejection");
+	Object.defineProperty(event, "reason", { value: wrapped });
+	window.dispatchEvent(event);
+	const { captureExceptionToSentry } = await import("./renderer/lib/sentry");
+	captureExceptionToSentry(wrapped);
+	expect(mocks.invoke.mock.calls.some(([channel]) => channel === "telemetry:capture")).toBe(false);
+});
+
+it("forwards uncoded engine errors with their original type for main's display rule", async () => {
+	const { controller, capture, resolvePolicy } = await setup(true);
+	const message = "Cannot read properties of undefined (reading 'id')";
+	fail(new TypeError(message));
+	resolvePolicy(controller.snapshot());
+	await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
+	expect(capture.mock.calls[0][0]).toMatchObject({ message, exception: { type: "TypeError" } });
 });
