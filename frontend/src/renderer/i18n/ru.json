@@ -2731,6 +2731,7 @@
 	"shell.removeProjectRetry": "Повторить",
 	"shell.renameSession": "Переименовать {{title}}",
 	"shell.rename": "Переименовать",
+	"shell.renameFailed": "Не удалось переименовать в {{name}}",
 	"shell.openDashboard": "Открыть панель управления",
 	"shell.copied": "Скопировано в буфер обмена",
 	"shell.copyFailed": "Не удалось скопировать",

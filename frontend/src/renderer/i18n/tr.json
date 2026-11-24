@@ -2649,6 +2649,7 @@
 	"shell.removeProjectRetry": "Yeniden dene",
 	"shell.renameSession": "{{title}} öğesini yeniden adlandır",
 	"shell.rename": "Yeniden adlandır",
+	"shell.renameFailed": "{{name}} olarak yeniden adlandırılamadı",
 	"shell.openDashboard": "Kontrol panelini aç",
 	"shell.copied": "Panoya kopyalandı",
 	"shell.copyFailed": "Kopyalanamadı",

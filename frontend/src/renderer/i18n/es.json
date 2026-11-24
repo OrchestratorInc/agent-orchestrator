@@ -2299,6 +2299,7 @@
 	"shell.removeProjectRetry": "Reintentar",
 	"shell.renameSession": "Renombrar {{title}}",
 	"shell.rename": "Renombrar",
+	"shell.renameFailed": "No se pudo cambiar el nombre a {{name}}",
 	"shell.openDashboard": "Abrir panel",
 	"shell.copied": "Copiado al portapapeles",
 	"shell.copyFailed": "No se pudo copiar",
