@@ -381,17 +381,11 @@ func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewN
 		}
 		return sendOnceSuppressed, sendErr
 	}
-	if sendErr != nil {
-		// Chat did not take the relay. Count the attempt against the budget, but
-		// record no relay and settle nothing: reading this id back could find an
-		// older turn and mark items delivered that never reached the worker.
-		for i, it := range items {
-			if due[i] {
-				m.react.attempts[it.key]++
-			}
-		}
-		return sendOnceSuppressed, errors.Join(sendErr, m.persistPRSignaturesLocked(ctx, prURL))
-	}
+	// Sent with an error means the write was attempted: Chat may already hold
+	// the relay. Record it either way, so the next observation looks this id up
+	// instead of pasting the batch again, and settle only what a readback of
+	// this relay's own turn confirms. The id covers every item in the batch, so
+	// a turn found under it can only be one that carried exactly these items.
 	for i, it := range items {
 		if due[i] {
 			m.react.attempts[it.key]++
@@ -406,7 +400,7 @@ func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewN
 			}
 		}
 	}
-	if err := errors.Join(readErr, m.persistPRSignaturesLocked(ctx, prURL)); err != nil {
+	if err := errors.Join(sendErr, readErr, m.persistPRSignaturesLocked(ctx, prURL)); err != nil {
 		return sendOnceAccounted, err
 	}
 	if delivered {

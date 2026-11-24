@@ -589,11 +589,23 @@ func TestChatReviewOnlyBatchSettlesThroughItsStoredRelay(t *testing.T) {
 type strictRelay struct {
 	store    *chatNoticeStore
 	accepted map[string]string
+	tried    []string
 	failWith error
+	// landThenFail makes a send reach Chat and still return an error, as when
+	// the turn is stored and a later step of the send fails.
+	landThenFail error
 }
 
 func (r *strictRelay) Send(ctx context.Context, _ domain.SessionID, msg string) error {
 	id := ports.ClientMessageIDFromContext(ctx)
+	r.tried = append(r.tried, id)
+	if r.landThenFail != nil {
+		if _, taken := r.store.turns[id]; !taken {
+			r.store.turns[id] = domain.TurnStateRunning
+			r.accepted[id] = msg
+		}
+		return r.landThenFail
+	}
 	if r.failWith != nil {
 		return r.failWith
 	}
@@ -644,23 +656,87 @@ func TestChatReviewRelayIDChangesWithBatchMembership(t *testing.T) {
 	}
 }
 
-// A relay Chat rejects records no relay id and settles nothing, but it still
-// counts against the item's attempt budget.
-func TestChatReviewRejectedRelaySettlesNothing(t *testing.T) {
+// A relay Chat rejects is recorded under its id but settles nothing: the
+// readback finds no turn, so the items stay pending and are retried under a
+// fresh id.
+func TestChatReviewRejectedRelayIsRetriedUnderAFreshID(t *testing.T) {
 	m, _, relay := newStrictRelayManager(t)
 	relay.failWith = errors.New("chat rejected the message")
 	x := nudgeItem{key: "comment:" + donePR + ":x", sig: "sig-x"}
 	y := nudgeItem{key: "comment:" + donePR + ":y", sig: "sig-y"}
+	items := []nudgeItem{x, y}
+	build := func([]bool) string { return "X and Y" }
 
-	_, err := m.sendBatchOnce(ctx, "w-1", donePR, []nudgeItem{x, y}, func([]bool) string { return "X and Y" }, reviewMaxNudge, false)
-	if err == nil {
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, items, build, reviewMaxNudge, false); err == nil {
 		t.Fatal("a rejected relay must surface its error")
 	}
-	if len(m.react.seen) != 0 || len(m.react.relays) != 0 {
-		t.Fatalf("a rejected relay settled or recorded items: seen=%v relays=%v", m.react.seen, m.react.relays)
+	if len(m.react.seen) != 0 || m.react.attempts[x.key] != 1 || m.react.attempts[y.key] != 1 {
+		t.Fatalf("a rejected relay settled an item or missed the attempt count: seen=%v attempts=%v", m.react.seen, m.react.attempts)
 	}
-	if m.react.attempts[x.key] != 1 || m.react.attempts[y.key] != 1 {
-		t.Fatalf("a rejected relay should count one attempt each: %v", m.react.attempts)
+
+	relay.failWith = nil
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, items, build, reviewMaxNudge, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(relay.tried) != 2 || relay.tried[0] == relay.tried[1] {
+		t.Fatalf("the retry must use a fresh relay id: %v", relay.tried)
+	}
+	if m.react.seen[x.key] != x.sig || m.react.seen[y.key] != y.sig {
+		t.Fatalf("the retried relay should settle both items: seen=%v", m.react.seen)
+	}
+}
+
+// Chat rejects a relay whose id already names a turn. With ids that cover the
+// whole batch, that turn can only be one that carried the same items; when it
+// never started, the items stay unseen and go out under a fresh id.
+func TestChatReviewConflictWithAnEarlierTurnSettlesNothing(t *testing.T) {
+	m, st, relay := newStrictRelayManager(t)
+	x := nudgeItem{key: "comment:" + donePR + ":x", sig: "sig-x"}
+	y := nudgeItem{key: "comment:" + donePR + ":y", sig: "sig-y"}
+	items := []nudgeItem{x, y}
+	build := func([]bool) string { return "X and Y" }
+
+	// The earlier relay for exactly these items failed before it started, and
+	// the daemon restarted without the dedup state of that send.
+	earlier := reviewFeedbackRelayID(items, []bool{true, true}, 0)
+	st.turns[earlier] = domain.TurnStateFailed
+
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, items, build, reviewMaxNudge, false); err == nil {
+		t.Fatal("a relay that conflicts with an earlier turn must surface its error")
+	}
+	if len(relay.accepted) != 0 || len(m.react.seen) != 0 {
+		t.Fatalf("a conflicting relay delivered or settled items: accepted=%v seen=%v", relay.accepted, m.react.seen)
+	}
+
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, items, build, reviewMaxNudge, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(relay.accepted) != 1 || relay.tried[len(relay.tried)-1] == earlier {
+		t.Fatalf("the retry must go out once under a fresh id: tried=%v accepted=%v", relay.tried, relay.accepted)
+	}
+	if m.react.seen[x.key] != x.sig || m.react.seen[y.key] != y.sig {
+		t.Fatalf("the fresh relay should settle both items: seen=%v", m.react.seen)
+	}
+}
+
+// A send can reach Chat and still return an error. The relay is recorded, so a
+// readback settles the items and the batch is not pasted again.
+func TestChatReviewRelayThatLandedBeforeAnErrorIsNotResent(t *testing.T) {
+	m, _, relay := newStrictRelayManager(t)
+	relay.landThenFail = errors.New("send failed after the turn was stored")
+	x := nudgeItem{key: "comment:" + donePR + ":x", sig: "sig-x"}
+	y := nudgeItem{key: "comment:" + donePR + ":y", sig: "sig-y"}
+	items := []nudgeItem{x, y}
+	build := func([]bool) string { return "X and Y" }
+
+	for i := 0; i < 2; i++ {
+		_, _ = m.sendBatchOnce(ctx, "w-1", donePR, items, build, reviewMaxNudge, false) // the first pass reports the send error
+	}
+	if len(relay.tried) != 1 || len(relay.accepted) != 1 {
+		t.Fatalf("a relay that already reached Chat was pasted again: tried=%v accepted=%v", relay.tried, relay.accepted)
+	}
+	if m.react.seen[x.key] != x.sig || m.react.seen[y.key] != y.sig {
+		t.Fatalf("the landed relay should settle both items: seen=%v", m.react.seen)
 	}
 }
 
