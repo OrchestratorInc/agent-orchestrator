@@ -1,7 +1,6 @@
 ---
 name: using-ao
-description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers first-time setup and importing existing agent sessions."
-trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
+description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Use when using the `ao` CLI, setting up Orchestrator for a user, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
 ---
 
 # Orchestrator CLI Catalog

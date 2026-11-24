@@ -9,33 +9,51 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-func TestEmbeddedSkillFrontmatterIsValidYAML(t *testing.T) {
-	body, err := files.ReadFile("using-ao/SKILL.md")
-	if err != nil {
-		t.Fatalf("read embedded SKILL.md: %v", err)
-	}
+// agentSkillsFrontmatterKeys are the top-level frontmatter fields the Agent
+// Skills specification (agentskills.io) defines. Harnesses ignore any other
+// key, so guidance placed in one never reaches the model.
+var agentSkillsFrontmatterKeys = map[string]bool{
+	"name":          true,
+	"description":   true,
+	"license":       true,
+	"compatibility": true,
+	"metadata":      true,
+	"allowed-tools": true,
+}
 
-	parts := strings.SplitN(string(body), "---", 3)
-	if len(parts) != 3 {
-		t.Fatal("embedded SKILL.md is missing YAML frontmatter delimiters")
-	}
+func TestEmbeddedSkillFrontmatterFollowsAgentSkillsSpec(t *testing.T) {
+	for _, skill := range []string{SkillName, "bug-triage"} {
+		t.Run(skill, func(t *testing.T) {
+			body, err := files.ReadFile(skill + "/SKILL.md")
+			if err != nil {
+				t.Fatalf("read embedded SKILL.md: %v", err)
+			}
 
-	var frontmatter struct {
-		Name        string `yaml:"name"`
-		Description string `yaml:"description"`
-		Trigger     string `yaml:"trigger"`
-	}
-	if err := yaml.Unmarshal([]byte(parts[1]), &frontmatter); err != nil {
-		t.Fatalf("parse embedded SKILL.md frontmatter: %v", err)
-	}
-	if frontmatter.Name != SkillName {
-		t.Fatalf("frontmatter name = %q, want %q", frontmatter.Name, SkillName)
-	}
-	if strings.TrimSpace(frontmatter.Description) == "" {
-		t.Fatal("frontmatter description is empty")
-	}
-	if strings.TrimSpace(frontmatter.Trigger) == "" {
-		t.Fatal("frontmatter trigger is empty")
+			parts := strings.SplitN(string(body), "---", 3)
+			if len(parts) != 3 {
+				t.Fatal("embedded SKILL.md is missing YAML frontmatter delimiters")
+			}
+
+			var frontmatter map[string]any
+			if err := yaml.Unmarshal([]byte(parts[1]), &frontmatter); err != nil {
+				t.Fatalf("parse embedded SKILL.md frontmatter: %v", err)
+			}
+			for key := range frontmatter {
+				if !agentSkillsFrontmatterKeys[key] {
+					t.Errorf("frontmatter key %q is not defined by the Agent Skills spec", key)
+				}
+			}
+			if name, _ := frontmatter["name"].(string); name != skill {
+				t.Fatalf("frontmatter name = %q, want %q", name, skill)
+			}
+			description, _ := frontmatter["description"].(string)
+			if strings.TrimSpace(description) == "" {
+				t.Fatal("frontmatter description is empty")
+			}
+			if len(description) > 1024 {
+				t.Fatalf("frontmatter description is %d characters; the spec allows 1024", len(description))
+			}
+		})
 	}
 }
 
