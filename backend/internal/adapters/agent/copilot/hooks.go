@@ -243,49 +243,76 @@ func ignoreCopilotPath(workspacePath, pattern string) error {
 
 // normalizeCopilotExcludes collapses AO's Copilot exclude entries (legacy
 // per-session pairs and duplicate glob copies) into one header+glob block.
+//
+// Git applies the last matching exclude rule, so the consolidated block takes
+// the position of the last AO entry: any file an AO entry ignored before stays
+// ignored, even when a user negation (e.g. "!/.github/agents/*.agent.md") sits
+// between AO entries.
+//
 // Lines are compared without their terminator so CRLF files match too; every
 // kept line, including a reused AO block, retains its original line ending so
 // an already-normalized file round-trips byte-for-byte.
 func normalizeCopilotExcludes(data, pattern string) string {
 	lines := strings.SplitAfter(data, "\n")
-	kept := make([]string, 0, len(lines)+2)
-	inserted := false
 	newline := "\n"
 	if strings.Contains(data, "\r\n") {
 		newline = "\r\n"
 	}
 
-	for i := 0; i < len(lines); i++ {
-		line, eol := splitExcludeLine(lines[i])
-		if line == copilotAgentExcludeHeader && i+1 < len(lines) {
-			next, nextEOL := splitExcludeLine(lines[i+1])
-			if next == pattern || isLegacyCopilotAgentExclude(next) {
-				if !inserted {
-					kept = append(kept, lines[i], pattern+nextEOL)
-					inserted = true
-				}
-				i++
-				continue
-			}
-		}
-		if line == pattern {
-			if !inserted {
-				kept = append(kept, copilotAgentExcludeHeader+newline, pattern+eol)
-				inserted = true
-			}
+	last := -1
+	for i := 0; i < len(lines); {
+		if n := copilotExcludeBlockLen(lines, i, pattern); n > 0 {
+			last = i
+			i += n
 			continue
 		}
-		kept = append(kept, lines[i])
+		i++
+	}
+	if last < 0 {
+		body := data
+		if body != "" && !strings.HasSuffix(body, "\n") {
+			body += newline
+		}
+		return body + copilotAgentExcludeHeader + newline + pattern + newline
 	}
 
-	body := strings.Join(kept, "")
-	if inserted {
-		return body
+	kept := make([]string, 0, len(lines)+1)
+	for i := 0; i < len(lines); {
+		n := copilotExcludeBlockLen(lines, i, pattern)
+		if n == 0 {
+			kept = append(kept, lines[i])
+			i++
+			continue
+		}
+		if i == last {
+			if n == 2 {
+				_, eol := splitExcludeLine(lines[i+1])
+				kept = append(kept, lines[i], pattern+eol)
+			} else {
+				_, eol := splitExcludeLine(lines[i])
+				kept = append(kept, copilotAgentExcludeHeader+newline, pattern+eol)
+			}
+		}
+		i += n
 	}
-	if body != "" && !strings.HasSuffix(body, "\n") {
-		body += newline
+	return strings.Join(kept, "")
+}
+
+// copilotExcludeBlockLen reports how many lines starting at lines[i] form an AO
+// exclude entry: 2 for a header followed by the glob or a legacy per-session
+// path, 1 for a bare glob line, 0 otherwise.
+func copilotExcludeBlockLen(lines []string, i int, pattern string) int {
+	line, _ := splitExcludeLine(lines[i])
+	if line == copilotAgentExcludeHeader && i+1 < len(lines) {
+		next, _ := splitExcludeLine(lines[i+1])
+		if next == pattern || isLegacyCopilotAgentExclude(next) {
+			return 2
+		}
 	}
-	return body + copilotAgentExcludeHeader + newline + pattern + newline
+	if line == pattern {
+		return 1
+	}
+	return 0
 }
 
 // splitExcludeLine separates a line produced by strings.SplitAfter(_, "\n")

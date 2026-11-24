@@ -156,6 +156,26 @@ func TestInstallAgentProfileDoesNotRewriteNormalizedCRLFExclude(t *testing.T) {
 	}
 }
 
+func TestInstallAgentProfileKeepsGlobAfterInterveningNegation(t *testing.T) {
+	// Git applies the last matching rule: ao-second is ignored today because its
+	// legacy entry follows the user's negation. The consolidated glob must stay
+	// after that negation so ao-second.agent.md remains ignored.
+	existing := testCopilotExcludeHeader + "\n/.github/agents/ao-first.agent.md\n" +
+		"!/.github/agents/*.agent.md\n" +
+		testCopilotExcludeHeader + "\n/.github/agents/ao-second.agent.md\n" +
+		"/tmp/\n"
+	workspace := copilotWorkspaceWithExclude(t, existing)
+
+	installCopilotTestProfile(t, workspace, "fresh")
+
+	want := "!/.github/agents/*.agent.md\n" +
+		testCopilotExcludeHeader + "\n" + testCopilotExcludePattern + "\n" +
+		"/tmp/\n"
+	if got := readCopilotExclude(t, workspace); got != want {
+		t.Fatalf("exclude = %q, want %q", got, want)
+	}
+}
+
 func copilotWorkspaceWithExclude(t *testing.T, existing string) string {
 	t.Helper()
 	workspace := t.TempDir()
