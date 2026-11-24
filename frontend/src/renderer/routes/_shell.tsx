@@ -40,6 +40,7 @@ import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
+import { useHostUpdatePolling } from "../hooks/useHostUpdates";
 import { useSettingsPolling } from "../hooks/useSettings";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
@@ -111,6 +112,12 @@ import { useSessionOpenTiming } from "../lib/performance-telemetry";
 import { uiUsage } from "../lib/ui-usage-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
+// The agent update notice checks every installed harness, and on a daemon that
+// has just started each check can hold a connection to it for seconds. The
+// renderer has few (Chromium opens six per host and the event streams keep
+// several), so checks started with the app made the session and Files views
+// opened first wait behind them. They start once launch has settled.
+const HARNESS_UPDATE_CHECKS_DELAY_MS = 15_000;
 
 // Only shown while an orchestrator is starting, but it pulls in the whole chat
 // stack (ChatWorkspace, lexical, markdown). Lazy keeps that off every route.
@@ -370,6 +377,7 @@ function ShellLayout() {
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
+	useHostUpdatePolling(remoteHosts);
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
@@ -406,6 +414,17 @@ function ShellLayout() {
 			preloadSessionView();
 		});
 	}, [daemonIsReady]);
+	const [harnessUpdateChecksDue, setHarnessUpdateChecksDue] = useState(false);
+	useEffect(() => {
+		if (!daemonIsReady) return;
+		const timer = setTimeout(() => setHarnessUpdateChecksDue(true), HARNESS_UPDATE_CHECKS_DELAY_MS);
+		// A daemon that comes back, or a new one that replaces it, has cold checks
+		// again: wait out its launch too.
+		return () => {
+			clearTimeout(timer);
+			setHarnessUpdateChecksDue(false);
+		};
+	}, [daemonIsReady, daemonStatus.pid, daemonStatus.port]);
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
@@ -1619,7 +1638,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />}
+				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonIsReady && harnessUpdateChecksDue} />}
 				<TrayRuntime />
 				<SharedWithYouNotifier />
 				{isDragActive ? (

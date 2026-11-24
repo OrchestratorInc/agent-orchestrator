@@ -6725,6 +6725,92 @@ paths:
         device's own token
       tags:
       - mobile
+  /api/v1/remote-host/update:
+    get:
+      operationId: getRemoteHostUpdate
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteHostUpdateResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Report this host's version and the state of its last self-hosted update
+      tags:
+      - identity
+    post:
+      operationId: startRemoteHostUpdate
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersRemoteHostUpdateRequest'
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteHostUpdateResponse'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Install the newest release of this self-hosted host's channel and restart
+        it
+      tags:
+      - identity
+  /api/v1/remote-host/update/check:
+    post:
+      operationId: checkRemoteHostUpdate
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersRemoteHostUpdateCheckResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Ask a host that runs the desktop app which version it installs next
+      tags:
+      - identity
   /api/v1/reports:
     get:
       operationId: listReports
@@ -20161,6 +20247,18 @@ components:
       - token
       - hostKey
       type: object
+    ControllersRemoteHostUpdateCheckResponse:
+      properties:
+        version:
+          type: string
+      required:
+      - version
+      type: object
+    ControllersRemoteHostUpdateRequest:
+      properties:
+        version:
+          type: string
+      type: object
     ControllersReplaceAgentAccountAPIKeyRequest:
       properties:
         apiKey:
@@ -24497,6 +24595,30 @@ components:
           type: array
       required:
       - servers
+      type: object
+    RemoteHostUpdateResponse:
+      properties:
+        error:
+          type: string
+        method:
+          enum:
+          - service
+          - app
+          type: string
+        state:
+          enum:
+          - idle
+          - updating
+          - failed
+          type: string
+        supported:
+          type: boolean
+        version:
+          type: string
+      required:
+      - version
+      - supported
+      - state
       type: object
     RemoveProjectResult:
       properties:
