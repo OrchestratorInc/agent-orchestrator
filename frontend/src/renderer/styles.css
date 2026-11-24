@@ -7245,29 +7245,29 @@ html[data-new-desktop-ui] .sidebar-icon-action:not(:focus-visible)::before {
 	opacity: 0 !important;
 }
 
-/* Translucent window: the shell tint is 5 points more transparent than
- * above (65%, 67% light). */
+/* Translucent window: the shell tint is 5 points more opaque than above
+ * (75%, 77% light). */
 html[data-new-desktop-ui]:root[data-window-translucent="true"] {
-	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 65%, transparent);
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 75%, transparent);
 	/* Dark centre panel: one step darker than the shell, so the frame around
 	 * it reads as the lighter surface. */
 	--ao-center-plate: color-mix(in srgb, black 15%, transparent);
 }
 
 html[data-new-desktop-ui]:root[data-theme="light"][data-window-translucent="true"] {
-	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 67%, transparent);
+	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 77%, transparent);
 }
 
 html[data-new-desktop-ui]:root[data-style-theme][data-window-translucent="true"] {
-	--ao-shell-tint: color-mix(in srgb, var(--background) 65%, transparent);
+	--ao-shell-tint: color-mix(in srgb, var(--background) 75%, transparent);
 }
 
 html[data-new-desktop-ui]:root[data-style-theme][data-theme="light"][data-window-translucent="true"] {
-	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 65%, transparent);
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 75%, transparent);
 }
 
 html[data-new-desktop-ui][data-window-translucent="true"] .first-run-onboarding {
-	background-color: color-mix(in srgb, var(--sidebar) 65%, transparent);
+	background-color: color-mix(in srgb, var(--sidebar) 75%, transparent);
 }
 
 /* Dark: the centre panel is darker than the sidebar and frame around it.
