@@ -13,7 +13,8 @@ type KanbanColumn string
 
 // KanbanColumn values shown as board lanes by AO clients.
 const (
-	// KanbanBuilding is a session with no PR yet.
+	// KanbanBuilding is a session with no PR yet, or one a person prompted
+	// again after all of its PRs merged or closed.
 	KanbanBuilding KanbanColumn = "building"
 	// KanbanValidating is a PR inside an AO-driven loop: AO's own review of
 	// the current head (scheduled, running, cancelled, failed, or asking for
@@ -51,6 +52,11 @@ type KanbanSessionFacts struct {
 	AutoReview        bool
 	AutoInjectReview  bool
 	AutoInjectCI      bool
+	// HumanPromptAt is when a person last prompted the worker. Messages from
+	// other sessions (an orchestrator's wrap-up note, a report) and passive
+	// changes such as PR polls, CI results, previews and artifact writes never
+	// move it. Zero when unknown.
+	HumanPromptAt time.Time
 }
 
 // KanbanReviewRunFacts summarize AO's own review passes against one PR's
@@ -99,14 +105,18 @@ type KanbanPRFacts struct {
 	Repo string
 	// Number is the provider's PR number, which StackParent refers to; 0 when
 	// unknown.
-	Number         int
-	Draft          bool
-	Merged         bool
-	Closed         bool
-	CI             CIState
-	Review         ReviewDecision
-	Mergeability   Mergeability
-	UpdatedAt      time.Time
+	Number       int
+	Draft        bool
+	Merged       bool
+	Closed       bool
+	CI           CIState
+	Review       ReviewDecision
+	Mergeability Mergeability
+	UpdatedAt    time.Time
+	// SettledAt is when the PR merged or closed: the time its current
+	// lifecycle state began. Zero while it is open, or when that time is
+	// unknown.
+	SettledAt      time.Time
 	ReviewRun      KanbanReviewRunFacts
 	ExternalReview KanbanExternalReviewFacts
 	// StackParent is the number of the open PR whose branch this PR targets,
@@ -371,6 +381,18 @@ func DeriveKanbanPresentation(
 	// merged/closed placements count only once nothing is live.
 	pool := liveKanbanPRs(prs)
 	if len(pool) == 0 {
+		// Prompted again after every PR landed: the session is building its
+		// next change, so it reads as building rather than done. Its merged
+		// and closed PRs stay on the card as history. HasArtifactOutput is
+		// deliberately not consulted here: it says the session has ever
+		// written an artifact, not that the resumed work did, so honouring it
+		// would park every resumed session with older files in Validating.
+		if resumedAfterPRsSettled(session, prs) {
+			return KanbanPresentation{
+				Column:        KanbanBuilding,
+				DisplayStatus: buildingDisplayStatus(session, now, noSignalGrace),
+			}
+		}
 		pool = prs
 	}
 	owned := make(map[kanbanPRKey]bool, len(pool))
@@ -392,6 +414,22 @@ func DeriveKanbanPresentation(
 		Column:        column,
 		DisplayStatus: displayStatusInColumn(column, session, chosen, now, noSignalGrace),
 	}
+}
+
+// resumedAfterPRsSettled reports a session whose PRs are all merged or closed
+// and that a person prompted again after the last of them settled. A PR whose
+// settle time is unknown keeps the session done: without it, a prompt cannot
+// be shown to come after the merge.
+func resumedAfterPRsSettled(session KanbanSessionFacts, prs []KanbanPRFacts) bool {
+	if session.HumanPromptAt.IsZero() || len(prs) == 0 {
+		return false
+	}
+	for _, pr := range prs {
+		if pr.SettledAt.IsZero() || !session.HumanPromptAt.After(pr.SettledAt) {
+			return false
+		}
+	}
+	return true
 }
 
 func displayStatusInColumn(

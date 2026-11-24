@@ -598,3 +598,43 @@ func seedKanbanTestProject(t *testing.T, st *sqlite.Store, id string) {
 		t.Fatalf("seed project %s: %v", id, err)
 	}
 }
+
+func TestKanbanFactsCarryHumanPromptAndSettleTimes(t *testing.T) {
+	t.Parallel()
+	prompt := time.Date(2026, 11, 23, 19, 0, 0, 0, time.UTC)
+	message := prompt.Add(time.Minute)
+	merged := prompt.Add(-24 * time.Hour)
+
+	for _, tt := range []struct {
+		name string
+		md   domain.SessionMetadata
+		want time.Time
+	}{
+		{name: "never prompted", want: time.Time{}},
+		{name: "a human prompt", md: domain.SessionMetadata{LatestUserPromptAt: prompt}, want: prompt},
+		{name: "a newer message from another session does not count", md: domain.SessionMetadata{LatestUserPromptAt: prompt, LatestInteractionAt: message}, want: prompt},
+		{name: "only a session message is not a human prompt", md: domain.SessionMetadata{LatestInteractionAt: message}, want: time.Time{}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toContractKanbanSessionFacts(domain.SessionRecord{Metadata: tt.md}, false, true).HumanPromptAt
+			if !got.Equal(tt.want) {
+				t.Fatalf("HumanPromptAt = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	prs := toContractKanbanPRFacts([]domain.PRFacts{
+		{URL: "open", StateChangedAt: merged, UpdatedAt: prompt},
+		{URL: "merged", Merged: true, StateChangedAt: merged, UpdatedAt: prompt},
+		{URL: "closed", Closed: true, StateChangedAt: merged, UpdatedAt: prompt},
+	}, nil)
+	for _, pr := range prs {
+		want := merged
+		if pr.URL == "open" {
+			want = time.Time{}
+		}
+		if !pr.SettledAt.Equal(want) {
+			t.Fatalf("%s SettledAt = %v, want %v (from StateChangedAt, never UpdatedAt)", pr.URL, pr.SettledAt, want)
+		}
+	}
+}
