@@ -1,3 +1,4 @@
+import { AoError } from "../../../shared/telemetry/ao-error";
 import { toViewState, type BrowserCapabilities, type BrowserCommand, type BrowserControl, type BrowserDialog, type BrowserFrame, type BrowserPickedFile, type BrowserTransport, type BrowserTransportHandlers, type BrowserViewState, type FocusedEditable } from "../browserTransport";
 import { CLOUD_API_PREFIX, cloudWebSocketBase } from "./config";
 
@@ -99,11 +100,11 @@ type FrameHeader = { seq: number; ts?: number; inputSeq?: number; q?: number; cr
 
 /** A viewer frame as the pane's BrowserFrame, plus the sequence to ack. */
 export function parseViewerFrame(buffer: ArrayBuffer, fallback = { width: 1280, height: 800 }): { seq: number; frame: BrowserFrame } {
-	if (buffer.byteLength < 4) throw new Error("Browser frame is truncated");
+	if (buffer.byteLength < 4) throw new AoError("BROWSER_FRAME_TRUNCATED", "Browser frame is truncated");
 	const headerLength = new DataView(buffer).getUint32(0);
-	if (4 + headerLength > buffer.byteLength) throw new Error("Browser frame is truncated");
+	if (4 + headerLength > buffer.byteLength) throw new AoError("BROWSER_FRAME_TRUNCATED", "Browser frame is truncated");
 	const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, headerLength))) as FrameHeader;
-	if (typeof header.seq !== "number") throw new Error("Browser frame has no sequence");
+	if (typeof header.seq !== "number") throw new AoError("BROWSER_FRAME_NO_SEQUENCE", "Browser frame has no sequence");
 	// The JPEG's own size isn't known without decoding it; the pane needs only
 	// its shape, which the crop (fullscreen) or the page's CSS size gives.
 	const [cropWidth, cropHeight] = header.crop ?? [];
