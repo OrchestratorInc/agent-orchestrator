@@ -6969,9 +6969,10 @@ describe("browser live asks", () => {
 		expect(file!.startsWith(uploadDir)).toBe(true);
 		expect(await readFile(file!, "utf8")).toBe("png");
 
-		// The stream ends: the phone's files go with it.
+		// The stream ends: the files stay for the phone's next stream (a system
+		// picker ends one), and go when the browser session does.
 		await host.stopLiveStream("sess-1", 7);
-		await vi.waitFor(async () => expect(await readdir(uploadDir)).toEqual([]));
+		expect(await readdir(uploadDir)).not.toEqual([]);
 	});
 
 	it("keeps folder mode for the desktop user's own folder input", async () => {

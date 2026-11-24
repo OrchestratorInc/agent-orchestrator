@@ -156,3 +156,36 @@ describe("sign-ins", () => {
 		expect(disposed).toHaveBeenCalledWith();
 	});
 });
+
+describe("a phone that reconnects", () => {
+	// Found on the Android emulator: the system picker sends the app to the
+	// background, which ends its stream; the chooser must wait for the next one.
+	it("keeps a chooser through a short gap between streams, and its files reach the input", async () => {
+		const asks = new LiveAsks({ uploadDir: dir }, sink);
+		const setFiles = vi.fn(async (_paths: string[]) => undefined);
+		asks.chooserOpened({ setFiles }, { multiple: false, accept: "", folder: false });
+		const id = chooserId();
+		asks.detach();
+		const next = { ask: vi.fn<(ask: BrowserLiveAsk) => void>(), askClosed: vi.fn<() => void>(), notice: vi.fn<(message: string) => void>() };
+		asks.attach(next);
+		await asks.receiveFiles({ action: "chunk", chooser: id, file: 0, name: "n.txt", offset: 0, data: b64("note") });
+		await asks.receiveFiles({ action: "done", chooser: id, count: 1 });
+		expect(await readFile(setFiles.mock.calls[0]![0][0]!, "utf8")).toBe("note");
+	});
+
+	it("cancels a sign-in when its stream ends, and forgets everything after the gap", async () => {
+		vi.useFakeTimers();
+		const asks = new LiveAsks({ uploadDir: dir }, sink);
+		const signIn = vi.fn();
+		asks.authRequired({ origin: "https://a.example" }, signIn);
+		asks.chooserOpened({ setFiles: vi.fn(async () => undefined) }, { multiple: false, accept: "", folder: false });
+		const id = chooserId();
+		await asks.receiveFiles({ action: "chunk", chooser: id, file: 0, name: "a", offset: 0, data: b64("a") });
+		asks.detach();
+		expect(signIn).toHaveBeenCalledWith();
+		await vi.advanceTimersByTimeAsync(130_000);
+		vi.useRealTimers();
+		await vi.waitFor(async () => expect(await readdir(dir)).toEqual([]));
+		expect(asks.disposed).toBe(true);
+	});
+});

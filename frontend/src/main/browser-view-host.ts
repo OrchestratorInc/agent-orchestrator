@@ -723,6 +723,8 @@ type BrowserSessionEntry = {
   };
   nativeOperationQueue: Promise<void>;
   devtoolsPlacement: BrowserDevToolsPlacement;
+	// What the page asked the phone, kept between its streams (LiveAsks.detach).
+	liveAsks?: LiveAsks;
 	live?: {
 		streamId: number;
 		sink: BrowserLiveSink;
@@ -3157,6 +3159,9 @@ export function createBrowserViewHost(
 		live?.sink.error("BROWSER_SESSION_CLOSED", "The desktop browser session was closed");
 		session.live = undefined;
 		if (live?.screencast) void live.screencast.stop();
+		// The phone's files and any waiting sign-in go with the session.
+		void session.liveAsks?.dispose();
+		session.liveAsks = undefined;
     const partitionToClear =
       session.profileId === null ? session.profilePartition : undefined;
     session.signals.entries.length = 0;
@@ -4320,7 +4325,15 @@ export function createBrowserViewHost(
 		if (!Number.isSafeInteger(streamId) || streamId <= 0) throw browserError("INVALID_ARGUMENT", "streamId is invalid");
 		const session = await ensureSessionReady(sessionId);
 		if (session.live) await stopLiveCapture(session);
-		session.live = { streamId, sink, ...(options.liveUploadDir ? { asks: new LiveAsks({ uploadDir: options.liveUploadDir }, sink) } : {}) };
+		// A chooser the phone was answering outlives a short gap between its
+		// streams (the system picker ends one), so the next stream takes it over.
+		let asks: LiveAsks | undefined;
+		if (options.liveUploadDir) {
+			asks = session.liveAsks && !session.liveAsks.disposed ? session.liveAsks : new LiveAsks({ uploadDir: options.liveUploadDir }, sink);
+			asks.attach(sink);
+			session.liveAsks = asks;
+		}
+		session.live = { streamId, sink, ...(asks ? { asks } : {}) };
 		syncBackgroundThrottling(session);
 		// Report an empty browser immediately, even before a hidden renderer
 		// finishes preparing capture. The phone must not wait for a blank frame.
@@ -4345,7 +4358,7 @@ export function createBrowserViewHost(
 		live.screencast = undefined;
 		syncBackgroundThrottling(session);
 		if (!session.visible) applySessionBounds(session, activeEntry(session));
-		void live.asks?.dispose();
+		live.asks?.detach();
 		for (const entry of session.tabs.values()) interceptFileChoosers(entry, false);
 		return screencast?.stop();
 	}

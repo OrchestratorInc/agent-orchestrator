@@ -9,6 +9,8 @@ export const MAX_UPLOAD_BYTES = 25 << 20;
 const MAX_UPLOAD_FILES = 20;
 /** The page's sign-in waits this long for the phone, then is cancelled. */
 const AUTH_WAIT_MS = 60_000;
+/** How long a chooser waits for its phone to come back on a new stream. */
+const RECONNECT_GRACE_MS = 120_000;
 /** A second request for an origin this soon after an answer means it failed. */
 const AUTH_RETRY_MS = 15_000;
 
@@ -35,8 +37,31 @@ export class LiveAsks {
 	private auth: PendingAuth | null = null;
 	private lastAuth: { origin: string; at: number } | null = null;
 	private readonly dirs = new Set<string>();
+	private graceTimer: ReturnType<typeof setTimeout> | null = null;
+	/** Gone for good: nothing waits, and its files are removed. */
+	disposed = false;
 
-	constructor(private readonly options: { uploadDir: string }, private readonly sink: AskSink) {}
+	constructor(private readonly options: { uploadDir: string }, private sink: AskSink) {}
+
+	/** A phone's stream (again): a chooser it was answering waits for it here. */
+	attach(sink: AskSink): void {
+		this.sink = sink;
+		if (this.graceTimer) clearTimeout(this.graceTimer);
+		this.graceTimer = null;
+	}
+
+	/**
+	 * The phone's stream ended. A system file picker ends it too (the app goes
+	 * to the background), so a chooser waits a while for the phone's next
+	 * stream; a sign-in can't, and is cancelled.
+	 */
+	detach(): void {
+		this.cancelAuth();
+		this.sink = {};
+		if (this.graceTimer) clearTimeout(this.graceTimer);
+		this.graceTimer = setTimeout(() => void this.dispose(), RECONNECT_GRACE_MS);
+		this.graceTimer.unref?.();
+	}
 
 	chooserOpened(chooser: Chooser, ask: { multiple: boolean; accept: string; folder: boolean }): void {
 		const id = randomBytes(8).toString("hex");
@@ -128,6 +153,9 @@ export class LiveAsks {
 
 	/** The phone stopped watching: nothing waits for it, and its files go. */
 	async dispose(): Promise<void> {
+		this.disposed = true;
+		if (this.graceTimer) clearTimeout(this.graceTimer);
+		this.graceTimer = null;
 		this.cancelAuth();
 		this.upload = null;
 		const dirs = [...this.dirs];
