@@ -230,6 +230,19 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText("Terminated an agent")).not.toBeInTheDocument();
 	});
 
+	it("shows the termination of a worker that has already answered", async () => {
+		const terminated = { ...spawnRecord("proj-288", "t3", 52), id: "ao-action:session.terminated:proj-288", summary: "Terminated an agent", detail: { action: "session.terminated", operationId: "proj-288:generation:0", targetSessionId: "proj-288" } };
+		renderOrchestrator([
+			automation("t1", 1, "Check usage."), spawnRecord(), startedReply,
+			report("t2", 3, "[done] [Audit usage](ao://sessions/proj/proj-288)\nFound 9 issues across 6 files."),
+			reply("t2", 4, "Noted."),
+			automation("t3", 5, "Stop the audit."), command("t3", 5, "ao session kill proj-288"), terminated, { ...reply("t3", 5, "Stopped it."), sequence: 53 },
+		], vi.fn(), worker({ status: "terminated", isTerminated: true }));
+		expect(screen.queryByTestId("spawned-agent")).not.toBeInTheDocument();
+		await userEvent.click(screen.getAllByRole("button", { name: /^Worked for/ }).at(-1)!);
+		expect(await screen.findByRole("button", { name: /Terminated an agent/ })).toBeInTheDocument();
+	});
+
 	it("keeps a termination of a worker this chat did not spawn, and a failed one", () => {
 		const terminated = (id: string, sequence: number, status: ConversationActivity["status"]): ConversationActivity => ({
 			kind: "activity", id: `ao-action:session.terminated:${id}`, sequence, revision: 0, activityKind: "ao_action",

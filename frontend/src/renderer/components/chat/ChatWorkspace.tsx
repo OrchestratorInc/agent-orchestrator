@@ -4540,9 +4540,9 @@ export function Timeline({
 		if (!workerUpdates) return groups;
 		const placed = batchedReports.moved.size > 0 ? groups.filter((group) => !group.turnId || !batchedReports.moved.has(group.turnId)) : groups;
 		// A worker this chat spawned is drawn by its spawn tree row and then by its reports,
-		// so the daemon's records of it would only repeat them: its termination, and its
-		// spawn once it has answered and the row is gone. Dropped here, before they can leave
-		// an empty group behind.
+		// so the daemon's records of it would only repeat them: its termination while the row
+		// is still up, and its spawn once it has answered and the row is gone. Dropped here,
+		// before they can leave an empty group behind.
 		const spawned = new Set(snapshot.items.flatMap((item) => spawnedBy(item) ?? []));
 		if (spawned.size === 0) return placed;
 		const answered = indexWorkerUpdates(snapshot.items).latest;
@@ -4550,7 +4550,7 @@ export function Timeline({
 			const started = spawnedBy(item);
 			if (started) return answered.has(started);
 			const ended = terminatedBy(item);
-			return ended !== undefined && spawned.has(ended);
+			return ended !== undefined && spawned.has(ended) && !answered.has(ended);
 		};
 		if (!placed.some((group) => group.items.some(repeats))) return placed;
 		return placed
