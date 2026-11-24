@@ -281,8 +281,34 @@ func reviewFeedbackClientID(key, sig string, attempt int) string {
 	return fmt.Sprintf("review-feedback:%x:%d", sha256.Sum256([]byte(key+"\x00"+sig)), attempt)
 }
 
-func chatReviewFeedbackState(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, key, sig string, attempt int) (delivered, queued bool, err error) {
-	turn, _, started, found, err := chat.ReviewNoticeChatDelivery(ctx, id, reviewFeedbackClientID(key, sig, attempt))
+// reviewFeedbackRelayID names one relay by every item it carries, not by its
+// first item alone. Attempt counts are not always durable, so two different
+// batches can start from the same lead item and attempt; the batch membership
+// keeps their ids apart, and a turn read back by this id can only be the one
+// that carried exactly these items.
+func reviewFeedbackRelayID(items []nudgeItem, due []bool, attempt int) string {
+	h := sha256.New()
+	for i, it := range items {
+		if due[i] {
+			_, _ = fmt.Fprintf(h, "%d:%s\x00%d:%s\x00", len(it.key), it.key, len(it.sig), it.sig)
+		}
+	}
+	return fmt.Sprintf("review-feedback:%x:%d", h.Sum(nil), attempt)
+}
+
+// relayID is the client message id of the relay that carried the item's
+// current signature. State written before relays were recorded has none; the
+// id the one-comment relay used then is the fallback.
+func (m *Manager) relayID(it nudgeItem) string {
+	if r, ok := m.react.relays[it.key]; ok && r.Sig == it.sig && r.ID != "" {
+		return r.ID
+	}
+	return reviewFeedbackClientID(it.key, it.sig, m.react.attempts[it.key]-1)
+}
+
+// chatReviewFeedbackState reads one relay's Chat turn by client message id.
+func chatReviewFeedbackState(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, clientID string) (delivered, queued bool, err error) {
+	turn, _, started, found, err := chat.ReviewNoticeChatDelivery(ctx, id, clientID)
 	delivered = found && (started || turn == domain.TurnStateRunning || turn == domain.TurnStateCompleted || turn == domain.TurnStateRecovered || turn == domain.TurnStateCancelled)
 	return delivered, found && !delivered && turn == domain.TurnStateQueued, err
 }
@@ -290,32 +316,89 @@ func chatReviewFeedbackState(ctx context.Context, chat reviewNoticeChatStore, id
 // Caller holds react.mu. A queued Chat relay is an attempt, not delivery.
 // Its stable id lets another observation or a restart settle it without a
 // second paste. Only turns that never started retry within the attempt cap.
-func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, prURL, key, sig, msg string, maxAttempts int) (sendOnceOutcome, error) {
-	attempts := m.react.attempts[key]
-	if attempts > 0 {
-		delivered, queued, err := chatReviewFeedbackState(ctx, chat, id, key, sig, attempts-1)
+// The relay covers every item still due as one message, and each item records
+// the relay's id, so only items sent in the same relay settle together:
+// separate relays are read on their own state even when their attempt counts
+// are equal.
+func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, prURL string, items []nudgeItem, build func(due []bool) string, maxAttempts int) (sendOnceOutcome, error) {
+	var pending []int
+	for i, it := range items {
+		if m.react.seen[it.key] != it.sig {
+			pending = append(pending, i)
+		}
+	}
+	checked := map[string]bool{}
+	changed := false
+	for _, i := range pending {
+		if m.react.attempts[items[i].key] == 0 {
+			continue
+		}
+		relay := m.relayID(items[i])
+		if checked[relay] {
+			continue
+		}
+		checked[relay] = true
+		delivered, queued, err := chatReviewFeedbackState(ctx, chat, id, relay)
 		if err != nil || queued {
+			if changed {
+				// Keep what an earlier relay already settled this pass.
+				err = errors.Join(err, m.persistPRSignaturesLocked(ctx, prURL))
+			}
 			return sendOnceSuppressed, err
 		}
 		if delivered {
-			if m.react.seen[key] == sig {
-				return sendOnceAccounted, nil
+			for _, j := range pending {
+				if m.react.attempts[items[j].key] > 0 && m.relayID(items[j]) == relay {
+					m.react.seen[items[j].key] = items[j].sig
+					changed = true
+				}
 			}
-			m.react.seen[key] = sig
-			return sendOnceAccounted, m.persistPRSignaturesLocked(ctx, prURL)
 		}
 	}
-	if m.react.seen[key] == sig || (maxAttempts > 0 && attempts >= maxAttempts) {
+	due := make([]bool, len(items))
+	lead := -1
+	for _, i := range pending {
+		it := items[i]
+		if m.react.seen[it.key] == it.sig || (maxAttempts > 0 && m.react.attempts[it.key] >= maxAttempts) {
+			continue
+		}
+		due[i] = true
+		if lead < 0 {
+			lead = i
+		}
+	}
+	if lead < 0 {
+		if changed {
+			return sendOnceAccounted, m.persistPRSignaturesLocked(ctx, prURL)
+		}
 		return sendOnceAccounted, nil
 	}
-	outcome, sendErr := m.guard.Nudge(ports.WithClientMessageID(ctx, reviewFeedbackClientID(key, sig, attempts)), id, msg)
+	relay := reviewFeedbackRelayID(items, due, m.react.attempts[items[lead].key])
+	outcome, sendErr := m.guard.Nudge(ports.WithClientMessageID(ctx, relay), id, build(due))
 	if outcome != sessionguard.Sent {
+		if changed {
+			sendErr = errors.Join(sendErr, m.persistPRSignaturesLocked(ctx, prURL))
+		}
 		return sendOnceSuppressed, sendErr
 	}
-	m.react.attempts[key] = attempts + 1
-	delivered, _, readErr := chatReviewFeedbackState(ctx, chat, id, key, sig, attempts)
+	// Sent with an error means the write was attempted: Chat may already hold
+	// the relay. Record it either way, so the next observation looks this id up
+	// instead of pasting the batch again, and settle only what a readback of
+	// this relay's own turn confirms. The id covers every item in the batch, so
+	// a turn found under it can only be one that carried exactly these items.
+	for i, it := range items {
+		if due[i] {
+			m.react.attempts[it.key]++
+			m.react.relays[it.key] = feedbackRelay{Sig: it.sig, ID: relay}
+		}
+	}
+	delivered, _, readErr := chatReviewFeedbackState(ctx, chat, id, relay)
 	if delivered && readErr == nil {
-		m.react.seen[key] = sig
+		for i, it := range items {
+			if due[i] {
+				m.react.seen[it.key] = it.sig
+			}
+		}
 	}
 	if err := errors.Join(sendErr, readErr, m.persistPRSignaturesLocked(ctx, prURL)); err != nil {
 		return sendOnceAccounted, err
