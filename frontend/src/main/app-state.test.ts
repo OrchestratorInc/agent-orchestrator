@@ -62,10 +62,18 @@ describe("writeAppStateMarker", () => {
 		await writeAppStateMarker(options);
 		expect(await claimCliLinkFirstLaunch(dir)).toBe(false);
 
+		expect((await readMarker(dir)).cliLinkFirstLaunch).toBe("eligible");
+	});
+
+	it("leaves an install from an earlier build out of the first launch ao link", async () => {
+		const options = { stateDir: dir, appPath: "/AO.app", version: "1", now: () => new Date() };
+		await writeAppStateMarker(options);
 		const { cliLinkFirstLaunch: _dropped, ...older } = await readMarker(dir);
 		await writeFile(path.join(dir, APP_STATE_FILE_NAME), JSON.stringify(older));
 		await writeAppStateMarker(options);
+		expect((await readMarker(dir)).cliLinkFirstLaunch).toBe("skip");
 		expect(await claimCliLinkFirstLaunch(dir)).toBe(false);
+		expect(await readdir(dir)).not.toContain("cli-link-first-launch");
 	});
 
 	it("keeps the first run prompt seen across later launch writes", async () => {

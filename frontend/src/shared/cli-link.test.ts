@@ -307,14 +307,15 @@ describe("cli link", () => {
 		};
 
 		expect(await linkCliOnFirstLaunch(io, { ...base, isPackaged: false, shellPath: linkDirectory }, claim)).toBeNull();
+		expect(await linkCliOnFirstLaunch(io, base, claim)).toBeNull();
 		expect(claims).toBe(0);
 		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: linkDirectory }, async () => false)).toBeNull();
-		expect(await linkCliOnFirstLaunch(io, base, claim)).toBeNull();
 		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: `${linkDirectory}:${other}` }, claim)).toBeNull();
+		expect(claims).toBe(1);
 		expect(await lstat(link).catch(() => null)).toBeNull();
 		expect(await readFile(path.join(other, "ao"), "utf8")).toContain("9.9.9");
 
-		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: linkDirectory }, claim)).toMatchObject({ ok: true, changed: true, linkPath: link });
+		expect(await linkCliOnFirstLaunch(io, { ...base, shellPath: `${appCliPath}:${linkDirectory}` }, claim)).toMatchObject({ ok: true, changed: true, linkPath: link });
 		expect(await readlink(link)).toBe(appCliPath);
 		expect(JSON.parse(await readFile(path.join(dataDir, CLI_LINK_MARKER_FILE), "utf8"))).toMatchObject({ linkPath: link, targetPath: appCliPath });
 	});

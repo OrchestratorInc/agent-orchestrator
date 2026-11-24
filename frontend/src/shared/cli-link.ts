@@ -371,12 +371,12 @@ export async function linkCli(io: CliLinkIo, request: CliLinkRequest): Promise<C
 }
 
 export async function linkCliOnFirstLaunch(io: CliLinkIo, request: CliLinkRequest, claim: () => Promise<boolean>): Promise<CliLinkResult | null> {
-	if (!cliLinkSupport(request).ok || !(await claim())) return null;
 	const directories = (request.shellPath?.split(":") ?? []).filter((directory) => directory.startsWith("/"));
+	if (!directories.length || !cliLinkSupport(request).ok || !(await claim())) return null;
 	for (const directory of directories) {
-		if (await io.lstat(io.join(directory, CLI_LINK_NAME))) return null;
+		if (await io.lstat(io.join(directory, CLI_LINK_NAME)).catch(() => null)) return null;
 	}
-	return directories.length ? linkCli(io, { ...request, confirmReplacement: false }) : null;
+	return linkCli(io, { ...request, confirmReplacement: false });
 }
 
 export async function unlinkCli(io: CliLinkIo, request: CliLinkRequest): Promise<CliLinkResult> {

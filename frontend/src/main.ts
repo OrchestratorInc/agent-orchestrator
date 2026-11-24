@@ -4836,13 +4836,15 @@ app.whenReady().then(async () => {
 	} catch (err) {
 		console.error("failed to write app-state marker:", err);
 	}
-	void ensureShellEnv()
-		.then(retryFailedEarlyShellEnvProbe)
-		.then(() => linkCliOnFirstLaunch(cachedShellEnv?.PATH))
-		.then((result) => {
-			if (result) console.log(result.ok ? `AO: first launch linked ao at ${result.linkPath}` : `AO: first launch did not link ao: ${result.message}`);
-		})
-		.catch((err) => console.error("AO: first launch ao link failed:", err));
+	if (cliShadowEnabled(process.env, app.isPackaged) && (process.platform !== "darwin" || app.isInApplicationsFolder())) {
+		void ensureShellEnv()
+			.then(retryFailedEarlyShellEnvProbe)
+			.then(() => linkCliOnFirstLaunch(cachedShellEnv?.PATH))
+			.then((result) => {
+				if (result) console.log(result.ok ? `AO: first launch linked ao at ${result.linkPath}` : `AO: first launch did not link ao: ${result.message}`);
+			})
+			.catch((err) => console.error("AO: first launch ao link failed:", err));
+	}
 
 	// A pre-fix bundle cannot be patched retroactively. After the maintained
 	// /Applications build runs, offer to retire older AO copies that can still

@@ -39,6 +39,10 @@ export function registerCliLinkIpc(input: {
 	};
 	ipcMain.handle("cliLink:inspect", async () => inspectCliLink(io, await request()));
 	ipcMain.handle("cliLink:link", async (_event, confirm: unknown, target: unknown) => linkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined)));
-	ipcMain.handle("cliLink:unlink", async (_event, confirm: unknown, target: unknown) => unlinkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined)));
+	ipcMain.handle("cliLink:unlink", async (_event, confirm: unknown, target: unknown) => {
+		const result = await unlinkCli(io, await request(confirm === true, typeof target === "string" || target === null ? target : undefined));
+		if (result.ok) await input.claimFirstLaunch().catch(() => false);
+		return result;
+	});
 	return async (loginShellPath) => linkCliOnFirstLaunch(io, { ...(await request()), shellPath: loginShellPath }, input.claimFirstLaunch);
 }

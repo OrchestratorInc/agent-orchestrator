@@ -31,7 +31,7 @@ export interface AppStateMarker {
 	installSource: string;
 	migration?: MigrationState;
 	firstRunProjectPrompt?: "pending" | "seen";
-	cliLinkFirstLaunch?: "pending" | "done";
+	cliLinkFirstLaunch?: "eligible" | "skip";
 	/**
 	 * Keys this writer does not own (for example the onboarding answer
 	 * acq_channel_self_reported) are carried through every launch write.
@@ -140,7 +140,7 @@ export async function writeAppStateMarker(opts: WriteAppStateOptions): Promise<v
 		// Preserve a migration block written before this launch write.
 		...(existing?.migration !== undefined ? { migration: existing.migration } : {}),
 		firstRunProjectPrompt: existing?.firstRunProjectPrompt ?? (existing ? "seen" : "pending"),
-		cliLinkFirstLaunch: existing?.cliLinkFirstLaunch ?? (existing ? "done" : "pending"),
+		cliLinkFirstLaunch: existing?.cliLinkFirstLaunch ?? (existing ? "skip" : "eligible"),
 	};
 
 	await atomicWriteMarker(opts.stateDir, marker);
@@ -186,20 +186,22 @@ export async function readFirstRunProjectPrompt(stateDir: string): Promise<"pend
 
 /** Atomic install reservation, independent of renderer remounts and telemetry consent. */
 export async function claimFirstRunExperimentExposure(stateDir: string): Promise<boolean> {
+	return claimOnce(path.join(stateDir, "first-run-project-experiment-exposed"));
+}
+
+export async function claimCliLinkFirstLaunch(stateDir: string): Promise<boolean> {
+	const existing = await readExisting(path.join(stateDir, APP_STATE_FILE_NAME));
+	return existing?.cliLinkFirstLaunch === "eligible" && claimOnce(path.join(stateDir, "cli-link-first-launch"));
+}
+
+async function claimOnce(file: string): Promise<boolean> {
 	try {
-		await writeFile(path.join(stateDir, "first-run-project-experiment-exposed"), "1\n", { mode: 0o600, flag: "wx" });
+		await writeFile(file, "1\n", { mode: 0o600, flag: "wx" });
 		return true;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
 		throw error;
 	}
-}
-
-export async function claimCliLinkFirstLaunch(stateDir: string): Promise<boolean> {
-	const existing = await readExisting(path.join(stateDir, APP_STATE_FILE_NAME));
-	if (existing?.cliLinkFirstLaunch !== "pending") return false;
-	await atomicWriteMarker(stateDir, { ...existing, cliLinkFirstLaunch: "done" });
-	return true;
 }
 
 export async function markFirstRunProjectPromptSeen(stateDir: string): Promise<void> {
