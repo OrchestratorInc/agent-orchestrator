@@ -4,8 +4,8 @@ import { cn } from "../lib/utils";
 export type DeviceFrameKind = "iphone" | "ipad" | "android-phone" | "android-tablet";
 
 /**
- * The hardware drawn around a device's screen, flat: a metal band, the black
- * bezel inside it, and the side buttons. Sizes are fractions of the frame's
+ * The hardware drawn around a device's screen: a brushed metal band, the black
+ * glass bezel inside it, and the side buttons. Sizes are fractions of the frame's
  * width so the frame scales with the panel; the screen keeps its own aspect
  * ratio.
  */
@@ -24,8 +24,8 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 	// A recent iPhone: a thin even bezel, deep screen corners, the action
 	// button and volume keys on the left, the side button on the right.
 	iphone: {
-		band: 0.012,
-		bezel: 0.026,
+		band: 0.02,
+		bezel: 0.022,
 		screenRadius: 0.13,
 		buttons: [
 			{ edge: "left", at: 0.17, length: 0.045 },
@@ -36,8 +36,8 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 	},
 	// An iPad: a wider even bezel, gentle corners, the top button and volume keys.
 	ipad: {
-		band: 0.009,
-		bezel: 0.04,
+		band: 0.014,
+		bezel: 0.036,
 		screenRadius: 0.035,
 		buttons: [
 			{ edge: "top", at: 0.78, length: 0.09 },
@@ -48,8 +48,8 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 	// An Android phone (Pixel-like): thin bezel, rounder corners than a
 	// tablet, power and volume on the right.
 	"android-phone": {
-		band: 0.01,
-		bezel: 0.024,
+		band: 0.018,
+		bezel: 0.02,
 		screenRadius: 0.085,
 		buttons: [
 			{ edge: "right", at: 0.2, length: 0.065 },
@@ -57,8 +57,8 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 		],
 	},
 	"android-tablet": {
-		band: 0.009,
-		bezel: 0.04,
+		band: 0.014,
+		bezel: 0.036,
 		screenRadius: 0.03,
 		buttons: [
 			{ edge: "top", at: 0.12, length: 0.08 },
@@ -71,11 +71,27 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 const BUTTON_DEPTH = 0.011;
 
 /**
- * The band and buttons: the theme's muted text tone over its background, so
- * the frame stands out on the dark canvas (where the device's black would
- * vanish) and stays a quiet grey on the light one.
+ * Polished titanium, the same in both themes like the real hardware. A conic
+ * sweep alternates light and dark around the rim the way a curved metal edge
+ * reflects a room, so it reads as metal on the dark canvas and the light one.
  */
-const METAL = "color-mix(in oklab, var(--color-text-muted) 45%, var(--color-bg-primary))";
+const METAL_BAND =
+	"conic-gradient(from 25deg, #8a8d93, #eceef0 7%, #a3a6ab 15%, #d3d5d8 24%, #6c6f75 35%, #c9cbce 46%, #f3f4f5 52%, #8f9298 61%, #dfe1e3 71%, #74777d 82%, #c5c7cb 92%, #8a8d93)";
+/**
+ * The rim's profile: a dark machined outer edge, a bright line just inside it
+ * where the curve catches the light, and a soft shadow under the device.
+ */
+const METAL_BAND_SHADOW = [
+	"inset 0 0 0 0.75px rgb(0 0 0 / 0.6)",
+	"inset 0 0 0 1.75px rgb(255 255 255 / 0.45)",
+	"0 1px 2px rgb(0 0 0 / 0.25)",
+	"0 20px 44px -18px rgb(0 0 0 / 0.5)",
+].join(", ");
+/** Where the glass meets the metal: a dark seam that shades the rim's inner edge, and a faint lit edge on the glass. */
+const BEZEL_SHADOW = "0 0 0 1px rgb(0 0 0 / 0.75), 0 0 3px 1px rgb(0 0 0 / 0.35), inset 0 0 0 1px rgb(255 255 255 / 0.07)";
+/** Side buttons: rounded metal, lit along the middle. */
+const METAL_BUTTON = (direction: string) =>
+	`linear-gradient(${direction}, #4f5258 0%, #b9bcc0 30%, #f2f3f5 50%, #a2a5aa 70%, #4f5258 100%)`;
 
 /** Screen width ÷ height to assume until the first frame says otherwise. */
 const DEFAULT_SCREEN_ASPECT: Record<DeviceFrameKind, number> = {
@@ -133,19 +149,30 @@ export function DeviceFrame({
 	return (
 		<div className={cn("relative", className)} data-device-frame={kind} style={frameStyle}>
 			{spec.buttons.map((button, index) => (
-				<span aria-hidden="true" className="absolute rounded-xs" key={index} style={{ ...buttonStyle(button, frameAspect), background: METAL }} />
+				<span
+					aria-hidden="true"
+					className="absolute rounded-xs"
+					key={index}
+					style={{
+						...buttonStyle(button, frameAspect),
+						background: METAL_BUTTON(button.edge === "top" ? "180deg" : "90deg"),
+						boxShadow: "inset 0 0 0 0.5px rgb(0 0 0 / 0.45)",
+					}}
+				/>
 			))}
 			<div
 				className="absolute inset-0"
 				style={{
-					background: METAL,
+					background: METAL_BAND,
+					boxShadow: METAL_BAND_SHADOW,
 					borderRadius: `${outerRadius * 100}% / ${outerRadius * frameAspect * 100}%`,
 					padding: `${band * 100}%`,
 				}}
 			>
 				<div
-					className="size-full bg-black"
+					className="size-full bg-[#050506]"
 					style={{
+						boxShadow: BEZEL_SHADOW,
 						borderRadius: `${(bezelRadius / bezelBoxWidth) * 100}% / ${(bezelRadius / bezelBoxHeight) * 100}%`,
 						// Padding percentages are of this box's containing block, the band's content box.
 						padding: `${(bezel / bezelBoxWidth) * 100}%`,
