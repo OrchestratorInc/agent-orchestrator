@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import type { SessionArtifact } from "../../types/workspace";
@@ -103,16 +104,68 @@ describe("render activity", () => {
 		expect(inline.getAttribute("src")).toBe(src);
 	});
 
-	it("shows a note instead of a frame in a remote host's chat", () => {
-		// The local daemon has no copy of a remote host's render, and the remote
-		// proxy URL carries a capability token the page could read.
-		render(
-			<ChatImageSourceProvider sessionId="proj-1" remoteHost>
-				<ActivityRow activity={renderActivity()} />
-			</ChatImageSourceProvider>,
-		);
-		expect(document.querySelector("iframe")).toBeNull();
-		expect(screen.getByText(/Turns by day/)).toHaveTextContent("Turns by day · Open this session on its host to see the page.");
+	describe("in a remote host's chat", () => {
+		const renderOrigin = "http://ao-preview-0123.localhost:4000";
+		afterEach(() => vi.restoreAllMocks());
+
+		function remoteChat(baseUrl?: string) {
+			return render(
+				<ChatImageSourceProvider sessionId="proj-1" assetBaseUrl={baseUrl} remoteHost hostId="h_box">
+					<ActivityRow activity={renderActivity()} />
+				</ChatImageSourceProvider>,
+			);
+		}
+
+		it("frames the page from the proxy's render origin, sandboxed, without the proxy token", async () => {
+			const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(`${renderOrigin}/r1`);
+			remoteChat("http://127.0.0.1:4000/tok123");
+			await waitFor(() => expect(frame().getAttribute("src")).toMatch(/^http:\/\/ao-preview-0123\.localhost:4000\/r1#ao-theme=/));
+			expect(previewUrl).toHaveBeenCalledWith("h_box", "proj-1", "/api/v1/sessions/proj-1/renders/r1");
+			expect(frame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+		});
+
+		it("reads the source from the render origin and offers no local-only actions", async () => {
+			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(`${renderOrigin}/r1`);
+			const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>chart</p>"));
+			const user = userEvent.setup();
+			remoteChat("http://127.0.0.1:4000/tok123");
+			await waitFor(() => expect(frame().getAttribute("src")).toContain(renderOrigin));
+			await user.click(screen.getByRole("button", { name: "Expand page" }));
+			const dialog = screen.getByRole("dialog");
+			for (const name of ["Save as artifact", "Open in Orchestrator Browser", "Open in external browser"]) {
+				expect(within(dialog).queryByRole("button", { name })).toBeNull();
+			}
+			await user.click(within(dialog).getByRole("button", { name: "View source" }));
+			await waitFor(() => expect(fetch).toHaveBeenCalledWith(`${renderOrigin}/r1?source=1`, expect.anything()));
+		});
+
+		it("drops the previous origin while a reconnected host's lookup is pending", async () => {
+			let resolveNext!: (url: string) => void;
+			vi.spyOn(aoBridge.remotes, "previewUrl")
+				.mockResolvedValueOnce(`${renderOrigin}/r1`)
+				.mockReturnValueOnce(new Promise((resolve) => (resolveNext = resolve)));
+			const chat = (baseUrl: string) => (
+				<TooltipProvider>
+					<ChatImageSourceProvider sessionId="proj-1" assetBaseUrl={baseUrl} remoteHost hostId="h_box">
+						<ActivityRow activity={renderActivity()} />
+					</ChatImageSourceProvider>
+				</TooltipProvider>
+			);
+			const { rerender } = rtlRender(chat("http://127.0.0.1:4000/tok123"));
+			await waitFor(() => expect(frame().getAttribute("src")).toContain(renderOrigin));
+			rerender(chat("http://127.0.0.1:4001/tok456"));
+			expect(document.querySelector("iframe")).toBeNull();
+			act(() => resolveNext("http://ao-preview-4567.localhost:4001/r1"));
+			await waitFor(() => expect(frame().getAttribute("src")).toMatch(/^http:\/\/ao-preview-4567\.localhost:4001\/r1#/));
+		});
+
+		it("shows the note while the host is not connected", () => {
+			const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl");
+			remoteChat();
+			expect(screen.getByText(/Turns by day/)).toHaveTextContent("Turns by day · Open this session on its host to see the page.");
+			expect(previewUrl).not.toHaveBeenCalled();
+			expect(document.querySelector("iframe")).toBeNull();
+		});
 	});
 
 	it("frames the page in a local chat", () => {
@@ -464,20 +517,23 @@ describe("artifact activity", () => {
 		detail: { event: "artifact", artifact: { path: "q3/Q3 (final).html", name: "Q3 (final).html", url } },
 	};
 	const previewUrl = "http://ao-preview-artifact.x.localhost:3001/q3/Q3%20(final).html";
-	const sessionArtifact = (path: string): SessionArtifact => ({ kind: "html", name: "Q3 (final).html", path, previewUrl, size: 9, updatedAt: "2026-10-08T10:00:00Z" });
+	const inlineUrl = "http://ao-inline-artifact.x.localhost:3001/q3/Q3%20(final).html";
+	const sessionArtifact = (path: string): SessionArtifact => ({ kind: "html", name: "Q3 (final).html", path, previewUrl, inlineUrl, size: 9, updatedAt: "2026-10-08T10:00:00Z" });
+	// What a local session lists for the card's page.
+	const listed = [sessionArtifact("q3/Q3 (final).html")];
 
-	function renderArtifact(artifacts?: SessionArtifact[]) {
+	function renderArtifact(artifacts: SessionArtifact[] | undefined = listed, activity = artifactActivity) {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		return render(
 			<QueryClientProvider client={client}>
 				<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
-					<ActivityRow activity={artifactActivity} />
+					<ActivityRow activity={activity} />
 				</ChatImageSourceProvider>
 			</QueryClientProvider>,
 		);
 	}
 
-	async function expandArtifact(artifacts?: SessionArtifact[]) {
+	async function expandArtifact(artifacts: SessionArtifact[] = listed) {
 		const user = userEvent.setup();
 		renderArtifact(artifacts);
 		await user.click(screen.getByRole("button", { name: "Expand page" }));
@@ -487,19 +543,62 @@ describe("artifact activity", () => {
 	const artifactFrame = () => screen.getByTitle("Q3 (final).html") as HTMLIFrameElement;
 
 	it("frames the artifact from its own inline origin, same-origin there, when the session lists one", () => {
-		const inlineUrl = "http://ao-inline-artifact.x.localhost:3001/q3/Q3%20(final).html";
-		renderArtifact([{ ...sessionArtifact("q3/Q3 (final).html"), inlineUrl }]);
+		renderArtifact();
 		expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/Q3%20\(final\)\.html#ao-theme=/);
 		expect(artifactFrame().getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-same-origin");
 	});
 
-	it("never frames an inline URL off the inline-artifact origin with allow-same-origin", () => {
+	it("never frames an inline URL off the inline-artifact origin", () => {
 		// allow-same-origin on the app's own origin would let the page script the app.
-		for (const inlineUrl of ["http://localhost:5173/q3/x.html", "app://renderer/x.html", "http://ao-inline-artifact.x.example/x.html"]) {
-			const { unmount } = renderArtifact([{ ...sessionArtifact("q3/Q3 (final).html"), inlineUrl }]);
-			expect(artifactFrame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
-			expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/artifact-files\//);
+		for (const offOrigin of ["http://localhost:5173/q3/x.html", "app://renderer/x.html", "http://ao-inline-artifact.x.example/x.html"]) {
+			const { unmount } = renderArtifact([{ ...sessionArtifact("q3/Q3 (final).html"), inlineUrl: offOrigin }]);
+			expect(document.querySelector("iframe")).toBeNull();
 			unmount();
+		}
+	});
+
+	it("points to the Artifacts tab for a listed file with no inline page", () => {
+		// A page renamed to another kind of file is still listed, but has no inline URL.
+		const renamed: SessionArtifact = { ...sessionArtifact("q3/notes.md"), kind: "markdown", inlineUrl: undefined, previousPaths: ["q3/Q3 (final).html"] };
+		renderArtifact([renamed]);
+		expect(document.querySelector("iframe")).toBeNull();
+		expect(screen.getByText("This file can't be shown here. Open it in the Artifacts tab.")).toBeInTheDocument();
+		expect(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Open in Artifacts tab" })).toBeInTheDocument();
+	});
+
+	it("rereads the session's artifacts while a card's page is missing, and frames it once listed", () => {
+		// The card arrives on the chat stream; the list can lag behind a page just reported.
+		const opened: string[] = [];
+		const closed: string[] = [];
+		class EventSourceStub {
+			constructor(readonly url: string) {
+				opened.push(url);
+			}
+			addEventListener() {}
+			close() {
+				closed.push(this.url);
+			}
+		}
+		vi.stubGlobal("EventSource", EventSourceStub);
+		try {
+			const client = new QueryClient();
+			const view = (artifacts: SessionArtifact[]) => (
+				<TooltipProvider>
+					<QueryClientProvider client={client}>
+						<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
+							<ActivityRow activity={artifactActivity} />
+						</ChatImageSourceProvider>
+					</QueryClientProvider>
+				</TooltipProvider>
+			);
+			const { rerender } = rtlRender(view([]));
+			expect(opened).toEqual(["http://127.0.0.1:3001/api/v1/sessions/proj-1/artifact-events"]);
+			rerender(view(listed));
+			expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/Q3%20\(final\)\.html#ao-theme=/);
+			// Listed, the card stops following the directory.
+			expect(closed).toEqual(opened);
+		} finally {
+			vi.unstubAllGlobals();
 		}
 	});
 
@@ -509,12 +608,8 @@ describe("artifact activity", () => {
 		useUiStore.setState({ inspectorSessions: {} });
 	});
 
-	it("frames the artifact sandboxed, from the artifact route, at 400 until the page reports its height", () => {
+	it("frames the artifact at 400 until the page reports its height", () => {
 		renderArtifact();
-		expect(artifactFrame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
-		expect(artifactFrame().getAttribute("src")).toMatch(
-			/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/artifact-files\/q3\/Q3%20%28final%29\.html#ao-theme=/,
-		);
 		expect(artifactFrame().style.height).toBe("400px");
 		post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 520 } }, artifactFrame().contentWindow);
 		expect(artifactFrame().style.height).toBe("520px");
@@ -559,16 +654,79 @@ describe("artifact activity", () => {
 	});
 
 	it("heads the dialog with the artifact's name and has no Save as artifact", async () => {
-		const { dialog } = await expandArtifact([sessionArtifact("other.html")]);
+		const { dialog } = await expandArtifact();
 		expect(within(dialog).getByRole("heading", { name: "Q3 (final).html" })).toBeInTheDocument();
 		for (const name of ["View source", "Save page", "Close"]) {
 			expect(within(dialog).getByRole("button", { name })).toBeInTheDocument();
 		}
 		expect(within(dialog).queryByRole("button", { name: "Save as artifact" })).toBeNull();
-		// The session lists no preview for this path, so it opens nowhere outside the chat:
-		// its artifact-files route serves only the app's own frames.
-		expect(within(dialog).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
-		expect(within(dialog).queryByRole("button", { name: "Open in external browser" })).toBeNull();
+	});
+
+	it("shows an old card's page under the name it was renamed to", async () => {
+		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("<p>report</p>"));
+		try {
+			const renamedInline = "http://ao-inline-artifact.x.localhost:3001/q3/final/report.html";
+			const renamed: SessionArtifact = { ...sessionArtifact("q3/final/report.html"), inlineUrl: renamedInline, previousPaths: ["q3/Q3 (final).html"] };
+			const { user, dialog } = await expandArtifact([sessionArtifact("other.html"), renamed]);
+			expect((within(dialog).getByTitle("Q3 (final).html") as HTMLIFrameElement).getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/final\/report\.html#ao-theme=/);
+			await user.click(within(dialog).getByRole("button", { name: "View source" }));
+			// Read from where the file is now, not the route the card recorded.
+			await waitFor(() => expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/proj-1/artifact-files/q3/final/report.html?source=1", expect.anything()));
+			await user.click(within(dialog).getByRole("button", { name: "Open in Artifacts tab" }));
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/final/report.html", source: "artifact" });
+		} finally {
+			fetch.mockRestore();
+		}
+	});
+
+	it("prefers the page listed at the card's path over one renamed away from it", () => {
+		const elsewhere: SessionArtifact = { ...sessionArtifact("old/report.html"), inlineUrl: "http://ao-inline-artifact.x.localhost:3001/old/report.html", previousPaths: ["q3/Q3 (final).html"] };
+		renderArtifact([elsewhere, sessionArtifact("q3/Q3 (final).html")]);
+		expect(artifactFrame().getAttribute("src")).toMatch(/^http:\/\/ao-inline-artifact\.x\.localhost:3001\/q3\/Q3%20\(final\)\.html#ao-theme=/);
+	});
+
+	it("closes the open dialog when its page is deleted, rather than framing the daemon's refusal", async () => {
+		const user = userEvent.setup();
+		const client = new QueryClient();
+		const view = (artifacts: SessionArtifact[]) => (
+			<TooltipProvider>
+				<QueryClientProvider client={client}>
+					<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
+						<ActivityRow activity={artifactActivity} />
+					</ChatImageSourceProvider>
+				</QueryClientProvider>
+			</TooltipProvider>
+		);
+		const { rerender } = rtlRender(view(listed));
+		await user.click(screen.getByRole("button", { name: "Expand page" }));
+		expect(await screen.findByRole("dialog")).toBeInTheDocument();
+		rerender(view([]));
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(document.querySelector("iframe")).toBeNull();
+		expect(screen.getByText("This page is no longer in the session's artifacts.")).toBeInTheDocument();
+	});
+
+	it("says a page the session no longer lists is gone, rather than framing the daemon's refusal", () => {
+		// The card's artifact-files route refuses frames (ORIGIN_FORBIDDEN), so an old
+		// card whose page was deleted must not frame it and show that error's JSON.
+		const unlisted = () => render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatImageSourceProvider sessionId="proj-1">
+					<ActivityRow activity={artifactActivity} />
+				</ChatImageSourceProvider>
+			</QueryClientProvider>,
+		);
+		for (const show of [() => renderArtifact([]), () => renderArtifact([sessionArtifact("other.html")]), unlisted]) {
+			const { unmount } = show();
+			expect(document.querySelector("iframe")).toBeNull();
+			expect(screen.getByText("This page is no longer in the session's artifacts.")).toBeInTheDocument();
+			const header = screen.getByTestId("artifact-card-header");
+			expect(header).toHaveTextContent("Q3 (final).html");
+			for (const name of ["Expand page", "Wrap content", "Open in Artifacts tab", "Open in Orchestrator Browser"]) {
+				expect(screen.queryByRole("button", { name })).toBeNull();
+			}
+			unmount();
+		}
 	});
 
 	it("opens the artifact in the external browser from its preview origin, not the app-only artifact route", async () => {
@@ -614,12 +772,46 @@ describe("artifact activity", () => {
 	});
 
 	it("labels the inline card as an artifact with its name", () => {
-		renderArtifact();
+		renderArtifact([]);
 		const header = screen.getByTestId("artifact-card-header");
 		expect(header).toHaveTextContent("Artifact");
 		expect(header).toHaveTextContent("Q3 (final).html");
 		// The session lists no preview for this artifact, so there is nothing to open.
 		expect(within(header).queryByRole("button", { name: "Open in Artifacts tab" })).toBeNull();
+	});
+
+	it("folds the page from its header and keeps it folded when the card remounts", async () => {
+		const user = userEvent.setup();
+		// Its own card: the fold is remembered per card for the rest of the run.
+		const activity = { ...artifactActivity, id: "act-fold" };
+		const fold = () => within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" });
+		const { unmount } = renderArtifact(listed, activity);
+		expect(fold()).toHaveAttribute("aria-expanded", "true");
+		const frame = artifactFrame();
+		await user.click(fold());
+		expect(fold()).toHaveAttribute("aria-expanded", "false");
+		// Folded, the page leaves the tab order and its hover actions go with it.
+		expect(frame.closest("[inert]")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: "Expand page" })).toBeNull();
+		// A long chat remounts a card that scrolls away; it comes back folded, without loading the page.
+		unmount();
+		renderArtifact(listed, activity);
+		expect(fold()).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByTitle("Q3 (final).html")).toBeNull();
+		await user.click(fold());
+		expect(fold()).toHaveAttribute("aria-expanded", "true");
+		expect(artifactFrame().closest("[inert]")).toBeNull();
+		expect(screen.getByRole("button", { name: "Expand page" })).toBeInTheDocument();
+	});
+
+	it("opens a later report of a folded file unfolded", async () => {
+		const user = userEvent.setup();
+		const first = renderArtifact(listed, { ...artifactActivity, id: "act-fold-first" });
+		await user.click(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" }));
+		first.unmount();
+		renderArtifact(listed, { ...artifactActivity, id: "act-fold-later" });
+		expect(within(screen.getByTestId("artifact-card-header")).getByRole("button", { name: "Artifact Q3 (final).html" })).toHaveAttribute("aria-expanded", "true");
+		expect(artifactFrame()).toBeInTheDocument();
 	});
 
 	it("opens the artifact in the Artifacts tab straight from the card", async () => {

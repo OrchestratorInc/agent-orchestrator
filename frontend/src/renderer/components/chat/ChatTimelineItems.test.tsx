@@ -670,6 +670,39 @@ describe("AssistantMessage streaming", () => {
 });
 
 describe("ActivityRow", () => {
+	it("does not print a null tool payload as the row's body", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "delegate", sequence: 1, revision: 1, createdAt: "2026-11-04T00:00:00Z",
+				activityKind: "mcp_tool", status: "completed", summary: "Agent tool",
+				// As the daemon sends it: JSON null for each payload the provider left out.
+				detail: JSON.parse('{"protocol":"acp","arguments":null,"result":null,"content":null}'),
+			}} />,
+		);
+
+		const row = screen.getByRole("button", { name: /Agent tool/ });
+		expect(row).toBeDisabled();
+		fireEvent.click(row);
+		expect(screen.queryByText("null")).not.toBeInTheDocument();
+		expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+	});
+
+	it("opens a tool row onto its real payload and skips the null ones", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "search", sequence: 1, revision: 1, createdAt: "2026-11-04T00:00:00Z",
+				activityKind: "mcp_tool", status: "completed", summary: "Search files",
+				detail: JSON.parse('{"protocol":"acp","arguments":null,"result":{"matches":2},"content":null}'),
+			}} />,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: /Search files/ }));
+		expect(screen.getByText("Result")).toBeInTheDocument();
+		expect(document.querySelector("pre code")?.textContent).toContain('"matches": 2');
+		expect(screen.queryByText("Arguments")).not.toBeInTheDocument();
+		expect(screen.queryByText("null")).not.toBeInTheDocument();
+	});
+
 	it("renders inline code in provider activity titles without literal backticks", () => {
 		const path = "/Users/sachin/.ao/worktrees/murdock/docs/system-design.html";
 		const { container } = render(
@@ -833,6 +866,71 @@ describe("HumanMessage", () => {
 			);
 			expect(screen.getByRole("img", { name: "Image 1" })).toHaveClass("h-16");
 			expect(screen.getByText("attachment-b.pdf").closest("li")).toHaveClass("h-16");
+		});
+	});
+
+	describe("branch navigation", () => {
+		const branchPoint = {
+			turnId: "turn-1",
+			position: 2,
+			total: 3,
+			previousBranchId: "branch-prev",
+			nextBranchId: "branch-next",
+		};
+
+		it("disables branch navigation when activateBranchDisabled is true", () => {
+			render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchDisabled
+				/>,
+			);
+			expect(screen.getByRole("button", { name: "Previous conversation branch" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Next conversation branch" })).toBeDisabled();
+		});
+
+		it("disables branch navigation globally while activateBranchPending is true regardless of activateBranchTarget", () => {
+			render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchPending
+					activateBranchTarget="unrelated-branch"
+				/>,
+			);
+			expect(screen.getByRole("button", { name: "Previous conversation branch" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Next conversation branch" })).toBeDisabled();
+		});
+
+		it("shows activateBranchError only when branch matches activateBranchTarget", () => {
+			const { rerender } = render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchTarget="unrelated-branch"
+					activateBranchError="stop the current turn before switching conversation branches"
+				/>,
+			);
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+			rerender(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchTarget="branch-prev"
+					activateBranchError="stop the current turn before switching conversation branches"
+				/>,
+			);
+			expect(screen.getByRole("alert")).toHaveTextContent("stop the current turn before switching conversation branches");
 		});
 	});
 });

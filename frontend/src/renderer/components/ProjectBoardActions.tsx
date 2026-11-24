@@ -33,8 +33,10 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 	const orchestratorButton = (
 		<Tooltip>
 			<TooltipTrigger asChild>
-				<span className="inline-flex" style={style}>
+				{/* The guided tour's second stop: the empty board's copy, else the header's (GuidedTour). */}
+				<span className="inline-flex" style={style} data-tour={header ? "orchestrator-header" : "orchestrator"}>
 					<Button type="button" size="sm"
+						data-telemetry-id="topbar.open_orchestrator"
 						aria-label={orchestratorReplyLabel(activity ? t("shell.orchestratorWithActivity", { activity }) : actionLabel, activity && orchestratorReply === "working" ? null : orchestratorReply, t)}
 						aria-busy={busy}
 						data-priority={header ? "secondary" : undefined}
@@ -62,6 +64,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 			<TooltipTrigger asChild>
 				<span className="inline-flex" style={style}>
 					<Button type="button" size="sm"
+						data-telemetry-id="topbar.new_task"
 						aria-label={t("shell.newTask")}
 						data-priority={header ? "primary" : undefined}
 						disabled={isProjectRestarting || isProvisioning}

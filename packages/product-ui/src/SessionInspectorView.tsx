@@ -23,6 +23,18 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
+// Usage telemetry names for each inspector view: the desktop's
+// `inspector_<name>` surfaces and `inspector.tab_<name>` controls.
+const INSPECTOR_TELEMETRY_NAMES: Record<InspectorView, string> = {
+	summary: "summary",
+	reviews: "reviews",
+	browser: "browser",
+	sideChat: "side_chat",
+	subagents: "subagents",
+	files: "files",
+	artifacts: "artifacts",
+};
+
 export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
 
 export type InspectorTab = {
@@ -134,6 +146,7 @@ export function SessionInspectorShellView({
 								key={tab.id}
 								type="button"
 								role="tab"
+								data-telemetry-id={`inspector.tab_${INSPECTOR_TELEMETRY_NAMES[tab.id]}`}
 								aria-selected={activeView === tab.id}
 								tabIndex={activeView === tab.id ? 0 : -1}
 								className={cn(
@@ -191,6 +204,7 @@ export function SessionInspectorShellView({
 					activeView === "files" && "p-0 overflow-hidden [&>[role=tabpanel]]:h-full",
 				)}
 				inert={!isVisible}
+				data-telemetry-surface={`inspector_${INSPECTOR_TELEMETRY_NAMES[activeView]}`}
 			>
 				{activeView === "summary" ? summaryView : null}
 				{activeView === "reviews" ? reviewsView : null}
@@ -221,7 +235,7 @@ export function InspectorSection({
 	const reduceMotion = useReducedMotion();
 	// Header: 6px slot + 6px button inset puts the label 12px from the edge; collapsed headers sit 4px apart.
 	return (
-		<section className="group/inspector-section flex flex-col" data-testid="inspector-section">
+		<section className="flex flex-col" data-testid="inspector-section">
 			<div className="px-1.5 py-0.5">
 				<button
 					aria-controls={contentId}
@@ -246,7 +260,13 @@ export function InspectorSection({
 						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
 						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
 					>
-						<div className="min-w-0 px-3 pt-0.5 pb-3.5 group-last/inspector-section:pb-0" id={contentId}>
+						{/*
+						 * The last section drops its bottom padding. Match the section as this div's
+						 * grandparent, not as any ancestor (`group-last/...`): an any-ancestor
+						 * `:last-child` makes Chromium restyle the whole document whenever a node is
+						 * added to <body>, which every tooltip and hover card does.
+						 */}
+						<div className="min-w-0 px-3 pt-0.5 pb-3.5 [:last-child>*>&]:pb-0" id={contentId}>
 							{surface ? <div className="overflow-hidden bg-settings-row py-1">{children}</div> : children}
 						</div>
 					</motion.div>
@@ -345,6 +365,7 @@ export function InspectorPullRequestCardView({
 	externalIcon,
 	externalLink: ExternalLink,
 	headerless = false,
+	hideDiffCounts = false,
 	mergeAction,
 	mergeError,
 	openLabel,
@@ -371,6 +392,8 @@ export function InspectorPullRequestCardView({
 	 * header row, as the inspector's PR card does with its own state row.
 	 */
 	headerless?: boolean;
+	/** Leave +/− off the branch line: a row under the card states the same numbers. */
+	hideDiffCounts?: boolean;
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
@@ -423,6 +446,7 @@ export function InspectorPullRequestCardView({
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
 				externalLink={ExternalLink}
+				hideDiffCounts={hideDiffCounts}
 				inline={compact}
 				openedViaLabel={openedViaLabel}
 				pr={pr}

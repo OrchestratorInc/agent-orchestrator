@@ -75,7 +75,8 @@ The agent reads `.conductor/settings.toml`, `.conductor/settings.local.toml`, `c
 | `scripts.run` actions | one command **Cue** each |
 | `environment_variables` and `environment_variables.local` | project **Environment** variables |
 | `prompts.general` | agent rules |
-| `.worktreeinclude`, `file_include_globs`, or the default `.env*` | a **Setup** step that copies those files into each new worktree |
+| `.worktreeinclude` | nothing to convert: Orchestrator reads it itself (see [Setup and rules](/configuration/projects#setup-and-rules)) |
+| `file_include_globs`, or the default `.env*`, without a `.worktreeinclude` | a **Setup** step that copies those files into each new worktree |
 
 Orchestrator does not set the `CONDUCTOR_*` variables, so the agent rewrites each command that uses one. For example, `$CONDUCTOR_WORKSPACE_PATH` becomes `$AO_WORKTREE_PATH` in a Setup step. Check the result in **Project settings → Scripts**, **Environment**, and **Cues**.
 

@@ -20,9 +20,10 @@ const FLIGHT_MAX_MS = 1500;
 /**
  * Tests snap, as under reduced motion, because they assert scroll positions
  * synchronously and jsdom has no layout to animate. The test-mode branch is
- * compiled out of production builds.
+ * compiled out of production builds. Read on each render, so a test of the
+ * animated paths can stub the mode.
  */
-const CANNOT_ANIMATE = import.meta.env.MODE === "test";
+const cannotAnimate = () => import.meta.env.MODE === "test";
 
 /** `deliberate`: the reader asked for it (glideToEnd: a send, Jump to latest), not automatic follow. */
 type Flight = { from: number; to: number; aimedAt: number; deliberate: boolean };
@@ -33,7 +34,9 @@ type Flight = { from: number; to: number; aimedAt: number; deliberate: boolean }
  * Large moves (a send, Jump to latest, a big append) use the browser's native
  * smooth scroll, which Chromium animates on the compositor, so it keeps moving
  * while the main thread is busy committing. Small streamed growth is followed with
- * instant writes. Every position along a smooth scroll in flight counts as ours;
+ * instant writes. No glide covers more than a screen: an automatic follow that far
+ * lands at once, and a deliberate one cuts to a screen short of its target first.
+ * Every position along a smooth scroll in flight counts as ours;
  * reader input stops it in place (`cancel` / `hold`). Reduced motion snaps, and
  * so does a hidden window: it draws no frames, so a smooth scroll started then
  * would sit still and only play once the reader is back, gliding them down
@@ -42,7 +45,7 @@ type Flight = { from: number; to: number; aimedAt: number; deliberate: boolean }
 export function useScrollFollow(getNode: () => HTMLElement | null) {
 	const reducedMotion = useReducedMotion();
 	const snap = useRef(false);
-	snap.current = CANNOT_ANIMATE || Boolean(reducedMotion);
+	snap.current = cannotAnimate() || Boolean(reducedMotion);
 	// Where our last write left (or will leave) the viewport. Scroll events are
 	// classified by position rather than by time: an event that lands here is ours
 	// however late it arrives, and anything else is the reader's.
@@ -62,6 +65,20 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	};
 	// Re-aiming keeps the flight's origin; only glideToEnd starts a deliberate one.
 	const smoothTo = (node: HTMLElement, top: number, deliberate = flight.current?.deliberate ?? false) => {
+		// No long rides. Content that moved the end more than a screen away lands at
+		// once: the reader following it is kept at the end, not animated through it.
+		// A reader who asked to go there (a send from far up, Jump to latest) cuts to
+		// a screen short of it and glides the rest, one short move down to it.
+		const longest = Math.max(node.clientHeight, FOLLOW_INSTANT_PX);
+		const distance = top - node.scrollTop;
+		if (Math.abs(distance) > longest) {
+			if (!deliberate) {
+				flight.current = null;
+				write(node, top);
+				return;
+			}
+			write(node, top - Math.sign(distance) * longest);
+		}
 		const now = performance.now();
 		flight.current = { from: flight.current?.from ?? node.scrollTop, to: top, aimedAt: now, deliberate };
 		lastAimAt.current = now;
@@ -181,6 +198,32 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	}, [getNode]);
 
 	/**
+	 * Rows above the view were added, dropped or resized, moving everything on screen
+	 * by `delta`. Move the view the same amount, so nothing the reader sees moves, and
+	 * carry a glide in flight with it: the instant write stops a native smooth scroll,
+	 * so it is aimed again at the end from the new spot. Left alone, the view would
+	 * show some earlier (or later) part of the chat and then ride back from there.
+	 */
+	const shift = useCallback((delta: number) => {
+		const node = getNode();
+		if (!node || Math.abs(delta) <= SETTLE_PX) return;
+		const current = flying() ? flight.current : null;
+		node.scrollTop += delta;
+		lastWritten.current = node.scrollTop;
+		if (!current) return;
+		const end = endOf(node);
+		// The shift put the view where the glide was going: it has landed. A smooth
+		// scroll aimed at where the view already is fires no scrollend, so re-issuing
+		// one would leave the flight open and every later shift would renew it.
+		if (Math.abs(end - node.scrollTop) <= OWN_SCROLL_PX) {
+			flight.current = null;
+			return;
+		}
+		flight.current = { ...current, from: current.from + delta, to: current.to + delta };
+		smoothTo(node, end);
+	}, [getNode]);
+
+	/**
 	 * The browser finished a scroll (wire to the scroller's onScrollEnd). Only a
 	 * landing on our target ends the flight: a `scrollend` queued by an earlier
 	 * instant write must not clear a fresh one. After landing, catch up with any
@@ -199,5 +242,5 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		flight.current = null;
 	}, []);
 
-	return { glideToEnd, followEnd, cancel, hold, markWritten, isOwnScroll, isFlying, isGliding, reaim, endFlight };
+	return { glideToEnd, followEnd, cancel, hold, markWritten, isOwnScroll, isFlying, isGliding, reaim, shift, endFlight };
 }

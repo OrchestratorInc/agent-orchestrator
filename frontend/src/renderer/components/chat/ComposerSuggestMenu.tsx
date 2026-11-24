@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { CornerDownLeft } from "@/components/app-icons";
+import { CornerDownLeft, Loader2 } from "@/components/app-icons";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
@@ -27,6 +27,7 @@ export function ComposerSuggestMenu({
 	highlighted,
 	onPick,
 	truncated,
+	loadingNote,
 }: {
 	/** Shared with the editor's `aria-controls`, so the pairing is announced. */
 	id: string;
@@ -36,6 +37,11 @@ export function ComposerSuggestMenu({
 	onPick: (value: string) => void;
 	/** The candidate list was capped by the daemon, so it is not exhaustive. */
 	truncated?: boolean;
+	/**
+	 * More candidates are still on their way. Shown as a quiet line, not a row, so
+	 * it can stand alone while nothing matches yet without taking Enter.
+	 */
+	loadingNote?: string;
 }) {
 	const list = useRef<HTMLUListElement>(null);
 	const previousHighlighted = useRef(highlighted);
@@ -56,85 +62,101 @@ export function ComposerSuggestMenu({
 		row?.scrollIntoView({ block: "nearest" });
 	}, [highlighted, items]);
 
-	if (items.length === 0) return null;
+	if (items.length === 0 && !loadingNote) return null;
 
 	return (
 		<div
 			className="absolute bottom-full left-0 z-overlay mb-1.5 flex w-full max-w-md flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-overlay p-1 text-popover-foreground shadow-(--shadow-popover)"
+			data-telemetry-surface={kind === "skill" ? "slash_menu" : "mention_menu"}
 			// The composer owns the keyboard; a pointerdown here must not pull focus
 			// out of the textarea on its way to the click.
 			onMouseDown={(event) => event.preventDefault()}
 		>
-			<ul
-				ref={list}
-				id={id}
-				role="listbox"
-				// Rows are 32px, so the edge fade is short enough to leave a row readable.
-				// The scroll padding keeps a keyboard-highlighted row clear of it.
-				className="model-menu-scroll edge-fade flex max-h-64 scroll-py-4 flex-col overflow-y-auto overscroll-contain [--edge-fade-size:16px]"
-			>
-				{items.map((item, index) => {
-					const active = index === highlighted;
-					const badge = displayBadge(item.badge);
-					const Icon = kind === "file" ? composerFileIcon(item.value) : undefined;
-					return (
-						<li key={item.value} data-index={index}>
-							<Pressable
-								tabIndex={-1}
-								role="option"
-								id={`${id}-option-${index}`}
-								aria-selected={active}
-								onClick={() => onPick(item.value)}
-								className={cn(
-									"flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-muted-foreground outline-none !transition-none",
-									active
-										? "bg-interactive-active text-foreground"
-										: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
-								)}
-							>
-								{Icon ? (
-									<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-								) : null}
-								{/* Name first, then its description or folder on the same line,
-								    so a row stays one line tall. In the `/` menu the name is
-								    what the eye scans for, so it reads bright and its
-								    description stays quiet at the same size. A file's folder
-								    stays smaller. */}
-								<span className="flex min-w-0 flex-1 items-baseline gap-2">
-									<span
-										className={cn(
-											"truncate",
-											item.detail ? "max-w-3/5 shrink-0" : "min-w-0",
-											kind === "skill" && "text-foreground",
-										)}
-									>
-										{item.label}
-									</span>
-									{item.detail ? (
+			{items.length > 0 ? (
+				<ul
+					ref={list}
+					id={id}
+					role="listbox"
+					// Rows are 32px, so the edge fade is short enough to leave a row readable.
+					// The scroll padding keeps a keyboard-highlighted row clear of it.
+					className="model-menu-scroll edge-fade flex max-h-64 scroll-py-4 flex-col overflow-y-auto overscroll-contain [--edge-fade-size:16px]"
+				>
+					{items.map((item, index) => {
+						const active = index === highlighted;
+						const badge = displayBadge(item.badge);
+						const Icon = kind === "file" ? composerFileIcon(item.value) : undefined;
+						return (
+							<li key={item.value} data-index={index}>
+								<Pressable
+									tabIndex={-1}
+									role="option"
+									id={`${id}-option-${index}`}
+									aria-selected={active}
+									onClick={() => onPick(item.value)}
+									className={cn(
+										"flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-xs text-muted-foreground outline-none !transition-none",
+										active
+											? "bg-interactive-active text-foreground"
+											: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
+									)}
+								>
+									{Icon ? (
+										<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+									) : null}
+									{/* Name first, then its description or folder on the same line,
+									    so a row stays one line tall. In the `/` menu the name is
+									    what the eye scans for, so it reads bright and its
+									    description stays quiet at the same size. A file's folder
+									    stays smaller. */}
+									<span className="flex min-w-0 flex-1 items-baseline gap-2">
 										<span
 											className={cn(
-												"min-w-0 flex-1 truncate text-muted-foreground",
-												kind === "file" && "text-caption",
+												"truncate",
+												item.detail ? "max-w-3/5 shrink-0" : "min-w-0",
+												kind === "skill" && "text-foreground",
 											)}
 										>
-											{item.detail}
+											{item.label}
+										</span>
+										{item.detail ? (
+											<span
+												className={cn(
+													"min-w-0 flex-1 truncate text-muted-foreground",
+													kind === "file" && "text-caption",
+												)}
+											>
+												{item.detail}
+											</span>
+										) : null}
+									</span>
+									{badge ? <span className="shrink-0 text-micro text-muted-foreground">{badge}</span> : null}
+									{active ? (
+										<span
+											aria-label="Press Tab or Enter to insert"
+											className="flex shrink-0 items-center text-muted-foreground"
+										>
+											<CornerDownLeft aria-hidden="true" className="size-3" />
 										</span>
 									) : null}
-								</span>
-								{badge ? <span className="shrink-0 text-micro text-muted-foreground">{badge}</span> : null}
-								{active ? (
-									<span
-										aria-label="Press Tab or Enter to insert"
-										className="flex shrink-0 items-center text-muted-foreground"
-									>
-										<CornerDownLeft aria-hidden="true" className="size-3" />
-									</span>
-								) : null}
-							</Pressable>
-						</li>
-					);
-				})}
-			</ul>
+								</Pressable>
+							</li>
+						);
+					})}
+				</ul>
+			) : null}
+
+			{loadingNote ? (
+				<p
+					role="status"
+					className={cn(
+						"flex h-8 items-center gap-2 px-2 text-xs text-muted-foreground",
+						items.length > 0 && "mt-1 border-t border-border",
+					)}
+				>
+					<Loader2 aria-hidden="true" className="size-3 shrink-0 animate-spin" />
+					{loadingNote}
+				</p>
+			) : null}
 
 			{truncated ? (
 				// Said out loud rather than letting a capped list read as the whole

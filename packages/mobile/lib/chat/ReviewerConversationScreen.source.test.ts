@@ -39,6 +39,6 @@ describe("reviewer conversation parity", () => {
 		expect(source).toContain("restingInset={chatKeyboard.restingInset}");
 		expect(source).not.toContain("keyboardVerticalOffset={88}");
 		// The session's chat lays out under a clear bar; the reviewer's below its bar.
-		expect(readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8")).toContain("const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });");
+		expect(readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8")).toContain("const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER, floating: true });");
 	});
 });

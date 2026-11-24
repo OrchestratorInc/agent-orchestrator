@@ -1017,6 +1017,49 @@ func (q *Queries) ListChatHibernationCandidates(ctx context.Context) ([]domain.S
 	return items, nil
 }
 
+const listPreviewSessions = `-- name: ListPreviewSessions :many
+SELECT id, workspace_path, preview_url, preview_revision
+FROM sessions
+WHERE is_terminated = 0 AND kind = 'worker'
+ORDER BY id
+`
+
+type ListPreviewSessionsRow struct {
+	ID              domain.SessionID
+	WorkspacePath   string
+	PreviewURL      string
+	PreviewRevision int64
+}
+
+// Live workers with only the columns the preview poller reads.
+func (q *Queries) ListPreviewSessions(ctx context.Context) ([]ListPreviewSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPreviewSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPreviewSessionsRow{}
+	for rows.Next() {
+		var i ListPreviewSessionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspacePath,
+			&i.PreviewURL,
+			&i.PreviewRevision,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReleasedArchivedSessions = `-- name: ListReleasedArchivedSessions :many
 SELECT s.id, s.terminated_at, s.updated_at FROM sessions s
 WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
@@ -1028,12 +1071,16 @@ WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
     AND s.id NOT IN (
         SELECT t.handled_by_session_id FROM conversation_turns t
         JOIN conversations c ON c.id = t.conversation_id
-        WHERE c.session_id IS NULL OR c.session_id <> t.handled_by_session_id
+        LEFT JOIN review r ON r.id = c.review_id
+        WHERE (c.session_id IS NULL OR c.session_id <> t.handled_by_session_id)
+            AND (r.session_id IS NULL OR r.session_id <> t.handled_by_session_id)
     )
     AND s.id NOT IN (
         SELECT c.current_session_id FROM conversations c
+        LEFT JOIN review r ON r.id = c.review_id
         WHERE c.current_session_id IS NOT NULL
             AND (c.session_id IS NULL OR c.session_id <> c.current_session_id)
+            AND (r.session_id IS NULL OR r.session_id <> c.current_session_id)
     )
 ORDER BY s.id
 `
@@ -1480,12 +1527,13 @@ UPDATE sessions SET
     updated_at = ?15,
     auto_inject_review = ?16,
     auto_inject_ci = ?17,
-    provision_state = ?18,
+    terminate_on_pr_merge = ?18,
+    provision_state = ?19,
     provision_error = '',
-    client_request_id = ?19,
-    client_request_hash = ?20,
+    client_request_id = ?20,
+    client_request_hash = ?21,
     is_task_preparation = 0
-WHERE id = ?21 AND is_task_preparation = 1
+WHERE id = ?22 AND is_task_preparation = 1
 `
 
 type PromoteTaskPreparationParams struct {
@@ -1506,6 +1554,7 @@ type PromoteTaskPreparationParams struct {
 	UpdatedAt           time.Time
 	AutoInjectReview    bool
 	AutoInjectCI        bool
+	TerminateOnPRMerge  bool
 	ProvisionState      domain.SessionProvisionState
 	ClientRequestID     string
 	ClientRequestHash   string
@@ -1533,6 +1582,7 @@ func (q *Queries) PromoteTaskPreparation(ctx context.Context, arg PromoteTaskPre
 		arg.UpdatedAt,
 		arg.AutoInjectReview,
 		arg.AutoInjectCI,
+		arg.TerminateOnPRMerge,
 		arg.ProvisionState,
 		arg.ClientRequestID,
 		arg.ClientRequestHash,

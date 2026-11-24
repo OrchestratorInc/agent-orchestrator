@@ -8,15 +8,23 @@ import { fetch as expoFetch } from "expo/fetch";
 import { router } from "expo-router";
 import { forgetCloudAccountCaches } from "./accountCaches";
 import { forgetCloudDrafts } from "./drafts";
+import { forgetAccountState } from "../forgetLocalState";
 import { collectPages, createCloudClient, type CloudClient } from "./client";
 import { CLOUD_API_BASE_URL } from "./config";
 import { CloudAuthError, cloudErrorMessage } from "./errors";
 import { resolveOrganization } from "./org";
+import { mergeCloudProjectLists, upsertCloudProject } from "./standaloneAgents";
 import { presentPlanRefusal } from "./planRefusal";
 import { registerCloudPush, unregisterCloudPush } from "./push";
 import type { CloudMe, CloudOrganization, CloudProject, CloudProviderConnection, CloudSession } from "./types";
 
 export type CloudStatus = "loading" | "signed-out" | "connecting" | "ready" | "error";
+
+/** List writes bound to the account and organization they were taken under. */
+export type CloudScopedWrites = {
+	upsertSession(session: CloudSession): void;
+	upsertProject(project: CloudProject): void;
+};
 
 export type CloudState = {
 	status: CloudStatus;
@@ -53,6 +61,14 @@ export type CloudState = {
 	refreshNotifications(): Promise<void>;
 	/** Put a session the phone just created or changed into the list without waiting for the poll. */
 	upsertSession(session: CloudSession): void;
+	/** Put a project the phone just created (a standalone agent's) into the list without waiting for a read. */
+	upsertProject(project: CloudProject): void;
+	/**
+	 * The list writes for a request starting now. They do nothing once the
+	 * account or organization has changed, so a late answer can't land in
+	 * another organization's lists.
+	 */
+	scoped(): CloudScopedWrites;
 	/** A cloud screen is on view: poll at the live rate until the returned release runs. */
 	watch(): () => void;
 };
@@ -108,6 +124,20 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	// register the phone again after its removal.
 	const pushRegistration = useRef<Promise<unknown>>(Promise.resolve());
 	const signingOut = useRef(false);
+	// Projects the phone put in the list itself, by the order they went in: a
+	// read that started before one can't know it, so it keeps those; a read that
+	// started after one answers for it, deletion included.
+	const upsertClock = useRef(0);
+	const upsertedProjects = useRef(new Map<string, { project: CloudProject; at: number }>());
+	// Project reads in the order they started, and the newest one applied: an
+	// older read that lands after a newer one is out of date and is dropped.
+	const projectReadClock = useRef(0);
+	const appliedProjectRead = useRef(0);
+	// The projects as last set, for the session poll to spot one it hasn't read
+	// (an agent started on another device), and the ids it already re-read the
+	// projects for, so one that never lists (a shared session's) costs one read.
+	const projectsRef = useRef<CloudProject[] | null>(null);
+	const projectsReadFor = useRef(new Set<string>());
 
 	const client = useMemo(() => createCloudClient({
 		baseUrl: CLOUD_API_BASE_URL,
@@ -127,6 +157,9 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	const reset = useCallback(() => {
 		generation.current++;
 		forgetCloudAccountCaches();
+		upsertedProjects.current.clear();
+		projectsRef.current = null;
+		projectsReadFor.current.clear();
 		setMe(null);
 		setOrg(null);
 		setProjects([]);
@@ -152,21 +185,42 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		setError(cloudErrorMessage(cause));
 	}, []);
 
-	const refreshProjects = useCallback(async () => {
+	// True once the projects were read (an out-of-date answer counts: a newer
+	// read answered); false when the read failed.
+	const readProjects = useCallback(async (): Promise<boolean> => {
 		const current = orgRef.current;
 		const own = generation.current;
-		if (!current) return;
+		if (!current) return false;
+		const startedAt = upsertClock.current;
+		const readId = ++projectReadClock.current;
 		try {
-			const items = await collectPages((cursor) => client.listProjects(current.id, { cursor }));
-			if (own !== generation.current) return;
-			setProjects(items);
+			// The caller's standalone agents are each a project of their own, read
+			// apart from the projects so many agents can't page the projects out.
+			const [listed, agents] = await Promise.all([
+				collectPages((cursor) => client.listProjects(current.id, { cursor, standaloneAgents: "exclude" })),
+				collectPages((cursor) => client.listProjects(current.id, { cursor, standaloneAgents: "only" })),
+			]);
+			if (own !== generation.current || readId < appliedProjectRead.current) return true;
+			appliedProjectRead.current = readId;
+			let next = mergeCloudProjectLists(listed, agents);
+			for (const [id, upsert] of upsertedProjects.current) {
+				if (upsert.at > startedAt) next = upsertCloudProject(next, upsert.project);
+				else upsertedProjects.current.delete(id);
+			}
+			projectsRef.current = next;
+			setProjects(next);
 			setProjectsLoaded(true);
 			setProjectsError(null);
+			return true;
 		} catch (cause) {
+			// A newer read already answered: this failure is out of date too.
+			if (readId < appliedProjectRead.current) return true;
 			if (own === generation.current) setProjectsError(cloudErrorMessage(cause));
 			fail(cause, own);
+			return false;
 		}
 	}, [client, fail]);
+	const refreshProjects = useCallback(async () => { await readProjects(); }, [readProjects]);
 
 	const refreshSessions = useCallback(async () => {
 		const current = orgRef.current;
@@ -176,6 +230,20 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			const items = await collectPages((cursor) => client.listSessions(current.id, { cursor }), 5);
 			if (own !== generation.current) return;
 			setSessions(items);
+			// A session in a project the list doesn't hold (a standalone agent
+			// started elsewhere) reads as its project only once the projects are read.
+			const known = projectsRef.current;
+			if (known) {
+				const listed = new Set(known.map((project) => project.id));
+				const unread = items.map((item) => item.projectId).filter((id) => id && !listed.has(id) && !projectsReadFor.current.has(id));
+				if (unread.length > 0) {
+					unread.forEach((id) => projectsReadFor.current.add(id));
+					// A failed read is tried again on a later poll.
+					void readProjects().then((read) => {
+						if (!read) unread.forEach((id) => projectsReadFor.current.delete(id));
+					});
+				}
+			}
 			setSessionsLoaded(true);
 			setSessionsError(null);
 			setError(null);
@@ -183,7 +251,7 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			if (own === generation.current) setSessionsError(cloudErrorMessage(cause));
 			fail(cause, own);
 		}
-	}, [client, fail]);
+	}, [client, fail, readProjects]);
 
 	const refreshConnections = useCallback(async () => {
 		const own = generation.current;
@@ -224,6 +292,9 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 			if (orgRef.current && orgRef.current.id !== nextOrg.id) {
 				own = ++generation.current;
 				forgetCloudAccountCaches();
+				upsertedProjects.current.clear();
+				projectsRef.current = null;
+				projectsReadFor.current.clear();
 				setProjects([]);
 				setProjectsLoaded(false);
 				setSessions([]);
@@ -254,7 +325,9 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 	const adopt = useCallback((next: Account | null) => {
 		const previous = adopted.current;
 		adopted.current = next;
-		if (previous && previous.id !== next?.id) draftsCleared.current = forgetCloudDrafts().catch(() => {});
+		// So does what the app kept across being closed while it was signed in
+		// (the New task draft, Cloud review comments, the last screen).
+		if (previous && previous.id !== next?.id) draftsCleared.current = Promise.all([forgetCloudDrafts(), forgetAccountState(previous.id)]).then(() => {}, () => {});
 		signingOut.current = false;
 		reset();
 		setAccount(next);
@@ -354,11 +427,28 @@ export function CloudProvider({ children }: { children: ReactNode }) {
 		setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
 	}, []);
 
+	const upsertProject = useCallback((project: CloudProject) => {
+		upsertedProjects.current.set(project.id, { project, at: ++upsertClock.current });
+		setProjects((current) => {
+			const next = upsertCloudProject(current, project);
+			if (projectsRef.current) projectsRef.current = next;
+			return next;
+		});
+	}, []);
+
+	const scoped = useCallback((): CloudScopedWrites => {
+		const own = generation.current;
+		return {
+			upsertSession: (session) => { if (own === generation.current) upsertSession(session); },
+			upsertProject: (project) => { if (own === generation.current) upsertProject(project); },
+		};
+	}, [upsertProject, upsertSession]);
+
 	const value = useMemo<CloudState>(() => ({
 		status, account, me, org, error, client,
 		projects, projectsLoaded, projectsError, sessions, sessionsLoaded, sessionsError, connections, connectionsLoaded, notificationsUnread,
 		chatHarnesses: me?.chatHarnesses ?? NO_CHAT_HARNESSES,
-		signIn, signOut, refresh, refreshProjects, refreshSessions, refreshConnections, refreshNotifications, upsertSession, watch,
-	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsError, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, sessions, sessionsError, sessionsLoaded, signIn, signOut, status, upsertSession, watch]);
+		signIn, signOut, refresh, refreshProjects, refreshSessions, refreshConnections, refreshNotifications, upsertSession, upsertProject, scoped, watch,
+	}), [account, client, connections, connectionsLoaded, error, me, notificationsUnread, org, projects, projectsError, projectsLoaded, refresh, refreshConnections, refreshNotifications, refreshProjects, refreshSessions, scoped, sessions, sessionsError, sessionsLoaded, signIn, signOut, status, upsertProject, upsertSession, watch]);
 	return <CloudContext.Provider value={value}>{children}</CloudContext.Provider>;
 }

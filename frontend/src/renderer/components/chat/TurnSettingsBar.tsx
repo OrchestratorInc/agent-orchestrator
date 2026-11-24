@@ -17,6 +17,7 @@
  * provider's; only the grouping of the triggers is AO's.
  */
 
+import { uiUsage, useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import { Fragment, useMemo, useState, type FocusEvent, type ReactNode } from "react";
 import { Check, ChevronDown, Hand, ListTodo, PencilLine, ShieldAlert, ShieldCheck, SlidersHorizontal, TriangleAlert, Zap, type AppIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
@@ -40,6 +41,7 @@ import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
 import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
+import { queryShown } from "../../lib/dom-selectors";
 import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
 	ApprovalMode,
@@ -135,6 +137,7 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen = false,
 	agentSwitch,
 	beforePicker,
+	afterPicker,
 	modelsLoading,
 	lastModel,
 	unsetModelLabel,
@@ -188,6 +191,8 @@ export function TurnSettingsBar({
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
+	/** Right after the model control, in either picker, such as the usage-limit sign. */
+	afterPicker?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
@@ -542,6 +547,8 @@ export function TurnSettingsBar({
 						/>
 					) : null}
 
+					{afterPicker}
+
 					{standaloneExecutionMode && onChangeConfigOption ? (
 						<ExecutionModePicker
 							option={standaloneExecutionMode}
@@ -760,6 +767,13 @@ function claudeChoiceLabels(catalog: { id: string; displayName: string }[]) {
 	return choiceModel && ((value: string, name?: string) => choiceModel(value, name)?.label);
 }
 
+/** Open state and picks of a model menu, for the model picker's usage counts. */
+function useModelPickerTelemetry() {
+	const [open, setOpen] = useState(false);
+	const markPick = useTelemetrySurface("model_picker", open, { choice: true });
+	return { onOpenChange: setOpen, markPick };
+}
+
 function ModelEffortPicker({
 	models,
 	settings,
@@ -798,17 +812,25 @@ function ModelEffortPicker({
 	onChangeConfigOption?: (optionId: string, value: ChatConfigOptionValue) => void;
 }) {
 	const { t } = useTranslation();
+	const picker = useModelPickerTelemetry();
+	// Any applied choice is a pick; a different model is also a model change.
+	const change = (next: TurnSettings) => {
+		picker.markPick();
+		if (next.model !== settings.model) uiUsage.modelChanged();
+		onChange(next);
+	};
 	const catalog = useMemo(() => models.map((model) => ({ ...model, label: model.displayName })), [models]);
 	const effortChoices = useMemo(() => efforts.map((value) => ({ value })), [efforts]);
 	const savedEffort = settings.reasoningEffort === "default" ? "" : settings.reasoningEffort ?? "";
 
 	return (
-		<OptionMenu>
+		<OptionMenu onOpenChange={picker.onOpenChange}>
 				<OptionMenuTrigger variant="ghost"
 					showCaret={false}
 					disabled={disabled}
 					aria-label="Model and reasoning effort for the next turn"
 					data-shortcut-target="model-picker"
+					data-telemetry-id="composer.model_picker"
 					title={
 						reroute
 							? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}${
@@ -820,12 +842,12 @@ function ModelEffortPicker({
 				>
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 				</OptionMenuTrigger>
-			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
+			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} data-telemetry-surface="model_picker" onCloseAutoFocus={restoreComposerFocus}>
 				<OptionMenuSub closeOnSelect>
 					<OptionMenuSubTrigger label="Model" value={modelLabel} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
-					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
+					<OptionMenuSubContent data-telemetry-surface="model_picker" scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
 						<ModelMenuChoices models={catalog} selectedId={settings.model}>
 							{(matches, searchActiveID, optionID) => matches.map((model) => (
 								<OptionMenuItem
@@ -835,7 +857,7 @@ function ModelEffortPicker({
 									searchActive={model.id === searchActiveID}
 									radio
 									disabled={Boolean(model.unavailableReason)}
-									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
+									onSelect={() => change({ ...settings, model: model.id, reasoningEffort: undefined })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
 								>
 									<UnavailableLabel label={model.displayName} reason={model.unavailableReason} />
@@ -851,14 +873,14 @@ function ModelEffortPicker({
 							label={t("settings.models.effort")}
 							value={effortDisplayLabel({ value: savedEffort, choices: effortChoices, followLabel: t("settings.models.effort"), t, defaultEffort })}
 						/>
-						<OptionMenuSubContent className={CHAT_MENU_CLASS}>
+						<OptionMenuSubContent data-telemetry-surface="model_picker" className={CHAT_MENU_CLASS}>
 							<EffortMenuItems
 								value={savedEffort}
 								choices={effortChoices}
 								availability={availability}
 								defaultEffort={defaultEffort}
 								compact
-								onChange={(value) => onChange({ ...settings, reasoningEffort: value || undefined })}
+								onChange={(value) => change({ ...settings, reasoningEffort: value || undefined })}
 							/>
 						</OptionMenuSubContent>
 					</OptionMenuSub>
@@ -1053,7 +1075,7 @@ function restoreComposerFocus(event: Event) {
 	const trigger = document.querySelector<HTMLElement>("[data-shortcut-target='model-picker'][data-shortcut-opened]");
 	if (!trigger) return;
 	delete trigger.dataset.shortcutOpened;
-	const composer = document.querySelector<HTMLElement>('[aria-label="Message the agent"]');
+	const composer = queryShown<HTMLElement>('[aria-label="Message the agent"]');
 	if (!composer || composer.getAttribute("aria-disabled") === "true") return;
 	event.preventDefault();
 	composer.focus();

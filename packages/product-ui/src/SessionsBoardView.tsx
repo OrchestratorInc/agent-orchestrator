@@ -48,6 +48,14 @@ export type BoardSessionPresentation = {
 	 * send one falls back to the translated {@link status} label.
 	 */
 	displayStatus?: string;
+	/**
+	 * How a multi-PR session's live PRs stand when they do not all agree with
+	 * the one {@link displayStatus} speaks for: `lead`, when several PRs share
+	 * that state, replaces the phrase with its count ("2 awaiting review"), and
+	 * `detail` follows it, muted ("1 waiting on #8277"). Absent for a single PR
+	 * or when every live PR is in one state.
+	 */
+	prMix?: { lead?: string; detail: string };
 	statusReadiness?: "checking" | "ready" | "unavailable";
 	/**
 	 * Daemon-confirmed termination fact. `status` can already read "merged"
@@ -145,7 +153,7 @@ export function SessionsBoardGridView<TSession extends BoardSessionPresentation>
 
 	return (
 		<div
-			className="board-horizontal-scrollbar h-full overflow-x-auto overflow-y-hidden"
+			className="board-horizontal-scrollbar scrollbar-none h-full overflow-x-auto overflow-y-hidden"
 			data-testid="board-horizontal-scroll"
 		>
 			<div className="relative grid h-full min-w-[64rem] grid-cols-4 divide-x divide-border-strong xl:min-w-0">
@@ -201,7 +209,7 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 				</span>
 				<span className="ml-auto tabular-nums text-xs leading-none text-passive">{ordered.length}</span>
 			</div>
-			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto pl-3 pr-2 pb-3 pt-3">
+			<div className="scrollbar-none min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
 				<div className="flex min-h-full flex-col gap-2.5">
 					{ordered.map((session) => (
 						<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
@@ -289,7 +297,10 @@ export function SessionCardView({
 			? "text-status-exited"
 			: session.displayStatus === "Merged"
 				? "text-status-merged"
-				: session.status === "mergeable" || session.displayStatus === "Mergeable"
+				// The daemon's phrase decides; `status` only speaks for a daemon too old
+				// to send one (a PR stacked on another session's PR can still read
+				// "mergeable" there while the phrase says it waits on its parent).
+				: (session.displayStatus ? session.displayStatus === "Mergeable" : session.status === "mergeable")
 				? "text-success"
 				: (session.statusPresentation?.className ?? column.titleClassName);
 	const branch = session.branch ?? "";
@@ -301,7 +312,12 @@ export function SessionCardView({
 			: session.statusReadiness === "unavailable"
 				? translateStatus("session.statusUnavailable")
 				: (statusPresentation?.label ??
+					session.prMix?.lead ??
 					(session.displayStatus ? getDisplayStatusLabel(session.displayStatus, translate) : badge.label));
+	const statusDetail =
+		session.statusReadiness !== "checking" && session.statusReadiness !== "unavailable" && !statusPresentation
+			? session.prMix?.detail
+			: undefined;
 	// Additive summary footer, not a replacement for renderedStatusLabel: it
 	// only appears once the daemon confirms the session is actually finished
 	// ("terminated", or "merged" with isTerminated true -- a live session can
@@ -336,7 +352,10 @@ export function SessionCardView({
 			data-testid="session-status"
 		>
 			{showStatusLoader ? <LoaderCircleIcon aria-hidden="true" className="mr-1 size-icon-2xs animate-spin" /> : null}
-			<span className="min-w-0 truncate">{renderedStatusLabel}</span>
+			<span className="min-w-0 truncate" title={statusDetail ? `${renderedStatusLabel} · ${statusDetail}` : undefined}>
+				{renderedStatusLabel}
+				{statusDetail ? <span className="text-muted-foreground"> · {statusDetail}</span> : null}
+			</span>
 		</span>
 	);
 	const metrics = (
@@ -383,6 +402,7 @@ export function SessionCardView({
 	return (
 		<div
 			onClick={interactive ? onOpen : undefined}
+			data-telemetry-id={interactive ? "board.card" : undefined}
 			role={interactive || still ? undefined : "listitem"}
 			className={cn(
 				still

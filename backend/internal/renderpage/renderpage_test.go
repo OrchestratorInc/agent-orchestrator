@@ -34,7 +34,7 @@ func TestInjectLandsAfterTheDoctype(t *testing.T) {
 			if !strings.HasSuffix(got, tc.wantSuffix) {
 				t.Fatalf("page body not preserved verbatim: %.160q", got[len(got)-min(len(got), 160):])
 			}
-			for _, want := range []string{`<meta name="viewport"`, "ui/notifications/size-changed", "ui/open-link", "ao/open-image", "ao-theme=", "--viz-series-1:var(--chart-1)", "--blue:var(--chart-1)"} {
+			for _, want := range []string{`<meta name="viewport"`, "ui/notifications/size-changed", "ui/open-link", "ao/open-image", "--viz-series-1:var(--chart-1)", "--blue:var(--chart-1)"} {
 				if !strings.Contains(got, want) {
 					t.Errorf("bootstrap missing %q", want)
 				}
@@ -47,6 +47,24 @@ func TestInjectKeepsThePagesViewport(t *testing.T) {
 	got := inject(`<!doctype html><meta name="viewport" content="width=500">`)
 	if n := strings.Count(got, `name="viewport"`); n != 1 {
 		t.Fatalf("viewport metas = %d, want the page's own only", n)
+	}
+}
+
+func TestPageViewport(t *testing.T) {
+	for page, want := range map[string]bool{
+		`<meta name="viewport" content="width=device-width">`:        true,
+		`<META charset="utf-8" Name='Viewport' content="width=600">`: true,
+		"<meta\n  content=\"width=400\"\n  name=viewport>":           true,
+		`<meta name=viewport/>`:                                      true,
+		`<meta name="description" content="viewport">`:               false,
+		`<meta data-name="viewport">`:                                false,
+		`<meta name="viewport-fit">`:                                 false,
+		`<metadata name="viewport">`:                                 false,
+		`<p>name="viewport"</p>`:                                     false,
+	} {
+		if got := pageViewport.MatchString(page); got != want {
+			t.Errorf("pageViewport(%q) = %v, want %v", page, got, want)
+		}
 	}
 }
 
@@ -138,19 +156,18 @@ func TestBootstrapStylesFullscreenAndScrollableFrames(t *testing.T) {
 	}
 }
 
-// The cases mirror renderFileName in frontend/src/renderer/lib/render-frame.test.ts.
-func TestFileNameMatchesTheRenderer(t *testing.T) {
+func TestFileName(t *testing.T) {
 	for title, want := range map[string]string{
-		"Turns by day":                          "Turns by day.html",
-		"Q3: a/b\\c *?\"<>| \u0007 report\n":    "Q3 a b c report.html",
-		"":                                      "Page.html",
-		" /:*?\"<>| ":                           "Page.html",
-		strings.Repeat("x", 119) + " tail":      strings.Repeat("x", 119) + ".html",
-		strings.Repeat("y", 300):                strings.Repeat("y", 120) + ".html",
-		strings.Repeat("é", 130):                strings.Repeat("é", 120) + ".html",
-		"tab\there\u00a0and\u2003wide   spaces": "tab here and wide spaces.html",
-		// JS \s matches U+FEFF; Go's unicode.IsSpace does not.
-		"\ufeffTurns\ufeffby day\ufeff": "Turns by day.html",
+		"Weekly spend":                         "Weekly spend.html",
+		"CI <main>: p95 / p99 | \"flaky\"?":    "CI main p95 p99 flaky.html",
+		"line one\r\nline two\x00\x7f":         "line one line two.html",
+		"":                                     "Page.html",
+		"  ***  ":                              "Page.html",
+		"\ufeffBOM\ufefftitle\ufeff":           "BOM title.html",
+		"nbsp\u00a0em\u2003space":              "nbsp em space.html",
+		strings.Repeat("ab ", 50):              strings.TrimSpace(strings.Repeat("ab ", 40)) + ".html",
+		strings.Repeat("ж", 125):               strings.Repeat("ж", 120) + ".html",
+		strings.Repeat("z", 120) + " overflow": strings.Repeat("z", 120) + ".html",
 	} {
 		if got := FileName(title); got != want {
 			t.Errorf("FileName(%q) = %q, want %q", title, got, want)

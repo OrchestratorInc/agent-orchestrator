@@ -80,7 +80,7 @@ export type FilesSource =
 	 * `cloud` fetches rawUrl through the cloud control-plane bridge;
 	 * `artifactRoot` is the URL relative links resolve against.
 	 */
-	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void; save?: ArtifactSave; savedVersion?: number };
+	| { kind: "artifact"; rawUrl?: string; readOnly?: boolean; /** Offers no feedback to the worker, as for an archived session's files. */ noFeedback?: boolean; cloud?: boolean; artifactRoot?: string; onAccessRefused?: () => void; save?: ArtifactSave; savedVersion?: number };
 
 /** Saves an edit of an artifact file somewhere other than the local daemon, as a cloud session's control plane. */
 export type ArtifactSave = (input: { path: string; content: string; expectedFileFingerprint: string }) => Promise<{ fileFingerprint: string; size: number }>;
@@ -215,12 +215,13 @@ export const sessionWorkspaceFilesQueryKey = (sessionId: string, hostId?: string
 const WORKSPACE_FILES_DEGRADED_REFETCH_MS = 30_000;
 const MAX_ARTIFACT_TEXT_BYTES = 256 * 1024;
 
-async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string, hostId?: string): Promise<WorkspaceFilesResponse> {
+async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: string, hostId?: string, signal?: AbortSignal): Promise<WorkspaceFilesResponse> {
 	const missing = knownMissingWorkspace(sessionId, hostId);
 	if (missing) throw missing;
 	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
 	const { data, error, response: httpResponse } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/manifest", {
 		params: { path: { sessionId } },
+		signal,
 	});
 	if (error) throw recordWorkspaceResult(sessionId, hostId, error, httpResponse, errorMessage, epoch);
 	const response = (data ? { ...data, commits: [] } : {
@@ -239,7 +240,7 @@ async function fetchSessionWorkspaceFiles(sessionId: string, errorMessage: strin
 	};
 }
 
-async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: string, hostId?: string, branch: FilesBranchTarget = CHECKED_OUT_BRANCH): Promise<WorkspaceHistoryResponse> {
+async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: string, hostId?: string, branch: FilesBranchTarget = CHECKED_OUT_BRANCH, signal?: AbortSignal): Promise<WorkspaceHistoryResponse> {
 	const missing = knownMissingWorkspace(sessionId, hostId);
 	if (missing) throw missing;
 	const epoch = workspaceRecoveryEpoch(sessionId, hostId);
@@ -248,6 +249,7 @@ async function fetchSessionWorkspaceHistory(sessionId: string, errorMessage: str
 		: undefined;
 	const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/workspace/history", {
 		params: query ? { path: { sessionId }, query } : { path: { sessionId } },
+		signal,
 	});
 	if (error) throw recordWorkspaceResult(sessionId, hostId, error, response, errorMessage, epoch);
 	if (!data) throw new Error(errorMessage);
@@ -816,7 +818,7 @@ export function sessionWorkspaceSearchQueryOptions(
 export function sessionWorkspaceFilesQueryOptions(sessionId: string, errorMessage = "Unable to load workspace files", hostId?: string) {
 	return {
 		queryKey: sessionWorkspaceFilesQueryKey(sessionId, hostId),
-		queryFn: () => fetchSessionWorkspaceFiles(sessionId, errorMessage, hostId),
+		queryFn: ({ signal }: { signal?: AbortSignal } = {}) => fetchSessionWorkspaceFiles(sessionId, errorMessage, hostId, signal),
 		retry: retryWorkspaceRead,
 		refetchOnWindowFocus: false,
 	};
@@ -838,7 +840,7 @@ export function sessionWorkspaceHistoryQueryOptions(sessionId: string, errorMess
 		queryKey: branch.kind === "branch" ? [...prefix, "branch", branch.name, branch.tipSha ?? ""] as const
 			: branch.kind === "pull_request" ? [...prefix, "pr", branch.url, branch.tipSha ?? ""] as const
 			: prefix,
-		queryFn: () => fetchSessionWorkspaceHistory(sessionId, errorMessage, hostId, branch),
+		queryFn: ({ signal }: { signal?: AbortSignal } = {}) => fetchSessionWorkspaceHistory(sessionId, errorMessage, hostId, branch, signal),
 		staleTime: Infinity,
 		retry: retryWorkspaceRead,
 	};

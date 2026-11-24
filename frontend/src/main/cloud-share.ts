@@ -12,7 +12,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
-import type { CloudShareAccess, CloudShareGrant, CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
+import type { CloudShareAccess, CloudShareGrant, CloudShareGrants, CloudShareInvite, CloudShareLink, CloudShareLinks, CloudShareSubjectGrant } from "../shared/cloud-share";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -172,6 +172,195 @@ export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: st
 	} finally {
 		await source.close();
 		await output?.close();
+	}
+}
+
+/** How long reading a remote host's file may take: its headers, and the whole download. */
+export const HOST_SHARE_TIMEOUTS: Record<"inspect" | "download", number> = {
+	inspect: 30_000,
+	download: 15 * 60_000,
+};
+
+/** A remote host's artifact as its daemon serves it. */
+export interface HostShareFileInfo {
+	name: string;
+	/** Slash-separated path in the session's artifacts folder. */
+	relativePath: string;
+	size: number;
+	/** See shareFileFingerprint; read from the host's ETag, so it matches a local file's. */
+	fingerprint: string;
+}
+
+/**
+ * The address of a remote host's artifact file on that host's loopback proxy
+ * (apiBase), served as its exact bytes. The path is checked as a local
+ * file's is, before the host's own check: no absolute path, no "..", and
+ * never the version history folder.
+ */
+export function hostShareFileUrl(apiBase: string, sessionId: unknown, relPath: unknown): { url: string; relativePath: string; name: string } {
+	if (typeof sessionId !== "string" || !SESSION_ID_PATTERN.test(sessionId) || sessionId === "." || sessionId === "..") {
+		throw new CloudShareError("invalid_file", "Not a session's artifact.");
+	}
+	if (typeof relPath !== "string" || relPath === "" || relPath.includes("\0") || relPath.includes("\\") || relPath.startsWith("/") || path.win32.isAbsolute(relPath)) {
+		throw new CloudShareError("invalid_file", "Not a file in the session's artifacts.");
+	}
+	const segments = relPath.split("/").filter((segment) => segment !== "");
+	if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
+		throw new CloudShareError("invalid_file", "Only files in the session's artifacts folder can be shared.");
+	}
+	if (segments[0] === VERSIONS_DIR) throw new CloudShareError("invalid_file", "Version history cannot be shared.");
+	const relativePath = segments.join("/");
+	const url = `${apiBase.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${segments.map(encodeURIComponent).join("/")}?source=artifact&raw=true`;
+	return { url, relativePath, name: segments[segments.length - 1] ?? relativePath };
+}
+
+/**
+ * The fingerprint a remote host's response names. The daemon tags an
+ * artifact "<size>-<modification time in ns>", which gives the same
+ * fingerprint a local file's metadata would. A host that sends no such tag
+ * falls back to its Content-Length and Last-Modified, which only tells
+ * changes a second apart.
+ */
+export function hostShareFingerprint(headers: Headers): { size: number; fingerprint: string } | undefined {
+	const tag = /^(?:W\/)?"?(\d+)-(\d+)"?$/.exec(headers.get("etag")?.trim() ?? "");
+	if (tag) {
+		const size = Number(tag[1]);
+		const nanoseconds = BigInt(tag[2] ?? "0");
+		return { size, fingerprint: shareFileFingerprint({ size, mtimeMs: Number(nanoseconds / 1_000_000n) }) };
+	}
+	const length = headers.get("content-length");
+	const modified = Date.parse(headers.get("last-modified") ?? "");
+	if (length === null || !/^\d+$/.test(length) || Number.isNaN(modified)) return undefined;
+	const size = Number(length);
+	return { size, fingerprint: shareFileFingerprint({ size, mtimeMs: modified }) };
+}
+
+function hostFileError(response: Response): CloudShareError {
+	if (response.status === 404) return new CloudShareError("file_missing", "The file is no longer available.");
+	return new CloudShareError("host_unavailable", `The machine this file is on didn't answer (${response.status}).`, response.status);
+}
+
+/** fetch from a remote host, with a time limit; a cancel stays a cancel. */
+async function fetchHostWithin(fetchHost: HostFetch, url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<Response> {
+	const timeout = AbortSignal.timeout(timeoutMs);
+	try {
+		return await fetchHost(url, { ...init, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+	} catch (error) {
+		if (timeout.aborted && !signal?.aborted) throw new CloudShareError("timeout", "The machine this file is on didn't answer in time. Check that it is online and try again.");
+		if (signal?.aborted) throw error;
+		throw new CloudShareError("host_unavailable", "The machine this file is on can't be reached. Check that it is online and try again.");
+	}
+}
+
+export type HostFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+/** A remote host's file's name, size and fingerprint, read from its headers alone. */
+export async function inspectHostShareFile(fetchHost: HostFetch, file: { url: string; relativePath: string; name: string }, signal?: AbortSignal): Promise<HostShareFileInfo> {
+	const version = await hostFileVersion(fetchHost, file.url, signal);
+	return { name: file.name, relativePath: file.relativePath, ...version };
+}
+
+/**
+ * A remote host's file's size and fingerprint, from its headers alone. A GET whose body is dropped
+ * once the headers are in: the host's file route answers GET only, and a HEAD there is refused with 405.
+ */
+async function hostFileVersion(fetchHost: HostFetch, url: string, signal?: AbortSignal): Promise<{ size: number; fingerprint: string }> {
+	const response = await fetchHostWithin(fetchHost, url, { method: "GET" }, HOST_SHARE_TIMEOUTS.inspect, signal);
+	await response.body?.cancel().catch(() => undefined);
+	if (!response.ok) throw hostFileError(response);
+	const version = hostShareFingerprint(response.headers);
+	if (!version) throw new CloudShareError("host_unsupported", "The machine this file is on is running an older Orchestrator. Update it to share its files.");
+	return version;
+}
+
+/**
+ * Downloads a remote host's file into a private snapshot under snapshotDir,
+ * hashing it as it goes. The version is the one the response names, so a
+ * file the agent rewrote since the panel showed it is caught by the caller's
+ * fingerprint check. A body shorter or longer than that version, or a file
+ * that is no longer that version once the body is read, is refused as
+ * source_changed. The download needs as much free space as the file.
+ */
+export async function snapshotHostShareFile(
+	fetchHost: HostFetch,
+	file: { url: string },
+	snapshotDir: string,
+	options: SnapshotOptions & { expectedSize?: number } = {},
+): Promise<ShareSnapshot> {
+	await fs.mkdir(snapshotDir, { recursive: true, mode: 0o700 });
+	if (options.expectedSize !== undefined) {
+		const free = await fs.statfs(snapshotDir).then((stats) => stats.bavail * stats.bsize, () => Number.POSITIVE_INFINITY);
+		if (free < options.expectedSize) throw new CloudShareError("disk_full", "There is not enough free disk space to prepare this file for sharing.");
+	}
+	const response = await fetchHostWithin(fetchHost, file.url, { method: "GET" }, HOST_SHARE_TIMEOUTS.download, options.signal);
+	if (!response.ok) {
+		await response.body?.cancel().catch(() => undefined);
+		throw hostFileError(response);
+	}
+	const version = hostShareFingerprint(response.headers);
+	if (!version || !response.body) {
+		await response.body?.cancel().catch(() => undefined);
+		throw new CloudShareError("host_unsupported", "The machine this file is on is running an older Orchestrator. Update it to share its files.");
+	}
+	const target = path.join(snapshotDir, randomUUID());
+	// The body is cancelled on every way out short of reading it all, so it never holds its connection.
+	const reader = response.body.getReader();
+	const output = await fs.open(target, "wx", 0o600).catch(async (error: unknown) => {
+		await reader.cancel().catch(() => undefined);
+		throw error;
+	});
+	const hash = createHash("sha256");
+	let size = 0;
+	try {
+		for (;;) {
+			if (options.signal?.aborted) {
+				await reader.cancel().catch(() => undefined);
+				throw new CloudShareError("cancelled", "Sharing was cancelled.");
+			}
+			const { done, value } = await reader.read();
+			if (done) break;
+			hash.update(value);
+			await output.write(value);
+			size += value.byteLength;
+			if (size > version.size) {
+				await reader.cancel().catch(() => undefined);
+				break;
+			}
+			options.onProgress?.(size);
+		}
+		// The bytes must be all of the version the response named, and no more.
+		if (size !== version.size) throw new CloudShareError("source_changed", "The file changed while it was being prepared for sharing.");
+		// The host streams the live file, so a rewrite in place during the body can mix two versions
+		// under the first one's tag: the file must still be that version once it is all read.
+		if ((await hostFileVersion(fetchHost, file.url, options.signal)).fingerprint !== version.fingerprint) {
+			throw new CloudShareError("source_changed", "The file changed while it was being prepared for sharing.");
+		}
+		await output.close();
+		return { path: target, size, sha256: hash.digest("hex"), fingerprint: version.fingerprint };
+	} catch (error) {
+		await reader.cancel().catch(() => undefined);
+		await output.close().catch(() => undefined);
+		await fs.rm(target, { force: true });
+		// A connection that dropped mid-download reads as the host being away, not as a bug.
+		if (error instanceof CloudShareError || options.signal?.aborted) throw error;
+		throw new CloudShareError("host_unavailable", "The machine this file is on stopped answering. Check that it is online and try again.");
+	}
+}
+
+/** The largest page whose files are looked for; a larger one is shared alone. */
+export const MAX_SCANNED_PAGE = 32 << 20;
+
+/**
+ * A resolved file's text, read the way a snapshot reads it (see
+ * openResolved), or null when it is larger than limit bytes.
+ */
+export async function readShareFileText(file: ResolvedShareFile, limit: number): Promise<string | null> {
+	const handle = await openResolved(file);
+	try {
+		if ((await handle.stat()).size > limit) return null;
+		return await handle.readFile("utf8");
+	} finally {
+		await handle.close();
 	}
 }
 
@@ -336,14 +525,40 @@ export function setShareLinkAccess(api: CloudShareApi, baseUrl: string, shareId:
 	return callApi<CloudShareLink>(api, baseUrl, "PATCH", shareLinkPath(shareId), { access });
 }
 
-/** The emails a link is shared with. */
-export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrant[]> {
-	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`)).grants;
+interface ShareGrantsBody {
+	grants: CloudShareGrant[];
+	teams?: CloudShareSubjectGrant[];
+	workspaces?: CloudShareSubjectGrant[];
 }
 
-/** Shares a link with emails at once, and returns everyone it is shared with now. */
-export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, emails: string[]): Promise<CloudShareGrant[]> {
-	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, { emails })).grants;
+/** A control plane that predates team sharing lists only people. */
+function shareGrants(body: ShareGrantsBody): CloudShareGrants {
+	return { people: body.grants, teams: body.teams ?? [], workspaces: body.workspaces ?? [] };
+}
+
+/** Everyone a link is shared with: people, teams and workspaces. */
+export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrants> {
+	return shareGrants(await callApi<ShareGrantsBody>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`));
+}
+
+/**
+ * Shares a link with people, teams and a workspace at once, and returns
+ * everyone it is shared with now. Only the fields set are sent, so sharing
+ * with people alone works on a control plane that predates team sharing.
+ */
+export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, invite: CloudShareInvite): Promise<CloudShareGrants> {
+	const teamIds = invite.teamIds ?? [];
+	const subjects = teamIds.length > 0 || invite.workspace === true;
+	if (subjects && (!invite.orgId || !UUID_PATTERN.test(invite.orgId) || !teamIds.every((id) => UUID_PATTERN.test(id)))) {
+		throw new CloudShareError("invalid_request", "Not a team or workspace to share with.");
+	}
+	const body = {
+		...(invite.emails && invite.emails.length > 0 ? { emails: invite.emails } : {}),
+		...(subjects ? { orgId: invite.orgId } : {}),
+		...(teamIds.length > 0 ? { teamIds } : {}),
+		...(invite.workspace === true ? { workspace: true } : {}),
+	};
+	return shareGrants(await callApi<ShareGrantsBody>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, body));
 }
 
 export async function removeShareGrant(api: CloudShareApi, baseUrl: string, shareId: string, grantId: string): Promise<void> {
@@ -425,6 +640,36 @@ export interface ShareUploadInput extends ShareAccessInput {
 	feature: string;
 	/** Update this active link instead. */
 	shareId?: string;
+	/**
+	 * The snapshot is an HTML page: files are the files it uses, uploaded with
+	 * it, and from now on the only files its link serves beside it (none when
+	 * empty). See cloud-share-page-files.ts.
+	 */
+	page?: { files: PageFileSnapshot[] };
+}
+
+/** One file a page uses, as it was copied, and where its link serves it. */
+export interface PageFileSnapshot {
+	path: string;
+	snapshot: ShareSnapshot;
+}
+
+/** What publishing a page did with the files it uses. */
+export interface PageFilesOutcome {
+	/** How many the link serves beside the page now. */
+	included: number;
+	/**
+	 * The control plane cannot serve a page's files (it predates them): the
+	 * page was published alone, and an active link kept the files it had.
+	 */
+	unsupported: boolean;
+	/**
+	 * The paths of the videos the control plane refused to include (it does
+	 * not serve videos yet): left out, as a page's missing files are.
+	 */
+	refusedVideos: string[];
+	/** The paths of the videos over the control plane's size limit: left out too. */
+	tooLargeVideos: string[];
 }
 
 interface UploadStart {
@@ -439,6 +684,12 @@ interface PresignedPart {
 	url: string;
 	headers: Record<string, string>;
 	size: number;
+}
+
+interface CompletedPart {
+	partNumber: number;
+	sha256: string;
+	etag: string;
 }
 
 function partRange(start: UploadStart, size: number, number: number): { offset: number; length: number } {
@@ -459,33 +710,25 @@ async function hashRange(handle: fs.FileHandle, range: { offset: number; length:
 }
 
 /**
- * Uploads a snapshot as a share link's file: starts the upload, presigns and
- * puts its parts, and finalizes it. A failure or cancel before finalizing
- * aborts the upload so its parts are discarded.
+ * Presigns and puts every part of one started upload of snapshot, and returns
+ * the parts in order, ready to finish it. One failed part stops the others
+ * before this throws. onSent gets the bytes of each part as it is sent.
  */
-export async function uploadShare(
+async function putSnapshotParts(
 	api: CloudShareApi,
-	input: ShareUploadInput,
-	onProgress: (sentBytes: number) => void,
+	baseUrl: string,
+	start: UploadStart,
+	snapshot: ShareSnapshot,
+	onSent: (bytes: number) => void,
 	signal?: AbortSignal,
-): Promise<{ share: CloudShareLink; replaced: boolean }> {
-	const { baseUrl, snapshot } = input;
-	// An update names where the file is now too, so its link follows a file
-	// moved to another folder.
-	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", {
-		name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature,
-		...(input.shareId ? { shareId: input.shareId } : {}),
-	}, signal);
+): Promise<CompletedPart[]> {
 	const handle = await fs.open(snapshot.path, "r");
-	// One failed part stops the others before the upload is aborted and the
-	// snapshot closed.
 	const batch = new AbortController();
 	const stop = () => batch.abort();
 	signal?.addEventListener("abort", stop, { once: true });
 	const running: Array<Promise<void>> = [];
 	try {
-		const completed: Array<{ partNumber: number; sha256: string; etag: string }> = [];
-		let sent = 0;
+		const completed: CompletedPart[] = [];
 		for (let first = 1; first <= start.partCount; first += PRESIGN_BATCH) {
 			const numbers = Array.from({ length: Math.min(PRESIGN_BATCH, start.partCount - first + 1) }, (_, index) => first + index);
 			const parts: Array<{ partNumber: number; sha256: string }> = [];
@@ -509,26 +752,146 @@ export async function uploadShare(
 					const etag = response.headers.get("etag");
 					if (!response.ok || !etag) throw new CloudShareError("upload_failed", `Uploading part ${part.partNumber} failed (${response.status}).`, response.status);
 					completed.push({ partNumber: part.partNumber, sha256: signed.sha256, etag });
-					sent += body.byteLength;
-					onProgress(sent);
+					onSent(body.byteLength);
 				}
 			};
 			const workers = Array.from({ length: UPLOAD_CONCURRENCY }, worker);
 			running.push(...workers);
 			await Promise.all(workers);
 		}
-		completed.sort((a, b) => a.partNumber - b.partNumber);
-		return await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize",
-			{ uploadToken: start.uploadToken, parts: completed, ...accessFields(input) }, signal, SHARE_TIMEOUTS.publish);
+		return completed.sort((a, b) => a.partNumber - b.partNumber);
 	} catch (error) {
 		batch.abort();
 		await Promise.allSettled(running);
-		// The upload was never finalized: discard its parts. Finalize itself
-		// failing leaves nothing to discard but aborting is harmless.
-		await callApi<void>(api, baseUrl, "POST", "/me/artifact-shares/uploads/abort", { uploadToken: start.uploadToken }).catch(() => undefined);
 		throw error;
 	} finally {
 		signal?.removeEventListener("abort", stop);
 		await handle.close();
+	}
+}
+
+/** Whether a control-plane refusal says it has no such route: it predates it. */
+function isMissingRoute(error: unknown): boolean {
+	return error instanceof CloudShareError && error.status === 404;
+}
+
+/** Whether a refusal says the control plane does not publish this type: a video while it serves none. */
+function isRefusedType(error: unknown): boolean {
+	return error instanceof CloudShareError && error.code === "artifact_share_type_unsupported";
+}
+
+/** Whether a refusal says a video is over the control plane's size limit. */
+function isVideoTooLarge(error: unknown): boolean {
+	return error instanceof CloudShareError && error.code === "artifact_share_video_too_large";
+}
+
+/** The file tokens of a page's uploaded files, and the videos the control plane refused. */
+interface UploadedPageFiles {
+	tokens: string[];
+	refusedVideos: string[];
+	tooLargeVideos: string[];
+}
+
+/**
+ * Uploads the files a page uses under the page's upload (pageToken) and
+ * returns their file tokens for finalizing, or null when the control plane
+ * predates included files: it then cannot take a files list either, since it
+ * refuses fields it does not know. With no files, one request that is refused
+ * either way tells which: an unknown route (404) or a path it checks (400).
+ * A video the control plane refuses (415: it serves no videos yet) is left
+ * out and the page is published without it.
+ */
+async function uploadPageFiles(
+	api: CloudShareApi,
+	baseUrl: string,
+	pageToken: string,
+	files: PageFileSnapshot[],
+	onSent: (bytes: number) => void,
+	signal?: AbortSignal,
+): Promise<UploadedPageFiles | null> {
+	if (files.length === 0) {
+		try {
+			await callApi<unknown>(api, baseUrl, "POST", "/me/artifact-shares/uploads/files",
+				{ uploadToken: pageToken, path: "", size: 0, sha256: "0".repeat(64) }, signal);
+		} catch (error) {
+			if (isMissingRoute(error)) return null;
+			if (error instanceof CloudShareError && error.status === 400) return { tokens: [], refusedVideos: [], tooLargeVideos: [] };
+			throw error;
+		}
+		return { tokens: [], refusedVideos: [], tooLargeVideos: [] };
+	}
+	const tokens: string[] = [];
+	const refusedVideos: string[] = [];
+	const tooLargeVideos: string[] = [];
+	for (const [index, file] of files.entries()) {
+		let start: UploadStart;
+		try {
+			start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads/files",
+				{ uploadToken: pageToken, path: file.path, size: file.snapshot.size, sha256: file.snapshot.sha256 }, signal);
+		} catch (error) {
+			if (index === 0 && isMissingRoute(error)) return null;
+			if (isRefusedType(error) || isVideoTooLarge(error)) {
+				(isRefusedType(error) ? refusedVideos : tooLargeVideos).push(file.path);
+				onSent(file.snapshot.size);
+				continue;
+			}
+			throw error;
+		}
+		try {
+			const parts = await putSnapshotParts(api, baseUrl, start, file.snapshot, onSent, signal);
+			const done = await callApi<{ fileToken: string }>(api, baseUrl, "POST", "/me/artifact-shares/uploads/files/complete",
+				{ uploadToken: start.uploadToken, parts }, signal, SHARE_TIMEOUTS.publish);
+			tokens.push(done.fileToken);
+		} catch (error) {
+			await callApi<void>(api, baseUrl, "POST", "/me/artifact-shares/uploads/abort", { uploadToken: start.uploadToken }).catch(() => undefined);
+			throw error;
+		}
+	}
+	return { tokens, refusedVideos, tooLargeVideos };
+}
+
+/**
+ * Uploads a snapshot as a share link's file: starts the upload, presigns and
+ * puts its parts, and finalizes it. A page's files go first, under the same
+ * upload, and finalizing lists them. A failure or cancel before finalizing
+ * aborts the upload so its parts are discarded; a file uploaded but never
+ * listed is deleted by the control plane in time. onProgress gets the bytes
+ * sent so far, the page's files included.
+ */
+export async function uploadShare(
+	api: CloudShareApi,
+	input: ShareUploadInput,
+	onProgress: (sentBytes: number) => void,
+	signal?: AbortSignal,
+): Promise<{ share: CloudShareLink; replaced: boolean; pageFiles?: PageFilesOutcome }> {
+	const { baseUrl, snapshot } = input;
+	// An update names where the file is now too, so its link follows a file
+	// moved to another folder.
+	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", {
+		name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature,
+		...(input.shareId ? { shareId: input.shareId } : {}),
+	}, signal);
+	let sent = 0;
+	const onSent = (bytes: number) => {
+		sent += bytes;
+		onProgress(sent);
+	};
+	try {
+		const uploaded = input.page ? await uploadPageFiles(api, baseUrl, start.uploadToken, input.page.files, onSent, signal) : null;
+		const fileTokens = uploaded?.tokens ?? null;
+		const parts = await putSnapshotParts(api, baseUrl, start, snapshot, onSent, signal);
+		const result = await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize", {
+			uploadToken: start.uploadToken,
+			parts,
+			...accessFields(input),
+			...(fileTokens ? { files: fileTokens.map((fileToken) => ({ fileToken })) } : {}),
+		}, signal, SHARE_TIMEOUTS.publish);
+		if (!input.page) return result;
+		return { ...result, pageFiles: { included: fileTokens?.length ?? 0, unsupported: uploaded === null, refusedVideos: uploaded?.refusedVideos ?? [], tooLargeVideos: uploaded?.tooLargeVideos ?? [] } };
+	} catch (error) {
+		// The upload was never finalized: discard its parts. Finalize itself
+		// failing leaves nothing to discard but aborting is harmless.
+		await callApi<void>(api, baseUrl, "POST", "/me/artifact-shares/uploads/abort", { uploadToken: start.uploadToken }).catch(() => undefined);
+		throw error;
 	}
 }
