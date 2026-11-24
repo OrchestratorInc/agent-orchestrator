@@ -69,6 +69,12 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 	if out, err = runAccess(t, "token", "ls"); err != nil || !strings.Contains(out, "api-bot") || strings.Contains(out, created.Secret) {
 		t.Fatalf("token ls: %q %v", out, err)
 	}
+	if _, err = runAccess(t, "token", "create", "100%"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runAccess(t, "token", "revoke", "100%"); err != nil {
+		t.Errorf("a token whose name has a percent sign must be revocable by name: %v", err)
+	}
 	if _, err = runAccess(t, "token", "create", "bad", "--level", "admin"); err == nil {
 		t.Error("an unknown level must be refused")
 	}
@@ -165,14 +171,14 @@ func TestActionRequestSplitsInput(t *testing.T) {
 func TestSessionWaitExitCodes(t *testing.T) {
 	cfg := setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "")
-	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "api-4": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}, "stuck": {"idle"}}
+	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "api-4": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}, "stuck": {"idle"}, "failed-start": {"idle"}, "silent": {"idle"}, "no-record": {"active", "idle"}}
 	polls := map[string]int{}
 	created := time.Date(2026, 11, 23, 11, 59, 50, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
 		if session, isHistory := strings.CutSuffix(id, "/history"); isHistory {
 			total := 1
-			if session == "fresh" {
+			if session == "fresh" || session == "no-record" {
 				total = 0
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"turns": []any{}, "total": total})
@@ -197,6 +203,10 @@ func TestSessionWaitExitCodes(t *testing.T) {
 			session["statusReadiness"], session["isTerminated"] = "unavailable", true
 		case id == "stuck":
 			session["statusReadiness"] = "unavailable"
+		case id == "failed-start":
+			session["provisionState"], session["isTerminated"] = "failed", true
+		case id == "silent":
+			session["status"] = "no_signal"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"session": session})
 	}))
@@ -224,7 +234,7 @@ func TestSessionWaitExitCodes(t *testing.T) {
 	}
 	for _, age := range []time.Duration{10 * time.Second, time.Hour} {
 		clock = created.Add(age)
-		if out, _, err = executeCLI(t, deps(), "session", "wait", "fresh", "--json"); err != nil || json.Unmarshal([]byte(out), &result) != nil || result.State != "idle" || result.WaitedSeconds != 60 {
+		if out, _, err = executeCLI(t, deps(), "session", "wait", "fresh", "--json"); err != nil || json.Unmarshal([]byte(out), &result) != nil || result.State != "idle" || result.WaitedSeconds != 120 {
 			t.Errorf("a %s old session with no turn yet must be watched for the startup window: %s %v", age, out, err)
 		}
 	}
@@ -248,6 +258,15 @@ func TestSessionWaitExitCodes(t *testing.T) {
 	}
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "stuck"); ExitCode(err) != 1 || !strings.Contains(out, "stuck: unverified after 0s") {
 		t.Errorf("a session the daemon could not verify must fail at once: exit %d, out %q", ExitCode(err), out)
+	}
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "no-record", "--json"); err != nil || json.Unmarshal([]byte(out), &result) != nil || result.State != "idle" || result.WaitedSeconds != 2 {
+		t.Errorf("a session the wait saw working settles when it goes idle, also when the daemon records no turns for its agent: %s %v", out, err)
+	}
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "failed-start"); ExitCode(err) != 1 || !strings.Contains(out, "failed-start: failed") {
+		t.Errorf("a failed start that the daemon also marked terminated: exit %d, out %q, want exit 1 and failed", ExitCode(err), out)
+	}
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "silent"); ExitCode(err) != 1 || !strings.Contains(out, "silent: no_signal") {
+		t.Errorf("a session whose agent reports no activity must not read as finished: exit %d, out %q", ExitCode(err), out)
 	}
 	if _, _, err = executeCLI(t, deps(), "session", "wait", "api-3", "nope"); ExitCode(err) != 1 || !strings.Contains(err.Error(), "nope: ") {
 		t.Errorf("a failed read while waiting on two sessions must name the session: exit %d, err %v", ExitCode(err), err)

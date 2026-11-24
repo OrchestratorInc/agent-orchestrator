@@ -25,21 +25,22 @@ type sessionWaitOptions struct {
 	after             map[string]time.Time
 }
 
-const startupGrace = time.Minute
+const startupGrace = 2 * time.Minute
 
 func settledState(session sessionDTO) string {
 	switch {
+	case session.ProvisionState == "failed":
+		return "failed"
 	case session.IsTerminated:
 		return "terminated"
 	case session.ProvisionState != "" && session.ProvisionState != "ready":
-		if session.ProvisionState == "failed" {
-			return "failed"
-		}
 		return ""
 	case session.StatusReadiness == "unavailable":
 		return "unverified"
 	case session.StatusReadiness != "" && session.StatusReadiness != "ready":
 		return ""
+	case session.Status == "no_signal":
+		return "no_signal"
 	case session.Activity.State == "active":
 		return ""
 	case session.Activity.State == "waiting_input" || session.Activity.State == "blocked":
@@ -59,15 +60,19 @@ one and why. One call replaces a loop of ` + "`ao session get`" + ` checks.
 
 A session that is idle when the command starts settles at once, unless it has
 not completed a turn yet: a new session reads as idle until its agent starts,
-so it settles as idle only after the command has watched it for a minute. To message a
+so it settles as idle only after the command has seen it work, or has watched
+it for two minutes.
+An agent that never reports its activity cannot be waited on: the command
+fails with no_signal instead of calling it idle. To message a
 session and wait for its reply, use ` + "`ao send --wait`" + `: a message can reach
 the agent after ` + "`ao send`" + ` returns, so a wait started then can see the
 idle state from before the message.
 
 Exit codes: 0 the agent finished its turn, exited or was terminated; 5 the
 session waits for an answer or an approval; 124 no session settled before
---timeout; 4 refused by the grant; 1 the session failed to start, the daemon
-could not verify it after a restart, or any other failure.`,
+--timeout; 4 refused by the grant; 1 the session failed to start, its agent
+reports no activity, the daemon could not verify it after a restart, or any
+other failure.`,
 		Args: usageArgs(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return ctx.waitForSessions(cmd, args, opts)
@@ -92,7 +97,7 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 		ids[i] = id
 	}
 	started := c.deps.Now()
-	idleSince := map[string]time.Time{}
+	idleSince, worked := map[string]time.Time{}, map[string]bool{}
 	waitCtx, cancel := context.WithTimeout(cmd.Context(), opts.timeout)
 	defer cancel()
 	emit := func(result sessionWaitResult) error {
@@ -132,10 +137,13 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 			state := settledState(res.Session)
 			before, sent := opts.after[id]
 			moved := sent && res.Session.Activity.LastActivityAt.After(before)
+			if res.Session.Activity.State == "active" {
+				worked[id] = true
+			}
 			if _, seen := idleSince[id]; state == "idle" && !seen {
 				idleSince[id] = c.deps.Now()
 			}
-			if state == "idle" && !moved && c.deps.Now().Sub(idleSince[id]) < startupGrace {
+			if state == "idle" && !moved && !worked[id] && c.deps.Now().Sub(idleSince[id]) < startupGrace {
 				var history sessionHistoryResponse
 				if err := get(id, "/history?limit=1", &history); err != nil {
 					return err
@@ -160,6 +168,8 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 				return fmt.Errorf("%s failed to start", id)
 			case "unverified":
 				return fmt.Errorf("the daemon could not verify %s after it restarted, so its recorded state may be stale", id)
+			case "no_signal":
+				return fmt.Errorf("the agent in %s has reported no activity since it started, so the daemon cannot tell when it finishes", id)
 			}
 			return nil
 		}

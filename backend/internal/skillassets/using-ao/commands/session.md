@@ -192,7 +192,7 @@ ao session wait <id>... [--timeout 10m] [--interval 2s] [--json]
 | 0 | The agent finished its turn (`idle`), exited or was terminated | Read the result with `ao session get <id> --transcript N` |
 | 5 | The session waits for an answer or an approval (`needs_input`) | Read the question in the transcript, then answer it or ask the user |
 | 124 | No session settled before `--timeout` | Wait again, or report that it is still working |
-| 1 | The session failed to start (`failed`), the daemon could not verify it after a restart (`unverified`), or the daemon call failed | Read the error; do not wait again |
+| 1 | The session failed to start (`failed`), its agent reports no activity (`no_signal`), the daemon could not verify it after a restart (`unverified`), or the daemon call failed | Read the error; do not wait again |
 | 4 | Your grant does not allow reading that session | Tell the user; do not retry |
 
 `--json` prints `{"sessionId","state","status","waitedSeconds"}`.
@@ -202,8 +202,12 @@ has verified it; `wait` keeps waiting until then.
 
 A session that was just spawned reads as idle until its agent starts. `wait`
 therefore accepts idle for a session that has not completed a turn only after
-it has watched that session for a minute. On a timeout, `sessionId` lists every
-session that was waited on.
+it has seen that session work, or has watched it for two minutes. On a
+timeout, `sessionId` lists every session that was waited on.
+
+`wait` needs the agent to report its activity. Chat sessions always do. A
+Terminal session of an agent that never reports (`no_signal`, about 90 seconds
+after it starts) cannot be waited on: read its transcript instead.
 
 ---
 

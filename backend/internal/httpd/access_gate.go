@@ -163,6 +163,9 @@ func (g *accessGate) targetProject(r *http.Request, rctx *chi.Context, action ac
 	}
 	param := func() string {
 		value := rctx.URLParam(action.Key)
+		if r.URL.RawPath == "" {
+			return value
+		}
 		if unescaped, err := url.PathUnescape(value); err == nil {
 			return unescaped
 		}
@@ -205,7 +208,7 @@ func bodyField(r *http.Request, key string) (string, error) {
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 	var fields map[string]json.RawMessage
 	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&fields); err != nil {
-		return "", nil //nolint:nilerr // the handler reports the malformed body itself
+		return "", fmt.Errorf("the request body is not a JSON object: %w", err)
 	}
 	for name := range fields {
 		if name != key && strings.EqualFold(name, key) {

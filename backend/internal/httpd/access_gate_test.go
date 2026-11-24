@@ -130,6 +130,7 @@ func TestGateHoldsATokenToItsGrant(t *testing.T) {
 	read := f.token("reader", access.LevelRead)
 	operateAPI := f.token("api-bot", access.LevelOperate, "api")
 	manage := f.token("admin", access.LevelManage)
+	operateA := f.token("a-bot", access.LevelOperate, "A")
 	spawn := func(project string) string { return `{"projectId":"` + project + `","prompt":"hi"}` }
 
 	for name, tc := range map[string]struct {
@@ -138,35 +139,37 @@ func TestGateHoldsATokenToItsGrant(t *testing.T) {
 		code   string
 		reason string
 	}{
-		"read lists sessions":             {gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: read}, 200, "", ""},
-		"read cannot send":                {gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-1/send", token: read}, 403, "GRANT_REFUSED", access.ReasonLevel},
-		"probe is open":                   {gateCall{method: http.MethodGet, path: "/healthz", token: read}, 200, "", ""},
-		"whoami is open":                  {gateCall{method: http.MethodGet, path: "/api/v1/access/whoami", token: read}, 200, "", ""},
-		"route outside the catalog":       {gateCall{method: http.MethodGet, path: "/api/v1/mobile/status", token: manage}, 403, "GRANT_REFUSED", access.ReasonCatalog},
-		"token cannot make tokens":        {gateCall{method: http.MethodPost, path: "/api/v1/access/tokens", token: manage}, 403, "GRANT_REFUSED", access.ReasonCatalog},
-		"unknown route":                   {gateCall{method: http.MethodGet, path: "/api/v1/nope", token: manage}, 404, "ROUTE_NOT_FOUND", ""},
-		"unknown token":                   {gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: access.TokenPrefix + "ff"}, 401, "AGENT_TOKEN_INVALID", ""},
-		"limited: session in its project": {gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-1/send", token: operateAPI}, 200, "", ""},
-		"limited: session elsewhere":      {gateCall{method: http.MethodPost, path: "/api/v1/sessions/web-1/send", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
-		"limited: unknown session":        {gateCall{method: http.MethodGet, path: "/api/v1/sessions/ghost", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
-		"limited: list needs a project":   {gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
-		"limited: list in its project":    {gateCall{method: http.MethodGet, path: "/api/v1/sessions?project=api", token: operateAPI}, 200, "", ""},
-		"limited: every project":          {gateCall{method: http.MethodGet, path: "/api/v1/projects", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
-		"limited: machine data":           {gateCall{method: http.MethodGet, path: "/api/v1/settings", token: operateAPI}, 200, "", ""},
-		"limited: spawn in its project":   {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("api"), token: operateAPI}, 200, "", ""},
-		"limited: spawn elsewhere":        {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("web"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
-		"limited: spawn with no project":  {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"prompt":"hi"}`, token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
-		"manage removes a project":        {gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", token: manage}, 200, "", ""},
-		"limited: second spelling of key": {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api","ProjectId":"web"}`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
-		"limited: other spelling of key":  {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"PROJECTID":"api"}`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
-		"limited: first of two values":    {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("api") + spawn("web"), token: operateAPI}, 200, "", ""},
-		"limited: first value elsewhere":  {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("web") + spawn("api"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
-		"limited: cues of its project":    {gateCall{method: http.MethodGet, path: "/api/v1/projects/api/cues", token: operateAPI}, 200, "", ""},
-		"limited: escaped slash in an id": {gateCall{method: http.MethodGet, path: "/api/v1/projects/api%2Fcues", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
-		"operate starts an orchestrator":  {gateCall{method: http.MethodPost, path: "/api/v1/orchestrators", body: spawn("api"), token: operateAPI}, 200, "", ""},
-		"orchestrator elsewhere":          {gateCall{method: http.MethodPost, path: "/api/v1/orchestrators", body: spawn("web"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
-		"a session's own hook":            {gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-1/activity", token: manage}, 403, "GRANT_REFUSED", access.ReasonCatalog},
-		"token that names a session":      {gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", token: read, session: "api-1"}, 403, "GRANT_REFUSED", access.ReasonLevel},
+		"read lists sessions":                    {gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: read}, 200, "", ""},
+		"read cannot send":                       {gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-1/send", token: read}, 403, "GRANT_REFUSED", access.ReasonLevel},
+		"probe is open":                          {gateCall{method: http.MethodGet, path: "/healthz", token: read}, 200, "", ""},
+		"whoami is open":                         {gateCall{method: http.MethodGet, path: "/api/v1/access/whoami", token: read}, 200, "", ""},
+		"route outside the catalog":              {gateCall{method: http.MethodGet, path: "/api/v1/mobile/status", token: manage}, 403, "GRANT_REFUSED", access.ReasonCatalog},
+		"token cannot make tokens":               {gateCall{method: http.MethodPost, path: "/api/v1/access/tokens", token: manage}, 403, "GRANT_REFUSED", access.ReasonCatalog},
+		"unknown route":                          {gateCall{method: http.MethodGet, path: "/api/v1/nope", token: manage}, 404, "ROUTE_NOT_FOUND", ""},
+		"unknown token":                          {gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: access.TokenPrefix + "ff"}, 401, "AGENT_TOKEN_INVALID", ""},
+		"limited: session in its project":        {gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-1/send", token: operateAPI}, 200, "", ""},
+		"limited: session elsewhere":             {gateCall{method: http.MethodPost, path: "/api/v1/sessions/web-1/send", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: unknown session":               {gateCall{method: http.MethodGet, path: "/api/v1/sessions/ghost", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: list needs a project":          {gateCall{method: http.MethodGet, path: "/api/v1/sessions", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: list in its project":           {gateCall{method: http.MethodGet, path: "/api/v1/sessions?project=api", token: operateAPI}, 200, "", ""},
+		"limited: every project":                 {gateCall{method: http.MethodGet, path: "/api/v1/projects", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: machine data":                  {gateCall{method: http.MethodGet, path: "/api/v1/settings", token: operateAPI}, 200, "", ""},
+		"limited: spawn in its project":          {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("api"), token: operateAPI}, 200, "", ""},
+		"limited: spawn elsewhere":               {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("web"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: spawn with no project":         {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"prompt":"hi"}`, token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"manage removes a project":               {gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", token: manage}, 200, "", ""},
+		"limited: second spelling of key":        {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api","ProjectId":"web"}`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
+		"limited: other spelling of key":         {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"PROJECTID":"api"}`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
+		"limited: first of two values":           {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("api") + spawn("web"), token: operateAPI}, 200, "", ""},
+		"limited: first value elsewhere":         {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: spawn("web") + spawn("api"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: cues of its project":           {gateCall{method: http.MethodGet, path: "/api/v1/projects/api/cues", token: operateAPI}, 200, "", ""},
+		"limited: escaped slash in an id":        {gateCall{method: http.MethodGet, path: "/api/v1/projects/api%2Fcues", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: an id that only looks escaped": {gateCall{method: http.MethodGet, path: "/api/v1/projects/%2541", token: operateA}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"limited: a body that is not JSON":       {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
+		"operate starts an orchestrator":         {gateCall{method: http.MethodPost, path: "/api/v1/orchestrators", body: spawn("api"), token: operateAPI}, 200, "", ""},
+		"orchestrator elsewhere":                 {gateCall{method: http.MethodPost, path: "/api/v1/orchestrators", body: spawn("web"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
+		"a session's own hook":                   {gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-1/activity", token: manage}, 403, "GRANT_REFUSED", access.ReasonCatalog},
+		"token that names a session":             {gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", token: read, session: "api-1"}, 403, "GRANT_REFUSED", access.ReasonLevel},
 	} {
 		status, code, reason := f.do(tc.call)
 		if status != tc.status || (tc.code != "" && code != tc.code) || reason != tc.reason {

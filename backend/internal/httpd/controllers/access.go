@@ -39,6 +39,17 @@ func grantResponse(grant access.Grant, now time.Time) AccessGrantResponse {
 	return out
 }
 
+func pathValue(r *http.Request, name string) string {
+	value := chi.URLParam(r, name)
+	if r.URL.RawPath == "" {
+		return value
+	}
+	if unescaped, err := url.PathUnescape(value); err == nil {
+		return unescaped
+	}
+	return value
+}
+
 func (c *AccessController) whoami(w http.ResponseWriter, r *http.Request) {
 	who := access.CallerFrom(r.Context())
 	out := WhoamiResponse{Kind: who.Kind, ID: who.ID, Name: who.Name}
@@ -72,7 +83,7 @@ func (c *AccessController) listActions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *AccessController) getAction(w http.ResponseWriter, r *http.Request) {
-	id, _ := url.PathUnescape(chi.URLParam(r, "actionId"))
+	id := pathValue(r, "actionId")
 	action, ok := access.ActionByID(id)
 	if !ok {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "ACTION_NOT_FOUND", "The action catalog has no "+id, nil)
@@ -174,7 +185,7 @@ func (c *AccessController) revokeToken(w http.ResponseWriter, r *http.Request) {
 	if c.tokensUnavailable(w, r, http.MethodDelete, "/api/v1/access/tokens/{tokenId}") {
 		return
 	}
-	id, _ := url.PathUnescape(chi.URLParam(r, "tokenId"))
+	id := pathValue(r, "tokenId")
 	_, found, err := c.Registry.Revoke(id)
 	if err != nil {
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal_error", "AGENT_TOKEN_NOT_REVOKED", "The agent token could not be revoked", nil)
