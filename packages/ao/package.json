@@ -2,7 +2,7 @@
 	"name": "@aoagents/ao",
 	"version": "0.10.0",
 	"description": "Orchestrator CLI. Resolves and runs the prebuilt Go binary for your platform.",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"bin": {
 		"ao": "./bin/ao.js"
 	},

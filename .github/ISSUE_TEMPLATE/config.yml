@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/OrchestratorInc/agent-orchestrator/security/advisories/new
+    about: Please report security problems privately, not as a public issue. See SECURITY.md.
   - name: Discord community
     url: https://discord.com/invite/UZv7JjxbwG
     about: Questions, mentoring, and the weekly contributor call.

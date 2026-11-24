@@ -7,7 +7,7 @@ How to set up, build, run, and test Agent Orchestrator locally.
 | Tool       | Minimum version | Notes                                                                  |
 | ---------- | --------------- | ---------------------------------------------------------------------- |
 | Go         | 1.27.4          | `go version` to check; install via [go.dev](https://go.dev/dl/)        |
-| Node.js    | 24         | `node --version`; install via [nodejs.org](https://nodejs.org/)        |
+| Node.js    | 24              | `node --version`; `nvm use` reads `.nvmrc`; install via [nodejs.org](https://nodejs.org/) |
 | npm        | 10              | Ships with Node.js                                                     |
 | Nix (opt.) | -               | `nix develop` drops you into a shell with all deps; see `../flake.nix` |
 

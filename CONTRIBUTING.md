@@ -111,6 +111,12 @@ and suggest features. The time and link are shared on Discord.
 
 ## Code of Conduct
 
-Be respectful, constructive, and assume good intent. Report problems to maintainers via Discord DM.
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
+By taking part, you agree to uphold it. See that file for how to report a problem.
+
+## Security
+
+Please don't report security vulnerabilities in public issues, PRs, or Discord.
+Follow [SECURITY.md](SECURITY.md) to report them privately.
 
 Thanks for making agent-orchestrator better for the next person who shows up.
