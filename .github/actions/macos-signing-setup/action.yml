@@ -26,7 +26,7 @@ runs:
   steps:
     # Imports the .p12 into a temporary keychain so @electron/osx-sign can find
     # the identity (forge, unlike electron-builder, does not decode CSC_LINK).
-    - uses: apple-actions/import-codesign-certs@v3
+    - uses: apple-actions/import-codesign-certs@63fff01cd422d4b7b855d40ca1e9d34d2de9427d # v3.0.0
       with:
         p12-file-base64: ${{ inputs.csc-link }}
         p12-password: ${{ inputs.csc-key-password }}

@@ -53,13 +53,13 @@ jobs:
         working-directory: frontend
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -157,7 +157,7 @@ jobs:
           jq -n --arg f "$name" --arg h "$hash" '{($f): $h}' > dist-artifact/linux-arm64-host.digest.json
           echo "linux-arm64-host: $name sha256=$hash" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-arm64-host
           path: frontend/dist-artifact/ao-host-linux-arm64.tar.gz
@@ -165,7 +165,7 @@ jobs:
           retention-days: ${{ inputs.version != '' && 1 || 7 }}
           if-no-files-found: error
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # build-artifacts.yml's digests job merges every digest-* artifact.
           name: digest-linux-arm64-host
