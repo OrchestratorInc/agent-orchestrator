@@ -44,7 +44,7 @@ protocol/topology facts, not authenticated testing of every accepted version.
 | Provider | Primary source revision or contract |
 |---|---|
 | ACP | [`agentclientprotocol/agent-client-protocol@01b9d6e`](https://github.com/agentclientprotocol/agent-client-protocol/tree/01b9d6e9c094d31cdea6d88768a9dd31b089ccef) |
-| Claude Code | [`agentclientprotocol/claude-agent-acp@7c66108`](https://github.com/agentclientprotocol/claude-agent-acp/tree/7c6610835f26f18cd162b78dff74a7b7cd74497a); AO pins adapter `0.70.0` ([package](https://github.com/Untrivial-ai/agent-orchestrator/blob/2bada3983f294c201578f32463fe0a140e650590/frontend/acp-runtime/package.json#L1-L8)) |
+| Claude Code | [`agentclientprotocol/claude-agent-acp@7c66108`](https://github.com/agentclientprotocol/claude-agent-acp/tree/7c6610835f26f18cd162b78dff74a7b7cd74497a); AO pins adapter `0.70.0` ([package](https://github.com/OrchestratorInc/agent-orchestrator/blob/2bada3983f294c201578f32463fe0a140e650590/frontend/acp-runtime/package.json#L1-L8)) |
 | Cursor | [Cursor CLI ACP documentation](https://cursor.com/docs/cli/acp); the provider implementation is not public |
 | OpenCode | [`anomalyco/opencode@ebece6e`](https://github.com/anomalyco/opencode/tree/ebece6efd7b11401cf1e7390b5a22991b6608cc4) |
 | Droid | [Factory `droid exec` documentation](https://docs.factory.ai/droid-exec/overview); the provider implementation is not public |

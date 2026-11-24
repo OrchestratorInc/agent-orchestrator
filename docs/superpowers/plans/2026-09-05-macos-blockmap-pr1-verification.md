@@ -1,6 +1,6 @@
 # PR #4906 verification and rollout stop
 
-PR: https://github.com/Untrivial-ai/agent-orchestrator/pull/4906
+PR: https://github.com/OrchestratorInc/agent-orchestrator/pull/4906
 
 ## Current implementation
 

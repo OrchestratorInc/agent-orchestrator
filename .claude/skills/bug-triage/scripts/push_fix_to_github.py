@@ -16,7 +16,7 @@ Environment variables:
 Example:
   OLD_STRING='<td className="foo">{bar}</td>' \
   NEW_STRING='<td className="foo"><a href="#">{bar}</a></td>' \
-  python3 push_fix_to_github.py Untrivial-ai/agent-orchestrator fix/branch packages/web/src/File.tsx \
+  python3 push_fix_to_github.py OrchestratorInc/agent-orchestrator fix/branch packages/web/src/File.tsx \
     "fix: description" "fix: title" "Fixes #123"
 """
 import sys, os, json, subprocess, base64

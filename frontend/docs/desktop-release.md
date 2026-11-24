@@ -3,7 +3,7 @@
 Canonical desktop releases are conducted from the private
 `Untrivial-ai/ao-releases` repository. That conductor is the only system allowed
 to publish stable, nightly, or preview releases. The public
-`Untrivial-ai/agent-orchestrator` repository supplies source and unsigned build
+`OrchestratorInc/agent-orchestrator` repository supplies source and unsigned build
 artifacts; it does not hold signing credentials or publish canonical releases.
 
 Do not create release tags or try to publish from this repository. Operators

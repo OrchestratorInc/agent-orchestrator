@@ -47,7 +47,7 @@ agent-orchestrator/
 ## Getting the code
 
 ```bash
-git clone https://github.com/Untrivial-ai/agent-orchestrator.git
+git clone https://github.com/OrchestratorInc/agent-orchestrator.git
 cd agent-orchestrator
 npm ci
 ```

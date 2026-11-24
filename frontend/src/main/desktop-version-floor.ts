@@ -2,7 +2,7 @@ import { app, dialog, shell, type BaseWindow, type MessageBoxOptions } from "ele
 import semver from "semver";
 
 const FLOOR_URL =
-  "https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/desktop-version-floor.json";
+  "https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/desktop-version-floor.json";
 
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -13,7 +13,7 @@ type Floor = {
 };
 
 const DEFAULT_DOWNLOAD_URL =
-  "https://github.com/Untrivial-ai/agent-orchestrator/releases/latest";
+  "https://github.com/OrchestratorInc/agent-orchestrator/releases/latest";
 
 function usableVersion(v: string | null | undefined): string | null {
   const trimmed = v?.trim();

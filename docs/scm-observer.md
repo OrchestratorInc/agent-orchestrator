@@ -191,7 +191,7 @@ transfer is exactly the event that made them disagree.
 | 5 | Store identity machinery | `provider_id` (unique per provider+host) + `pr_url_alias` | migration 0097, added by #3923 |
 
 Before #4090, after a rename (`AgentWrapper/agent-orchestrator` →
-`Untrivial-ai/agent-orchestrator`):
+`OrchestratorInc/agent-orchestrator`):
 
 - (1) keeps the old `repo` string forever unless something rewrites it.
 - (2) trusts (1), so subjects poll under the old name — which *works*, because
@@ -213,10 +213,10 @@ Four issues in six weeks, all facets of the same distributed invariant:
 
 | Issue | Facet | Derivations that disagreed |
 |-------|-------|---------------------------|
-| [#2509](https://github.com/Untrivial-ai/agent-orchestrator/issues/2509) | observer reloaded tracked repos without owner/name → check-run 404s | 1 ↔ 2 |
-| [#3922](https://github.com/Untrivial-ai/agent-orchestrator/issues/3922) / PR [#3923](https://github.com/Untrivial-ai/agent-orchestrator/pull/3923) | duplicate rows for one transferred PR → stale row's `conflicting` shown | 1 ↔ 4 (two scan identities each created a row) |
-| [#3252](https://github.com/Untrivial-ai/agent-orchestrator/issues/3252) | new PRs not attributable after transfer; stale project origin | 4 ↔ provider reality |
-| [#4089](https://github.com/Untrivial-ai/agent-orchestrator/issues/4089) | CI/mergeability `unknown` most of the time, flapping ("Checking merge readiness") | 2 ↔ 3 — **regression introduced by #3923** — composed with the discovery clobber below |
+| [#2509](https://github.com/OrchestratorInc/agent-orchestrator/issues/2509) | observer reloaded tracked repos without owner/name → check-run 404s | 1 ↔ 2 |
+| [#3922](https://github.com/OrchestratorInc/agent-orchestrator/issues/3922) / PR [#3923](https://github.com/OrchestratorInc/agent-orchestrator/pull/3923) | duplicate rows for one transferred PR → stale row's `conflicting` shown | 1 ↔ 4 (two scan identities each created a row) |
+| [#3252](https://github.com/OrchestratorInc/agent-orchestrator/issues/3252) | new PRs not attributable after transfer; stale project origin | 4 ↔ provider reality |
+| [#4089](https://github.com/OrchestratorInc/agent-orchestrator/issues/4089) | CI/mergeability `unknown` most of the time, flapping ("Checking merge readiness") | 2 ↔ 3 — **regression introduced by #3923** — composed with the discovery clobber below |
 
 The #3923 → #4089 sequence is the cautionary tale: #3923 fixed identity at the
 store layer (aliases + `provider_id`) and changed it at the provider layer
@@ -224,7 +224,7 @@ store layer (aliases + `provider_id`) and changed it at the provider layer
 ref), but the observer's dispatch keying between them was not updated. Its
 tests covered each layer separately; no test crossed the seam with a renamed
 repo. The first commit in PR
-[#4090](https://github.com/Untrivial-ai/agent-orchestrator/pull/4090) patched
+[#4090](https://github.com/OrchestratorInc/agent-orchestrator/pull/4090) patched
 that seam with a URL-match fallback. The final implementation then removed
 that interim matching layer: subjects and discovery use provider-native IDs,
 and fetch results are attributed positionally to their requesting refs. The
@@ -266,7 +266,7 @@ identity dedupe makes the clobber structurally impossible.)
 ## Target Design: ProviderID-Primary Identity
 
 *Implemented in PR
-[#4090](https://github.com/Untrivial-ai/agent-orchestrator/pull/4090) —
+[#4090](https://github.com/OrchestratorInc/agent-orchestrator/pull/4090) —
 `identityPRKey` / `keyForTrackedPR` in
 `backend/internal/observe/scm/observer.go`, plus the positional
 `FetchPullRequests` contract below. The observer is net smaller than before

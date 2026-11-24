@@ -172,7 +172,7 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
         refresh()
     }
     @objc func download() {
-        NSWorkspace.shared.open(URL(string: "https://github.com/Untrivial-ai/agent-orchestrator/releases/latest")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/OrchestratorInc/agent-orchestrator/releases/latest")!)
     }
     @objc func closeWindow() { window.performClose(nil) }
     func windowWillClose(_ notification: Notification) {

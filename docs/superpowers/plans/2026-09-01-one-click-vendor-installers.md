@@ -610,8 +610,8 @@ Expected: all verification commands exit 0 and the worktree contains no unrelate
 
 ```bash
 git push origin codex/harness-install-settings-main
-gh pr edit 4221 --repo Untrivial-ai/agent-orchestrator --body-file /tmp/pr-4221-body.md
-gh pr view 4221 --repo Untrivial-ai/agent-orchestrator --json url,headRefOid,statusCheckRollup
+gh pr edit 4221 --repo OrchestratorInc/agent-orchestrator --body-file /tmp/pr-4221-body.md
+gh pr view 4221 --repo OrchestratorInc/agent-orchestrator --json url,headRefOid,statusCheckRollup
 ```
 
 The updated PR body must state that Install is one click with no extra confirmation, package managers remain preferred, exact first-party HTTPS scripts are downloaded to AO-owned private files before execution, script contents remain mutable vendor-controlled code, and native-unsupported Windows targets remain manual/WSL.
