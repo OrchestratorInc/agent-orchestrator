@@ -280,6 +280,14 @@ export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?:
  * takes its place without a jump.
  */
 export type UploadingSend = { clientMessageId: string; text: string; images: string[] };
+
+/** The pictures a message waiting on its uploads shows: its attached images, then those still uploading. */
+function uploadingImages(attachments: FileAttachment[], pending: { previewUrl?: string }[]): string[] {
+	return [
+		...attachments.flatMap((attachment) => attachment.dataUrl && isSupportedImageAttachment(attachment.mimeType) ? [attachment.dataUrl] : []),
+		...pending.flatMap((file) => (file.previewUrl ? [file.previewUrl] : [])),
+	];
+}
 export type ChatComposerHandle = {
 	focus(): void;
 	isEmpty(): boolean;
@@ -670,6 +678,11 @@ export const ChatComposer = memo(function ChatComposer({
 	// Read when the send settles, which can be after a re-render replaced it.
 	const onUploadingSendChangeRef = useRef(onUploadingSendChange);
 	onUploadingSendChangeRef.current = onUploadingSendChange;
+	const uploadingSend = useRef<UploadingSend | null>(null);
+	const publishUploadingSend = useCallback((send: UploadingSend | null) => {
+		uploadingSend.current = send;
+		onUploadingSendChangeRef.current?.(send);
+	}, []);
 	/**
 	 * Messages sent in quick succession go out one after another, in order.
 	 *
@@ -876,6 +889,14 @@ export const ChatComposer = memo(function ChatComposer({
 	// Files still uploading keep their tiles, and so a way to cancel one, even
 	// once the message they belong to waits in the queue.
 	const { pendingAttachments } = fileAttachments;
+	// The queued row shows what will be sent: a file cancelled meanwhile leaves it.
+	useEffect(() => {
+		const send = uploadingSend.current;
+		if (!awaitingUploads || !send) return;
+		const images = uploadingImages(fileAttachments.attachments, pendingAttachments);
+		if (images.length === send.images.length && images.every((src, index) => src === send.images[index])) return;
+		publishUploadingSend({ ...send, images });
+	}, [awaitingUploads, fileAttachments.attachments, pendingAttachments, publishUploadingSend]);
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
 	useEffect(() => {
 		if (!holdAttachments || !onHeldAttachmentsChange) return;
@@ -1868,7 +1889,7 @@ export const ChatComposer = memo(function ChatComposer({
 			await performClaimedSubmit(forceSteer, mutationToken);
 		} finally {
 			if (draftScope && mutationToken) cancelChatComposerMutation(draftScope, mutationToken);
-			onUploadingSendChangeRef.current?.(null);
+			publishUploadingSend(null);
 		}
 	}
 
@@ -1929,7 +1950,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (draftScope && !recoveringDelivery && !savingQueuedEdit && !forceSteer && fileAttachments.preparing) {
 			uploadingId = crypto.randomUUID();
 			setAwaitingUploads(true);
-			onUploadingSendChangeRef.current?.({
+			publishUploadingSend({
 				clientMessageId: uploadingId,
 				// Images show as chips in the row, so their paths leave the text.
 				text: splitInlineImagePaths(currentText)
@@ -1937,10 +1958,7 @@ export const ChatComposer = memo(function ChatComposer({
 					.join("")
 					.replace(/[ \t]{2,}/g, " ")
 					.trim(),
-				images: [
-					...fileAttachments.attachments.flatMap((attachment) => attachment.dataUrl && isSupportedImageAttachment(attachment.mimeType) ? [attachment.dataUrl] : []),
-					...fileAttachments.pendingAttachments.flatMap((file) => file.previewUrl ? [file.previewUrl] : []),
-				],
+				images: uploadingImages(fileAttachments.attachments, fileAttachments.pendingAttachments),
 			});
 		}
 		try {

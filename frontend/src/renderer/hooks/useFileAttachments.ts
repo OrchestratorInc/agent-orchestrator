@@ -399,6 +399,8 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	const pendingReadsRef = useRef<Set<Promise<unknown>>>(new Set());
 	const addQueueRef = useRef<Promise<unknown>>(Promise.resolve());
 	const queuedAddsRef = useRef(0);
+	// Files in batches still being read or staged, which already claim attachment slots.
+	const outstandingFilesRef = useRef(0);
 	const generationRef = useRef(0);
 
 	useEffect(() => {
@@ -605,7 +607,8 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		// An image shows its own picture while it uploads, not a placeholder: the
 		// bytes are already here, and only their upload can take a while. Only files
 		// that can still be attached get one, so a large drop loads no extra pictures.
-		const slots = MAX_ATTACHMENTS - attachmentsRef.current.length;
+		const slots = MAX_ATTACHMENTS - attachmentsRef.current.length - outstandingFilesRef.current;
+		outstandingFilesRef.current += batch.length;
 		const pending = batch.map((file, index): PendingFileAttachment => {
 			const fits = index < slots && (maxAttachmentBytes === undefined || file.size <= maxAttachmentBytes);
 			const previewUrl = fits && isSupportedImageAttachment(file.type) ? fileObjectUrl(file) : undefined;
@@ -630,6 +633,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 				return [];
 			})
 			.finally(() => {
+				outstandingFilesRef.current = Math.max(0, outstandingFilesRef.current - batch.length);
 				for (const file of pending) {
 					pendingFileControllers.delete(file.id);
 					// The attached file draws from its own bytes from here on.

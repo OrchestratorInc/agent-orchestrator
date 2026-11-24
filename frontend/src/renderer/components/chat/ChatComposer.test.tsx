@@ -2899,6 +2899,29 @@ describe("attachments", () => {
 		expect(await screen.findByRole("button", { name: "Remove second.png" })).toBeInTheDocument();
 	});
 
+	it("takes an image cancelled while the message waits out of its queued row", async () => {
+		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+		URL.createObjectURL = vi.fn((blob: Blob) => `blob:${(blob as File).name}`);
+		URL.revokeObjectURL = vi.fn();
+		try {
+			const stage = vi.fn(() => new Promise<string[]>(() => undefined));
+			const onUploadingSendChange = vi.fn();
+			const { field } = renderComposer({ draftSessionId: "composer-cancel-while-queued", onStageAttachments: stage, onUploadingSendChange });
+			await typeInComposer(field, "compare these");
+			fireEvent.paste(field, { clipboardData: clipboardData([png("first.png")]) });
+			fireEvent.paste(field, { clipboardData: clipboardData([png("second.png")]) });
+			await screen.findByRole("button", { name: "Cancel attaching second.png" });
+			fireEvent.keyDown(field, { key: "Enter" });
+			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({ images: ["blob:first.png", "blob:second.png"] })));
+
+			await userEvent.click(screen.getByRole("button", { name: "Cancel attaching first.png" }));
+			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({ images: ["blob:second.png"] })));
+		} finally {
+			URL.createObjectURL = original.createObjectURL;
+			URL.revokeObjectURL = original.revokeObjectURL;
+		}
+	});
+
 	it("lets a message go while its image uploads: it waits in the queue and the box reads as sent", async () => {
 		const staging = deferred<string[]>();
 		const stage = vi.fn(() => staging.promise);

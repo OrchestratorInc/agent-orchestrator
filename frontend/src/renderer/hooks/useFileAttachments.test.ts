@@ -47,8 +47,12 @@ describe("useFileAttachments", () => {
 			act(() => { added = result.current.addFiles(drop); });
 			// The two files past the limit are refused, so they load no picture.
 			expect(createObjectURL.mock.calls.map(([blob]) => (blob as File).name)).toEqual(drop.slice(0, MAX_ATTACHMENTS).map((f) => f.name));
+			// A second drop while the first is still uploading finds no free slot either.
+			let again!: Promise<FileAttachment[]>;
+			act(() => { again = result.current.addFiles([file("late.png", 8, "image/png")]); });
+			expect(createObjectURL).toHaveBeenCalledTimes(MAX_ATTACHMENTS);
 			await waitFor(() => expect(prepareAttachments).toHaveBeenCalled());
-			await act(async () => { release(); await added; });
+			await act(async () => { release(); await added; await again; });
 		} finally {
 			URL.createObjectURL = original.createObjectURL;
 			URL.revokeObjectURL = original.revokeObjectURL;
