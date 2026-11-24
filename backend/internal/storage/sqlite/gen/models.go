@@ -989,6 +989,15 @@ type SessionTerminalTurn struct {
 	RespondedAt     sql.NullTime
 }
 
+type SessionTransfer struct {
+	SessionID     string
+	TransferID    string
+	DestHostID    string
+	DestLabel     string
+	DestSessionID string
+	CreatedAt     time.Time
+}
+
 type SessionWorktree struct {
 	SessionID    domain.SessionID
 	RepoName     string

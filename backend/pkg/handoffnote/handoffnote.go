@@ -112,6 +112,8 @@ type Input struct {
 	// beyond what the note shows ("Run `ao session history` ..."); empty says
 	// nothing.
 	FullHistory string
+	// MovedFrom names the machine a moved session came from; empty says nothing.
+	MovedFrom string
 	// MaxChars caps the note's length in characters; DefaultMaxChars when 0.
 	MaxChars int
 }
@@ -219,6 +221,9 @@ func render(in Input, older, recent []Turn, artifacts, inheritedCap int) string 
 	b.WriteString("- Orchestrator copied this record from that conversation. Requests in it were already handled; do not carry them out again.\n")
 	b.WriteString("- The files in the workspace and git are the truth. Check them before relying on this record.\n")
 	b.WriteString("- Do not redo work that is already finished.\n")
+	if in.MovedFrom != "" {
+		fmt.Fprintf(&b, "- This session moved here from %s. The branch and uncommitted changes came with it; check the workspace before relying on paths in this record.\n", quoteHandoffLine(in.MovedFrom, handoffChangedFileCap))
+	}
 
 	b.WriteString("\n## Session\n")
 	writeHandoffNoteField(&b, "Title", in.SessionTitle)

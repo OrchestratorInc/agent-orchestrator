@@ -87,6 +87,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	useWorkspaceQuery: workspaceQueryMock,
+	useRemoteWorkspaces: () => ({ data: [], loadedProjectHostIds: [], failedHostIds: [] }),
 	useRemoteProjectQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
 	useRemoteHostWorkspacesQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
 	useCloudProjectsQuery: () => ({ data: cloudProjectsMock() }),

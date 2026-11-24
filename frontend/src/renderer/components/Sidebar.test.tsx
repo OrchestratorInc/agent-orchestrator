@@ -2811,6 +2811,7 @@ describe("Sidebar", () => {
 			"Rename",
 			"Pin session",
 			"Fork session",
+			"Move to",
 			"Archive session",
 		]);
 		expect(renameItem).toHaveTextContent(/^Rename$/);

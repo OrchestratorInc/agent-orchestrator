@@ -56,13 +56,15 @@ import {
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
+import { ArrowDown, ArrowRightLeft, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, usePresence, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
 import { ChatAnnotationMarkers, DraftAnnotationMarkers, numberedReferences } from "./ChatAnnotationMarkers";
 import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
+import { usePendingMove, useSessionMovedTo } from "../../hooks/useSessionMovedTo";
+import { moveKey, useMoveStore } from "../../lib/move-runner";
 import {
 	defaultRangeExtractor,
 	measureElement,
@@ -126,6 +128,7 @@ import { sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
 import type { TerminalTarget } from "../../types/terminal";
 import {
 	isOrchestratorSession,
+	sessionAgentExited,
 	sessionIsActive,
 	type SessionKind,
 	type WorkspaceSession,
@@ -1080,6 +1083,10 @@ function ChatWorkspaceContent({
 	// Nothing here resumes a chat that is a saved copy, blocked on its import, archived
 	// or mid-restore: the stopped banner and the version chip both stay out of it.
 	const resumeHidden = savedCopy || Boolean(importBlock) || terminated || restoring;
+	// While a move runs, the stopped agent is expected, not a failure.
+	const moving = useMoveStore((state) => (session ? state.moves[moveKey(session.hostId, session.id)] : undefined));
+	// Set by the banner, which looks the move up only for archived sessions.
+	const [movedToLabel, setMovedToLabel] = useState<string>();
 	// After a restart the daemon is still verifying this session and reconnects
 	// its surviving agent itself. Until it settles, "stopped" is not a state to act on.
 	const startupReconnecting = snapshot.controller.state === "stopped" && !resumingAgent && !terminated &&
@@ -2314,9 +2321,14 @@ function ChatWorkspaceContent({
 						</div>
 					) : null}
 					{/* An archived chat reads as an ordinary one: sending to it restores it, and the
-					    composer, not a banner, says so until the agent is back. */}
-					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : resumeHidden ? null : (
-						<ControllerBanner
+					    composer, not a banner, says so until the agent is back. One that moved to
+					    another computer keeps a banner pointing there. */}
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock || (restoring && !terminated) ? null : (
+						<ControllerBannerForSession
+							session={terminated || sessionAgentExited(session) ? session : undefined}
+							onMovedTo={setMovedToLabel}
+							moving={moving?.phase === "moving" || moving?.phase === "done" ? moving.targetLabel : undefined}
+							terminated={terminated}
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
 							provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
@@ -2541,7 +2553,7 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting || restoring}
-										disabled={(orchestratorBlocksComposer || (openingStarting && !session && !followUpWhileOpening) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session && !followUpWhileOpening) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && !terminated && (!resumingAgent || session?.provisionState === "failed")) || Boolean(terminated && movedToLabel) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										sendBlockedReason={sendBlockedReason}
 										// Signed out: nothing typed could be sent until the login takes. The box
 										// keeps its look; the agent and model can still be changed.
@@ -2560,6 +2572,10 @@ function ChatWorkspaceContent({
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
+												: moving?.phase === "moving"
+												? t("moveSession.moving", { host: moving.targetLabel })
+												: terminated && movedToLabel
+												? t("moveSession.movedHeading", { host: movedToLabel })
 												: restoring
 												? t("shell.restoringSession")
 												: terminated
@@ -3137,6 +3153,23 @@ const OPEN_ELSEWHERE_RECHECK_MS = 30_000;
  * Controller health and hibernation. A silent surface is indistinguishable from
  * an agent that is simply thinking.
  */
+/** Looks up where an archived session moved; only archived sessions need it. */
+type MovedAwareProps = ComponentProps<typeof ControllerBanner> & { onMovedTo?: (label: string | undefined) => void };
+
+function ControllerBannerForSession({ session, onMovedTo, ...props }: MovedAwareProps & { session?: WorkspaceSession }) {
+	return session ? <MovedAwareControllerBanner session={session} onMovedTo={onMovedTo} {...props} /> : <ControllerBanner {...props} />;
+}
+
+function MovedAwareControllerBanner({ session, onMovedTo, ...props }: MovedAwareProps & { session: WorkspaceSession }) {
+	const movedTo = useSessionMovedTo(session);
+	const pendingMove = usePendingMove(session);
+	useEffect(() => {
+		onMovedTo?.(movedTo?.label);
+		return () => onMovedTo?.(undefined);
+	}, [movedTo?.label, onMovedTo]);
+	return <ControllerBanner {...props} movedTo={movedTo} pendingMove={pendingMove} />;
+}
+
 function ControllerBanner({
 	controller,
 	provisionState,
@@ -3144,6 +3177,10 @@ function ControllerBanner({
 	transitioning,
 	automaticWakePending,
 	reconnecting,
+	terminated = false,
+	movedTo,
+	moving,
+	pendingMove,
 	onResume,
 	resuming,
 	resumeError,
@@ -3164,6 +3201,14 @@ function ControllerBanner({
 	automaticWakePending?: boolean;
 	/** The daemon is still reconnecting this session after a restart. */
 	reconnecting?: boolean;
+	/** The session is archived, so `onResume` restores it instead of resuming its agent. */
+	terminated?: boolean;
+	/** Where an archived session continues; it offers Open session instead of Restore. */
+	movedTo?: { label: string; sessionId: string; open?: () => void };
+	/** The computer this session is moving to, while the move runs. */
+	moving?: string;
+	/** A move that did not finish, which keeps the agent from resuming. */
+	pendingMove?: ReturnType<typeof usePendingMove>;
 	onResume?: () => void | Promise<unknown>;
 	resuming?: boolean;
 	resumeError?: string;
@@ -3191,6 +3236,27 @@ function ControllerBanner({
 		}, OPEN_ELSEWHERE_RECHECK_MS);
 		return () => window.clearTimeout(timer);
 	}, [recheck]);
+	// The move banner above the session shows the move; the stopped agent is expected.
+	if (moving && controller.state === "stopped") return null;
+	// Archived chats restore from the composer; only a moved one keeps a banner.
+	if (terminated && !movedTo) return null;
+	if (pendingMove && controller.state === "stopped" && !terminated) {
+		return (
+			<div role="status" aria-atomic="true" className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5">
+				<ArrowRightLeft aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<strong className="text-xs font-medium text-muted-foreground">{t("moveSession.pendingHeading", { host: pendingMove.label })}</strong>
+					<span className="text-xs leading-snug text-muted-foreground">{t("moveSession.pendingBody")}</span>
+					<div className="mt-1.5 flex flex-wrap gap-2">
+						<Button type="button" size="sm" variant="secondary" disabled={!pendingMove.finish} onClick={pendingMove.finish}>{t("moveSession.finish")}</Button>
+						<Button type="button" size="sm" variant="ghost" disabled={pendingMove.keeping} onClick={() => void pendingMove.keepHere()}>
+							{t("moveSession.keepHere")}
+						</Button>
+					</div>
+				</div>
+			</div>
+		);
+	}
 	// Startup failures use the checklist's Retry action.
 	if (provisionState === "provisioning" || provisionState === "failed") return null;
 	const waking = Boolean(resuming && controller.state === "stopped");
@@ -3218,16 +3284,18 @@ function ControllerBanner({
 			tone: "text-warning",
 		},
 		stopped: {
-			title: waking
-				? "Waking agent…"
-				: restarting
-					? "Reconnecting to the agent…"
-					: openElsewhere
-						? t("chat.controller.openElsewhere")
-						: needsResume
-							? t("chat.controller.couldNotConnect")
-							: "The agent controller stopped",
-			tone: waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
+			title: terminated && movedTo
+				? t("moveSession.movedHeading", { host: movedTo.label })
+				: waking
+					? "Waking agent…"
+					: restarting
+						? "Reconnecting to the agent…"
+						: openElsewhere
+							? t("chat.controller.openElsewhere")
+							: needsResume
+								? t("chat.controller.couldNotConnect")
+								: "The agent controller stopped",
+			tone: terminated || waking || restarting || needsResume ? "text-muted-foreground" : "text-destructive",
 		},
 	};
 	const shown = copy[controller.state];
@@ -3262,13 +3330,15 @@ function ControllerBanner({
 				{actionable ? (
 					<>
 						<span className="text-xs leading-snug text-muted-foreground">
-							{openElsewhere
-								? [
-									t("chat.controller.openElsewhereBody"),
-									harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
-									t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
-								].filter(Boolean).join(" ")
-								: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
+							{terminated && movedTo
+								? t("moveSession.movedMessage", { sessionId: movedTo.sessionId })
+								: openElsewhere
+									? [
+										t("chat.controller.openElsewhereBody"),
+										harness === "codex" ? t("chat.controller.openElsewhereCodex") : "",
+										t("chat.controller.openElsewhereRecheck", { seconds: OPEN_ELSEWHERE_RECHECK_MS / 1000 }),
+									].filter(Boolean).join(" ")
+									: needsResume ? t("chat.controller.retryBody") : "History is kept. Resume the agent or open a shell in the same worktree."}
 						</span>
 						{!openElsewhere && (resumeError || shellError) ? (
 							<span className="text-xs leading-snug text-destructive">
@@ -3276,7 +3346,12 @@ function ControllerBanner({
 							</span>
 						) : null}
 						<div className="mt-1.5 flex flex-wrap gap-2">
-							{onResume ? (
+							{movedTo?.open ? (
+								<Button type="button" size="sm" variant="outline" onClick={movedTo.open}>
+									{t("moveSession.open")}
+								</Button>
+							) : null}
+							{onResume && !movedTo ? (
 								<Button
 									type="button"
 									size="sm"

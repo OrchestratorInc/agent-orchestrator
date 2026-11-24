@@ -78,3 +78,22 @@ describe.each([false, true])("shared settings page, Cloud=%s", (cloud) => {
 		await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: "saved", dirty: false, error: undefined })));
 	});
 });
+
+describe("issue intake on another computer", () => {
+	const renderWith = (intakeEnabled: boolean) => render(<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+		<ProjectSettingsEditor initialValues={{ ...initialValues, intakeEnabled }} section="general"
+			capabilities={{ workflow: true, sessionPrefix: true, intake: true, reviewer: true, requiredAgents: true, requiredBranch: false, nameLimit: 100, runtimeDefaults: false }}
+			details={[]} modelScope={() => ""} renderAgent={() => null} save={vi.fn().mockResolvedValue({})}
+			intakeWarning="Issue intake is also on for this repository on: MacBook B." />
+	</TooltipProvider></QueryClientProvider>);
+
+	it("is pointed out while intake is on here", () => {
+		renderWith(true);
+		expect(screen.getByRole("status")).toHaveTextContent("Issue intake is also on for this repository on: MacBook B.");
+	});
+
+	it("is not mentioned while intake is off here", () => {
+		renderWith(false);
+		expect(screen.queryByText(/also on for this repository/)).not.toBeInTheDocument();
+	});
+});

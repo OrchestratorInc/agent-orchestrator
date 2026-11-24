@@ -21,6 +21,7 @@ import type { components } from "../../api/schema";
 import { isFileViewCapture } from "../../shared/chat-file-reference";
 import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
+import { MoveBanner } from "./MoveBanner";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
 import { agentLabel } from "../lib/agent-options";
@@ -2928,7 +2929,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
-			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
+			{/* An unfinished move is explained, with its actions, in the terminal strip. */}
+			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError &&
+				apiErrorCode(autoResume.error) !== "TRANSFER_PENDING" ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}
 				</p>
@@ -2960,6 +2963,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							className="relative z-chrome flex h-toolbar w-full shrink-0 overflow-hidden"
 							data-testid="session-topbar-host"
 						/>
+						{session ? <MoveBanner session={session} /> : null}
 						<div
 							className="relative min-h-0 flex-1"
 							data-split-group={shownGroup?.id}

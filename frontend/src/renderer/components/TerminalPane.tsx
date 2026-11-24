@@ -39,6 +39,9 @@ import {
 import { cn } from "../lib/utils";
 import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
+import { usePendingMove, useSessionMovedTo } from "../hooks/useSessionMovedTo";
+import { LOCAL_HOST } from "../lib/hosts";
+import { moveKey, useMoveStore } from "../lib/move-runner";
 import { useShellTerminals } from "../hooks/useShellTerminals";
 import { placeCloudAttachment, uploadCloudAttachment } from "../lib/cloud-attachments";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -1405,6 +1408,9 @@ function AttachedTerminal({
 	// disconnected: an open timeout lifts it, the backoff reconnect would
 	// otherwise pull it straight back down, and the "reattaching" banner already
 	// explains that window better than a blank overlay does.
+	// A session on another computer replays over the network, which takes long
+	// enough to read as a blank pane, so its cover says Connecting as Cloud's does.
+	const onOtherComputer = Boolean(session?.hostId) && session?.hostId !== LOCAL_HOST;
 	const showReplayCover =
 		Boolean(handleId) &&
 		(!replaySettled || replayPaintPending) &&
@@ -1464,6 +1470,9 @@ function AttachedTerminal({
 	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
 	const coverLabel = switchingLabel ?? switchingHeldRef.current;
 	const switchingCover = Boolean(coverLabel) && !hasVisibleContent && state !== "exited" && state !== "error";
+	// A move stops the agent first, which leaves an empty terminal; say what is happening instead.
+	const move = useMoveStore((store) => (session ? store.moves[moveKey(session.hostId, session.id)] : undefined));
+	const movingLabel = move?.phase === "moving" && terminalTarget?.kind === "worker" ? t("moveSession.moving", { host: move.targetLabel }) : undefined;
 	// A Cloud session's socket also closes for a pause, a handoff or a reviewer
 	// whose verdict is still landing, so the strip shows there only for an end
 	// the control plane recorded: the agent process gone in a live session, or
@@ -1522,10 +1531,10 @@ function AttachedTerminal({
 				/>
 				</Suspense>
 				</LazyChunkBoundary>
-				{(showEmptyState || booting || switchingCover) && (
+				{(showEmptyState || booting || switchingCover || movingLabel) && (
 					<div className="terminal-surface absolute inset-0 grid place-items-center font-mono text-control">
 						{session ? (
-							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={coverLabel} />
+							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={movingLabel ?? coverLabel} />
 						) : (
 							<div className="text-center">
 								<div className="text-terminal">{"Orchestrator"}</div>
@@ -1543,7 +1552,7 @@ function AttachedTerminal({
 					</div>
 				)}
 				{showReplayCover && !isCloudConnecting && (
-					<ReplayCover message={attachSession?.cloud ? t("terminal.connecting") : undefined} />
+					<ReplayCover message={attachSession?.cloud || onOtherComputer ? t("terminal.connecting") : undefined} />
 				)}
 				{isCloudConnectError && <CloudConnectError onRetry={handleRetry} />}
 				{banner && !showEndedState && (
@@ -1620,13 +1629,26 @@ type TerminalEndedStripProps = {
 	variant: "reviewer" | "session" | "shell";
 };
 
-function TerminalEndedStrip({ canRestore, contentExpired, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
+function TerminalEndedStrip({ canRestore: restorable, contentExpired, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
 	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
 	const terminated = variant === "session" && session && !sessionIsActive(session);
+	// A session that moved to another computer is refused here; point there instead.
+	const movedTo = useSessionMovedTo(terminated ? session : undefined);
+	const move = useMoveStore((state) => (session ? state.moves[moveKey(session.hostId, session.id)] : undefined));
+	const moving = move?.phase === "moving" || move?.phase === "done" ? move.targetLabel : undefined;
+	const canRestore = restorable && !movedTo;
 	const agentExited = variant === "session" && sessionAgentExited(session);
+	// A move that did not finish keeps the agent from resuming; offer the two ways out instead.
+	const pendingMove = usePendingMove(agentExited && !moving ? session : undefined);
+	// The move banner above the session shows a move in progress.
+	if (moving) return null;
 	const startupFailed = variant === "session" && session?.provisionState === "failed";
-	const heading = reviewDelivered
+	const heading = pendingMove
+		? t("moveSession.pendingHeading", { host: pendingMove.label })
+		: movedTo
+		? t("moveSession.movedHeading", { host: movedTo.label })
+		: reviewDelivered
 		? t("terminal.reviewCompleted")
 		: startupFailed
 			? t("terminal.startupFailed")
@@ -1635,7 +1657,9 @@ function TerminalEndedStrip({ canRestore, contentExpired, error, isRestoring, on
 				: agentExited
 					? t("terminal.agentExited")
 					: t("terminal.ended");
-	const message = reviewDelivered
+	const message = movedTo
+		? t("moveSession.movedMessage", { sessionId: movedTo.sessionId })
+		: reviewDelivered
 		? t("terminal.reviewerCompleted")
 		: contentExpired
 		? t("restoreUnavailable.contentExpired")
@@ -1654,17 +1678,32 @@ function TerminalEndedStrip({ canRestore, contentExpired, error, isRestoring, on
 					<div
 						className={cn(
 							"font-mono text-caption font-medium uppercase tracking-wide-md",
-							terminated || startupFailed ? "text-destructive" : "text-muted-foreground",
+							(terminated && !movedTo) || startupFailed ? "text-destructive" : "text-muted-foreground",
 						)}
 					>
 						{heading}
 					</div>
 					<div className="mt-0.5 text-xs text-muted-foreground">
-						{startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
+						{pendingMove ? t("moveSession.pendingBody") : startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
 					</div>
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
-				{variant === "session" && session ? <ResumeAgentControl session={session} /> : null}
+				{variant === "session" && session && !movedTo && !pendingMove ? <ResumeAgentControl session={session} /> : null}
+				{pendingMove ? (
+					<>
+						<Button type="button" variant="secondary" disabled={!pendingMove.finish} onClick={pendingMove.finish}>
+							{t("moveSession.finish")}
+						</Button>
+						<Button type="button" variant="ghost" disabled={pendingMove.keeping} onClick={() => void pendingMove.keepHere()}>
+							{t("moveSession.keepHere")}
+						</Button>
+					</>
+				) : null}
+				{movedTo?.open ? (
+					<Button type="button" variant="secondary" onClick={movedTo.open}>
+						{t("moveSession.open")}
+					</Button>
+				) : null}
 				{canRestore && (
 					<Tooltip>
 						<TooltipTrigger asChild>

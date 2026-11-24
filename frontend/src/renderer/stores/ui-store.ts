@@ -353,6 +353,9 @@ export type UiState = {
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
+	/** Opens the sidebar's clone flow for another computer with the repository filled in. */
+	cloneElsewhereRequest: { hostId: string; remoteUrl: string; nonce: number } | null;
+	requestCloneElsewhere: (hostId: string, remoteUrl: string) => void;
 	// Transient "a folder was dropped onto the app window — open the
 	// create-project flow for this path" signal, mirroring newTaskRequest: the
 	// nonce always bumps so dropping the same folder twice in a row still
@@ -661,6 +664,9 @@ export const useUiStore = create<UiState>((set, get) => ({
 	workspaceFileOpenRequest: null,
 	chatMessageFocusRequest: null,
 	createProjectNonce: 0,
+	cloneElsewhereRequest: null,
+	requestCloneElsewhere: (hostId, remoteUrl) =>
+		set((state) => ({ cloneElsewhereRequest: { hostId, remoteUrl, nonce: (state.cloneElsewhereRequest?.nonce ?? 0) + 1 } })),
 	folderDropRequest: null,
 	newShellTerminalNonce: 0,
 	activeShellTerminalHandleId: null,
