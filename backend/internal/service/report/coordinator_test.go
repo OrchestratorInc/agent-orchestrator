@@ -70,6 +70,51 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	}
 }
 
+func TestCoordinatorPiggybackDoesNotWaitForAnotherProjectsDelivery(t *testing.T) {
+	now := time.Date(2026, 11, 24, 7, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.setSessions(
+		domain.SessionRecord{ID: "slow", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+		domain.SessionRecord{ID: "chat", ProjectID: "q", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat},
+	)
+	due := reportAt("due", "worker", now, now, "delivered slowly")
+	later := reportAt("later", "other-worker", now, now.Add(time.Hour), "rides along with the user's message")
+	later.ProjectID = "q"
+	store.add(due, later)
+	delivery := &coordinatorDelivery{entered: make(chan struct{}), release: make(chan struct{})}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	passDone := make(chan error, 1)
+	go func() {
+		_, err := c.RunDue(context.Background())
+		passDone <- err
+	}()
+	<-delivery.entered
+	prepared := make(chan PreparedBatch, 1)
+	go func() {
+		batch, err := c.PreparePiggyback(context.Background(), "chat")
+		if err != nil {
+			t.Error(err)
+		}
+		prepared <- batch
+	}()
+	select {
+	case batch := <-prepared:
+		if len(batch.Reports) != 1 || batch.Reports[0].ID != "later" {
+			t.Fatalf("piggyback batch = %#v, want the other project's report", batch.Reports)
+		}
+	case <-time.After(5 * time.Second):
+		close(delivery.release)
+		t.Fatal("a user's Chat send waited behind another project's report delivery")
+	}
+	close(delivery.release)
+	if err := <-passDone; err != nil {
+		t.Fatal(err)
+	}
+	if got := delivery.submitted(); len(got) != 1 || got[0].target != "slow" {
+		t.Fatalf("submissions = %#v", got)
+	}
+}
+
 func TestCoordinatorStuckInterruptRateLimitAndCoalescing(t *testing.T) {
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)
@@ -1109,9 +1154,16 @@ type coordinatorDelivery struct {
 	submitErr    error
 	submitErrFor map[domain.SessionID]error
 	attempts     int
+	// When set, Submit signals entered and then waits for release before
+	// recording, without holding d.mu.
+	entered, release chan struct{}
 }
 
 func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
+	if d.entered != nil {
+		close(d.entered)
+		<-d.release
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.attempts++
