@@ -46,6 +46,42 @@ func (f *schedulerMemoryStore) MaterializeAutomationRuns(_ context.Context, id d
 	return true, nil
 }
 
+// ListAutomationRuns mirrors the SQL contract: newest first, optional status
+// filter, limit/offset paging, and the filtered total.
+func (f *schedulerMemoryStore) ListAutomationRuns(_ context.Context, filter domain.AutomationRunFilter) (domain.AutomationRunPage, error) {
+	var matched []domain.AutomationRun
+	for _, run := range f.runs {
+		if run.AutomationID == filter.AutomationID && (filter.Status == nil || run.Status == *filter.Status) {
+			matched = append(matched, run)
+		}
+	}
+	sort.Slice(matched, func(i, j int) bool {
+		if !matched[i].ScheduledFor.Equal(matched[j].ScheduledFor) {
+			return matched[i].ScheduledFor.After(matched[j].ScheduledFor)
+		}
+		return matched[i].ID > matched[j].ID
+	})
+	page := domain.AutomationRunPage{Total: int64(len(matched))}
+	start := min(filter.Offset, int64(len(matched)))
+	end := int64(len(matched))
+	if filter.Limit > 0 {
+		end = min(start+filter.Limit, end)
+	}
+	page.Items = matched[start:end]
+	return page, nil
+}
+
+func (f *schedulerMemoryStore) runsWithStatus(id domain.AutomationID, status domain.AutomationRunStatus) []domain.AutomationRun {
+	var out []domain.AutomationRun
+	for _, run := range f.runs {
+		if run.AutomationID == id && run.Status == status {
+			out = append(out, run)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ScheduledFor.Before(out[j].ScheduledFor) })
+	return out
+}
+
 func (f *schedulerMemoryStore) ClaimNextAutomationRun(_ context.Context, now, lease time.Time) (domain.AutomationRun, bool, error) {
 	active := map[domain.AutomationID]bool{}
 	for _, run := range f.runs {
@@ -164,9 +200,9 @@ func (s *recordingSpawner) Kill(_ context.Context, id domain.SessionID) (bool, e
 	return s.killFreed, nil
 }
 
-// Catch-up is capped at three durable rows but advances past the whole missed
-// window, and only the oldest occurrence is dispatched for the definition.
-func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
+// Missed occurrences coalesce into one durable row: the schedule advances past
+// the whole missed window and only the oldest owed occurrence is dispatched.
+func TestTickCoalescesMissedOccurrencesIntoOneRun(t *testing.T) {
 	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	now := base.Add(5 * time.Hour)
 	store := newSchedulerStore()
@@ -178,8 +214,8 @@ func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
 	if err := svc.Tick(context.Background(), now); err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
-	if len(store.runs) != 3 || len(spawner.calls) != 1 {
-		t.Fatalf("runs=%d spawns=%d, want 3 and 1", len(store.runs), len(spawner.calls))
+	if len(store.runs) != 1 || len(spawner.calls) != 1 {
+		t.Fatalf("runs=%d spawns=%d, want 1 and 1", len(store.runs), len(spawner.calls))
 	}
 	if got := store.automations["automation-1"].NextRunAt; !got.Equal(base.Add(6 * time.Hour)) {
 		t.Fatalf("next run = %s, want %s", got, base.Add(6*time.Hour))
@@ -189,6 +225,138 @@ func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
 	}
 	if spawner.calls[0].AutomationRunID == nil || store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor != base {
 		t.Fatalf("spawn config = %#v, want oldest occurrence", spawner.calls[0])
+	}
+}
+
+// While an automation's session is still working, each new occurrence that
+// falls due must not add another pending row: one owed run is enough.
+func TestTickKeepsOnePendingRunWhileAutomationIsBusy(t *testing.T) {
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	now := base
+	store := newSchedulerStore()
+	store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", RRuleText: "DTSTART:20260825T090000Z\nRRULE:FREQ=HOURLY", Timezone: "UTC", Enabled: true, NextRunAt: base}
+	runID, sessionID := domain.AutomationRunID("run-busy"), domain.SessionID("session-busy")
+	store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", ScheduledFor: base.Add(-time.Hour), SessionID: &sessionID, Status: domain.AutomationRunRunning}
+	store.sessions[sessionID] = domain.SessionRecord{ID: sessionID, AutomationRunID: &runID, FirstSignalAt: base.Add(-time.Hour), Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: base.Add(-time.Minute)}}
+	spawner := &recordingSpawner{store: store}
+	svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+	for hour := 0; hour < 4; hour++ {
+		now = base.Add(time.Duration(hour) * time.Hour)
+		if err := svc.Tick(context.Background(), now); err != nil {
+			t.Fatalf("Tick at %s: %v", now, err)
+		}
+	}
+	pending := store.runsWithStatus("automation-1", domain.AutomationRunPending)
+	if len(pending) != 1 || !pending[0].ScheduledFor.Equal(base) {
+		t.Fatalf("pending = %#v, want exactly the first owed occurrence", pending)
+	}
+	if store.runs[runID].Status != domain.AutomationRunRunning || len(spawner.calls) != 0 {
+		t.Fatalf("busy run = %#v spawns = %d", store.runs[runID], len(spawner.calls))
+	}
+	if got := store.automations["automation-1"].NextRunAt; !got.Equal(base.Add(4 * time.Hour)) {
+		t.Fatalf("next run = %s, want %s", got, base.Add(4*time.Hour))
+	}
+}
+
+// A backlog left by earlier versions collapses to its oldest pending run the
+// next time the automation falls due; the rest are recorded as skipped.
+func TestTickCollapsesExistingPendingBacklog(t *testing.T) {
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	now := base.Add(5 * time.Hour)
+	store := newSchedulerStore()
+	store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", RRuleText: "DTSTART:20260825T090000Z\nRRULE:FREQ=HOURLY", Timezone: "UTC", Enabled: true, NextRunAt: now}
+	runID, sessionID := domain.AutomationRunID("run-busy"), domain.SessionID("session-busy")
+	store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", ScheduledFor: base.Add(-time.Hour), SessionID: &sessionID, Status: domain.AutomationRunRunning}
+	store.sessions[sessionID] = domain.SessionRecord{ID: sessionID, AutomationRunID: &runID, FirstSignalAt: base, Activity: domain.Activity{State: domain.ActivityBlocked, LastActivityAt: base.Add(time.Minute)}}
+	for hour := 0; hour < 5; hour++ {
+		id := domain.AutomationRunID("run-backlog-" + string(rune('a'+hour)))
+		store.runs[id] = domain.AutomationRun{ID: id, AutomationID: "automation-1", ScheduledFor: base.Add(time.Duration(hour) * time.Hour), Status: domain.AutomationRunPending}
+	}
+	spawner := &recordingSpawner{store: store}
+	svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+	if err := svc.Tick(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	pending := store.runsWithStatus("automation-1", domain.AutomationRunPending)
+	if len(pending) != 1 || pending[0].ID != "run-backlog-a" {
+		t.Fatalf("pending = %#v, want only the oldest backlog run", pending)
+	}
+	skipped := store.runsWithStatus("automation-1", domain.AutomationRunFailed)
+	if len(skipped) != 4 {
+		t.Fatalf("skipped = %d, want 4", len(skipped))
+	}
+	for _, run := range skipped {
+		if run.ErrorMessage != skippedRunMessage {
+			t.Fatalf("skipped run %s message = %q", run.ID, run.ErrorMessage)
+		}
+	}
+	if len(store.runs) != 6 || len(spawner.calls) != 0 {
+		t.Fatalf("runs=%d spawns=%d, want no new row and no spawn while blocked", len(store.runs), len(spawner.calls))
+	}
+}
+
+// A session that has finished its work completes its run without being
+// killed, so the next occurrence starts unattended.
+func TestTickCompletesSettledSessionWithoutKilling(t *testing.T) {
+	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	firstSignal := now.Add(-30 * time.Minute)
+	for _, state := range []domain.ActivityState{domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityExited} {
+		t.Run(string(state), func(t *testing.T) {
+			store := newSchedulerStore()
+			store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", Enabled: true, NextRunAt: now.Add(time.Hour)}
+			runID, sessionID := domain.AutomationRunID("run-1"), domain.SessionID("session-1")
+			store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", ScheduledFor: now.Add(-time.Hour), SessionID: &sessionID, Status: domain.AutomationRunRunning}
+			store.runs["run-2"] = domain.AutomationRun{ID: "run-2", AutomationID: "automation-1", ScheduledFor: now, Status: domain.AutomationRunPending}
+			store.sessions[sessionID] = domain.SessionRecord{ID: sessionID, AutomationRunID: &runID, FirstSignalAt: firstSignal, Activity: domain.Activity{State: state, LastActivityAt: firstSignal.Add(10 * time.Minute)}}
+			spawner := &recordingSpawner{store: store}
+			svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+			if err := svc.Tick(context.Background(), now); err != nil {
+				t.Fatal(err)
+			}
+			if store.runs[runID].Status != domain.AutomationRunCompleted || store.runs["run-2"].Status != domain.AutomationRunRunning || len(spawner.calls) != 1 {
+				t.Fatalf("runs=%#v calls=%d", store.runs, len(spawner.calls))
+			}
+			if len(spawner.kills) != 0 || store.sessions[sessionID].IsTerminated {
+				t.Fatalf("settled session was killed: kills=%v", spawner.kills)
+			}
+		})
+	}
+}
+
+// A session that has not yet worked on its prompt, is still working, or is
+// stopped on a permission prompt keeps its run and the gate closed.
+func TestTickKeepsRunWhileSessionHasNotSettled(t *testing.T) {
+	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	firstSignal := now.Add(-30 * time.Minute)
+	cases := map[string]domain.SessionRecord{
+		"seeded idle without signal": {Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: firstSignal}},
+		"first signal only":          {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: firstSignal}},
+		"working":                    {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: now}},
+		"blocked on approval":        {FirstSignalAt: firstSignal, Activity: domain.Activity{State: domain.ActivityBlocked, LastActivityAt: now}},
+		"still provisioning":         {FirstSignalAt: firstSignal, ProvisionState: domain.SessionProvisionProvisioning, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: now}},
+	}
+	for name, session := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := newSchedulerStore()
+			store.automations["automation-1"] = domain.Automation{ID: "automation-1", ProjectID: "scheduled", Enabled: true, NextRunAt: now.Add(time.Hour)}
+			runID, sessionID := domain.AutomationRunID("run-1"), domain.SessionID("session-1")
+			store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "automation-1", ScheduledFor: now.Add(-time.Hour), SessionID: &sessionID, Status: domain.AutomationRunRunning}
+			store.runs["run-2"] = domain.AutomationRun{ID: "run-2", AutomationID: "automation-1", ScheduledFor: now, Status: domain.AutomationRunPending}
+			session.ID, session.AutomationRunID = sessionID, &runID
+			store.sessions[sessionID] = session
+			spawner := &recordingSpawner{store: store}
+			svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+			if err := svc.Tick(context.Background(), now); err != nil {
+				t.Fatal(err)
+			}
+			if store.runs[runID].Status != domain.AutomationRunRunning || store.runs["run-2"].Status != domain.AutomationRunPending || len(spawner.calls) != 0 {
+				t.Fatalf("runs=%#v calls=%d", store.runs, len(spawner.calls))
+			}
+		})
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,10 @@ const (
 	dispatchScanLimit = 100
 	spawnLease        = 2 * time.Minute
 	maxRunErrorBytes  = 512
+	// pendingScanLimit bounds one coalescing pass; a larger legacy backlog
+	// drains over the following ticks.
+	pendingScanLimit  = 100
+	skippedRunMessage = "Skipped: an earlier occurrence of this automation was still waiting to run"
 )
 
 // SessionSpawner is the existing user-facing session launch boundary.
@@ -39,6 +44,7 @@ type schedulerStore interface {
 	CompleteAutomationRun(context.Context, domain.AutomationRunID, time.Time) (bool, error)
 	FailAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
 	ReleaseAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
+	ListAutomationRuns(context.Context, domain.AutomationRunFilter) (domain.AutomationRunPage, error)
 }
 
 func (s *Service) schedulerStore() (schedulerStore, error) {
@@ -102,15 +108,13 @@ func (s *Service) materializeDefinition(ctx context.Context, store schedulerStor
 	if !definition.Enabled || definition.NextRunAt.After(now) {
 		return nil
 	}
+	// Walk past every due occurrence (bounded) to find the next future one.
+	// However many occurrences fell due, they coalesce into at most one
+	// pending run: an automation that is still busy, or whose daemon was
+	// down, owes one more run, not one per missed tick.
 	occurrence := definition.NextRunAt.UTC()
-	runs := make([]domain.AutomationRun, 0, catchupLimit)
-	var last time.Time
-	for !occurrence.After(now) && len(runs) < catchupLimit {
-		runs = append(runs, domain.AutomationRun{
-			ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
-			ScheduledFor: occurrence, Status: domain.AutomationRunPending,
-			CreatedAt: now, UpdatedAt: now,
-		})
+	last := occurrence
+	for steps := 0; !occurrence.After(now) && steps < catchupLimit; steps++ {
 		last = occurrence
 		next, err := NextOccurrence(definition.RRuleText, definition.Timezone, occurrence)
 		if err != nil {
@@ -125,11 +129,57 @@ func (s *Service) materializeDefinition(ctx context.Context, store schedulerStor
 			return err
 		}
 	}
-	if len(runs) == 0 {
-		return nil
+	waiting, err := s.coalescePendingRuns(ctx, store, definition.ID, now)
+	if err != nil {
+		return err
 	}
-	_, err := store.MaterializeAutomationRuns(ctx, definition.ID, definition.NextRunAt, runs, last, occurrence, now)
+	var runs []domain.AutomationRun
+	if !waiting {
+		runs = []domain.AutomationRun{{
+			ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
+			ScheduledFor: definition.NextRunAt.UTC(), Status: domain.AutomationRunPending,
+			CreatedAt: now, UpdatedAt: now,
+		}}
+	}
+	_, err = store.MaterializeAutomationRuns(ctx, definition.ID, definition.NextRunAt, runs, last, occurrence, now)
 	return err
+}
+
+// coalescePendingRuns keeps only the oldest pending run of one automation and
+// marks any others as skipped. It reports whether a pending run remains, in
+// which case no new occurrence needs to be queued.
+func (s *Service) coalescePendingRuns(ctx context.Context, store schedulerStore, id domain.AutomationID, now time.Time) (bool, error) {
+	status := domain.AutomationRunPending
+	filter := domain.AutomationRunFilter{AutomationID: id, Status: &status, Limit: pendingScanLimit}
+	page, err := store.ListAutomationRuns(ctx, filter)
+	if err != nil {
+		return false, err
+	}
+	// Runs list newest first. Keep the oldest, which is the one a claim takes
+	// next, so read the oldest page when the backlog is longer than one page.
+	if page.Total > int64(len(page.Items)) {
+		filter.Offset = page.Total - pendingScanLimit
+		if page, err = store.ListAutomationRuns(ctx, filter); err != nil {
+			return false, err
+		}
+	}
+	if len(page.Items) == 0 {
+		return false, nil
+	}
+	pending := append([]domain.AutomationRun(nil), page.Items...)
+	sort.Slice(pending, func(i, j int) bool {
+		if !pending[i].ScheduledFor.Equal(pending[j].ScheduledFor) {
+			return pending[i].ScheduledFor.Before(pending[j].ScheduledFor)
+		}
+		return pending[i].ID < pending[j].ID
+	})
+	var problems []error
+	for _, extra := range pending[1:] {
+		if _, err := store.FailAutomationRun(ctx, extra.ID, skippedRunMessage, now); err != nil {
+			problems = append(problems, err)
+		}
+	}
+	return true, errors.Join(problems...)
 }
 
 func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain.AutomationRun, now time.Time) error {
@@ -223,7 +273,7 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 				_, lookupErr = store.MarkAutomationRunRunning(ctx, run.ID, session.ID, now)
 				if lookupErr != nil {
 					problems = append(problems, lookupErr)
-				} else if session.IsTerminated {
+				} else if automationSessionSettled(session) {
 					if _, lookupErr = store.CompleteAutomationRun(ctx, run.ID, now); lookupErr != nil {
 						problems = append(problems, lookupErr)
 					}
@@ -265,13 +315,40 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 				problems = append(problems, err)
 			}
 		}
-		if session.IsTerminated {
+		if automationSessionSettled(session) {
 			if _, err := store.CompleteAutomationRun(ctx, run.ID, now); err != nil {
 				problems = append(problems, err)
 			}
 		}
 	}
 	return errors.Join(problems...)
+}
+
+// automationSessionSettled reports whether a scheduled session has finished
+// the work it was launched for, which ends its run and lets the next
+// occurrence start. Terminating the session still counts, but so does the
+// agent settling on its own: idle, waiting for its next instruction, or
+// exited. The session itself stays open so its output can be read.
+//
+// A spawn is seeded idle before the agent reports anything, and an agent may
+// report idle once as it starts. Requiring a later reading than the first
+// signal means the agent has reported at least twice, so a run is not
+// completed before its prompt was ever worked on. A blocked agent, stopped on
+// a permission or approval prompt, is still mid-task and keeps its run.
+func automationSessionSettled(session domain.SessionRecord) bool {
+	if session.IsTerminated {
+		return true
+	}
+	if session.ProvisionState.IsProvisioning() || session.FirstSignalAt.IsZero() ||
+		!session.Activity.LastActivityAt.After(session.FirstSignalAt) {
+		return false
+	}
+	switch session.Activity.State {
+	case domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityExited:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) rollbackIncompleteLaunch(ctx context.Context, store schedulerStore, run domain.AutomationRun, session domain.SessionRecord, now time.Time) error {
