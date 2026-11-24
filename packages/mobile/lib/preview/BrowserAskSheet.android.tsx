@@ -1,13 +1,13 @@
 import { AlertDialog, Host, LazyColumn, ListItem, Text as NativeText, TextButton, TextField, useNativeState } from "@expo/ui/jetpack-compose";
 import { alpha, clickable, fillMaxWidth, height } from "@expo/ui/jetpack-compose/modifiers";
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Alert, StyleSheet } from "react-native";
+import { useRef, useState, type ReactNode } from "react";
+import { StyleSheet } from "react-native";
 import type { BrowserCommand, BrowserDialog } from "../browserTransport";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { font, stateOpacity } from "../tokens";
 import { answerAuth, answerDialog, answerSelect, askTitle, authMessage } from "./browserAsk";
 import { browserAskCopy as copy, type BrowserAskSheetProps } from "./BrowserAskSheet.types";
-import { answerWithFiles, fileSources, presentPageAlert } from "./browserAskAlerts";
+import { answerWithFiles, fileSources } from "./browserAskAlerts";
 
 export type { BrowserAskSheetProps } from "./BrowserAskSheet.types";
 
@@ -31,26 +31,11 @@ export function BrowserAskSheet({ dialog, onAnswer, pickers }: BrowserAskSheetPr
 		latest.current.onAnswer(asked, command);
 	};
 
-	useEffect(() => {
-		if (!dialog) return;
-		if (dialog.kind === "alert" || dialog.kind === "confirm" || dialog.kind === "beforeunload") presentPageAlert(dialog, answer(dialog));
-		if (dialog.kind === "filechooser") {
-			const sources = fileSources(dialog);
-			const respond = answer(dialog);
-			Alert.alert(askTitle(dialog), undefined, [
-				...sources.map((source) => ({
-					text: source === "photos" ? copy.photos : copy.files(dialog.multiple),
-					onPress: () => void answerWithFiles(source, dialog, respond, latest.current.pickers),
-				})),
-				{ text: copy.cancel, style: "cancel" as const, onPress: () => respond({ type: "files", payload: { files: [], folder: dialog.folder } }) },
-			], { cancelable: true, onDismiss: () => respond({ type: "files", payload: { files: [], folder: dialog.folder } }) });
-		}
-		// answer is rebuilt each render; the dialog is what is presented.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [dialog]);
-
 	if (!dialog || answered.current === dialog) return null;
-	// Keyed by the dialog, so each one opens with fresh fields.
+	// Each is drawn only while it is the page's current ask, so one the host
+	// closed or replaced goes away. Keyed by the dialog, so fields start fresh.
+	if (dialog.kind === "alert" || dialog.kind === "confirm" || dialog.kind === "beforeunload") return <PageDialog key={keyOf(dialog)} dialog={dialog} answer={answer(dialog)} />;
+	if (dialog.kind === "filechooser") return <FileSourceDialog key={keyOf(dialog)} dialog={dialog} answer={answer(dialog)} pickers={() => latest.current.pickers} />;
 	if (dialog.kind === "prompt") return <PromptDialog key={keyOf(dialog)} dialog={dialog} answer={answer(dialog)} />;
 	if (dialog.kind === "auth") return <AuthDialog key={keyOf(dialog)} dialog={dialog} answer={answer(dialog)} />;
 	if (dialog.kind === "select") return <SelectDialog key={keyOf(dialog)} dialog={dialog} answer={answer(dialog)} />;
@@ -70,7 +55,7 @@ export function resetBrowserAskKeys(): void {
 	nextKey = 0;
 }
 
-function Frame({ title, onDismiss, confirm, dismiss, children }: { title: string; onDismiss(): void; confirm?: ReactNode; dismiss: ReactNode; children: ReactNode }) {
+function Frame({ title, onDismiss, confirm, dismiss, children }: { title: string; onDismiss(): void; confirm?: ReactNode; dismiss?: ReactNode; children: ReactNode }) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	return (
@@ -79,7 +64,7 @@ function Frame({ title, onDismiss, confirm, dismiss, children }: { title: string
 				<AlertDialog.Title><NativeText style={{ typography: "headlineSmall", fontFamily: font.regular }}>{title}</NativeText></AlertDialog.Title>
 				<AlertDialog.Text>{children}</AlertDialog.Text>
 				{confirm ? <AlertDialog.ConfirmButton>{confirm}</AlertDialog.ConfirmButton> : null}
-				<AlertDialog.DismissButton>{dismiss}</AlertDialog.DismissButton>
+				{dismiss ? <AlertDialog.DismissButton>{dismiss}</AlertDialog.DismissButton> : null}
 			</AlertDialog>
 		</Host>
 	);
@@ -105,6 +90,38 @@ function useFieldColors() {
 			focusedLabelColor: t.accent, unfocusedLabelColor: t.textSecondary,
 		},
 	};
+}
+
+function PageDialog({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind: "alert" | "confirm" | "beforeunload" }>; answer: Answer }) {
+	const leave = dialog.kind === "beforeunload";
+	const decline = () => answer(answerDialog(dialog.kind === "alert"));
+	return (
+		<Frame
+			title={askTitle(dialog)}
+			onDismiss={decline}
+			confirm={<Button label={leave ? copy.leave : copy.ok} onClick={() => answer(answerDialog(true))} />}
+			dismiss={dialog.kind === "alert" ? null : <Button label={leave ? copy.stay : copy.cancel} onClick={() => answer(answerDialog(false))} />}
+		>
+			<NativeText style={{ typography: "bodyMedium", fontFamily: font.regular }}>{leave ? copy.leaveMessage : dialog.message}</NativeText>
+		</Frame>
+	);
+}
+
+function FileSourceDialog({ dialog, answer, pickers }: { dialog: Extract<BrowserDialog, { kind: "filechooser" }>; answer: Answer; pickers: () => BrowserAskSheetProps["pickers"] }) {
+	const none = () => answer({ type: "files", payload: { files: [], folder: dialog.folder } });
+	return (
+		<Frame title={askTitle(dialog)} onDismiss={none} dismiss={<Button label={copy.cancel} onClick={none} />}>
+			<LazyColumn modifiers={[fillMaxWidth()]}>
+				{fileSources(dialog).map((source) => (
+					<ListItem key={source} modifiers={[clickable(() => void answerWithFiles(source, dialog, answer, pickers()))]}>
+						<ListItem.HeadlineContent>
+							<NativeText style={{ typography: "bodyLarge", fontFamily: font.regular }}>{source === "photos" ? copy.photos : copy.files(dialog.multiple)}</NativeText>
+						</ListItem.HeadlineContent>
+					</ListItem>
+				))}
+			</LazyColumn>
+		</Frame>
+	);
 }
 
 function PromptDialog({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind: "prompt" }>; answer: Answer }) {
