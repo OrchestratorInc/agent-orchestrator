@@ -33,9 +33,12 @@ func pidHidden(int) bool { return false }
 func pidsCanHide() bool    { return true }
 func pidsCannotHide() bool { return false }
 
-// hiddenPIDDeps are the deps of a CLI inside a PID-isolated sandbox.
+// hiddenPIDDeps are the deps of a CLI inside a PID-isolated sandbox. Sleep is
+// real: executeCLI's no-op default makes stop re-read the run-file in a tight
+// loop, and on Windows a file that is open for reading cannot be deleted, so
+// the fake daemon's delete and the next read kept failing each other.
 func hiddenPIDDeps() Deps {
-	return Deps{HTTPClient: &http.Client{}, ProcessAlive: pidHidden, PIDMayBeHidden: pidsCanHide}
+	return Deps{HTTPClient: &http.Client{}, ProcessAlive: pidHidden, PIDMayBeHidden: pidsCanHide, Sleep: time.Sleep}
 }
 
 type fakeDaemon struct {
