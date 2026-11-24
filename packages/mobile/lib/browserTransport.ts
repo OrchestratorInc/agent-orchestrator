@@ -39,7 +39,8 @@ export type BrowserCapabilities = {
 export type BrowserStatus = "connecting" | "open" | "closed" | "error";
 /** Something the page asks the person. All its text comes from the page. */
 export type BrowserDialog =
-	| { kind: "alert" | "confirm" | "prompt" | "beforeunload"; message: string; defaultPrompt?: string }
+	| { kind: "alert" | "confirm" | "beforeunload"; message: string }
+	| { kind: "prompt"; message: string; defaultPrompt?: string }
 	| { kind: "auth"; origin: string; realm?: string; failed: boolean }
 	| { kind: "select"; id: string; ctx?: string; options: Array<{ label: string; disabled?: boolean }>; selected: number }
 	| { kind: "filechooser"; multiple: boolean; accept: string; folder: boolean };

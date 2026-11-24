@@ -373,11 +373,10 @@ export class CloudBrowserTransport implements BrowserTransport {
 			case "dialog": {
 				const kind = String(message.type ?? "");
 				if (!DIALOG_KINDS.has(kind)) return;
-				this.handlers.onDialog?.({
-					kind: kind as "alert" | "confirm" | "prompt" | "beforeunload",
-					message: pageText(message.message),
-					...(kind === "prompt" && typeof message.defaultPrompt === "string" ? { defaultPrompt: pageText(message.defaultPrompt) } : {}),
-				});
+				const text = pageText(message.message);
+				this.handlers.onDialog?.(kind === "prompt"
+					? { kind, message: text, ...(typeof message.defaultPrompt === "string" ? { defaultPrompt: pageText(message.defaultPrompt) } : {}) }
+					: { kind: kind as "alert" | "confirm" | "beforeunload", message: text });
 				return;
 			}
 			case "dialogClosed": this.handlers.onDialogClosed?.(); return;
