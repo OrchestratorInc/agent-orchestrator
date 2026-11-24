@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,6 +97,12 @@ type childSessionState struct {
 	// child has sent since it was loaded, which names them stably across loads.
 	said     map[string]*childSaying
 	messages map[string]int
+	// adopted holds children found already streaming, loaded by an earlier
+	// attachment. Their count restarts here, short of the messages they sent
+	// before, so their messages are named under attachment, which is this
+	// attachment's alone, and never take an earlier message's name.
+	adopted    map[string]struct{}
+	attachment string
 }
 
 type childSaying struct{ id, text string }
@@ -110,6 +117,9 @@ func (c *conversation) childStateLocked() *childSessionState {
 			tools:    map[string]*toolState{},
 			said:     map[string]*childSaying{},
 			messages: map[string]int{},
+			adopted:  map[string]struct{}{},
+			// Unique per attachment, across daemon restarts too.
+			attachment: strconv.FormatInt(time.Now().UnixNano(), 36),
 		}
 	}
 	return c.children
@@ -246,22 +256,56 @@ func (c *conversation) routeChildUpdate(params acpsdk.SessionNotification) bool 
 		if notChild {
 			return false
 		}
-		parent, launchID, ok := c.childSessions.LaunchOf(c.childEnv, child)
-		c.mu.Lock()
-		s = c.childStateLocked()
-		_, parentKnown := s.launchOf[parent]
-		if !ok || (parent != c.sessionID && !parentKnown) || len(s.launchOf) >= maxChildSessions {
-			s.notChild[child] = struct{}{}
-			c.mu.Unlock()
+		var ours bool
+		if launch, ours = c.adoptChild(child); !ours {
 			return false
 		}
-		s.launchOf[child], s.parentOf[child] = launchID, parent
-		s.finding[launchID] = struct{}{}
-		launch = launchID
-		c.mu.Unlock()
 	}
 	c.childUpdate(child, launch, params)
 	return true
+}
+
+// adoptChild files child, and each ancestor of it not yet known, under the
+// launch the agent recorded for it, when the chain of launches leads back to
+// the conversation, and returns child's launch. A grandchild can stream before
+// its parent does: after a reattach the parent may be idle while its own child
+// still works. A chain that leads elsewhere is not ours, and none of its
+// sessions is looked up again.
+func (c *conversation) adoptChild(child string) (string, bool) {
+	type link struct{ session, parent, launch string }
+	var chain []link
+	for session := child; ; {
+		parent, launchID, ok := c.childSessions.LaunchOf(c.childEnv, session)
+		c.mu.Lock()
+		s := c.childStateLocked()
+		if ok {
+			chain = append(chain, link{session, parent, launchID})
+		}
+		_, parentKnown := s.launchOf[parent]
+		_, parentElsewhere := s.notChild[parent]
+		ours := ok && (parent == c.sessionID || parentKnown)
+		// The cap also ends a chain the records loop.
+		if !ok || (!ours && parentElsewhere) || len(s.launchOf)+len(chain) > maxChildSessions {
+			for _, l := range chain {
+				s.notChild[l.session] = struct{}{}
+			}
+			s.notChild[session] = struct{}{}
+			c.mu.Unlock()
+			return "", false
+		}
+		if ours {
+			for _, l := range chain {
+				s.launchOf[l.session], s.parentOf[l.session] = l.launch, l.parent
+				s.finding[l.launch] = struct{}{}
+				s.adopted[l.session] = struct{}{}
+				delete(s.notChild, l.session)
+			}
+			c.mu.Unlock()
+			return chain[0].launch, true
+		}
+		c.mu.Unlock()
+		session = parent
+	}
 }
 
 // childUpdate turns what a child did into steps under its launch. Only its tool
@@ -295,8 +339,13 @@ func (c *conversation) childUpdate(child, launch string, params acpsdk.SessionNo
 		if report, ok := c.childSessions.Report(childCallView(tool), parent); ok {
 			if tool.status == acpsdk.ToolCallStatusCompleted {
 				emit(c.childHandbackEvent(launch, report))
+				return
 			}
-			return
+			// A report still in flight shows once it lands, as the hand-back. One
+			// that failed shows as the failed call, so the reader sees why.
+			if !toolTerminal(tool.status) {
+				return
+			}
 		}
 		emit(withParentItem(c.toolEvent("", tool, toolTerminal(tool.status)), c.providerItemID(launch)))
 		// A child can start a child of its own.
@@ -312,7 +361,11 @@ func (c *conversation) childUpdate(child, launch string, params acpsdk.SessionNo
 		said := s.said[child]
 		if said == nil {
 			s.messages[child]++
-			said = &childSaying{id: c.providerItemID(fmt.Sprintf("subagent-message:%s:%d", child, s.messages[child]))}
+			key := fmt.Sprintf("subagent-message:%s:%d", child, s.messages[child])
+			if _, adopted := s.adopted[child]; adopted {
+				key = fmt.Sprintf("subagent-message:%s:%s:%d", child, s.attachment, s.messages[child])
+			}
+			said = &childSaying{id: c.providerItemID(key)}
 			s.said[child] = said
 		}
 		said.text += delta

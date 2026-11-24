@@ -178,9 +178,13 @@ func childSays(text string) acpsdk.SessionUpdate {
 }
 
 func childSendsMessage(id, recipient, message string) acpsdk.SessionUpdate {
+	return childSendMessageCall(id, recipient, message, acpsdk.ToolCallStatusCompleted)
+}
+
+func childSendMessageCall(id, recipient, message string, status acpsdk.ToolCallStatus) acpsdk.SessionUpdate {
 	return acpsdk.SessionUpdate{ToolCall: &acpsdk.SessionUpdateToolCall{
 		SessionUpdate: "tool_call", ToolCallId: acpsdk.ToolCallId(id), Title: "Run send_message",
-		Kind: acpsdk.ToolKindOther, Status: acpsdk.ToolCallStatusCompleted,
+		Kind: acpsdk.ToolKindOther, Status: status,
 		RawInput: map[string]any{"Message": message, "Recipient": recipient},
 	}}
 }
@@ -298,20 +302,82 @@ func TestChildSessionAlreadyStreamingIsFiledUnderItsLaunch(t *testing.T) {
 	}
 }
 
+// A grandchild can stream while its parent, idle after a reattach, sends
+// nothing: the chain of launches back to the conversation is looked up at once.
+func TestChildSessionGrandchildStreamingBeforeItsParentIsFiledUnderItsLaunch(t *testing.T) {
+	records := newChildSessionRecords()
+	records.record(childTestParent, "call-earlier", "child-2")
+	records.record("child-2", "call-inner", "child-3")
+	agent, conv, _ := startWithChildSessions(t, records.sessions())
+	childSessionUpdate(t, agent, "child-3", childRead("call-read"))
+	if read := nextChildActivity(t, conv); childDetail(t, read)["parentProviderItemId"] != "call-inner" {
+		t.Fatalf("grandchild step = %#v %s", read, read.Detail)
+	}
+	childSessionUpdate(t, agent, "child-2", childRead("call-read-2"))
+	if read := nextChildActivity(t, conv); childDetail(t, read)["parentProviderItemId"] != "call-earlier" {
+		t.Fatalf("child step = %#v %s", read, read.Detail)
+	}
+	records.mu.Lock()
+	defer records.mu.Unlock()
+	if records.lookedUp["child-2"] != 1 || records.lookedUp["child-3"] != 1 {
+		t.Fatalf("looked up %v", records.lookedUp)
+	}
+}
+
 func TestChildSessionUnknownSessionIsLookedUpOnce(t *testing.T) {
 	records := newChildSessionRecords()
+	// A child of a session that is not ours leads elsewhere.
+	records.record("someone-else", "call-other", "their-child")
 	agent, conv, _ := startWithChildSessions(t, records.sessions())
 	for range 2 {
-		// The driver still refuses an update for a session that is not its own.
-		_ = agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
-			SessionId: "someone-else", Update: childRead("call-read"),
-		})
+		for _, session := range []string{"someone-else", "their-child"} {
+			// The driver still refuses an update for a session that is not its own.
+			_ = agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+				SessionId: acpsdk.SessionId(session), Update: childRead("call-read"),
+			})
+		}
 	}
 	noChildActivity(t, conv)
 	records.mu.Lock()
 	defer records.mu.Unlock()
-	if records.lookedUp["someone-else"] != 1 {
-		t.Fatalf("looked up %d times", records.lookedUp["someone-else"])
+	if records.lookedUp["someone-else"] != 1 || records.lookedUp["their-child"] != 1 {
+		t.Fatalf("looked up %v", records.lookedUp)
+	}
+}
+
+// A report that fails is no hand-back, so it shows as the failed call it is.
+func TestChildSessionFailedReportShowsAsAFailedStep(t *testing.T) {
+	records := newChildSessionRecords()
+	records.record(childTestParent, "call-launch", "child-1")
+	agent, conv, _ := startWithChildSessions(t, records.sessions())
+	childSessionUpdate(t, agent, "child-1", childSendMessageCall("call-send", childTestParent, "alpha", acpsdk.ToolCallStatusInProgress))
+	noChildActivity(t, conv)
+	failed := acpsdk.ToolCallStatusFailed
+	childSessionUpdate(t, agent, "child-1", acpsdk.SessionUpdate{ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+		SessionUpdate: "tool_call_update", ToolCallId: "call-send", Status: &failed,
+	}})
+	step := nextChildActivity(t, conv)
+	d := childDetail(t, step)
+	if step.ProviderItemID != "call-send" || step.ActivityStatus != domain.ActivityStatusFailed ||
+		d["parentProviderItemId"] != "call-launch" || d["providerToolName"] == childSessionHandbackTool {
+		t.Fatalf("failed report = %#v %s", step, step.Detail)
+	}
+	noChildActivity(t, conv)
+}
+
+// A later attachment finds a child still streaming without the messages it
+// sent before, so its count restarts; the names must not.
+func TestChildSessionAdoptedAgainNamesItsMessagesApart(t *testing.T) {
+	records := newChildSessionRecords()
+	records.record(childTestParent, "call-launch", "child-1")
+	agent, conv, _ := startWithChildSessions(t, records.sessions())
+	childSessionUpdate(t, agent, "child-1", childSays("one"))
+	first := nextChildActivity(t, conv)
+	later, laterConv, _ := startWithChildSessions(t, records.sessions())
+	childSessionUpdate(t, later, "child-1", childSays("two"))
+	second := nextChildActivity(t, laterConv)
+	if second.Text != "two" || first.ProviderItemID == second.ProviderItemID {
+		t.Fatalf("messages = %q %q, %q", first.ProviderItemID, second.ProviderItemID, second.Text)
 	}
 }
 

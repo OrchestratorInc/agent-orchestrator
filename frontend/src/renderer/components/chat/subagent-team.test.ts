@@ -366,4 +366,11 @@ describe("Antigravity subagents", () => {
 			steps: [read, said],
 		});
 	});
+
+	// The launch settles as soon as the child starts, so it says nothing of the child.
+	it("keeps a child working until its hand-back", () => {
+		const read = step("read", "tool-agy", { activityKind: "mcp_tool", summary: "File a.txt" });
+		expect(readSubagent(agyLaunch, [read], true).state).toBe("working");
+		expect(readSubagent(agyLaunch, [read], false).state).toBe("unknown");
+	});
 });

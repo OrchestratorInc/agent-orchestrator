@@ -360,6 +360,8 @@ export interface CommandDetail {
 	providerToolName?: string;
 	providerTitle?: string;
 	subagentType?: string;
+	/** A subagent launch that settles once the child starts, as Antigravity's does. */
+	background?: boolean;
 	subagentRetry?: unknown;
 	terminalId?: string;
 	signal?: string;
