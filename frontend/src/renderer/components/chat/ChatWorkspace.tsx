@@ -1952,9 +1952,9 @@ function ChatWorkspaceContent({
 	const composerElicitation = useMemo(
 		() =>
 			stablePendingUserInput ? (
-				<ElicitationDock key={stablePendingUserInput.id} activity={stablePendingUserInput} onResolve={onResolveInput} />
+				<ElicitationDock key={stablePendingUserInput.id} activity={stablePendingUserInput} harness={snapshot.harness} onResolve={onResolveInput} />
 			) : undefined,
-		[onResolveInput, stablePendingUserInput],
+		[onResolveInput, snapshot.harness, stablePendingUserInput],
 	);
 	const canSteerQueuedMessage =
 		Boolean(onSteer) && Boolean(onPromoteQueuedTurn) && can(snapshot, "steer") && turn?.state === "running";
@@ -6410,6 +6410,7 @@ const TurnGroup = memo(function TurnGroup({
 		<TimelineItem
 			key={run.key}
 			item={run.items[0]!}
+			harness={harness}
 			sessionId={sessionId}
 			apiBaseUrl={apiBaseUrl}
 			onDecide={onDecide}
@@ -6658,6 +6659,7 @@ function TurnLiveStatus({ blocked }: { blocked?: boolean }) {
 
 function TimelineItem({
 	item,
+	harness,
 	sessionId,
 	apiBaseUrl,
 	onDecide,
@@ -6691,6 +6693,7 @@ function TimelineItem({
 	status,
 }: {
 	item: ConversationItem;
+	harness?: string;
 	sessionId: string;
 	apiBaseUrl: string | null;
 	onDecide?: (requestId: string, decisionId: string) => void;
@@ -6798,7 +6801,7 @@ function TimelineItem({
 		return <ApprovalCard activity={item} onDecide={onDecide} busy={busy} />;
 	}
 	if (item.activityKind === "user_input") {
-		return item.status === "pending" ? null : <ElicitationHistory activity={item} />;
+		return item.status === "pending" ? null : <ElicitationHistory activity={item} harness={harness} />;
 	}
 	if (isCompaction(item)) {
 		return <CompactionMarker activity={item} />;
