@@ -5525,7 +5525,6 @@
 	"backgroundTasks.shells_many": "{{count}} shells siguen en ejecución",
 	"backgroundTasks.agents_many": "{{count}} agentes en segundo plano en ejecución",
 	"backgroundTasks.tasks_many": "{{count}} tareas en segundo plano en ejecución",
-	"remote.forwardFailed": "No se pudo reenviar el puerto",
 	"remote.shareLocalhost": "Compartir localhost",
-	"remote.shareLocalhostDescription": "Tus otros dispositivos pueden abrir los servidores de este equipo y reenviar sus puertos."
+	"remote.shareLocalhostDescription": "Tus otros dispositivos pueden abrir los servidores de este equipo."
 }

@@ -66,16 +66,16 @@ export function classifySiteResponse(input: { url: string; statusCode: number; h
 
 /**
  * Pages that can be handed to another browser: ordinary web pages only. An
- * agent tab shows a page on the agent's host, so a loopback address there
- * names that host, not this computer.
+ * agent tab, and every tab of a remote session, shows pages on another host,
+ * so a loopback address there names that host, not this computer.
  */
-export function canOpenInUserBrowser(rawUrl: string, options: { agentTab?: boolean } = {}): boolean {
+export function canOpenInUserBrowser(rawUrl: string, options: { onHost?: boolean } = {}): boolean {
 	try {
 		const url = new URL(rawUrl);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return false;
 		// AO's own preview origins only work inside AO.
 		if (/^ao-preview-[0-9a-f]{32}\.localhost$/.test(url.hostname)) return false;
-		return !(options.agentTab && isLoopbackHost(url.hostname));
+		return !(options.onHost && isLoopbackHost(url.hostname));
 	} catch {
 		return false;
 	}

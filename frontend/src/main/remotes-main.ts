@@ -240,9 +240,7 @@ export function registerRemotesIpc(
 		return updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
 	}));
 	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(async () => {
-		const removed = (await owned()).find((entry) => entry.url === url);
-		if (!removed) throw new ExpectedIpcError("Host does not belong to this account.");
-		if (removed.hostId) tunnels.stopHost(removed.hostId);
+		if (!(await owned()).some((entry) => entry.url === url)) throw new ExpectedIpcError("Host does not belong to this account.");
 		return removeSavedRemote(file, url, disconnect);
 	}));
 	ipcMain.handle("remotes:connect", async (_event, url: string, hostId?: string) => ordered(async () => {
@@ -396,15 +394,7 @@ export function registerRemotesIpc(
 		const account = await accountID();
 		refuseSelf(hostId, await localIdentity());
 		if (await accountID() !== account) throw new ExpectedIpcError("Account changed during remote connection.");
-		const local = await tunnels.localUrl(hostId, url).catch((error: unknown) => {
-			throw new ExpectedIpcError(error instanceof Error ? error.message : String(error));
-		});
-		if (local) return local;
-		try {
-			return registry.externalUrl(hostId, url);
-		} catch {
-			return url;
-		}
+		return registry.externalUrl(hostId, url);
 	});
 	ipcMain.handle("remotes:loopbackReach", async (_event, hostId: string) => {
 		await requireAccount();

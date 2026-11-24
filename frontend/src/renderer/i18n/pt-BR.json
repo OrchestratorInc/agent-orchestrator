@@ -5525,7 +5525,6 @@
 	"backgroundTasks.shells_many": "{{count}} shells ainda em execução",
 	"backgroundTasks.agents_many": "{{count}} agentes em segundo plano em execução",
 	"backgroundTasks.tasks_many": "{{count}} tarefas em segundo plano em execução",
-	"remote.forwardFailed": "Não foi possível encaminhar a porta",
 	"remote.shareLocalhost": "Compartilhar localhost",
-	"remote.shareLocalhostDescription": "Seus outros dispositivos podem abrir os servidores deste computador e encaminhar as portas dele."
+	"remote.shareLocalhostDescription": "Seus outros dispositivos podem abrir os servidores deste computador."
 }

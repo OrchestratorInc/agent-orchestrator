@@ -49,8 +49,6 @@ import { cn } from "../../lib/utils";
 import { useLatestCallback } from "../../hooks/useStable";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
-import { appI18n } from "../../i18n";
-import { editorHandoffErrorMessage } from "../../hooks/useEditorHandoff";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage, streamingCodeHighlighter } from "../../lib/code-highlight";
 import { fenceOf, textOf } from "../../lib/markdown-fence";
@@ -68,7 +66,6 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
-import { aoBridge } from "../../lib/bridge";
 import { LinkFavicon } from "../LinkPreviewCard";
 import { PULL_REQUEST_CHIP_CLASS, PullRequestChipContent, PullRequestHoverCard, parsePullRequestLink, pullRequestChipLabel } from "./PullRequestLink";
 import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
@@ -588,7 +585,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 			: unavailable;
 	}
 	const browserLink = href ? !sessionLink && (isWebLink(href) || (!remoteHost && (!!filePath || isPotentialWorkspaceFileLink(href)))) : false;
-	const hostLocalOn = remoteHost && sessionLinkHostId && href && isHostLocalWebLink(href) ? sessionLinkHostId : undefined;
+	const hostLocal = Boolean(remoteHost && href && isHostLocalWebLink(href));
 	// A GitHub pull request link shows the PR's card on hover; one whose text
 	// only names the PR is drawn as a chip with its state.
 	const pullRequest = href && !sessionLink && !linksImage(node) ? parsePullRequestLink(href) : undefined;
@@ -597,8 +594,8 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 	return (
 		<AppLink
 			href={href}
-			noHoverPreview={Boolean(hostLocalOn)}
-			externalUrl={hostLocalOn ? (url) => hostExternalUrl(hostLocalOn, url) : undefined}
+			noHoverPreview={hostLocal}
+			inAppOnly={hostLocal}
 			onBrowserOpen={onLinkOpen}
 			inAppLink={href ? () => browserLink : undefined}
 			filePath={ownArtifact ?? (filePath && href ? workspaceFileOpenTarget(href, filePath) : filePath)}
@@ -718,15 +715,13 @@ export const SessionLinkedText = memo(function SessionLinkedText({ text }: { tex
  * must stay module-level so react-markdown's memoization survives polling.
  */
 function MermaidFence({ code }: { code: string }) {
-	const { open: onLinkOpen, remoteHost, hostLocalLinks, sessionLinkHostId } = useContext(OpenChatLink);
+	const { open: onLinkOpen, remoteHost, hostLocalLinks } = useContext(OpenChatLink);
 	const blockHostLocalLink = (event: ReactMouseEvent<HTMLDivElement>) => {
 		const href = (event.target as Element).closest?.("a[href]")?.getAttribute("href");
 		if (!href || !isHostLocalWebLink(href)) return;
-		const external = event.type === "click" ? event.metaKey || event.ctrlKey || event.altKey : event.type === "auxclick" && event.button === 1;
-		if (hostLocalLinks && !external) return;
 		event.preventDefault();
 		event.stopPropagation();
-		if (hostLocalLinks && sessionLinkHostId) void hostExternalUrl(sessionLinkHostId, href).then((resolved) => resolved ? openLinkInSystemBrowser(resolved) : undefined);
+		if (hostLocalLinks && (event.type === "click" || (event.type === "auxclick" && event.button === 1))) onLinkOpen?.(href);
 	};
 	const diagram = <MermaidBlock code={code} onLinkOpen={onLinkOpen} />;
 	return remoteHost

@@ -36,7 +36,6 @@ import type { DictationEvent } from "./shared/dictation";
 import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
-import type { LoopbackReach } from "./main/loopback-tunnel";
 import type { RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
@@ -1033,7 +1032,7 @@ const api = {
 		// A preview's address for a browser outside AO; any other URL unchanged.
 		externalUrl: (hostId: string, url: string) =>
 			ipcRenderer.invoke("remotes:externalUrl", hostId, url) as Promise<string>,
-		loopbackReach: (hostId: string) => ipcRenderer.invoke("remotes:loopbackReach", hostId) as Promise<LoopbackReach>,
+		loopbackReach: (hostId: string) => ipcRenderer.invoke("remotes:loopbackReach", hostId) as Promise<boolean>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

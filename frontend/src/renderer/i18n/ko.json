@@ -5358,7 +5358,6 @@
 	"backgroundTasks.state.running": "실행 중",
 	"backgroundTasks.state.paused": "일시 중지됨",
 	"backgroundTasks.state.failed": "실패",
-	"remote.forwardFailed": "포트를 전달하지 못했습니다",
 	"remote.shareLocalhost": "localhost 공유",
-	"remote.shareLocalhostDescription": "다른 기기에서 이 컴퓨터의 서버를 열고 포트를 전달할 수 있습니다."
+	"remote.shareLocalhostDescription": "다른 기기에서 이 컴퓨터의 서버를 열 수 있습니다."
 }

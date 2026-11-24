@@ -23,7 +23,7 @@ export function hostLoopbackUrl(target: string): string | undefined {
 	if (!isHostLocalWebLink(href)) return undefined;
 	try {
 		const url = new URL(href);
-		return url.hostname.endsWith(".localhost") ? undefined : url.href;
+		return /^ao-preview-.*\.localhost$/.test(url.hostname) ? undefined : url.href;
 	} catch {
 		return undefined;
 	}

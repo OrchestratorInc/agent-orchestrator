@@ -16,9 +16,9 @@ import (
 const loopbackTunnelPath = "/api/v1/loopback-tunnel"
 
 const (
-	loopbackRefusedHeader  = "X-AO-Loopback-Refused"
-	loopbackDisabledHeader = "X-AO-Loopback-Disabled"
-	loopbackDialTimeout    = 5 * time.Second
+	loopbackRefusedHeader = "X-AO-Loopback-Refused"
+	loopbackOffMessage    = "The localhost tunnel is turned off on this host."
+	loopbackDialTimeout   = 5 * time.Second
 )
 
 func (m *LANManager) serveLoopbackTunnel(w http.ResponseWriter, r *http.Request) {
@@ -28,22 +28,22 @@ func (m *LANManager) serveLoopbackTunnel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if m.loopbackOff.Load() {
-		refuseLoopback(w, loopbackDisabledHeader, "The localhost tunnel is turned off on this host.")
+		http.Error(w, loopbackOffMessage, http.StatusForbidden)
 		return
 	}
 	if m.isOwnPort(port) {
-		refuseLoopback(w, loopbackRefusedHeader, fmt.Sprintf("Port %d is this Orchestrator daemon's own port.", port))
+		refuseLoopback(w, fmt.Sprintf("Port %d is this Orchestrator daemon's own port.", port))
 		return
 	}
 	upstream, err := dialLoopback(r.Context(), port)
 	if err != nil {
-		refuseLoopback(w, loopbackRefusedHeader, fmt.Sprintf("Nothing accepted a connection on loopback port %d.", port))
+		refuseLoopback(w, fmt.Sprintf("Nothing accepted a connection on loopback port %d.", port))
 		return
 	}
 	defer func() { _ = upstream.Close() }()
 	defer m.untrackLoopback(upstream)
 	if !m.trackLoopback(upstream) {
-		refuseLoopback(w, loopbackDisabledHeader, "The localhost tunnel is turned off on this host.")
+		http.Error(w, loopbackOffMessage, http.StatusForbidden)
 		return
 	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
@@ -58,8 +58,8 @@ func (m *LANManager) serveLoopbackTunnel(w http.ResponseWriter, r *http.Request)
 	<-done
 }
 
-func refuseLoopback(w http.ResponseWriter, header, message string) {
-	w.Header().Set(header, "1")
+func refuseLoopback(w http.ResponseWriter, message string) {
+	w.Header().Set(loopbackRefusedHeader, "1")
 	http.Error(w, message, http.StatusForbidden)
 }
 

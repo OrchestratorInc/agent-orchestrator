@@ -88,7 +88,7 @@ export class RemoteRegistry {
 
 	openLoopbackTunnel(hostId: string, port: number): Promise<Duplex> {
 		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
-		if (!connected) return Promise.reject(new LoopbackTunnelError("unavailable", `Host ${hostId} is not connected`));
+		if (!connected) return Promise.reject(new LoopbackTunnelError(false, `Host ${hostId} is not connected`));
 		return connected.proxy.openLoopbackTunnel(port);
 	}
 

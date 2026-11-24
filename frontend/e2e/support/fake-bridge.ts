@@ -487,7 +487,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
-					loopbackReach: async () => "off" as const,
+					loopbackReach: async () => false,
 				},
 				cloud: {
 					getSession: async () => null,
@@ -1495,7 +1495,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 					agentBrowserUrl: async () => "",
 					externalUrl: async (_hostId: string, url: string) => url,
-					loopbackReach: async () => "off" as const,
+					loopbackReach: async () => false,
 				},
 				cloud: {
 					getSession: async () => null,

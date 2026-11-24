@@ -115,8 +115,8 @@ func TestLoopbackTunnelRefusesBeforeTheUpgrade(t *testing.T) {
 
 	m.SetLoopbackTunnelOff(true)
 	_, resp, err := dialLoopbackTunnel(lanPort, startEcho(t), "secret12")
-	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden || resp.Header.Get(loopbackDisabledHeader) != "1" {
-		t.Fatalf("tunnel while turned off: err=%v resp=%v, want 403 %s", err, resp, loopbackDisabledHeader)
+	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden || resp.Header.Get(loopbackRefusedHeader) != "" {
+		t.Fatalf("tunnel while turned off: err=%v resp=%v, want 403 without %s", err, resp, loopbackRefusedHeader)
 	}
 }
 

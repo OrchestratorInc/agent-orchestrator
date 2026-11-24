@@ -5358,7 +5358,6 @@
 	"backgroundTasks.state.running": "Läuft",
 	"backgroundTasks.state.paused": "Pausiert",
 	"backgroundTasks.state.failed": "Fehlgeschlagen",
-	"remote.forwardFailed": "Port konnte nicht weitergeleitet werden",
 	"remote.shareLocalhost": "localhost freigeben",
-	"remote.shareLocalhostDescription": "Deine anderen Geräte können Server auf diesem Computer öffnen und seine Ports weiterleiten."
+	"remote.shareLocalhostDescription": "Deine anderen Geräte können Server auf diesem Computer öffnen."
 }

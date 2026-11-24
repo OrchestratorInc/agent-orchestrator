@@ -1812,7 +1812,7 @@ describe("useBrowserView", () => {
 
 	it("loads a remote loopback preview at its own address when the host shares its localhost", async () => {
 		const browser = setupBridge();
-		vi.spyOn(aoBridge.remotes, "loopbackReach").mockResolvedValue("tunnel");
+		vi.spyOn(aoBridge.remotes, "loopbackReach").mockResolvedValue(true);
 		const resolve = vi.spyOn(aoBridge.remotes, "previewUrl");
 		renderHook(() => useBrowserView({
 			sessionId: "remote:box-a:ao-1",

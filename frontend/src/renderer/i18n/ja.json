@@ -5358,7 +5358,6 @@
 	"backgroundTasks.state.running": "実行中",
 	"backgroundTasks.state.paused": "一時停止中",
 	"backgroundTasks.state.failed": "失敗",
-	"remote.forwardFailed": "ポートを転送できませんでした",
 	"remote.shareLocalhost": "localhost を共有",
-	"remote.shareLocalhostDescription": "他のデバイスからこのコンピュータのサーバーを開き、ポートを転送できます。"
+	"remote.shareLocalhostDescription": "他のデバイスからこのコンピュータのサーバーを開けます。"
 }

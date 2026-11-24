@@ -51,15 +51,15 @@ async function socksConnect(proxyPort: number, host: string, port: number, paylo
 	return { code: data[3] ?? -1, echoed: data.subarray(12).toString() };
 }
 
-type Host = { ports?: Record<number, number>; same?: boolean; off?: boolean };
+type Host = { ports?: Record<number, number>; off?: boolean };
 
 function hosts(table: Record<string, Host>) {
 	return async (hostId: string, port: number) => {
 		const host = table[hostId];
-		if (!host) throw new LoopbackTunnelError("unavailable", "not connected");
-		if (host.off) throw new LoopbackTunnelError("disabled", "turned off");
-		const target = host.same ? port : host.ports?.[port];
-		if (!target) throw new LoopbackTunnelError("refused", "nothing listening");
+		if (!host) throw new LoopbackTunnelError(false, "not connected");
+		if (host.off) throw new LoopbackTunnelError(false, "turned off");
+		const target = host.ports?.[port];
+		if (!target) throw new LoopbackTunnelError(true, "nothing listening");
 		return connect(target);
 	};
 }
@@ -113,68 +113,12 @@ describe("loopback tunnels", () => {
 		expect(state.proxy?.proxyRules).toMatch(/^socks5:\/\/127\.0\.0\.1:\d+$/);
 	});
 
-	it("tells a host on this computer, a remote host and one that does not share apart", async () => {
-		const tunnels = createLoopbackTunnels(hosts({ h_same: { same: true }, h_box: { ports: {} }, h_off: { off: true } }));
-		expect(await tunnels.reach("h_same")).toBe("same");
-		expect(await tunnels.reach("h_box")).toBe("tunnel");
-		expect(await tunnels.reach("h_off")).toBe("off");
-		expect(await tunnels.reach("h_gone")).toBe("off");
-	});
-
-	it("forwards a host port to this computer until it is stopped", async () => {
-		const echo = await echoServer();
-		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: { [echo]: echo } }, h_same: { same: true }, h_off: { off: true } }));
-		const forward = await tunnels.forward("h_box", echo);
-		expect(forward.localPort).not.toBe(echo);
-		expect(await tunnels.forward("h_box", echo)).toEqual(forward);
-		expect(tunnels.list()).toEqual([forward]);
-
-		const client = await connect(forward.localPort);
-		client.write("ping");
-		expect((await receive(client, 4)).toString()).toBe("ping");
-
-		tunnels.stopHost("h_box");
-		expect(tunnels.list()).toEqual([]);
-		expect((await receive(client, 1)).length).toBe(0);
-		await expect(connect(forward.localPort)).rejects.toThrow();
-
-		const opened = await tunnels.localUrl("h_box", `http://0.0.0.0:${echo}/app?x=1#y`);
-		expect(opened).toBe(`http://localhost:${tunnels.list()[0]!.localPort}/app?x=1#y`);
-		expect(await tunnels.localUrl("h_box", `http://app.localhost:${echo}/x`)).toBe(`http://app.localhost:${tunnels.list()[0]!.localPort}/x`);
-		expect(await tunnels.localUrl("h_box", `http://ao-preview-${"0".repeat(32)}.localhost:${echo}/`)).toBeUndefined();
-		expect(await tunnels.localUrl("h_same", `http://localhost:${echo}/`)).toBeUndefined();
-		expect(await tunnels.localUrl("h_box", "https://example.com/")).toBeUndefined();
-		await expect(tunnels.localUrl("h_off", `http://localhost:${echo}/`)).rejects.toThrow(/Share localhost/);
-		tunnels.stop("h_box", echo);
-
-		await expect(tunnels.forward("h_same", echo)).rejects.toThrow(/runs on this computer/);
-		await expect(tunnels.forward("h_off", echo)).rejects.toThrow(/Share localhost/);
-		await expect(tunnels.forward("h_box", 0)).rejects.toThrow(/1 to 65535/);
-	});
-
-	it("drops a forward still starting when its host is removed", async () => {
-		const echo = await echoServer();
-		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: { [echo]: echo } } }));
-		const starting = tunnels.forward("h_box", echo);
-		tunnels.stopHost("h_box");
-		await expect(starting).rejects.toThrow(/removed/);
-		const signingOut = tunnels.forward("h_box", echo);
-		tunnels.stopAll();
-		await expect(signingOut).rejects.toThrow(/removed/);
-		expect(tunnels.list()).toEqual([]);
-	});
-
-	it.each(["::1", "::"])("moves a forward off a port another server holds on %s", async (address) => {
-		const taken = net.createServer();
-		const port = await new Promise<number>((resolve) => {
-			taken.once("error", () => resolve(0));
-			taken.listen(0, address, () => resolve((taken.address() as net.AddressInfo).port));
-		});
-		if (!port) return;
-		cleanup.push(() => taken.close());
-		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: { [port]: await echoServer() } } }));
-		expect((await tunnels.forward("h_box", port)).localPort).not.toBe(port);
-		tunnels.stopHost("h_box");
+	it("tells a host that shares its localhost from one that does not", async () => {
+		const tunnels = createLoopbackTunnels(hosts({ h_box: { ports: {} }, h_listening: { ports: { 1: await echoServer() } }, h_off: { off: true } }));
+		expect(await tunnels.reach("h_box")).toBe(true);
+		expect(await tunnels.reach("h_listening")).toBe(true);
+		expect(await tunnels.reach("h_off")).toBe(false);
+		expect(await tunnels.reach("h_gone")).toBe(false);
 	});
 });
 

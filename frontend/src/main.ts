@@ -1355,7 +1355,7 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
-		openInUserBrowser: async (url, hostId) => userBrowser.open((hostId ? await loopbackTunnels.localUrl(hostId, url) : undefined) ?? url),
+		openInUserBrowser: (url) => userBrowser.open(url),
 		describeUserBrowser: () => userBrowser.describe(),
 		prepareBrowserPartition: (partition, hostId) => {
 			const browserSession = session.fromPartition(partition);
@@ -4432,7 +4432,6 @@ function notifyRenderersOfCloudSession(
 	bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
 	if (!account) {
 		void remoteRegistry.disconnectAll();
-		loopbackTunnels.stopAll();
 		void cloudAgentProxy.close();
 	}
 	const contents = getShellWebContents();

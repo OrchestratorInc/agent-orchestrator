@@ -7,11 +7,12 @@ describe("hostLoopbackUrl", () => {
 		["http://127.0.0.2:8080/", "http://127.0.0.2:8080/"],
 		["https://[::1]:8443/x", "https://[::1]:8443/x"],
 		["http://0.0.0.0:3000", "http://0.0.0.0:3000/"],
+		["http://app.localhost:3000/", "http://app.localhost:3000/"],
 	])("takes %s as the host's own address", (target, url) => {
 		expect(hostLoopbackUrl(target)).toBe(url);
 	});
 
-	it.each(["https://example.com/", "http://ao-preview-abc.localhost:4000/", "file:///tmp/index.html", "localhost.example.com:3000"])("leaves %s to the preview proxy", (target) => {
+	it.each(["https://example.com/", "http://ao-preview-abc.localhost:4000/", "https://ao-preview-artifact.abc.localhost:4000/a.html", "file:///tmp/index.html", "localhost.example.com:3000"])("leaves %s to the preview proxy", (target) => {
 		expect(hostLoopbackUrl(target)).toBeUndefined();
 	});
 });

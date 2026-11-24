@@ -5338,7 +5338,6 @@
 	"backgroundTasks.state.running": "Running",
 	"backgroundTasks.state.paused": "Paused",
 	"backgroundTasks.state.failed": "Failed",
-	"remote.forwardFailed": "Couldn't forward the port",
 	"remote.shareLocalhost": "Share localhost",
-	"remote.shareLocalhostDescription": "Your other devices can open servers running on this computer and forward its ports."
+	"remote.shareLocalhostDescription": "Your other devices can open servers running on this computer."
 }

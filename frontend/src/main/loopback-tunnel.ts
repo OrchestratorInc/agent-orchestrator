@@ -1,14 +1,9 @@
-import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { connect, createServer, type AddressInfo, type Server, type Socket } from "node:net";
+import { createServer, type AddressInfo, type Server, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import ipaddr from "ipaddr.js";
 import { LoopbackTunnelError } from "./remote-proxy";
 import { readRequest, refuse, reply, REPLY_HOST_UNREACHABLE, REPLY_NOT_ALLOWED, REPLY_OK, SocketReader } from "./render-check-proxy";
-
-export type PortForward = { hostId: string; remotePort: number; localPort: number };
-
-export type LoopbackReach = "same" | "tunnel" | "off";
 
 type OpenTunnel = (hostId: string, port: number) => Promise<Duplex>;
 
@@ -23,13 +18,10 @@ export type RoutedSession = {
 	};
 };
 
-const MAX_FORWARD_CONNECTIONS = 64;
-const PROBE_TIMEOUT_MS = 3_000;
+const UNUSED_PORT = 1;
 const BYPASS_RULES = "*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost";
 const UNSPECIFIED_URLS = ["*://0.0.0.0/*", "*://[::]/*"];
 const PREVIEW_HOST = /^ao-preview-.*\.localhost$/;
-
-class SameHostError extends Error {}
 
 export function isLoopbackName(host: string): boolean {
 	const name = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
@@ -105,29 +97,9 @@ function listen(server: Server, port: number): Promise<number> {
 	});
 }
 
-function answers(host: string, port: number): Promise<boolean> {
-	return new Promise((resolve) => {
-		const probe = connect(port, host);
-		probe.setTimeout(1_000, () => {
-			probe.destroy();
-			resolve(false);
-		});
-		probe.once("connect", () => {
-			probe.destroy();
-			resolve(true);
-		});
-		probe.once("error", () => resolve(false));
-	});
-}
-
 export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 	const socksPorts = new Map<string, Promise<number>>();
 	const routed = new WeakMap<RoutedSession, Promise<void>>();
-	const forwards = new Map<string, { forward: PortForward; server: Server; clients: Set<Socket> }>();
-	const pending = new Map<string, Promise<PortForward>>();
-	const removals = new Map<string, number>();
-	let generation = 0;
-	const key = (hostId: string, port: number) => `${hostId}\n${port}`;
 
 	const serveSocks = async (client: Socket, hostId: string): Promise<void> => {
 		client.on("error", () => client.destroy());
@@ -161,74 +133,11 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		return port;
 	};
 
-	const reach = async (hostId: string): Promise<LoopbackReach> => {
-		const nonce = randomBytes(16);
-		const probe = createServer();
-		let timer: NodeJS.Timeout | undefined;
-		let settle: (same: boolean) => void = () => undefined;
-		const received = new Promise<boolean>((resolve) => {
-			settle = resolve;
-			probe.on("connection", (socket) => {
-				let data = Buffer.alloc(0);
-				socket.on("error", () => undefined);
-				socket.on("data", (chunk: Buffer) => {
-					data = Buffer.concat([data, chunk]);
-					if (data.length < nonce.length) return;
-					resolve(data.subarray(0, nonce.length).equals(nonce));
-					socket.destroy();
-				});
-			});
-		});
-		const port = await listen(probe, 0);
-		try {
-			const tunnel = await openTunnel(hostId, port).catch((error: unknown) =>
-				error instanceof LoopbackTunnelError && error.reason === "refused" ? null : undefined);
-			if (tunnel === undefined) return "off";
-			if (tunnel === null) return "tunnel";
-			tunnel.on("error", () => settle(false));
-			tunnel.write(nonce);
-			timer = setTimeout(() => settle(false), PROBE_TIMEOUT_MS);
-			const same = await received;
+	const reach = (hostId: string): Promise<boolean> =>
+		openTunnel(hostId, UNUSED_PORT).then((tunnel) => {
 			tunnel.destroy();
-			return same ? "same" : "tunnel";
-		} finally {
-			clearTimeout(timer);
-			probe.close();
-		}
-	};
-
-	const startForward = async (hostId: string, remotePort: number): Promise<PortForward> => {
-		const removal = removals.get(hostId);
-		const started = generation;
-		const reached = await reach(hostId);
-		if (reached === "same") throw new SameHostError("This host runs on this computer, so its ports are already on localhost here.");
-		if (reached === "off") throw new Error("Can't reach this host's localhost. Check that the host is online, up to date, and has Share localhost on in Settings → Mobile.");
-		const clients = new Set<Socket>();
-		const server = createServer((client) => {
-			client.on("error", () => client.destroy());
-			if (clients.size >= MAX_FORWARD_CONNECTIONS) return void client.destroy();
-			clients.add(client);
-			client.once("close", () => clients.delete(client));
-			void (async () => {
-				const tunnel = (await ownedByThisUser(client)) ? await openTunnel(hostId, remotePort).catch(() => null) : null;
-				if (!tunnel || client.destroyed) {
-					tunnel?.destroy();
-					client.destroy();
-					return;
-				}
-				join(client, tunnel);
-			})();
-		});
-		const taken = (await Promise.all([answers("127.0.0.1", remotePort), answers("::1", remotePort)])).some(Boolean);
-		const localPort = taken ? await listen(server, 0) : await listen(server, remotePort).catch(() => listen(server, 0));
-		if (removals.get(hostId) !== removal || generation !== started) {
-			server.close();
-			throw new Error("This host was removed.");
-		}
-		const forward = { hostId, remotePort, localPort };
-		forwards.set(key(hostId, remotePort), { forward, server, clients });
-		return forward;
-	};
+			return true;
+		}, (error: unknown) => error instanceof LoopbackTunnelError && error.refused);
 
 	const route = (session: RoutedSession, hostId: string): Promise<void> => {
 		let ready = routed.get(session);
@@ -257,52 +166,7 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 		return ready;
 	};
 
-	return {
-		route,
-		reach,
-		forward(hostId: string, remotePort: number): Promise<PortForward> {
-			if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65_535) return Promise.reject(new Error("A port is a whole number from 1 to 65535."));
-			const id = key(hostId, remotePort);
-			const existing = forwards.get(id);
-			if (existing) return Promise.resolve(existing.forward);
-			let started = pending.get(id);
-			if (!started) {
-				started = startForward(hostId, remotePort).finally(() => pending.delete(id));
-				pending.set(id, started);
-			}
-			return started;
-		},
-		async localUrl(hostId: string, url: string): Promise<string | undefined> {
-			const parsed = hostLocalUrl(url);
-			if (!parsed || parsed.protocol.startsWith("ws")) return undefined;
-			const host = parsed.hostname.toLowerCase();
-			const forward = await this.forward(hostId, Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80))).catch((error: unknown) => {
-				if (error instanceof SameHostError) return undefined;
-				throw error;
-			});
-			if (!forward) return undefined;
-			if (!/\.localhost\.?$/.test(host)) parsed.hostname = "localhost";
-			parsed.port = String(forward.localPort);
-			return parsed.href;
-		},
-		stop(hostId: string, remotePort: number): void {
-			const id = key(hostId, remotePort);
-			const existing = forwards.get(id);
-			if (!existing) return;
-			forwards.delete(id);
-			existing.server.close();
-			for (const client of existing.clients) client.destroy();
-		},
-		stopHost(hostId: string): void {
-			removals.set(hostId, (removals.get(hostId) ?? 0) + 1);
-			for (const { forward } of [...forwards.values()]) if (forward.hostId === hostId) this.stop(hostId, forward.remotePort);
-		},
-		stopAll(): void {
-			generation++;
-			for (const { forward } of [...forwards.values()]) this.stop(forward.hostId, forward.remotePort);
-		},
-		list: (): PortForward[] => [...forwards.values()].map(({ forward }) => forward),
-	};
+	return { route, reach };
 }
 
 export type LoopbackTunnels = ReturnType<typeof createLoopbackTunnels>;

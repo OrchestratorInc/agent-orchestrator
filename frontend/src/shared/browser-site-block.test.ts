@@ -67,11 +67,11 @@ describe("canOpenInUserBrowser", () => {
 			"http://[::ffff:127.1.2.3]/",
 			"http://[::ffff:0.0.0.0]/",
 		]) {
-			expect(canOpenInUserBrowser(url, { agentTab: true })).toBe(false);
+			expect(canOpenInUserBrowser(url, { onHost: true })).toBe(false);
 			expect(canOpenInUserBrowser(url)).toBe(true);
 		}
-		expect(canOpenInUserBrowser("https://github.com/aoagents/ao", { agentTab: true })).toBe(true);
+		expect(canOpenInUserBrowser("https://github.com/aoagents/ao", { onHost: true })).toBe(true);
 		// A mapped public address is not loopback.
-		expect(canOpenInUserBrowser("http://[::ffff:8.8.8.8]/", { agentTab: true })).toBe(true);
+		expect(canOpenInUserBrowser("http://[::ffff:8.8.8.8]/", { onHost: true })).toBe(true);
 	});
 });

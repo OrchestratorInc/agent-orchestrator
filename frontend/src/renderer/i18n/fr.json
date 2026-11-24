@@ -5525,7 +5525,6 @@
 	"backgroundTasks.shells_many": "{{count}} shells sont toujours en cours",
 	"backgroundTasks.agents_many": "{{count}} agents en arrière-plan en cours",
 	"backgroundTasks.tasks_many": "{{count}} tâches en arrière-plan en cours",
-	"remote.forwardFailed": "Impossible de rediriger le port",
 	"remote.shareLocalhost": "Partager localhost",
-	"remote.shareLocalhostDescription": "Vos autres appareils peuvent ouvrir les serveurs de cet ordinateur et rediriger ses ports."
+	"remote.shareLocalhostDescription": "Vos autres appareils peuvent ouvrir les serveurs de cet ordinateur."
 }

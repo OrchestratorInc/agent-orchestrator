@@ -742,7 +742,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				savedCopy={savedCopy}
 				importBlock={importBlock}
 				onLinkOpen={openLinkInBrowser}
-				hostLocalLinks={loopbackReach === "tunnel" || loopbackReach === "same"}
+				hostLocalLinks={loopbackReach}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
 				sessionRole={session.kind}

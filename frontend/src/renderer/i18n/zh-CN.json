@@ -5340,7 +5340,6 @@
 	"backgroundTasks.state.running": "运行中",
 	"backgroundTasks.state.paused": "已暂停",
 	"backgroundTasks.state.failed": "失败",
-	"remote.forwardFailed": "无法转发端口",
 	"remote.shareLocalhost": "共享 localhost",
-	"remote.shareLocalhostDescription": "你的其他设备可以打开这台电脑上的服务器并转发其端口。"
+	"remote.shareLocalhostDescription": "你的其他设备可以打开这台电脑上的服务器。"
 }
