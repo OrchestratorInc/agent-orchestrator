@@ -4,9 +4,13 @@ Open an iOS Simulator or Android Emulator for this AO session, put the app you
 built on it, and drive it. The user watches and taps the same device in the
 desktop Device tab and in the AO phone app.
 
-Device support is opt-in. If `ao device open` answers `DEVICES_DISABLED`, ask
-the user to turn it on in the Device tab or to run `ao device setup`; do not
-run setup yourself unless the user asked for device support.
+Devices are a Developer mode preview. If an `ao device` command answers
+`DEVICES_UNAVAILABLE`, tell the user it needs Developer mode in Orchestrator's
+Settings > General; do not try to work around it.
+
+Device support is also opt-in. If `ao device open` answers `DEVICES_DISABLED`,
+ask the user to turn it on in the Device tab or to run `ao device setup`; do
+not run setup yourself unless the user asked for device support.
 
 ## Loop
 

@@ -1528,6 +1528,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/devices/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn devices on or off for every client; the desktop app sends its Developer mode, and devices start off on every daemon boot */
+        put: operations["setDeviceAvailability"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices/setup": {
         parameters: {
             query?: never;
@@ -7539,6 +7556,12 @@ export interface components {
             args: string[];
             command: string;
         };
+        DeviceAvailabilityRequest: {
+            enabled: null | boolean;
+        };
+        DeviceAvailabilityResponse: {
+            enabled: boolean;
+        };
         DeviceLease: {
             agentDevice: components["schemas"]["DeviceAgentControl"];
             device: components["schemas"]["DeviceSummary"];
@@ -7557,6 +7580,8 @@ export interface components {
             reason?: string;
         };
         DeviceStatusResponse: {
+            /** @description Whether devices are available: the desktop app's Developer mode is on. While false, only status, a session's lease and releasing a device are served. */
+            available: boolean;
             devices: components["schemas"]["DeviceSummary"][];
             /** @description Whether the user turned device support on. */
             enabled: boolean;
@@ -15576,6 +15601,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeviceStatusResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setDeviceAvailability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceAvailabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceAvailabilityResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Implemented */

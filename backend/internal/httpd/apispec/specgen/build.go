@@ -386,6 +386,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersDeviceAgentControl":                       "DeviceAgentControl",
 	"ControllersDeviceLease":                              "DeviceLease",
 	"ControllersDeviceStatusResponse":                     "DeviceStatusResponse",
+	"ControllersDeviceAvailabilityRequest":                "DeviceAvailabilityRequest",
+	"ControllersDeviceAvailabilityResponse":               "DeviceAvailabilityResponse",
 	"ControllersSessionDeviceResponse":                    "SessionDeviceResponse",
 	"ControllersOpenSessionDeviceRequest":                 "OpenSessionDeviceRequest",
 	"ControllersInstallSessionDeviceRequest":              "InstallSessionDeviceRequest",
@@ -1285,6 +1287,16 @@ func deviceOperations() []operation {
 			method: http.MethodGet, path: "/api/v1/devices", id: "getDeviceStatus", tag: "devices",
 			summary: "Report device support: opt-in, platform availability, simulators and emulators, and leases",
 			resps:   []respUnit{{http.StatusOK, controllers.DeviceStatusResponse{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/devices/availability", id: "setDeviceAvailability", tag: "devices",
+			summary: "Turn devices on or off for every client; the desktop app sends its Developer mode, and devices start off on every daemon boot",
+			reqBody: controllers.DeviceAvailabilityRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.DeviceAvailabilityResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/devices/setup", id: "setupDevices", tag: "devices",

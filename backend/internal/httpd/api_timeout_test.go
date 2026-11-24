@@ -566,6 +566,8 @@ func (d *timeoutProbeDevices) Lease(domain.SessionID) (devices.Lease, bool) {
 	return devices.Lease{}, false
 }
 
+func (d *timeoutProbeDevices) SetAvailable(bool) {}
+
 func (d *timeoutProbeDevices) Status(ctx context.Context) devices.Status {
 	d.probe(ctx)
 	return devices.Status{}

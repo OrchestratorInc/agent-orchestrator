@@ -120,7 +120,7 @@ func TestDeviceOpen_SurfacesDaemonError(t *testing.T) {
 
 func TestDeviceStatus_ListsPlatformsAndLeases(t *testing.T) {
 	cfg := setConfigEnv(t)
-	srv, capture := deviceServer(t, http.StatusOK, `{"enabled":true,"state":"ready",
+	srv, capture := deviceServer(t, http.StatusOK, `{"available":true,"enabled":true,"state":"ready",
 "platforms":[{"platform":"ios","available":true},{"platform":"android","available":false,"reason":"Install the Android SDK."}],
 "devices":[{"id":"UDID-1","name":"iPhone 17 Pro","platform":"ios","version":"iOS 26.5","booted":true}],
 "leases":[{"sessionId":"aa-47","provider":"local","reason":"r","device":{"id":"UDID-1","name":"iPhone 17 Pro","platform":"ios","booted":true},"agentDevice":{"command":"","args":[]}}]}`)
@@ -180,7 +180,7 @@ func TestDeviceClose_ReleasesAHeldDevice(t *testing.T) {
 func TestDeviceStatus_FailsWhenTheDevicesCannotBeListed(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
 	cfg := setConfigEnv(t)
-	srv, _ := deviceServer(t, http.StatusOK, `{"enabled":true,"state":"ready","error":"list devices: Failed to run avdmanager","platforms":[],"devices":[],"leases":[]}`)
+	srv, _ := deviceServer(t, http.StatusOK, `{"available":true,"enabled":true,"state":"ready","error":"list devices: Failed to run avdmanager","platforms":[],"devices":[],"leases":[]}`)
 	writeRunFileFor(t, cfg, srv)
 	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "device", "status")
 	if err == nil {
@@ -188,5 +188,24 @@ func TestDeviceStatus_FailsWhenTheDevicesCannotBeListed(t *testing.T) {
 	}
 	if !strings.Contains(out, "Failed to run avdmanager") {
 		t.Fatalf("output does not say why:\n%s", out)
+	}
+}
+
+func TestDeviceStatusSaysWhenDeveloperModeIsOff(t *testing.T) {
+	for _, tc := range []struct {
+		status deviceStatusDTO
+		want   string
+	}{
+		{deviceStatusDTO{Available: false, Enabled: true, State: "ready"}, "Developer mode"},
+		{deviceStatusDTO{Available: true, Enabled: false, State: "off"}, "ao device setup"},
+		{deviceStatusDTO{Available: true, Enabled: true, State: "ready"}, "Device support: ready"},
+	} {
+		var out strings.Builder
+		if err := writeDeviceStatus(&out, tc.status, false); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), tc.want) {
+			t.Errorf("status %+v printed %q, want it to mention %q", tc.status, out.String(), tc.want)
+		}
 	}
 }
