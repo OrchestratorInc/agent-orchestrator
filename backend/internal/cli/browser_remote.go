@@ -151,8 +151,10 @@ var remoteBrowserBoolFlags = map[string]bool{
 // remoteBrowserCommandIndex returns the index of the command in args, or -1.
 // agent-browser puts global flags before the command, and a flag written as
 // "--flag value" consumes the next token, so a non-flag token right after a
-// value-taking flag is that flag's value unless it names a file-input
-// command (`--session work upload …` and `--json upload …` both find upload).
+// value-taking flag is always that flag's value, even when it reads "upload"
+// (`--session upload fill …` is a fill). This fails closed: a value-less flag
+// missing from remoteBrowserBoolFlags makes the next token look like a value,
+// so a file is not sent, rather than sent when it should not be.
 func remoteBrowserCommandIndex(args []string) int {
 	expectValue := false
 	for i, arg := range args {
@@ -160,7 +162,7 @@ func remoteBrowserCommandIndex(args []string) int {
 			expectValue = !strings.Contains(arg, "=") && !remoteBrowserBoolFlags[arg]
 			continue
 		}
-		if expectValue && !remoteBrowserFileInputCommands[arg] {
+		if expectValue {
 			expectValue = false
 			continue
 		}

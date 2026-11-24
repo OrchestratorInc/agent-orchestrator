@@ -294,6 +294,7 @@ func TestBrowserRemoteFindsUploadAfterGlobalFlags(t *testing.T) {
 		{"other command", []string{"fill", "@e1", file}, false},
 		{"other command after value flag", []string{"--session", "work", "fill", "@e1", file}, false},
 		{"upload as text", []string{"fill", "upload", file}, false},
+		{"upload as session value", []string{"--session", "upload", "fill", "@e1", file}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			files, err := remoteBrowserUploadArgs(tc.args)
