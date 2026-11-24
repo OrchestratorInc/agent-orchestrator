@@ -89,9 +89,10 @@ export class StreamStats {
 	}
 
 	snapshot(now: number): StreamStatsSnapshot {
-		// Buckets that started within the last second (to BUCKET_MS).
+		// Buckets that overlap the last second, including the one straddling its
+		// start: exact to within one BUCKET_MS at the window's old edge.
 		const since = now - WINDOW_MS;
-		const recent = (buckets: Bucket[]) => buckets.filter((b) => b.start >= since);
+		const recent = (buckets: Bucket[]) => buckets.filter((b) => b.start + BUCKET_MS > since);
 		return {
 			firstFrameMs: this.firstFrameMs,
 			fps: recent(this.shownAt).reduce((sum, b) => sum + b.frames, 0),

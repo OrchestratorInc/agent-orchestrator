@@ -67,6 +67,18 @@ describe("StreamStats", () => {
 		expect(s.fps).toBe(120);
 	});
 
+	it("counts a frame in the bucket that straddles the window's start", () => {
+		const stats = new StreamStats();
+		stats.connecting(0);
+		// At 2098 ms the window starts at 1098 ms: a frame at 1099 ms is in it,
+		// though its bucket starts at 1000 ms.
+		stats.received(1_099, 1_024);
+		stats.shown(1_099, 1);
+		const s = stats.snapshot(2_098);
+		expect(s.fps).toBe(1);
+		expect(s.kbps).toBe(1);
+	});
+
 	it("reports the median decode time of recent frames", () => {
 		const stats = new StreamStats();
 		stats.connecting(0);
