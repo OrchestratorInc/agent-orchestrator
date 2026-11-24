@@ -71,6 +71,7 @@ export type LinkedPullRequest = Schemas["LinkedPullRequest"];
 export type SessionOutputType = Schemas["SessionOutputType"];
 export type RequestedOutput = Schemas["RequestedOutput"];
 export type SessionStartupError = Schemas["SessionStartupError"];
+export type SessionReadyCheck = Schemas["SessionReadyCheck"];
 export type SessionKind = Schemas["SessionKind"];
 export type SessionMode = Schemas["SessionMode"];
 export type SessionActivityState = Schemas["SessionActivityState"];

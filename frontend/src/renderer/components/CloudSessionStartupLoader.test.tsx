@@ -1,8 +1,9 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
-import { groupScriptRuns } from "../lib/cloud-script-runs";
+import type { CloudCpSessionReadyCheck } from "../lib/cloud-cp";
+import { forgetControlPlaneClock, groupScriptRuns } from "../lib/cloud-script-runs";
 import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -73,5 +74,72 @@ describe("CloudSessionStartupLoader", () => {
 		mount({ activeIndex: 1 });
 		expect(screen.queryByRole("figure")).toBeNull();
 		expect(screen.queryByText("Your message, sent when the workspace is ready")).toBeNull();
+	});
+
+	describe("while AO waits for the workspace's own ready check", () => {
+		// Coder reported the workspace ready 20:12 ago; the check runs until 1:00:00.
+		const now = Date.parse("2026-11-09T19:38:42Z");
+		const check = (overrides: Partial<CloudCpSessionReadyCheck> = {}): CloudCpSessionReadyCheck => ({
+			since: "2026-11-09T19:18:30Z", timeoutSeconds: 3600, attempts: 31, exitCode: 1,
+			checkedAt: "2026-11-09T19:38:40Z", ...overrides,
+		});
+
+		beforeEach(() => {
+			forgetControlPlaneClock();
+			vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+			vi.setSystemTime(now);
+		});
+		afterEach(() => vi.useRealTimers());
+
+		it("says so in place of creating the workspace, with the time since Coder reported it ready and the checks so far, when the check prints nothing", () => {
+			// A bare `grep -q '^Ready' ~/.bootstrap-status` prints nothing.
+			mount({ activeIndex: 0, readyCheck: check(), startupNote: "Waiting for your workspace's own setup to finish: its ready check hasn't passed yet.", coderWorkspaceUrl: workspaceUrl });
+			const step = screen.getByTestId("multi-step-loader-step");
+			expect(step).toHaveTextContent("Waiting for your workspace's own setup");
+			expect(screen.queryByText("Creating the workspace")).toBeNull();
+			// The workspace link stays beside the step.
+			expect(within(step.closest("li")!).getByRole("button", { name: "Open the workspace in Coder" })).toBeInTheDocument();
+			const wait = screen.getByRole("region", { name: "Waiting for your workspace's own setup" });
+			expect(within(wait).getByTestId("cloud-session-ready-check-progress"))
+				.toHaveTextContent("20:12 of 1:00:00 since Coder reported the workspace ready, 31 checks so far");
+			expect(screen.queryByTestId("cloud-session-ready-check-output")).toBeNull();
+			expect(screen.queryByText(/Latest output/)).toBeNull();
+			// The server's note is for older apps; the wait replaces it here.
+			expect(screen.queryByTestId("cloud-session-startup-note")).toBeNull();
+			// The elapsed time is live.
+			act(() => { vi.advanceTimersByTime(1_000); });
+			expect(screen.getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("20:13 of 1:00:00");
+		});
+
+		it("shows the last lines the check printed and its exit status", () => {
+			mount({ activeIndex: 0, readyCheck: check({ attempts: 1, exitCode: 3, output: "Bootstrapping step 2/5\nBootstrapping step 3/5\n" }) });
+			const output = screen.getByRole("region", { name: "Waiting for your workspace's own setup" }).querySelector("pre");
+			expect(output).toBe(screen.getByLabelText("Latest output of the ready check (exit 3)"));
+			expect(output).toHaveTextContent("Bootstrapping step 2/5 Bootstrapping step 3/5");
+			expect(screen.getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("20:12 of 1:00:00 since Coder reported the workspace ready, 1 check so far");
+		});
+
+		it("never shows more time than the limit", () => {
+			// Coder reported the workspace ready 2 hours ago; AO stops checking at 1 hour.
+			mount({ activeIndex: 0, readyCheck: check({ since: "2026-11-09T17:38:42Z", attempts: 45 }) });
+			expect(screen.getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("1:00:00 of 1:00:00 since Coder reported the workspace ready, 45 checks so far");
+			act(() => { vi.advanceTimersByTime(1_000); });
+			expect(screen.getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("1:00:00 of 1:00:00");
+		});
+
+		it("leaves the limit out when the control plane sends none", () => {
+			mount({ activeIndex: 0, readyCheck: check({ timeoutSeconds: undefined }) });
+			expect(screen.getByTestId("cloud-session-ready-check-progress")).toHaveTextContent("20:12 since Coder reported the workspace ready, 31 checks so far");
+		});
+
+		it("moves on once the check passed or the screen completes", () => {
+			const view = mount({ activeIndex: 0, readyCheck: check() });
+			view.rerender(<TooltipProvider><CloudSessionStartupLoader activeIndex={1} /></TooltipProvider>);
+			expect(screen.queryByTestId("cloud-session-ready-check")).toBeNull();
+			expect(screen.getByText("Creating the workspace")).toBeInTheDocument();
+			expect(screen.getByTestId("multi-step-loader-step")).toHaveTextContent("Connecting to the worker");
+			view.rerender(<TooltipProvider><CloudSessionStartupLoader activeIndex={3} completed readyCheck={check()} /></TooltipProvider>);
+			expect(screen.queryByTestId("cloud-session-ready-check")).toBeNull();
+		});
 	});
 });
