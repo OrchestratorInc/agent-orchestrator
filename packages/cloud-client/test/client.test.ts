@@ -1150,7 +1150,7 @@ describe("CloudClient", () => {
     await client.createAutomation("org/1", {
       projectId: "project", displayName: "Nightly debt", prompt: "List debt.", harness: "codex",
       rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", timezone: "Asia/Kolkata",
-      mode: "trusted", maxRuntimeMinutes: 60, enabled: true,
+      mode: "trusted", maxRuntimeMinutes: 60, deleteSessionOnComplete: false, enabled: true,
     });
     await client.updateAutomation("org/1", "auto 1", { enabled: false });
     await expect(client.deleteAutomation("org/1", "auto 1")).resolves.toBeUndefined();
