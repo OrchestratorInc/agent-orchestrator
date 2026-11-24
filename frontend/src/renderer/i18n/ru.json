@@ -5686,6 +5686,8 @@
 	"chat.connectors.starting": "Запускается",
 	"chat.connectors.failed": "Сбой",
 	"chat.connectors.added": "В этом чате",
+	"chat.connectors.fromOrchestrator": "Из Orchestrator",
+	"chat.connectors.fromAgent": "Из собственных настроек {{agent}}",
 	"chat.connectors.manage": "Управление коннекторами",
 	"chat.connectorProposal.dock": "Запрос коннектора",
 	"chat.connectorProposal.title": "Добавить коннектор?",

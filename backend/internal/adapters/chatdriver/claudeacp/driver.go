@@ -534,7 +534,7 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	// a finished background task. AO has no turn for those, so the SDK's own
 	// running/idle report is the only sign that the agent is working.
 	claudeCode := map[string]any{
-		"emitRawSDKMessages": []map[string]string{{"type": "system", "subtype": "session_state_changed"}},
+		"emitRawSDKMessages": []map[string]string{{"type": "system", "subtype": "session_state_changed"}, {"type": "system", "subtype": "init"}},
 	}
 	meta["claudeCode"] = claudeCode
 	// Also per session, so a choice made after the adapter started still applies.

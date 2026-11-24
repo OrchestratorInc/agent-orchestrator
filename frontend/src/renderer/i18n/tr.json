@@ -5362,6 +5362,8 @@
 	"chat.connectors.starting": "Başlatılıyor",
 	"chat.connectors.failed": "Başarısız",
 	"chat.connectors.added": "Bu sohbette",
+	"chat.connectors.fromOrchestrator": "Orchestrator'dan",
+	"chat.connectors.fromAgent": "{{agent}} kendi ayarlarından",
 	"chat.connectors.manage": "Bağlayıcıları yönet",
 	"chat.connectorProposal.dock": "Bağlayıcı isteği",
 	"chat.connectorProposal.title": "Bağlayıcı eklensin mi?",

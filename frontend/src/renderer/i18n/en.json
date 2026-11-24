@@ -5362,6 +5362,8 @@
 	"chat.connectors.starting": "Starting",
 	"chat.connectors.failed": "Failed",
 	"chat.connectors.added": "In this chat",
+	"chat.connectors.fromOrchestrator": "From Orchestrator",
+	"chat.connectors.fromAgent": "From {{agent}}'s own settings",
 	"chat.connectors.manage": "Manage connectors",
 	"chat.connectorProposal.dock": "Connector request",
 	"chat.connectorProposal.title": "Add a connector?",

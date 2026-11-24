@@ -5538,6 +5538,8 @@
 	"chat.connectors.starting": "Iniciando",
 	"chat.connectors.failed": "Falló",
 	"chat.connectors.added": "En este chat",
+	"chat.connectors.fromOrchestrator": "De Orchestrator",
+	"chat.connectors.fromAgent": "De la configuración propia de {{agent}}",
 	"chat.connectors.manage": "Gestionar conectores",
 	"chat.connectorProposal.dock": "Solicitud de conector",
 	"chat.connectorProposal.title": "¿Añadir un conector?",

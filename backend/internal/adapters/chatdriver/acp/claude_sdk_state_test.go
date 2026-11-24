@@ -55,3 +55,39 @@ func TestClaudeSDKSessionStateBecomesProviderState(t *testing.T) {
 	default:
 	}
 }
+
+func TestClaudeStartMessageReportsItsToolServers(t *testing.T) {
+	conv := &conversation{
+		log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		sessionID: "claude-session",
+		events:    make(chan ports.ChatEvent, 8),
+	}
+	start := `{"sessionId":"claude-session","message":{"type":"system","subtype":"init","mcp_servers":[` +
+		`{"name":"ao","status":"connected"},{"name":"claude_agent_acp","status":"connected"},{"name":"linear","status":"pending"},` +
+		`{"name":"claude.ai Notion","status":"needs-auth"},{"name":"plugin:docs:docs","status":"failed"}]}}`
+	for _, params := range []string{start, start, `{"sessionId":"other-session","message":{"type":"system","subtype":"init","mcp_servers":[{"name":"x","status":"connected"}]}}`} {
+		if !conv.handleNotification(claudeSDKMessageMethod, []byte(params)) {
+			t.Fatalf("%s was not handled", claudeSDKMessageMethod)
+		}
+	}
+	event := <-conv.events
+	want := []ports.ChatMCPServer{{Name: "ao", Status: "ready"}, {Name: "linear", Status: "starting"}, {Name: "claude.ai Notion", Status: "needs-auth"}, {Name: "plugin:docs:docs", Status: "failed"}}
+	if event.Kind != ports.ChatEventMCPServers || len(event.MCPServers) != len(want) {
+		t.Fatalf("event = %+v", event)
+	}
+	for i, server := range event.MCPServers {
+		if server != want[i] {
+			t.Fatalf("server %d = %+v, want %+v", i, server, want[i])
+		}
+	}
+	select {
+	case again := <-conv.events:
+		t.Fatalf("an unchanged list or another session's list was reported: %+v", again)
+	default:
+	}
+	settled := `{"sessionId":"claude-session","message":{"type":"system","subtype":"init","mcp_servers":[{"name":"linear","status":"connected"}]}}`
+	conv.handleNotification(claudeSDKMessageMethod, []byte(settled))
+	if event := <-conv.events; len(event.MCPServers) != 1 || event.MCPServers[0] != (ports.ChatMCPServer{Name: "linear", Status: "ready"}) {
+		t.Fatalf("a changed status = %+v", event)
+	}
+}

@@ -7,7 +7,7 @@ import { connectorsApi, sessionConnectorsQueryKey, type SessionConnector } from 
 import { useUiStore } from "../../stores/ui-store";
 import type { McpServer } from "../../types/conversation";
 import { Button } from "../ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { CHAT_MENU_CLASS, TRIGGER_CLASS } from "./TurnSettingsBar";
 
 type RowState = "off" | "needsSignIn" | "failed" | "starting" | "loaded" | "added";
@@ -29,7 +29,30 @@ const stateKeys = {
 	added: "chat.connectors.added",
 } as const;
 
-export function ChatConnectorsMenu({ sessionId, hostId, servers }: { sessionId: string; hostId?: string; servers: readonly McpServer[] }) {
+const ORCHESTRATOR_SERVERS: ReadonlySet<string> = new Set(["ao"]);
+
+function GroupLabel({ text, count }: { text: string; count: number }) {
+	return (
+		<DropdownMenuLabel className="flex items-center justify-between gap-3">
+			<span className="min-w-0 truncate">{text}</span>
+			<span className="tabular-nums">{count}</span>
+		</DropdownMenuLabel>
+	);
+}
+
+function RowStateLabel({ state, error }: { state: RowState; error?: string }) {
+	const { t } = useTranslation();
+	return (
+		<span
+			className={cn("shrink-0", state === "failed" ? "text-error" : state === "needsSignIn" ? "text-warning" : "text-muted-foreground")}
+			title={state === "failed" ? error : undefined}
+		>
+			{t(stateKeys[state])}
+		</span>
+	);
+}
+
+export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers }: { sessionId: string; hostId?: string; agentName: string; servers: readonly McpServer[] }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const query = useQuery({
@@ -44,42 +67,63 @@ export function ChatConnectorsMenu({ sessionId, hostId, servers }: { sessionId: 
 		if (serverCount > 0) void refetch({ cancelRefetch: false });
 	}, [serverCount, refetch]);
 	const connectors = query.data ?? [];
-	if (connectors.length === 0) return null;
+	const keys = new Set(connectors.map((connector) => connector.key));
+	const own = servers.filter((server) => !keys.has(server.name) && !ORCHESTRATOR_SERVERS.has(server.name) && server.status !== "disabled");
+	const total = connectors.length + own.length;
+	if (total === 0) return null;
 	const reported = new Map(servers.map((server) => [server.name, server]));
 	const rows = connectors.map((connector) => ({ connector, report: reported.get(connector.key), state: connectorRowState(connector, reported.get(connector.key)) }));
 	const attention = rows.some((row) => row.state === "needsSignIn" || row.state === "failed");
-	const label = t("chat.connectors.chip", { count: connectors.length });
+	const label = t("chat.connectors.chip", { count: total });
+	const fromOrchestrator = t("chat.connectors.fromOrchestrator");
+	const fromAgent = t("chat.connectors.fromAgent", { agent: agentName });
 
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen}>
 			<DropdownMenuTrigger asChild>
 				<Button type="button" variant="ghost" size="sm" className={cn(TRIGGER_CLASS, "px-2")} aria-label={label} title={label} data-chat-connectors>
 					<Plug className={cn("size-3.5", attention && "text-warning")} aria-hidden="true" />
-					<span className="tabular-nums">{connectors.length}</span>
+					<span className="tabular-nums">{total}</span>
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className={cn(CHAT_MENU_CLASS, "min-w-64 max-w-80")}>
-				<div role="list" aria-label={label} className="flex flex-col">
-					{rows.map(({ connector, report, state }) => (
-						<div key={connector.key} role="listitem" className="flex items-start justify-between gap-3 px-2 py-1.5">
-							<span className="min-w-0">
-								<span className="block truncate text-foreground">{connector.name}</span>
-								<span className="block truncate text-muted-foreground">
-									{connector.transport === "stdio"
-										? t("settings.connectors.dialog.tabCommand")
-										: connector.calls > 0
-											? `${t("chat.connectors.calls", { count: connector.calls })}${connector.lastTool ? ` · ${connector.lastTool}` : ""}`
-											: t("chat.connectors.noCalls")}
-								</span>
-							</span>
-							<span
-								className={cn("shrink-0", state === "failed" ? "text-error" : state === "needsSignIn" ? "text-warning" : "text-muted-foreground")}
-								title={state === "failed" ? report?.error : undefined}
-							>
-								{t(stateKeys[state])}
-							</span>
-						</div>
-					))}
+				<div className="flex max-h-80 flex-col overflow-y-auto">
+					{rows.length > 0 ? (
+						<>
+							{own.length > 0 ? <GroupLabel text={fromOrchestrator} count={rows.length} /> : null}
+							<div role="list" aria-label={own.length > 0 ? fromOrchestrator : label} className="flex flex-col">
+								{rows.map(({ connector, report, state }) => (
+									<div key={connector.key} role="listitem" className="flex items-start justify-between gap-3 px-2 py-1.5">
+										<span className="min-w-0">
+											<span className="block truncate text-foreground">{connector.name}</span>
+											<span className="block truncate text-muted-foreground">
+												{connector.transport === "stdio"
+													? t("settings.connectors.dialog.tabCommand")
+													: connector.calls > 0
+														? `${t("chat.connectors.calls", { count: connector.calls })}${connector.lastTool ? ` · ${connector.lastTool}` : ""}`
+														: t("chat.connectors.noCalls")}
+											</span>
+										</span>
+										<RowStateLabel state={state} error={report?.error} />
+									</div>
+								))}
+							</div>
+						</>
+					) : null}
+					{own.length > 0 ? (
+						<>
+							{rows.length > 0 ? <DropdownMenuSeparator /> : null}
+							<GroupLabel text={fromAgent} count={own.length} />
+							<div role="list" aria-label={fromAgent} className="flex flex-col">
+								{own.map((server) => (
+									<div key={server.name} role="listitem" className="flex items-start justify-between gap-3 px-2 py-1.5">
+										<span className="min-w-0 truncate text-foreground">{server.name}</span>
+										<RowStateLabel state={connectorRowState({ enabled: true, status: server.status === "needs-auth" ? "needs_signin" : "connected" }, server)} error={server.error} />
+									</div>
+								))}
+							</div>
+						</>
+					) : null}
 				</div>
 				{hostId ? null : (
 					<>

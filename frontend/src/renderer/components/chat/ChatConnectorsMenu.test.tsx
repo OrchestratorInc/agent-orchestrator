@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
@@ -11,7 +11,7 @@ function renderMenu(servers: Parameters<typeof ChatConnectorsMenu>[0]["servers"]
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<QueryClientProvider client={client}>
-			<ChatConnectorsMenu sessionId="mer-1" servers={servers} />
+			<ChatConnectorsMenu sessionId="mer-1" agentName="Claude Code" servers={servers} />
 		</QueryClientProvider>,
 	);
 }
@@ -32,7 +32,7 @@ it("does not offer this computer's connector settings in a chat on another machi
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={client}>
-			<ChatConnectorsMenu sessionId="mer-1" hostId="air" servers={[]} />
+			<ChatConnectorsMenu sessionId="mer-1" hostId="air" agentName="Claude Code" servers={[]} />
 		</QueryClientProvider>,
 	);
 	await userEvent.setup().click(await screen.findByRole("button"));
@@ -69,6 +69,38 @@ describe("ChatConnectorsMenu", () => {
 		expect(screen.getByText("Failed")).toHaveAttribute("title", "spawn npx ENOENT");
 		await user.click(screen.getByRole("menuitem", { name: "Manage connectors" }));
 		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "connectors" });
+	});
+
+	it("counts and lists the agent's own servers in a second group", async () => {
+		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: { connectors: three.data.connectors.slice(0, 2) } } as never);
+		const user = userEvent.setup();
+		renderMenu([
+			{ name: "ao", status: "ready" },
+			{ name: "linear", status: "ready" },
+			{ name: "github", status: "ready" },
+			{ name: "claude.ai Notion", status: "needs-auth" },
+			{ name: "plugin:docs:docs", status: "failed", error: "spawn docs ENOENT" },
+			{ name: "paused", status: "disabled" },
+		]);
+		const chip = await screen.findByRole("button", { name: "5 connectors in this chat" });
+		expect(chip).toHaveTextContent("5");
+		await user.click(chip);
+		const ours = within(screen.getByRole("list", { name: "From Orchestrator" })).getAllByRole("listitem");
+		expect(ours.map((row) => row.textContent)).toEqual(["Linear4 calls · create_issueLoaded", "SentryNo calls yetNeeds sign-in"]);
+		const own = within(screen.getByRole("list", { name: "From Claude Code's own settings" })).getAllByRole("listitem");
+		expect(own.map((row) => row.textContent)).toEqual(["githubLoaded", "claude.ai NotionNeeds sign-in", "plugin:docs:docsFailed"]);
+		expect(screen.getByText("Failed")).toHaveAttribute("title", "spawn docs ENOENT");
+		expect(screen.getByText("From Orchestrator").parentElement).toHaveTextContent("From Orchestrator2");
+		expect(screen.getByText("From Claude Code's own settings").parentElement).toHaveTextContent("From Claude Code's own settings3");
+	});
+
+	it("shows the agent's own servers in a chat with no connector from Orchestrator", async () => {
+		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: { connectors: [] } } as never);
+		const user = userEvent.setup();
+		renderMenu([{ name: "ao", status: "ready" }, { name: "github", status: "starting" }]);
+		await user.click(await screen.findByRole("button", { name: "1 connector in this chat" }));
+		expect(screen.queryByText("From Orchestrator")).not.toBeInTheDocument();
+		expect(within(screen.getByRole("list", { name: "From Claude Code's own settings" })).getByRole("listitem")).toHaveTextContent("githubStarting");
 	});
 
 	it("does not claim an agent loaded a server it has not reported", () => {

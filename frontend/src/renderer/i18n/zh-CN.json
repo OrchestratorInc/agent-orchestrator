@@ -5364,6 +5364,8 @@
 	"chat.connectors.starting": "正在启动",
 	"chat.connectors.failed": "失败",
 	"chat.connectors.added": "此聊天可用",
+	"chat.connectors.fromOrchestrator": "来自 Orchestrator",
+	"chat.connectors.fromAgent": "来自 {{agent}} 自己的设置",
 	"chat.connectors.manage": "管理连接器",
 	"chat.connectorProposal.dock": "连接器请求",
 	"chat.connectorProposal.title": "添加连接器?",

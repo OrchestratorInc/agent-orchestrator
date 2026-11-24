@@ -5382,6 +5382,8 @@
 	"chat.connectors.starting": "起動中",
 	"chat.connectors.failed": "失敗",
 	"chat.connectors.added": "このチャットで有効",
+	"chat.connectors.fromOrchestrator": "Orchestrator から",
+	"chat.connectors.fromAgent": "{{agent}} 自身の設定から",
 	"chat.connectors.manage": "コネクタを管理",
 	"chat.connectorProposal.dock": "コネクタの追加リクエスト",
 	"chat.connectorProposal.title": "コネクタを追加しますか?",

@@ -1886,7 +1886,7 @@ function ChatWorkspaceContent({
 					afterPicker={(
 						<>
 							{quotaSign}
-							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} hostId={activeRemoteHostId} servers={stableMcpServers ?? NO_MCP_SERVERS} /> : null}
+							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} hostId={activeRemoteHostId} agentName={agentLabel(snapshot.harness)} servers={stableMcpServers ?? NO_MCP_SERVERS} /> : null}
 						</>
 					)}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
@@ -1927,6 +1927,7 @@ function ChatWorkspaceContent({
 			stableMcpServers,
 			uiSessionId,
 			activeRemoteHostId,
+			snapshot.harness,
 			settingsReady,
 			settingsLocked,
 			settingsLoading,
