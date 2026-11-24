@@ -219,6 +219,13 @@ func TestExistingHeadReasonCapsFailedAutoRetriesPerHead(t *testing.T) {
 			runs: []domain.ReviewRun{
 				{PRURL: prURL, TargetSHA: "sha1", Harness: domain.ReviewerCodex, TriggerSource: domain.ReviewTriggerAgent, Status: domain.ReviewRunFailed, FailureReason: domain.ReviewFailureTurnEndedWithoutSubmit},
 			},
+			want: "unsubmitted_same_sha",
+		},
+		{
+			name: "a failed preflight is not retried automatically",
+			runs: []domain.ReviewRun{
+				{PRURL: prURL, TargetSHA: "sha1", Harness: domain.ReviewerCodex, TriggerSource: domain.ReviewTriggerAuto, Status: domain.ReviewRunFailed, FailureReason: domain.ReviewFailurePreflightFailed},
+			},
 			want: "failed_not_retryable",
 		},
 		{
