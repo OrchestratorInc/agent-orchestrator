@@ -74,7 +74,21 @@ describe("FirstTaskFunnel", () => {
 		expect(onboardingInProgress()).toBe(false);
 	});
 
-	it("counts opening a project that was already there", () => {
+	it("counts a chat on a remote host as reaching a chat", () => {
+		workspaces.data = [project("old")];
+		act(() => startFirstTaskFunnel());
+		const view = render(<FirstTaskFunnel />);
+		route.pathname = "/projects/old";
+		view.rerender(<FirstTaskFunnel />);
+		route.pathname = "/host/devbox/session/remote-1";
+		view.rerender(<FirstTaskFunnel />);
+		expect(funnel().slice(-2)).toEqual([
+			["ao.onboarding.step_completed", "tour_orchestrator"],
+			["ao.onboarding.step_viewed", "first_task"],
+		]);
+	});
+
+		it("counts opening a project that was already there", () => {
 		workspaces.data = [project("old")];
 		act(() => startFirstTaskFunnel());
 		const view = render(<FirstTaskFunnel />);

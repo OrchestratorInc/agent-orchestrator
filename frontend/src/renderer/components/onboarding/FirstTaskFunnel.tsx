@@ -37,8 +37,9 @@ const STEPS: readonly FunnelStep[] = ["project", "orchestrator", "task"];
 
 /** A project's board or one of its chats (this machine's routes). */
 const PROJECT_ROUTE = /^\/projects\/([^/]+)/;
-/** A page with a chat composer: any session, or the new chat page. */
-const CHAT_ROUTE = /(^|\/)sessions\/[^/]+|^\/new(\/|$)/;
+/** A page with a chat composer: any session on this machine
+ * (`/sessions/…`), on a remote host (`/host/…/session/…`), or the new chat page. */
+const CHAT_ROUTE = /(^|\/)sessions?\/[^/]+|^\/new(\/|$)/;
 
 // ── State: one run per install, kept across relaunches ──────────────────────
 

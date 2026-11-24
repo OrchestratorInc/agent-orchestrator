@@ -246,16 +246,15 @@ export function FirstRunOnboarding() {
 					setFreshMachineSim(false);
 					resetToolChecks();
 				}
-				// Setup done: Home, with Add Project open over it (not whatever page
-				// was behind the onboarding). A skipped setup has no harness to run a
-				// project's agents with, so it lands on Home without it.
+				// Setup done: Home (not whatever page was behind the onboarding),
+				// with Add Project open over it. A skipped setup has no harness to
+				// run a project's agents with, so it lands on Home without it.
 				const replay = runKind.current === "replay";
-				if (!skipped) {
-					void navigate({ to: "/" }).then(() => {
-						startFirstTaskFunnel({ replay });
-						useUiStore.getState().requestCreateProject();
-					});
-				}
+				void navigate({ to: "/" }).then(() => {
+					if (skipped) return;
+					startFirstTaskFunnel({ replay });
+					useUiStore.getState().requestCreateProject();
+				});
 			}}
 		/>
 	);
