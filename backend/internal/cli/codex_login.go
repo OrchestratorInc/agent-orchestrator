@@ -11,11 +11,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -170,11 +170,6 @@ func (c *commandContext) checkOpenAIKey(ctx context.Context, key []byte, out io.
 	}
 }
 
-// codexTopLevelKey is a top-level `key = "…"` in Codex's config.toml that can
-// send an API key somewhere other than api.openai.com. TOML lets the key name
-// itself be quoted, as in `"openai_base_url" = "…"`.
-var codexTopLevelKey = regexp.MustCompile(`^\s*["']?(model_provider|openai_base_url|profile)["']?\s*=\s*["']([^"']+)["']`)
-
 // codexSystemConfig is the system-wide config.toml Codex also loads; a
 // variable so tests never read the host's.
 var codexSystemConfig = "/etc/codex/config.toml"
@@ -198,24 +193,26 @@ func codexKeyGoesElsewhere() bool {
 	return codexConfigRoutesElsewhere(codexSystemConfig)
 }
 
+// codexConfigRoutesElsewhere decodes the config.toml at path, as TOML so every
+// string form counts, and reports whether a top-level model_provider other
+// than openai, an openai_base_url, or a profile is set.
 func codexConfigRoutesElsewhere(path string) bool {
 	data, err := os.ReadFile(path) //nolint:gosec // Codex's own config files.
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "[") {
-			break
-		}
-		match := codexTopLevelKey.FindStringSubmatch(line)
-		if match == nil {
-			continue
-		}
-		if value := strings.TrimSpace(match[2]); value != "" && (match[1] != "model_provider" || value != "openai") {
-			return true
-		}
+	var config struct {
+		ModelProvider string `toml:"model_provider"`
+		OpenAIBaseURL string `toml:"openai_base_url"`
+		Profile       string `toml:"profile"`
 	}
-	return false
+	if toml.Unmarshal(data, &config) != nil {
+		return false
+	}
+	provider := strings.TrimSpace(config.ModelProvider)
+	return (provider != "" && provider != "openai") ||
+		strings.TrimSpace(config.OpenAIBaseURL) != "" ||
+		strings.TrimSpace(config.Profile) != ""
 }
 
 // codexStartProbeTimeout bounds the `codex --version` run that tells a Codex

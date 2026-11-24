@@ -255,6 +255,8 @@ func TestCodexLoginChecksAnAPIKeyWithOpenAIFirst(t *testing.T) {
 		{name: "single-quoted openai_base_url", status: http.StatusUnauthorized, config: "'openai_base_url' = 'https://proxy.example.invalid/v1'\n", wantSaved: true, wantOutput: "Saved without checking"},
 		{name: "quoted profile", status: http.StatusUnauthorized, config: "\"profile\" = \"work\"\n", wantSaved: true, wantOutput: "Saved without checking"},
 		{name: "single-quoted profile", status: http.StatusUnauthorized, config: "'profile' = 'work'\n", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "triple-quoted openai_base_url", status: http.StatusUnauthorized, config: "openai_base_url = \"\"\"https://proxy.example.invalid/v1\"\"\"\n", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "openai_base_url inside a table", status: http.StatusUnauthorized, config: "[tui]\nopenai_base_url = \"https://proxy.example.invalid/v1\"\n", wantErr: "OpenAI refused this API key (HTTP 401)", wantAsked: true},
 		{name: "system openai_base_url", status: http.StatusUnauthorized, system: "openai_base_url = \"https://proxy.example.invalid/v1\"\n", wantSaved: true, wantOutput: "Saved without checking"},
 		{name: "openai provider named", status: http.StatusUnauthorized, config: "model_provider = \"openai\"\n", wantErr: "OpenAI refused this API key (HTTP 401)", wantAsked: true},
 		{name: "unreachable", wantSaved: true, wantOutput: "Couldn't reach OpenAI to check the key"},
