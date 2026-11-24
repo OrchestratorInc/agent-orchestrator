@@ -253,7 +253,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 							onFocus={() => setSearchFocused(true)}
 							onBlur={() => setSearchFocused(false)}
 							placeholder={searchPlaceholder ?? t("settings.models.searchPlaceholder")}
-							className="menu-search-input h-auto! rounded-[10px] py-[7px]! pl-8! text-xs!"
+							// Borderless: its fill alone marks the field.
+							className="menu-search-input h-auto! rounded-[10px] border-transparent! py-[7px]! pl-8! text-xs!"
 						/>
 					</div>
 					{normalizedQuery ? (
