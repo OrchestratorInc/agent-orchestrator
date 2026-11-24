@@ -1,7 +1,9 @@
-import { Alert, Button, ConfirmationDialog, Host, SecureField, Text, TextField, useNativeState } from "@expo/ui/swift-ui";
-import { autocorrectionDisabled, textInputAutocapitalization } from "@expo/ui/swift-ui/modifiers";
+import { Host } from "@expo/ui";
+import { Alert, Button, ConfirmationDialog, SecureField, Spacer, Text, TextField, useNativeState } from "@expo/ui/swift-ui";
+import { autocorrectionDisabled, frame, textInputAutocapitalization } from "@expo/ui/swift-ui/modifiers";
 import { useRef, useState, type ReactNode } from "react";
 import { StyleSheet } from "react-native";
+import { useThemeState } from "../ThemeProvider";
 import type { BrowserCommand, BrowserDialog } from "../browserTransport";
 import { answerAuth, answerDialog, answerSelect, askTitle, authMessage } from "./browserAsk";
 import { browserAskCopy as copy, type BrowserAskSheetProps } from "./BrowserAskSheet.types";
@@ -31,9 +33,15 @@ export function BrowserAskSheet({ dialog, onAnswer, pickers }: BrowserAskSheetPr
 
 	if (!dialog || answered.current === dialog) return null;
 	const respond = answer(dialog);
+	return <AskHost><Ask key={keyOf(dialog)} dialog={dialog} answer={respond} pickers={() => latest.current.pickers} /></AskHost>;
+}
+
+/** SwiftUI presents an alert from a view, so the host is a one-point anchor. */
+function AskHost({ children }: { children: ReactNode }) {
+	const { scheme } = useThemeState();
 	return (
-		<Host matchContents style={styles.host}>
-			<Ask key={keyOf(dialog)} dialog={dialog} answer={respond} pickers={() => latest.current.pickers} />
+		<Host style={styles.anchor} colorScheme={scheme}>
+			{children}
 		</Host>
 	);
 }
@@ -102,6 +110,7 @@ function Ask({ dialog, answer, pickers }: { dialog: BrowserDialog; answer: Answe
 function PageAlert({ title, message, onDismiss, children }: { title: string; message?: string; onDismiss(): void; children: ReactNode }) {
 	return (
 		<Alert title={title} isPresented onIsPresentedChange={(shown) => { if (!shown) onDismiss(); }}>
+			<Alert.Trigger><Spacer modifiers={[frame({ width: 1, height: 1 })]} /></Alert.Trigger>
 			<Alert.Actions>{children}</Alert.Actions>
 			{message ? <Alert.Message><Text>{message}</Text></Alert.Message> : null}
 		</Alert>
@@ -111,6 +120,7 @@ function PageAlert({ title, message, onDismiss, children }: { title: string; mes
 function Choices({ title, onDismiss, children }: { title: string; onDismiss(): void; children: ReactNode }) {
 	return (
 		<ConfirmationDialog title={title} titleVisibility="visible" isPresented onIsPresentedChange={(shown) => { if (!shown) onDismiss(); }}>
+			<ConfirmationDialog.Trigger><Spacer modifiers={[frame({ width: 1, height: 1 })]} /></ConfirmationDialog.Trigger>
 			<ConfirmationDialog.Actions>{children}</ConfirmationDialog.Actions>
 		</ConfirmationDialog>
 	);
@@ -145,5 +155,5 @@ function AuthAlert({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind: 
 
 const styles = StyleSheet.create({
 	// The alert draws in its own window; the host only anchors it.
-	host: { position: "absolute" },
+	anchor: { position: "absolute", top: 0, left: 0, width: 1, height: 1 },
 });
