@@ -464,8 +464,11 @@ func (q *Queries) BindConversationTurnProviderID(ctx context.Context, arg BindCo
 }
 
 const bindProjectConversationSession = `-- name: BindProjectConversationSession :exec
-UPDATE conversations SET current_session_id = ?, updated_at = ?
-WHERE id = ? AND scope = 'project'
+UPDATE conversations
+SET queue_held_at = CASE WHEN current_session_id IS ?1 THEN queue_held_at END,
+    current_session_id = ?1,
+    updated_at = ?2
+WHERE id = ?3 AND scope = 'project'
 `
 
 type BindProjectConversationSessionParams struct {
@@ -954,6 +957,10 @@ WHERE conversations.id = ?2
         AND conversation_messages.role = 'user'
         AND conversation_messages.origin = 'human'
   )
+  AND (conversations.scope <> 'project' OR conversations.current_session_id = (
+      SELECT conversation_turns.handled_by_session_id FROM conversation_turns
+      WHERE conversation_turns.id = ?3
+  ))
 `
 
 type HoldConversationQueueForTurnParams struct {

@@ -142,8 +142,11 @@ LIMIT 1;
 SELECT * FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1;
 
 -- name: BindProjectConversationSession :exec
-UPDATE conversations SET current_session_id = ?, updated_at = ?
-WHERE id = ? AND scope = 'project';
+UPDATE conversations
+SET queue_held_at = CASE WHEN current_session_id IS sqlc.arg(current_session_id) THEN queue_held_at END,
+    current_session_id = sqlc.arg(current_session_id),
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id) AND scope = 'project';
 
 -- name: SelectConversationByID :one
 SELECT * FROM conversations WHERE id = ? LIMIT 1;
@@ -1175,7 +1178,11 @@ WHERE conversations.id = sqlc.arg(conversation_id)
       WHERE conversation_messages.turn_id = sqlc.arg(turn_id)
         AND conversation_messages.role = 'user'
         AND conversation_messages.origin = 'human'
-  );
+  )
+  AND (conversations.scope <> 'project' OR conversations.current_session_id = (
+      SELECT conversation_turns.handled_by_session_id FROM conversation_turns
+      WHERE conversation_turns.id = sqlc.arg(turn_id)
+  ));
 
 -- name: ReleaseConversationQueue :exec
 UPDATE conversations SET queue_held_at = NULL
