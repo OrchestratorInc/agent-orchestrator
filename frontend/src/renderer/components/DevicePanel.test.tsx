@@ -183,7 +183,7 @@ describe("DevicePanel", () => {
 		mockApi({ lease: { ...iosLease, device: { ...iosLease.device, booted: false } } });
 		renderPanel(<DevicePanel isActive sessionId="ao-1" />);
 		expect(await screen.findByText("iPhone 17 Pro is off")).toBeInTheDocument();
-		expect(screen.getByRole("img", { name: "iPhone 17 Pro screen", hidden: true })).toHaveClass("hidden");
+		expect(screen.getByRole("img", { name: "iPhone 17 Pro screen", hidden: true }).closest("[data-device-frame]")).toHaveClass("hidden");
 		await userEvent.click(screen.getByRole("button", { name: "Start" }));
 		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/device/open", {
 			params: { path: { sessionId: "ao-1" } },
