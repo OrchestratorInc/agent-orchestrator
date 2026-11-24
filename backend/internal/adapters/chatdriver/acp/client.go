@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -634,7 +636,6 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 	return true
 }
 
-// claudeAdapterToolServer is the tool server the Claude adapter adds for its own use.
 const claudeAdapterToolServer = "claude_agent_acp"
 
 type claudeToolServer struct {
@@ -642,12 +643,13 @@ type claudeToolServer struct {
 	Status string `json:"status"`
 }
 
-// reportClaudeToolServers reports the tool servers Claude Code names in its start
-// message, each time the list or a status changes.
 func (c *conversation) reportClaudeToolServers(reported []claudeToolServer) {
-	servers := make([]ports.ChatMCPServer, 0, len(reported))
-	var seen strings.Builder
+	now := make(map[string]string, len(reported))
+	order := make([]string, 0, len(reported))
 	for _, server := range reported {
+		if server.Name == "" || server.Name == claudeAdapterToolServer {
+			continue
+		}
 		status := server.Status
 		switch status {
 		case "connected":
@@ -655,18 +657,28 @@ func (c *conversation) reportClaudeToolServers(reported []claudeToolServer) {
 		case "pending":
 			status = "starting"
 		}
-		if server.Name == "" || server.Name == claudeAdapterToolServer {
-			continue
+		if _, twice := now[server.Name]; !twice {
+			order = append(order, server.Name)
 		}
-		servers = append(servers, ports.ChatMCPServer{Name: server.Name, Status: status})
-		seen.WriteString(server.Name + "\x00" + status + "\x00")
+		now[server.Name] = status
 	}
 	c.mu.Lock()
-	changed := c.reportedServers != seen.String()
-	c.reportedServers = seen.String()
+	before := c.reportedServers
+	c.reportedServers = now
 	c.mu.Unlock()
-	if changed && len(servers) > 0 {
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventMCPServers, MCPServers: servers})
+	var changed []ports.ChatMCPServer
+	for _, name := range order {
+		if before[name] != now[name] {
+			changed = append(changed, ports.ChatMCPServer{Name: name, Status: now[name]})
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(before)) {
+		if _, still := now[name]; !still && before[name] != "disabled" {
+			changed = append(changed, ports.ChatMCPServer{Name: name, Status: "disabled"})
+		}
+	}
+	if len(changed) > 0 {
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventMCPServers, MCPServers: changed})
 	}
 }
 

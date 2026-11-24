@@ -146,11 +146,14 @@ func (s *Service) SessionConnectors(_ context.Context, sessionID string) ([]Sess
 	}
 	out := make([]SessionConnector, 0, len(use.keys))
 	for _, key := range use.keys {
-		one := SessionConnector{Key: key, Name: key, Status: StatusUnavailable, Calls: use.calls[key], LastTool: use.last[key]}
-		if i := s.index(key); i >= 0 {
-			one.Name, one.Transport, one.Status, one.Enabled = s.records[i].Name, s.records[i].Transport, s.records[i].Status, s.records[i].Enabled
+		i := s.index(key)
+		if i < 0 || s.records[i].Key != key {
+			continue
 		}
-		out = append(out, one)
+		rec := s.records[i]
+		out = append(out, SessionConnector{
+			Key: key, Name: rec.Name, Transport: rec.Transport, Status: rec.Status, Enabled: rec.Enabled, Calls: use.calls[key], LastTool: use.last[key],
+		})
 	}
 	return out, nil
 }

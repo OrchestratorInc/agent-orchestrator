@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -330,8 +331,8 @@ func normalize(in Input, old record) (record, error) {
 	if rec.Name == "" {
 		rec.Name = rec.Key
 	}
-	if !keyPattern.MatchString(rec.Key) || reservedKeys[rec.Key] {
-		return record{}, invalid("INVALID_CONNECTOR_KEY", "The key must be 1 to 32 lowercase letters, digits, hyphens or underscores, and it cannot be \"ao\", \"import\" or \"proposals\"")
+	if !keyPattern.MatchString(rec.Key) || strings.Contains(rec.Key, "__") || reservedKeys[rec.Key] {
+		return record{}, invalid("INVALID_CONNECTOR_KEY", "The key must be 1 to 32 lowercase letters, digits, hyphens or single underscores, and it cannot be \"ao\", \"import\" or \"proposals\"")
 	}
 	if rec.Name == "" || len(rec.Name) > maxNameBytes {
 		return record{}, invalid("INVALID_CONNECTOR_NAME", "The name is required and must be at most 64 bytes")
@@ -507,7 +508,12 @@ func LoopbackURL(raw string) bool {
 }
 
 func loopbackHost(host string) bool {
-	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
 
 func invalid(code, message string) error { return apierr.Invalid(code, message, nil) }

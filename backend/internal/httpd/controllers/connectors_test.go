@@ -342,10 +342,12 @@ func TestARemoteClientCannotAimAConnectorAtTheMachineItself(t *testing.T) {
 	}
 	remote = true
 	for name, call := range map[string][3]string{
-		"create": {http.MethodPost, "/api/v1/connectors", `{"name":"aimed","transport":"http","url":"http://localhost:3011/shutdown"}`},
-		"edit":   {http.MethodPatch, "/api/v1/connectors/far", `{"url":"http://127.0.0.1:3011/shutdown"}`},
-		"test":   {http.MethodPost, "/api/v1/connectors/local/test", ""},
-		"signin": {http.MethodPost, "/api/v1/connectors/local/connect", ""},
+		"create":                                {http.MethodPost, "/api/v1/connectors", `{"name":"aimed","transport":"http","url":"http://localhost:3011/shutdown"}`},
+		"create by another name of the machine": {http.MethodPost, "/api/v1/connectors", `{"name":"aimed2","transport":"http","url":"https://127.0.0.2:8443/mcp"}`},
+		"create by a mapped address":            {http.MethodPost, "/api/v1/connectors", `{"name":"aimed3","transport":"http","url":"https://[::ffff:127.0.0.1]:8443/mcp"}`},
+		"edit":                                  {http.MethodPatch, "/api/v1/connectors/far", `{"url":"http://127.0.0.1:3011/shutdown"}`},
+		"test":                                  {http.MethodPost, "/api/v1/connectors/local/test", ""},
+		"signin":                                {http.MethodPost, "/api/v1/connectors/local/connect", ""},
 	} {
 		if status, body := connectorCall(t, srv, call[0], call[1], call[2]); status != http.StatusForbidden || !strings.Contains(body, "CONNECTOR_LOOPBACK_REQUIRED") {
 			t.Errorf("%s from another machine = %d %s", name, status, body)

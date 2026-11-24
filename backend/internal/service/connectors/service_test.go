@@ -336,3 +336,32 @@ func TestATestDoesNotCarryStoredValuesToAnotherHost(t *testing.T) {
 		t.Fatalf("test of a moved server = %+v, %v, requests to the other host %d", tested, err, seen.Load())
 	}
 }
+
+func TestEveryNameOfTheMachineItselfIsLoopback(t *testing.T) {
+	for _, address := range []string{
+		"http://localhost:1/mcp", "http://LOCALHOST:1/mcp", "https://localhost.:8443/mcp", "https://api.localhost/mcp",
+		"http://127.0.0.1:1/mcp", "https://127.0.0.2:8443/mcp", "http://[::1]:1/mcp", "https://[::ffff:127.0.0.1]:8443/mcp", "http://0.0.0.0:1/mcp",
+	} {
+		if !LoopbackURL(address) {
+			t.Errorf("%s does not read as the machine itself", address)
+		}
+	}
+	for _, address := range []string{"https://mcp.example.com/mcp", "https://localhost.example.com/mcp", "https://10.0.0.5/mcp"} {
+		if LoopbackURL(address) {
+			t.Errorf("%s reads as the machine itself", address)
+		}
+	}
+}
+
+func TestAKeyCannotHoldTheSeparatorOfToolNames(t *testing.T) {
+	svc := New(t.TempDir(), "http://127.0.0.1:1")
+	ctx := context.Background()
+	in := httpInput("docs")
+	in.Key = "my__docs"
+	if _, err := svc.Create(ctx, in); errCode(err) != "INVALID_CONNECTOR_KEY" {
+		t.Fatalf("a key with two underscores together = %v", err)
+	}
+	if got := importKey("My__Docs  Server"); got != "my-docs-server" {
+		t.Fatalf("a key made from a name = %q", got)
+	}
+}

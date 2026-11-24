@@ -85,9 +85,20 @@ func TestClaudeStartMessageReportsItsToolServers(t *testing.T) {
 		t.Fatalf("an unchanged list or another session's list was reported: %+v", again)
 	default:
 	}
-	settled := `{"sessionId":"claude-session","message":{"type":"system","subtype":"init","mcp_servers":[{"name":"linear","status":"connected"}]}}`
+	settled := `{"sessionId":"claude-session","message":{"type":"system","subtype":"init","mcp_servers":[{"name":"ao","status":"connected"},{"name":"linear","status":"connected"}]}}`
 	conv.handleNotification(claudeSDKMessageMethod, []byte(settled))
-	if event := <-conv.events; len(event.MCPServers) != 1 || event.MCPServers[0] != (ports.ChatMCPServer{Name: "linear", Status: "ready"}) {
-		t.Fatalf("a changed status = %+v", event)
+	later := []ports.ChatMCPServer{{Name: "linear", Status: "ready"}, {Name: "claude.ai Notion", Status: "disabled"}, {Name: "plugin:docs:docs", Status: "disabled"}}
+	event = <-conv.events
+	if len(event.MCPServers) != len(later) {
+		t.Fatalf("a changed list = %+v", event)
+	}
+	for i, server := range event.MCPServers {
+		if server != later[i] {
+			t.Fatalf("change %d = %+v, want %+v", i, server, later[i])
+		}
+	}
+	conv.handleNotification(claudeSDKMessageMethod, []byte(`{"sessionId":"claude-session","message":{"type":"system","subtype":"init","mcp_servers":[{"name":"claude_agent_acp","status":"connected"}]}}`))
+	if event := <-conv.events; len(event.MCPServers) != 2 || event.MCPServers[0].Status != "disabled" || event.MCPServers[1].Status != "disabled" {
+		t.Fatalf("an empty list = %+v", event)
 	}
 }

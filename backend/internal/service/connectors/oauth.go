@@ -212,17 +212,19 @@ func (s *Service) FinishFromAddress(ctx context.Context, ref, address string) (C
 
 // SignOut forgets the tokens of a connector.
 func (s *Service) SignOut(_ context.Context, ref string) (Connector, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.load(); err != nil {
+	rec, err := s.snapshot(ref)
+	if err != nil {
 		return Connector{}, err
 	}
-	i := s.index(ref)
+	if rec.Transport != TransportHTTP || rec.Auth != AuthOAuth {
+		return Connector{}, invalid("CONNECTOR_SIGNIN_NOT_SUPPORTED", "Only a server URL with automatic sign-in can sign out")
+	}
+	s.cancelSignIns(rec.ID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.index(rec.ID)
 	if i < 0 {
 		return Connector{}, errNotFound()
-	}
-	if s.records[i].Transport != TransportHTTP || s.records[i].Auth != AuthOAuth {
-		return Connector{}, invalid("CONNECTOR_SIGNIN_NOT_SUPPORTED", "Only a server URL with automatic sign-in can sign out")
 	}
 	next := slices.Clone(s.records)
 	next[i].OAuth, next[i].Status, next[i].StatusStep, next[i].StatusError = nil, StatusNeedsSignIn, "", ""

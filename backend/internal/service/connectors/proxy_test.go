@@ -420,3 +420,20 @@ func TestARefusedNotificationGetsNoMessage(t *testing.T) {
 		t.Fatalf("a call to a connector that is off = %d %q", status, body)
 	}
 }
+
+func TestAConnectorThatWasRemovedIsNotInAChatsList(t *testing.T) {
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	for _, name := range []string{"docs", "wiki"} {
+		if _, err := svc.Create(ctx, Input{Name: name, Transport: TransportHTTP, URL: "https://" + name + ".example.com/mcp"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc.ForSession(ctx, SessionInput{SessionID: "ao-12"})
+	if err := svc.Delete(ctx, "docs"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.SessionConnectors(ctx, "ao-12"); err != nil || len(got) != 1 || got[0].Key != "wiki" {
+		t.Fatalf("session connectors = %+v, %v", got, err)
+	}
+}

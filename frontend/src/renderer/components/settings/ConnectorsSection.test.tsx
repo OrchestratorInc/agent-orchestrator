@@ -226,6 +226,10 @@ describe("connector helpers", () => {
 		}
 	});
 
+	it("makes no key with two underscores together", () => {
+		expect(connectorKeyFrom("My__Docs  Server")).toBe("my_docs-server");
+	});
+
 	it("derives a key and reads environment lines", () => {
 		expect(connectorKeyFrom("  My Server (EU) ")).toBe("my-server-eu");
 		expect(connectorKeyFrom("a".repeat(40))).toHaveLength(32);

@@ -48,7 +48,8 @@ command = "paused-server"
 enabled = false
 `)
 	writeSource(t, filepath.Join(project, ".mcp.json"), `{"mcpServers": {"repo": {"command": "repo-server"}, "unapproved": {"command": "x"}}}`)
-	writeSource(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers": {"blank": {"url": "https://blank.example.com/mcp", "headers": {"Authorization": ""}}}}`)
+	writeSource(t, filepath.Join(home, ".cursor", "mcp.json"), `{"mcpServers": {"blank": {"url": "https://blank.example.com/mcp", "headers": {"Authorization": ""}},
+		"placed": {"command": "${userHome}/bin/placed", "env": {"KEY": "Bearer ${env:PLACED_KEY}"}}}}`)
 	return home, project
 }
 
@@ -81,7 +82,7 @@ func TestNativeNamesReadTheAgentsOwnConfiguration(t *testing.T) {
 }
 
 func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
-	_, project := sourceHome(t)
+	home, project := sourceHome(t)
 	svc := New(t.TempDir(), "http://127.0.0.1:1")
 	svc.SetImportProjects(func(context.Context) []ImportProject {
 		return []ImportProject{{ID: "p1", Path: filepath.ToSlash(project)}}
@@ -95,7 +96,10 @@ func TestImportListsCandidatesWithoutValuesAndAddsTheChosenOnes(t *testing.T) {
 	for _, candidate := range candidates {
 		byKey[candidate.Key] = candidate
 	}
-	if len(byKey) != 9 || byKey["old"].ID != "" || byKey["ao"].ID != "" {
+	if got := byKey["placed"]; !slices.Equal(got.NeedsValue, []string{"PLACED_KEY"}) || got.Command != filepath.Join(home, "bin", "placed") {
+		t.Errorf("a server with Cursor's own placeholders = %+v", got)
+	}
+	if len(byKey) != 10 || byKey["old"].ID != "" || byKey["ao"].ID != "" {
 		t.Fatalf("candidates = %+v", candidates)
 	}
 	if got := byKey["linear"]; got.URL != "https://mcp.linear.app/mcp?team=***" || got.Transport != TransportHTTP || len(got.NeedsValue) != 0 {

@@ -664,3 +664,25 @@ func TestACallbackPageThatLoadsAgainStillKnowsItsSignIn(t *testing.T) {
 		t.Fatal("an unknown state reads as done")
 	}
 }
+
+func TestASignOutEndsASignInThatIsStillOpen(t *testing.T) {
+	fake := newFakeServer(t, true)
+	svc := New(t.TempDir(), testBaseURL)
+	ctx := context.Background()
+	created := signInFake(t, svc, fake, Input{Name: "fake"})
+	fake.minToken.Store(9)
+	page, err := svc.StartSignIn(ctx, created.ID)
+	if err != nil || page == "" {
+		t.Fatalf("start = %q, %v", page, err)
+	}
+	fake.minToken.Store(0)
+	if _, err := svc.SignOut(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CompleteSignIn(ctx, signInState(t, page), "code-2", "", ""); err == nil {
+		t.Fatal("a sign-in completed after the sign-out")
+	}
+	if got, _ := svc.Get(ctx, created.ID); got.SignedIn {
+		t.Fatalf("connector = %+v", got)
+	}
+}

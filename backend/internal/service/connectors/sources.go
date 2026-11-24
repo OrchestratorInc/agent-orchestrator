@@ -49,7 +49,7 @@ type ImportCandidate struct {
 	Exists     bool
 }
 
-var sourceVariable = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
+var sourceVariable = regexp.MustCompile(`\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
 
 type sourceDef struct {
 	Type      string            `json:"type" toml:"type"`
@@ -273,6 +273,9 @@ func (f sourceServer) input(typed map[string]string) (in Input, needs []string, 
 			parts := sourceVariable.FindStringSubmatch(match)
 			if typed[parts[1]] != "" {
 				return typed[parts[1]]
+			}
+			if home, err := os.UserHomeDir(); match == "${userHome}" && f.agent == agentCursor && err == nil {
+				return home
 			}
 			if strings.Contains(match, ":-") {
 				return parts[2]
