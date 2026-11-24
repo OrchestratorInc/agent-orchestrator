@@ -16,7 +16,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -28,6 +27,8 @@ import (
 	"regexp/syntax"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // maxAlternatives bounds pattern expansion so a pathological pattern cannot
@@ -70,42 +71,49 @@ func main() {
 }
 
 var (
-	runFlag = regexp.MustCompile(`-run[= ](?:'([^']*)'|"([^"]*)"|(\S+))`)
+	runFlag = regexp.MustCompile(`-run[= ](?:'([^']*)'|"([^"]*)"|([^\s;&|()]+))`)
 	goTest  = regexp.MustCompile(`\bgo test\b`)
 )
 
 // readInvocations returns the go test commands with a -run flag in a
-// workflow file. Shell line continuations are joined first.
+// workflow file. It decodes the YAML so folded and literal `run` scalars come
+// back as the shell text GitHub runs, then joins shell line continuations.
 func readInvocations(path string) ([]invocation, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	var invs []invocation
-	scanner := bufio.NewScanner(f)
-	lineNo, start := 0, 0
-	var pending strings.Builder
-	for scanner.Scan() {
-		lineNo++
-		line := scanner.Text()
-		if pending.Len() == 0 {
-			start = lineNo
-		}
-		if trimmed := strings.TrimRight(line, " "); strings.HasSuffix(trimmed, `\`) {
-			pending.WriteString(strings.TrimSuffix(trimmed, `\`) + " ")
-			continue
-		}
-		pending.WriteString(line)
-		cmd := pending.String()
-		pending.Reset()
-		if inv, ok := parseInvocation(cmd); ok {
-			inv.source = fmt.Sprintf("%s:%d", path, start)
-			invs = append(invs, inv)
+	for _, run := range runScripts(&doc) {
+		script := strings.ReplaceAll(run.Value, "\\\n", " ")
+		for _, cmd := range strings.Split(script, "\n") {
+			if inv, ok := parseInvocation(cmd); ok {
+				inv.source = fmt.Sprintf("%s:%d", path, run.Line)
+				invs = append(invs, inv)
+			}
 		}
 	}
-	return invs, scanner.Err()
+	return invs, nil
+}
+
+// runScripts returns every scalar value stored under a `run` key.
+func runScripts(n *yaml.Node) []*yaml.Node {
+	var out []*yaml.Node
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if key, val := n.Content[i], n.Content[i+1]; key.Value == "run" && val.Kind == yaml.ScalarNode {
+				out = append(out, val)
+			}
+		}
+	}
+	for _, child := range n.Content {
+		out = append(out, runScripts(child)...)
+	}
+	return out
 }
 
 func parseInvocation(cmd string) (invocation, bool) {
@@ -135,10 +143,7 @@ func check(inv invocation, root string) []string {
 	if err != nil {
 		return []string{fmt.Sprintf("%s: %v", inv.source, err)}
 	}
-	// go test splits -run on unbracketed slashes for subtests; only the
-	// top-level part names test functions.
-	top := strings.SplitN(inv.pattern, "/", 2)[0]
-	alts, err := alternatives(top)
+	alts, err := alternatives(inv.pattern)
 	if err != nil {
 		return []string{fmt.Sprintf("%s: invalid -run pattern %q: %v", inv.source, inv.pattern, err)}
 	}
@@ -165,7 +170,7 @@ func anyMatch(re *regexp.Regexp, names []string) bool {
 	return false
 }
 
-// alternatives splits a pattern into the regexps its alternation stands for,
+// alternatives splits a -run pattern into the regexps its alternation stands for,
 // distributing alternation over concatenation: `^Test(A|B)$` becomes
 // `^TestA$` and `^TestB$`. It works on the pattern text rather than a parsed
 // regexp because regexp/syntax folds `A|B` into the class `[AB]`. A group
@@ -174,11 +179,40 @@ func alternatives(pattern string) ([]string, error) {
 	if _, err := syntax.Parse(pattern, syntax.Perl); err != nil {
 		return nil, err
 	}
-	alts := expand(pattern)
-	if len(alts) > maxAlternatives {
-		return []string{pattern}, nil
+	// Like go test, split top-level alternatives first; in each, the part
+	// before the first unbracketed slash names the test function and the
+	// rest selects subtests.
+	var alts []string
+	for _, branch := range splitTopLevel(pattern) {
+		alts = append(alts, expand(cutSubtests(branch))...)
+		if len(alts) > maxAlternatives {
+			return []string{pattern}, nil
+		}
 	}
 	return alts, nil
+}
+
+// cutSubtests returns the part of a branch before its first slash outside
+// groups, classes and escapes.
+func cutSubtests(branch string) string {
+	depth := 0
+	for i := 0; i < len(branch); i++ {
+		switch branch[i] {
+		case '\\':
+			i++
+		case '[':
+			i = classEnd(branch, i)
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case '/':
+			if depth == 0 {
+				return branch[:i]
+			}
+		}
+	}
+	return branch
 }
 
 // expand returns the alternatives of a syntactically valid pattern.
@@ -339,7 +373,8 @@ func testNames(root string, packages []string) ([]string, error) {
 				}
 				return nil
 			}
-			if !strings.HasSuffix(path, "_test.go") {
+			// go ignores files whose names start with _ or . .
+			if name := d.Name(); !strings.HasSuffix(name, "_test.go") || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
 				return nil
 			}
 			return addTestNames(path, seen)

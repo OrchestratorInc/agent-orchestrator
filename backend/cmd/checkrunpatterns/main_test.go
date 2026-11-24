@@ -46,12 +46,17 @@ func TestParseInvocation(t *testing.T) {
 	if inv, ok := parseInvocation(`(cd backend && go test ./internal/p -run TestLive -count 1)`); !ok || inv.pattern != "TestLive" {
 		t.Errorf("unquoted -run: got %+v, %v", inv, ok)
 	}
+	if inv, ok := parseInvocation(`(cd backend && go test ./internal/p -run TestLive)`); !ok || inv.pattern != "TestLive" {
+		t.Errorf("unquoted -run before a closing paren: got %+v, %v", inv, ok)
+	}
 }
 
 func TestCheckReportsOnlyMissingAlternatives(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "internal", "x", "x_test.go"), "package x\n\nimport \"testing\"\n\nfunc TestPresent(t *testing.T) {}\n")
 	// Build-constrained tests still count: CI may run them on another OS.
+	// go ignores files starting with _ or ., so their tests do not count.
+	writeFile(t, filepath.Join(root, "internal", "x", "_old_test.go"), "package x\n\nimport \"testing\"\n\nfunc TestRenamed(t *testing.T) {}\n")
 	writeFile(t, filepath.Join(root, "internal", "x", "sub", "w_windows_test.go"), "//go:build windows\n\npackage sub\n\nimport \"testing\"\n\nfunc TestWindowsOnly(t *testing.T) {}\n")
 
 	inv := invocation{source: "ci.yml:1", pattern: `^Test(Present|WindowsOnly|Renamed)$`, packages: []string{"./internal/x/..."}}
@@ -78,5 +83,33 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadInvocationsDecodesFoldedRunScalars(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ci.yml")
+	writeFile(t, path, `jobs:
+  a:
+    steps:
+      - run: >-
+          go test -run '^TestFolded$'
+          ./internal/x/
+      - run: |
+          echo hi
+          go test -count=1 \
+            -run '^TestContinued$' ./internal/y/
+      - run: go test -run TestPlain ./internal/z/
+`)
+	invs, err := readInvocations(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, inv := range invs {
+		got = append(got, inv.pattern+" "+strings.Join(inv.packages, " "))
+	}
+	want := []string{"^TestFolded$ ./internal/x/", "^TestContinued$ ./internal/y/", "TestPlain ./internal/z/"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("invocations = %q, want %q", got, want)
 	}
 }

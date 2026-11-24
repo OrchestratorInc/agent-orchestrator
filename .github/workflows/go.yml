@@ -58,6 +58,8 @@ jobs:
 
       - name: Upload coverage profile
         if: always()
+        # Coverage is informational; a failed upload must not fail the shard.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: go-coverage-${{ matrix.shard }}
@@ -71,6 +73,7 @@ jobs:
   coverage:
     needs: backend-core
     if: always()
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
