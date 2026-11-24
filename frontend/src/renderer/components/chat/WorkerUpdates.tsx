@@ -14,7 +14,7 @@ import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, 
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
 import { getSessionRowMarker } from "../../lib/session-presentation";
-import { remarkPlainReferences } from "../../lib/session-links";
+import { isSessionLink, remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
 import { isSteer, type BatchedDelivery, type ConversationItem } from "../../types/conversation";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -620,6 +620,17 @@ export function spawnedBy(item: ConversationItem): string | undefined {
 	return completedActionTarget(item, "session.spawned");
 }
 
+/** A worker a recorded spawn started, with the name, harness and link the record carries. */
+export type SpawnedWorker = { sessionId: string; displayName?: string; harness?: string; href?: string };
+
+/** The worker a recorded spawn started, as its record names it, for a row the session list can't fill. */
+export function spawnedWorker(item: ConversationItem): SpawnedWorker | undefined {
+	const sessionId = spawnedBy(item);
+	if (!sessionId || item.kind !== "activity") return undefined;
+	const { displayName, harness, href } = item.detail ?? {};
+	return { sessionId, displayName, harness, href: href && isSessionLink(href) ? href : undefined };
+}
+
 /** The worker a termination the daemon recorded ended. */
 export function terminatedBy(item: ConversationItem): string | undefined {
 	return completedActionTarget(item, "session.terminated");
@@ -630,20 +641,20 @@ export function terminatedBy(item: ConversationItem): string | undefined {
  * until it answers; its reports then say where it is. A row opens the worker's
  * session, and hovering it opens the card a session link shows.
  */
-export function SpawnedAgents({ sessionIds, commandSessionIds = [] }: {
+export function SpawnedAgents({ spawns, commandSessionIds = [] }: {
 	/** Workers the daemon recorded the turn spawning. */
-	sessionIds: readonly string[];
+	spawns: readonly SpawnedWorker[];
 	/** Workers only `ao spawn` output names: a daemon too old to record the spawn started them. */
 	commandSessionIds?: readonly string[];
 }) {
 	const index = useContext(WorkerUpdateIndexContext);
-	const unrecorded = commandSessionIds.filter((id) => !index?.spawnRecorded.has(id) && !sessionIds.includes(id));
-	const waiting = [...sessionIds, ...unrecorded].filter((id) => !index?.latest.has(id));
+	const unrecorded = commandSessionIds.filter((id) => !index?.spawnRecorded.has(id) && !spawns.some((spawn) => spawn.sessionId === id));
+	const waiting = [...spawns, ...unrecorded.map((sessionId) => ({ sessionId }))].filter((spawn) => !index?.latest.has(spawn.sessionId));
 	if (waiting.length === 0) return null;
 	return (
 		<ul data-testid="spawned-agents" className="m-0 flex min-w-0 max-w-full list-none flex-col items-start p-0">
-			{waiting.map((id) => (
-				<SpawnedAgentRow key={id} sessionId={id} />
+			{waiting.map((spawn) => (
+				<SpawnedAgentRow key={spawn.sessionId} spawn={spawn} />
 			))}
 		</ul>
 	);
@@ -716,14 +727,17 @@ const SPAWN_LINK_CLASS = "group flex min-w-0 items-center gap-1.5 rounded-sm foc
  * it is now, named on the card and to screen readers. Hovering underlines the name;
  * the arrow stays as it is, since it only shows where the worker came from.
  */
-function SpawnedAgentRow({ sessionId }: { sessionId: string }) {
+function SpawnedAgentRow({ spawn }: { spawn: SpawnedWorker }) {
+	const { sessionId } = spawn;
 	const session = useWorkerSession(sessionId);
 	const state = waitingState(session);
-	const name = session?.title || sessionId;
-	const href = session ? sessionHref({ sessionId, projectId: session.workspaceId }) : undefined;
+	// Before the session list has the worker, or once it is deleted, its spawn record names it.
+	const name = session?.title || spawn.displayName || sessionId;
+	const provider = session?.provider ?? spawn.harness;
+	const href = session ? sessionHref({ sessionId, projectId: session.workspaceId }) : spawn.href;
 	const content = (
 		<>
-			{session ? <AgentAvatar provider={session.provider} className="size-3.5 shrink-0" /> : <span aria-hidden="true" className="size-3.5 shrink-0" />}
+			{provider ? <AgentAvatar provider={provider} className="size-3.5 shrink-0" /> : <span aria-hidden="true" className="size-3.5 shrink-0" />}
 			<span
 				className={cn(
 					"min-w-0 truncate decoration-foreground/40 underline-offset-2 group-hover:underline group-focus-visible:underline",

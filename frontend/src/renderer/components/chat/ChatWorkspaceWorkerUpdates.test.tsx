@@ -115,6 +115,15 @@ describe("orchestrator worker updates", () => {
 		expect(openSession).toHaveBeenCalledWith("ao://sessions/proj/proj-288");
 	});
 
+	it("names a worker the session list does not have from its spawn record", () => {
+		const record = { ...spawnRecord(), detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288", displayName: "Audit usage", harness: "codex", href: "ao://sessions/proj/proj-288" } };
+		renderOrchestrator([automation("t1", 1, "Check current usage."), record, startedReply]);
+		const row = screen.getByTestId("spawned-agent");
+		expect(within(row).getByRole("img", { name: "codex" })).toBeInTheDocument();
+		expect(within(row).getByRole("link", { name: /Audit usage/ })).toHaveAttribute("href", "ao://sessions/proj/proj-288");
+		expect(row).not.toHaveTextContent("proj-288");
+	});
+
 	it("marks a hovered row by underlining its name, with no fill behind it", () => {
 		renderOrchestrator([automation("t1", 1, "Check current usage."), spawnRecord(), startedReply], vi.fn(), worker());
 		const row = screen.getByTestId("spawned-agent");
