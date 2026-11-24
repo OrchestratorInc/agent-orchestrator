@@ -55,6 +55,12 @@ type fakeStore struct {
 	projects                           map[string]domain.ProjectRecord
 	conversations                      map[domain.SessionID]domain.ConversationRecord
 	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
+	workspaceRepoErr                   error
+	workspaceRepoErrOnce               bool  // fail only the next lookup
+	commitAttributionErr               error // fails trailer writes
+	commitAttributionMu                sync.Mutex
+	commitAttribution                  map[domain.SessionID]string
+	prFooter                           map[domain.SessionID]bool
 	num                                int
 	deleteErr                          error
 	upsertWTErr                        error
@@ -99,8 +105,47 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	return r, ok, nil
 }
 func (f *fakeStore) ListWorkspaceRepos(_ context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
+	if err := f.workspaceRepoErr; err != nil {
+		if f.workspaceRepoErrOnce {
+			f.workspaceRepoErr = nil
+		}
+		return nil, err
+	}
 	return f.workspaceRepo[projectID], nil
 }
+func (f *fakeStore) SetSessionCommitAttribution(_ context.Context, id domain.SessionID, coAuthor string) error {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	if f.commitAttributionErr != nil {
+		return f.commitAttributionErr
+	}
+	if f.commitAttribution == nil {
+		f.commitAttribution = map[domain.SessionID]string{}
+	}
+	f.commitAttribution[id] = coAuthor
+	return nil
+}
+func (f *fakeStore) SessionCommitAttribution(_ context.Context, id domain.SessionID) (string, error) {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	return f.commitAttribution[id], nil
+}
+func (f *fakeStore) SetSessionPRFooter(_ context.Context, id domain.SessionID, footer bool) error {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	if f.prFooter == nil {
+		f.prFooter = map[domain.SessionID]bool{}
+	}
+	f.prFooter[id] = footer
+	return nil
+}
+func (f *fakeStore) SessionPRFooter(_ context.Context, id domain.SessionID) (footer, recorded bool, err error) {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	footer, recorded = f.prFooter[id]
+	return footer, recorded, nil
+}
+
 func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	f.num++
 	prefix := string(rec.ProjectID)
@@ -3956,8 +4001,8 @@ func TestSpawn_WorkspaceProjectRecordsRootAndChildWorktrees(t *testing.T) {
 	if rec.Metadata.WorkspacePath != managedPath {
 		t.Fatalf("workspace path = %q, want root worktree path", rec.Metadata.WorkspacePath)
 	}
-	if rec.Metadata.Branch != "ao/mer-1" {
-		t.Fatalf("workspace branch = %q, want ao/mer-1", rec.Metadata.Branch)
+	if rec.Metadata.Branch != "orchestrator/mer-1" {
+		t.Fatalf("workspace branch = %q, want orchestrator/mer-1", rec.Metadata.Branch)
 	}
 	if got := ws.lastProjectCfg.RootRepoPath; got != projectPath {
 		t.Fatalf("root repo path = %q, want %q", got, projectPath)
@@ -5883,8 +5928,8 @@ func TestSpawn_DefaultsBranchFromSessionID(t *testing.T) {
 	}
 	// An empty SpawnConfig.Branch defaults to a unique per-session root branch
 	// under a namespace that can also hold sibling PR branches.
-	if got := st.sessions[s.ID].Metadata.Branch; got != "ao/mer-1/root" {
-		t.Fatalf("default branch = %q, want ao/mer-1/root", got)
+	if got := st.sessions[s.ID].Metadata.Branch; got != "orchestrator/mer-1/root" {
+		t.Fatalf("default branch = %q, want orchestrator/mer-1/root", got)
 	}
 	if !st.sessions[s.ID].AutoInjectReview {
 		t.Fatal("automatic review injection must default to enabled")
@@ -6465,8 +6510,8 @@ func TestSpawn_DefaultBranchFetchFailureDoesNotBlockWorkerSpawn(t *testing.T) {
 	if len(ws.fetches) != 1 {
 		t.Fatalf("fetches = %d, want 1", len(ws.fetches))
 	}
-	if ws.lastCfg.Branch != "ao/mer-1/root" {
-		t.Fatalf("created branch = %q, want ao/mer-1/root", ws.lastCfg.Branch)
+	if ws.lastCfg.Branch != "orchestrator/mer-1/root" {
+		t.Fatalf("created branch = %q, want orchestrator/mer-1/root", ws.lastCfg.Branch)
 	}
 }
 
@@ -6480,16 +6525,16 @@ func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions[worker.ID].Metadata.Branch; got != "ao/dev/mer-1/root" {
-		t.Fatalf("worker branch = %q, want ao/dev/mer-1/root", got)
+	if got := st.sessions[worker.ID].Metadata.Branch; got != "orchestrator/dev/mer-1/root" {
+		t.Fatalf("worker branch = %q, want orchestrator/dev/mer-1/root", got)
 	}
 
 	orchestrator, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions[orchestrator.ID].Metadata.Branch; got != "ao/dev/mer-orchestrator" {
-		t.Fatalf("orchestrator branch = %q, want ao/dev/mer-orchestrator", got)
+	if got := st.sessions[orchestrator.ID].Metadata.Branch; got != "orchestrator/dev/mer-orchestrator" {
+		t.Fatalf("orchestrator branch = %q, want orchestrator/dev/mer-orchestrator", got)
 	}
 }
 

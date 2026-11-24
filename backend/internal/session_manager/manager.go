@@ -373,6 +373,10 @@ type Store interface {
 	// config into the launch command. ok=false means the project is unknown.
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
+	SetSessionCommitAttribution(ctx context.Context, id domain.SessionID, coAuthor string) error
+	SessionCommitAttribution(ctx context.Context, id domain.SessionID) (string, error)
+	SetSessionPRFooter(ctx context.Context, id domain.SessionID, footer bool) error
+	SessionPRFooter(ctx context.Context, id domain.SessionID) (footer, recorded bool, err error)
 	CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error)
 	CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
 	CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
@@ -613,6 +617,9 @@ type Manager struct {
 	// user opted in; nil is off.
 	devicesMu      sync.Mutex
 	devicesOffered func() bool
+	// commitAttribution reports the Orchestrator attribution beta; nil is off.
+	commitAttributionMu sync.Mutex
+	commitAttribution   func(context.Context) bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -1415,7 +1422,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnArtifactDir, err)
 		}
 	}
-	prompt, systemPrompt, err := m.buildSpawnTexts(ctx, cfg, id)
+	// spawnTexts also decides attribution for this spawn; the spawn carries
+	// that decision to its workspace setup.
+	prompt, systemPrompt, spawnAttr, err := m.spawnTexts(ctx, cfg, id)
 	if err != nil {
 		m.cleanupArtifactDir(id)
 		if prep != nil {
@@ -1521,6 +1530,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// from disk) so the opening prompt is complete before the files land.
 	if asyncChat {
 		started, promptBytes, systemPromptBytes, err := m.beginAsyncChatSpawn(ctx, asyncChatSpawn{
+			attribution:       spawnAttr,
 			cfg:               cfg,
 			project:           project,
 			projectKind:       projectKind,
@@ -1584,7 +1594,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	// .worktreeinclude names, then run any post-create commands (e.g.
 	// `pnpm install`) before the agent launches.
 	provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
-	err = m.provisionWorkspace(ctx, project, ws.Path)
+	err = m.provisionSpawnWorkspace(ctx, project, id, ws.Path, spawnAttr)
 	provisioned(err)
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
@@ -5263,7 +5273,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 	}
 	if recreated {
 		m.restoreForkStartingFiles(ctx, rec.ID, ws.Path)
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionWorkspaceWith(ctx, project, rec.ID, ws.Path, attributionRecorded, ""); err != nil {
 			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
 			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
 			return
@@ -5356,7 +5366,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		}
 		if recreated {
 			m.restoreForkStartingFiles(ctx, rec.ID, ws.Path)
-			if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
+			if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
 				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 			}
 		}
@@ -5388,7 +5398,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
 	if recreated {
-		if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 		}
 	}
@@ -5399,10 +5409,10 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 // worktree was reclaimed. Only such a restore runs Setup, so only it extends
 // a REST restore's budget, from now, by the Setup steps' limits; any other
 // restore keeps the request's ordinary budget.
-func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string) error {
 	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
 	defer cancel()
-	return m.provisionWorkspace(ctx, project, workspacePath)
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionRecorded, "")
 }
 
 func workspacePathMissing(path string) (bool, error) {
@@ -6754,7 +6764,7 @@ func defaultSessionBranch(id domain.SessionID, kind domain.SessionKind, prefix, 
 	// A fresh, unique branch per worker session: gitworktree can't add a worktree
 	// on a branch already checked out elsewhere (e.g. main). Put the root work
 	// branch under a session namespace so sibling PR branches such as
-	// ao/<session>/<topic> remain valid Git refs.
+	// orchestrator/<session>/<topic> remain valid Git refs.
 	return aoBranch(branchNamespace, string(id), "root")
 }
 
@@ -6777,8 +6787,17 @@ func DefaultOrchestratorBranch(prefix, dataDir string) string {
 	return defaultSessionBranch("", domain.KindOrchestrator, prefix, generatedBranchNamespace(dataDir))
 }
 
+// LegacyOrchestratorBranch is the orchestrator branch a session created before
+// the "orchestrator/" rename recorded, still accepted where branches are checked.
+func LegacyOrchestratorBranch(prefix, dataDir string) string {
+	return strings.Replace(DefaultOrchestratorBranch(prefix, dataDir), domain.SessionBranchPrefix+"/", domain.LegacySessionBranchPrefix+"/", 1)
+}
+
+// aoBranch builds a generated session branch under the "orchestrator/" prefix.
+// Sessions created before the rename keep their recorded "ao/" branches, which
+// PR attribution still matches.
 func aoBranch(namespace string, parts ...string) string {
-	all := []string{"ao"}
+	all := []string{domain.SessionBranchPrefix}
 	if namespace != "" {
 		all = append(all, namespace)
 	}
@@ -6946,17 +6965,26 @@ func appendAttachmentReferences(prompt string, refs []string) string {
 // promptless spawn delivers no user prompt at all: the agent simply lands at an
 // empty input box rather than receiving an auto-generated kickoff turn.
 func (m *Manager) buildSpawnTexts(ctx context.Context, cfg ports.SpawnConfig, sessionID domain.SessionID) (prompt, systemPrompt string, err error) {
+	prompt, systemPrompt, _, err = m.spawnTexts(ctx, cfg, sessionID)
+	return prompt, systemPrompt, err
+}
+
+// spawnTexts is buildSpawnTexts that also returns the spawn's attribution
+// decision, made before the first prompt asks for the footer.
+func (m *Manager) spawnTexts(ctx context.Context, cfg ports.SpawnConfig, sessionID domain.SessionID) (prompt, systemPrompt string, attr spawnAttribution, err error) {
 	prompt = buildPrompt(cfg)
 	if cfg.Fork != nil {
 		// The lineage row is written after spawn returns, so name the
 		// original here; restores read it from the lineage.
 		ctx = withForkOrigin(ctx, cfg.Fork.SourceSessionID, cfg.Fork.SourceTitle, cfg.Fork.SourceWorkspace)
 	}
+	// Decide attribution once, before the first prompt asks for the footer.
+	attr = m.recordSpawnAttribution(ctx, cfg.ProjectID, sessionID)
 	systemPrompt, err = m.buildSystemPrompt(ctx, cfg.Kind, cfg.ProjectID, sessionID, cfg.RequestedOutput, domain.NormalizeSessionMode(cfg.RequestedMode) == domain.SessionModeChat)
 	if err != nil {
-		return "", "", err
+		return "", "", spawnAttribution{}, err
 	}
-	return prompt, systemPrompt, nil
+	return prompt, systemPrompt, attr, nil
 }
 
 // buildSystemPrompt derives the standing instructions for a session of the
@@ -7035,6 +7063,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)
+	}
+	if projectID != "" && m.sessionPRFooter(ctx, project, sessionID) {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, prAttributionPrompt())
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
@@ -7634,7 +7665,31 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 // so the explicit project setting wins over the repository's file. Any step
 // failing aborts the spawn so a half-provisioned workspace never launches an
 // agent.
-func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string) error {
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionFromSettings, "")
+}
+
+// provisionSpawnWorkspace sets up a spawn's workspace with the attribution
+// decision the spawn made before its first prompt, or decides now when it
+// made none.
+func (m *Manager) provisionSpawnWorkspace(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, attr spawnAttribution) error {
+	if !attr.decided {
+		return m.provisionWorkspace(ctx, project, sessionID, workspacePath)
+	}
+	return m.provisionWorkspaceWith(ctx, project, sessionID, workspacePath, attributionDecided, attr.coAuthor)
+}
+
+// provisionWorkspaceWith is provisionWorkspace with the attribution choice
+// made explicit: a recreated worktree of an existing session keeps the choice
+// that session started with.
+func (m *Manager) provisionWorkspaceWith(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice, decided string) error {
+	// Before post-create commands, so commits they make are credited too.
+	var coAuthor string
+	if choice == attributionDecided {
+		coAuthor = m.configureAttribution(ctx, project, workspacePath, decided)
+	} else {
+		coAuthor = m.applyCommitAttribution(ctx, project, sessionID, workspacePath, choice)
+	}
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
 	}
@@ -7649,7 +7704,12 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 		// from what its cloned dependencies were installed from.
 		aoEnv = map[string]string{"AO_FORK": "1"}
 	}
-	return runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env, aoEnv)
+	if err := runPostCreate(ctx, workspacePath, project.Path, project.Config.PostCreate, project.Config.Env, aoEnv); err != nil {
+		return err
+	}
+	// Setup may have installed a repository hook that needs a dispatcher.
+	m.refreshAttributionHooks(ctx, project, workspacePath, coAuthor)
+	return nil
 }
 
 // applySymlinks links each repo-relative path into the workspace. A source that

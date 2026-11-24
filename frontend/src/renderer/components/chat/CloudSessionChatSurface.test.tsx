@@ -21,6 +21,7 @@ import { QUEUED_STEER_STALE_MS, cloudSteeringQueuedTurns, nextQueuedSteerDeadlin
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
+import { noteCloudWorkerStarting, resetCloudWorkerStartingForTests, WORKER_STARTING_CODE } from "../../lib/cloud-worker-starting";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -32,6 +33,8 @@ const cloudMocks = vi.hoisted(() => ({
 	steerQueuedMessage: vi.fn(),
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
+	getWorkspaceReviewTree: vi.fn(),
+	searchWorkspaceReview: vi.fn(),
 	listUserAgentModels: vi.fn(),
 	resumeSession: vi.fn(),
 	requestWorkspaceCheckout: vi.fn(),
@@ -118,6 +121,8 @@ function capturedCloudExcerpt(): ChatDraftExcerptReference {
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
+		// A session's starting backoff is module state: one test's must not hold the next one's reads.
+		resetCloudWorkerStartingForTests();
 		vi.mocked(reportPlanRefusal).mockClear();
 		vi.mocked(reportUpgradeViewed).mockClear();
 		billing.offering = { selfServeBilling: true, canManageBilling: true };
@@ -259,6 +264,53 @@ describe("CloudSessionChatSurface", () => {
 		// The composer's agent and model picker reads each agent's list through
 		// this organization's Cloud catalog (AgentSwitchPicker).
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ cloudOrgId: "org-1", harnessView: "cloud" });
+	});
+
+	describe("a worker still preparing its workspace", () => {
+		const starting = () => new CloudCpError("The session's workspace is still starting.", { status: 503, code: WORKER_STARTING_CODE, retryAfterMs: 1_000 });
+		beforeEach(() => {
+			resetCloudWorkerStartingForTests();
+			cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0, hasOlder: false, nextBefore: CLOUD_CHAT_NEWEST });
+			cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		});
+
+		it("is not asked for its models until it is ready, then is", async () => {
+			noteCloudWorkerStarting("org-1", session.id, starting());
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
+			expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
+			// Its Retry-After passed: the catalog is asked for.
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+		});
+
+		it("is not asked for its files for @ until it is ready, and a still-starting answer is asked again rather than shown", async () => {
+			const tree = { path: "", truncated: false, entries: [{ name: "README.md", path: "README.md", type: "file", status: "unmodified", size: 5 }] };
+			cloudMocks.getWorkspaceReviewTree.mockReset().mockRejectedValueOnce(starting()).mockResolvedValue(tree);
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+			// A models read was answered, so the workspace is ready; then it says it is starting again.
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalled());
+			act(() => { cloudMocks.chatProps.mock.lastCall?.[0].onFileQuery(""); });
+			await waitFor(() => expect(cloudMocks.getWorkspaceReviewTree).toHaveBeenCalledTimes(1));
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(cloudMocks.getWorkspaceReviewTree).toHaveBeenCalledTimes(1);
+			expect(queryClient.getQueryState(["cloud-composer-files", "org-1", session.id, ""])?.status).not.toBe("error");
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].filePaths).toEqual(["README.md"]), { timeout: 3_000 });
+			expect(cloudMocks.getWorkspaceReviewTree).toHaveBeenCalledTimes(2);
+		});
+
+		it("asks again after its Retry-After when it answers that it is still starting, instead of showing an error", async () => {
+			cloudMocks.listChatModels.mockRejectedValueOnce(starting());
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1));
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1);
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+			await waitFor(() => expect(queryClient.getQueryState(["cloud-chat-models", "org-1", session.id, "codex", ""])?.status).toBe("success"));
+		});
 	});
 
 	it("holds a chat it hasn't read yet as one with history, and reopens a closed chat from its cache", async () => {
