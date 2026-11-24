@@ -310,7 +310,8 @@ describe("TurnChangedFiles", () => {
 		);
 		const [tsx, markdown] = screen.getAllByRole("listitem").map((row) => row.querySelector("svg"));
 		expect(tsx).not.toBeNull();
-		expect(tsx?.innerHTML).not.toBe(markdown?.innerHTML);
+		expect(markdown).not.toBeNull();
+		expect(tsx!.innerHTML).not.toBe(markdown!.innerHTML);
 	});
 
 	it("marks a running turn's diff as still growing", () => {
