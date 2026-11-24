@@ -179,6 +179,56 @@ func TestUsageLimitHoldWaitsForTheUsersSend(t *testing.T) {
 	}
 }
 
+func TestUsageLimitHoldQueuesAgentSendsOnAnIdleChat(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "finish this task", ClientMessageID: "c-limited", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, turn.ID)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "child-turn", ProviderConversationID: "child-thread"})
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "child-turn", ProviderConversationID: "child-thread", TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, turn := range s.Turns {
+			if turn.ProviderTurnID == "child-turn" {
+				return turn.State == domain.TurnStateCompleted
+			}
+		}
+		return false
+	})
+	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID()); err != nil || !held {
+		t.Fatalf("queue held = %v, %v after a child thread completed", held, err)
+	}
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "agent note", ClientMessageID: "c-agent", Origin: domain.MessageOriginAutomation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertTurnStaysQueued(t, h, "agent note")
+	result, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{
+		Text: "agent steer", ClientMessageID: "c-steer", Origin: domain.MessageOriginHuman, SenderSessionID: "worker-1",
+	}, false)
+	if err != nil || result.Steered || result.Turn.State != domain.TurnStateQueued {
+		t.Fatalf("agent steer = %+v, %v, want it queued behind the hold", result, err)
+	}
+	assertTurnStaysQueued(t, h, "agent note")
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "user note", ClientMessageID: "c-cli", Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["agent note"] == domain.TurnStateRunning
+	})
+}
+
 func TestUsageLimitOnAutomationPromptLeavesTheQueueUnheld(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()

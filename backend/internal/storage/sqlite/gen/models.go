@@ -296,7 +296,7 @@ type Conversation struct {
 	ActiveBranchID             string
 	OpencodeMode               string
 	AutoCompactWindow          string
-	QueueHeldAt                sql.NullTime
+	QueueHeldTurnID            sql.NullString
 }
 
 type ConversationActivity struct {

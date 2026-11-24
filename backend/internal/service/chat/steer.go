@@ -627,6 +627,15 @@ func (c *Controller) SteerOrSend(
 		return result, err
 	}
 
+	if !domain.UserSentMessage(normalizeOrigin(msg.Origin), msg.SenderSessionID, msg.AuthoredByUser) {
+		if held, err := c.queueHeld(ctx); err != nil {
+			return SteerOrSendResult{}, err
+		} else if held {
+			turn, err := c.sendLocked(ctx, msg, true, nil, nil)
+			return SteerOrSendResult{Turn: turn}, err
+		}
+	}
+
 	if _, active := c.awaitAcknowledgedTurn(ctx); active {
 		steered, err := c.steerLocked(ctx, msg)
 		if err == nil {

@@ -632,6 +632,27 @@ func TestAccountHandoffSkippedRetryReleasesTheHeldQueue(t *testing.T) {
 	})
 }
 
+func TestAccountHandoffSkippedRetryKeepsAHoldItDoesNotOwn(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx := context.Background()
+	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
+	retry, err := hh.svc.RetryTurn(ctx, testSession, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, hh.harness, retry.ID)
+	hh.tick(t)
+
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if held, err := hh.st.ConversationQueueHeld(ctx, source.ConversationID); err != nil || !held {
+		t.Fatalf("queue held = %v, %v after the handoff skipped its retry", held, err)
+	}
+}
+
 func TestAccountHandoffFailedMoveKeepsTheQueueHeld(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
 	ctx := context.Background()

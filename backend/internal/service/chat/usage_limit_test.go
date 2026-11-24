@@ -342,7 +342,7 @@ func TestUsageLimitAutoResumeStopsAfterNewerCompletedTurn(t *testing.T) {
 	if err := h.svc.SetTurnAutoResume(ctx, testSession, source.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	newer, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "continue differently", ClientMessageID: "new", Origin: domain.MessageOriginAutomation})
+	newer, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "continue differently", ClientMessageID: "new", Origin: domain.MessageOriginHuman})
 	if err != nil {
 		t.Fatal(err)
 	}

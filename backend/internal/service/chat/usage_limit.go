@@ -33,6 +33,8 @@ type usageLimitStore interface {
 type queueHoldStore interface {
 	ConversationQueueHeld(context.Context, string) (bool, error)
 	ReleaseConversationQueue(context.Context, string) error
+	ReleaseConversationQueueHeldBy(ctx context.Context, conversationID, turnID string) error
+	ReleaseConversationQueueAfterTurn(ctx context.Context, conversationID, providerTurnID string) error
 	CleanupOwnedControllerWorkKeepingHeldQueue(context.Context, domain.SessionID, string, string, time.Time) (bool, error)
 }
 

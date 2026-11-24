@@ -96,6 +96,42 @@ func TestUsageLimitRefusedAtSendHoldsTheQueue(t *testing.T) {
 	}
 }
 
+func TestQueueHoldFollowsTheTurnThatOwnsIt(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	for i, name := range []string{"older", "limited", "later", "newest"} {
+		created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
+			ID: "message-" + name, Origin: domain.MessageOriginHuman, Text: name, ClientMessageID: "client-" + name,
+		}, "turn-"+name, testNow.Add(time.Duration(i)*time.Minute))
+		if err != nil || !created {
+			t.Fatalf("append %s: created=%v err=%v", name, created, err)
+		}
+		mustNoError(t, s.BindTurnToProvider(ctx, "turn-"+name, "provider-"+name, testNow))
+	}
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	held := func(want bool, step string) {
+		t.Helper()
+		if got, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || got != want {
+			t.Fatalf("queue held = %v, %v after %s, want %v", got, err, step, want)
+		}
+	}
+	later := testNow.Add(time.Hour)
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, refusal, later))
+	held(true, "the usage limit")
+	mustNoError(t, s.ReleaseConversationQueueAfterTurn(ctx, conversation.ID, "provider-older"))
+	held(true, "an older turn completed")
+	mustNoError(t, s.ReleaseConversationQueueAfterTurn(ctx, conversation.ID, "provider-later"))
+	held(false, "a later turn completed")
+
+	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-newest", domain.TurnStateFailed, refusal, later))
+	mustNoError(t, s.ReleaseConversationQueueAfterTurn(ctx, conversation.ID, "provider-later"))
+	held(true, "a replayed completion")
+	mustNoError(t, s.ReleaseConversationQueueHeldBy(ctx, conversation.ID, "turn-limited"))
+	held(true, "releasing another turn's hold")
+	mustNoError(t, s.ReleaseConversationQueueHeldBy(ctx, conversation.ID, "turn-newest"))
+	held(false, "releasing its own hold")
+}
+
 // A resumed Codex thread replays a turn the dead controller left in progress as
 // interrupted, with no error. Nobody interrupted it, so the failure must stay.
 func TestSettleTurnInterruptedReplayKeepsStoredFailure(t *testing.T) {

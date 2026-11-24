@@ -350,7 +350,10 @@ func (s *Service) recordAccountHandoffRetry(ctx context.Context, h *accountHando
 }
 
 func (s *Service) releaseAccountHandoffQueue(ctx context.Context, h *accountHandoff) {
-	err := releaseHeldQueue(ctx, s.store, h.conversationID)
+	var err error
+	if holds, ok := s.store.(queueHoldStore); ok {
+		err = holds.ReleaseConversationQueueHeldBy(ctx, h.conversationID, h.turnID)
+	}
 	if err == nil {
 		err = s.DrainQueued(ctx, h.sessionID)
 	}

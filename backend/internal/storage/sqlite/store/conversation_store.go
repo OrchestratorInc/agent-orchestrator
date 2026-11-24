@@ -1460,7 +1460,7 @@ func (s *Store) appendUserMessage(
 		}); err != nil {
 			return err
 		}
-		if retryOfTurnID == "" && msg.Origin == domain.MessageOriginHuman {
+		if retryOfTurnID == "" && domain.UserSentMessage(msg.Origin, msg.SenderSessionID, msg.AuthoredByUser) {
 			if err := q.ReleaseConversationQueue(ctx, conversationID); err != nil {
 				return fmt.Errorf("release held queue: %w", err)
 			}
@@ -2733,14 +2733,14 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 
 // ConversationQueueHeld reports whether the conversation's queue is held.
 func (s *Store) ConversationQueueHeld(ctx context.Context, conversationID string) (bool, error) {
-	heldAt, err := s.conversationReader(ctx).SelectConversationQueueHeldAt(ctx, conversationID)
+	heldBy, err := s.conversationReader(ctx).SelectConversationQueueHoldTurn(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("read queue hold of %s: %w", conversationID, err)
 	}
-	return heldAt.Valid, nil
+	return heldBy.Valid, nil
 }
 
 // ReleaseConversationQueue lets the conversation's queued turns dispatch again.
@@ -2749,6 +2749,39 @@ func (s *Store) ReleaseConversationQueue(ctx context.Context, conversationID str
 	defer unlock()
 	if err := q.ReleaseConversationQueue(ctx, conversationID); err != nil {
 		return fmt.Errorf("release queue of %s: %w", conversationID, err)
+	}
+	return nil
+}
+
+// ReleaseConversationQueueAfterTurn releases the conversation's queue when a provider turn completes, unless a newer turn holds it.
+func (s *Store) ReleaseConversationQueueAfterTurn(ctx context.Context, conversationID, providerTurnID string) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	turn, err := q.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+		ConversationID: conversationID, ProviderTurnID: providerTurnID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("select turn %s: %w", providerTurnID, err)
+	}
+	if err := q.ReleaseConversationQueueAfterTurn(ctx, gen.ReleaseConversationQueueAfterTurnParams{
+		ConversationID: conversationID, TurnID: turn.ID,
+	}); err != nil {
+		return fmt.Errorf("release queue of %s after turn %s: %w", conversationID, turn.ID, err)
+	}
+	return nil
+}
+
+// ReleaseConversationQueueHeldBy releases the conversation's queue only while turnID holds it.
+func (s *Store) ReleaseConversationQueueHeldBy(ctx context.Context, conversationID, turnID string) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.ReleaseConversationQueueHeldByTurn(ctx, gen.ReleaseConversationQueueHeldByTurnParams{
+		ConversationID: conversationID, TurnID: sql.NullString{String: turnID, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("release queue of %s held by %s: %w", conversationID, turnID, err)
 	}
 	return nil
 }
@@ -3252,7 +3285,6 @@ func holdQueueBehindUsageLimit(ctx context.Context, q *gen.Queries, turn gen.Con
 		return nil
 	}
 	if err := q.HoldConversationQueueForTurn(ctx, gen.HoldConversationQueueForTurnParams{
-		QueueHeldAt:    sql.NullTime{Time: now, Valid: true},
 		ConversationID: turn.ConversationID,
 		TurnID:         sql.NullString{String: turn.ID, Valid: true},
 	}); err != nil {

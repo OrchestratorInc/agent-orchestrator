@@ -143,7 +143,7 @@ SELECT * FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1;
 
 -- name: BindProjectConversationSession :exec
 UPDATE conversations
-SET queue_held_at = CASE WHEN current_session_id IS sqlc.arg(current_session_id) THEN queue_held_at END,
+SET queue_held_turn_id = CASE WHEN current_session_id IS sqlc.arg(current_session_id) THEN queue_held_turn_id END,
     current_session_id = sqlc.arg(current_session_id),
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id) AND scope = 'project';
@@ -829,7 +829,7 @@ WHERE handled_by_session_id = sqlc.arg(handled_by_session_id)
       SELECT 1 FROM conversations
       WHERE conversations.id = sqlc.arg(conversation_id)
         AND conversations.id = conversation_turns.conversation_id
-        AND conversations.queue_held_at IS NOT NULL)));
+        AND conversations.queue_held_turn_id IS NOT NULL)));
 
 -- Reviewer Chat has its own controller generation on review, separate from
 -- the worker session. Settle only turns owned by that review conversation.
@@ -1171,7 +1171,7 @@ LIMIT 1;
 
 -- name: HoldConversationQueueForTurn :exec
 UPDATE conversations
-SET queue_held_at = sqlc.arg(queue_held_at)
+SET queue_held_turn_id = sqlc.arg(turn_id)
 WHERE conversations.id = sqlc.arg(conversation_id)
   AND EXISTS (
       SELECT 1 FROM conversation_messages
@@ -1181,11 +1181,26 @@ WHERE conversations.id = sqlc.arg(conversation_id)
   );
 
 -- name: ReleaseConversationQueue :exec
-UPDATE conversations SET queue_held_at = NULL
-WHERE id = ? AND queue_held_at IS NOT NULL;
+UPDATE conversations SET queue_held_turn_id = NULL
+WHERE id = ? AND queue_held_turn_id IS NOT NULL;
 
--- name: SelectConversationQueueHeldAt :one
-SELECT queue_held_at FROM conversations WHERE id = ?;
+-- name: ReleaseConversationQueueHeldByTurn :exec
+UPDATE conversations SET queue_held_turn_id = NULL
+WHERE id = sqlc.arg(conversation_id) AND queue_held_turn_id = sqlc.arg(turn_id);
+
+-- name: ReleaseConversationQueueAfterTurn :exec
+UPDATE conversations SET queue_held_turn_id = NULL
+WHERE conversations.id = sqlc.arg(conversation_id)
+  AND conversations.queue_held_turn_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_turns AS held, conversation_turns AS settled
+      WHERE held.id = conversations.queue_held_turn_id
+        AND settled.id = sqlc.arg(turn_id)
+        AND held.requested_at > settled.requested_at
+  );
+
+-- name: SelectConversationQueueHoldTurn :one
+SELECT queue_held_turn_id FROM conversations WHERE id = ?;
 
 -- name: SelectQueuedConversationBatch :many
 SELECT conversation_turns.id,

@@ -711,6 +711,11 @@ type RetryPrompt struct {
 	ActiveLineage       bool
 }
 
+// UserSentMessage reports whether a message is the user's own send rather than an agent's.
+func UserSentMessage(origin MessageOrigin, senderSessionID string, authoredByUser bool) bool {
+	return authoredByUser || (origin == MessageOriginHuman && senderSessionID == "")
+}
+
 // ConversationMessage is one readable block of text.
 type ConversationMessage struct {
 	// InteractionAt is an internal write fact, independent of history CreatedAt.
