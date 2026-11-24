@@ -140,7 +140,7 @@ func (s *Store) ResolveSessionNotifications(
 	err := s.inTx(ctx, "resolve session notifications", func(q *gen.Queries) error {
 		var err error
 		rows, err = q.ResolveSessionNotificationsByType(ctx, gen.ResolveSessionNotificationsByTypeParams{
-			ResolvedAt: nullTime(at),
+			ResolvedAt: timeToNullTime(at),
 			SessionID:  id,
 			Type:       typ,
 		})
@@ -173,7 +173,7 @@ func (s *Store) ResolvePRNotifications(
 	err := s.inTx(ctx, "resolve pr notifications", func(q *gen.Queries) error {
 		var err error
 		rows, err = q.ResolvePRNotificationsByType(ctx, gen.ResolvePRNotificationsByTypeParams{
-			ResolvedAt: nullTime(at),
+			ResolvedAt: timeToNullTime(at),
 			PRURL:      prURL,
 			Type:       typ,
 		})
@@ -242,7 +242,7 @@ func (s *Store) ReconcileResolvedNotifications(ctx context.Context, at time.Time
 	defer s.writeMu.Unlock()
 	var resolved []domain.NotificationRecord
 	err = s.inTx(ctx, "reconcile resolved notifications", func(q *gen.Queries) error {
-		needsInput, err := q.ResolveStaleNeedsInputNotifications(ctx, nullTime(at))
+		needsInput, err := q.ResolveStaleNeedsInputNotifications(ctx, timeToNullTime(at))
 		if err != nil {
 			return fmt.Errorf("reconcile needs-input notifications: %w", err)
 		}
@@ -252,7 +252,7 @@ func (s *Store) ReconcileResolvedNotifications(ctx context.Context, at time.Time
 		resolved = notificationsFromGen(needsInput)
 		for _, prURL := range stalePRs {
 			rows, err := q.ResolvePRNotificationsByType(ctx, gen.ResolvePRNotificationsByTypeParams{
-				ResolvedAt: nullTime(at),
+				ResolvedAt: timeToNullTime(at),
 				PRURL:      prURL,
 				Type:       domain.NotificationReadyToMerge,
 			})

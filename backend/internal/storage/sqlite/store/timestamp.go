@@ -48,11 +48,6 @@ func timePtrToNullTime(t *time.Time) sql.NullTime {
 	return sql.NullTime{Time: normalizeTime(*t), Valid: true}
 }
 
-// nullTime is an alias for timeToNullTime, used across store packages.
-func nullTime(t time.Time) sql.NullTime {
-	return timeToNullTime(t)
-}
-
 // nullTimeToTime bridges a nullable database timestamp to domain zero-time in UTC.
 func nullTimeToTime(t sql.NullTime) time.Time {
 	if !t.Valid || t.Time.IsZero() {

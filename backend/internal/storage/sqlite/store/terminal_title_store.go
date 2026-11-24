@@ -15,7 +15,7 @@ import (
 func (s *Store) UpsertSessionTerminalTitle(ctx context.Context, id domain.SessionID, title string, updatedAt time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if err := s.qw.UpsertSessionTerminalTitle(ctx, gen.UpsertSessionTerminalTitleParams{SessionID: string(id), Title: title, UpdatedAt: normalizeTime(updatedAt)}); err != nil {
+	if err := s.qw.UpsertSessionTerminalTitle(ctx, gen.UpsertSessionTerminalTitleParams{SessionID: string(id), Title: title, UpdatedAt: updatedAt}); err != nil {
 		return fmt.Errorf("upsert terminal title for session %s: %w", id, err)
 	}
 	return nil

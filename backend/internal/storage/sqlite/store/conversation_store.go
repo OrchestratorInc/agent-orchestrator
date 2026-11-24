@@ -89,7 +89,6 @@ func (s *Store) OpenNativeConversation(ctx context.Context, id string, scope dom
 // Reviewer identity, rather than the parent worker session, is the conversation
 // owner; a worker can therefore retain its own Chat narrative at the same time.
 func (s *Store) CreateReviewConversation(ctx context.Context, id, reviewID string, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error) {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -186,7 +185,6 @@ func (s *Store) createConversation(
 	ctx context.Context,
 	options conversationCreateOptions,
 ) (domain.ConversationRecord, error) {
-	options.now = normalizeTime(options.now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -378,7 +376,6 @@ func adoptProvisioningQueue(
 	targetID string,
 	now time.Time,
 ) (int64, error) {
-	now = normalizeTime(now)
 	target, err := q.SelectConversationByID(ctx, targetID)
 	if err != nil {
 		return 0, fmt.Errorf("select adopting conversation %s: %w", targetID, err)
@@ -480,7 +477,6 @@ func (s *Store) CreateConversationBranch(
 	branch domain.ConversationBranch,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -534,7 +530,6 @@ func insertConversationBranchTx(
 	if now.IsZero() {
 		now = branch.CreatedAt
 	}
-	now = normalizeTime(now)
 	if err := q.InsertConversationBranch(ctx, gen.InsertConversationBranchParams{
 		ID:                     branch.ID,
 		ConversationID:         branch.ConversationID,
@@ -568,7 +563,6 @@ func (s *Store) CreateAndActivateConversationBranch(
 	generation string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -596,8 +590,6 @@ func (s *Store) CreateAndActivateConversationBranch(
 // target harness/controller metadata. Provider startup happens before this
 // method; until it commits, the old branch remains the durable owner.
 func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, settings domain.ConversationSettings, activity domain.ConversationActivity) error {
-	rec.UpdatedAt = normalizeTime(rec.UpdatedAt)
-	branch.CreatedAt = normalizeTime(branch.CreatedAt)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "commit provider switch", func(q *gen.Queries) error {
@@ -650,7 +642,6 @@ func (s *Store) CreateAndActivateReviewConversationBranch(
 	generation string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -675,7 +666,6 @@ func (s *Store) CreateAndActivateReviewConversationBranch(
 }
 
 func insertAndActivateConversationBranchTx(ctx context.Context, q *gen.Queries, branch domain.ConversationBranch, now time.Time) error {
-	now = normalizeTime(now)
 	if err := insertConversationBranchTx(ctx, q, branch, now); err != nil {
 		return err
 	}
@@ -731,9 +721,6 @@ func (s *Store) commitChatSpawn(
 	handoff *domain.ChatProviderHandoff,
 	prepare func(context.Context) error,
 ) error {
-	rec.CreatedAt = normalizeTime(rec.CreatedAt)
-	rec.UpdatedAt = normalizeTime(rec.UpdatedAt)
-	branch.CreatedAt = normalizeTime(branch.CreatedAt)
 	if rec.ID == "" || branch.ID == "" || branch.ConversationID == "" ||
 		branch.SessionID != rec.ID || branch.ParentBranchID == "" ||
 		branch.ProviderConversationID == "" ||
@@ -970,7 +957,6 @@ func (s *Store) RepairIncompleteConversationEdit(
 	conversationID string,
 	now time.Time,
 ) (repaired domain.ConversationBranch, restoredProviderOwner bool, err error) {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -1084,7 +1070,6 @@ func (s *Store) ActivateConversationBranch(
 	conversationID, branchID, providerConversationID, generation string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -1330,7 +1315,6 @@ func (s *Store) appendUserMessage(
 	autoResume bool,
 	now time.Time,
 ) (created bool, err error) {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if generation == "" && reviewID == "" {
@@ -1482,7 +1466,7 @@ func (s *Store) appendUserMessage(
 				return fmt.Errorf("record usage message count: %w", err)
 			}
 		}
-		interactionAt := normalizeTime(msg.InteractionAt)
+		interactionAt := msg.InteractionAt
 		if interactionAt.IsZero() {
 			interactionAt = now
 		}
@@ -1562,8 +1546,8 @@ func (s *Store) AdoptProviderTurn(
 		HandledBySessionID:   session,
 		ProviderTurnID:       providerTurnID,
 		ControllerGeneration: generation,
-		RequestedAt:          normalizeTime(now),
-		StartedAt:            sql.NullTime{Time: normalizeTime(now), Valid: true},
+		RequestedAt:          now,
+		StartedAt:            sql.NullTime{Time: now, Valid: true},
 	}); err != nil {
 		return fmt.Errorf("adopt provider turn %s: %w", providerTurnID, err)
 	}
@@ -1578,7 +1562,7 @@ func (s *Store) AdoptReviewProviderTurn(ctx context.Context, conversationID stri
 	defer unlock()
 	if err := q.AdoptReviewProviderConversationTurn(ctx, gen.AdoptReviewProviderConversationTurnParams{
 		ID: turnID, ConversationID: conversationID, HandledBySessionID: session, HandledByReviewID: nullableString(reviewID),
-		ProviderTurnID: providerTurnID, ControllerGeneration: generation, RequestedAt: normalizeTime(now), StartedAt: sql.NullTime{Time: normalizeTime(now), Valid: true},
+		ProviderTurnID: providerTurnID, ControllerGeneration: generation, RequestedAt: now, StartedAt: sql.NullTime{Time: now, Valid: true},
 	}); err != nil {
 		return fmt.Errorf("adopt reviewer provider turn %s: %w", providerTurnID, err)
 	}
@@ -1599,7 +1583,6 @@ func (s *Store) AppendImportedUserMessage(
 	msg domain.ConversationMessage,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
@@ -1691,12 +1674,11 @@ func expectBatchRow(action, id string, rows int64, err error) error {
 // BindTurnToProvider records the provider's turn id once a send is accepted and
 // marks the turn running.
 func (s *Store) BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	rows, err := q.BindConversationTurnProviderID(ctx, gen.BindConversationTurnProviderIDParams{
 		ProviderTurnID: providerTurnID,
-		StartedAt:      sql.NullTime{Time: normalizeTime(now), Valid: true},
+		StartedAt:      sql.NullTime{Time: now, Valid: true},
 		ID:             turnID,
 	})
 	if err != nil {
@@ -1740,8 +1722,6 @@ func (s *Store) SettleTurnWithFailureCode(
 	usageLimitResetsAt time.Time,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
-	usageLimitResetsAt = normalizeTime(usageLimitResetsAt)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
@@ -1774,7 +1754,7 @@ func (s *Store) SettleTurnWithFailureCode(
 		State:              state,
 		ErrorMessage:       errMessage,
 		FailureCode:        string(failureCode),
-		CompletedAt:        sql.NullTime{Time: normalizeTime(now), Valid: true},
+		CompletedAt:        sql.NullTime{Time: now, Valid: true},
 		UsageLimitResetsAt: timeToNullTime(usageLimitResetsAt),
 		ID:                 turn.ID,
 	}); err != nil {
@@ -1896,7 +1876,6 @@ func terminalActivityStatus(state domain.TurnState) domain.ActivityStatus {
 // controller was running is not evidence the work finished, so it settles as
 // failed rather than silently completing.
 func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	if err := q.FailOrphanedConversationActivities(ctx,
@@ -1908,7 +1887,7 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 	}
 	if err := q.SettleOrphanedConversationTurns(ctx,
 		gen.SettleOrphanedConversationTurnsParams{
-			CompletedAt:        sql.NullTime{Time: normalizeTime(now), Valid: true},
+			CompletedAt:        sql.NullTime{Time: now, Valid: true},
 			HandledBySessionID: session,
 		}); err != nil {
 		return fmt.Errorf("settle orphaned turns for %s: %w", session, err)
@@ -1937,7 +1916,6 @@ func (s *Store) SettleStrandedActivities(ctx context.Context, conversationID str
 // SettleUnboundRunningTurn closes an ambiguous dispatch after live reconnect.
 // Recheck under the writer lock so a bound or queued turn is never settled.
 func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	turn, err := q.SelectConversationTurnByID(ctx, turnID)
@@ -1952,7 +1930,7 @@ func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID str
 	}
 	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State: domain.TurnStateFailed, ErrorMessage: "provider delivery unconfirmed after reconnect",
-		CompletedAt: sql.NullTime{Time: normalizeTime(now), Valid: true}, ID: turnID,
+		CompletedAt: sql.NullTime{Time: now, Valid: true}, ID: turnID,
 	}); err != nil {
 		return fmt.Errorf("settle unbound running turn %s: %w", turnID, err)
 	}
@@ -1976,7 +1954,6 @@ func (s *Store) CleanupOwnedControllerWork(
 	conversationID, generation string,
 	now time.Time,
 ) (owned bool, err error) {
-	now = normalizeTime(now)
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
 		return cleanupOwnedControllerWork(ctx, q, session, conversationID, generation, now)
 	}
@@ -2000,7 +1977,6 @@ func cleanupOwnedControllerWork(
 	conversationID, generation string,
 	now time.Time,
 ) (bool, error) {
-	now = normalizeTime(now)
 	owner, err := q.GetSession(ctx, session)
 	if err != nil {
 		return false, fmt.Errorf("read controller generation for %s: %w", session, err)
@@ -2016,7 +1992,7 @@ func cleanupOwnedControllerWork(
 	}
 	if err := q.SettleOrphanedConversationTurns(ctx,
 		gen.SettleOrphanedConversationTurnsParams{
-			CompletedAt:        sql.NullTime{Time: normalizeTime(now), Valid: true},
+			CompletedAt:        sql.NullTime{Time: now, Valid: true},
 			HandledBySessionID: session,
 		}); err != nil {
 		return false, fmt.Errorf("settle orphaned turns for %s: %w", session, err)
@@ -2040,7 +2016,6 @@ func (s *Store) CleanupOwnedReviewControllerWork(
 	reviewID, conversationID, generation string,
 	now time.Time,
 ) (owned bool, err error) {
-	now = normalizeTime(now)
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
 		return cleanupOwnedReviewControllerWork(ctx, q, reviewID, conversationID, generation, now)
 	}
@@ -2061,7 +2036,6 @@ func cleanupOwnedReviewControllerWork(
 	reviewID, conversationID, generation string,
 	now time.Time,
 ) (bool, error) {
-	now = normalizeTime(now)
 	owner, err := q.GetReviewByID(ctx, reviewID)
 	if err != nil {
 		return false, fmt.Errorf("read reviewer controller generation for %s: %w", reviewID, err)
@@ -2080,7 +2054,7 @@ func cleanupOwnedReviewControllerWork(
 		return false, fmt.Errorf("settle reviewer activities for %s: %w", reviewID, err)
 	}
 	if err := q.SettleOrphanedReviewTurns(ctx, gen.SettleOrphanedReviewTurnsParams{
-		CompletedAt: sql.NullTime{Time: normalizeTime(now), Valid: true}, ConversationID: conversationID, ReviewID: review,
+		CompletedAt: sql.NullTime{Time: now, Valid: true}, ConversationID: conversationID, ReviewID: review,
 	}); err != nil {
 		return false, fmt.Errorf("settle reviewer turns for %s: %w", reviewID, err)
 	}
@@ -2118,7 +2092,6 @@ func (s *Store) SetConversationSettings(
 	settings domain.ConversationSettings,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if err := s.qw.UpdateConversationTurnSettings(ctx, gen.UpdateConversationTurnSettingsParams{
@@ -2148,8 +2121,8 @@ func (s *Store) MarkCompacted(ctx context.Context, conversationID string, at tim
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	if err := q.MarkConversationCompacted(ctx, gen.MarkConversationCompactedParams{
-		CompactedAt: sql.NullTime{Time: normalizeTime(at), Valid: true},
-		UpdatedAt:   normalizeTime(at),
+		CompactedAt: sql.NullTime{Time: at, Valid: true},
+		UpdatedAt:   at,
 		ID:          conversationID,
 	}); err != nil {
 		return fmt.Errorf("mark conversation %s compacted: %w", conversationID, err)
@@ -2256,7 +2229,7 @@ func (s *Store) RecordModelReroute(
 	if err := q.UpdateConversationModelReroute(ctx,
 		gen.UpdateConversationModelRerouteParams{
 			ModelRerouteJson: sql.NullString{String: string(encoded), Valid: true},
-			UpdatedAt:        normalizeTime(reroute.At),
+			UpdatedAt:        reroute.At,
 			ID:               conversationID,
 		}); err != nil {
 		return fmt.Errorf("record model reroute for %s: %w", conversationID, err)
@@ -2277,7 +2250,6 @@ func (s *Store) RecordAccount(
 	account domain.ConversationAccount,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	encoded, err := json.Marshal(account)
 	if err != nil {
 		return fmt.Errorf("encode account for %s: %w", conversationID, err)
@@ -2309,7 +2281,6 @@ func (s *Store) ConversationAccount(ctx context.Context, conversationID string) 
 // The writer transaction makes evidence selection and demand clearing atomic with
 // newer failures, generation claims, and branch/account changes.
 func (s *Store) ReconcileConversationAuthentication(ctx context.Context, conversationID, generation, providerTurnID string, now time.Time) (*domain.ConversationAccount, error) {
-	now = normalizeTime(now)
 	if _, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); !ok {
 		if account, verifiedAt, err := authenticationEvidence(ctx, s.qr, conversationID, generation, providerTurnID); err != nil || verifiedAt == nil {
 			return account, err
@@ -2364,7 +2335,7 @@ func authenticationEvidence(ctx context.Context, q *gen.Queries, conversationID,
 	}
 	turn, err := q.SelectVerifiedAuthenticationTurn(ctx, gen.SelectVerifiedAuthenticationTurnParams{
 		ConversationID: conversationID, Generation: generation, ProviderTurnID: providerTurnID,
-		AfterAt: sql.NullTime{Time: normalizeTime(cutoff), Valid: true},
+		AfterAt: sql.NullTime{Time: cutoff, Valid: true},
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return account, nil, nil
@@ -2405,8 +2376,6 @@ func (s *Store) ConversationsAwaitingLogin(ctx context.Context) ([]ConversationA
 // signed in and read its limits from the provider with that login. A demand
 // recorded at or after at stays, since that check cannot speak for it.
 func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID string, at, now time.Time) (bool, error) {
-	at = normalizeTime(at)
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	cleared := false
@@ -2428,7 +2397,6 @@ func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID str
 
 // RequireSessionLogin records a login demand on the session's chat unless one is pending.
 func (s *Store) RequireSessionLogin(ctx context.Context, id domain.SessionID, reason string, now time.Time) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "require session login", func(q *gen.Queries) error {
@@ -2560,14 +2528,12 @@ func (s *Store) SetTurnPlan(
 // the path is superseded. Copies on other branches keep their marks until their
 // branch is active again, when this runs for that path.
 func (s *Store) ReconcileSpanningPlans(ctx context.Context, conversationID string, now time.Time) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	return reconcileSpanningPlans(ctx, q, conversationID, now)
 }
 
 func reconcileSpanningPlans(ctx context.Context, q *gen.Queries, conversationID string, now time.Time) error {
-	now = normalizeTime(now)
 	copies, err := q.SelectSpanningPlanCopiesOnActivePath(ctx, conversationID)
 	if err != nil {
 		return fmt.Errorf("select spanning plan copies in %s: %w", conversationID, err)
@@ -2758,7 +2724,6 @@ func (s *Store) ListQueuedBatch(ctx context.Context, conversationID string, limi
 // row becomes the provider turn for a normal drain. Other rows are reserved as
 // members of that input. A steer reserves every row without starting a new turn.
 func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dispatch bool, limit int, now time.Time) ([]domain.QueuedTurn, error) {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	var batch []domain.QueuedTurn
@@ -2823,7 +2788,6 @@ func (s *Store) MarkQueuedBatchStarted(ctx context.Context, conversationID strin
 // steerActivityID names the steer that carried the turns into a running turn;
 // empty means a queue drain, the turns joining the input providerTurnID started with.
 func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID, steerActivityID string, now time.Time) error {
-	now = normalizeTime(now)
 	if len(turnIDs) == 0 {
 		return nil
 	}
@@ -2838,7 +2802,7 @@ func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, 
 		}
 		for _, id := range turnIDs {
 			changed, err := q.CompleteQueuedConversationBatchMember(ctx, gen.CompleteQueuedConversationBatchMemberParams{
-				CompletedAt:          sql.NullTime{Time: normalizeTime(now), Valid: true},
+				CompletedAt:          sql.NullTime{Time: now, Valid: true},
 				PromotedToTurnID:     sql.NullString{String: target.ID, Valid: true},
 				BatchDeliveryKind:    batchDeliveryKind(steerActivityID),
 				BatchDeliverySteerID: steerActivityID,
@@ -2869,7 +2833,6 @@ func (s *Store) ReleaseQueuedBatch(ctx context.Context, conversationID string, t
 
 // FailQueuedBatch retains uncertain source messages without replaying them.
 func (s *Store) FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time, accepted bool) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "fail queued batch", func(q *gen.Queries) error {
@@ -2888,11 +2851,10 @@ func (s *Store) FailQueuedBatch(ctx context.Context, conversationID string, turn
 
 // FailReservedQueuedBatch closes stranded reservations during live reconnect.
 func (s *Store) FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	return q.FailReservedQueuedConversationTurns(ctx, gen.FailReservedQueuedConversationTurnsParams{
-		CompletedAt: sql.NullTime{Time: normalizeTime(now), Valid: true}, ConversationID: conversationID,
+		CompletedAt: sql.NullTime{Time: now, Valid: true}, ConversationID: conversationID,
 	})
 }
 
@@ -2903,7 +2865,6 @@ func (s *Store) ReserveQueuedTurnForPromotion(
 	conversationID, turnID string,
 	now time.Time,
 ) (domain.QueuedTurn, error) {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.ReserveQueuedConversationTurnForPromotion(ctx,
@@ -2959,7 +2920,6 @@ func (s *Store) CompleteQueuedTurnPromotion(
 	activity domain.ConversationActivity,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTxDB(ctx, "complete queued turn promotion", func(q *gen.Queries, db gen.DBTX) error {
@@ -2976,7 +2936,7 @@ func (s *Store) CompleteQueuedTurnPromotion(
 		}
 		rows, err := q.CompleteQueuedConversationTurnPromotion(ctx,
 			gen.CompleteQueuedConversationTurnPromotionParams{
-				CompletedAt:      sql.NullTime{Time: normalizeTime(now), Valid: true},
+				CompletedAt:      sql.NullTime{Time: now, Valid: true},
 				PromotedToTurnID: sql.NullString{String: target.ID, Valid: true},
 				ID:               sourceTurnID,
 				ConversationID:   conversationID,
@@ -3001,12 +2961,10 @@ func (s *Store) CancelQueuedTurns(
 	conversationID string,
 	cutoff, now time.Time,
 ) error {
-	cutoff = normalizeTime(cutoff)
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if err := s.qw.CancelQueuedConversationTurns(ctx, gen.CancelQueuedConversationTurnsParams{
-		CompletedAt:    sql.NullTime{Time: normalizeTime(now), Valid: true},
+		CompletedAt:    sql.NullTime{Time: now, Valid: true},
 		ConversationID: conversationID,
 		RequestedAt:    cutoff,
 	}); err != nil {
@@ -3023,7 +2981,6 @@ func (s *Store) CancelAllQueuedTurns(
 	conversationID string,
 	now time.Time,
 ) (int, error) {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
@@ -3043,12 +3000,11 @@ func (s *Store) CancelQueuedTurnByID(
 	conversationID, turnID string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.CancelQueuedConversationTurnByID(ctx,
 		gen.CancelQueuedConversationTurnByIDParams{
-			CompletedAt:    sql.NullTime{Time: normalizeTime(now), Valid: true},
+			CompletedAt:    sql.NullTime{Time: now, Valid: true},
 			ID:             turnID,
 			ConversationID: conversationID,
 		})
@@ -3119,7 +3075,7 @@ func (s *Store) ReorderQueuedTurns(
 	for i, turnID := range turnIDs {
 		rows, err := q.UpdateQueuedConversationTurnRequestedAt(ctx,
 			gen.UpdateQueuedConversationTurnRequestedAtParams{
-				RequestedAt:    normalizeTime(requestedAts[i]),
+				RequestedAt:    requestedAts[i],
 				ID:             turnID,
 				ConversationID: conversationID,
 			})
@@ -3159,7 +3115,6 @@ func (s *Store) UpdateQueuedTurnMessage(
 	now time.Time,
 	delivery domain.ConversationQueuedEditDelivery,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "update queued turn message", func(q *gen.Queries) error {
@@ -3211,14 +3166,13 @@ func (s *Store) SettleTurnByID(
 	errMessage string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
 		ErrorMessage: errMessage,
 		FailureCode:  "",
-		CompletedAt:  sql.NullTime{Time: normalizeTime(now), Valid: true},
+		CompletedAt:  sql.NullTime{Time: now, Valid: true},
 		ID:           turnID,
 	}); err != nil {
 		return fmt.Errorf("settle turn %s: %w", turnID, err)
@@ -3234,7 +3188,6 @@ func (s *Store) AppendAssistantDelta(
 	conversationID, providerItemID, providerTurnID, delta, messageID string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
@@ -3309,7 +3262,6 @@ func (s *Store) SettleAssistantMessage(
 	conversationID, providerItemID, providerTurnID, text, messageID string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
@@ -3397,7 +3349,6 @@ func (s *Store) UpsertActivity(
 	activity domain.ConversationActivity,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
@@ -3518,7 +3469,6 @@ func (s *Store) AppendCommandOutput(
 	conversationID, providerItemID, delta string,
 	now time.Time,
 ) (bool, error) {
-	now = normalizeTime(now)
 	if delta == "" {
 		return false, nil
 	}
@@ -3622,7 +3572,6 @@ func (s *Store) ResolveApproval(
 	conversationID, requestID, detailJSON string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	if err := q.ResolveConversationApproval(ctx, gen.ResolveConversationApprovalParams{
@@ -3649,7 +3598,6 @@ func (s *Store) HasPendingConversationInteractions(ctx context.Context, conversa
 // FailPendingApprovals closes out anything the user can no longer answer, because
 // the provider call it was blocking is gone.
 func (s *Store) FailPendingApprovals(ctx context.Context, conversationID string, now time.Time) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	if err := q.FailPendingConversationApprovals(ctx,
@@ -3667,7 +3615,6 @@ func (s *Store) FailPendingApprovals(ctx context.Context, conversationID string,
 // the activity-kind boundary even though both use the same pending/resolved state
 // machine.
 func (s *Store) FailPendingInputs(ctx context.Context, conversationID string, now time.Time) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	if err := q.FailPendingConversationInputs(ctx,
@@ -3715,7 +3662,6 @@ func (s *Store) projectProviderEvent(
 	now time.Time,
 	project func(context.Context) error,
 ) (bool, error) {
-	now = normalizeTime(now)
 	if q, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); ok && q != nil {
 		db, ok := ctx.Value(conversationProjectionDBKey{}).(gen.DBTX)
 		if !ok {
@@ -3758,7 +3704,6 @@ func projectProviderEventTx(
 	now time.Time,
 	project func(context.Context) error,
 ) (bool, error) {
-	now = normalizeTime(now)
 	if reviewID != "" {
 		owner, err := q.GetReviewByID(ctx, reviewID)
 		if err != nil {
@@ -3820,7 +3765,6 @@ func (s *Store) TurnByID(ctx context.Context, turnID string) (domain.Conversatio
 // SetTurnAutoResume keeps user consent on the failed source, separate from the
 // new attempt. The retry transaction consumes it before provider dispatch.
 func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID string, resetsAt *time.Time, enabled bool, resumeError string) error {
-	resetsAt = normalizeTimePtr(resetsAt)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if enabled || resumeError != "" {
@@ -3881,7 +3825,6 @@ func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID st
 
 // PostponeTurnAutoResume moves an armed deadline without restoring consumed consent.
 func (s *Store) PostponeTurnAutoResume(ctx context.Context, conversationID, turnID string, resetAt time.Time) (bool, error) {
-	resetAt = normalizeTime(resetAt)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	n, err := s.qw.PostponeConversationTurnAutoResume(ctx, gen.PostponeConversationTurnAutoResumeParams{
@@ -3935,7 +3878,6 @@ func (s *Store) RollbackTurns(
 	conversationID, turnID string,
 	now time.Time,
 ) (int, error) {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -3957,7 +3899,7 @@ func (s *Store) RollbackTurns(
 	err = s.inTx(ctx, "roll back turns", func(q *gen.Queries) error {
 		rows, markErr := q.MarkConversationTurnsRolledBack(ctx,
 			gen.MarkConversationTurnsRolledBackParams{
-				RolledBackAt:   sql.NullTime{Time: normalizeTime(now), Valid: true},
+				RolledBackAt:   sql.NullTime{Time: now, Valid: true},
 				ConversationID: conversationID,
 				AnchorTurnID:   turnID,
 			})
@@ -3968,7 +3910,7 @@ func (s *Store) RollbackTurns(
 
 		if err := q.InterruptRolledBackQueuedTurns(ctx,
 			gen.InterruptRolledBackQueuedTurnsParams{
-				CompletedAt:    sql.NullTime{Time: normalizeTime(now), Valid: true},
+				CompletedAt:    sql.NullTime{Time: now, Valid: true},
 				ConversationID: conversationID,
 			}); err != nil {
 			return fmt.Errorf("interrupt rolled back queued turns: %w", err)
@@ -4014,7 +3956,6 @@ func (s *Store) SetProviderTitle(
 	conversationID, title string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 	if err := q.UpdateConversationProviderTitle(ctx,
@@ -4047,7 +3988,6 @@ func (s *Store) ApplyProviderTitle(
 	title string,
 	now time.Time,
 ) (bool, error) {
-	now = normalizeTime(now)
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
@@ -5344,7 +5284,6 @@ func (s *Store) ReserveEditDelivery(
 	conversationID, clientMessageID, requestJSON string,
 	now time.Time,
 ) (delivery domain.ConversationEditDelivery, created bool, err error) {
-	now = normalizeTime(now)
 	return reserveConversationDelivery(
 		ctx,
 		s,
@@ -5370,7 +5309,6 @@ func (s *Store) ReserveEditDelivery(
 // RecoverCompletedEditDelivery uses provider completion as proof of acceptance.
 // A queued, bound, or failed turn alone does not prove provider execution.
 func (s *Store) RecoverCompletedEditDelivery(ctx context.Context, conversationID, clientMessageID string, now time.Time) error {
-	now = normalizeTime(now)
 	row, err := s.conversationReader(ctx).SelectCompletedEditReplacement(ctx, gen.SelectCompletedEditReplacementParams{
 		ConversationID: conversationID, ClientMessageID: clientMessageID,
 	})
@@ -5409,7 +5347,6 @@ func (s *Store) CompleteEditDelivery(
 	turn domain.ConversationTurn,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "complete edit delivery", func(q *gen.Queries) error {
@@ -5428,8 +5365,8 @@ func (s *Store) CompleteEditDelivery(
 				SourceBranchID: sourceBranchID, ActiveBranchID: activeBranchID,
 				TurnID: turn.ID, HandledBySessionID: string(turn.HandledBySessionID),
 				ProviderTurnID: turn.ProviderTurnID, TurnState: string(turn.State),
-				TurnRequestedAt: sql.NullTime{Time: normalizeTime(turn.RequestedAt), Valid: !turn.RequestedAt.IsZero()},
-				SettledAt:       sql.NullTime{Time: normalizeTime(now), Valid: true},
+				TurnRequestedAt: sql.NullTime{Time: turn.RequestedAt, Valid: !turn.RequestedAt.IsZero()},
+				SettledAt:       sql.NullTime{Time: now, Valid: true},
 				ConversationID:  conversationID, ClientMessageID: clientMessageID,
 			})
 		if err != nil {
@@ -5451,13 +5388,12 @@ func (s *Store) RejectEditDelivery(
 	message string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.RejectConversationEditDelivery(ctx,
 		gen.RejectConversationEditDeliveryParams{
 			RejectionKind: string(kind), RejectionMessage: message,
-			SettledAt:      sql.NullTime{Time: normalizeTime(now), Valid: true},
+			SettledAt:      sql.NullTime{Time: now, Valid: true},
 			ConversationID: conversationID, ClientMessageID: clientMessageID,
 		})
 	if err != nil {
@@ -5520,7 +5456,6 @@ func (s *Store) ReserveSteerDelivery(
 	conversationID, clientMessageID, requestJSON string,
 	now time.Time,
 ) (delivery domain.ConversationSteerDelivery, created bool, err error) {
-	now = normalizeTime(now)
 	return reserveConversationDelivery(
 		ctx,
 		s,
@@ -5563,7 +5498,6 @@ func (s *Store) CompleteSteerBatchDelivery(
 	turnIDs []string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTxDB(ctx, "complete steer delivery", func(q *gen.Queries, db gen.DBTX) error {
@@ -5576,7 +5510,7 @@ func (s *Store) CompleteSteerBatchDelivery(
 			}
 			for _, id := range turnIDs {
 				changed, err := q.CompleteQueuedConversationBatchMember(ctx, gen.CompleteQueuedConversationBatchMemberParams{
-					CompletedAt:          sql.NullTime{Time: normalizeTime(now), Valid: true},
+					CompletedAt:          sql.NullTime{Time: now, Valid: true},
 					PromotedToTurnID:     sql.NullString{String: target.ID, Valid: true},
 					BatchDeliveryKind:    batchDeliveryKind(activity.ID),
 					BatchDeliverySteerID: activity.ID,
@@ -5594,7 +5528,7 @@ func (s *Store) CompleteSteerBatchDelivery(
 		rows, err := q.AcceptConversationSteerDelivery(ctx,
 			gen.AcceptConversationSteerDeliveryParams{
 				ProviderTurnID: providerTurnID, ActivityID: activity.ID,
-				SettledAt:      sql.NullTime{Time: normalizeTime(now), Valid: true},
+				SettledAt:      sql.NullTime{Time: now, Valid: true},
 				ConversationID: conversationID, ClientMessageID: clientMessageID,
 			})
 		if err != nil {
@@ -5616,13 +5550,12 @@ func (s *Store) RejectSteerDelivery(
 	message string,
 	now time.Time,
 ) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.RejectConversationSteerDelivery(ctx,
 		gen.RejectConversationSteerDeliveryParams{
 			RejectionKind: string(kind), RejectionMessage: message,
-			SettledAt:      sql.NullTime{Time: normalizeTime(now), Valid: true},
+			SettledAt:      sql.NullTime{Time: now, Valid: true},
 			ConversationID: conversationID, ClientMessageID: clientMessageID,
 		})
 	if err != nil {
@@ -5652,7 +5585,6 @@ func steerDeliveryToDomain(row gen.ConversationSteerDelivery) domain.Conversatio
 // SettleReviewChatWork closes the previous review epoch before a downgrade or
 // configuration replacement. There may be durable work without a live process.
 func (s *Store) SettleReviewChatWork(ctx context.Context, reviewID string, now time.Time) error {
-	now = normalizeTime(now)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "settle reviewer Chat epoch", func(q *gen.Queries) error {

@@ -64,7 +64,7 @@ func (s *Store) writeWorkspaceProject(ctx context.Context, label string, r domai
 				RelativePath:  repo.RelativePath,
 				RepoOriginURL: repo.RepoOriginURL,
 				DefaultBranch: repo.DefaultBranch,
-				RegisteredAt:  normalizeTime(repo.RegisteredAt),
+				RegisteredAt:  repo.RegisteredAt,
 				GitStatus:     string(repo.GitStatus.WithDefault()),
 			}); err != nil {
 				return err
@@ -102,8 +102,8 @@ func upsertProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, 
 		Path:          r.Path,
 		RepoOriginURL: r.RepoOriginURL,
 		DisplayName:   r.DisplayName,
-		RegisteredAt:  normalizeTime(r.RegisteredAt),
-		ArchivedAt:    nullTime(r.ArchivedAt),
+		RegisteredAt:  r.RegisteredAt,
+		ArchivedAt:    timeToNullTime(r.ArchivedAt),
 		Config:        config,
 		Kind:          string(kind),
 	})
@@ -155,8 +155,8 @@ func importProject(ctx context.Context, q *gen.Queries, r domain.ProjectRecord, 
 		Path:          r.Path,
 		RepoOriginURL: r.RepoOriginURL,
 		DisplayName:   r.DisplayName,
-		RegisteredAt:  normalizeTime(r.RegisteredAt),
-		ArchivedAt:    nullTime(r.ArchivedAt),
+		RegisteredAt:  r.RegisteredAt,
+		ArchivedAt:    timeToNullTime(r.ArchivedAt),
 		Config:        config,
 		Kind:          string(kind),
 	})
@@ -236,7 +236,7 @@ func (s *Store) ArchiveProject(ctx context.Context, id string, at time.Time) (bo
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	n, err := s.qw.ArchiveProject(ctx, gen.ArchiveProjectParams{
-		ArchivedAt: nullTime(at),
+		ArchivedAt: timeToNullTime(at),
 		ID:         domain.ProjectID(id),
 	})
 	if err != nil {

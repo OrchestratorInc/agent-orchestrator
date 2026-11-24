@@ -32,7 +32,7 @@ func (s *Store) RecordTerminalTurnRequest(ctx context.Context, turn domain.Termi
 		}
 		if err := q.InsertTerminalTurn(ctx, gen.InsertTerminalTurnParams{
 			SessionID: string(turn.SessionID), Harness: string(turn.Harness),
-			NativeSessionID: turn.NativeSessionID, UserRequest: text, RequestedAt: normalizeTime(turn.RequestedAt),
+			NativeSessionID: turn.NativeSessionID, UserRequest: text, RequestedAt: turn.RequestedAt,
 		}); err != nil {
 			return err
 		}
@@ -48,7 +48,7 @@ func (s *Store) RecordTerminalTurnResponse(ctx context.Context, id domain.Sessio
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if err := s.qw.CloseTerminalTurn(ctx, gen.CloseTerminalTurnParams{
-		AgentResponse: strings.TrimSpace(response), RespondedAt: sql.NullTime{Time: normalizeTime(at), Valid: true}, SessionID: string(id),
+		AgentResponse: strings.TrimSpace(response), RespondedAt: sql.NullTime{Time: at, Valid: true}, SessionID: string(id),
 	}); err != nil {
 		return fmt.Errorf("record terminal turn response: %w", err)
 	}
