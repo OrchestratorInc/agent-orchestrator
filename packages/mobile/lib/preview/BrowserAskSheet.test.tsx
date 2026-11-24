@@ -12,15 +12,20 @@ vi.mock("@expo/ui/swift-ui", async () => {
 	const withSlots = (name: string, slots: string[]) => Object.assign(host(name), Object.fromEntries(slots.map((slot) => [slot, host(`${name}.${slot}`)])));
 	return {
 		...doubles,
-		Host: host("Host"),
+		Spacer: host("Spacer"),
 		Alert: withSlots("Alert", ["Actions", "Message", "Trigger"]),
 		ConfirmationDialog: withSlots("ConfirmationDialog", ["Actions", "Message", "Trigger"]),
 	};
 });
 vi.mock("@expo/ui/swift-ui/modifiers", async () => {
 	const { modifierDouble } = await import("../nativeFormTestDoubles");
-	return modifierDouble(["autocorrectionDisabled", "textInputAutocapitalization"]);
+	return modifierDouble(["autocorrectionDisabled", "frame", "textInputAutocapitalization"]);
 });
+vi.mock("@expo/ui", async () => {
+	const { createElement } = await import("react");
+	return { Host: ({ children, ...props }: { children?: ReactNode }) => createElement("Host", props, children) };
+});
+vi.mock("../ThemeProvider", () => ({ useThemeState: () => ({ scheme: "dark" }) }));
 
 import { BrowserAskSheet, resetBrowserAskKeys } from "./BrowserAskSheet";
 
@@ -62,6 +67,14 @@ describe("BrowserAskSheet on iOS", () => {
 			[confirm, { type: "dialog", payload: { accept: false } }],
 			[leave, { type: "dialog", payload: { accept: true } }],
 		]);
+	});
+
+	it("anchors each presentation to a one-point trigger, as SwiftUI needs", () => {
+		ask({ kind: "confirm", message: "Sure?" });
+		expect(all("Alert.Trigger")[0]!.findAll((node) => (node.type as unknown) === "Spacer")).toHaveLength(1);
+		ask({ kind: "select", id: "s", selected: 0, options: [{ label: "A" }] });
+		expect(all("ConfirmationDialog.Trigger")[0]!.findAll((node) => (node.type as unknown) === "Spacer")).toHaveLength(1);
+		expect(all("Host")[0]!.props).toMatchObject({ colorScheme: "dark", style: { width: 1, height: 1 } });
 	});
 
 	it("goes away when the host closes the dialog or a newer one replaces it", () => {
