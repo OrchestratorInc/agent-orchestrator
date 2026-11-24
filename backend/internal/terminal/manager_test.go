@@ -577,7 +577,7 @@ func TestLastInputAtReadsWithoutBlockingInput(t *testing.T) {
 		t.Fatalf("LastInputAt before any input = %s, want zero", got)
 	}
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("first\n"))}
-	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "first\n" && !mgr.LastInputAt("t1").IsZero() })
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "first\n" })
 
 	first := mgr.LastInputAt("t1")
 	if first.IsZero() {
@@ -585,9 +585,10 @@ func TestLastInputAtReadsWithoutBlockingInput(t *testing.T) {
 	}
 	// Reading must not close input: the next keystroke is still written.
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("second\n"))}
-	eventually(t, time.Second, func() bool {
-		return string(pty.writtenBytes()) == "first\nsecond\n" && mgr.LastInputAt("t1").After(first)
-	})
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "first\nsecond\n" })
+	if !mgr.LastInputAt("t1").After(first) {
+		t.Fatal("LastInputAt did not advance with the next accepted keystroke")
+	}
 }
 
 // nextTerminal returns the next frame on conn.out (no skipping), so callers can
