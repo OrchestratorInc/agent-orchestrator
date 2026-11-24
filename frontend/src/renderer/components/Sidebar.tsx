@@ -2173,6 +2173,7 @@ const ProjectItem = memo(function ProjectItem({
 													<Button
 														size="icon-xs"
 														variant="quiet"
+														data-telemetry-id="sidebar.project_orchestrator"
 														aria-current={orchestratorActive ? "page" : undefined}
 														aria-label={orchestratorReplyLabel(
 															orchestrator
