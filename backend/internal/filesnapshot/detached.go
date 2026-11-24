@@ -133,7 +133,22 @@ func InDetachedStore(ctx context.Context, workspace, ref string) bool {
 
 // storeLocks holds one lock per store, so making one store never waits on
 // another's.
-var storeLocks sync.Map
+var (
+	storeLocksMu sync.Mutex
+	storeLocks   = map[string]*sync.Mutex{}
+)
+
+// storeLock is the lock that guards making store.
+func storeLock(store string) *sync.Mutex {
+	storeLocksMu.Lock()
+	defer storeLocksMu.Unlock()
+	mu := storeLocks[store]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		storeLocks[store] = mu
+	}
+	return mu
+}
 
 // ensureStore creates a plain folder's store the first time it is used: a bare
 // repository whose HEAD is an empty commit, with an empty index, so a snapshot
@@ -145,8 +160,7 @@ func ensureStore(ctx context.Context, store string) error {
 	if storeReady(store) {
 		return nil
 	}
-	lock, _ := storeLocks.LoadOrStore(store, &sync.Mutex{})
-	mu := lock.(*sync.Mutex)
+	mu := storeLock(store)
 	mu.Lock()
 	defer mu.Unlock()
 	if storeReady(store) {
