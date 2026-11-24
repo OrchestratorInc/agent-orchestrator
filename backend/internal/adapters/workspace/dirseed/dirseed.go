@@ -31,7 +31,9 @@ var cloneTree = CloneTree
 
 // Capture copies workspace to seed, which must not exist yet. Regular files,
 // folders and symlinks are copied; a symlink stays a link and its target is
-// never read. On any failure, including cancellation, seed is removed.
+// never read. A copy-on-write clone takes everything; the plain copy used
+// where clones aren't supported leaves node_modules and .venv out. On any
+// failure, including cancellation, seed is removed.
 func Capture(ctx context.Context, workspace, seed string) (err error) {
 	if strings.TrimSpace(seed) == "" {
 		return errors.New("dirseed: seed path is required")
@@ -63,7 +65,9 @@ func Capture(ctx context.Context, workspace, seed string) (err error) {
 	}()
 	err = cloneTree(src, seed)
 	if errors.Is(err, ErrCloneUnsupported) {
-		err = copyTree(ctx, src, seed)
+		// Without clones every byte is read inside the fork request, so the
+		// dependency folders stay out, as a turn's snapshot leaves them out.
+		err = copyTree(ctx, src, seed, true)
 	}
 	if err != nil {
 		return fmt.Errorf("dirseed: copy workspace: %w", err)
@@ -150,7 +154,7 @@ func copyEntry(ctx context.Context, from, to string) error {
 		return err
 	}
 	if info.IsDir() {
-		err = copyTree(ctx, from, to)
+		err = copyTree(ctx, from, to, false)
 	} else {
 		err = copyOne(from, to, info)
 	}
@@ -160,9 +164,13 @@ func copyEntry(ctx context.Context, from, to string) error {
 	return os.RemoveAll(from)
 }
 
+// dependencyDirs are reinstallable dependency folders a plain copy leaves out.
+var dependencyDirs = map[string]bool{"node_modules": true, ".venv": true}
+
 // copyTree copies src's folders, regular files and symlinks to dst. Other
-// kinds of file, such as sockets, are left out.
-func copyTree(ctx context.Context, src, dst string) error {
+// kinds of file, such as sockets, are left out, and with skipDeps so are
+// dependency folders at any depth.
+func copyTree(ctx context.Context, src, dst string, skipDeps bool) error {
 	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -180,6 +188,9 @@ func copyTree(ctx context.Context, src, dst string) error {
 		}
 		target := filepath.Join(dst, rel)
 		if entry.IsDir() {
+			if skipDeps && path != src && dependencyDirs[entry.Name()] {
+				return filepath.SkipDir
+			}
 			return os.MkdirAll(target, info.Mode().Perm()|0o700)
 		}
 		return copyOne(path, target, info)

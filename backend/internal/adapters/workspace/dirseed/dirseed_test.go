@@ -59,7 +59,7 @@ func TestCaptureCopiesFilesAndLeavesSourceUntouched(t *testing.T) {
 			t.Fatal(err)
 		}
 		for rel, want := range map[string]string{
-			"notes.md": "notes", "src/deep/main.go": "package main", "node_modules/left-pad/index.js": "pad", ".env": "KEY=1",
+			"notes.md": "notes", "src/deep/main.go": "package main", ".env": "KEY=1",
 		} {
 			if got := readFile(t, filepath.Join(seed, rel)); got != want {
 				t.Errorf("%s = %q, want %q", rel, got, want)
@@ -248,4 +248,44 @@ func TestReapKeepsFreshCaptureOfOldFolder(t *testing.T) {
 			t.Fatalf("Reap removed %d (%v) seeds just captured", removed, err)
 		}
 	})
+}
+
+// A clone costs nothing whatever the folder holds, so it keeps the dependency
+// folders. The plain copy, on disks without clones, would read every byte of
+// them inside the fork request, so it leaves them out at any depth, as a turn's
+// snapshot does.
+func TestCaptureCopyLeavesDependencyFoldersOut(t *testing.T) {
+	src := sourceFolder(t)
+	writeFile(t, filepath.Join(src, "pkg", "app", "node_modules", "react", "index.js"), "react", 0o644)
+	writeFile(t, filepath.Join(src, ".venv", "bin", "python"), "py", 0o755)
+	writeFile(t, filepath.Join(src, "my_node_modules_notes.md"), "kept", 0o644)
+	deps := []string{"node_modules/left-pad/index.js", "pkg/app/node_modules/react/index.js", ".venv/bin/python"}
+
+	saved := cloneTree
+	cloneTree = func(string, string) error { return ErrCloneUnsupported }
+	copied := filepath.Join(t.TempDir(), "copied")
+	err := Capture(context.Background(), src, copied)
+	cloneTree = saved
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range deps {
+		if _, err := os.Lstat(filepath.Join(copied, rel)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the copy holds %s: %v", rel, err)
+		}
+	}
+	if got := readFile(t, filepath.Join(copied, "my_node_modules_notes.md")); got != "kept" {
+		t.Errorf("a file merely named like a dependency folder was dropped: %q", got)
+	}
+
+	cloned := filepath.Join(t.TempDir(), "cloned")
+	if err := Capture(context.Background(), src, cloned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(cloned, deps[0])); errors.Is(err, os.ErrNotExist) {
+		if errors.Is(CloneTree(src, filepath.Join(t.TempDir(), "probe")), ErrCloneUnsupported) {
+			t.Skip("no copy-on-write clones here")
+		}
+		t.Errorf("the clone left %s out", deps[0])
+	}
 }
