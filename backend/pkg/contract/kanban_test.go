@@ -1233,9 +1233,9 @@ func TestDeriveKanbanPresentationResumedAfterPRsSettled(t *testing.T) {
 	t.Parallel()
 	merged := time.Unix(1000, 0)
 	before, after := merged.Add(-time.Minute), merged.Add(time.Minute)
-	directed := func(activity contract.ActivityState, at time.Time) contract.KanbanSessionFacts {
+	prompted := func(activity contract.ActivityState, at time.Time) contract.KanbanSessionFacts {
 		session := sessionAt(activity)
-		session.DirectedAt = at
+		session.HumanPromptAt = at
 		return session
 	}
 	done := contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMerged}
@@ -1250,49 +1250,49 @@ func TestDeriveKanbanPresentationResumedAfterPRsSettled(t *testing.T) {
 	}{
 		{
 			name:    "merged and untouched stays done",
-			session: directed(contract.ActivityIdle, before),
+			session: prompted(contract.ActivityIdle, before),
 			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
 			want:    done,
 		},
 		{
-			name:    "never directed stays done",
+			name:    "never prompted stays done",
 			session: sessionAt(contract.ActivityIdle),
 			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
 			want:    done,
 		},
 		{
-			name:    "a send after the merge is building again once idle",
-			session: directed(contract.ActivityIdle, after),
+			name:    "a prompt after the merge is building again once idle",
+			session: prompted(contract.ActivityIdle, after),
 			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
 			want:    building(contract.DisplayIdle),
 		},
 		{
 			name:    "a resumed worker reads as working",
-			session: directed(contract.ActivityActive, after),
+			session: prompted(contract.ActivityActive, after),
 			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
 			want:    building(contract.DisplayWorking),
 		},
 		{
 			name:    "a resumed worker waiting on input needs input",
-			session: directed(contract.ActivityWaitingInput, after),
+			session: prompted(contract.ActivityWaitingInput, after),
 			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
 			want:    building(contract.DisplayNeedsInput),
 		},
 		{
 			name:    "a closed pr resumes the same way",
-			session: directed(contract.ActivityIdle, after),
+			session: prompted(contract.ActivityIdle, after),
 			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Closed: true, SettledAt: merged}},
 			want:    building(contract.DisplayIdle),
 		},
 		{
 			name:    "an unknown settle time keeps the session done",
-			session: directed(contract.ActivityIdle, after),
+			session: prompted(contract.ActivityIdle, after),
 			prs:     []contract.KanbanPRFacts{{URL: "pr/1", Merged: true}},
 			want:    done,
 		},
 		{
-			name:    "a pr that merged after the send keeps the session done",
-			session: directed(contract.ActivityIdle, after),
+			name:    "a pr that merged after the prompt keeps the session done",
+			session: prompted(contract.ActivityIdle, after),
 			prs: []contract.KanbanPRFacts{
 				{URL: "pr/1", Merged: true, SettledAt: merged},
 				{URL: "pr/2", Merged: true, SettledAt: after.Add(time.Minute)},
@@ -1300,8 +1300,8 @@ func TestDeriveKanbanPresentationResumedAfterPRsSettled(t *testing.T) {
 			want: done,
 		},
 		{
-			name:    "a send after every pr settled resumes",
-			session: directed(contract.ActivityIdle, after.Add(2*time.Minute)),
+			name:    "a prompt after every pr settled resumes",
+			session: prompted(contract.ActivityIdle, after.Add(2*time.Minute)),
 			prs: []contract.KanbanPRFacts{
 				{URL: "pr/1", Merged: true, SettledAt: merged},
 				{URL: "pr/2", Closed: true, SettledAt: after.Add(time.Minute)},
@@ -1311,7 +1311,7 @@ func TestDeriveKanbanPresentationResumedAfterPRsSettled(t *testing.T) {
 		{
 			name: "earlier artifact output does not hold a resumed session in validating",
 			session: func() contract.KanbanSessionFacts {
-				session := directed(contract.ActivityIdle, after)
+				session := prompted(contract.ActivityIdle, after)
 				session.HasArtifactOutput = true
 				return session
 			}(),
@@ -1320,7 +1320,7 @@ func TestDeriveKanbanPresentationResumedAfterPRsSettled(t *testing.T) {
 		},
 		{
 			name:    "a live pr still speaks for a resumed session",
-			session: directed(contract.ActivityIdle, after),
+			session: prompted(contract.ActivityIdle, after),
 			prs: []contract.KanbanPRFacts{
 				{URL: "pr/1", Merged: true, SettledAt: merged},
 				{URL: "pr/2", Mergeability: contract.MergeMergeable},

@@ -599,7 +599,7 @@ func seedKanbanTestProject(t *testing.T, st *sqlite.Store, id string) {
 	}
 }
 
-func TestKanbanFactsCarryDirectionAndSettleTimes(t *testing.T) {
+func TestKanbanFactsCarryHumanPromptAndSettleTimes(t *testing.T) {
 	t.Parallel()
 	prompt := time.Date(2026, 11, 23, 19, 0, 0, 0, time.UTC)
 	message := prompt.Add(time.Minute)
@@ -610,15 +610,15 @@ func TestKanbanFactsCarryDirectionAndSettleTimes(t *testing.T) {
 		md   domain.SessionMetadata
 		want time.Time
 	}{
-		{name: "never directed", want: time.Time{}},
+		{name: "never prompted", want: time.Time{}},
 		{name: "a human prompt", md: domain.SessionMetadata{LatestUserPromptAt: prompt}, want: prompt},
-		{name: "a newer session message wins", md: domain.SessionMetadata{LatestUserPromptAt: prompt, LatestInteractionAt: message}, want: message},
-		{name: "a newer human prompt wins", md: domain.SessionMetadata{LatestUserPromptAt: message, LatestInteractionAt: prompt}, want: message},
+		{name: "a newer message from another session does not count", md: domain.SessionMetadata{LatestUserPromptAt: prompt, LatestInteractionAt: message}, want: prompt},
+		{name: "only a session message is not a human prompt", md: domain.SessionMetadata{LatestInteractionAt: message}, want: time.Time{}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := toContractKanbanSessionFacts(domain.SessionRecord{Metadata: tt.md}, false, true).DirectedAt
+			got := toContractKanbanSessionFacts(domain.SessionRecord{Metadata: tt.md}, false, true).HumanPromptAt
 			if !got.Equal(tt.want) {
-				t.Fatalf("DirectedAt = %v, want %v", got, tt.want)
+				t.Fatalf("HumanPromptAt = %v, want %v", got, tt.want)
 			}
 		})
 	}

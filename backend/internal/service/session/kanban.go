@@ -35,17 +35,11 @@ func toContractKanbanSessionFacts(rec domain.SessionRecord, interrupted, signalC
 		AutoReview:        rec.AutoReviewEnabled,
 		AutoInjectReview:  rec.AutoInjectReview,
 		AutoInjectCI:      rec.AutoInjectCI,
-		DirectedAt:        latestDirectedAt(rec.Metadata),
+		// Only a person's prompt resumes a done session. LatestInteractionAt
+		// also counts messages from other sessions, such as an orchestrator's
+		// note after the merge, which must leave the session done.
+		HumanPromptAt: rec.Metadata.LatestUserPromptAt,
 	}
-}
-
-// latestDirectedAt is the newest deliberate direction: a human prompt or a
-// message from another session, the same instant the sidebar's age shows.
-func latestDirectedAt(md domain.SessionMetadata) time.Time {
-	if md.LatestInteractionAt.After(md.LatestUserPromptAt) {
-		return md.LatestInteractionAt
-	}
-	return md.LatestUserPromptAt
 }
 
 // prSettledAt is when a merged or closed PR reached that state; zero while it

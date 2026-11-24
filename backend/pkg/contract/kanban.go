@@ -13,8 +13,8 @@ type KanbanColumn string
 
 // KanbanColumn values shown as board lanes by AO clients.
 const (
-	// KanbanBuilding is a session with no PR yet, or one directed again after
-	// all of its PRs merged or closed.
+	// KanbanBuilding is a session with no PR yet, or one a person prompted
+	// again after all of its PRs merged or closed.
 	KanbanBuilding KanbanColumn = "building"
 	// KanbanValidating is a PR inside an AO-driven loop: AO's own review of
 	// the current head (scheduled, running, cancelled, failed, or asking for
@@ -52,11 +52,11 @@ type KanbanSessionFacts struct {
 	AutoReview        bool
 	AutoInjectReview  bool
 	AutoInjectCI      bool
-	// DirectedAt is when the worker was last directed on purpose: the newest
-	// human prompt or message from another session. Passive changes such as
-	// PR polls, CI results, previews and artifact writes never move it. Zero
-	// when unknown.
-	DirectedAt time.Time
+	// HumanPromptAt is when a person last prompted the worker. Messages from
+	// other sessions (an orchestrator's wrap-up note, a report) and passive
+	// changes such as PR polls, CI results, previews and artifact writes never
+	// move it. Zero when unknown.
+	HumanPromptAt time.Time
 }
 
 // KanbanReviewRunFacts summarize AO's own review passes against one PR's
@@ -381,7 +381,7 @@ func DeriveKanbanPresentation(
 	// merged/closed placements count only once nothing is live.
 	pool := liveKanbanPRs(prs)
 	if len(pool) == 0 {
-		// Directed again after every PR landed: the session is building its
+		// Prompted again after every PR landed: the session is building its
 		// next change, so it reads as building rather than done. Its merged
 		// and closed PRs stay on the card as history. HasArtifactOutput is
 		// deliberately not consulted here: it says the session has ever
@@ -417,15 +417,15 @@ func DeriveKanbanPresentation(
 }
 
 // resumedAfterPRsSettled reports a session whose PRs are all merged or closed
-// and that someone directed again after the last of them settled. A PR whose
+// and that a person prompted again after the last of them settled. A PR whose
 // settle time is unknown keeps the session done: without it, a prompt cannot
 // be shown to come after the merge.
 func resumedAfterPRsSettled(session KanbanSessionFacts, prs []KanbanPRFacts) bool {
-	if session.DirectedAt.IsZero() || len(prs) == 0 {
+	if session.HumanPromptAt.IsZero() || len(prs) == 0 {
 		return false
 	}
 	for _, pr := range prs {
-		if pr.SettledAt.IsZero() || !session.DirectedAt.After(pr.SettledAt) {
+		if pr.SettledAt.IsZero() || !session.HumanPromptAt.After(pr.SettledAt) {
 			return false
 		}
 	}
