@@ -50,15 +50,12 @@ export default function NewProjectScreen() {
 	const choose = useCallback((next: ProjectPlacement) => { if (!busy) setChosen(next); }, [busy]);
 	const choice: PlacementChoice | undefined = localOffered && cloudOffered ? { value: placement, onChange: choose, disabled: busy } : undefined;
 
-	// Leave the form first, then open the page: a page pushed from a sheet lands
-	// in the stack under it, out of sight, and on Android back from the project
-	// should not return to a form already used. On iOS the page waits for the
-	// sheet to finish closing (see useLeaveSheetThen).
-	const leave = useCallback(() => backOr(router, "/projects"), [router]);
+	// Created, the form closes back to home, which lists the new project with
+	// its orchestrator. On iOS anything after waits for the sheet to finish
+	// closing (see useLeaveSheetThen).
+	const leave = useCallback(() => backOr(router, "/"), [router]);
 	const leaveFor = useLeaveSheetThen(leave);
-	const openProject = useCallback((hostId: string, id: string) => {
-		leaveFor(() => router.push({ pathname: "/project/[id]", params: { id, hostId } }));
-	}, [leaveFor, router]);
+	const openProject = leave;
 	const cancel = leave;
 
 	return (

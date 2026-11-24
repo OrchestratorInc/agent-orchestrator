@@ -5,6 +5,10 @@ const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
 	theme: new Proxy({}, { get: (_target, property) => `#${String(property)}` }),
 }));
+vi.mock("./FlatBackButton", async () => {
+	const React = await import("react");
+	return { FlatBackButton: (props: object) => React.createElement("FlatBackButton", props) };
+});
 vi.mock("react-native", () => ({ Platform: fixtures.platform, View: "View" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
@@ -37,6 +41,9 @@ vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
 vi.mock("./UpdateScreen", () => ({ UpdateScreen: () => null }));
 vi.mock("./UpdateRouteKeeper", () => ({ UpdateRouteKeeper: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
+// The side bar draws with Reanimated; the stack under it is what these tests read.
+vi.mock("./sidebar/Sidebar", () => ({ Sidebar: () => null }));
+vi.mock("./sidebar/SidebarDrawer", () => ({ SidebarDrawer: ({ children }: { children: unknown }) => children }));
 
 import RootLayout, { unstable_settings } from "../app/_layout";
 
@@ -55,7 +62,7 @@ async function renderRoot(platform: string) {
 	return renderer;
 }
 
-const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file", "project/[id]"];
+const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file", "project/[id]", "tag"];
 
 describe("root stack", () => {
 	// A cold start on a deep link or a notification tap lands with the board
@@ -74,10 +81,10 @@ describe("root stack", () => {
 				const value = renderer.root.findByProps({ name }).props.options;
 				return typeof value === "function" ? value({ route }) : value;
 			};
-			const board = (index: number) => ({ name: "(tabs)", state: { index, routes: [{ name: "(workers)" }, { name: "(projects)" }] } });
+			// The board is the Workers page alone: Projects moved into the sidebar.
+			const board = { name: "(tabs)", state: { index: 0, routes: [{ name: "(workers)" }] } };
 			expect(options("(tabs)").title).toBe("Workers");
-			expect(options("(tabs)", board(0)).title).toBe("Workers");
-			expect(options("(tabs)", board(1)).title).toBe("Projects");
+			expect(options("(tabs)", board).title).toBe("Workers");
 			expect(options("(tabs)").headerShown).toBe(false);
 			// The pair page's back button, pushed from onboarding.
 			expect(options("onboarding")).toMatchObject({ title: "Welcome", headerShown: false });

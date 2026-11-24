@@ -1,7 +1,7 @@
 import type { DesktopStatusTone } from "./desktopStatus";
 import type { Host as PairedHost } from "./hosts";
 import { machineAppearance, machineSymbolNames } from "./machineAppearance";
-import { SettingsStatusRow, type SettingsTone } from "./SettingsForm";
+import { SettingsStatusRow, type SettingsTone } from "./SettingsPage";
 
 /**
  * One paired machine, said once: its own glyph, its name, how its link is

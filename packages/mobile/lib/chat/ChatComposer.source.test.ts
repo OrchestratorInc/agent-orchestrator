@@ -159,11 +159,12 @@ describe("collapsed and expanded composer", () => {
 	// Collapsed, a slim pill under the session's chips; writing grows it into a
 	// card with the turn settings between attach and the round button. The mic
 	// takes it back to the slim pill.
-	it("opens on focus and stays open while anything waits to be sent, until the mic opens", () => {
+	// The desktop's card at rest as well as while writing: the settings row is
+	// always in view, until the mic opens and the waveform takes the width.
+	it("stays the open card, with its settings row, until the mic opens", () => {
 		expect(composer).toContain("const dictating = listening || transcribing;");
-		// `keyboardSend.holding` covers a hardware-Return send, whose read-only field
-		// is away for a moment after the draft clears (see useKeyboardSendRefocus).
-		expect(composer).toContain("const expanded = !dictating && (focused || keyboardSend.holding || hasDraft || attachments.length > 0);");
+		expect(composer).toContain("const expanded = !dictating;");
+		expect(composer).toContain("const held = !dictating;");
 		expect(composer).toContain('<Animated.View pointerEvents={expanded ? "box-none" : "none"}');
 	});
 
@@ -191,15 +192,18 @@ describe("composer chips", () => {
 	// The session's PR, what it changed, the context meter and the account's
 	// quota sit over the composer, open or not.
 	it("shows the session's state as chips that say where they lead", () => {
-		expect(composer).toContain("const chips = activeReviewPR || changes || contextMeter || quotaChip ?");
+		expect(composer).toContain("const chips = activeReviewPR || contextMeter || quotaChip ?");
 		expect(composer).toContain('accessibilityHint="Opens the pull request review" onPress={onOpenReview}');
-		expect(composer).toContain('accessibilityHint="Opens the changed files" onPress={changes.onOpen}');
+		// What changed is the desktop's "N Files Changed · Review" card, not a chip.
+		expect(composer).toContain('accessibilityHint="Opens the changed files to review"');
+		expect(composer).toContain('{changes.files} {changes.files === 1 ? "File" : "Files"} Changed');
+		expect(composer).toContain(">Review</Text>");
 		expect(composer).toContain('accessibilityHint="Opens context and usage" onPress={onOpenUsage}');
 	});
 
 	// The row scrolls sideways with no indicator, and the quota chip is the only
 	// quota warning: last, behind a PR and a changes chip, it starts off screen.
-	it("puts the quota chip first, ahead of the PR, changes and context chips", () => {
+	it("puts the quota chip first, ahead of the PR and context chips", () => {
 		const at = (marker: string) => {
 			const index = composer.indexOf(marker);
 			expect(index, marker).toBeGreaterThan(-1);
@@ -207,7 +211,6 @@ describe("composer chips", () => {
 		};
 		const quota = at("{quotaChip ? <ComposerChip");
 		expect(quota).toBeLessThan(at("{activeReviewPR ? <ComposerChip"));
-		expect(quota).toBeLessThan(at("{changes ? <ComposerChip"));
 		expect(quota).toBeLessThan(at("{contextMeter ? <View"));
 	});
 

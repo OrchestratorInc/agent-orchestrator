@@ -143,30 +143,27 @@ describe("Android chat controls row", () => {
 		expect(trigger("chat-model").findByType("ComposeText" as never).props.children).toBe("Opus");
 		expect(trigger("chat-model").props.modifiers).toContainEqual({ modifier: "semantics", args: [{ contentDescription: "Model, Opus" }] });
 		expect(menu("chat-model").props.expanded).toBe(false);
-		expect(titles("chat-model")).toEqual([["Opus", "on"], ["Haiku", "off"], ["Fast mode", "off"]]);
+		expect(titles("chat-model").slice(0, 3)).toEqual([["Opus", "on"], ["Haiku", "off"], ["Fast mode", "off"]]);
+		// Effort is one of the model menu's settings, as on the desktop.
+		expect(titles("chat-model").map(([title]) => title)).toContain("Effort: Low");
 		open("chat-model");
 		expect(menu("chat-model").props.expanded).toBe(true);
 	});
 
-	// The speedometer lit to the level, which opens the composer's slider.
-	it("draws the effort's speedometer, which opens the composer's slider", () => {
-		const { onToggleEffort } = render();
-		expect(gauge().props.disabled).toBe(false);
-		act(() => gauge().props.onPress());
-		expect(onToggleEffort).toHaveBeenCalledOnce();
-	});
-
-	it("draws no speedometer for a model that takes no effort", () => {
-		render({ effort: null });
-		expect(gauge()).toBeUndefined();
-		render({ effort: { choices: [], open: false, onToggle: () => {} } });
-		expect(gauge()).toBeUndefined();
-	});
-
-	it("offers the approval modes from the shield", () => {
+	// The row holds the model and approvals alone, as on the desktop: no speedometer.
+	it("draws no effort speedometer in the row", () => {
 		render();
-		expect(trigger("chat-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Ask when unsure");
-		expect(titles("chat-approval").find(([, state]) => state === "on")).toEqual(["Ask when unsure", "on"]);
+		expect(gauge()).toBeUndefined();
+	});
+
+
+	// The composer does not offer the approval mode: not as a control in the
+	// row, and not among the model menu's other settings.
+	it("offers no approval mode", () => {
+		render();
+		expect(renderer!.root.findAll((node) => hasTestID(node, "chat-approval"))).toHaveLength(0);
+		open("chat-model");
+		expect(rows("chat-model").some((row) => String(row.props.label).includes("Ask when unsure"))).toBe(false);
 	});
 
 	// The M3 menu once listed models only, and with the settings sheet gone
@@ -200,10 +197,8 @@ describe("Android chat controls row", () => {
 		pick("chat-model", 1);
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
 		expect(menu("chat-model").props.expanded).toBe(false);
-		pick("chat-approval", 3);
-		expect(onSettings).toHaveBeenLastCalledWith(expect.objectContaining({ approvalMode: "bypass-permissions" }));
 		expect(onOption).not.toHaveBeenCalled();
-		expect(fixtures.select).toHaveBeenCalledTimes(2);
+		expect(fixtures.select).toHaveBeenCalledTimes(1);
 	});
 
 	// A long catalog keeps the newest of each family on top and its older
@@ -276,14 +271,13 @@ describe("Android chat controls row", () => {
 
 	it("closes an open menu on back, since it does not take focus", () => {
 		render();
-		open("chat-approval");
+		open("chat-model");
 		act(() => { for (const handler of [...fixtures.back]) handler(); });
-		expect(menu("chat-approval").props.expanded).toBe(false);
+		expect(menu("chat-model").props.expanded).toBe(false);
 	});
 
 	it("disables every control while the conversation cannot take a change", () => {
 		render({ disabled: true });
-		expect(gauge().props.disabled).toBe(true);
-		for (const id of ["chat-model", "chat-approval"]) expect(trigger(id).props.enabled).toBe(false);
+		expect(trigger("chat-model").props.enabled).toBe(false);
 	});
 });

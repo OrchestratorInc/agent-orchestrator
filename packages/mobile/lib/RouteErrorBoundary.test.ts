@@ -14,12 +14,12 @@ const rootLayout = "_layout.tsx";
 
 const screenRoutes = [
 	"(tabs)/(workers)/index.tsx",
-	"(tabs)/(projects)/projects.tsx",
+	"(tabs)/(workers)/board.tsx",
 	"prs/index.tsx",
-	"(tabs)/compose.tsx",
 	"artifact/[sessionId].tsx",
 	"artifact-version/[sessionId].tsx",
 	"artifacts/[sessionId].tsx",
+	"artifacts/index.tsx",
 	"connect.tsx",
 	"conversation-actions.tsx",
 	"files/[sessionId]/file.tsx",
@@ -45,6 +45,7 @@ const screenRoutes = [
 	"session/[id].tsx",
 	"settings/index.tsx",
 	"shell/[handleId].tsx",
+	"tag.tsx",
 ];
 
 const sheetRoutes = [
@@ -67,7 +68,6 @@ const sheetRoutes = [
 const deferredRoutes = [
 	"(tabs)/_layout.tsx",
 	"(tabs)/(workers)/_layout.tsx",
-	"(tabs)/(projects)/_layout.tsx",
 	"settings/_layout.tsx",
 	"notifications/_layout.tsx",
 	"prs/_layout.tsx",

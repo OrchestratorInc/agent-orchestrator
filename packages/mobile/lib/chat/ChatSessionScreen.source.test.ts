@@ -61,7 +61,7 @@ describe("active turn controls", () => {
 	// PATCH. With the precedence inverted, renaming on the board changed the row
 	// and left this header showing the agent's auto-generated title.
 	it("prefers the session's name over the conversation title", () => {
-		expect(screenSource).toContain("const title = sessionName || conversation.snapshot?.title");
+		expect(screenSource).toContain('const title = isOrchestrator ? "Orchestrator" : sessionName || conversation.snapshot?.title');
 	});
 
 	// The actions sheet holds only Shell, Preview, Artifacts, Pin, PR Review, Compact and Archive.
@@ -102,7 +102,7 @@ describe("active turn controls", () => {
 
 describe("whole-screen states", () => {
 	it("shows loading, and failures as an alert with Retry", () => {
-		expect(screenSource).toContain('<EmptyState busy title="Loading conversation…" />');
+		expect(screenSource).toContain('<ConversationLoading title="Orchestrating…" message={isOrchestrator ? undefined : title} />');
 		expect(screenSource).toContain('onPress={() => void resume()} />}');
 		expect(screenSource).toContain('<View accessibilityRole="alert" style={[styles.center, { paddingTop: headerOverlap }]}>{children}</View>');
 	});
@@ -174,9 +174,23 @@ describe("the composer and the keyboard", () => {
 // iOS 26's glass blurred only the status bar over the conversation and left
 // the title over sharp text; iOS 27's covers the whole bar.
 describe("the bar over the conversation", () => {
-	it("is the clear glass bar on iOS 27 and later only, and the stack's own bar on every other iOS", () => {
-		expect(screenSource).toContain('const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";');
+	// The desktop's top bar, drawn by the conversation itself, with the native
+	// bar hidden while it shows and back for the terminal on the same route.
+	it("draws the desktop's top bar itself, over no native bar", () => {
+		expect(screenSource).toContain("const CLEAR_HEADER = false;");
+		expect(screenSource).toContain("navigation.setOptions({ headerShown: false });");
+		expect(screenSource).toContain("return () => navigation.setOptions({ headerShown: true });");
+		expect(screenSource).toContain("<SessionTopbar");
 		expect(screenSource).toContain("if (!CLEAR_HEADER) return;");
 		expect(screenSource).not.toContain("headerBlurEffect");
+	});
+});
+
+describe("the top bar stays whole", () => {
+	// The timeline is lifted as the composer grows; unclipped, its first card
+	// slid up over the session's top bar and cut the tab in half.
+	it("clips the conversation to its frame and keeps the bar above it", () => {
+		expect(screenSource).toContain('conversation: { flex: 1, overflow: "hidden" },');
+		expect(readFileSync(new URL("./SessionTopbar.tsx", import.meta.url), "utf8")).toContain("bar: { zIndex: 2,");
 	});
 });

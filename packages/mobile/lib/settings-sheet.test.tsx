@@ -2,6 +2,10 @@ import { act, create } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({ platform: { OS: "android" }, theme: new Proxy({}, { get: () => "#000000" }) }));
+vi.mock("./FlatBackButton", async () => {
+	const React = await import("react");
+	return { FlatBackButton: (props: object) => React.createElement("FlatBackButton", props) };
+});
 vi.mock("react-native", () => ({ Platform: fixtures.platform, View: "View" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
@@ -31,6 +35,9 @@ vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
 vi.mock("./UpdateScreen", () => ({ UpdateScreen: () => null }));
 vi.mock("./UpdateRouteKeeper", () => ({ UpdateRouteKeeper: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
+// The side bar draws with Reanimated; the stack under it is what these tests read.
+vi.mock("./sidebar/Sidebar", () => ({ Sidebar: () => null }));
+vi.mock("./sidebar/SidebarDrawer", () => ({ SidebarDrawer: ({ children }: { children: unknown }) => children }));
 
 import RootLayout from "../app/_layout";
 

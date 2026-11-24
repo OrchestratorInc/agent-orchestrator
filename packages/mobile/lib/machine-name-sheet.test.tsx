@@ -10,12 +10,13 @@ const fixtures = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: () => "#000000" }),
 	hosts: [] as { id: string; name: string; appearance?: { symbol: string } }[],
 }));
+vi.mock("./HeaderTextButton", () => ({ HeaderTextButton: "HeaderTextButton", HeaderPrimaryButton: "HeaderPrimaryButton" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	const router = { back: fixtures.back, canGoBack: () => true };
 	return {
-		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) },
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) },
 		useRouter: () => router,
 		useLocalSearchParams: () => fixtures.params,
 	};
@@ -215,7 +216,7 @@ it("cancels and saves from the iOS bar", async () => {
 	expect(nameField().props.autoFocus).toBe(true);
 	await typeName("   ");
 	expect(saveButton().props.disabled).toBe(true);
-	const cancel = left.findByType("StackToolbarButton" as never);
+	const cancel = left.findByType("HeaderTextButton" as never);
 	act(() => cancel.props.onPress());
 	expect(fixtures.back).toHaveBeenCalledTimes(1);
 	act(() => renderer!.unmount());

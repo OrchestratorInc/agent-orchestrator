@@ -481,46 +481,6 @@ export function orchestratorButtonCopy(row: OrchestratorProjectRow, busy: boolea
 	}
 }
 
-/**
- * Every session a project detail page lists: its workers, archived ones
- * included. The Workers tab filters by project too, but it is scoped to live
- * work; a project's own page is where its history belongs, so nothing is dropped
- * for being finished. The store already keeps orchestrators in a list of their
- * own, so these are workers only; the page shows the orchestrator above them.
- */
-export function projectDetailSessions(projectId: string, sessions: readonly DashboardSession[]): DashboardSession[] {
-	return sessions.filter((session) => session.projectId === projectId);
-}
-
-export type ProjectPageStats = { workers: number; needsYou: number; ready: number; archived: number };
-
-/**
- * The counts across the top of a project page. Zones come from the board's own
- * classifier, so "Needs you" and "Ready" agree with the sections listed below.
- * "Needs you" also counts the orchestrator when it is the one waiting — it is
- * something to answer, even though it is not in the worker list.
- */
-export function projectPageStats(
-	sessions: readonly DashboardSession[],
-	orchestrator?: OrchestratorLink | null,
-	/** Archived workers the poll only counted, on a machine that pages its archive. */
-	pagedArchived = 0,
-): ProjectPageStats {
-	const orchestratorWaiting = orchestrator && orchestrator.isTerminal !== true && agentBlocked({ status: orchestrator.status ?? null });
-	const stats: ProjectPageStats = { workers: 0, needsYou: orchestratorWaiting ? 1 : 0, ready: 0, archived: pagedArchived };
-	for (const session of sessions) {
-		if (isArchived(session)) {
-			stats.archived += 1;
-			continue;
-		}
-		stats.workers += 1;
-		const zone = boardZoneOf(session);
-		if (zone === "needs_you") stats.needsYou += 1;
-		if (zone === "ready") stats.ready += 1;
-	}
-	return stats;
-}
-
 /** No orchestrator agent is set for the project, so the machine can't pick one. */
 export const ORCHESTRATOR_AGENT_REQUIRED = {
 	title: "No orchestrator agent",

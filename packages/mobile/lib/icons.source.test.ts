@@ -36,3 +36,24 @@ describe("icon imports", () => {
 		expect(unknown).toEqual([]);
 	});
 });
+
+// The icon's `name` takes any string, and an unknown one draws nothing: the
+// tag page shipped blank checkboxes ("square", "check-square") and a blank tag
+// glyph that the typecheck let through. Every literal name must be shipped.
+describe("icon names", () => {
+	it("draws only glyphs the app ships", async () => {
+		const { readdirSync } = await import("node:fs");
+		const icons = readFileSync(fileURLToPath(new URL("./icons.tsx", import.meta.url)), "utf8");
+		const block = icons.slice(icons.indexOf("export const glyphs = {"), icons.indexOf("} as const;"));
+		const glyphs = new Set([...block.matchAll(/^\t"([a-z0-9-]+)":/gm)].map((match) => match[1]));
+		const root = fileURLToPath(new URL("../", import.meta.url));
+		const files = ["app", "lib"].flatMap((dir) => readdirSync(`${root}${dir}`, { recursive: true, encoding: "utf8" })
+			.filter((file) => file.endsWith(".tsx") && !file.includes(".test."))
+			.map((file) => `${root}${dir}/${file}`));
+		const missing = files.flatMap((file) => [...readFileSync(file, "utf8").matchAll(/<Feather name="([a-z0-9-]+)"/g)]
+			.map((match) => match[1])
+			.filter((name) => !glyphs.has(name))
+			.map((name) => `${file.slice(root.length)}: ${name}`));
+		expect(missing).toEqual([]);
+	});
+});

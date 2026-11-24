@@ -12,7 +12,7 @@ import { cloudAgentsOffered, cloudPlanView, freePlanSummary, PLAN_DESKTOP_NOTE }
 import { useCloudPlan, type CloudPlanState } from "../../../lib/cloud/planStore";
 import type { CloudGitHubInstallation, CloudOffering, CloudProviderConnection } from "../../../lib/cloud/types";
 import { haptics } from "../../../lib/haptics";
-import { SettingsButtonRow, SettingsForm, SettingsMeterRow, SettingsSection, SettingsStatusRow, SettingsValueRow, type SettingsTone } from "../../../lib/SettingsForm";
+import { SettingsButtonRow, SettingsForm, SettingsMeterRow, SettingsSection, SettingsStatusRow, SettingsValueRow, type SettingsTone } from "../../../lib/SettingsPage";
 import { Spinner } from "../../../lib/Spinner";
 import { useTheme } from "../../../lib/ThemeProvider";
 import { rowIconWidth } from "../../../lib/tokens";

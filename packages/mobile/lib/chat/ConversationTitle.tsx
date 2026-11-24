@@ -11,6 +11,8 @@ import { fontScaleCap, radius, space, type } from "../tokens";
  */
 const BAR_CHROME = 180;
 const MAX_TITLE_WIDTH = 260;
+/** What each further bar button (the desktop topbar's Orchestrator, Board, New task) takes from the title. */
+const BAR_BUTTON = 44;
 
 /** The agent's state in a word, so the header never says it by colour alone. */
 export function conversationStateLabel(state: string): string {
@@ -30,18 +32,21 @@ export function ConversationTitle({
 	subtitle,
 	harness,
 	state,
+	barButtons = 0,
 }: {
 	title: string;
 	subtitle: string;
 	harness?: string | null;
 	state?: string;
+	/** Buttons the bar holds beside "⋯", each taking its width from the title. */
+	barButtons?: number;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// Sized to the window, not fixed: a set width wider than the space between
 	// the bar's buttons ran the state label under the actions menu.
 	const { width: windowWidth } = useWindowDimensions();
-	const maxWidth = Math.min(MAX_TITLE_WIDTH, windowWidth - BAR_CHROME);
+	const maxWidth = Math.min(MAX_TITLE_WIDTH, windowWidth - BAR_CHROME - barButtons * BAR_BUTTON);
 	const stateColor = state === "busy" ? t.orange : state === "ready" ? t.green : state === "stopped" ? t.red : t.amber;
 	const stateLabel = state ? conversationStateLabel(state) : undefined;
 

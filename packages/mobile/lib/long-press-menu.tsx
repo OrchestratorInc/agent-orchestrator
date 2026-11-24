@@ -30,6 +30,13 @@ export type LongPressMenuProps<Id extends string> = {
 	style?: StyleProp<ViewStyle>;
 	pressedStyle?: StyleProp<ViewStyle>;
 	testID?: string;
+	/**
+	 * What opens the menu. A row opens it on a long press; a "⋯" button, whose
+	 * whole job is the menu, opens it on a plain tap (and ignores `onPress`).
+	 */
+	openOn?: "longPress" | "press";
+	/** Lays out the menu's own wrapper, as a row that has to fill its line needs. */
+	containerStyle?: StyleProp<ViewStyle>;
 };
 
 type Anchor = { x: number; y: number; width: number; height: number };
@@ -46,7 +53,7 @@ const GAP = 8;
  * dims, the target lifts in place, and a rounded card of actions opens under it.
  * iOS keeps the system menu (long-press-menu.ios.tsx).
  */
-export function LongPressMenu<Id extends string>({ children, actions, onAction, onPress, accessibilityLabel, accessibilityHint, style, pressedStyle, testID }: LongPressMenuProps<Id>) {
+export function LongPressMenu<Id extends string>({ children, actions, onAction, onPress: rowPress, accessibilityLabel, accessibilityHint, style, pressedStyle, testID, openOn = "longPress", containerStyle }: LongPressMenuProps<Id>) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const reduceMotion = useReducedMotion();
@@ -70,6 +77,7 @@ export function LongPressMenu<Id extends string>({ children, actions, onAction, 
 		});
 	};
 	const close = () => setAnchor(undefined);
+	const onPress = openOn === "press" ? open : rowPress;
 	const choose = (id: Id) => {
 		close();
 		onAction(id);
@@ -87,7 +95,7 @@ export function LongPressMenu<Id extends string>({ children, actions, onAction, 
 	})() : undefined;
 
 	return (
-		<View style={onPress ? undefined : style}>
+		<View style={onPress ? containerStyle : [style, containerStyle]}>
 			<Pressable
 				ref={target}
 				testID={testID}

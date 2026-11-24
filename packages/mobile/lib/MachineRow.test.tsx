@@ -1,7 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./SettingsForm", () => ({ SettingsStatusRow: "SettingsStatusRow" }));
+vi.mock("./SettingsPage", () => ({ SettingsStatusRow: "SettingsStatusRow" }));
 
 import { MachineRow, machineStatusTone } from "./MachineRow";
 

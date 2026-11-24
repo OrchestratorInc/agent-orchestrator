@@ -22,6 +22,7 @@ const fixtures = vi.hoisted(() => ({
 	theme: { accent: "accent", bgBase: "base", bgElevated: "card", green: "green", highlight: "caret", red: "red", textPrimary: "ink", textSecondary: "gray", textTertiary: "dim" },
 }));
 
+vi.mock("./HeaderTextButton", () => ({ HeaderTextButton: "HeaderTextButton", HeaderPrimaryButton: "HeaderPrimaryButton" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -130,7 +131,8 @@ async function type(testID: string, text: string) {
 	const node = field(testID);
 	await act(async () => node.props.onTextChange(text));
 }
-const save = () => renderer!.root.findByType("StackToolbarButton" as never);
+// iOS draws our filled Save; Android keeps its check icon in the bar.
+const save = () => renderer!.root.findAllByType("HeaderPrimaryButton" as never)[0] ?? renderer!.root.findByType("StackToolbarButton" as never);
 const connectionSection = () => renderer!.root.findAllByType("Section" as never)[1];
 
 describe("editing a machine", () => {
@@ -151,7 +153,7 @@ describe("editing a machine", () => {
 
 	it("saves from the bar once something changed, then goes back", async () => {
 		await open();
-		expect(save().props).toMatchObject({ children: "Save", accessibilityLabel: "Save machine changes", disabled: true });
+		expect(save().props).toMatchObject({ title: "Save", accessibilityLabel: "Save machine changes", disabled: true });
 		await type("environment-name-a", "Travel Mac");
 		await type("environment-host-a", "travel.tail123.ts.net");
 		act(() => renderer!.root.findByType("Picker" as never).props.onSelectionChange("cloud"));

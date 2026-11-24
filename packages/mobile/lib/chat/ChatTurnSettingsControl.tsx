@@ -1,10 +1,9 @@
-import { DropdownMenu, DropdownMenuItem, HorizontalDivider, Icon, IconButton, Text } from "@expo/ui/jetpack-compose";
+import { DropdownMenu, DropdownMenuItem, HorizontalDivider, Icon, Text } from "@expo/ui/jetpack-compose";
 import { testID, width } from "@expo/ui/jetpack-compose/modifiers";
 import { useState } from "react";
 import { ComposerControlsRow, HarnessMark, KEEP_KEYBOARD, MenuRow, ModelCapsuleMenu, SUBMENU, useCloseMenuOnBack } from "../composeMenu.android";
 import { defaultModelChoice } from "../spawnModel";
 import { AUTOMATIC_MODEL } from "../agentSwitch";
-import { EffortGaugeButton } from "../effort-gauge";
 import { haptics } from "../haptics";
 import { useTheme } from "../ThemeProvider";
 import { materialDrawable } from "../toolbarIcon.android";
@@ -21,10 +20,10 @@ const MENU_WIDTH = 240;
 
 /**
  * The chat's controls row on Android, built as the new task's: the model in a
- * filled capsule led by its agent's mark, the effort as a speedometer beside
- * it that opens the composer's slider, and the approval mode as its shield at
- * the row's end. The model and the approval mode open the same Material 3
- * dropdown as the new task's, with the current choice ticked. The model's lists
+ * filled capsule led by its agent's mark, opening the same Material 3 dropdown
+ * as the new task's, with the current choice ticked. As on the desktop, the
+ * effort is one of the model menu's settings rather than a gauge beside it,
+ * and the composer offers no approval mode: the session keeps the one it has. The model's lists
  * models, the newest of each family first and older versions one level down,
  * then the provider's other settings, such as Fast mode or its agent, as iOS's
  * does: an on/off setting ticked while on, any other opening onto its choices.
@@ -37,11 +36,10 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
 	const modelRow = select("model");
-	const effortRow = select("effort");
 	const approvalRow = select("permissions");
-	// The effort has its slider; everything else the provider offers is listed
-	// under the models, or Android would have no way to reach it.
-	const otherRows = rows.filter((row) => row !== modelRow && row !== effortRow && row !== approvalRow);
+	// Everything else the provider offers, the effort included, is listed under
+	// the models. The approval mode is not offered in the composer.
+	const otherRows = rows.filter((row) => row !== modelRow && row !== approvalRow);
 	const modelChoices = splitModelChoices(modelRow?.choices ?? []);
 	const parts = turnSettingsParts(snapshot, models, options);
 	const off = Boolean(disabled);
@@ -188,24 +186,6 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 					))}
 				</ModelCapsuleMenu>
 			}
-			// The effort as a speedometer lit to the chosen level; a tap opens the
-			// slider over the composer.
-			effort={effort?.choices.length ? <EffortGaugeButton choices={effort.choices} open={effort.open} onPress={() => { close(); effort.onToggle(); }} disabled={off} testID="chat-effort" /> : null}
-			// The approval mode as its symbol alone; the menu and TalkBack name it.
-			end={approvalRow ? (
-				<DropdownMenu expanded={openMenu === "approval"} properties={KEEP_KEYBOARD} onDismissRequest={close} color={t.bgElevated}>
-					<DropdownMenu.Trigger>
-						<IconButton onClick={() => setOpenMenu("approval")} enabled={!off} colors={{ contentColor: t.textSecondary }} modifiers={[testID("chat-approval")]}>
-							<Icon source={materialDrawable("verified_user")} size={iconSize.lg} contentDescription={`Approval, ${approvalRow.value}`} />
-						</IconButton>
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Items>
-						{approvalRow.choices.map((choice) => (
-							<MenuRow key={choice.value} label={choice.label} selected={choice.selected} width={MENU_WIDTH} onClick={() => choose(approvalRow, choice.value)} />
-						))}
-					</DropdownMenu.Items>
-				</DropdownMenu>
-			) : null}
 		/>
 	);
 }

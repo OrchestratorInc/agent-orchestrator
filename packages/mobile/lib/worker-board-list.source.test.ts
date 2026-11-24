@@ -7,7 +7,7 @@ function source(relativePath: string): string {
 }
 
 const list = source("./worker-board-list.tsx");
-const board = source("../app/(tabs)/(workers)/index.tsx");
+const board = source("../app/(tabs)/(workers)/board.tsx");
 
 describe("worker board list identity", () => {
 	// Swapping the project filter in place left the board showing two lists at
@@ -18,8 +18,10 @@ describe("worker board list identity", () => {
 		expect(list).toContain("<LayoutAnimationConfig key={`${identityKey}:${fontScale}`} skipEntering skipExiting>");
 		expect(list).not.toContain("<FlatList\n\t\t\t\t\tref={listRef}\n\t\t\t\t\tkey={identityKey}");
 		expect(board).toContain("const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}`;");
-		expect(board).toContain("key={boardIdentityKey}");
-		expect(board).toContain("identityKey={boardIdentityKey}");
+		// The lane is part of the identity: switching lanes swaps the set of cards wholesale.
+		expect(board).toContain("const listKey = showLanes ? `${boardIdentityKey}|${kanban.lane}` : boardIdentityKey;");
+		expect(board).toContain("key={listKey}");
+		expect(board).toContain("identityKey={listKey}");
 	});
 
 	// Memoised rows kept the old text size's measurements after a live change.

@@ -63,11 +63,14 @@ import { STARTUP_POLL_MS } from "../session/startupPoll";
 import { useStartupSession } from "../session/useStartupSession";
 import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
+import { SessionTopbarPills, sessionTopbarToolbarButtons, useSessionTopbarActions } from "../sessionTopbar";
+import { SessionTopbar } from "./SessionTopbar";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { space } from "../tokens";
+import { ConversationLoading } from "../OrchestratorLoader";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
@@ -367,7 +370,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// title (ChatWorkspace: sessionTitle || session.title || snapshot.title). This
 	// had that precedence inverted, so renaming from the board changed the row but
 	// left this header on the agent's auto-generated conversation title.
-	const title = sessionName || conversation.snapshot?.title || session.id;
+	// An orchestrator's header reads "Orchestrator", as its desktop tab does;
+	// the project is the subtitle.
+	const isOrchestrator = "projectName" in session || session.kind === "orchestrator";
+	const title = isOrchestrator ? "Orchestrator" : sessionName || conversation.snapshot?.title || session.id;
+	const topbarActions = useSessionTopbarActions({ orchestrator: isOrchestrator, projectId: session.projectId || undefined, hostId: currentHostId });
 	const projectName = "projectName" in session
 		? session.projectName
 		: session.projectId ? projects.find((project) => project.id === session.projectId)?.name : "Standalone";
@@ -437,12 +444,19 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 						subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
 						harness={headerHarness}
 						state={headerState}
+						barButtons={topbarActions.length}
 					/>
 				);
 				return PILL_HEADER ? <HeaderPill onBack={goBack}>{heading}</HeaderPill> : heading;
 			},
 		});
-	}, [goBack, headerHarness, headerState, navigation, projectName, title, t]);
+	}, [goBack, headerHarness, headerState, navigation, projectName, title, t, topbarActions.length]);
+	// The desktop's top bar is this screen's own (SessionTopbar); the native bar
+	// comes back for the terminal, which shares the route.
+	useLayoutEffect(() => {
+		navigation.setOptions({ headerShown: false });
+		return () => navigation.setOptions({ headerShown: true });
+	}, [navigation]);
 	// The route keeps its options when it swaps this screen for the terminal,
 	// which sets only `title`. A `headerTitle` left here outranks it, so the bar
 	// stayed on this screen's last state: the Chat controller the switch stopped,
@@ -641,7 +655,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// What the menu shows, as plain values: the conversation streams, and the menu
 	// is rebuilt only when one of these changes, not on every event.
 	const menuSnapshot = conversation.snapshot;
-	const isOrchestrator = "projectName" in session;
 	const menuReady = Boolean(menuSnapshot);
 	// The daemon refuses to rename the project orchestrator.
 	const menuCanCompact = Boolean(menuSnapshot && can(menuSnapshot, "compaction")) && !conversationActionUnsupported("compact", conversation.actionCodes.compact);
@@ -789,15 +802,21 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useLayoutEffect(() => {
 		if (!PILL_HEADER) return;
 		navigation.setOptions({
-			headerRight: menuReady ? () => <HeaderPillButton icon="more" label="Conversation actions" onPress={openActions} testID="header-more" /> : undefined,
+			headerRight: menuReady || topbarActions.length ? () => (
+				<SessionTopbarPills actions={topbarActions}>
+					{menuReady ? <HeaderPillButton icon="more" label="Conversation actions" onPress={openActions} testID="header-more" /> : null}
+				</SessionTopbarPills>
+			) : undefined,
 		});
 		return () => navigation.setOptions({ headerRight: undefined });
-	}, [menuReady, navigation, openActions]);
-	const headerItems = useMemo(() => menuReady && !PILL_HEADER ? (
+	}, [menuReady, navigation, openActions, topbarActions]);
+	// Desktop's session topbar actions (Orchestrator, or Board and New task) lead "⋯".
+	const headerItems = useMemo(() => (menuReady || topbarActions.length) && !PILL_HEADER ? (
 		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
+			{sessionTopbarToolbarButtons(topbarActions)}
+			{menuReady ? <Stack.Toolbar.Button icon={toolbarIcon("more")} hidesSharedBackground accessibilityLabel="Conversation actions" onPress={openActions} /> : null}
 		</Stack.Toolbar>
-	) : null, [menuReady, openActions]);
+	) : null, [menuReady, openActions, topbarActions]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -860,7 +879,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	if (awaitingConversation && startupView && !startupView.failed) {
 		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
 	}
-	if (awaitingConversation) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
+	if (awaitingConversation) return <View style={[styles.center, { paddingTop: headerOverlap }]}><ConversationLoading title="Orchestrating…" message={isOrchestrator ? undefined : title} /></View>;
 	if (conversation.unavailable) {
 		return <Failure>
 			<EmptyState
@@ -957,7 +976,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		{/* Not padded for the keyboard: the timeline moves its content with the
 		    keyboard on the UI thread (ChatTimeline's `keyboardOffset`). */}
 		<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>
-			{headerItems}
+			{/* The desktop session view's top bar, drawn here: the native bar is hidden while the conversation shows. */}
+			<SessionTopbar
+				title={title}
+				harness={headerHarness}
+				onBack={goBack}
+				onMenu={menuReady ? openActions : undefined}
+				actions={topbarActions}
+			/>
 			{CLEAR_HEADER ? null : banners}
 			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
@@ -1142,7 +1168,9 @@ function Failure({ children }: { children: ReactNode }) {
  * a terminal session does. iOS 26's glass blurred only the status bar over
  * this list, leaving the title over sharp text, and older versions have none.
  */
-const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";
+// The conversation draws the desktop's top bar itself (SessionTopbar) and
+// starts below it; the native bar, clear or solid, is hidden while it shows.
+const CLEAR_HEADER = false;
 
 /**
  * Android's bar floats its controls on pills over the conversation (see
@@ -1193,7 +1221,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	composerHidden: { display: "none" },
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, backgroundColor: t.bgBase },
-	conversation: { flex: 1 },
+	// Clipped to its own frame: the timeline is lifted as the composer grows
+	// (ChatTimeline's growthLift), and unclipped it slid up over the top bar.
+	conversation: { flex: 1, overflow: "hidden" },
 	// The page's colour, so the conversation scrolling up passes under the
 	// banners rather than showing between them.
 	floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 },

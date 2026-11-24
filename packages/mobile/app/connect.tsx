@@ -26,7 +26,7 @@ export default function ConnectRoute() {
 	// right. A connect that has started can't be called back, so while one runs
 	// the edge swipe is held, and the form disables its way back.
 	const header = useMemo(() => (
-		<Stack.Screen options={{ title: hostId === undefined ? "Connect manually" : "Edit connection", headerBackVisible: false }} />
+		<Stack.Screen options={{ title: hostId === undefined ? "Connect manually" : "Edit connection", headerBackVisible: false, unstable_headerLeftItems: () => [], headerLeft: () => null }} />
 	), [hostId]);
 	useEffect(() => {
 		if (!busy) return;

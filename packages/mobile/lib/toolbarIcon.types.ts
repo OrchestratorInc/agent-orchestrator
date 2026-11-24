@@ -14,6 +14,7 @@ import type { AppSymbolName, IOSSymbol, symbols } from "./symbols";
  */
 export const materialDrawableNames = [
 	"account_circle",
+	"account_tree",
 	"add",
 	"add_comment",
 	"archive",
@@ -47,11 +48,13 @@ export const materialDrawableNames = [
 	"dns",
 	"draft",
 	"edit",
+	"edit_square",
 	"expand_less",
 	"expand_more",
 	"filter_list",
 	"find_in_page",
 	"folder",
+	"grid_view",
 	"group",
 	"history",
 	"host",

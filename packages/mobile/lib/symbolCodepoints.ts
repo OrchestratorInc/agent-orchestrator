@@ -15,6 +15,8 @@ const codepoints: Record<RegistryAndroidSymbol, number> = {
 	settings: 0xe8b8,
 	notifications: 0xe7f4,
 	add: 0xe145,
+	account_tree: 0xe97a,
+	grid_view: 0xe9b0,
 	more_vert: 0xe5d4,
 	more_horiz: 0xe5d3,
 	close: 0xe5cd,

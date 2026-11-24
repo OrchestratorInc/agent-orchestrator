@@ -6,15 +6,17 @@ import type { LongPressMenuProps } from "./long-press-menu";
 export type { LongPressMenuAction, LongPressMenuProps } from "./long-press-menu";
 
 /** See long-press-menu.tsx. iOS resolves SF Symbols by name at runtime. */
-export function LongPressMenu<Id extends string>({ children, actions, onAction, onPress, accessibilityLabel, accessibilityHint, style, pressedStyle, testID }: LongPressMenuProps<Id>) {
+export function LongPressMenu<Id extends string>({ children, actions, onAction, onPress: rowPress, accessibilityLabel, accessibilityHint, style, pressedStyle, testID, openOn = "longPress", containerStyle }: LongPressMenuProps<Id>) {
+	// A "⋯" button opens the system menu on a tap: MenuView then owns the press.
+	const onPress = openOn === "press" ? undefined : rowPress;
 	const menuActions: MenuAction[] = actions.map((action) => ({ id: action.id, title: action.title, image: action.systemImage }));
 	return (
 		<MenuView
 			actions={menuActions}
-			shouldOpenOnLongPress
+			shouldOpenOnLongPress={openOn !== "press"}
 			onPressAction={(event: NativeActionEvent) => { haptics.tap(); onAction(event.nativeEvent.event as Id); }}
 			testID={testID}
-			style={onPress ? undefined : style}
+			style={onPress ? containerStyle : [style, containerStyle]}
 		>
 			{onPress ? (
 				<Pressable
@@ -28,7 +30,7 @@ export function LongPressMenu<Id extends string>({ children, actions, onAction, 
 				>
 					{children}
 				</Pressable>
-			) : <View>{children}</View>}
+			) : <View accessible={openOn === "press"} accessibilityRole={openOn === "press" ? "button" : undefined} accessibilityLabel={openOn === "press" ? accessibilityLabel : undefined}>{children}</View>}
 		</MenuView>
 	);
 }

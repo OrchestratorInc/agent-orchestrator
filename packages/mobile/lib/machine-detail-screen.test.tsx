@@ -28,6 +28,7 @@ const fixtures = vi.hoisted(() => ({
 	theme: { accent: "accent", bgBase: "base", bgElevated: "card", green: "green", red: "red", textPrimary: "ink", textSecondary: "gray", textTertiary: "dim" },
 }));
 
+vi.mock("./HeaderTextButton", () => ({ HeaderTextButton: "HeaderTextButton", HeaderPrimaryButton: "HeaderPrimaryButton" }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -36,7 +37,7 @@ vi.mock("expo-router", async () => {
 	return {
 		Stack: {
 			Screen: host("StackScreen"),
-			Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }),
+			Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }),
 		},
 		useFocusEffect: (effect: () => void) => React.useEffect(effect, [effect]),
 		useLocalSearchParams: () => ({ id: "a" }),
@@ -153,8 +154,8 @@ describe("a machine's page on iOS", () => {
 	it("is titled for the machine and edits it from the bar", async () => {
 		await open();
 		expect(renderer!.root.findByType("StackScreen" as never).props.options).toEqual({ title: "Studio Mac" });
-		const edit = renderer!.root.findByType("StackToolbarButton" as never);
-		expect(edit.props).toMatchObject({ accessibilityLabel: "Edit Studio Mac", children: "Edit" });
+		const edit = renderer!.root.findByType("HeaderTextButton" as never);
+		expect(edit.props).toMatchObject({ accessibilityLabel: "Edit Studio Mac", title: "Edit" });
 		act(() => edit.props.onPress());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/settings/machine/[id]/edit", params: { id: "a" } });
 	});

@@ -133,6 +133,8 @@ export type DashboardSession = {
 	autoInjectCI?: boolean;
 	/** Files in the session's artifact directory, newest first. */
 	artifacts?: SessionArtifact[];
+	/** What the session was started to deliver: "pr", "artifact", "pr_artifact". */
+	outputType?: string;
 };
 
 export type OrchestratorLink = {
@@ -285,6 +287,8 @@ type WireSession = {
 	prs?: WirePR[];
 	/** SessionArtifactView[]; read through parseArtifacts. */
 	artifactFiles?: unknown;
+	/** What the session was started to deliver: "pr", "artifact", "pr_artifact". */
+	outputType?: string;
 };
 
 type WireProject = {
@@ -384,6 +388,7 @@ function mapSession(s: WireSession): DashboardSession {
 		autoInjectReview: s.autoInjectReview ?? true,
 		autoInjectCI: s.autoInjectCI ?? true,
 		artifacts: sortArtifacts(parseArtifacts(s.artifactFiles)),
+		...(typeof s.outputType === "string" ? { outputType: s.outputType } : {}),
 	};
 }
 

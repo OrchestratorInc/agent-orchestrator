@@ -43,6 +43,7 @@ import { useSessionPreview } from "./useSessionPreview";
 import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { font, fontScaleCap, iconSize, radius, space, touchTarget, type } from "../tokens";
 import { toolbarIcon } from "../toolbarIcon";
+import { sessionTopbarToolbarButtons, useSessionTopbarActions } from "../sessionTopbar";
 import { Spinner } from "../Spinner";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -357,11 +358,19 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// when it has none. Everything else the bar holds is a toolbar item.
 	const named = sessions.find((session) => session.id === id);
 	const sessionName = named?.displayName || named?.issueTitle || params.title;
+	// An orchestrator's bar reads "Orchestrator", as its desktop tab does.
+	const isOrchestrator = !shellOnly && !reviewerPane && Boolean(resolved && ("projectName" in resolved || resolved.kind === "orchestrator"));
 	useLayoutEffect(() => {
 		navigation.setOptions({
-			title: shellOnly ? (params.title || "Worktree shell") : sessionName || (id.length > 22 ? `${id.slice(0, 20)}...` : id),
+			title: shellOnly ? (params.title || "Worktree shell") : isOrchestrator ? "Orchestrator" : sessionName || (id.length > 22 ? `${id.slice(0, 20)}...` : id),
 		});
-	}, [navigation, id, params.title, sessionName, shellOnly]);
+	}, [navigation, id, isOrchestrator, params.title, sessionName, shellOnly]);
+	// Desktop's session topbar actions, ahead of "⋯": a worker's Orchestrator, an orchestrator's Board and New task.
+	const topbarActions = useSessionTopbarActions({
+		orchestrator: isOrchestrator,
+		projectId: shellOnly || reviewerPane ? undefined : projectId ?? (resolved?.projectId || undefined),
+		hostId: params.hostId ? String(params.hostId) : undefined,
+	});
 
 	// Whether there is older output to jump to, as the WebView last reported it.
 	const [canScrollTop, setCanScrollTop] = useState(false);
@@ -801,7 +810,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const headerItems = useMemo(() => {
 		// Held back for the frame `resetHeaderRightForSwap` keeps the slot empty,
 		// so the bar never draws these over what the Chat renderer left there.
-		if (!headerRightReady || !menuSections.length) return null;
+		if (!headerRightReady || (!menuSections.length && !topbarActions.length)) return null;
 		const ios = Platform.OS === "ios";
 		const sections = menuSections.map((section) => ({ ...section, actions: section.items.map((item) => (
 			<Stack.Toolbar.MenuAction
@@ -833,15 +842,16 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		});
 		return (
 			<Stack.Toolbar placement="right">
-				<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Terminal actions">
+				{sessionTopbarToolbarButtons(topbarActions)}
+				{menuSections.length ? <Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Terminal actions">
 					{/* The bar button's own title, which UIKit shows in the Large
 					    Content Viewer and an overflowing bar. */}
 					{ios ? <Stack.Toolbar.Label>Terminal actions</Stack.Toolbar.Label> : null}
 					{menuItems}
-				</Stack.Toolbar.Menu>
+				</Stack.Toolbar.Menu> : null}
 			</Stack.Toolbar>
 		);
-	}, [headerRightReady, menuSections]);
+	}, [headerRightReady, menuSections, topbarActions]);
 
 	const webViewOptions = useMemo(
 		() => ({

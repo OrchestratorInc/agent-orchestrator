@@ -1,4 +1,5 @@
 import { Host } from "@expo/ui";
+import { HeaderTextButton } from "./HeaderTextButton";
 import { Button, DisclosureGroup, Form, LabeledContent, Section, Text, VStack } from "@expo/ui/swift-ui";
 import { disabled, font, foregroundStyle, textSelection } from "@expo/ui/swift-ui/modifiers";
 import { Stack } from "expo-router";
@@ -31,7 +32,9 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 	const busy = switching || forgetting;
 	const headerItems = useMemo(() => (
 		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button accessibilityLabel={`Edit ${host.name}`} disabled={forgetting} onPress={onEdit}>Edit</Stack.Toolbar.Button>
+			<Stack.Toolbar.View hidesSharedBackground>
+				<HeaderTextButton title="Edit" accessibilityLabel={`Edit ${host.name}`} disabled={forgetting} onPress={onEdit} testID="machine-edit" />
+			</Stack.Toolbar.View>
 		</Stack.Toolbar>
 	), [forgetting, host.name, onEdit]);
 

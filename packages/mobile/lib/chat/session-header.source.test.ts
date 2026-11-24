@@ -16,7 +16,7 @@ describe("session header controls", () => {
 	const route = source("../../app/conversation-actions.tsx");
 
 	it("opens the conversation actions as a bottom sheet on both platforms, never a menu or a page", () => {
-		expect(session).toContain('<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />');
+		expect(session).toContain('<Stack.Toolbar.Button icon={toolbarIcon("more")} hidesSharedBackground accessibilityLabel="Conversation actions" onPress={openActions} />');
 		expect(session).toContain('kind: "conversation-actions"');
 		expect(session).not.toContain("Stack.Toolbar.Menu");
 		expect(source("./chatSheetRegistry.ts")).toContain('"conversation-actions": "/conversation-actions",');

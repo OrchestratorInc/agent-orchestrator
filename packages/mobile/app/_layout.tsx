@@ -23,8 +23,11 @@ import { UpdateScreen } from "../lib/UpdateScreen";
 import { UpdateRouteKeeper } from "../lib/UpdateRouteKeeper";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
+import { SYSTEM_BACK_OPTIONS } from "../lib/headerBack";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
+import { Sidebar } from "../lib/sidebar/Sidebar";
+import { SidebarDrawer } from "../lib/sidebar/SidebarDrawer";
 import { CloudProvider } from "../lib/cloud/CloudProvider";
 import { appFonts } from "../lib/appFonts";
 import { symbolFonts } from "../lib/symbolFonts";
@@ -152,6 +155,9 @@ export default function RootLayout() {
 	);
 }
 
+/** Module-level, so the drawer keeps one element across renders. */
+const renderSidebar = (close: () => void) => <Sidebar part="drawer" close={close} />;
+
 function Shell() {
 	// Unsent review comments survive the phone closing the app (see reviewPersistence).
 	useEffect(() => { void startReviewPersistence(); }, []);
@@ -197,6 +203,8 @@ function Shell() {
 			    the page mid-transition — so the theme carries our palette into the
 			    native layer instead. */}
 			<NavigationThemeProvider value={navigationTheme}>
+			{/* The side bar: the desktop sidebar's rows that home leaves out. */}
+			<SidebarDrawer sidebar={renderSidebar}>
 			<Stack screenOptions={stackScreenOptions(t)}>
 				{/* A hidden header still needs a title: iOS lists the pages under the
 				    current one by title in the back button's long-press menu, and an
@@ -224,6 +232,8 @@ function Shell() {
 				{/* An Orchestrator Cloud session's sandbox shell, the cloud's worktree shell. */}
 				<Stack.Screen name="cloud/terminal" options={{ title: "Shell", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", ...GLASS_HEADER_OPTIONS }} />
+				{/* Every session's artifacts, from the sidebar, as the desktop's Artifacts page. */}
+				<Stack.Screen name="artifacts/index" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifacts/[sessionId]" options={{ title: "Artifacts", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="shared-artifact" options={{ title: "Shared artifact", ...GLASS_HEADER_OPTIONS }} />
@@ -251,7 +261,7 @@ function Shell() {
 				/>
 				{/* An agent's page, expanded from the conversation. Modal, so iOS
 				    swipes it away; the page titles the bar with its own name. */}
-				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page", ...GLASS_HEADER_OPTIONS }} />
+				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page", ...GLASS_HEADER_OPTIONS, ...SYSTEM_BACK_OPTIONS }} />
 				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder", ...GLASS_HEADER_OPTIONS }} />
 				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File", ...GLASS_HEADER_OPTIONS }} />
@@ -274,6 +284,8 @@ function Shell() {
 				    stack's back: the scanner, then the manual form over it. */}
 				<Stack.Screen name="pair" options={{ title: "Pair a machine" }} />
 				<Stack.Screen name="connect" options={{ title: "Connect manually" }} />
+				{/* A home tag, made from the devices bar's + or edited from a tag's long press. */}
+				<Stack.Screen name="tag" options={{ title: "New tag", ...GLASS_HEADER_OPTIONS }} />
 
 				{/* Sheets. `formSheet` is a real UIKit sheet, so the drag-to-dismiss,
 				    the grabber and the rubber-banding come from the OS rather than
@@ -349,6 +361,7 @@ function Shell() {
 					}}
 				/>
 			</Stack>
+			</SidebarDrawer>
 			</NavigationThemeProvider>
 		</View>
 	);

@@ -1,12 +1,10 @@
 import { Host } from "@expo/ui";
-import { HStack, Label, Menu, Picker, RNHostView, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
-import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
+import { HStack, Label, Menu, Picker, Section, Text, Toggle } from "@expo/ui/swift-ui";
+import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag, layoutPriority } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
-import { approvalSymbol } from "../approvalSymbol";
-import { EffortGaugeButton } from "../effort-gauge";
-import { ApprovalMenu, Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
+import { Choice, controlsRowTypeSize, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import { defaultModelChoice } from "../spawnModel";
 import { AUTOMATIC_MODEL } from "../agentSwitch";
@@ -34,9 +32,13 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
 	const modelRow = select("model");
-	const effortRow = select("effort");
+	// The approval mode is not offered in the composer: it is left as the
+	// session has it, and kept out of the model menu's other settings.
 	const approvalRow = select("permissions");
-	const otherRows = rows.filter((row) => row !== modelRow && row !== effortRow && row !== approvalRow);
+	// Effort is one of the model menu's settings, as on the desktop, where the
+	// row holds the model and approvals alone; a gauge beside the model left
+	// its name too little room on a phone.
+	const otherRows = rows.filter((row) => row !== modelRow && row !== approvalRow);
 	const modelChoices = splitModelChoices(modelRow?.choices ?? []);
 	const parts = turnSettingsParts(snapshot, models, options);
 	const off = Boolean(disabled);
@@ -70,7 +72,8 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 					label={pending
 						? <ModelCapsuleLabel mark={<HarnessImage harness={pending.harness} />} title={pending.modelLabel} />
 						: <ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}
-					modifiers={useTriggerModifiers({ label: pending ? `Next message switches to ${otherAgents?.agents.find((agent) => agent.id === pending.harness)?.label ?? pending.harness}, ${pending.modelLabel}` : parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off })}
+					// The model's name is the last thing in the row to shorten.
+					modifiers={[...useTriggerModifiers({ label: pending ? `Next message switches to ${otherAgents?.agents.find((agent) => agent.id === pending.harness)?.label ?? pending.harness}, ${pending.modelLabel}` : parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off }), layoutPriority(1)]}
 				>
 					{modelChoices.latest.map((choice) => <Choice key={choice.value} label={choice.label} selected={!pending && choice.selected} onChoose={() => chooseCurrent(modelRow!, choice)} />)}
 					{/* Older versions one level down, as on Android: the newest of
@@ -119,23 +122,6 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 						</Section>
 					) : null}
 				</Menu>
-				{/* The effort as a speedometer lit to the chosen level; a tap
-				    opens the slider over the composer. */}
-				{effort?.choices.length ? (
-					<RNHostView matchContents>
-						<EffortGaugeButton choices={effort.choices} open={effort.open} onPress={effort.onToggle} disabled={off} testID="chat-effort" />
-					</RNHostView>
-				) : null}
-				<Spacer minLength={0} />
-				{approvalRow ? (
-					<ApprovalMenu
-						key={`approval-${generation}`}
-						choices={approvalRow.choices.map((choice) => ({ value: choice.value, label: choice.label, symbol: approvalSymbol(choice.permissionMode, snapshot.harness), selected: choice.selected }))}
-						onChoose={(value) => choose(approvalRow, value)}
-						disabled={off}
-						id="chat-approval"
-					/>
-				) : null}
 			</HStack>
 		</Host>
 	);

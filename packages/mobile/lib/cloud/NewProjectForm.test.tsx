@@ -32,6 +32,7 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ t
 vi.mock("expo-router", () => ({
 	Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) },
 }));
+vi.mock("../HeaderTextButton", () => ({ HeaderTextButton: "HeaderTextButton", HeaderPrimaryButton: "HeaderPrimaryButton" }));
 vi.mock("@expo/ui", () => ({ Host: "Host" }));
 vi.mock("@expo/ui/swift-ui", async () => (await import("../nativeFormTestDoubles")).swiftUIDouble());
 vi.mock("@expo/ui/swift-ui/modifiers", async () => {
@@ -218,11 +219,19 @@ describe("New cloud project form, iOS", () => {
 		expect(root.findAll((node) => is(node, "SettingsSection") && node.props.title === "Repository")).toHaveLength(0);
 	});
 
-	it("puts Cancel and Create in the native bar, Create off until the form is ready", () => {
+	// In the app's own style, not the system's glass capsules: plain-text
+	// Cancel and a filled Create, each on a toolbar view with no glass.
+	it("puts Cancel and Create in the bar in our style, Create off until the form is ready", () => {
 		const onCreate = vi.fn();
-		const root = render(<ios.NewProjectBar canCreate={false} busy={false} onCancel={vi.fn()} onCreate={onCreate} />);
-		const create = root.find((node) => is(node, "StackToolbarButton") && node.props.accessibilityLabel === "Create project");
-		expect(create.props.disabled).toBe(true);
+		const onCancel = vi.fn();
+		const root = render(<ios.NewProjectBar canCreate={false} busy={false} onCancel={onCancel} onCreate={onCreate} />);
+		expect(root.findAll((node) => is(node, "StackToolbarButton"))).toHaveLength(0);
+		for (const view of root.findAll((node) => is(node, "StackToolbarView"))) expect(view.props.hidesSharedBackground).toBe(true);
+		const create = root.find((node) => is(node, "HeaderPrimaryButton"));
+		expect(create.props).toMatchObject({ title: "Create", accessibilityLabel: "Create project", disabled: true });
+		const cancel = root.find((node) => is(node, "HeaderTextButton"));
+		act(() => cancel.props.onPress());
+		expect(onCancel).toHaveBeenCalled();
 	});
 });
 

@@ -1,4 +1,5 @@
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
+import { HeaderPrimaryButton, HeaderTextButton } from "../../lib/HeaderTextButton";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
@@ -82,10 +83,14 @@ export default function MachineNameSheetRoute() {
 	const headerItems = useMemo(() => ios ? (
 		<>
 			<Stack.Toolbar placement="left">
-				<Stack.Toolbar.Button onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>
+				<Stack.Toolbar.View hidesSharedBackground>
+					<HeaderTextButton title="Cancel" onPress={() => backOr(router)} testID="machine-name-cancel" />
+				</Stack.Toolbar.View>
 			</Stack.Toolbar>
 			<Stack.Toolbar placement="right">
-				<Stack.Toolbar.Button accessibilityLabel="Save machine" disabled={!canSave} style={{ fontWeight: "600" }} onPress={() => saveRef.current()}>Save</Stack.Toolbar.Button>
+				<Stack.Toolbar.View hidesSharedBackground>
+					<HeaderPrimaryButton title="Save" accessibilityLabel="Save machine" disabled={!canSave} onPress={() => saveRef.current()} testID="machine-name-save" />
+				</Stack.Toolbar.View>
 			</Stack.Toolbar>
 		</>
 	) : null, [canSave, ios, router]);

@@ -269,9 +269,9 @@ it("stays open across a hardware-Return send while the read-only field is away",
 	act(() => field().props.onFocus());
 	expect(opened.at(-1)).toBe(true);
 	expect(opened.slice(opened.indexOf(true))).not.toContain(false);
-	// Once the field has its focus back, leaving it empty closes the composer as usual.
+	// The composer is the desktop's card at rest too: leaving the field keeps it open.
 	act(() => field().props.onBlur());
-	expect(opened.at(-1)).toBe(false);
+	expect(opened.at(-1)).toBe(true);
 });
 
 it("gives Return back to the field while the composer cannot send", async () => {

@@ -11,6 +11,7 @@ import {
 	getSessionTimelinePillView as getPortableSessionTimelinePillView,
 	isAgentActivityWorking,
 	isSessionIdle,
+	sessionNeedsInput,
 	type AgentActivityView,
 	type AttentionZone,
 	type AttentionZoneView,
@@ -20,6 +21,15 @@ import {
 	type SessionStatusView,
 	type SessionTimelinePillStatus,
 	type SessionTimelinePillView,
+} from "@aoagents/product-ui";
+// The sidebar row's indicator rules live in product-ui so the mobile app's
+// sidebar draws the same states from the same code.
+export {
+	getSessionRowIndicator,
+	getSessionRowMarker,
+	isSessionRowWorking,
+	sessionNeedsInput,
+	type SessionRowMarker,
 } from "@aoagents/product-ui";
 import type { TFunction } from "i18next";
 import { appI18n, type MessageKey } from "../i18n";
@@ -103,101 +113,6 @@ export function getSessionStatusDotView(
 		return { className: getSessionStatusView("merged", t).dotClassName, breathe: false };
 	}
 	return dot(getKanbanColumnView(column, t).dotClassName);
-}
-
-/**
- * The things a sidebar row may flag, in order of how much they ask of the
- * user. Everything else (working aside, which has its own spinner) is quiet, so
- * the few icons that appear stand out:
- *  - "attention", red: the session needs you now (input or blocked, CI failing,
- *    or changes requested)
- *  - "ready", green: a PR you can merge
- *  - "review", orange alert: a person's review is next
- *  - "merged", purple and dimmed: a PR that has landed, nothing left to do
- */
-export type SessionRowMarker = "attention" | "ready" | "review" | "merged";
-
-/**
- * What a sidebar row says about its session, if anything, from the daemon's
- * display status (with a fallback to the status for an older daemon). Idle,
- * exited, draft, AO's active review and closed sessions get no marker: they need
- * nothing from the user, and the hover card has the detail.
- */
-export function getSessionRowMarker(session: {
-	activity?: SessionActivity | null;
-	displayStatus?: string;
-	kanbanColumn?: KanbanColumn;
-	scmStatus?: SessionStatus;
-	status: SessionStatus;
-}): SessionRowMarker | null {
-	const sectionStatus: SessionStatus = session.scmStatus ?? session.status;
-	const display = session.displayStatus;
-	if (display === "Terminated" || sectionStatus === "terminated" || display === "Closed without merge") return null;
-
-	if (sessionNeedsInput(session)) return "attention";
-	if (display === "CI failing" || display === "Merge conflicts" || display === "Changes requested") return "attention";
-	if (!display && (session.status === "ci_failed" || session.status === "changes_requested")) {
-		return "attention";
-	}
-
-	switch (toKanbanColumn(session.kanbanColumn, sectionStatus)) {
-		case "needs_review":
-			// The review lane is the person's turn, short of the red states above.
-			// A draft is still the author's, and a PR waiting on its stack parent
-			// is waiting on another PR, so both stay quiet.
-			if (display === "Waiting on base PR") return null;
-			return (display ? display === "Draft" : sectionStatus === "draft") ? null : "review";
-		case "validating":
-			// AO's own review loop needs nothing from the user unless it failed.
-			return display === "Review failed" ? "review" : null;
-		case "ready":
-			if (display ? display === "Merged" : sectionStatus === "merged") return "merged";
-			return (display ? display === "Mergeable" || display === "Approved" : sectionStatus === "mergeable" || sectionStatus === "approved")
-				? "ready"
-				: null;
-		default:
-			return null;
-	}
-}
-
-/**
- * A sidebar row spins while its agent works, from the moment it is set up.
- * Working wins over any PR state: the agent may already be on its next PR, and
- * the hover card has the PR detail.
- */
-export function isSessionRowWorking(session: {
-	activity?: SessionActivity | null;
-	displayStatus?: string;
-	provisionState?: string;
-}): boolean {
-	if (session.displayStatus === "Terminated") return false;
-	return session.provisionState === "provisioning" || isAgentActivityWorking(session.activity);
-}
-
-/**
- * The icon that leads a sidebar row: the working spinner while the agent works,
- * then what the user has to act on (input, CI, review), then the PR state.
- * Null leaves the quiet dot.
- */
-export function getSessionRowIndicator(
-	session: Parameters<typeof getSessionRowMarker>[0] & Parameters<typeof isSessionRowWorking>[0],
-): "working" | SessionRowMarker | null {
-	return isSessionRowWorking(session) ? "working" : getSessionRowMarker(session);
-}
-
-// The agent has stopped and is waiting on the user (a question or a decision).
-export function sessionNeedsInput(session: {
-	activity?: SessionActivity | null;
-	displayStatus?: string;
-	status: SessionStatus;
-}): boolean {
-	return (
-		session.status === "needs_input" ||
-		session.activity?.state === "waiting_input" ||
-		session.activity?.state === "blocked" ||
-		session.displayStatus === "Blocked" ||
-		session.displayStatus === "Needs input"
-	);
 }
 
 // Mirrors the board card's needs-attention check; waiting on input is handled

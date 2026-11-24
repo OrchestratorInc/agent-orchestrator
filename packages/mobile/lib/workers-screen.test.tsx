@@ -110,7 +110,6 @@ vi.mock("./worker-board-list", async () => {
 // The real one draws nothing on iOS; this stands in for Android's FAB on both.
 vi.mock("./workers-idle-state", () => ({ WorkersIdleState: "WorkersIdleState" }));
 vi.mock("./archive/useLatestArchivedAt", () => ({ useLatestArchivedAt: () => undefined }));
-vi.mock("./frost", () => ({ useTabBarFrost: () => ({ inset: 0, frost: null }) }));
 // As the real hook places the title's accessory: back to the page on iOS,
 // pinned under the bar (inside the edge) on Android.
 vi.mock("./largeTitle", async () => {
@@ -123,20 +122,26 @@ vi.mock("./largeTitle", async () => {
 });
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
-import { startNewTask } from "./newTaskAction";
-import FleetScreen from "../app/(tabs)/(workers)/index";
+import FleetScreen from "../app/(tabs)/(workers)/board";
 import { WorkerBoardList } from "./worker-board-list";
 import { WorkerEnvironmentFilter } from "./worker-environment-filter";
 import { ALL_WORKER_ENVIRONMENTS } from "./worker-controls";
 
 let renderer: ReactTestRenderer;
 
+/** Presses the header's New task button, which starts a task on the board's filters. */
+function startNewTask() {
+	const button = renderer.root.findAllByType("StackToolbarButton" as never).find((node) => node.props.accessibilityLabel === "New task")!;
+	button.props.onPress();
+}
+
 function toolbar(placement: "left" | "right"): ReactTestInstance | undefined {
 	return renderer.root.findAllByType("StackToolbar" as never).find((node) => node.props.placement === placement);
 }
 /** The filter menu: leading on iOS, the first trailing item on Android. */
 function filterMenu(): ReactTestInstance {
-	const bar = fixtures.platform === "ios" ? toolbar("left")! : toolbar("right")!;
+	// Both platforms head the trailing items with it: the board's leading slot is its back button.
+	const bar = toolbar("right")!;
 	// Depth first, so the root menu comes before the submenus inside it.
 	return bar.findAllByType("StackToolbarMenu" as never)[0];
 }
@@ -215,61 +220,28 @@ beforeEach(() => {
 afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); });
 
 describe("Workers header", () => {
-	function headerButtons() {
-		return toolbar("right")!.findAllByType("StackToolbarButton" as never);
-	}
-
-	// The header is the native bar's: its title comes from the tab's stack, and
-	// its actions are bar items the page declares, not a row drawn in the page.
-	it("declares Settings, Pull Requests and Notifications as trailing header items", () => {
+	// The board is a page pushed from home. Its bar holds the filter and New
+	// task; Settings, Pull requests and Notifications are home's rows, as they
+	// are the desktop sidebar's.
+	it("ends with New task and keeps the app's pages off the bar", () => {
 		act(() => { renderer = create(<FleetScreen />); });
-		const [settings, prs, notifications] = headerButtons();
-		expect([settings, prs, notifications].map((button) => button.props.accessibilityLabel)).toEqual(["Settings", "Pull Requests", "Notifications"]);
-		act(() => prs.props.onPress());
-		expect(fixtures.navigate).toHaveBeenCalledWith("/prs");
-		expect(notifications.findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
-		act(() => settings.props.onPress());
-		expect(fixtures.navigate).toHaveBeenCalledWith("/settings");
-		act(() => notifications.props.onPress());
-		expect(fixtures.navigate).toHaveBeenCalledWith("/notifications");
+		expect(renderer.root.findAllByType("StackToolbarButton" as never).map((button) => button.props.accessibilityLabel)).toEqual(["New task"]);
 	});
 
-	it("badges Notifications with the unread count across machines", () => {
-		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, notificationsUnread: 2 }));
-		act(() => { renderer = create(<FleetScreen />); });
-		const notifications = headerButtons()[2];
-		expect(notifications.props.accessibilityLabel).toBe("Notifications, 4 unread");
-		expect(notifications.findByType("StackToolbarBadge" as never).props.children).toBe("4");
-	});
-
-	// Android's toolbar reads the badge after the label, so the count is said once.
-	it("leaves the count to the badge on Android", () => {
-		fixtures.platform = "android";
-		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, notificationsUnread: 2 }));
-		act(() => { renderer = create(<FleetScreen />); });
-		const notifications = renderer.root.findAllByType("StackToolbarButton" as never).find((node) => node.props.icon === "bell")!;
-		expect(notifications.props.accessibilityLabel).toBe("Unread notifications");
-		expect(notifications.findByType("StackToolbarBadge" as never).props.children).toBe("4");
-	});
-
-	// Settings is where pairing starts, so an unpaired board still offers it, and
-	// there is nothing yet to search, filter or spawn.
-	it("keeps Settings alone in the header before a machine is paired", () => {
+	// Pairing starts from home's footer; there is nothing yet to filter or spawn.
+	it("keeps the bar empty before a machine is paired", () => {
 		fixtures.configured = false;
 		fixtures.hostStates = [];
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(renderer.root.findByType("UnpairedState" as never)).toBeTruthy();
-		expect(headerButtons().map((button) => button.props.accessibilityLabel)).toEqual(["Settings"]);
+		expect(renderer.root.findAllByType("StackToolbarButton" as never)).toHaveLength(0);
 		expect(toolbar("left")).toBeUndefined();
-		expect(renderer.root.findAllByType("StackSearchBar" as never)).toHaveLength(0);
 	});
-
 });
 
 describe("Workers filter menu", () => {
 	// iOS leads the bar with the filter, across from the actions. It holds the
 	// projects alone: machines are the chip row's.
-	it("leads the iOS bar with the project choices, the current one checked, and no machines", () => {
+	it("heads the iOS bar's trailing items with the project choices, the current one checked, and no machines", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers");
@@ -294,7 +266,8 @@ describe("Workers filter menu", () => {
 		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
 	});
 
-	// Android's top app bar has no leading actions, and badges a filtered board.
+	// Android's top app bar leads with the drawer button alone; the filter
+	// heads the trailing actions, and badges a filtered board.
 	it("heads the Android bar's trailing actions and badges a project-filtered board", () => {
 		fixtures.platform = "android";
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("web", "Web", "mac", "Mac")];
@@ -384,33 +357,30 @@ describe("Workers filter menu", () => {
 	it("keeps the header items across polls that change only machine state", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
-		const menu = toolbar("left")!.props.children;
 		const trailing = toolbar("right")!.props;
 		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, lastSyncAt: host.lastSyncAt + 8_000, sessions: [...host.sessions] }));
 		act(() => renderer.update(<FleetScreen />));
-		expect(toolbar("left")!.props.children).toBe(menu);
 		expect(toolbar("right")!.props).toBe(trailing);
+		// The leading slot stays the back button's.
+		expect(toolbar("left")).toBeUndefined();
 	});
 });
 
 describe("Workers spawn action", () => {
-	// iOS has no floating action button: the create action ends the header.
-	// New task is the tab bar's own round button on iOS; the board keeps
-	// settings and alerts in its header, and hands the button its own filters.
-	it("starts a task from the tab bar's button on the board's own filters", () => {
+	// New task ends the header and starts on the board's own filters.
+	it("starts a task from the header on the board's own filters", () => {
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Pull Requests", "Notifications"]);
-		act(() => startNewTask(() => fixtures.push("/spawn")));
+		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["New task"]);
+		act(() => startNewTask());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
 	});
 
-	// Android lays its header out as iOS does: New task is the board bar's
-	// round button, and Settings and Pull Requests open from the header.
-	it("keeps Settings and Pull Requests in the Android header, and floats no button", () => {
+	// Android puts the filter at the head of the trailing items, then New task.
+	it("ends the Android header with New task after the filter", () => {
 		fixtures.platform = "android";
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Pull Requests", "Notifications"]);
-		act(() => startNewTask(() => fixtures.push("/spawn")));
+		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["New task"]);
+		act(() => startNewTask());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
 	});
 
@@ -420,13 +390,13 @@ describe("Workers spawn action", () => {
 		fixtures.connection = "closed";
 		for (const host of fixtures.hostStates) Object.assign(host, { connection: "closed", loading: false, error: "Host is unreachable" });
 		act(() => { renderer = create(<FleetScreen />); });
-		act(() => startNewTask(() => fixtures.push("/spawn")));
+		act(() => startNewTask());
 		expect(fixtures.push).toHaveBeenLastCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
 		act(() => renderer.unmount());
 
 		fixtures.cloud = { hostId: "orchestrator-cloud", name: "Cloud", appearance: { symbol: "cloud" }, connection: "open", projects: [], sessions: [], orchestrators: [] };
 		act(() => { renderer = create(<FleetScreen />); });
-		act(() => startNewTask(() => fixtures.push("/spawn")));
+		act(() => startNewTask());
 		expect(fixtures.push).toHaveBeenLastCalledWith({ pathname: "/spawn", params: { hostId: "orchestrator-cloud" } });
 	});
 
@@ -434,7 +404,7 @@ describe("Workers spawn action", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
 		choose(filterMenu(), "Game · Windows");
-		act(() => startNewTask(() => fixtures.push("/spawn")));
+		act(() => startNewTask());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "windows", projectId: "game" } });
 	});
 });
@@ -509,7 +479,7 @@ describe("Workers selected-machine reachability", () => {
 	it.each(["open", "closed"] as const)("targets the selected environment when creating work, even when %s", (connection) => {
 		fixtures.hostStates[1].connection = connection;
 		selectWindows();
-		act(() => startNewTask(() => fixtures.push("/spawn")));
+		act(() => startNewTask());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "windows" } });
 	});
 	it("does not claim an unreachable machine has no workers while another machine is online", () => {

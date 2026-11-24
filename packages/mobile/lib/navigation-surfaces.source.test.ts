@@ -25,14 +25,21 @@ describe("navigation surfaces", () => {
 		expect(layout).toContain("<Stack screenOptions={stackScreenOptions(t)}>");
 	});
 
-	// The tab roots' titles and actions are the native bar's, each item named
-	// for screen readers and opening its page the same way.
-	it("leaves the tab roots' titles and actions to the native header", () => {
-		const items = source("./BoardHeaderItems.tsx");
-		expect(items).toContain('accessibilityLabel="Pull Requests" onPress={() => router.navigate("/prs")}');
-		expect(items).toContain('accessibilityLabel="Settings" onPress={() => router.navigate("/settings")} />');
-		expect(items).toContain('onPress={() => router.navigate("/notifications")}');
-		expect(items).not.toContain("router.push(");
+	// Home is the desktop sidebar's Sessions and Projects; the side bar holds
+	// Pull requests, All workers, Notifications and Settings, each opened the
+	// same way: navigated to, so a second tap during the push doesn't stack a copy.
+	it("opens the app's pages from the side bar's rows", () => {
+		const home = source("../app/(tabs)/(workers)/index.tsx");
+		expect(home).toContain('return <Sidebar part="home" />;');
+		expect(home).toContain("useSidebarEdgeSwipe(useIsFocused());");
+		expect(source("../app/_layout.tsx")).toContain('<Sidebar part="drawer" close={close} />');
+		const sidebar = source("./sidebar/Sidebar.tsx");
+		expect(sidebar).toContain('label="Pull requests" onPress={() => go("/prs")}');
+		expect(sidebar).toContain('label="Notifications" onPress={() => go("/notifications")}');
+		expect(sidebar).toContain('label="Artifacts" onPress={() => go("/artifacts")}');
+		expect(sidebar).toContain('onSettings={() => go("/settings")}');
+		expect(sidebar).toContain("router.navigate(href)");
+		expect(source("./BoardHeaderItems.tsx")).not.toContain("router.");
 	});
 
 	// The session used to render a spinner until the push animation finished, so
@@ -49,7 +56,7 @@ describe("navigation surfaces", () => {
 		expect(session).toContain("headerTitle: () => {");
 		expect(session).toContain('<Stack.Toolbar placement="right">');
 		// Android floats the "⋯" on a pill of its own, set as the bar's item.
-		expect(session).toContain('headerRight: menuReady ? () => <HeaderPillButton icon="more"');
+		expect(session).toContain('{menuReady ? <HeaderPillButton icon="more" label="Conversation actions"');
 		expect(session).not.toContain("resetHeaderRightForSwap");
 	});
 });

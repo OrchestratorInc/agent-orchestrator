@@ -39,13 +39,14 @@ import {
 	mobileInterfaceTransitionRecoveryMessage,
 	useInterfaceTransitionWith,
 } from "../session/useInterfaceTransition";
-import { Spinner } from "../Spinner";
+import { ConversationLoading } from "../OrchestratorLoader";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { space } from "../tokens";
 import { toolbarIcon } from "../toolbarIcon";
+import { sessionTopbarToolbarButtons, useSessionTopbarActions } from "../sessionTopbar";
 import { Button, EmptyState } from "../ui";
 import { cloudAgentLabel } from "./agents";
 import { cloudAttachmentUri, cloudUploadDeps } from "./attachmentFiles";
@@ -73,7 +74,9 @@ const COMPOSER_SETTLE_MS = 120;
  * The conversation runs on under a clear bar: iOS 26's glass, and on Android
  * the bar the frost lies behind. Older iOS keeps the stack's solid bar.
  */
-const CLEAR_HEADER = SYSTEM_GLASS_HEADER || Platform.OS === "android";
+// A solid top bar on iOS, as the desktop's session view and the local chat
+// have; Android keeps its clear bar, as the local chat does.
+const CLEAR_HEADER = Platform.OS === "android";
 
 /** The worker's Plan mode, as the composer's settings show a provider's switch. */
 const PLAN_OPTION_ID = "plan";
@@ -319,6 +322,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		navigation.setOptions({ gestureEnabled: !cardShowing });
 	}, [cardShowing, navigation]);
 
+	// Desktop's session topbar actions lead "⋯": a worker's Orchestrator, an orchestrator's Board and New task.
+	const topbarActions = useSessionTopbarActions({ orchestrator: session?.kind === "orchestrator", projectId: session?.projectId || undefined, hostId: CLOUD_HOST_ID });
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			headerTitle: () => (
@@ -329,10 +334,11 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					subtitle={[standaloneAgent ? "Standalone" : project?.displayName ?? "Cloud", harness ? cloudAgentLabel(harness) : ""].filter(Boolean).join(" · ")}
 					harness={harness || undefined}
 					state={headerState}
+					barButtons={topbarActions.length}
 				/>
 			),
 		});
-	}, [harness, headerState, navigation, project?.displayName, standaloneAgent, title]);
+	}, [harness, headerState, navigation, project?.displayName, standaloneAgent, title, topbarActions.length]);
 	// The conversation scrolls up under a clear bar, as a local chat's does.
 	useLayoutEffect(() => {
 		if (!CLEAR_HEADER) return;
@@ -361,9 +367,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		canShowAgentTerminal: tui && current === "chat",
 		interfaceSwitch: canSwitch ? { to: switchTo, switching } : undefined,
 		pullRequest: prNumber === undefined ? undefined : { number: prNumber },
-		projectName: project?.displayName,
 		artifactCount: artifactsOffered ? artifactCount : undefined,
-	}) : undefined, [artifactCount, artifactsOffered, canSwitch, current, hasSession, pinned, prNumber, project?.displayName, switchTo, switching, terminated, tui]);
+	}) : undefined, [artifactCount, artifactsOffered, canSwitch, current, hasSession, pinned, prNumber, switchTo, switching, terminated, tui]);
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
 	useEffect(() => {
@@ -392,7 +397,6 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const menuActions: Partial<Record<ConversationMenuAction, () => void>> = {
 		shell: () => router.push({ pathname: "/cloud/terminal", params: { sessionId, kind: "workspace" } }),
 		agent_terminal: () => setView("agent"),
-		project: () => { if (project) router.push({ pathname: "/project/[id]", params: { id: project.id, hostId: CLOUD_HOST_ID } }); },
 		pin: () => void setWorkerPinned(sessionId, !pinned, CLOUD_HOST_ID).then(() => haptics.success(), (error: unknown) => {
 			haptics.error();
 			Alert.alert("Couldn't update pin", cloudErrorMessage(error));
@@ -415,9 +419,10 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	}, [router, subscribeMenuGroups, title]);
 	const headerItems = useMemo(() => hasSession ? (
 		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Session actions" onPress={openActions} />
+			{sessionTopbarToolbarButtons(topbarActions)}
+			<Stack.Toolbar.Button icon={toolbarIcon("more")} hidesSharedBackground accessibilityLabel="Session actions" onPress={openActions} />
 		</Stack.Toolbar>
-	) : null, [hasSession, openActions]);
+	) : null, [hasSession, openActions, topbarActions]);
 
 	// An `ao://sessions/…` link (an orchestrator naming the worker it spawned)
 	// opens that session's chat here, as the local chat does; any other link
@@ -623,7 +628,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 				{startup ? (
 					<View style={styles.startupLoading}><SessionStartupStatus startup={startup} onRetry={retryStart} retrying={busyAction === "retry"} /></View>
 				) : (
-					<View style={styles.center}><Spinner accessibilityLabel="Loading conversation" /></View>
+					<View style={styles.center}><ConversationLoading title="Orchestrating…" message={session?.kind === "orchestrator" ? undefined : title} /></View>
 				)}
 				{switchCard}
 			</View>

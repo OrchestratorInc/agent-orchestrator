@@ -5,9 +5,9 @@ const fixtures = vi.hoisted(() => ({ platform: { OS: "ios" }, router: { back: vi
 
 vi.mock("react-native", () => ({ Platform: fixtures.platform }));
 vi.mock("./backNavigation", () => ({ backOr: fixtures.backOr }));
-vi.mock("./native-header-button", async () => {
+vi.mock("./FlatBackButton", async () => {
 	const React = await import("react");
-	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
+	return { FlatBackButton: (props: object) => React.createElement("FlatBackButton", props) };
 });
 vi.mock("expo-router", async () => {
 	const React = await import("react");
@@ -42,8 +42,8 @@ describe("StackRootBack", () => {
 	it("puts a back chevron at the bar's leading end on iOS, popping the page", () => {
 		fixtures.platform.OS = "ios";
 		act(() => { renderer = create(<StackRootBack />); });
-		const back = renderer!.root.findByType("NativeHeaderButton" as never);
-		expect(back.props.label).toBe("Back");
+		// The app's flat chevron, as on every other page.
+		const back = renderer!.root.findByType("FlatBackButton" as never);
 		back.props.onPress();
 		expect(fixtures.backOr).toHaveBeenCalledWith(fixtures.router);
 	});
