@@ -58,11 +58,9 @@ import {
 	type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { artifactCount, groupArtifactsByProject, withKeptArtifacts } from "../lib/artifacts";
 import { useKeptArtifacts } from "../hooks/useKeptArtifacts";
 import {
-	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
 	openPRs,
 	type WorkspaceSession,
@@ -84,7 +82,7 @@ import {
 import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
 import { dropdownMenuKit, MenuEntries, MenuKitContext, type MenuEntry } from "./menu-model";
 import { isArchivedSession } from "../lib/standalone-archive";
-import { hasTrustedApiBaseUrl } from "../lib/api-client";
+import { apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useEdgeFade } from "../hooks/useEdgeFade";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
@@ -1775,9 +1773,8 @@ const ProjectItem = memo(function ProjectItem({
 		}
 		// A guest cannot start an orchestrator in someone else's project.
 		if (workspace.shared) return;
-		// A cloud project has no local orchestrator-agent config, so the settings
-		// fallback below would dead-end it. Spawn the orchestrator as a cloud
-		// session in its own sandbox instead.
+		// A cloud project has no local orchestrator-agent config. Spawn the
+		// orchestrator as a cloud session in its own sandbox instead.
 		if (workspace.kind === "cloud") {
 			setIsSpawning(true);
 			try {
@@ -1792,16 +1789,18 @@ const ProjectItem = memo(function ProjectItem({
 			}
 			return;
 		}
-		if (!hasConfiguredOrchestratorAgent(workspace)) {
-					selection.goSettings(workspace.id, workspace.cloudOrgId);
-			return;
-		}
 		setIsSpawning(true);
 		try {
+			// A project that lost its orchestrator agent starts on the ranked
+			// default: the daemon fills the empty role as it starts.
 			const sessionId = await spawnOrchestrator(workspace.id, "sidebar");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			goOrchestrator(sessionId);
 		} catch (err) {
+			if (apiErrorCode(err) === "AGENT_REQUIRED") {
+				useUiStore.getState().openProjectSettings(workspace.id, { section: "agents" });
+				return;
+			}
 			console.error("Failed to spawn orchestrator:", err);
 			void captureRendererException(err, { source: "orchestrator-open", operation: "open_orchestrator", surface: "sidebar" });
 		} finally {
@@ -3546,29 +3545,23 @@ function ShowMoreRow({
 	className?: string;
 }) {
 	const { t } = useTranslation();
-	const prefersReducedMotion = useReducedMotion();
+	// One button that relabels in place: the label flips in the same frame as
+	// the rows it reveals or hides, and keyboard focus stays on it.
 	return (
-		<AnimatePresence initial={false} mode="wait">
-			<motion.button
-				key={expanded ? "show-less" : "show-more"}
-				aria-label={label}
-				className={cn(
-					SECTION_ROW_CLASS,
-					NAV_ROW_HIGHLIGHT_HOST_CLASS,
-					"mb-1 shrink-0 rounded-lg text-left text-muted-foreground",
-					className,
-				)}
-				initial={{ opacity: 0 }}
-				animate={{ opacity: 1 }}
-				exit={{ opacity: 0 }}
-				onClick={onClick}
-				transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
-				type="button"
-			>
-				<NavRowHighlight />
-				<span className="relative z-[1] truncate">{t(expanded ? "shell.showLess" : "shell.showMore")}</span>
-			</motion.button>
-		</AnimatePresence>
+		<button
+			aria-label={label}
+			className={cn(
+				SECTION_ROW_CLASS,
+				NAV_ROW_HIGHLIGHT_HOST_CLASS,
+				"mb-1 shrink-0 rounded-lg text-left text-muted-foreground",
+				className,
+			)}
+			onClick={onClick}
+			type="button"
+		>
+			<NavRowHighlight />
+			<span className="relative z-[1] truncate">{t(expanded ? "shell.showLess" : "shell.showMore")}</span>
+		</button>
 	);
 }
 
