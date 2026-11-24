@@ -27,3 +27,9 @@ func writeClaimPRCheckout(w io.Writer, branchChanged bool) error {
 	}
 	return nil
 }
+
+// writeJSONLine writes v as compact JSON on one line, for stderr envelopes
+// that line-oriented readers consume.
+func writeJSONLine(w io.Writer, v any) error {
+	return json.NewEncoder(w).Encode(v)
+}

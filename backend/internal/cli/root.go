@@ -43,9 +43,12 @@ func executeWithDeps(deps Deps, args []string) error {
 	}
 	cmd := NewRootCommand(deps)
 	cmd.SetArgs(args)
-	err := cmd.Execute()
+	executed, err := cmd.ExecuteC()
 	if err != nil && ExitCode(err) == 2 {
 		(&commandContext{deps: deps}).emitCLIUsageError(context.Background(), args, err)
+	}
+	if err != nil && jsonRequested(executed, args) {
+		err = jsonModeError{err}
 	}
 	return err
 }
@@ -230,6 +233,9 @@ func NewRootCommand(deps Deps) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if err := rejectUnsupportedJSON(cmd.Root(), cmd); err != nil {
+				return err
+			}
 			if shouldEmitCLIInvocation(cmd) {
 				ctx.emitCLIInvoked(cmd.Context(), cmd)
 			}
@@ -240,6 +246,10 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.SetOut(deps.Out)
 	root.SetErr(deps.Err)
 	root.CompletionOptions.DisableDefaultCmd = true
+	// Every command accepts --json. Commands with JSON output shadow this flag
+	// with their own; on the rest it is refused (rejectUnsupportedJSON). Either
+	// way, a failure under --json is written to stderr as a JSON envelope.
+	root.PersistentFlags().Bool(jsonFlag, false, "Print JSON output (commands without it refuse the flag); errors go to stderr as JSON")
 	// Tag flag-parse failures as usage errors so the entrypoint can exit 2 for
 	// misuse versus 1 for runtime failures. Subcommands inherit this func.
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
