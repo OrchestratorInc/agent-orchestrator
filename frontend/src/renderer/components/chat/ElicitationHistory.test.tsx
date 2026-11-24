@@ -76,9 +76,20 @@ describe("ElicitationHistory", () => {
 				q1_other: { type: "string", title: "Other", description: "Optional free-form answer to: Which color?" },
 			} } },
 			inputResponse: { action: "accept", content: { q1: "2" } },
-		})} />);
+		})} harness="agy" />);
 		expect(screen.getByText("Which color?").parentElement).toHaveTextContent("Blue");
 		expect(screen.queryByText("The agent has a question.")).not.toBeInTheDocument();
+	});
+
+	it("keeps another agent's q1 form under its message", () => {
+		render(<ElicitationHistory activity={question({
+			detail: { message: "Pick a color.", schema: { properties: {
+				q1: { type: "string", title: "Color", oneOf: [{ const: "1", title: "Red" }, { const: "2", title: "Blue" }] },
+			} } },
+			inputResponse: { action: "accept", content: { q1: "2" } },
+		})} harness="claude-code" />);
+		expect(screen.getByText("Pick a color.")).toBeVisible();
+		expect(screen.getByText("Color").parentElement).toHaveTextContent("Blue");
 	});
 
 	it.each([

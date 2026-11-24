@@ -17,9 +17,12 @@ type PropertyEntry = [string, Record<string, unknown>];
  */
 export function ElicitationDock({
 	activity,
+	harness,
 	onResolve,
 }: {
 	activity: ConversationActivity;
+	/** The session's agent. Antigravity's question fields are read only when it asked. */
+	harness?: string;
 	onResolve?: (
 		requestId: string,
 		action: InputAction,
@@ -54,7 +57,7 @@ export function ElicitationDock({
 			{activity.detail?.inputMode === "url" ? (
 				<URLRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
 			) : (
-				<FormRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
+				<FormRequest activity={activity} harness={harness} disabled={submitting || unavailable} onResolve={resolve} />
 			)}
 
 			{error ? (
@@ -66,7 +69,7 @@ export function ElicitationDock({
 	);
 }
 
-export function ElicitationHistory({ activity }: { activity: ConversationActivity }) {
+export function ElicitationHistory({ activity, harness }: { activity: ConversationActivity; harness?: string }) {
 	const response = activity.inputResponse;
 	const answered = (activity.status === "resolved" || activity.status === "completed") && response?.action === "accept";
 	const outcome = activity.status === "failed" ? "Question expired"
@@ -75,7 +78,7 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 				: answered ? "Answered" : "Question closed";
 	const schema = activity.detail?.schema;
 	const properties = Object.entries(schema?.properties ?? {});
-	const form = questionForm(properties);
+	const form = questionForm(properties, harness);
 	const groups = form?.groups;
 	const message = activity.detail?.message ?? schema?.title ?? activity.summary;
 	const content = answered ? response.content : undefined;
@@ -315,16 +318,18 @@ function URLRequest({
 
 function FormRequest({
 	activity,
+	harness,
 	disabled,
 	onResolve,
 }: {
 	activity: ConversationActivity;
+	harness?: string;
 	disabled: boolean;
 	onResolve: (action: InputAction, content?: Record<string, unknown>) => Promise<void>;
 }) {
 	const schema = activity.detail?.schema;
 	const properties = useMemo(() => Object.entries(schema?.properties ?? {}), [schema?.properties]);
-	const form = useMemo(() => questionForm(properties), [properties]);
+	const form = useMemo(() => questionForm(properties, harness), [properties, harness]);
 	const questionGroups = form?.groups;
 	const otherAnswers = useMemo(() => otherAnswerFields(properties), [properties]);
 	const required = useMemo(() => new Set(schema?.required ?? []), [schema?.required]);
@@ -828,18 +833,20 @@ function enumOptions(property: Record<string, unknown>): Array<{ value: string; 
  * "Other" field. claude-agent-acp writes `question_<n>` / `question_<n>_custom`
  * and carries a single question's prompt in `message`. Antigravity (`agy acp`)
  * writes `q<n>` / `q<n>_other`, puts the prompt in the field title and sends only
- * "The agent has N questions." as `message`.
+ * "The agent has N questions." as `message`. Any MCP form may name its fields
+ * `q1`, `q2`, so that scheme applies only when Antigravity asked.
  */
-const QUESTION_FIELD_SCHEMES = [
+const QUESTION_FIELD_SCHEMES: Array<{ pattern: RegExp; promptInTitle: boolean; harness?: string }> = [
 	{ pattern: /^question_(\d+)(_custom)?$/, promptInTitle: false },
-	{ pattern: /^q(\d+)(_other)?$/, promptInTitle: true },
+	{ pattern: /^q(\d+)(_other)?$/, promptInTitle: true, harness: "agy" },
 ];
 
 type QuestionForm = { groups: PropertyEntry[][]; promptInTitle: boolean };
 
 /** A question form shows one question, with its Other field, at a time. */
-function questionForm(properties: PropertyEntry[]): QuestionForm | undefined {
+function questionForm(properties: PropertyEntry[], harness?: string): QuestionForm | undefined {
 	for (const scheme of QUESTION_FIELD_SCHEMES) {
+		if (scheme.harness !== undefined && scheme.harness !== harness) continue;
 		const groups = questionGroups(properties, scheme.pattern);
 		if (groups) return { groups, promptInTitle: scheme.promptInTitle };
 	}

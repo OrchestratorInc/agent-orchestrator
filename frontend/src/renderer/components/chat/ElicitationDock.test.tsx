@@ -358,6 +358,7 @@ describe("ElicitationDock", () => {
 		render(
 			<ElicitationDock
 				activity={activity({ inputMode: "form", message: "The agent has 2 questions.", schema: agyQuestions })}
+				harness="agy"
 				onResolve={onResolve}
 			/>,
 		);
@@ -381,11 +382,27 @@ describe("ElicitationDock", () => {
 		render(
 			<ElicitationDock
 				activity={activity({ inputMode: "form", message: "The agent has a question.", schema: { type: "object", properties: { q1, q1_other } } })}
+				harness="agy"
 				onResolve={vi.fn()}
 			/>,
 		);
 		expect(screen.getByTestId("elicitation-question")).toHaveTextContent("How should this panel relate to the Inspector?");
 		expect(screen.queryByText("The agent has a question.")).not.toBeInTheDocument();
+	});
+
+	it("keeps another agent's q1, q2 form in the all-fields layout", () => {
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", message: "Tell us about the deploy.", schema: { ...agyQuestions, description: "Both are optional." } })}
+				harness="claude-code"
+				onResolve={vi.fn()}
+			/>,
+		);
+		expect(screen.getByTestId("elicitation-question")).toHaveTextContent("Tell us about the deploy.");
+		expect(screen.getByText("Both are optional.")).toBeVisible();
+		expect(screen.getByText("Which session details should be shown?")).toBeVisible();
+		expect(screen.getAllByRole("textbox")).toHaveLength(2);
+		expect(screen.queryByRole("button", { name: "Next" })).not.toBeInTheDocument();
 	});
 
 	it("keeps generic MCP forms in the all-fields layout", () => {
