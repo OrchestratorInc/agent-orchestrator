@@ -34,6 +34,11 @@ const DRAG_SLOP = 7;
 const TAP_MAX_MS = 10_000;
 /** Debug builds measure the stream (StreamStats). */
 const MEASURE_STREAM = typeof __DEV__ !== "undefined" && __DEV__;
+/** The Hermes JS heap in KB, for the debug log's 10-minute heap check; null off Hermes. */
+function hermesHeapKB(): number | null {
+	const stats = (globalThis as { HermesInternal?: { getInstrumentedStats?: () => { js_heapSize?: number } } }).HermesInternal?.getInstrumentedStats?.();
+	return typeof stats?.js_heapSize === "number" ? Math.round(stats.js_heapSize / 1024) : null;
+}
 /** How often the stream's quality follows the bandwidth it uses. */
 const QUALITY_INTERVAL_MS = 2_000;
 /** The mark a tap leaves on the frame: about a fingertip. */
@@ -111,7 +116,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		const timer = setInterval(() => {
 			const now = performance.now();
 			setStatsLine(stats.current?.line(now) ?? "");
-			if (++ticks % 5 === 0) console.log(`[stream-stats] ${JSON.stringify(stats.current?.snapshot(now))}`);
+			if (++ticks % 5 === 0) console.log(`[stream-stats] ${JSON.stringify({ ...stats.current?.snapshot(now), heapKB: hermesHeapKB() })}`);
 		}, 1_000);
 		return () => clearInterval(timer);
 	}, []);

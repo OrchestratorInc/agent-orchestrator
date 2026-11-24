@@ -17,8 +17,10 @@ const CEILING: Record<StreamLink, StreamQuality> = {
 	wifi: { quality: 80, maxFps: 30 },
 	unknown: { quality: 70, maxFps: 30 },
 };
-// Kilobytes per second the stream may use on each link.
-const BUDGET_KBPS: Record<StreamLink, number> = { cellular: 150, wifi: 1_000, unknown: 400 };
+// Kilobytes per second the stream may use on each link. Cellular data is
+// metered; Wi-Fi is not, so its budget only reins in a stream the network
+// cannot carry (a LAN at q70 measured ~5.8 MB/s on a constantly repainting page).
+const BUDGET_KBPS: Record<StreamLink, number> = { cellular: 150, wifi: 6_000, unknown: 1_500 };
 const MIN_QUALITY = 40;
 const MIN_FPS = 5;
 

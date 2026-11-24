@@ -35,6 +35,12 @@ describe("stream quality", () => {
 		expect(q).toEqual({ quality: 60, maxFps: 20 });
 	});
 
+	it("keeps Wi-Fi at full quality and frame rate at LAN rates", () => {
+		// Measured on a LAN with a constantly repainting page: ~5.8 MB/s at q70.
+		const start = initialStreamQuality("wifi");
+		expect(adjustStreamQuality(start, 5_800, "wifi")).toBe(start);
+	});
+
 	it("holds steady between half the budget and the budget", () => {
 		const q = { quality: 60, maxFps: 20 };
 		expect(adjustStreamQuality(q, 100, "cellular")).toBe(q);
