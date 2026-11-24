@@ -42,6 +42,7 @@ type APIDeps struct {
 	Activity           controllers.ActivityRecorder
 	PRRefresh          controllers.PRRefresher
 	NativeSessions     ports.AgentNativeSessionResolver
+	TerminalReplies    ports.AgentResolver // Stop replies from native history; nil disables
 	UsageHooks         controllers.UsageHookRecorder
 	UsageSummary       controllers.UsageSummaryService
 	UsageReport        controllers.UsageReportService
@@ -104,6 +105,9 @@ type APIDeps struct {
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService
+	// PRPreview reads any GitHub pull request a chat links to; nil leaves
+	// the route answering 501.
+	PRPreview controllers.PRPreviewService
 	// SessionSearch answers the ranked search over past sessions. Nil leaves
 	// the route answering 501; the index itself is built by the daemon.
 	SessionSearch controllers.SessionSearchService
@@ -188,6 +192,7 @@ type API struct {
 	computerUse   *controllers.ComputerUseController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
+	prPreview     *controllers.PRPreviewController
 	sessionSearch *controllers.SessionSearchController
 	github        *controllers.GitHubController
 	events        *EventsController
@@ -221,6 +226,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Activity:                 deps.Activity,
 			PRRefresh:                deps.PRRefresh,
 			NativeSessions:           deps.NativeSessions,
+			TerminalReplies:          deps.TerminalReplies,
 			DataDir:                  cfg.DataDir,
 			Usage:                    deps.UsageHooks,
 			Attachments:              attachmentstore.New(cfg.DataDir),
@@ -257,6 +263,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
+		prPreview:     &controllers.PRPreviewController{Svc: deps.PRPreview},
 		sessionSearch: &controllers.SessionSearchController{Svc: deps.SessionSearch},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
 		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
@@ -410,6 +417,7 @@ func (a *API) Register(root chi.Router) {
 			a.computerUse.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
+			a.prPreview.Register(r)
 			a.sessionSearch.Register(r)
 			a.github.Register(r)
 			// Sibling REST controllers plug in here.

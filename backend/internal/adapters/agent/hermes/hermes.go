@@ -52,6 +52,14 @@ const (
 	nativeWarningPrompt  = "⚠ ❯"
 	nativeQuestionPrompt = "? ❯"
 	nativeUserEcho       = "● "
+	// display.cli_layout=modern (the default since at least v0.22.5) echoes
+	// submitted messages with the skin's prompt glyph instead of ●, between the
+	// same 40-cell transcript rules; cli_layout=classic keeps ●. Built from
+	// nativePrompt so the echo and composer markers cannot drift apart. `❯ `
+	// is more common in assistant output (shell prompts) than ●, so a match
+	// still needs exact rules on both sides, the whole message and a rising
+	// count before it acknowledges a send.
+	nativeModernUserEcho = nativePrompt + " "
 	nativeCommandEcho    = "⚙️  "
 	nativeTranscriptRule = "────────────────────────────────────────"
 	// modernSpinner holds the frames the modern layout (the v0.22 default)
@@ -504,11 +512,15 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 
 // qualifiedReleaseLines are the major.minor release lines whose composer,
 // busy, modal and transcript chrome AO's terminal detection was checked
-// against (v0.21.6 on Linux, v0.22.2 on macOS). A newer line stays installed
-// but unverified until its markers are revalidated. Only major.minor is
+// against (v0.21.6 on Linux, v0.22.2 on macOS, v0.23.1 on macOS and Linux,
+// and v0.23.2 live through AO's pty-host).
+// The modern layout, the default on 0.22 and 0.23, echoes submitted messages
+// with its prompt glyph, which committedMessageEchoes accepts alongside ●.
+// A newer line stays installed but unverified until its markers are
+// revalidated. Only major.minor is
 // compared: Hermes derives its banner from git tags, so the same build can
 // report v0.21.6 or v0.21.5+N.g<sha> depending on a checkout under HERMES_HOME.
-var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}}
+var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}, {0, 23}}
 
 // qualifiedSourceCheckout accepts the banner Hermes prints when its own git
 // lookup finds no release tag (`vgit.<sha>`, e.g. after a shallow or cold
@@ -1829,7 +1841,7 @@ func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 }
 
 // ValidateTerminalMessage refuses ordinary AO text while native decisions own input.
-func (p *Plugin) ValidateTerminalMessage(_, screen string) error {
+func (p *Plugin) ValidateTerminalMessage(screen, _ string) error {
 	state, ok := p.DetectTerminalActivity(screen)
 	if !ok || state != domain.ActivityIdle {
 		return fmt.Errorf("hermes: ordinary Orchestrator sends require the current empty native composer; enter approval decisions directly in the terminal")
@@ -1853,6 +1865,18 @@ func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool 
 		return false
 	}
 	return committedMessageEchoes(message, screen) > committedMessageEchoes(message, baseline)
+}
+
+// userEchoPrefix reports which native echo prefix a rendered line starts with:
+// ● for cli_layout=classic, or the skin's prompt glyph for the modern layout
+// (the default on 0.22 and 0.23). Empty when the line is not a user echo.
+func userEchoPrefix(line string) string {
+	for _, echo := range []string{nativeUserEcho, nativeModernUserEcho} {
+		if strings.HasPrefix(line, echo) {
+			return echo
+		}
+	}
+	return ""
 }
 
 // Count complete matching native echoes outside the current composer. Comparing
@@ -1887,11 +1911,15 @@ func committedMessageEchoes(message, screen string) int {
 			count++
 			continue
 		}
-		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule || !strings.HasPrefix(line, nativeUserEcho) {
+		if i == 0 || strings.TrimSpace(lines[i-1]) != nativeTranscriptRule {
+			continue
+		}
+		echoPrefix := userEchoPrefix(line)
+		if echoPrefix == "" {
 			continue
 		}
 		var echo strings.Builder
-		echo.WriteString(strings.TrimPrefix(line, nativeUserEcho))
+		echo.WriteString(strings.TrimPrefix(line, echoPrefix))
 		j := i + 1
 		for j < end && strings.TrimSpace(lines[j]) != nativeTranscriptRule {
 			echo.WriteString(strings.TrimSpace(lines[j]))

@@ -1,4 +1,5 @@
 import { ONBOARDING_STEPS, onboardingStepIndex, type OnboardingStep } from "./onboarding-steps";
+import { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_REASONS } from "../../shared/onboarding-failures";
 
 // The onboarding funnel's closed vocabulary and its per-event property
 // allowlist. telemetry.ts hands every ao.onboarding.* event here, so a value
@@ -6,7 +7,12 @@ import { ONBOARDING_STEPS, onboardingStepIndex, type OnboardingStep } from "./on
 // enums, booleans, small counts, buckets and durations are kept: never a path,
 // repository name or URL, username, email or error message.
 //
-// Pure (no imports from telemetry.ts) so telemetry.ts can import it.
+// Pure (no imports from telemetry.ts) so telemetry.ts can import it. The
+// actions and failure reasons live in shared/ so Electron main's Sentry
+// allowlist reads the same lists.
+
+export { ONBOARDING_ACTIONS, ONBOARDING_FAILURE_REASONS };
+export type { OnboardingAction, OnboardingFailureReason } from "../../shared/onboarding-failures";
 
 export const ONBOARDING_RUN_KINDS = ["first_run", "replay"] as const;
 export type OnboardingRunKind = (typeof ONBOARDING_RUN_KINDS)[number];
@@ -19,43 +25,9 @@ export type OnboardingOutcome = (typeof ONBOARDING_OUTCOMES)[number];
 export const ONBOARDING_SKIP_REASONS = ["already_done", "user", "dismissed"] as const;
 export type OnboardingSkipReason = (typeof ONBOARDING_SKIP_REASONS)[number];
 
-/** Things a person starts during onboarding that can fail and be retried. */
-export const ONBOARDING_ACTIONS = [
-	"dependency_install",
-	"gh_install",
-	"gh_sign_in",
-	"agent_install",
-	"agent_sign_in",
-	"cloud_sign_in",
-] as const;
-export type OnboardingAction = (typeof ONBOARDING_ACTIONS)[number];
-
-export const ONBOARDING_ACTION_OUTCOMES = ["succeeded", "failed", "cancelled", "timed_out", "handed_off"] as const;
+/** left: onboarding ended, or the window closed, with the attempt still running, so nothing will see how it ends. */
+export const ONBOARDING_ACTION_OUTCOMES = ["succeeded", "failed", "cancelled", "timed_out", "handed_off", "left"] as const;
 export type OnboardingActionOutcome = (typeof ONBOARDING_ACTION_OUTCOMES)[number];
-
-/**
- * Why an action did not succeed:
- * - start_failed: the daemon refused to start it
- * - install_failed / interrupted / unsupported: the install job's own end state
- * - lost_contact: the daemon stopped answering while it ran
- * - not_signed_in: the login ended and the check still says signed out
- * - cleanup_failed: a login's terminal could not be closed
- * - request_failed: the request never got an answer
- * - documentation: the agent signs in outside AO, so its guide was opened
- */
-export const ONBOARDING_FAILURE_REASONS = [
-	"start_failed",
-	"install_failed",
-	"interrupted",
-	"unsupported",
-	"lost_contact",
-	"not_signed_in",
-	"cleanup_failed",
-	"request_failed",
-	"documentation",
-	"other",
-] as const;
-export type OnboardingFailureReason = (typeof ONBOARDING_FAILURE_REASONS)[number];
 
 /** What a page found missing: tools, and whether any agent is installed or signed in. */
 export const ONBOARDING_MISSING = ["git", "tmux", "gh", "gh_auth", "agent", "agent_auth"] as const;

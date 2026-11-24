@@ -231,11 +231,16 @@ export function prStatusRows(pr: SessionPRSummary): PRStatusRow[] {
 export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: boolean } = {}): PRCardPresentation {
 	// CI "unknown" means checks are still being read, unless the PR has none.
 	const awaitingChecks = pr.ci.state === "unknown" && !options.noChecks;
+	const queued = prMergeQueueEntry(pr);
 	let primary: PRCardStatus;
 	if (pr.state === "merged") {
 		primary = cardStatus("lifecycle", "pr.card.merged", "success");
 	} else if (pr.state === "closed") {
 		primary = cardStatus("lifecycle", "pr.card.closed", "passive");
+	} else if (queued) {
+		// In the queue the PR is on its way to merging, whatever the provider
+		// says of a direct merge; the queue's own state is the one to show.
+		primary = cardStatus("merge", "pr.queue.card", queued.state === "unmergeable" ? "warning" : "neutral", prMergeQueueDetail(queued));
 	} else if (pr.ci.state === "failing") {
 		primary = cardStatus("ci", "pr.card.checksFailing", "error", ciSummary(pr), ciLinks(pr));
 	} else if (pr.mergeability.state === "conflicting") {
@@ -299,6 +304,13 @@ export function prCardPresentation(pr: SessionPRSummary, options: { noChecks?: b
 		statusRows.push(cardStatus("review", "pr.card.reviewStatus", reviewTone(pr.review.decision, pr.review.hasUnresolvedHumanComments), reviewStatusDetail(pr)));
 		const readinessRows = mergeReadinessRows(pr, options);
 		const mergeable = prCanMerge(pr, options);
+		if (queued) {
+			return { primary, supporting, statusRows, readinessRows, readinessExplained: true, readiness: {
+				label: appI18n.t("pr.queue.card"),
+				detail: prMergeQueueDetail(queued),
+				tone: queued.state === "unmergeable" ? "warning" : "neutral",
+			} };
+		}
 		if (mergeReasons(pr).includes("github_checks_unavailable")) {
 			return { primary, supporting, statusRows, readinessRows, readiness: {
 				label: appI18n.t("pr.merge.accessLost"),
@@ -474,7 +486,8 @@ function cardStatus(
 		| "pr.card.reviewApproved"
 		| "pr.card.open"
 		| "pr.card.checksPassing"
-		| "pr.card.reviewStatus",
+		| "pr.card.reviewStatus"
+		| "pr.queue.card",
 	tone: PRDisplayTone,
 	detail?: string,
 	links: PRSummaryLink[] = [],
@@ -577,6 +590,8 @@ function ciCancelled(pr: SessionPRSummary): boolean {
 export function prCanMerge(pr: SessionPRSummary, options: { noChecks?: boolean } = {}): boolean {
 	return (
 		pr.state === "open" &&
+		// A queued PR is already on its way; merging it again can only be refused.
+		!pr.mergeQueue &&
 		(pr.ci.state === "passing" || (pr.ci.state === "unknown" && options.noChecks === true)) &&
 		pr.mergeability.state === "mergeable" &&
 		reviewAllowsMerge(pr.review.decision) &&
@@ -604,6 +619,30 @@ export function prMergeRoute(pr: Pick<SessionPRSummary, "mergeAccess">): PRMerge
 	// merge from AO is refused whatever their permission, unknown included.
 	if (access.via === "github") return "github";
 	return "ao";
+}
+
+export type PRMergeQueueEntry = NonNullable<SessionPRSummary["mergeQueue"]>;
+
+/** The PR's place in its base branch's merge queue; only an open PR has one. */
+export function prMergeQueueEntry(pr: SessionPRSummary): PRMergeQueueEntry | undefined {
+	return pr.state === "open" ? pr.mergeQueue ?? undefined : undefined;
+}
+
+const queueStateLabel = {
+	queued: "pr.queue.state.queued",
+	awaiting_checks: "pr.queue.state.awaiting_checks",
+	mergeable: "pr.queue.state.mergeable",
+	unmergeable: "pr.queue.state.unmergeable",
+	locked: "pr.queue.state.locked",
+} as const;
+
+/** What a queued PR is doing, with its position and the provider's estimate when it gives them. */
+export function prMergeQueueDetail(entry: PRMergeQueueEntry): string {
+	const parts = [appI18n.t(queueStateLabel[entry.state] ?? "pr.queue.state.queued")];
+	if (entry.position > 0) parts.push(appI18n.t("pr.queue.position", { position: entry.position }));
+	const seconds = entry.estimatedSecondsToMerge ?? 0;
+	if (seconds > 0) parts.push(appI18n.t("pr.queue.eta", { minutes: Math.max(1, Math.round(seconds / 60)) }));
+	return parts.join(" · ");
 }
 
 function reviewAllowsMerge(decision: SessionPRSummary["review"]["decision"]): boolean {
@@ -635,6 +674,7 @@ function providerBlockedDetail(pr: SessionPRSummary): string {
 }
 
 export function prSummaryParts(pr: SessionPRSummary): PRSummaryPart[] {
+	const queued = prMergeQueueEntry(pr);
 	return [
 		{
 			key: "ci",
@@ -652,13 +692,24 @@ export function prSummaryParts(pr: SessionPRSummary): PRSummaryPart[] {
 		{
 			key: "merge",
 			label: appI18n.t("pr.section.merge"),
-			status: hasLostGitHubAccess(pr) ? appI18n.t("pr.merge.accessLost") : mergeabilityLabel(pr.mergeability.state),
-			summary: hasLostGitHubAccess(pr) ? appI18n.t("pr.merge.accessLostDetail") : mergeSummary(pr),
-			links: mergeLinks(pr),
-			linkTotal: mergeLinkTotal(pr),
-			overflowLabel: mergeOverflowLabel(pr),
-			overflowNoun: mergeOverflowNoun(pr),
-			tone: hasLostGitHubAccess(pr) ? "warning" : mergeabilityTone(pr.mergeability.state),
+			...(queued ? {
+				// Queued, not blocked: the queue's state stands in for the provider's verdict on a direct merge.
+				status: appI18n.t("pr.queue.card"),
+				summary: prMergeQueueDetail(queued),
+				links: [],
+				linkTotal: 0,
+				overflowLabel: undefined,
+				overflowNoun: mergeOverflowNoun(pr),
+				tone: queued.state === "unmergeable" ? "warning" as const : "neutral" as const,
+			} : {
+				status: hasLostGitHubAccess(pr) ? appI18n.t("pr.merge.accessLost") : mergeabilityLabel(pr.mergeability.state),
+				summary: hasLostGitHubAccess(pr) ? appI18n.t("pr.merge.accessLostDetail") : mergeSummary(pr),
+				links: mergeLinks(pr),
+				linkTotal: mergeLinkTotal(pr),
+				overflowLabel: mergeOverflowLabel(pr),
+				overflowNoun: mergeOverflowNoun(pr),
+				tone: hasLostGitHubAccess(pr) ? "warning" as const : mergeabilityTone(pr.mergeability.state),
+			}),
 		},
 		{
 			key: "review",

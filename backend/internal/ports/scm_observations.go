@@ -195,6 +195,10 @@ type SCMPRObservation struct {
 	ProviderMergeStateStatus string
 	// HTMLURL is the provider browser URL; it usually matches URL.
 	HTMLURL string
+	// MergeQueueRequired says the base branch merges through a merge queue.
+	MergeQueueRequired bool
+	// MergeQueue is the PR's merge queue entry, nil while it isn't queued.
+	MergeQueue *domain.MergeQueueEntry
 
 	// CreatedAtProvider is the provider's PR creation timestamp.
 	CreatedAtProvider time.Time

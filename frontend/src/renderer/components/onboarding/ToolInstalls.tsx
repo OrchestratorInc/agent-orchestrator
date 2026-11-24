@@ -15,7 +15,7 @@ import { invalidateAgentModelCatalogs } from "../../hooks/useAgentModelsQuery";
 import type { AgentReadinessSnapshot } from "../../hooks/useAgentReadinessQuery";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
-import { apiErrorCode, finishOnboardingAction, installJobOutcome, onboardingActionPending, startOnboardingAction } from "../../lib/onboarding-telemetry";
+import { apiErrorCode, finishOnboardingAction, installJobOutcome, onboardingActionWatched, startOnboardingAction } from "../../lib/onboarding-telemetry";
 import { ManualCommand } from "../InstallDependencyDialog";
 import { installPercent } from "../settings/harness/describe-harness";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
@@ -369,8 +369,8 @@ export function useGhInstall(onInstalled: () => void) {
 			.then(({ data }) => {
 				if (!current || !data || lookedUpAt !== generation.current) return;
 				// An install started here before the page was left (Back) is still
-				// followed to its end.
-				if (onboardingActionPending("gh_install", "gh")) {
+				// followed to its end, whether or not analytics is on.
+				if (onboardingActionWatched("gh_install", "gh")) {
 					if (!settle(data)) watch();
 					return;
 				}

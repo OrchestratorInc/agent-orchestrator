@@ -957,6 +957,19 @@ const api = {
 			ipcRenderer.invoke("keybindings:set", overrides) as Promise<KeybindingOverrides>,
 		setRecording: (active: boolean) => ipcRenderer.invoke("keybindings:setRecording", active) as Promise<void>,
 	},
+	awake: {
+		// Main pushes Stay Awake changes on this bridge; stubs set false and keep polling.
+		pushes: true,
+		// Main reads the daemon's Stay Awake state every 5 s for the menu bar and
+		// forwards each change here, so the sidebar need not poll the same endpoint.
+		onState: (listener: (state: unknown) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: unknown) => listener(state);
+			ipcRenderer.on("awake:state", wrapped);
+			return () => {
+				ipcRenderer.off("awake:state", wrapped);
+			};
+		},
+	},
 	updates: {
 		getStatus: () => ipcRenderer.invoke("updates:getStatus") as Promise<UpdateStatus>,
 		check: (options?: UpdateCheckOptions) => ipcRenderer.invoke("updates:check", options) as Promise<void>,
@@ -992,7 +1005,7 @@ const api = {
 	// back is password-free (see main/remotes-ipc.ts); a password only travels
 	// renderer -> main on add or credential edit. Account host tokens stay in main.
 	remotes: {
-		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
+		list: () => ipcRenderer.invoke("remotes:list", true) as Promise<RemoteHostView[] | { code: string; message: string; expected?: true }>,
 		// Saves the account's machines from AO Cloud and forgets the ones it no longer lists.
 		syncAccountHosts: (accountId: string) => ipcRenderer.invoke("remotes:syncAccountHosts", accountId) as Promise<void>,
 		// Lists a paired host under the signed-in account.

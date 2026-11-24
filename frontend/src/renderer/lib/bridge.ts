@@ -15,6 +15,10 @@ export const aoBridge: AoBridge =
 		triage: {
 			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
 		},
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
+		},
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,

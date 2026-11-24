@@ -397,6 +397,23 @@ describe("remoteHosts flag", () => {
 	});
 });
 
+describe("retired side chats switch", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+	});
+
+	it("leaves no switch behind and clears a stored opt-out at startup", async () => {
+		window.localStorage.setItem("ao.sideChats", "false");
+
+		const state = (await bootStore()).getState();
+
+		expect(state).not.toHaveProperty("sideChats");
+		expect(state).not.toHaveProperty("setSideChats");
+		expect(window.localStorage.getItem("ao.sideChats")).toBeNull();
+	});
+});
+
 describe("navigation gestures", () => {
 	beforeEach(() => {
 		window.localStorage.clear();

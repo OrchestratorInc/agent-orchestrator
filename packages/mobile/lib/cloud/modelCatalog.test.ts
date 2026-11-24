@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CloudError } from "./errors";
-import { agentModelCatalog, cachedAgentCatalog, cachedSessionCatalog, modelsRetryDelay, rememberSessionCatalog, sessionCatalogKey } from "./modelCatalog";
+import { forgetCloudAccountCaches } from "./accountCaches";
+import { agentModelCatalog, cachedAgentCatalog, cachedSessionCatalog, catalogAccount, modelsRetryDelay, releaseCatalogRefreshMs, rememberSessionCatalog, sessionCatalogKey } from "./modelCatalog";
 
 const error = (code: string) => new CloudError("failed", { status: 503, code });
 
@@ -30,5 +31,59 @@ describe("cloud model catalogs", () => {
 		expect(modelsRetryDelay(3, error("WORKER_TIMEOUT"))).toBeUndefined();
 		expect(modelsRetryDelay(1, error("FORBIDDEN"))).toBeUndefined();
 		expect(modelsRetryDelay(1, new Error("offline"))).toBeUndefined();
+	});
+});
+
+describe("a release catalog", () => {
+	const release = { models: [{ id: "opus", displayName: "Opus", default: true }], source: "release" };
+	const account = { models: [{ id: "opus", displayName: "Opus", description: "Opus 5.5 · Most capable", default: true }], source: "worker" };
+
+	it("is fresh for 15 seconds, where the account's own list is fresh for five minutes", async () => {
+		await agentModelCatalog({ listAgentModels: vi.fn(async () => release) } as never, "r1", "claude-code");
+		expect(cachedAgentCatalog("r1", "claude-code")).toBe(release);
+		expect(cachedAgentCatalog("r1", "claude-code", Date.now() + 16_000)).toBeUndefined();
+		await agentModelCatalog({ listAgentModels: vi.fn(async () => account) } as never, "r2", "claude-code");
+		expect(cachedAgentCatalog("r2", "claude-code", Date.now() + 16_000)).toBe(account);
+	});
+
+	it("is asked again on a scheduled re-read, and the account's own list is not", async () => {
+		const listAgentModels = vi.fn(async () => release);
+		const client = { listAgentModels } as never;
+		await agentModelCatalog(client, "r3", "claude-code");
+		await agentModelCatalog(client, "r3", "claude-code");
+		expect(listAgentModels).toHaveBeenCalledTimes(1);
+		listAgentModels.mockResolvedValueOnce(account as never);
+		await expect(agentModelCatalog(client, "r3", "claude-code", { rereadRelease: true })).resolves.toBe(account);
+		await agentModelCatalog(client, "r3", "claude-code", { rereadRelease: true });
+		expect(listAgentModels).toHaveBeenCalledTimes(2);
+	});
+
+	it("is read again on desktop's schedule: 15s, doubling, at most five minutes", () => {
+		expect([1, 2, 3, 4, 5, 6, 9].map(releaseCatalogRefreshMs)).toEqual([15_000, 30_000, 60_000, 120_000, 240_000, 300_000, 300_000]);
+	});
+});
+
+describe("on an account change", () => {
+	it("forgets every catalog, and drops an answer to a request made before it", async () => {
+		const codex = { models: [{ id: "gpt-5.5", displayName: "GPT-5.5", default: true }] };
+		await agentModelCatalog({ listAgentModels: vi.fn(async () => codex) } as never, "a1", "codex");
+		rememberSessionCatalog(sessionCatalogKey("a1", "s1", 1), codex);
+		let answer!: (value: unknown) => void;
+		const late = agentModelCatalog({ listAgentModels: () => new Promise((resolve) => { answer = resolve; }) } as never, "a1", "claude-code");
+		forgetCloudAccountCaches();
+		expect(cachedAgentCatalog("a1", "codex")).toBeUndefined();
+		expect(cachedSessionCatalog(sessionCatalogKey("a1", "s1", 1))).toBeUndefined();
+		answer(codex);
+		await late;
+		expect(cachedAgentCatalog("a1", "claude-code")).toBeUndefined();
+	});
+
+	it("drops a session's list asked for before the account changed", () => {
+		const asked = catalogAccount();
+		forgetCloudAccountCaches();
+		rememberSessionCatalog(sessionCatalogKey("a2", "s1", 1), { models: [] }, asked);
+		expect(cachedSessionCatalog(sessionCatalogKey("a2", "s1", 1))).toBeUndefined();
+		rememberSessionCatalog(sessionCatalogKey("a2", "s1", 1), { models: [] }, catalogAccount());
+		expect(cachedSessionCatalog(sessionCatalogKey("a2", "s1", 1))).toBeDefined();
 	});
 });

@@ -123,6 +123,51 @@ func TestProjectAddCommand_RequiresPath(t *testing.T) {
 	}
 }
 
+// A repository with no remote and no resolvable default branch is still
+// registered, with a warning naming the command that sets one. --default-branch
+// sets it up front.
+func TestProjectAddDefaultBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name, flag, replyBranch, replyRepo string
+		wantWarning                        bool
+	}{
+		{name: "unresolved without a remote warns", replyBranch: "auto", wantWarning: true},
+		{name: "unresolved with a remote resolves at spawn", replyBranch: "auto", replyRepo: "https://example.com/demo.git"},
+		{name: "flag is sent", flag: "trunk", replyBranch: "trunk"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			var body addProjectRequest
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/api/v1/projects" {
+					http.NotFound(w, r)
+					return
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"project":{"id":"demo","path":"/repo/demo","repo":"`+tc.replyRepo+`","defaultBranch":"`+tc.replyBranch+`"}}`)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
+
+			args := []string{"project", "add", "--path", "/repo/demo"}
+			if tc.flag != "" {
+				args = append(args, "--default-branch", tc.flag)
+			}
+			out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, args...)
+			if err != nil || !strings.Contains(out, "registered project demo") {
+				t.Fatalf("project add: err=%v out=%q", err, out)
+			}
+			if got := strings.Contains(errOut, "ao project set-config demo --default-branch"); got != tc.wantWarning {
+				t.Fatalf("stderr = %q, warning present = %t, want %t", errOut, got, tc.wantWarning)
+			}
+			if tc.flag != "" && (body.Config == nil || body.Config.DefaultBranch != tc.flag) {
+				t.Fatalf("request config = %+v, want defaultBranch %q", body.Config, tc.flag)
+			}
+		})
+	}
+}
+
 func TestSpawnClaimPRWiring(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
@@ -1154,24 +1199,24 @@ func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
 			Orchestrator: roleOverride{Agent: "claude-code"},
 		},
 	}
-	if got, err := resolveSpawnHarness("", "orchestrator", project); err != nil || got != "claude-code" {
-		t.Fatalf("orchestrator default: got %q err %v, want claude-code", got, err)
+	if got := resolveSpawnHarness("", "orchestrator", project); got != "claude-code" {
+		t.Fatalf("orchestrator default: got %q, want claude-code", got)
 	}
-	if got, err := resolveSpawnHarness("", "worker", project); err != nil || got != "codex" {
-		t.Fatalf("worker default: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "worker", project); got != "codex" {
+		t.Fatalf("worker default: got %q, want codex", got)
 	}
-	if got, err := resolveSpawnHarness("aider", "orchestrator", project); err != nil || got != "aider" {
-		t.Fatalf("explicit agent: got %q err %v, want aider", got, err)
+	if got := resolveSpawnHarness("aider", "orchestrator", project); got != "aider" {
+		t.Fatalf("explicit agent: got %q, want aider", got)
 	}
 	// Unset kind is the default `ao spawn` path and must resolve to worker.agent.
-	if got, err := resolveSpawnHarness("", "", project); err != nil || got != "codex" {
-		t.Fatalf("unset kind: got %q err %v, want codex", got, err)
+	if got := resolveSpawnHarness("", "", project); got != "codex" {
+		t.Fatalf("unset kind: got %q, want codex", got)
 	}
-	// Orchestrator spawn with no orchestrator.agent configured surfaces the
-	// --orchestrator-agent hint (the error branch this PR adds).
+	// Orchestrator spawn with no orchestrator.agent configured leaves the
+	// harness to the daemon, which fills the project's empty roles.
 	noOrch := projectDetails{ID: "demo", Config: &projectConfig{Worker: roleOverride{Agent: "codex"}}}
-	if _, err := resolveSpawnHarness("", "orchestrator", noOrch); err == nil || !strings.Contains(err.Error(), "--orchestrator-agent") {
-		t.Fatalf("missing orchestrator agent: err=%v, want --orchestrator-agent hint", err)
+	if got := resolveSpawnHarness("", "orchestrator", noOrch); got != "" {
+		t.Fatalf("missing orchestrator agent: got %q, want daemon-resolved empty harness", got)
 	}
 }
 
@@ -1346,5 +1391,8 @@ func TestSpawnReportsBackgroundStartFailure(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--prompt", "fix it")
 	if err == nil || !strings.Contains(err.Error(), "session demo-9 failed to start: git worktree add failed") {
 		t.Fatalf("err = %v, want the start failure reason", err)
+	}
+	if !strings.Contains(err.Error(), "ao session resume-agent demo-9") {
+		t.Fatalf("err = %v, want the retry command", err)
 	}
 }

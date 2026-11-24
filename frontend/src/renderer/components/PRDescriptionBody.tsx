@@ -10,19 +10,34 @@ import { isWebImageUrl, linksOnlyImages, PRDescriptionImage } from "./PRDescript
 import { PRImageGallery } from "./PRImageGallery";
 import { descriptionMarkdown, descriptionMedia } from "../lib/pr-description";
 
-// Reading width and type for the whole body.
-const readingClass = cn(
-	"min-w-0 select-text break-words text-sm leading-relaxed text-foreground/85",
+// Reading type for the whole body, shared by the tab and the drawer.
+const readingBaseClass = cn(
+	"min-w-0 select-text break-words text-sm leading-relaxed",
 	"[&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2",
-	"[&_code]:rounded [&_code]:bg-muted/60 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_code]:text-foreground",
-	"[&_h1]:mt-6 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-foreground",
-	"[&_h2]:mt-6 [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-foreground",
-	"[&_h3]:mt-4 [&_h3]:mb-1.5 [&_h3]:font-semibold [&_h3]:text-foreground",
+	"[&_code]:font-mono [&_code]:text-[0.9em] [&_code]:text-foreground",
 	"[&_li]:my-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2.5 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5",
 	"[&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/40 [&_pre]:p-3 [&_pre_code]:bg-transparent [&_pre_code]:p-0",
 	"[&_strong]:text-foreground [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse",
 	"[&_td]:border [&_td]:border-border [&_td]:p-2 [&_td]:align-top [&_th]:border [&_th]:border-border [&_th]:p-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-foreground",
 	"[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+);
+
+// The tab's full width carries a heading scale and a chip on each code word.
+const readingClass = cn(
+	readingBaseClass,
+	"text-foreground/85 [&_code]:rounded [&_code]:bg-muted/60 [&_code]:px-1 [&_code]:py-0.5",
+	"[&_h1]:mt-6 [&_h1]:mb-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-foreground",
+	"[&_h2]:mt-6 [&_h2]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-foreground",
+	"[&_h3]:mt-4 [&_h3]:mb-1.5 [&_h3]:font-semibold [&_h3]:text-foreground",
+);
+
+// A narrow column reads calmer with fewer weights: headings at body size and
+// bright against a dimmer text, and code words in mono without a chip. The
+// chips' fills stacked up line after line at this width. Code blocks keep their box.
+const narrowReadingClass = cn(
+	readingBaseClass,
+	"text-foreground/80",
+	"[&_:is(h1,h2,h3,h4)]:mt-5 [&_:is(h1,h2,h3,h4)]:mb-1 [&_:is(h1,h2,h3,h4)]:text-sm [&_:is(h1,h2,h3,h4)]:font-semibold [&_:is(h1,h2,h3,h4)]:text-foreground",
 );
 
 /**
@@ -44,10 +59,12 @@ function InlineImage({ alt, onOpen, src }: { alt?: string; onOpen: () => void; s
  * A PR's whole description, in its tab: the body at a readable width, images
  * full size (each opens the gallery). Says why when there is no body to show.
  */
-export function PRDescriptionBody({ cloud, detailsFailed, pr }: {
+export function PRDescriptionBody({ cloud, detailsFailed, narrow = false, pr }: {
 	cloud: boolean;
 	/** The one read of a PR's missing details failed (see usePRDetailsLoad). */
 	detailsFailed?: boolean;
+	/** Set in a narrow column, such as the drawer beside the inspector. */
+	narrow?: boolean;
 	pr: SessionPRSummary;
 }) {
 	const { t } = useTranslation();
@@ -76,7 +93,7 @@ export function PRDescriptionBody({ cloud, detailsFailed, pr }: {
 	return (
 		<div data-testid="pr-description">
 			{empty ? <p className="m-0 text-sm text-passive">{empty}</p> : (
-				<div className={readingClass}>
+				<div className={narrow ? narrowReadingClass : readingClass}>
 					{/* Provider content: react-markdown never renders raw HTML. */}
 					<ReactMarkdown components={components} remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
 				</div>

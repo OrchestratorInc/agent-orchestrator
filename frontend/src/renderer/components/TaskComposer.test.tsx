@@ -347,6 +347,16 @@ describe("TaskComposer", () => {
 		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
 		expect(startTask()).toBeDisabled();
 		expect(h.post).not.toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.anything());
+		fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
+		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "local" }));
+	});
+
+	it("opens the Cloud harness view from a cloud project's no-agent message", async () => {
+		const queryClient = cloudFixture("", {}, []);
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
+		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "cloud" }));
 	});
 
 	it("offers the agent default after a stale saved model is rejected without retrying the spawn", async () => {
@@ -405,6 +415,8 @@ describe("TaskComposer", () => {
 			: { data: {} });
 		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
 		await screen.findByText("No agent is ready on this host. Configure one there first.");
+		// A remote host's agents are set up on that host, not in this computer's Settings.
+		expect(screen.queryByRole("button", { name: "Open Agent Harnesses" })).not.toBeInTheDocument();
 		expect(startTask()).toBeDisabled();
 		expect(h.remotePost.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
 	});
@@ -1145,14 +1157,14 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.ensureTargetedReadiness).toHaveBeenCalledTimes(2));
 		expect(h.ensureTargetedReadiness).toHaveBeenLastCalledWith(["codex"], "launch", undefined);
 		const expectedError = errorCode === "AGENT_BINARY_NOT_FOUND"
-			? "This agent is not installed. Open Agent Harnesses settings to install it, then try again."
+			? "This agent is not installed. Open Agents settings to install it, then try again."
 			: "Codex is not ready";
 		expect(screen.queryByText(expectedError)).not.toBeInTheDocument();
 
 		await act(async () => finishReadiness({ agents: [completed] }));
 		expect(await screen.findByText(expectedError)).toBeInTheDocument();
 		if (errorCode === "AGENT_BINARY_NOT_FOUND") {
-			fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+			fireEvent.click(screen.getByRole("button", { name: "Open Agents settings" }));
 			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", focusAgentId: "codex" }));
 		}
 		expect(queryClient.getQueryData(agentReadinessQueryKey)).toEqual({ agents: [completed] });
@@ -1415,7 +1427,7 @@ describe("TaskComposer", () => {
 	it("manages cloud harness connections from a cloud project's agent picker", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
 		const { unmount } = render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
-		// Only connected harnesses, with "Manage harness connections…" (Harness settings' Cloud view).
+		// Only connected agents, with "Manage agent connections…" (Agents settings' Cloud view).
 		expect(await screen.findByLabelText("Agent")).toHaveAttribute("data-manage-view", "cloud");
 		unmount();
 
@@ -2325,6 +2337,95 @@ describe("TaskComposer", () => {
 
 		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
 		expect(await screen.findByTitle("Provider temporarily unavailable")).toBeInTheDocument();
+	});
+
+	it("submits a directly entered Mastra Code model", async () => {
+		const agent = "mastra-code";
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, "Mastra Code")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path.includes("/models")) return { data: {
+				agentId: agent,
+				selectionMode: "text",
+				models: [],
+				allowCustom: true,
+				customModelEntry: "direct",
+			} };
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ data: { session: { id: "custom-model-session" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		const search = await screen.findByRole("searchbox", { name: "Search model" });
+		await userEvent.type(search, "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
+		expect(picker).toHaveTextContent("private/model-id");
+
+		fireEvent.change(task(), { target: { value: "Use the selected native model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith(
+			"/api/v1/sessions",
+			expect.objectContaining({ body: expect.objectContaining({ harness: agent, model: "private/model-id" }) }),
+		));
+	});
+
+	it("returns a directly entered Mastra Code model to the native default", async () => {
+		const agent = "mastra-code";
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, "Mastra Code")] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: agent, selectionMode: "text", models: [], allowCustom: true, customModelEntry: "direct" } }
+			: { data: { status: "ok", project: { config: {} } } });
+		h.post.mockResolvedValueOnce({ data: { session: { id: "default-model-session" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		await userEvent.type(await screen.findByRole("searchbox", { name: "Search model" }), "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
+		expect(picker).toHaveTextContent("private/model-id");
+
+		await userEvent.click(picker);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Use project or agent default" }));
+		expect(picker).not.toHaveTextContent("private/model-id");
+		fireEvent.change(task(), { target: { value: "Use the native default model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.anything()));
+		expect(h.post.mock.calls.at(-1)?.[1]?.body?.model ?? "").toBe("");
+	});
+
+	// Other direct-entry harnesses keep the local catalog-only picker.
+	it.each([
+		["codex", "Codex"],
+		["claude-code", "Claude Code"],
+	] as const)("keeps local %s on its catalog when direct entry is advertised", async (agent, label) => {
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, label)] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: agent, selectionMode: "text", models: [], allowCustom: true, customModelEntry: "direct" } }
+			: { data: { status: "ok", project: { config: {} } } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		// An empty catalog may offer no search at all; where search is offered,
+		// a typed model ID must still not become a custom choice.
+		const search = screen.queryByRole("searchbox", { name: "Search model" });
+		if (search) await userEvent.type(search, "private/model-id");
+		expect(screen.queryByRole("menuitem", { name: /as a custom model/ })).not.toBeInTheDocument();
+	});
+
+	it("refuses direct model entry when the catalog explicitly disables it", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: "codex", selectionMode: "catalog", models: [], allowCustom: true, customModelEntry: "none" } }
+			: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: /as a custom model/ })).not.toBeInTheDocument();
 	});
 
 	it("does not render free text when models must be configured in the agent", async () => {
@@ -4424,11 +4525,44 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect((outcome as { status?: number }).status).toBeUndefined();
 	});
 
-	// Its own project comes with its session, so a start the files did not
-	// reach would leave that project behind: it starts without them.
-	it("refuses files on a Cloud standalone agent as final, starting nothing", async () => {
+	// A Cloud session of its own starts with files as a project's task does:
+	// created without a prompt, the files uploaded to it, the brief sent with them.
+	it("starts a Cloud session with files in Chat, the brief carrying them", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		const project = { id: "agent-f5", displayName: "Look at this", standaloneAgent: true };
+		h.cloudCreateStandaloneAgent.mockResolvedValue({ project, session: { id: "s-f5", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockResolvedValue({ id: "file-1" });
+		h.cloudSendSessionMessage.mockResolvedValue({});
+		let standalone!: ReturnType<typeof useTaskLaunch>;
+		function StandaloneLauncher() {
+			standalone = useTaskLaunch({ projectId: CLOUD_STANDALONE_WORKSPACE_ID });
+			return <p>{standalone.canSubmit ? "ready" : "loading"}</p>;
+		}
+		render(<Wrap queryClient={queryClient}><StandaloneLauncher /></Wrap>);
+		await screen.findByText("ready");
+		let sessionId!: string;
+		await act(async () => {
+			sessionId = await standalone.launch("Look at this", { clientRequestId: "req-f5", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] });
+		});
+		expect(sessionId).toBe("s-f5");
+		expect(h.cloudCreateStandaloneAgent).toHaveBeenCalledWith("org-1",
+			expect.objectContaining({ prompt: "", interfaceMode: "chat" }),
+			{ idempotencyKey: expect.stringMatching(/^req-f5:files:/) });
+		expect(h.cloudUpload).toHaveBeenCalledWith(h.cloudBaseUrl, "org-1", "s-f5", { name: "shot.png", data: "aGk=" }, { signal: expect.any(AbortSignal) });
+		expect(h.cloudSendSessionMessage).toHaveBeenCalledWith("org-1", "s-f5",
+			expect.objectContaining({ text: "Look at this", attachmentIds: ["file-1"] }),
+			{ idempotencyKey: expect.stringMatching(/^req-f5:files:.*:brief$/) });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+		expect(h.seedCreatedStandaloneAgent).toHaveBeenCalledWith(expect.anything(), h.cloudBaseUrl, "org-1", project);
+		expect(standaloneAgentProjectId("s-f5")).toBe("agent-f5");
+	});
+
+	it("deletes a Cloud session whose files did not upload, and returns the task as final", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
+		h.cloudCreateStandaloneAgent.mockResolvedValue({ project: { id: "agent-f6", standaloneAgent: true }, session: { id: "s-f6", harness: "codex", interfaceMode: "chat" } });
+		h.cloudUpload.mockRejectedValue(new Error("This file type is not allowed."));
 		let standalone!: ReturnType<typeof useTaskLaunch>;
 		function StandaloneLauncher() {
 			standalone = useTaskLaunch({ projectId: CLOUD_STANDALONE_WORKSPACE_ID });
@@ -4438,13 +4572,12 @@ describe("useTaskLaunch Cloud start on send", () => {
 		await screen.findByText("ready");
 		let outcome: unknown;
 		await act(async () => {
-			outcome = await standalone.launch("Look at this", { clientRequestId: "req-f5", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+			outcome = await standalone.launch("Look at this", { clientRequestId: "req-f6", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
 				.catch((error: unknown) => error);
 		});
-		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
-		expect(h.cloudCreateStandaloneAgent).not.toHaveBeenCalled();
-		expect(h.cloudCreateSession).not.toHaveBeenCalled();
-		expect(h.cloudUpload).not.toHaveBeenCalled();
+		expect(h.cloudDeleteSession).toHaveBeenCalledWith("org-1", "s-f6");
+		expect(h.cloudSendSessionMessage).not.toHaveBeenCalled();
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_TASK_FILES_UNDELIVERED", message: "This file type is not allowed." });
 	});
 
 	it("keeps a full plan's refusal as the reason, and creates nothing else", async () => {

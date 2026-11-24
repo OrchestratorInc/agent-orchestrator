@@ -25,6 +25,7 @@ const CHAT_PREFLIGHT_CODES = new Set([
 
 /** A rejected orchestrator spawn without flattening the daemon's error envelope. */
 export class OrchestratorSpawnError extends Error {
+	readonly telemetryCode: string = "ORCHESTRATOR_SPAWN_ERROR";
 	constructor(
 		message: string,
 		readonly code?: string,

@@ -58,23 +58,29 @@ builds stamp the Electron main and renderer bundles with Sentry debug IDs and
 upload their source maps to the ao-electron project; the maps are not shipped
 in the app. An event may carry the debug ID of each app bundle in its stack and
 the bundle's app URL (`app://renderer/assets/...` or `app:///.vite/build/...`),
-never an install path. Local
-filesystem paths, full URLs, and raw exception messages are removed before sending.
+never an install path. Desktop and mobile Sentry reports use the application
+error code when available. Uncoded JavaScript engine errors such as TypeError,
+ReferenceError, RangeError, SyntaxError, and DOMException can include the first
+line of the message after paths, URLs, emails, identifiers, quoted values, and
+numbers are removed, capped at 120 characters. Message text is withheld when
+its quoted parts cannot be separated reliably. Long engine messages and other
+uncoded errors use a computed title. All uncoded errors group by a short
+SHA-256 hash of the locally normalized first line.
 The app's global renderer error boundary binds handlers independently of
 PostHog setup. Electron main still checks Share error events before sending.
 Preload installs main-world error and rejection handlers before renderer imports
 and reads the consent policy itself. An import failure can therefore report even
-when the renderer never starts. Early reports contain fixed text, a standard
-exception type, and validated asset locations only. Once the renderer starts,
+when the renderer never starts. Early reports use the same error codes and message rules, with a standard
+exception type and validated asset locations. Once the renderer starts,
 the same listeners hand off to its normal reporter. Early captures are not
 replayed through the later renderer boundaries.
 Router error boundaries and query/mutation cache callbacks also report unexpected
-client failures. Query keys, mutation inputs, route parameters and error text are
-not sent. API failures retain a local ownership marker through message wrapping,
+client failures. The sender excludes query keys, mutation inputs and route
+parameters. API failures retain a local ownership marker through message wrapping,
 so these callbacks do not duplicate the API client's report or escalate expected
 API state. Repeated observations of the same exception object are reported once.
 Background side-chat restore and snapshot failures use the same main-owned
-consent gate, with fixed titles and no launch-state payload. Expected connection,
+consent gate and message rules, with no launch-state payload. Expected connection,
 authentication, cancellation and stale-attachment states stay out. Repeated
 recovery reports are limited to five per minute and 200 per UTC day.
 Turning off Share error events drains the sender and removes that queue before
@@ -96,11 +102,9 @@ analytics opt-out boundary. No failed mobile Sentry send is persisted for retry.
 The sender checks consent both before capture and immediately before network
 send, so an event still queued when opt-out arrives is discarded.
 
-Mobile Sentry receives fixed error titles and categories, safe stack line
-numbers with generic frame names, release version and build number, and the
-production or preview environment. It receives no raw error message, URL,
-request body, repository or workspace path, project or session identifier,
-credential, or account identity. Its `user.id` is the authenticated paired
+Mobile Sentry sends application codes and applies the same normalized first-line display rule for JavaScript engine errors. Other uncoded errors contribute only a hash of the cleaned-up text. It also receives the error category, safe stack line numbers with generic
+frame names, release version and build number, and the production or preview
+environment. The sender excludes request bodies and account identity. Its `user.id` is the authenticated paired
 desktop installation ID only. It is absent before pairing, during repair, and
 after unpairing or a failed identity refresh. The phone retains its separate
 PostHog identity across those changes. A paired Sentry error can therefore be
@@ -141,8 +145,11 @@ sampled by install rather than by event:
 - Fatal events send from every install: Electron main uncaught exceptions,
   Electron process crashes (`process_exit`), and daemon panics. Renderer errors,
   including unhandled window errors and rejections, are non-fatal and sampled.
+  Failed onboarding installs and sign-ins also send from every install (see
+  "Onboarding errors in Sentry"): they are rare and block a new user's first
+  run.
 - Every event carries a `sample_rate` tag: `0.1` for sampled non-fatal events
-  and `1` for always-sent fatal events. Multiply counts of `sample_rate:0.1`
+  and `1` for always-sent events. Multiply counts of `sample_rate:0.1`
   events by 10 to estimate the real volume.
 - Electron main caps every desktop event (main and renderer) after scrubbing,
   keyed on its final Sentry fingerprint: at most 3 events per fingerprint and 25
@@ -661,6 +668,184 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## UI usage
+
+When desktop product telemetry is enabled, Orchestrator.inc records which parts
+of the interface people look at and use, so we can tell which surfaces earn
+their space, which controls nobody finds, and where people get stuck. The
+properties specific to these events are only the closed values listed here,
+control ids, counts and durations. Like every desktop event, they also carry
+the shared context described under What Orchestrator.inc sends, such as
+`install_id` and `days_since_install`. They never include text you typed or
+clicked, a file name, path, URL, session or project name, chat content, error
+message, click position, window size, DOM path, or screenshot. There is no
+heatmap and no session replay.
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `ao.surfaces.viewed` | A surface stays on screen for a second. At most once per surface per UTC day | `surface`, `opened_by` |
+| `ao.features.first_used` | The first deliberate use of a feature on this install. At most once per feature | `feature` |
+| `ao.ui.usage_summary` | Every 45 to 60 minutes of app time, or at the next launch when a window ended while the app was closed. Not sent when nothing was counted | Window fields, counters, `surfaces`, `controls` (below) |
+| `ao.ui.error_shown` | A user-visible error renders: an error toast, the daemon banner, a failed chat turn, or a composer send failure. The same error shown again within 5 minutes is counted in the summary but not sent again | `presentation`, `error_kind`, `surface`, `error_code` |
+| `ao.ui.rage_clicked` | The first rage click on a surface each UTC day | `surface` |
+
+### Closed values
+
+- `surface` is one of `sidebar`, `topbar` (the top bar and its tabs), `chat`
+  (the transcript), `composer`, `new_chat`, `board`, `pr_tab`,
+  `inspector_summary`, `inspector_reviews`, `inspector_browser`,
+  `inspector_files`, `inspector_artifacts`, `inspector_side_chat`,
+  `inspector_subagents`, `cmdk`, `notifications_panel`, `archive_modal`,
+  `model_picker`, `slash_menu`, `mention_menu`, `split_view`, `terminal`,
+  `onboarding`, `toast`, or a settings page: `settings_general`,
+  `settings_agents`, `settings_teams`, `settings_billing`, `settings_browser`,
+  `settings_computer_use`, `settings_coder`, `settings_remote_hosts`,
+  `settings_mobile`, `settings_shortcuts`, `settings_diagnostics`,
+  `settings_updates`, `settings_help`, or `settings_project`. A settings page
+  added later reports as `settings_general` until it is listed.
+- `opened_by` is `click`, `keyboard` (Enter, Space, Escape, Tab or an arrow key
+  on a focused control), `shortcut` (a key chord or a swipe gesture), `cmdk`
+  (a Cmd+K command), `restore` (on screen within 10 seconds of launch, such as
+  a restored layout), or `auto` (opened by the app, with no input in the 1.5
+  seconds before).
+- `feature` is `cmdk`, `slash_menu`, `mention_menu`, `model_change`,
+  `attachment`, `steer`, `queue`, `keyboard_send`, `split_pane`,
+  `terminal_tab`, `side_chat`, `board`, `pin_session`, `archive_modal`,
+  `dictation`, `swipe_navigation`, `notifications_panel`, `inspector_summary`,
+  `inspector_reviews`, `inspector_browser`, `inspector_files`,
+  `inspector_artifacts`, or `inspector_subagents`. Opening a surface counts as
+  using its feature only when you opened it (`opened_by` is not `restore` or
+  `auto`). The marker is kept in the app's local storage, so an install that
+  used a feature before this release reports it again the first time it is
+  used after updating; read `first_used` as "first use since this release" for
+  those installs.
+- `presentation` is `toast`, `banner`, `inline`, or `dialog`.
+- `error_kind` is `toast` (any error toast), `daemon_unavailable`,
+  `chat_turn_failed`, `composer_send_failed`, or `other`.
+- `error_code` is one of a closed list, never a message: a daemon failure
+  (`NOT_CONFIGURED`, `DAEMON_UNREACHABLE`, `BINARY_MISSING`, `SPAWN_FAILED`,
+  `EXITED`, `PORT_UNCONFIRMED`, `NOT_READY`, `IDENTITY_MISMATCH`,
+  `DATADIR_UNWRITABLE`) or a chat turn failure (`AUTH_REQUIRED`,
+  `PROVIDER_KEY_MISSING`). Any other code is dropped, and it is omitted when
+  there is none.
+- `surface` on `ao.ui.error_shown` is the surface that showed the error, or,
+  for a toast, the surface you used in the 10 seconds before it. It is omitted
+  when neither is known.
+- A failed chat turn is reported when it renders within two minutes of failing,
+  once per turn while the app runs, so opening an old chat does not report its
+  past failures.
+
+### `ao.ui.usage_summary`
+
+Window fields:
+
+| Property | Meaning |
+| --- | --- |
+| `measurement_schema_version` | `1` |
+| `window_id` | A random UUID for this window, not tied to anything else |
+| `window_duration_seconds` | Wall time from the window's start to the send |
+| `active_seconds` | Time the window was focused and visible, with input in the last 5 minutes |
+| `flush_reason` | `interval`, or `startup` for a window that ended while the app was closed |
+
+Counters (a counter that stayed at 0 is left out):
+
+| Property | Counts |
+| --- | --- |
+| `session_switch_count` | Switches from one open session to another |
+| `switch_from_<source>_count` | Those switches by where they started. `<source>` is `sidebar`, `tab`, `cmdk`, `shortcut`, `notification`, `board`, `swipe`, `archive`, or `other` (no input in the 1.5 seconds before) |
+| `send_count`, `send_keyboard_count`, `send_button_count` | Messages sent from a composer, all and by Enter or the send button |
+| `steer_count`, `queue_count` | Sends that steered a running turn or were queued behind it |
+| `send_with_attachment_count` | Sends with at least one attachment |
+| `attachment_add_paste_count`, `attachment_add_drop_count`, `attachment_add_picker_count` | Attachments added by paste, drag and drop, or the file picker |
+| `composer_draft_discarded_count` | A draft of 10 or more characters erased without sending while the composer had focus |
+| `model_picker_change_count` | Model changes made in the composer's model picker |
+| `cmdk_open_count`, `cmdk_pick_count`, `cmdk_abandon_count` | Cmd+K opens, opens that ran a command, and opens closed without one |
+| `model_picker_open_count`, `model_picker_abandon_count` | Model picker opens and opens closed without a change |
+| `slash_menu_open_count`, `slash_menu_pick_count`, `slash_menu_abandon_count` | The composer's `/` menu |
+| `mention_menu_open_count`, `mention_menu_pick_count`, `mention_menu_abandon_count` | The composer's `@` menu |
+| `notifications_panel_open_count` | Notification panel opens |
+| `click_count`, `keyboard_activation_count` | Pointer clicks, and clicks made with Enter or Space on a focused control |
+| `shortcut_count` | Key chords (Cmd, Ctrl or Alt with a key). Copy, paste, cut, undo, redo and select all inside a text field are not counted |
+| `hover_click_count`, `hover_only_count` | On controls with a hover card or preview: clicks after hovering for at least 500 ms, and hovers of 500 ms or more that ended without a click |
+| `rage_click_count` | Rage clicks (below) |
+| `dead_click_count` | Dead clicks (below) |
+| `error_shown_count`, `error_toast_count` | User-visible errors, all and toasts only |
+| `retry_click_count` | Clicks on a Retry control after a failure |
+
+`surfaces` is a list with one entry per surface that had any activity in the
+window. Each entry has `surface` and any of these that are above 0:
+
+| Property | Meaning |
+| --- | --- |
+| `visible_seconds` | Time the surface was on screen while the window was active |
+| `focused_seconds` | Time keyboard focus was inside the surface while the window was active |
+| `open_count` | Times it came on screen. A surface back on screen within a second of leaving it, such as a panel that re-renders, is the same open. Menus and pickers count every open |
+| `pick_count`, `abandon_count` | For menus and pickers (`cmdk`, `model_picker`, `slash_menu`, `mention_menu`, `notifications_panel`, `archive_modal`): closes after a choice, and closes without one |
+| `dismiss_count` | Explicit dismissals, such as closing a toast |
+| `dead_click_count`, `rage_click_count` | Dead and rage clicks inside it |
+| `error_count`, `retry_count` | Errors attributed to it and Retry clicks inside it |
+
+`controls` is a list with one entry per named control used in the window.
+Each entry has `control_id` and any of `click_count`, `keyboard_count`,
+`hover_click_count`, `hover_only_count`, and `rage_click_count` that are above
+0. `control_id` is a stable product name from a fixed list, not a DOM path or
+label:
+
+- Sidebar: `sidebar.home`, `sidebar.collapse`, `sidebar.new_project`,
+  `sidebar.settings`, `sidebar.connect_mobile`, `sidebar.project_row`,
+  `sidebar.project_toggle`, `sidebar.project_new_session`,
+  `sidebar.project_menu`, `sidebar.project_unpin`, `sidebar.session_row`,
+  `sidebar.session_pin`, `sidebar.session_archive`,
+  `sidebar.archived_sessions`
+- Tabs and top bar: `tab.select`, `tab.close`, `tab.new`,
+  `topbar.notifications`, `topbar.inspector`, `topbar.new_task`,
+  `topbar.open_board`, `topbar.open_orchestrator`, `topbar.open_editor`
+- Composer: `composer.send`, `composer.stop`, `composer.attach`,
+  `composer.model_picker`, `composer.dictation`
+- Chat: `chat.retry`
+- Inspector tabs: `inspector.tab_summary`, `inspector.tab_reviews`,
+  `inspector.tab_browser`, `inspector.tab_files`, `inspector.tab_artifacts`,
+  `inspector.tab_side_chat`, `inspector.tab_subagents`
+- Board: `board.card`
+- Toasts and banners: `toast.action`, `toast.dismiss`, `daemon_banner.retry`
+
+Hover counts are kept for `sidebar.session_row`, `tab.select`, and
+`board.card`. Retry clicks are `chat.retry` and `daemon_banner.retry`.
+
+### Definitions
+
+- A rage click is the fourth pointer click on the same element within one
+  second. A burst is counted once, however long it lasts.
+- A dead click is a single pointer click inside a surface that lands on
+  nothing interactive (no button, link, field, tab, menu item, terminal, named
+  control or other focusable element), shows no pointer cursor, does not
+  select text, and is not on a scrollbar. Double clicks are never dead, since
+  they usually select text.
+- Visible and focused time stop counting after 5 minutes with no input, and
+  while the window is hidden or not focused. A surface that is mounted but
+  hidden, such as a chat kept alive in the background, is not on screen.
+
+### Limits and the opt-out
+
+Counting happens in memory and is saved to the app's local storage every five
+minutes and when the window closes. Turning off Share usage analytics drops
+everything counted so far, removes the saved window and stops counting. The
+daily view, rage-click and first-use markers are kept only so the same value
+is not sent twice. The kill switch in `AO_TELEMETRY_DISABLED_EVENTS` silences
+any of these events by name; silencing all five also stops the counting.
+`ao.ui.error_shown` is sent at most once per 5 minutes for the same kind,
+presentation, surface and code, and also uses the standard renderer caps of 5
+per minute and 200 per day. The once-per-day and once-per-install events skip the per-minute cap,
+since several can be sent together at launch, and keep the daily cap.
+
+The listeners are passive and attached once to the document, so they cannot
+delay a click, scroll or key press. Telling which surface or control was used
+walks up the DOM from the event target and reads no layout. Hover is checked
+at most once per animation frame, for the last element the mouse entered. The
+only layout read is for a click on nothing interactive: the clicked element's
+box and cursor, read after the click's frame has painted, to tell a dead click
+from a scrollbar or a pointer-cursor element.
+
 ## UI responsiveness
 
 When product telemetry is enabled, the desktop app sends launch timings in
@@ -688,12 +873,21 @@ Properties on `ao.launches.timed`:
   shows the sidebar with live sessions, the same frame the desktop log's
   "launch timing" line ends at. A cold launch starts when the app process
   starts; a warm one when the window is requested.
-- A launch during which the window was hidden sends `launch_kind` only.
+- A launch whose window was hidden after it first appeared but before it
+  became usable (the user minimized it or switched away) sends `launch_kind`
+  only. Hiding it after it became usable keeps the timings. The window is
+  created hidden and shown once the page loads; that wait is part of the
+  launch.
+- A window closed before it became usable sends the event as it closes,
+  without `to_usable_ms`.
 
 Properties on `ao.usage.ui_performance`:
 
-- Window: `measurement_schema_version` (1), `flush_reason` (`interval` or
-  `startup`), `window_seconds`, `active_seconds` (time the window was visible
+- Window: `measurement_schema_version` (2), `flush_reason` (`interval` or
+  `startup`), `window_seconds` (elapsed time while the app was running, so a
+  window kept across a quit leaves out the time the app was closed; never less
+  than `active_seconds`),
+  `active_seconds` (time the window was visible
   with input in the last 5 minutes), `open_sessions_bucket` (`0`, `1-3`,
   `4-10`, `11-30`, or `31+` sessions that are not terminated), and
   `uptime_hours_bucket` (how long the window has been open: `lt1`, `lt8`,
@@ -718,10 +912,13 @@ Properties on `ao.usage.ui_performance`:
   fallback, not a measured duration.
 - Frozen frames: `long_frame_count` (frames that took over 50 ms),
   `long_frame_blocking_ms` (their total blocking time), and
-  `long_frame_top_cause`, the kind of work that blocked longest:
-  `event-listener`, `user-callback` (timers and animation frames),
-  `resolve-promise`, `reject-promise`, `classic-script`, `module-script`, or
-  `other`.
+  `long_frame_top_cause`, the kind of work that took longest inside them:
+  `rendering` (style, layout and paint), a script's invoker type
+  (`event-listener`, `user-callback` for timers and animation frames,
+  `resolve-promise`, `reject-promise`, `classic-script`, `module-script`), or
+  `other`, the rest of those frames' time. The browser credits only scripts
+  that ran over 5 ms, so shorter scripts count as `other`. Version 1 summaries
+  put rendering-only frames under `other`.
 - Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
   messages were not in memory, from the click to the frame that shows them.
 - Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and
@@ -859,7 +1056,7 @@ and `project_source` on its `step_completed` says which it was.
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.action_started` | An install or sign-in starts, by a click or (`auto`) by the page, as the GitHub CLI login does once | `action`, `target`, `step`, `step_index`, `attempt`, `auto` |
-| `ao.onboarding.action_finished` | That attempt ends, once | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
+| `ao.onboarding.action_finished` | That attempt ends, once, or onboarding ends while it still runs (`left`) | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
 
 `attempt` counts from 1 for each action and target in a launch, so a value
 above 1 is a retry. The existing `ao.projects.clone_failed`,
@@ -873,6 +1070,45 @@ not both:
 - `action_finished` (`cloud_sign_in`, `succeeded`) and
   `ao.renderer.cloud_signed_in` with `source` `onboarding`.
 - `activated` with `during_tour` true and `step_completed` (`first_task`).
+
+### Onboarding errors in Sentry
+
+Onboarding errors go to the desktop Sentry project under **Share error
+events**, not the analytics choice, so they are sent with analytics off and
+stop when error sharing is off. A failed install or sign-in is sent from every
+install, not just the one in ten in the error sample (`sample_rate` `1`); the
+daily caps above still apply. The flow tag on other errors follows the usual
+sampling.
+
+- An install or sign-in started during onboarding that breaks is one Sentry
+  issue per attempt, titled `Onboarding <action> failed (<reason>)` and grouped
+  by action and reason alone. Its tags are `category` `onboarding`, `code`
+  `<action>:<reason>`, `action`, `reason`, `target` and `flow` `onboarding`.
+  `target` is what the action was for, from a fixed list in
+  `shared/onboarding-failures.ts` (`gh`, `tmux`, `claude-code`, `codex` and
+  the other registry agents), or `other` for any id not on it. It is a tag to
+  filter by, not part of the grouping. Only these
+  reasons are sent: `start_failed`, `install_failed`, `interrupted`,
+  `lost_contact`, `cleanup_failed`, `request_failed` and `other`. A login the
+  person did not finish (`not_signed_in`), a platform with no installer
+  (`unsupported`), an agent that signs in outside the app (`documentation`),
+  cancelled and timed-out attempts are setup states, counted only in PostHog.
+  The same panels outside onboarding (the clone dialog's GitHub sign-in) send
+  nothing, and an attempt stops counting once onboarding ends (outcome
+  `left`), so a later failure is not filed as an onboarding issue. The API
+  error code stays in PostHog's `action_finished`.
+- Every other renderer Sentry event (a render crash, a failed query, an API
+  error) sent while the first-run window shows, or a tour step in the launch
+  whose onboarding pages finished, carries `flow:onboarding`. A tour restored
+  on a later launch stays until it is dismissed, so it does not tag those
+  launches' errors. The tag does not change how the event is grouped.
+  Electron main's own events (process crashes, handled update or IPC
+  failures) do not carry it: main does not track which screen the renderer
+  shows.
+- To keep this working while analytics is off, the app holds the actions
+  started during onboarding, with an id for each attempt, in memory until each
+  ends. The id lets a check that outlived its attempt be ignored. Nothing about
+  them is stored or sent to PostHog.
 
 ### Property values
 
@@ -908,8 +1144,12 @@ not both:
   registry, such as `gh`, `tmux` or `claude-code`.
 - `outcome` on `action_finished` is `succeeded`, `failed`, `cancelled` (the
   person closed the login or moved on), `timed_out` (a login left open 15
-  minutes) or `handed_off` (the agent signs in outside AO, so its guide
-  opened).
+  minutes), `handed_off` (the agent signs in outside AO, so its guide
+  opened) or `left` (onboarding ended, or the window closed, while it was
+  still running: Skip setup, onboarding closed for the person, the tour ending
+  or closing, or quitting mid-onboarding). An install or sign-in from the
+  onboarding pages keeps running into the tour, so its `left` comes when the
+  tour ends and its `duration_ms` includes the tour.
 - `reason` on `action_finished` is `start_failed`, `install_failed`,
   `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
   `cleanup_failed`, `request_failed`, `documentation` or `other`.
@@ -948,6 +1188,8 @@ Product telemetry is designed not to include:
 - API keys, access tokens, passwords, or other credentials
 - Names, or email addresses other than the one on your signed-in AO Cloud
   account (invitee emails are never sent)
+- Screen recordings, session replays, screenshots, pointer coordinates, or
+  the text of anything you click or hover
 
 The explicit account fields are the GitHub owner segment, your authenticated
 GitHub username, and, only if you sign in to AO Cloud, your AO Cloud user ID and
@@ -1153,9 +1395,10 @@ only: the daemon's Sentry capture of reportable 5xx errors, registered fault
 codes answered as 4xx or 503, background failures, and handler or background
 goroutine panics; and Electron main capture of process crashes, handled
 daemon, update and IPC failures, uncaught exceptions, unhandled rejections,
-and reportable renderer errors. Sentry
-receives fixed failure or panic labels and allowlisted error codes instead of
-raw error messages. It groups HTTP faults by registered route and stable error
+reportable renderer errors, and installs and sign-ins that broke during
+onboarding (see "Onboarding errors in Sentry"). Daemon events use fixed failure
+or panic labels and allowlisted error codes. The daemon groups HTTP faults by
+registered route and stable error
 code, or by a bounded cause type when no code exists. Ordinary Go errors carry
 no synthetic throw stack. Recovered panics retain the interrupted AO function.
 Agent relaunches group by operation and failure step, with a fixed step tag
@@ -1163,11 +1406,10 @@ and no HTTP route tag.
 An event may include a bounded `git`, `db`, `agent`, or `network` area when the
 error provides evidence. Panic events keep function and line information, but
 remove stack paths, request data, project, session, repository and branch
-names, and panic text. Electron exception titles use a standard error type and
-a fixed function name or bounded bundle location; renderer API titles use a
-fixed error code or category.
-Both have scrubbed exception values and the same
-installation ID as Sentry `user.id`.
+names, and panic text. Electron issues use application codes, eligible engine
+messages, or a computed title based on the type, location, and category.
+Uncoded messages group by a hash of the locally normalized text.
+Daemon and Electron events use the same installation ID as Sentry `user.id`.
 Canceled requests, plain transient 503 responses, and expected upstream link-preview
 502 responses do not create Sentry issues. A 503 caused by a server deadline or
 a registered daemon fault code is reportable. Registered route templates remain
@@ -1335,6 +1577,7 @@ renamed event. Events not listed keep their names.
 | `ao.renderer.artifact_create_succeeded` | `ao.artifacts.session_started` |
 | `ao.renderer.artifact_create_failed` | `ao.artifacts.session_start_failed` |
 | (new) | other `ao.artifacts.*` events (see "Artifacts") |
+| (new) | `ao.surfaces.viewed`, `ao.features.first_used`, `ao.ui.usage_summary`, `ao.ui.error_shown`, `ao.ui.rage_clicked` (see "UI usage") |
 
 
 ## Questions or corrections
