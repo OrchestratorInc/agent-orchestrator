@@ -109,7 +109,7 @@ export function ThreadsView() {
 						)}
 					</div>
 				</section>
-				{selected ? <ThreadPane key={selected.asideId} thread={selected} /> : null}
+				{selected ? <ThreadPane key={selected.asideId} listed={list.rows.find((row) => row.aside.asideId === selected.asideId)} thread={selected} /> : null}
 			</div>
 		</div>
 	);
@@ -188,19 +188,20 @@ export function ThreadRow({ row, selected, onOpen }: { row: CloudCpCommentThread
  * session's title, its project, whether it ended) comes from the
  * notification, a cached row, or the session itself.
  */
-function ThreadPane({ thread }: { thread: ThreadInView }) {
-	const { t } = useTranslation();
+function ThreadPane({ thread, listed }: { thread: ThreadInView; listed?: CloudCpCommentThread }) {
 	const { client, ready, baseUrl, userId } = useCloudCp();
 	const queryClient = useQueryClient();
 	const attentive = useWindowAttention();
 	const openInSession = useOpenThreadInSession();
+	// Its row in the tab shown (it arrives after a thread a notification opened), else in another tab's cache.
 	const cachedRow = useMemo(() => {
+		if (listed) return listed;
 		for (const [, data] of queryClient.getQueriesData<{ pages: Array<{ items: CloudCpCommentThread[] }> }>({ queryKey: cloudCommentThreadsRootKey(baseUrl, userId) })) {
 			const row = data?.pages.flatMap((page) => page.items).find((item) => item.aside.asideId === thread.asideId);
 			if (row) return row;
 		}
 		return undefined;
-	}, [baseUrl, queryClient, thread.asideId, userId]);
+	}, [baseUrl, listed, queryClient, thread.asideId, userId]);
 	const known = { ...(cachedRow ? threadTarget(cachedRow) : {}), ...definedOf(thread) };
 	const session = useQuery<CloudCpSession | undefined>({
 		queryKey: ["cloud-thread-session", baseUrl, thread.orgId, thread.sessionId],
@@ -229,7 +230,7 @@ function ThreadPane({ thread }: { thread: ThreadInView }) {
 			onOpenInSession={projectId ? onOpenInSession : undefined}
 			orgId={thread.orgId}
 			sessionId={thread.sessionId}
-			sessionTitle={sessionTitle || t("threads.title")}
+			sessionTitle={sessionTitle}
 		/>
 	);
 }

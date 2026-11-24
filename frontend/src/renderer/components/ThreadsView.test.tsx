@@ -198,6 +198,21 @@ describe("opening a thread from the list", () => {
 		expect(within(pane).queryByRole("button", { name: "Resolve" })).toBeNull();
 	});
 
+	it("takes a notification-opened thread's title and send rights from its row once the list has it", async () => {
+		act(() => openThreadInView({ orgId: "org-1", sessionId: "session-c-1", asideId: "c-1", projectId: "project-1" }, { focusReply: true }));
+		// The list answers after the pane is up.
+		let answer: (page: CloudCpCommentThreadPage) => void = () => undefined;
+		mocks.listMyCommentThreads.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+		mocks.getSession.mockImplementation(() => new Promise(() => undefined));
+		renderView();
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(within(pane).getByText("Should this use jitter?")).toBeInTheDocument());
+		expect(within(pane).queryByRole("checkbox", { name: "Also send to agent" })).toBeNull();
+		await act(async () => answer(page([row("c-1", { canPrompt: true, sessionTitle: "Speed up session start" })])));
+		await waitFor(() => expect(pane.querySelector("[data-comment-pane-title]")).toHaveTextContent("Speed up session start"));
+		expect(await within(pane).findByRole("checkbox", { name: "Also send to agent" })).toBeInTheDocument();
+	});
+
 	it("shows a thread a notification opened, before its row is listed", async () => {
 		mocks.getSession.mockResolvedValue({ session: { id: "session-x", projectId: "project-9", displayName: "Notification session" } });
 		act(() => openThreadInView({ orgId: "org-1", sessionId: "session-x", asideId: "c-9" }, { focusReply: true }));
