@@ -1026,7 +1026,7 @@ describe("automation starters", () => {
 			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
 			expect(dialog.getByRole("combobox", { name: "Agent" })).toBeDisabled();
 			expect(dialog.getByRole("button", { name: "Create automation" })).toBeDisabled();
-			await user.click(dialog.getByRole("button", { name: "Go to Harness settings" }));
+			await user.click(dialog.getByRole("button", { name: "Go to Agents settings" }));
 			expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ harnessView: "cloud" }));
 			expect(mocks.createCloud).not.toHaveBeenCalled();
 		});
