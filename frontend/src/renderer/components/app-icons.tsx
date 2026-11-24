@@ -230,6 +230,7 @@ import {
 	Copy as LucideCopy,
 	Undo2 as LucideUndo2,
 	type LucideIcon as LucideComponent,
+	MessageCircleQuestionMark as LucideMessageCircleQuestionMark,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -396,6 +397,7 @@ export const RunKindFetch = fromLucide(LucideGlobe, "run-kind-fetch");
 export const RunKindOther = fromLucide(LucideWrench, "run-kind-other");
 export const RunKindRead = fromLucide(LucideFileText, "run-kind-read");
 export const RunKindSearch = fromLucide(LucideSearch, "run-kind-search");
+export const ToolQuestion = fromLucide(LucideMessageCircleQuestionMark, "tool-question");
 export const History = fromLucide(LucideHistory, "history");
 export const Hourglass = fromLucide(LucideHourglass, "hourglass");
 export const House = fromMyna(MynaHome, "house");

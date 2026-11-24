@@ -79,6 +79,7 @@ import {
 	ShieldQuestion,
 	ShieldX,
 	SquareTerminal,
+	ToolQuestion,
 	Trash2,
 	Undo2,
 	User,
@@ -2947,7 +2948,8 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	// An agent's built-in tool (a read, a web search) is named like a command step;
 	// a call to an MCP server keeps its tool and server name.
 	const step = activityToolStep(activity);
-	const StepMark = step ? stepIcon[step.icon] : undefined;
+	// A question to the user gets its own mark, so it does not read as plain text.
+	const StepMark = step ? stepIcon[step.icon] : isQuestionTool(activity) ? ToolQuestion : undefined;
 	const name = mcpToolName(activity);
 	const tool = step ? step[stepTense(activity, step)] : name.tool;
 	const sourceLabel = step
@@ -3016,7 +3018,9 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 					<span className="shrink-0 text-xs text-muted-foreground/70">outcome unknown</span>
 				) : activity.status === "cancelled" ? (
 					<span className="shrink-0 text-xs text-muted-foreground/70">stopped</span>
-				) : hasBody ? (
+				) : null}
+				{/* Anything that opens shows it, whatever its state says. */}
+				{hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
 						className={cn("size-3 shrink-0 self-center text-muted-foreground/40 transition-transform", open && "rotate-90")}
@@ -3042,6 +3046,14 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 			</AnimatePresence>
 		</div>
 	);
+}
+
+/** A tool call that asks the user a question (Claude's AskUserQuestion, or any call carrying questions). */
+function isQuestionTool(activity: ConversationActivity): boolean {
+	const detail = activity.detail;
+	if (detail?.providerToolName === "AskUserQuestion") return true;
+	const input = detail?.input;
+	return Boolean(input && typeof input === "object" && Array.isArray((input as { questions?: unknown }).questions));
 }
 
 function mcpToolHasBody(activity: ConversationActivity): boolean {
