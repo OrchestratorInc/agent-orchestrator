@@ -892,8 +892,9 @@ function isTextSelectionClick(target: Element, control: boolean, detail: number)
 	if (detail < 2 || control) return false;
 	if ((target instanceof HTMLElement && target.isContentEditable) || target.closest(TEXT_FIELD_SELECTOR)) return true;
 	if (target.closest(INTERACTIVE_SELECTOR)) return false;
+	// The burst's own selection, not one left elsewhere on the page.
 	const selection = typeof window === "undefined" ? null : window.getSelection();
-	return Boolean(selection && !selection.isCollapsed);
+	return Boolean(selection && !selection.isCollapsed && selection.containsNode(target, true));
 }
 
 /** Whether a press lands outside every open menu, popover or list, so all it does is close them. */

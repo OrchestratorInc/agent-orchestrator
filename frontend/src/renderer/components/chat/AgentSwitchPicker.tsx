@@ -240,8 +240,8 @@ export function AgentModelPicker({
 	title?: string;
 	/** A flag on the trigger, such as a substituted model. */
 	mark?: ReactNode;
-	/** The current agent's other settings, as menu rows under its effort. */
-	extras?: ReactNode;
+	/** The current agent's other settings, as menu rows under its effort. Given the picker's pick, called when one is changed. */
+	extras?: (markPick: () => void) => ReactNode;
 	onCloseAutoFocus?: (event: Event) => void;
 }) {
 	const { t } = useTranslation();
@@ -511,11 +511,15 @@ export function AgentModelPicker({
 				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={withPick(source.onToggleThinking)} />
 			</>
 		) : null,
-		extras && !pending ? extras : null,
+		extras && !pending ? extras(markModelPick) : null,
 		offersAutoCompact ? (
 			<AutoCompactRow
 				value={pending?.autoCompactWindow}
-				onChange={(value) => pending && onPendingChange({ ...pending, autoCompactWindow: value })}
+				onChange={(value) => {
+					if (!pending) return;
+					markModelPick();
+					onPendingChange({ ...pending, autoCompactWindow: value });
+				}}
 				title={t("agentSwitch.autoCompactHint")}
 			/>
 		) : null,
