@@ -261,6 +261,8 @@ import type {
 	BrowserRemoteInput,
 	BrowserRemoteNavigation,
 	BrowserRemoteTabAction,
+	BrowserRemoteAuth,
+	BrowserRemoteFiles,
 } from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { planDaemonScope, raiseOomScoreAdj, type DaemonScopePlan } from "./main/linux-daemon-scope";
@@ -1341,6 +1343,13 @@ async function createWindowInternal(): Promise<void> {
 		isCloseShellTerminalShortcutEnabled: () => closeShellTerminalShortcutEnabled,
 		browserProfileStore,
 		browserHistoryStore,
+		// A phone's files for a watched page's file input stay under AO's data dir.
+		liveUploadDir: path.join(desktopDataDir, "browser-uploads"),
+		showFileChooser: async ({ multiple }) => {
+			const options: Electron.OpenDialogOptions = { properties: multiple ? ["openFile", "multiSelections"] : ["openFile"] };
+			const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+			return result.canceled ? [] : result.filePaths;
+		},
 		browserDownloadManager: createBrowserDownloadManager({
 			downloadsDirectory: app.getPath("downloads"),
 			historyPath: path.join(desktopDataDir, "browser-downloads.json"),
@@ -2114,6 +2123,9 @@ async function handleBrowserStreamControl(control: BrowserStreamControl): Promis
 				frame: (frame) => browserStreamLink?.sendFrame({ streamId, ...frame }),
 				state: (state) => { browserStreamLink?.sendControl({ type: "state", streamId, sessionId, payload: state }); },
 				error: (code, message) => { browserStreamLink?.sendControl({ type: "error", streamId, sessionId, code, message }); },
+				ask: (ask) => { browserStreamLink?.sendControl({ type: "ask", streamId, sessionId, payload: ask }); },
+				askClosed: () => { browserStreamLink?.sendControl({ type: "askClosed", streamId, sessionId }); },
+				notice: (message) => { browserStreamLink?.sendControl({ type: "notice", streamId, sessionId, message }); },
 			});
 			return;
 		}
@@ -2128,6 +2140,12 @@ async function handleBrowserStreamControl(control: BrowserStreamControl): Promis
 			return;
 		case "tab":
 			await host.handleRemoteTab(sessionId, control.payload as BrowserRemoteTabAction);
+			return;
+		case "auth":
+			await host.handleRemoteAuth(sessionId, control.payload as BrowserRemoteAuth);
+			return;
+		case "files":
+			await host.handleRemoteFiles(sessionId, control.payload as BrowserRemoteFiles);
 			return;
 		case "preview": {
 			const url = (control.payload as { url?: unknown } | undefined)?.url;

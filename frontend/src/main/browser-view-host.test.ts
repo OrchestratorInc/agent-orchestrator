@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { net } from "electron";
 import {
 	type BrowserNavState,
@@ -155,7 +158,7 @@ function submittedAnnotationSession(
 	};
 }
 
-function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").AgentBrowserRuntime) {
+function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").AgentBrowserRuntime, hostOptions: Partial<import("./browser-view-host").BrowserViewHostOptions> = {}) {
 	let currentURL = "";
 	let browserZoomFactor = 1;
 	const webContentsListeners = new Map<string, (...args: never[]) => void>();
@@ -213,7 +216,7 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 				debuggerAttached = false;
 			}),
 			isAttached: () => debuggerAttached,
-			on: (event: string, listener: (...args: never[]) => void) => debuggerListeners.set(event, listener),
+			on: (event: string, listener: (...args: never[]) => void) => addListener(debuggerListeners, event, listener),
 			sendCommand: debuggerSendCommand,
 		},
 		clearHistory: () => undefined,
@@ -327,6 +330,7 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 		rendererOrigin: "http://localhost:5173",
 		agentBrowserRuntime: runtime,
 		clipboard: { writeImage },
+		...hostOptions,
 	});
 	const rendererFrame = { processId: 5, routingId: 7 };
 	const invoke = (channel: string, ...args: unknown[]) =>
@@ -6913,5 +6917,100 @@ describe("sites that refuse the Browser panel", () => {
 		await invoke("browser:clear", viewId);
 		await expect(invoke("browser:openInUserBrowser", viewId)).rejects.toMatchObject({ code: "BROWSER_URL_FORBIDDEN" });
 		expect(openInUserBrowser).toHaveBeenCalledOnce();
+	});
+});
+
+describe("browser live asks", () => {
+	const liveSink = () => ({ frame: vi.fn(), state: vi.fn(), error: vi.fn(), ask: vi.fn(), askClosed: vi.fn(), notice: vi.fn() });
+	let uploadDir: string;
+	beforeEach(async () => { uploadDir = await mkdtemp(path.join(tmpdir(), "ao-host-asks-")); });
+	afterEach(async () => { await rm(uploadDir, { recursive: true, force: true }); });
+	const pageEvent = (listeners: Map<string, (...args: never[]) => void>, method: string, params: object) =>
+		(listeners.get("message") as unknown as (event: unknown, method: string, params: unknown) => void)({}, method, params);
+
+	it("says what the page may ask, and catches file choosers only while a phone watches", async () => {
+		const { debuggerSendCommand, host } = setupHost(undefined, { liveUploadDir: uploadDir });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		expect(sink.state).toHaveBeenLastCalledWith(expect.objectContaining({ asks: ["auth", "files"] }));
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.setInterceptFileChooserDialog", { enabled: true });
+		await host.stopLiveStream("sess-1", 7);
+		expect(debuggerSendCommand).toHaveBeenCalledWith("Page.setInterceptFileChooserDialog", { enabled: false });
+	});
+
+	it("asks nothing of a phone on a desktop with no upload folder", async () => {
+		const { debuggerSendCommand, host, webContentsListeners } = setupHost();
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		expect(sink.state.mock.lastCall![0]).not.toHaveProperty("asks");
+		expect(debuggerSendCommand).not.toHaveBeenCalledWith("Page.setInterceptFileChooserDialog", expect.anything());
+		const event = { preventDefault: vi.fn() };
+		(webContentsListeners.get("login") as unknown as (...args: unknown[]) => void)?.(event, { url: "https://a.example/" }, { isProxy: false }, vi.fn());
+		expect(event.preventDefault).not.toHaveBeenCalled();
+	});
+
+	it("hands the phone a chooser it opened, and its files to the input", async () => {
+		const { debuggerListeners, debuggerSendCommand, host } = setupHost(undefined, { liveUploadDir: uploadDir });
+		const answer = debuggerSendCommand.getMockImplementation()!;
+		debuggerSendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) =>
+			method === "DOM.describeNode" ? { node: { attributes: ["type", "file", "accept", "image/*", "multiple", ""] } } : answer(method, params));
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		await host.handleRemoteInput("sess-1", { kind: "pointer", phase: "up", x: 0.5, y: 0.5, button: "left" });
+		pageEvent(debuggerListeners, "Page.fileChooserOpened", { backendNodeId: 42, mode: "selectMultiple" });
+		await vi.waitFor(() => expect(sink.ask).toHaveBeenCalledWith({ kind: "filechooser", multiple: true, accept: "image/*", folder: false }));
+
+		await host.handleRemoteFiles("sess-1", { action: "chunk", file: 0, name: "cat.png", offset: 0, data: Buffer.from("png").toString("base64") });
+		await host.handleRemoteFiles("sess-1", { action: "done", count: 1 });
+		const set = debuggerSendCommand.mock.calls.find(([method]) => method === "DOM.setFileInputFiles")!;
+		expect(set[1]).toMatchObject({ backendNodeId: 42 });
+		const [file] = (set[1] as { files: string[] }).files;
+		expect(file!.startsWith(uploadDir)).toBe(true);
+		expect(await readFile(file!, "utf8")).toBe("png");
+
+		// The stream ends: the phone's files go with it.
+		await host.stopLiveStream("sess-1", 7);
+		await vi.waitFor(async () => expect(await readdir(uploadDir)).toEqual([]));
+	});
+
+	it("gives the desktop user's own chooser the desktop's dialog", async () => {
+		const showFileChooser = vi.fn(async () => ["/Users/me/report.pdf"]);
+		const { debuggerListeners, debuggerSendCommand, host } = setupHost(undefined, { liveUploadDir: uploadDir, showFileChooser });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		pageEvent(debuggerListeners, "Page.fileChooserOpened", { backendNodeId: 9, mode: "selectSingle" });
+		await vi.waitFor(() => expect(debuggerSendCommand).toHaveBeenCalledWith("DOM.setFileInputFiles", { files: ["/Users/me/report.pdf"], backendNodeId: 9 }));
+		expect(showFileChooser).toHaveBeenCalledWith({ multiple: false, folder: false });
+		expect(sink.ask).not.toHaveBeenCalled();
+	});
+
+	it("asks the phone to sign in, and answers the page once", async () => {
+		const { host, webContentsListeners } = setupHost(undefined, { liveUploadDir: uploadDir });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		const event = { preventDefault: vi.fn() };
+		const callback = vi.fn();
+		(webContentsListeners.get("login") as unknown as (...args: unknown[]) => void)(event, { url: "https://intranet.example/x" }, { isProxy: false, realm: "Staff" }, callback);
+		expect(event.preventDefault).toHaveBeenCalled();
+		expect(sink.ask).toHaveBeenCalledWith({ kind: "auth", origin: "https://intranet.example", realm: "Staff", failed: false });
+		await host.handleRemoteAuth("sess-1", { origin: "https://intranet.example", username: "ada", password: "pw" });
+		await host.handleRemoteAuth("sess-1", { origin: "https://intranet.example", username: "ada", password: "again" });
+		expect(callback.mock.calls).toEqual([["ada", "pw"]]);
+	});
+
+	it("leaves a proxy's sign-in alone", async () => {
+		const { host, webContentsListeners } = setupHost(undefined, { liveUploadDir: uploadDir });
+		await host.startLiveStream("sess-1", 7, liveSink());
+		const event = { preventDefault: vi.fn() };
+		(webContentsListeners.get("login") as unknown as (...args: unknown[]) => void)(event, { url: "https://a.example/" }, { isProxy: true }, vi.fn());
+		expect(event.preventDefault).not.toHaveBeenCalled();
+	});
+
+	it("tells the phone a JS dialog waits on the desktop", async () => {
+		const { debuggerListeners, host } = setupHost(undefined, { liveUploadDir: uploadDir });
+		const sink = liveSink();
+		await host.startLiveStream("sess-1", 7, sink);
+		pageEvent(debuggerListeners, "Page.javascriptDialogOpening", { type: "confirm", message: "Sure?" });
+		expect(sink.notice).toHaveBeenCalledWith("The page is asking something on the desktop. Answer it there.");
 	});
 });

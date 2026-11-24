@@ -315,3 +315,16 @@ func TestBrowserWriterSendsControlsBeforePendingFrame(t *testing.T) {
 		t.Fatalf("frame kind=%v err=%v", kind, err)
 	}
 }
+
+func TestBrowserLiveCommandAllowedTakesPageAnswers(t *testing.T) {
+	for _, commandType := range []string{"input", "navigate", "tab", "auth", "files"} {
+		if !browserLiveCommandAllowed(commandType) {
+			t.Errorf("command %q refused", commandType)
+		}
+	}
+	for _, commandType := range []string{"", "start", "stop", "preview", "dialog", "select", "eval"} {
+		if browserLiveCommandAllowed(commandType) {
+			t.Errorf("command %q allowed", commandType)
+		}
+	}
+}
