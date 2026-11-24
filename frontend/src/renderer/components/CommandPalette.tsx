@@ -1127,7 +1127,6 @@ export const CommandPalette = memo(function CommandPalette() {
 					// After the palette has closed, so the action sees the screen
 					// it was asked about, not the palette.
 					const shortcut = action.shortcut;
-					uiUsage.shortcutUsed(shortcut, "cmdk");
 					window.setTimeout(() => runAppShortcut({ id: shortcut }), 0);
 					break;
 				}
@@ -1201,6 +1200,9 @@ export const CommandPalette = memo(function CommandPalette() {
 			if (chosen.disabled || !chosen.action) return;
 			if (pendingRef.current) return;
 			markCommandPick();
+			// A row that does what a shortcut does counts as that shortcut run from Cmd+K,
+			// whichever action runs it. Its secondary action is something else.
+			if (!secondary && item.shortcut) uiUsage.shortcutUsed(item.shortcut, "cmdk");
 			// What this pick opens or switches to is attributed to Cmd+K.
 			uiUsage.noteIntent("cmdk");
 			void runAction(chosen);
