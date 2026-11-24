@@ -336,6 +336,7 @@ export const LOCAL_NETWORK_HINT = "If Local Network access is off, turn it on in
  * fetch's platform-specific wording ("Network request failed").
  */
 export class UnreachableError extends Error {
+	readonly code: string = "UNREACHABLE_ERROR";
 	constructor(
 		readonly reason: "timeout" | "offline",
 		options?: { cause?: unknown },

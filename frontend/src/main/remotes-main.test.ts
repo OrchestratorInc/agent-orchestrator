@@ -1,9 +1,10 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { describe, expect, it, vi } from "vitest";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
+import { LocalIdentityUnavailableError, computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
 import { setPasswordCipher } from "./remotes-store";
 import { createLocalHostIdentity, type RemoteHealth } from "./remote-request";
@@ -103,6 +104,24 @@ describe("registerRemotesIpc", () => {
 				await expect(result).rejects.toThrow(state === "signed-out" || state === "account-gate" ? "Sign in to Orchestrator Cloud" : `is ${state}`);
 				expect(capture).not.toHaveBeenCalled();
 			}
+		} finally { resetMainErrorCaptureForTests(); }
+	});
+
+	it("preserves the code on a remotes:list failure requested by the renderer", async () => {
+		resetMainErrorCaptureForTests();
+		try {
+			const ipc = fakeIpc();
+			const capture = vi.fn();
+			setMainErrorSink(capture);
+			const error = new AoError("REMOTES_READ_FAILED", "Could not read remote hosts");
+			registerRemotes(ipc.ipcMain, {
+				file: await tempFile(),
+				registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+				requireAccount: async () => { throw error; },
+			});
+			await expect(ipc.invoke("remotes:list", true)).resolves.toEqual({ code: error.code, message: error.toString() });
+			expect(capture).toHaveBeenCalledExactlyOnceWith({ category: "ipc", reason: "handler", error, detail: "channel:remotes:list" });
+			await expect(ipc.invoke("remotes:list")).rejects.toBe(error);
 		} finally { resetMainErrorCaptureForTests(); }
 	});
 
@@ -788,4 +807,18 @@ describe("registerRemotesIpc", () => {
 			expect(pair).toHaveBeenCalledOnce();
 		});
 	});
+});
+
+it.each([
+	new ExpectedIpcError("Sign in to Orchestrator Cloud"),
+	new LocalIdentityUnavailableError(),
+])("marks expected remotes:list failures even when the subclass has its own code", async (error) => {
+	const ipc = fakeIpc();
+	registerRemotes(ipc.ipcMain, {
+		file: await tempFile(),
+		registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+		requireAccount: async () => { throw error; },
+	});
+	await expect(ipc.invoke("remotes:list", true)).resolves.toEqual({ code: error.code, message: error.toString(), expected: true });
+	await expect(ipc.invoke("remotes:list")).rejects.toBe(error);
 });

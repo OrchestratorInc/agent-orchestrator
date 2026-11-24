@@ -756,7 +756,7 @@ func TestManager_DefaultsWhenUnconfigured(t *testing.T) {
 	}
 
 	// A remoteless project stays in automatic mode instead of deriving a default
-	// from its current checkout. The empty config remains unpersisted.
+	// from its current checkout. Only the role agents are filled in.
 	got, err := m.Get(ctx, "ao")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -770,8 +770,11 @@ func TestManager_DefaultsWhenUnconfigured(t *testing.T) {
 	if got.Project.Agent != "claude-code" {
 		t.Fatalf("default agent = %q, want claude-code", got.Project.Agent)
 	}
-	if got.Project.Config != nil {
-		t.Fatalf("unconfigured project should omit config, got %#v", got.Project.Config)
+	if got.Project.Config == nil || got.Project.Config.Worker.Harness != domain.HarnessClaudeCode || got.Project.Config.Orchestrator.Harness != domain.HarnessClaudeCode {
+		t.Fatalf("unconfigured project should get the default worker and orchestrator agents, got %#v", got.Project.Config)
+	}
+	if got.Project.Config.DefaultBranch != "" {
+		t.Fatalf("unconfigured project should not pin a default branch, got %q", got.Project.Config.DefaultBranch)
 	}
 
 	list, err := m.List(ctx)
@@ -809,6 +812,81 @@ func TestManager_GetUsesConfiguredDefaultHarness(t *testing.T) {
 	}
 }
 
+func TestManager_AddFillsMissingRoleAgentsFromPreferredAgent(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := project.NewWithDeps(project.Deps{Store: store, PreferredAgent: func(context.Context) domain.AgentHarness { return domain.HarnessCodex }})
+
+	// `ao project add --worker-agent claude-code` names only the worker.
+	cfg := domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessClaudeCode}}
+	proj, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("partial"), Config: &cfg})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if proj.Config == nil || proj.Config.Worker.Harness != domain.HarnessClaudeCode || proj.Config.Orchestrator.Harness != domain.HarnessCodex {
+		t.Fatalf("partial config should keep the worker and fill the orchestrator, got %#v", proj.Config)
+	}
+
+	// A folder added with no config gets the preferred agent for both roles.
+	proj, err = m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("bare")})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if proj.Config == nil || proj.Config.Worker.Harness != domain.HarnessCodex || proj.Config.Orchestrator.Harness != domain.HarnessCodex {
+		t.Fatalf("bare add should fill both roles, got %#v", proj.Config)
+	}
+}
+
+func TestManager_AddLeavesRolesEmptyWhenPreferredAgentFindsNone(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var rankCalls int
+	m := project.NewWithDeps(project.Deps{
+		Store:          store,
+		DefaultHarness: domain.HarnessClaudeCode,
+		PreferredAgent: func(context.Context) domain.AgentHarness {
+			rankCalls++
+			return ""
+		},
+	})
+
+	// Cheap repository validation fails before calling PreferredAgent.
+	if _, err := m.Add(ctx, project.AddInput{Path: t.TempDir(), ProjectID: ptr("not-a-repo")}); err == nil {
+		t.Fatal("expected NOT_A_GIT_REPO error")
+	}
+	if rankCalls != 0 {
+		t.Fatalf("PreferredAgent called %d times on invalid repo, want 0", rankCalls)
+	}
+
+	// Partial add keeps the explicit worker and leaves the orchestrator empty
+	// instead of persisting an uninstalled default fallback.
+	cfg := domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessAider}}
+	proj, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("partial"), Config: &cfg})
+	if err != nil {
+		t.Fatalf("Add partial: %v", err)
+	}
+	if proj.Config == nil || proj.Config.Worker.Harness != domain.HarnessAider || proj.Config.Orchestrator.Harness != "" {
+		t.Fatalf("partial config = %#v, want worker=aider orchestrator=\"\"", proj.Config)
+	}
+
+	// Bare add leaves both roles empty when no launchable agent is installed.
+	proj, err = m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("bare")})
+	if err != nil {
+		t.Fatalf("Add bare: %v", err)
+	}
+	if proj.Config != nil && (proj.Config.Worker.Harness != "" || proj.Config.Orchestrator.Harness != "") {
+		t.Fatalf("bare config = %#v, want empty role harnesses", proj.Config)
+	}
+}
+
 func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
@@ -822,8 +900,8 @@ func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 	if proj.DefaultBranch != domain.DefaultBranchAuto {
 		t.Fatalf("DefaultBranch = %q, want auto", proj.DefaultBranch)
 	}
-	if proj.Config != nil {
-		t.Fatalf("automatic branch selection should not pin config, got %#v", proj.Config)
+	if proj.Config != nil && proj.Config.DefaultBranch != "" {
+		t.Fatalf("automatic branch selection should not pin a branch, got %#v", proj.Config)
 	}
 
 	got, err := m.Get(ctx, "ao")

@@ -1,3 +1,4 @@
+import { uiUsage } from "../lib/ui-usage-telemetry";
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
@@ -350,7 +351,7 @@ export type UiState = {
 	closeUpdateInstallPrompt: () => void;
 	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
-	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
+	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string; hostId?: string }) => void;
 	closeSettings: () => void;
 	loginReturn: LoginReturn | null;
 	/** Remember a chat whose agent refused its login while that login is fixed. */
@@ -778,16 +779,19 @@ export const useUiStore = create<UiState>((set, get) => ({
 					: {}),
 		},
 	})),
-	openProjectSettings: (projectId, options) => set({
-		accountLogin: null,
-		settingsModal: {
-			scope: "project",
-			projectId,
-			...(typeof options === "string" && options !== "local" ? { hostId: options } : {}),
-			...(typeof options === "object" && options?.section ? { section: options.section } : {}),
-			...(typeof options === "object" && options?.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
-		},
-	}),
+	openProjectSettings: (projectId, options) => {
+		const hostId = typeof options === "string" ? options : options?.hostId;
+		set({
+			accountLogin: null,
+			settingsModal: {
+				scope: "project",
+				projectId,
+				...(hostId && hostId !== "local" ? { hostId } : {}),
+				...(typeof options === "object" && options.section ? { section: options.section } : {}),
+				...(typeof options === "object" && options.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
+			},
+		});
+	},
 	closeSettings: () => set((state) => ({
 		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
@@ -1072,7 +1076,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			}
 			return { orchestratorStartupErrors };
 		}),
-	showGlobalToast: (title, body, style) =>
+	showGlobalToast: (title, body, style) => {
 		set((state) => {
 			const nonce = state.globalToastSequence + 1;
 			const options = typeof style === "object" ? style : undefined;
@@ -1083,7 +1087,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)
 				: state.globalToasts;
 			return { globalToast: toast, globalToasts: [...globalToasts, toast], globalToastSequence: nonce };
-		}),
+		});
+		// Every error toast in the app passes through here, so this one line counts them all.
+		if (get().globalToast?.tone === "error") uiUsage.errorShown("toast", "toast");
+	},
 	dismissGlobalToast: (nonce) =>
 		set((state) => ({
 			globalToasts: state.globalToasts.filter((toast) => toast.nonce !== nonce),

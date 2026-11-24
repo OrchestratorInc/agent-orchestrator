@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
@@ -48,6 +49,7 @@ import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
  */
 // A page opened from Report a problem is `report`: its agent runs on Scratchpad only.
 export function NewChatPage({ projectId, hostId, report }: { projectId: string; hostId?: string; report?: boolean }) {
+	useTelemetrySurface("new_chat");
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
@@ -145,20 +147,19 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	}, [lastReadAt, notePreparationUsed, preparedId]);
 	const stagePrepared = useStageAttachments(preparedId, hostId);
 	// A Cloud task carries files when its control plane takes them: they ride
-	// the first message of its Chat session, up to the size one upload may be.
-	// A Cloud standalone agent starts without them (createCloudTask).
+	// the first message of its Chat session, in a project or of its own
+	// (createCloudTask), up to the size one upload may be.
 	const cloudOffering = useCloudOffering(task.isCloudProject);
-	const cloudTaskTakesFiles = task.isCloudProject && projectId !== CLOUD_STANDALONE_WORKSPACE_ID;
-	const cloudFiles = useMemo(() => cloudTaskTakesFiles && cloudOffering.maxAttachmentBytes !== undefined
+	const cloudFiles = useMemo(() => task.isCloudProject && cloudOffering.maxAttachmentBytes !== undefined
 		? { maxBytes: Math.min(cloudOffering.maxAttachmentBytes, MAX_CLOUD_CP_BINARY_BYTES) } : undefined,
-	[cloudOffering.maxAttachmentBytes, cloudTaskTakesFiles]);
+	[cloudOffering.maxAttachmentBytes, task.isCloudProject]);
 	// A draft keeps the files it brought from a target that takes them; here
 	// they stay with why this target takes none, until they are removed.
-	const attachmentsRefusal = projectId === CLOUD_STANDALONE_WORKSPACE_ID && task.isCloudProject
-		? t("newTask.cloudStandaloneNoFiles", { defaultValue: "Files can't start a standalone agent. Remove them to continue." })
-		: task.isCloudProject && cloudOffering.loaded && !cloudFiles
-			? t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
-			: undefined;
+	const attachmentsRefusal = task.isCloudProject && cloudOffering.loaded && !cloudFiles
+		? projectId === CLOUD_STANDALONE_WORKSPACE_ID
+			? t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." })
+			: t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
+		: undefined;
 	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
 	// Files staged into one project's worktree do not exist in another's.
 	const attachmentsProject = useRef(projectId);
@@ -480,7 +481,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	) : task.modelWarning;
 
 	return (
-		<div className="flex h-full min-h-0 flex-col">
+		<div className="flex h-full min-h-0 flex-col" data-telemetry-surface="new_chat">
 			{/* No session yet: the shared session frame with no tabs holds the header's
 			    place and surface, so nothing moves or changes colour at handoff. The
 			    divider is dropped (styles.css) so the bar reads as bare chrome. */}

@@ -22,6 +22,14 @@ type backgroundTasksService struct {
 	project domain.ProjectID
 	stopped []string
 	stopErr error
+	output  ports.ChatBackgroundTaskOutput
+	outErr  error
+	read    []string
+}
+
+func (s *backgroundTasksService) BackgroundTaskOutput(_ context.Context, _ domain.SessionID, task string) (ports.ChatBackgroundTaskOutput, error) {
+	s.read = append(s.read, task)
+	return s.output, s.outErr
 }
 
 func (s *backgroundTasksService) StopBackgroundTask(_ context.Context, _ domain.SessionID, task string) error {
@@ -59,6 +67,25 @@ func TestBackgroundTasksRoutesPreserveAvailabilityAndErrors(t *testing.T) {
 	r = request("/sessions/missing/background-tasks")
 	if r.Code != 404 {
 		t.Fatalf("missing session=%d %s", r.Code, r.Body)
+	}
+}
+
+func TestBackgroundTasksRouteAlwaysSendsAKnownCommand(t *testing.T) {
+	svc := &backgroundTasksService{reading: chatsvc.BackgroundTaskSnapshot{SessionID: "s", Availability: "ready", Tasks: []ports.ChatBackgroundTask{
+		{ID: "codex", Kind: "shell", Description: "npm run dev", Command: "npm run dev", State: "running"},
+		{ID: "claude", Kind: "shell", Description: "Start the dev server", State: "running"},
+	}}}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	r := httptest.NewRecorder()
+	router.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/sessions/s/background-tasks", nil))
+	var reading controllers.BackgroundTasksResponse
+	if err := json.Unmarshal(r.Body.Bytes(), &reading); err != nil || len(reading.Tasks) != 2 {
+		t.Fatalf("response=%s err=%v", r.Body, err)
+	}
+	// An unknown command stays empty, so a client cannot mistake prose for one.
+	if reading.Tasks[0].Command != "npm run dev" || reading.Tasks[1].Command != "" {
+		t.Fatalf("commands = %q, %q", reading.Tasks[0].Command, reading.Tasks[1].Command)
 	}
 }
 
@@ -114,5 +141,44 @@ func TestStopBackgroundTaskRouteRejectsMalformedEscape(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || len(svc.stopped) != 0 {
 		t.Fatalf("status=%d stopped=%q body=%s", response.Code, svc.stopped, response.Body)
+	}
+}
+
+func TestBackgroundTaskOutputRouteReportsUnavailableAsAnAnswer(t *testing.T) {
+	svc := &backgroundTasksService{output: ports.ChatBackgroundTaskOutput{Text: "ready on :3000", Truncated: true, Stale: true}}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	read := func(path string) (*httptest.ResponseRecorder, controllers.BackgroundTaskOutputResponse) {
+		r := httptest.NewRecorder()
+		router.ServeHTTP(r, httptest.NewRequest(http.MethodGet, path, nil))
+		var body controllers.BackgroundTaskOutputResponse
+		_ = json.Unmarshal(r.Body.Bytes(), &body)
+		return r, body
+	}
+	r, body := read("/sessions/s/background-tasks/native%2Ftask/output")
+	if r.Code != http.StatusOK || body.Availability != "ready" || body.Output != "ready on :3000" || !body.Truncated || !body.Stale ||
+		body.TaskID != "native/task" || len(svc.read) != 1 || svc.read[0] != "native/task" {
+		t.Fatalf("status=%d body=%+v read=%q", r.Code, body, svc.read)
+	}
+	svc.outErr = ports.ErrBackgroundTaskOutputUnavailable
+	if r, body = read("/sessions/s/background-tasks/bash-1/output"); r.Code != http.StatusOK || body.Availability != "unavailable" || body.Output != "" {
+		t.Fatalf("unavailable status=%d body=%+v", r.Code, body)
+	}
+	svc.outErr = ports.ErrSessionNotFound
+	if r, _ = read("/sessions/missing/background-tasks/bash-1/output"); r.Code != http.StatusNotFound {
+		t.Fatalf("missing session=%d %s", r.Code, r.Body)
+	}
+}
+
+func TestBackgroundTaskOutputRouteRejectsMalformedEscape(t *testing.T) {
+	svc := &backgroundTasksService{}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	request := httptest.NewRequest(http.MethodGet, "/sessions/s/background-tasks/task/output", nil)
+	request.URL.RawPath = "/sessions/s/background-tasks/bad%ZZ/output"
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || len(svc.read) != 0 {
+		t.Fatalf("status=%d read=%q body=%s", response.Code, svc.read, response.Body)
 	}
 }

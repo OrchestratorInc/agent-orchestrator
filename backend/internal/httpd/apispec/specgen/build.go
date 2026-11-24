@@ -175,6 +175,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ChatFindOccurrence":                                   "ConversationFindOccurrence",
 	"ControllersBackgroundTaskResponse":                    "BackgroundTaskResponse",
 	"ControllersBackgroundTasksResponse":                   "BackgroundTasksResponse",
+	"ControllersBackgroundTaskOutputResponse":              "BackgroundTaskOutputResponse",
 	"ControllersListBackgroundTasksResponse":               "ListBackgroundTasksResponse",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
@@ -226,6 +227,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
+	"ControllersUpdateCommitAttributionRequest":            "UpdateCommitAttributionRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
 	"ControllersImportCustomThemeRequest":                  "ImportCustomThemeRequest",
@@ -358,6 +360,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"DomainTrackerIntakeConfig":       "TrackerIntakeConfig",
 	"ControllersTriggerReviewRequest": "TriggerReviewRequest",
 	"DomainContainerReapConfig":       "ContainerReapConfig",
+	"DomainAttributionConfig":         "AttributionConfig",
 	"DomainAgentConfig":               "AgentConfig",
 	"DomainRoleOverride":              "RoleOverride",
 	// httpd/controllers (wire envelopes)
@@ -716,6 +719,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersEndpointsResponse":                "EndpointsResponse",
 	"ControllersLinkPreviewQuery":                 "LinkPreviewQuery",
 	"ControllersLinkPreviewResponse":              "LinkPreviewResponse",
+	"ControllersPRPreviewQuery":                   "PRPreviewQuery",
+	"ControllersPRPreviewResponse":                "PRPreviewResponse",
 	"ControllersSessionSearchQuery":               "SessionSearchQuery",
 	"ControllersSessionSearchResponse":            "SessionSearchResponse",
 	"ControllersSessionSearchResult":              "SessionSearchResult",
@@ -894,6 +899,7 @@ func operations() []operation {
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	ops = append(ops, prPreviewOperations()...)
 	ops = append(ops, sessionSearchOperations()...)
 	return ops
 }
@@ -963,6 +969,26 @@ func linkPreviewOperations() []operation {
 			pathParams: []any{controllers.LinkPreviewQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.LinkPreviewResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusBadGateway, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+// prPreviewOperations declares the chat's pull request preview. Must stay 1:1
+// with the routes PRPreviewController.Register mounts (enforced by the parity
+// test).
+func prPreviewOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/pr-preview", id: "getPRPreview", tag: "link-preview",
+			summary:    "Read the state and summary of a GitHub pull request a chat links to",
+			pathParams: []any{controllers.PRPreviewQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PRPreviewResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusBadGateway, envelope.APIError{}},
@@ -1491,6 +1517,17 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPatch, path: "/api/v1/settings/commit-attribution", id: "updateCommitAttribution", tag: "settings",
+			summary: "Choose whether new sessions credit Orchestrator on their commits and PRs (beta)",
+			reqBody: controllers.UpdateCommitAttributionRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/settings/themes", id: "listCustomThemes", tag: "settings",
 			summary: "List the desktop app's custom themes and the latest theme switch an agent asked for",
 			resps: []respUnit{
@@ -1562,6 +1599,12 @@ func shellTerminalOperations() []operation {
 			summary:    "Stop one native background task without waking the session",
 			pathParams: []any{controllers.SessionIDParam{}, controllers.BackgroundTaskIDParam{}},
 			resps:      []respUnit{{http.StatusNoContent, nil}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output", id: "getBackgroundTaskOutput", tag: "conversations",
+			summary:    "Read one background task's recent output without waking the session",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BackgroundTaskIDParam{}},
+			resps:      []respUnit{{http.StatusOK, controllers.BackgroundTaskOutputResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/chat-view", id: "setSessionChatView", tag: "conversations",
