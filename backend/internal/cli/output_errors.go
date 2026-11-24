@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -65,9 +66,22 @@ func jsonRequested(executed *cobra.Command, args []string) bool {
 			return on
 		}
 	}
+	skipValue := false
 	for _, arg := range args {
+		if skipValue {
+			// The previous flag consumed this token as its value, so a
+			// literal "--json" here (`--project --json`) is data.
+			skipValue = false
+			continue
+		}
 		if arg == "--" {
 			break
+		}
+		if executed != nil && strings.HasPrefix(arg, "--") && !strings.Contains(arg, "=") && arg != "--json" {
+			if flag := executed.Flags().Lookup(arg[2:]); flag != nil && flag.NoOptDefVal == "" {
+				skipValue = true
+				continue
+			}
 		}
 		if arg == "--json" {
 			return true
@@ -81,7 +95,9 @@ func jsonRequested(executed *cobra.Command, args []string) bool {
 }
 
 // PrintError writes a failed command's error to w: a JSON envelope on one
-// line when the command ran with --json, otherwise the plain message.
+// line when the command ran with --json, otherwise the plain message. The
+// envelope is always the last line of stderr; a command may have written
+// progress or warnings to stderr before it.
 func PrintError(w io.Writer, err error) {
 	if err == nil {
 		return
@@ -105,7 +121,10 @@ func errorBody(err error) cliErrorBody {
 		if api.ErrorBody.Code != "" {
 			body.Code = api.ErrorBody.Code
 		}
-		if api.ErrorBody.Message != "" {
+		// Use the daemon's bare message only when the error is the daemon
+		// response itself; a wrapped or joined error keeps its full text
+		// (for example a claim failure plus a failed restoration).
+		if api.ErrorBody.Message != "" && err.Error() == api.Error() {
 			body.Message = api.ErrorBody.Message
 		}
 	case errors.As(err, &usage):

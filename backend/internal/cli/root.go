@@ -232,6 +232,14 @@ func NewRootCommand(deps Deps) *cobra.Command {
 		Version:       VersionString(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// The root runs only for a bare `ao`: show help, unless --json asked
+		// for output the root cannot give.
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := rejectUnsupportedJSON(cmd.Root(), cmd); err != nil {
+				return err
+			}
+			return cmd.Help()
+		},
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			if err := rejectUnsupportedJSON(cmd.Root(), cmd); err != nil {
 				return err

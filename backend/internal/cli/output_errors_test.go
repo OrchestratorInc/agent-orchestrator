@@ -19,18 +19,18 @@ func runCLIForError(t *testing.T, deps Deps, args ...string) (string, error) {
 	deps.Err = &errOut
 	deps.Sleep = func(time.Duration) {}
 	err := executeWithDeps(deps, args)
-	var printed bytes.Buffer
-	PrintError(&printed, err)
-	return printed.String(), err
+	PrintError(&errOut, err)
+	return errOut.String(), err
 }
 
 func decodeErrorEnvelope(t *testing.T, printed string) cliErrorBody {
 	t.Helper()
-	if strings.Count(strings.TrimSpace(printed), "\n") != 0 {
-		t.Fatalf("envelope must be one line: %q", printed)
-	}
+	// The envelope is the last line of stderr; commands may write progress
+	// or warnings before it.
+	lines := strings.Split(strings.TrimRight(printed, "\n"), "\n")
+	last := lines[len(lines)-1]
 	var env cliErrorEnvelope
-	if err := json.Unmarshal([]byte(printed), &env); err != nil {
+	if err := json.Unmarshal([]byte(last), &env); err != nil {
 		t.Fatalf("stderr is not a JSON envelope: %v\n%s", err, printed)
 	}
 	return env.Error
@@ -70,6 +70,7 @@ func TestJSONErrorForUsageMistakes(t *testing.T) {
 		"unknown flag":       {"project", "ls", "--json", "--nope"},
 		"flag before error":  {"--json", "project", "ls", "--nope"},
 		"command without it": {"report", "--json", "hello"},
+		"bare root":          {"--json"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			printed, err := runCLIForError(t, Deps{}, args...)
@@ -99,5 +100,38 @@ func TestErrorsStayPlainTextWithoutJSON(t *testing.T) {
 		if strings.HasPrefix(printed, "{") || !strings.Contains(printed, "not running") {
 			t.Fatalf("%v: printed = %q, want plain text", args, printed)
 		}
+	}
+}
+
+func TestJSONFallbackIgnoresFlagValues(t *testing.T) {
+	setConfigEnv(t)
+	// --json is the value of --project here, so the usage error stays text.
+	printed, err := runCLIForError(t, Deps{}, "session", "ls", "--project", "--json", "--nope")
+	if ExitCode(err) != 2 {
+		t.Fatalf("exit code = %d, want 2 (err=%v)", ExitCode(err), err)
+	}
+	if strings.Contains(printed, `{"error"`) {
+		t.Fatalf("printed = %q, want plain text", printed)
+	}
+}
+
+func TestJSONErrorKeepsWrappedContext(t *testing.T) {
+	api := apiResponseError{StatusCode: 409, ErrorBody: apiError{Message: "claim refused", Code: "CLAIM_CONFLICT", RequestID: "req-9"}}
+	joined := errors.Join(api, errors.New("restoring auto-fix settings failed"))
+	got := errorBody(joined)
+	if got.Code != "CLAIM_CONFLICT" || got.RequestID != "req-9" || !strings.Contains(got.Message, "restoring auto-fix settings failed") {
+		t.Fatalf("envelope = %+v", got)
+	}
+	if direct := errorBody(api); direct.Message != "claim refused" {
+		t.Fatalf("direct message = %q", direct.Message)
+	}
+}
+
+func TestBareRootStillShowsHelp(t *testing.T) {
+	setConfigEnv(t)
+	var out bytes.Buffer
+	err := executeWithDeps(Deps{Out: &out, Err: &out}, nil)
+	if err != nil || !strings.Contains(out.String(), "Usage:") {
+		t.Fatalf("err=%v out=%q", err, out.String())
 	}
 }

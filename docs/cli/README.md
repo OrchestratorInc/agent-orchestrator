@@ -279,8 +279,9 @@ PR actions are available through `ao pr merge` and
 
 Every command accepts `--json`. Commands with JSON output print it on stdout;
 a command without JSON output yet refuses the flag with a usage error rather
-than printing text. When a command run with `--json` fails, stderr holds one
-line in the daemon's error envelope shape:
+than printing text. When a command run with `--json` fails, the last line of
+stderr is the error in the daemon's envelope shape (a command such as `ao start`
+may write progress to stderr before it):
 
 ```json
 {"error":{"code":"PROJECT_NOT_FOUND","message":"project not found","requestId":"req-7","status":404,"exitCode":1}}
@@ -290,6 +291,9 @@ line in the daemon's error envelope shape:
 one of `USAGE`, `DAEMON_UNAVAILABLE`, `DATA_DIR_LOCKED`, or `ERROR`.
 `requestId` and `status` are present only for daemon responses. Script against
 `code`, not `message`. Without `--json`, errors stay plain text.
+One exception: when `AO_AGENT_BROWSER_URL` is set, `ao browser` is forwarded
+to the remote agent-browser service before `ao` parses flags, so its errors,
+including a missing `AO_AGENT_BROWSER_TOKEN`, stay plain text.
 
 | Exit code | Meaning |
 | --------- | ------- |
