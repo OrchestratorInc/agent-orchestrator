@@ -173,13 +173,29 @@ describe("browser profile IPC", () => {
 		expect(state()).toMatchObject({ profileId: profile.id, temporary: false });
 	});
 
-	it("re-checks agent activity when a confirmed switch arrives", async () => {
+	it("refuses a confirmed switch once an agent is using the browser, and says why", async () => {
 		const { invoke, renderer, store, host } = await setup();
 		const profile = await store.createProfile("Work");
 		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: true });
 
 		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id, confirmed: true });
 
+		expect(host.switchProfile).not.toHaveBeenCalled();
+		expect(renderer.send).toHaveBeenCalledWith("browser:profileSwitchFailed", {
+			viewId: "1:worker-1",
+			message: "An agent is using this browser.",
+			reason: "agent-active",
+		});
+	});
+
+	it("stays quiet for an unconfirmed selection while an agent is using the browser", async () => {
+		const { invoke, renderer, store, host } = await setup();
+		const profile = await store.createProfile("Work");
+		host.getProfileSwitchInfo.mockReturnValue({ hasNavigated: true, agentActive: true });
+
+		await invoke("browser:profile:select", renderer, { viewId: "1:worker-1", profileId: profile.id });
+
+		// The menus already show switching as disabled; nothing was confirmed.
 		expect(host.switchProfile).not.toHaveBeenCalled();
 		expect(renderer.send).not.toHaveBeenCalled();
 	});

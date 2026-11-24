@@ -646,6 +646,7 @@
 	"browser.profile.switchDetail": "Nicht gespeicherte Seitenzustände können verloren gehen.",
 	"browser.profile.switchConfirm": "Profil wechseln",
 	"browser.profile.switchFailed": "Profil konnte nicht gewechselt werden",
+	"browser.profile.switchAgentActive": "Ein Agent verwendet diesen Browser. Versuche es erneut, wenn seine Browseraktion abgeschlossen ist.",
 	"browser.queued": "In Warteschlange",
 	"browser.queuedCount": "In Warteschlange ({{count}})",
 	"browser.recentlyClosed": "Kürzlich geschlossen",

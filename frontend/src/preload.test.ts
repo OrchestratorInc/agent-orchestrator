@@ -547,8 +547,13 @@ describe("preload browser profile bridge", () => {
 		const failedWrapped = electronMocks.listeners.get("browser:profileSwitchFailed");
 		failedWrapped?.({}, { viewId: "1:worker-1", message: "Profile storage is unavailable." });
 		failedWrapped?.({}, { viewId: "1:worker-1" });
-		expect(failedListener).toHaveBeenCalledTimes(1);
-		expect(failedListener).toHaveBeenCalledWith({ viewId: "1:worker-1", message: "Profile storage is unavailable." });
+		failedWrapped?.({}, { viewId: "1:worker-1", message: "Busy.", reason: "agent-active" });
+		failedWrapped?.({}, { viewId: "1:worker-1", message: "Odd.", reason: "something-else" });
+		expect(failedListener.mock.calls).toEqual([
+			[{ viewId: "1:worker-1", message: "Profile storage is unavailable." }],
+			[{ viewId: "1:worker-1", message: "Busy.", reason: "agent-active" }],
+			[{ viewId: "1:worker-1", message: "Odd." }],
+		]);
 		failedDispose();
 		expect(electronMocks.off).toHaveBeenCalledWith("browser:profileSwitchFailed", failedWrapped);
 

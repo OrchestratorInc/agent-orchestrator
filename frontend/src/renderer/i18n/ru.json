@@ -608,6 +608,7 @@
 	"browser.profile.switchDetail": "Несохранённое состояние страниц может быть потеряно.",
 	"browser.profile.switchConfirm": "Сменить профиль",
 	"browser.profile.switchFailed": "Не удалось сменить профиль",
+	"browser.profile.switchAgentActive": "Агент использует этот браузер. Повторите попытку, когда он завершит действие в браузере.",
 	"browser.queued": "В очереди",
 	"browser.queuedCount": "В очереди ({{count}})",
 	"browser.recentlyClosed": "Недавно закрытые",

@@ -608,6 +608,7 @@
 	"browser.profile.switchDetail": "Kaydedilmemiş sayfa durumu kaybolabilir.",
 	"browser.profile.switchConfirm": "Profili değiştir",
 	"browser.profile.switchFailed": "Profil değiştirilemedi",
+	"browser.profile.switchAgentActive": "Bir aracı bu tarayıcıyı kullanıyor. Tarayıcı eylemi tamamlandığında yeniden deneyin.",
 	"browser.queued": "Sırada",
 	"browser.queuedCount": "Sırada ({{count}})",
 	"browser.recentlyClosed": "Son kapatılanlar",

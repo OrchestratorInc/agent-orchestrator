@@ -857,9 +857,13 @@ const api = {
 			};
 		},
 		onProfileSwitchFailed: (listener: (failure: BrowserProfileSwitchFailure) => void) => {
-			const wrapped = (_event: Electron.IpcRendererEvent, payload: { viewId?: unknown; message?: unknown }) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: { viewId?: unknown; message?: unknown; reason?: unknown }) => {
 				if (typeof payload?.viewId !== "string" || typeof payload.message !== "string") return;
-				listener({ viewId: payload.viewId, message: payload.message });
+				listener({
+					viewId: payload.viewId,
+					message: payload.message,
+					...(payload.reason === "agent-active" ? { reason: "agent-active" as const } : {}),
+				});
 			};
 			ipcRenderer.on("browser:profileSwitchFailed", wrapped);
 			return () => {

@@ -314,7 +314,20 @@ async function selectProfile(
 	const current = options.host.getProfileState(viewId);
 	if (!current || current.profileId === profileId) return;
 	const info = options.host.getProfileSwitchInfo(viewId);
-	if (!info || info.agentActive) return;
+	if (!info) return;
+	if (info.agentActive) {
+		// The menus disable switching while an agent drives the browser, so this
+		// only happens when the agent started after the user confirmed. Say why
+		// the profile did not change instead of closing the prompt silently.
+		if (confirmed) {
+			notifySwitch(notify, "browser:profileSwitchFailed", {
+				viewId,
+				message: "An agent is using this browser.",
+				reason: "agent-active",
+			} satisfies BrowserProfileSwitchFailure);
+		}
+		return;
+	}
 	if (info.hasNavigated && !confirmed) {
 		// The shell confirms in its own dialog and selects again with `confirmed`;
 		// the checks above run again then, against the state at that moment.

@@ -650,6 +650,7 @@
 	"browser.profile.switchDetail": "L’état non enregistré de la page peut être perdu.",
 	"browser.profile.switchConfirm": "Changer de profil",
 	"browser.profile.switchFailed": "Impossible de changer de profil",
+	"browser.profile.switchAgentActive": "Un agent utilise ce navigateur. Réessayez lorsque son action dans le navigateur sera terminée.",
 	"browser.queued": "En file d'attente",
 	"browser.queuedCount": "En file d'attente ({{count}})",
 	"browser.recentlyClosed": "Fermés récemment",

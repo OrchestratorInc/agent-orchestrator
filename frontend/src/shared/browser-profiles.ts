@@ -110,6 +110,12 @@ export type BrowserProfileSwitchConfirmRequest = {
 export type BrowserProfileSwitchFailure = {
 	viewId: string;
 	message: string;
+	/**
+	 * Set when the switch was refused rather than attempted, so the shell can
+	 * explain it in the user's language. `agent-active`: an agent began using
+	 * this browser while the confirmation was open.
+	 */
+	reason?: "agent-active";
 };
 
 export function isBrowserProfileId(value: unknown): value is BrowserProfileId {

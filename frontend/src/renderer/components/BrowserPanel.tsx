@@ -586,7 +586,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			if (request.viewId === viewId) setPendingProfileSwitch({ profileId: request.profileId });
 		});
 		const offFailed = window.ao.browser.onProfileSwitchFailed((failure) => {
-			if (failure.viewId === viewId) showProfileSwitchFailure(t("browser.profile.switchFailed"), failure.message, "error");
+			if (failure.viewId !== viewId) return;
+			const body = failure.reason === "agent-active" ? t("browser.profile.switchAgentActive") : failure.message;
+			showProfileSwitchFailure(t("browser.profile.switchFailed"), body, "error");
 		});
 		return () => {
 			offConfirm();
@@ -1858,6 +1860,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 				title={t("browser.profile.switchTitle")}
 				description={`${t("browser.profile.switchMessage")} ${t("browser.profile.switchDetail")}`}
 				confirmLabel={t("browser.profile.switchConfirm")}
+				// The old native alert defaulted to No: a repeated Enter from the
+				// profile menu must not reload away unsaved page state.
+				initialFocus="cancel"
 				onConfirm={() => {
 					if (!pendingProfileSwitch) return;
 					setPendingProfileSwitch(null);

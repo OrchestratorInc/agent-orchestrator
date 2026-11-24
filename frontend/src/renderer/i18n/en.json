@@ -608,6 +608,7 @@
 	"browser.profile.switchDetail": "Unsaved page state may be lost.",
 	"browser.profile.switchConfirm": "Switch profile",
 	"browser.profile.switchFailed": "Couldn't switch profile",
+	"browser.profile.switchAgentActive": "An agent is using this browser. Try again when its browser action finishes.",
 	"browser.queued": "Queued",
 	"browser.queuedCount": "Queued ({{count}})",
 	"browser.recentlyClosed": "Recently closed",

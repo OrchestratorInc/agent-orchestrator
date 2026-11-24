@@ -646,6 +646,7 @@
 	"browser.profile.switchDetail": "未保存的页面状态可能会丢失。",
 	"browser.profile.switchConfirm": "切换配置文件",
 	"browser.profile.switchFailed": "无法切换配置文件",
+	"browser.profile.switchAgentActive": "代理正在使用此浏览器。请在其浏览器操作完成后重试。",
 	"browser.queued": "已排队",
 	"browser.queuedCount": "已排队（{{count}}）",
 	"browser.recentlyClosed": "最近关闭",

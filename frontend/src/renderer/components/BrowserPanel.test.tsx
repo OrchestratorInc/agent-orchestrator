@@ -20,6 +20,7 @@ import type {
 	BrowserAnnotationSubmitPayload,
 } from "../../shared/browser-annotations";
 import type { BrowserDownloadsState } from "../../shared/browser-downloads";
+import type { BrowserProfileSwitchFailure } from "../../shared/browser-profiles";
 import type { BrowserRuntimeState } from "../../main/browser-view-host";
 
 function render(ui: ReactElement) {
@@ -1004,6 +1005,9 @@ describe("BrowserPanel", () => {
 		const dialog = await screen.findByRole("dialog", { name: "Switch profile?" });
 		expect(within(dialog).getByText("Switching profiles will reload the browser pages. Unsaved page state may be lost.")).toBeInTheDocument();
 		expect(window.ao!.browser.selectProfile).not.toHaveBeenCalled();
+		// Like the native alert's "No" default: a repeated Enter from the menu
+		// must not reload away unsaved page state.
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus());
 
 		await userEvent.click(within(dialog).getByRole("button", { name: "Switch profile" }));
 		expect(window.ao!.browser.selectProfile).toHaveBeenCalledWith({
@@ -1025,14 +1029,15 @@ describe("BrowserPanel", () => {
 
 		act(() => confirmListener!({ viewId: "42:sess-1", profileId: null }));
 		const dialog = await screen.findByRole("dialog", { name: "Switch profile?" });
-		await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus());
+		await userEvent.keyboard("{Enter}");
 
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		expect(window.ao!.browser.selectProfile).not.toHaveBeenCalled();
 	});
 
 	it("shows a failed profile switch as an in-app error toast", async () => {
-		let failedListener: ((failure: { viewId: string; message: string }) => void) | undefined;
+		let failedListener: ((failure: BrowserProfileSwitchFailure) => void) | undefined;
 		window.ao!.browser.onProfileSwitchFailed = vi.fn((listener) => {
 			failedListener = listener;
 			return () => undefined;
@@ -1047,6 +1052,15 @@ describe("BrowserPanel", () => {
 		expect(useUiStore.getState().globalToast).toMatchObject({
 			title: "Couldn't switch profile",
 			body: "Profile storage is unavailable.",
+			tone: "error",
+		});
+
+		// An agent took over the browser after the user confirmed: explain it in
+		// the user's language rather than echoing the main process's text.
+		act(() => failedListener!({ viewId: "42:sess-1", message: "An agent is using this browser.", reason: "agent-active" }));
+		expect(useUiStore.getState().globalToast).toMatchObject({
+			title: "Couldn't switch profile",
+			body: "An agent is using this browser. Try again when its browser action finishes.",
 			tone: "error",
 		});
 	});

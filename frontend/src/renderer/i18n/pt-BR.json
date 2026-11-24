@@ -650,6 +650,7 @@
 	"browser.profile.switchDetail": "O estado não salvo da página pode ser perdido.",
 	"browser.profile.switchConfirm": "Trocar perfil",
 	"browser.profile.switchFailed": "Não foi possível trocar o perfil",
+	"browser.profile.switchAgentActive": "Um agente está usando este navegador. Tente novamente quando a ação dele no navegador terminar.",
 	"browser.queued": "Na fila",
 	"browser.queuedCount": "Na fila ({{count}})",
 	"browser.recentlyClosed": "Fechadas recentemente",
