@@ -54,6 +54,10 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 	// Prose under an item after its code block (`npm i` … "Then run it."): its own
 	// paragraph, with the list held open so the next step keeps its number.
 	let listProse: Extract<MarkdownBlock, { kind: "paragraph" }> | null = null;
+	// The source lines of each list item and of each paragraph under a step, joined
+	// once the text is parsed: joining as each line arrives would copy the text so
+	// far on every line, quadratic in a long item.
+	const runs = new Map<{ text: string }, Run>();
 	const flushParagraph = () => {
 		if (paragraph.length) blocks.push({ kind: "paragraph", text: joinLines(paragraph) });
 		paragraph = [];
@@ -71,7 +75,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 		if (fence && (fence[1].length <= 3 || list)) {
 			flushParagraph();
 			const marker = fence[2];
-			const language = fenceInfo(fence).split(/\s+/)[0] || undefined;
+			const language = fence[3].trim().split(/\s+/)[0] || undefined;
 			// A fence opened inside a list item keeps the list's numbering going.
 			const inList = Boolean(list) && (fence[1].length > 0 || !list!.blank);
 			if (!inList) closeList();
@@ -88,6 +92,18 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 		if (!line.trim()) {
 			flushParagraph();
 			if (list) list.blank = true;
+			continue;
+		}
+
+		// An indented code block: lines indented four or more spaces that start a
+		// block (no paragraph open for them to continue, no list to belong to). Its
+		// blank lines are kept; trailing ones are not.
+		if (indent >= 4 && !list && !paragraph.length) {
+			const code: string[] = [];
+			for (; i < lines.length && (leadingSpaces(lines[i]) >= 4 || !lines[i].trim()); i++) code.push(dedent(raw[i], 4));
+			i--;
+			while (!code[code.length - 1].trim()) code.pop();
+			blocks.push({ kind: "code", text: code.join("\n") });
 			continue;
 		}
 
@@ -116,7 +132,9 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 				number = previous === undefined ? Number(item[2]) : previous + 1;
 				list.numbers[depth] = number;
 			}
-			list.block.items.push({ ...taskItem(item[4]), depth, ...(number !== undefined ? { number } : {}) });
+			const added: MarkdownListItem = { ...taskItem(item[4]), depth, ...(number !== undefined ? { number } : {}) };
+			list.block.items.push(added);
+			runs.set(added, { lines: [added.text], gaps: [false] });
 			list.blank = false;
 			continue;
 		}
@@ -129,16 +147,19 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 				|| (line.includes("|") && i + 1 < lines.length && tableDivider(lines[i + 1], tableCells(line).length) !== null);
 			const belongs = indent >= 2 || (!list.blank && !opensBlock);
 			if (last && listResumes && belongs) {
-				if (listProse && !list.blank) listProse.text = appendLine(listProse.text, line);
+				if (listProse && !list.blank) runs.get(listProse)!.lines.push(line);
 				else {
-					listProse = { kind: "paragraph", text: line.trimStart() };
+					listProse = { kind: "paragraph", text: "" };
 					blocks.push(listProse);
+					runs.set(listProse, { lines: [line], gaps: [false] });
 				}
 				list.blank = false;
 				continue;
 			}
 			if (last && !listResumes && belongs) {
-				last.text = list.blank ? `${last.text.trimEnd()}\n${line.trimStart()}` : appendLine(last.text, line);
+				const run = runs.get(last)!;
+				run.lines.push(line);
+				run.gaps.push(list.blank);
 				list.blank = false;
 				continue;
 			}
@@ -189,10 +210,7 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
 		paragraph.push(line);
 	}
 	flushParagraph();
-	for (const block of blocks) {
-		if (block.kind === "list") for (const item of block.items) item.text = item.text.trimEnd();
-		else if (block.kind === "paragraph") block.text = block.text.trimEnd();
-	}
+	for (const [owner, run] of runs) owner.text = joinRun(run.lines, run.gaps);
 	return blocks;
 }
 
@@ -202,19 +220,9 @@ export function parseBlocks(input: string, { relativeImages = false }: { relativ
  */
 function closesFence(line: string, opener: string, maxIndent: number): boolean {
 	const fence = FENCE.exec(line);
-	return Boolean(fence) && fence![1].length <= maxIndent && fence![2][0] === opener[0] && fence![2].length >= opener.length && !fenceInfo(fence!);
+	return Boolean(fence) && fence![1].length <= maxIndent && fence![2][0] === opener[0] && fence![2].length >= opener.length && !fence![3].trim();
 }
 
-/**
- * A fence line's info string, without the cursor the timeline appends while a
- * reply streams: "``` ▍" closes a block, and "```js ▍" opens one in js.
- */
-function fenceInfo(fence: RegExpExecArray): string {
-	return fence[3].replace(/\u258D\s*$/, "").trim();
-}
-
-/** The glyph the timeline appends to a reply while it streams: not part of the reply's text. */
-const STREAM_CURSOR = "\u258D";
 const INLINE_MARKERS = ["`", "**", "~~"] as const;
 
 /**
@@ -253,7 +261,7 @@ export function repairStreamingInline(text: string): string {
 	const start = Math.max(afterFence, text.lastIndexOf("\n\n") + 1, lastItem);
 	const scope = text.slice(start);
 	let end = scope.length;
-	while (end > 0 && (/\s/.test(scope[end - 1]) || scope[end - 1] === STREAM_CURSOR)) end--;
+	while (end > 0 && /\s/.test(scope[end - 1])) end--;
 	const trailing = scope.slice(end);
 	let body = scope.slice(0, end);
 	// Drop an opener that has just arrived, with no text after it to format.
@@ -314,7 +322,10 @@ function nestingDepth(list: { indents: number[]; numbers: Array<number | undefin
 	return indents.length - 1;
 }
 
-/** A blockquote's own Markdown as quoted prose: its lists keep one line per item. */
+/**
+ * A blockquote's own Markdown as quoted prose: its blocks sit a blank line apart,
+ * as paragraphs do, and its lists keep one line per item.
+ */
 function quoteText(value: string, relativeImages: boolean): string {
 	return parseBlocks(value, { relativeImages }).map((block) => {
 		switch (block.kind) {
@@ -324,8 +335,11 @@ function quoteText(value: string, relativeImages: boolean): string {
 			case "rule": return "";
 			default: return block.text;
 		}
-	}).join("\n");
+	}).filter(Boolean).join("\n\n");
 }
+
+/** A block's source lines, and whether a blank line came before each. */
+type Run = { lines: string[]; gaps: boolean[] };
 
 /**
  * A paragraph's source lines as the text it reads as. A plain line break is a
@@ -333,23 +347,25 @@ function quoteText(value: string, relativeImages: boolean): string {
  * or a backslash is a hard break.
  */
 function joinLines(lines: string[]): string {
-	let text = "";
-	for (const line of lines) text = text ? appendLine(text, line) : line.trimStart();
-	// A backslash with no line after it is not a break: `C:\` keeps it.
-	return text.trimEnd();
+	return joinRun(lines, []);
 }
 
-/** `before` followed by the next source line, across a hard or a soft break. */
-function appendLine(before: string, line: string): string {
-	const next = line.trimStart();
-	return HARD_BREAK.test(before) ? `${endLine(before)}\n${next}` : `${before.trimEnd()} ${next}`;
-}
-
-const HARD_BREAK = /(?: {2,}|\\)$/;
-
-/** A line without the trailing spaces or backslash that break it before the next. */
-function endLine(text: string): string {
-	return text.replace(HARD_BREAK, "").trimEnd();
+/**
+ * Source lines joined in one pass: after a blank line (`gaps`) a line starts
+ * on a line of its own; otherwise each break is decided by the line before it,
+ * hard or soft. A backslash with no line after it is not a break: `C:\` keeps it.
+ */
+function joinRun(lines: string[], gaps: boolean[]): string {
+	const parts: string[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i].trimStart();
+		if (i === lines.length - 1) parts.push(line.trimEnd());
+		else if (gaps[i + 1]) parts.push(line.trimEnd(), "\n");
+		else if (line.endsWith("\\")) parts.push(line.slice(0, -1).trimEnd(), "\n");
+		else if (line.endsWith("  ")) parts.push(line.trimEnd(), "\n");
+		else parts.push(line.trimEnd(), " ");
+	}
+	return parts.join("");
 }
 
 function leadingSpaces(line: string): number {
