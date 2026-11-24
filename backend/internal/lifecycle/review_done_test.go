@@ -481,6 +481,36 @@ func TestQueuedReviewFeedbackIsDeliveredOnce(t *testing.T) {
 	}
 }
 
+// A Chat session gets a review's comments as one relayed turn, not one per
+// comment: the batch is delivered once, survives a restart, and a comment that
+// arrives later goes out alone.
+func TestChatReviewFeedbackIsOneBatchedRelay(t *testing.T) {
+	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateRunning)
+	st.runs = nil
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
+	observation := ports.PRObservation{Fetched: true, URL: donePR}
+	if err := m.ApplyPRObservation(ctx, "w-1", observation); err != nil {
+		t.Fatal(err)
+	}
+	if len(relay.ids) != 1 {
+		t.Fatalf("two comments sent %v, want one relayed batch", relay.ids)
+	}
+	if err := New(st, relay).ApplyPRObservation(ctx, "w-1", observation); err != nil {
+		t.Fatal(err)
+	}
+	if len(relay.ids) != 1 {
+		t.Fatalf("delivered batch repeated after restart: %v", relay.ids)
+	}
+	st.comments[donePR] = append(st.comments[donePR], domain.PullRequestComment{ID: "c3", ThreadID: "T3", ReviewID: "777", Author: "me", File: "c.go", Line: 1, Body: "late finding", AutoInjectReview: true})
+	if err := New(st, relay).ApplyPRObservation(ctx, "w-1", observation); err != nil {
+		t.Fatal(err)
+	}
+	if len(relay.ids) != 2 || relay.ids[0] == relay.ids[1] {
+		t.Fatalf("a later comment should go out as its own relay, got %v", relay.ids)
+	}
+}
+
 func TestReviewDoneNotice_FailedFeedbackLeavesCompletionNotice(t *testing.T) {
 	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateFailed)
 	st.runs = nil
