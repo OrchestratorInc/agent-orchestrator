@@ -2104,6 +2104,16 @@ func TestSessionsAPI_SpawnPassesEffortToService(t *testing.T) {
 	if svc.lastSpawn.EffortOverride {
 		t.Fatal("service EffortOverride = true for omitted effort, want false")
 	}
+
+	// An explicit effortOverride: false marks request-carried effort as inherited.
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/sessions",
+		`{"kind":"worker","harness":"codex","prompt":"fix","displayName":"third","model":"sonnet","effort":"high","effortOverride":false}`)
+	if status != http.StatusCreated {
+		t.Fatalf("POST session = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.EffortOverride {
+		t.Fatal("service EffortOverride = true, want false when effortOverride is explicitly false")
+	}
 }
 
 func TestSessionsAPI_SpawnPassesParentSessionToService(t *testing.T) {

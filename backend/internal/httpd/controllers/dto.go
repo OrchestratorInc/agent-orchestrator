@@ -722,6 +722,10 @@ type SpawnSessionRequest struct {
 	Model string `json:"model,omitempty" maxLength:"256"`
 	// Effort is the optional reasoning level for the selected model.
 	Effort string `json:"effort,omitempty" maxLength:"32"`
+	// EffortOverride preserves whether effort was explicitly supplied by the caller.
+	// When false, effort is treated as inherited (clearing silently on harnesses or modes
+	// that do not support it). When omitted, effort is considered explicit if non-empty.
+	EffortOverride *bool `json:"effortOverride,omitempty"`
 	// AccountID is the subscription account the agent starts on. Empty uses the
 	// provider's default account.
 	AccountID string `json:"accountId,omitempty" maxLength:"128"`

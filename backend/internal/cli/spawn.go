@@ -59,6 +59,7 @@ type spawnRequest struct {
 	Prompt              string `json:"prompt,omitempty"`
 	Model               string `json:"model,omitempty"`
 	Effort              string `json:"effort,omitempty"`
+	EffortOverride      *bool  `json:"effortOverride,omitempty"`
 	AccountID           string `json:"accountId,omitempty"`
 	RequestedOutput     string `json:"requestedOutput,omitempty"`
 	DisplayName         string `json:"displayName"`
@@ -116,8 +117,8 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 			if opts.mode != "" && opts.mode != "chat" && opts.mode != "tui" {
 				return usageError{fmt.Errorf(`--mode must be "chat" or "tui"`)}
 			}
-			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" && opts.kind != "reviewer" {
-				return usageError{fmt.Errorf(`--kind must be "worker", "orchestrator", or "reviewer"`)}
+			if opts.kind != "" && opts.kind != "worker" && opts.kind != "orchestrator" {
+				return usageError{fmt.Errorf(`--kind must be "worker" or "orchestrator"`)}
 			}
 			if opts.standalone {
 				if opts.kind != "" && opts.kind != "worker" {
@@ -132,16 +133,12 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				opts.kind = "worker"
 			}
 			if opts.kind == "" {
-				if opts.review {
-					opts.kind = "reviewer"
-				} else {
-					opts.kind = "worker"
-				}
+				opts.kind = "worker"
 			}
 			if opts.output != "" && opts.output != "artifact" {
 				return usageError{fmt.Errorf(`--output must be "artifact"`)}
 			}
-			if opts.output != "" && opts.kind != "worker" {
+			if opts.output != "" && (opts.kind != "worker" || opts.review) {
 				return usageError{fmt.Errorf("--output is supported for worker sessions only")}
 			}
 
@@ -179,9 +176,11 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 					opts.model = project.Config.Reviewers[0].AgentConfig.Model
 				}
 			}
-			if opts.review && opts.kind == "worker" && reviewerHarnessMatches && opts.effort == "" && harnessSupportsEffort(opts.harness) {
+			inheritedEffort := false
+			if opts.review && reviewerHarnessMatches && opts.effort == "" {
 				if len(project.Config.Reviewers) > 0 && project.Config.Reviewers[0].AgentConfig != nil {
 					opts.effort = project.Config.Reviewers[0].AgentConfig.Effort
+					inheritedEffort = opts.effort != ""
 				}
 			}
 
@@ -209,6 +208,14 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 					return err
 				}
 			}
+			var effortOverride *bool
+			if inheritedEffort {
+				override := false
+				effortOverride = &override
+			} else if strings.TrimSpace(opts.effort) != "" {
+				override := true
+				effortOverride = &override
+			}
 			req := spawnRequest{
 				ProjectID:           opts.project,
 				IssueID:             opts.issue,
@@ -222,6 +229,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				Prompt:              opts.prompt,
 				Model:               strings.TrimSpace(opts.model),
 				Effort:              strings.TrimSpace(opts.effort),
+				EffortOverride:      effortOverride,
 				AccountID:           strings.TrimSpace(opts.account),
 				RequestedOutput:     opts.output,
 				DisplayName:         name,
@@ -298,7 +306,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.project, "project", "", "Project id to spawn the session in (default: AO_PROJECT_ID or the current registered repo)")
 	f.BoolVar(&opts.standalone, "standalone", false, "Spawn a projectless worker in an Orchestrator-managed plain directory (requires --agent)")
 	f.StringVar(&opts.harness, "harness", "", "Agent harness / --agent: claude-code, codex, aider, opencode, opencode-v2, grok, droid, amp, agy, crush, cursor, qwen, gemini, copilot, goose, auggie, continue, devin, cline, kimi, muse, kiro, kilocode, vibe, pi, kimchi, prime-agent, autohand, omp, fx, unreal-agent, codewhale, mimo-code, deepseek-harness, openhands, command-code, mastra-code, docker-agent, minimax-code, memcode, hermes, stakpak, open-interpreter, tau (default: project worker.agent; orchestrator spawns default to project orchestrator.agent; reviewer spawns default to project reviewer; when the project has none, the daemon selects a default agent)")
-	f.StringVar(&opts.kind, "kind", "", "Session role: worker, orchestrator, or reviewer (default: worker)")
+	f.StringVar(&opts.kind, "kind", "", "Session role: worker or orchestrator (default: worker)")
 	f.StringVar(&opts.mode, "mode", "", "Initial session interface: chat (structured agent connection) or tui (the agent's native terminal). Omitted uses the daemon default; compatible sessions can switch later.")
 	f.StringVar(&opts.branch, "branch", "", "Branch for git project sessions (default: ao/<session-id>/root; unsupported for standalone or Scratch sessions)")
 	f.StringVar(&opts.baseBranch, "base", "", "Start the session's branch from this branch, to stack on its pull request (default: the project's default branch); with --branch, that branch must be new")
@@ -480,22 +488,6 @@ func pathContains(root, child string) bool {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func harnessSupportsEffort(harness string) bool {
-	switch harness {
-	case string(domain.HarnessCodex),
-		string(domain.HarnessClaudeCode),
-		string(domain.HarnessCommandCode),
-		string(domain.HarnessHermes),
-		string(domain.HarnessPi),
-		string(domain.HarnessPrimeAgent),
-		string(domain.HarnessOpenInterpreter),
-		string(domain.HarnessGrok):
-		return true
-	default:
-		return false
-	}
 }
 
 func resolveSpawnHarness(explicit, kind string, project projectDetails) string {
