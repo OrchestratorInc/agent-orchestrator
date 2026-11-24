@@ -58,6 +58,8 @@ describe("BrowserAskSheet on Android", () => {
 		for (const method of ["log", "info", "warn", "error", "debug"] as const) vi.spyOn(console, method).mockImplementation((...args) => { logged.push(...args); });
 		const auth: BrowserDialog = { kind: "auth", origin: "https://intranet.example", failed: false };
 		ask(auth);
+		// Stacked, not drawn over one another.
+		expect(all("Column")[0]!.findAll((node) => (node.type as unknown) === "TextField")).toHaveLength(2);
 		const [username, password] = all("TextField");
 		expect(password!.props).toMatchObject({
 			visualTransformation: "password",

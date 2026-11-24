@@ -1,4 +1,4 @@
-import { AlertDialog, Host, LazyColumn, ListItem, Text as NativeText, TextButton, TextField, useNativeState } from "@expo/ui/jetpack-compose";
+import { AlertDialog, Column, Host, LazyColumn, ListItem, Text as NativeText, TextButton, TextField, useNativeState } from "@expo/ui/jetpack-compose";
 import { alpha, clickable, fillMaxWidth, height } from "@expo/ui/jetpack-compose/modifiers";
 import { useRef, useState, type ReactNode } from "react";
 import { StyleSheet } from "react-native";
@@ -166,6 +166,8 @@ function AuthDialog({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind:
 			confirm={<Button label={copy.signIn} onClick={() => answer(answerAuth(dialog, { username, password }))} />}
 			dismiss={<Button label={copy.cancel} onClick={() => answer(answerAuth(dialog, null))} />}
 		>
+			{/* The dialog's text slot doesn't stack its children: a column does. */}
+			<Column verticalArrangement={{ spacedBy: 8 }} modifiers={[fillMaxWidth()]}>
 			<TextField
 				value={usernameText}
 				autoFocus
@@ -189,6 +191,7 @@ function AuthDialog({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind:
 			>
 				<TextField.Label><NativeText style={{ fontFamily: font.regular }}>{copy.password}</NativeText></TextField.Label>
 			</TextField>
+			</Column>
 		</Frame>
 	);
 }
