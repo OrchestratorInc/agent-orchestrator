@@ -219,6 +219,9 @@ func (s *Store) createConversation(
 					}); err != nil {
 						return fmt.Errorf("release untouched provider of project conversation %s: %w", existing.ID, err)
 					}
+					if err := q.ReleaseConversationQueue(ctx, existing.ID); err != nil {
+						return fmt.Errorf("release queue hold of project conversation %s: %w", existing.ID, err)
+					}
 				}
 				if options.contextReset == nil ||
 					existing.LatestSequence <= 0 ||

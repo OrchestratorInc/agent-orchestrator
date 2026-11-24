@@ -1213,6 +1213,56 @@ func TestProjectConversationFreshContextRebindWritesResetBoundaryAtomically(t *t
 	}
 }
 
+func TestReplacementOrchestratorDoesNotInheritTheQueueHold(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "project-held")
+
+	firstRecord := sampleRecord("project-held")
+	firstRecord.Kind = domain.KindOrchestrator
+	firstRecord.Mode = domain.SessionModeChat
+	first, err := s.CreateSession(ctx, firstRecord)
+	if err != nil {
+		t.Fatalf("create first orchestrator: %v", err)
+	}
+	conversation, err := s.CreateConversation(ctx, "project-held-conversation", domain.ConversationScopeProject,
+		"project-held", first.ID, histClock)
+	if err != nil {
+		t.Fatalf("create project conversation: %v", err)
+	}
+	if _, err := s.AppendUserMessage(ctx, conversation.ID, first.ID, "gen-1", domain.ConversationMessage{
+		ID: "limited-message", Text: "finish this task", Origin: domain.MessageOriginHuman,
+	}, "limited-turn", histClock.Add(time.Second)); err != nil {
+		t.Fatalf("append limited prompt: %v", err)
+	}
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	if err := s.SettleTurnByID(ctx, "limited-turn", domain.TurnStateFailed, refusal, histClock.Add(2*time.Second)); err != nil {
+		t.Fatalf("settle limited prompt: %v", err)
+	}
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || !held {
+		t.Fatalf("queue held = %v, %v after the usage limit", held, err)
+	}
+
+	secondRecord := sampleRecord("project-held")
+	secondRecord.Kind = domain.KindOrchestrator
+	secondRecord.Mode = domain.SessionModeChat
+	second, err := s.CreateSession(ctx, secondRecord)
+	if err != nil {
+		t.Fatalf("create replacement orchestrator: %v", err)
+	}
+	if _, err := s.CreateProjectConversationAdoptingQueue(ctx, "unused-held-conversation", "project-held", second.ID,
+		domain.ConversationActivity{
+			ID: "context-reset", Kind: domain.ActivityKindSystem, Status: domain.ActivityStatusCompleted,
+			Summary:        "Agent context reset.",
+			ProviderItemID: domain.ConversationContextResetProviderItemID(second.ID),
+		}, histClock.Add(3*time.Second)); err != nil {
+		t.Fatalf("rebind to replacement: %v", err)
+	}
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || held {
+		t.Fatalf("queue held = %v, %v after a replacement orchestrator took over", held, err)
+	}
+}
+
 func TestQueuedTurnPromotionReservationPreservesTheOtherQueueOrder(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
