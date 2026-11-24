@@ -371,18 +371,21 @@ export function AgentModelPicker({
 	const shownUltra = isUltraEffort(pending ? pendingEffort : currentSource.effort);
 	const shownFast = pending ? pending.fast || pending.fastMode || source.fast : currentSource.fast;
 	const shownThinking = pending ? pending.thinking ?? source.thinking : currentSource.thinking;
-	const countModelPick = (harness: string, id: string) => {
+	// A row is named by its row id, a favourite by its row and the variant it sends; either names the current model.
+	// A terminal's agent menu is not the composer's model picker, so its picks are not counted.
+	const countModelPick = (harness: string, ids: Array<string | undefined>) => {
 		markModelPick();
-		if (harness !== currentHarness || id !== currentSource.modelId) uiUsage.modelChanged();
+		const same = harness === currentHarness && ids.some((id) => id !== undefined && (id === currentSource.modelId || id === currentSource.sendId));
+		if (!terminal && !same) uiUsage.modelChanged();
 	};
 	const pickModel = (harness: string, id: string) => {
-		countModelPick(harness, id);
+		countModelPick(harness, [id]);
 		if (harness !== currentHarness) return otherSource(harness, pending?.harness === harness ? pending : undefined).onPickModel?.(id);
 		keepCurrent();
 		currentSource.onPickModel?.(id);
 	};
 	const pickSetup = (favorite: ModelFavorite) => {
-		countModelPick(favorite.harness, favorite.model);
+		countModelPick(favorite.harness, [favorite.row, favorite.model]);
 		if (favorite.harness === currentHarness) {
 			keepCurrent();
 			if (currentSource.onPickSetup) currentSource.onPickSetup(favorite);
