@@ -19,8 +19,8 @@ type WorkerReporterStore interface {
 	ConversationMessages(context.Context, string) ([]domain.ConversationMessage, error)
 }
 
-// ReportCreator persists one report, as Service.Create does.
-type ReportCreator interface {
+// Creator persists one report, as Service.Create does.
+type Creator interface {
 	Create(context.Context, CreateInput) (domain.ReportRecord, error)
 }
 
@@ -47,7 +47,7 @@ const DoneQuietPeriod = 30 * time.Second
 // takes precedence and nothing is added.
 type WorkerReporter struct {
 	store     WorkerReporterStore
-	reports   ReportCreator
+	reports   Creator
 	now       func() time.Time
 	log       *slog.Logger
 	quiet     time.Duration
@@ -88,7 +88,7 @@ type pendingDone struct {
 // required; the rest exist for tests.
 type WorkerReporterDeps struct {
 	Store       WorkerReporterStore
-	Reports     ReportCreator
+	Reports     Creator
 	Now         func() time.Time
 	Logger      *slog.Logger
 	QuietPeriod time.Duration
