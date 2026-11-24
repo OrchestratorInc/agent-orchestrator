@@ -392,7 +392,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			<LoadingBar loading={status === "open" && loading} accessibilityLabel="Loading page" />
 		</View>
 		{bottomBar}
-		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} />
+		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} browserName={browserName} />
 		<BrowserAskSheet dialog={ask} onAnswer={answerAsk} />
 		<ToastHost toast={toast} bottomOffset={toolbarShown ? toolbarClearance + space.md : undefined} />
 	</View>;
