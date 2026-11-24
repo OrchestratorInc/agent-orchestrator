@@ -724,6 +724,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"MobilebridgeEndpoint":                        "MobileEndpoint",
 	"MobilebridgeTunnelStatus":                    "MobileTunnelStatus",
 	"ControllersIdentityResponse":                 "IdentityResponse",
+	"ControllersRemoteHostUpdateResponse":         "RemoteHostUpdateResponse",
 	"ControllersEndpointsResponse":                "EndpointsResponse",
 	"ControllersLinkPreviewQuery":                 "LinkPreviewQuery",
 	"ControllersLinkPreviewResponse":              "LinkPreviewResponse",
@@ -906,6 +907,7 @@ func operations() []operation {
 	ops = append(ops, computerUseOperations()...)
 	ops = append(ops, identityOperations()...)
 	ops = append(ops, endpointsOperations()...)
+	ops = append(ops, hostUpdateOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
 	ops = append(ops, prPreviewOperations()...)
@@ -1017,6 +1019,40 @@ func endpointsOperations() []operation {
 			summary: "List the ways this daemon can currently be reached",
 			resps: []respUnit{
 				{http.StatusOK, controllers.EndpointsResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+func hostUpdateOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/remote-host/update", id: "getRemoteHostUpdate", tag: "identity",
+			summary: "Report this host's version and the state of its last self-hosted update",
+			resps: []respUnit{
+				{http.StatusOK, controllers.RemoteHostUpdateResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/remote-host/update", id: "startRemoteHostUpdate", tag: "identity",
+			summary: "Install the newest release of this self-hosted host's channel and restart it",
+			reqBody: controllers.RemoteHostUpdateRequest{}, optionalReqBody: true,
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.RemoteHostUpdateResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/remote-host/update/check", id: "checkRemoteHostUpdate", tag: "identity",
+			summary: "Ask a host that runs the desktop app which version it installs next",
+			resps: []respUnit{
+				{http.StatusOK, controllers.RemoteHostUpdateCheckResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
