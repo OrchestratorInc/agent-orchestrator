@@ -1331,7 +1331,9 @@ func (c *conversation) finishPrompt(
 		c.turnCtx = nil
 		c.resetPromptSteeringLocked()
 		c.providerFailure = nil
-		if c.interrupt == interrupt {
+		// Scope by turn, not by the attempt captured above, so no finished
+		// turn's interrupt can leak into the next turn.
+		if c.interrupt != nil && c.interrupt.turnID == turnID {
 			c.interrupt = nil
 		}
 		c.releasePendingSteersLocked()

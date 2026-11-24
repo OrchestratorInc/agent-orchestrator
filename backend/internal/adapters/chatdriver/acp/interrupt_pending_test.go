@@ -115,11 +115,13 @@ func TestACPInterruptCancelsPendingElicitation(t *testing.T) {
 // still winding down, is answered cancelled at once instead of being parked.
 func TestACPInterruptCancelsPermissionRequestedAfterCancel(t *testing.T) {
 	started := make(chan struct{})
+	interrupted := make(chan struct{})
 	outcome := make(chan acpsdk.RequestPermissionOutcome, 1)
 	agent := &fakeAgent{}
 	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
 		close(started)
-		<-ctx.Done() // session/cancel arrived
+		<-ctx.Done()  // session/cancel arrived
+		<-interrupted // and Interrupt has finished its own bookkeeping
 		response, err := agent.conn.RequestPermission(context.WithoutCancel(ctx), acpsdk.RequestPermissionRequest{
 			SessionId: params.SessionId,
 			ToolCall:  acpsdk.ToolCallUpdate{ToolCallId: "tool-late", Title: acpsdk.Ptr("Edit file")},
@@ -144,6 +146,7 @@ func TestACPInterruptCancelsPermissionRequestedAfterCancel(t *testing.T) {
 	if err := conversation.Interrupt(context.Background(), turnID); err != nil {
 		t.Fatalf("Interrupt: %v", err)
 	}
+	close(interrupted)
 	select {
 	case got := <-outcome:
 		if got.Cancelled == nil || got.Selected != nil {
