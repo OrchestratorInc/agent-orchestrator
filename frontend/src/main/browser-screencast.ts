@@ -34,9 +34,11 @@ export class BrowserScreencast {
 	// on each frame's ack waits for it (an older daemon never reports).
 	private backpressure = false;
 	private lastWritten = 0n;
-	// The frame Chromium waits on: acked once the phone has it and the frame
-	// rate allows, or after ACK_TIMEOUT_MS.
-	private pendingAck?: { sessionId: number; sequence: bigint; emittedAt: number; timers: ReturnType<typeof setTimeout>[] };
+	// Frames Chromium waits on (it keeps two in flight), acked in order: each
+	// once the phone has it and the frame cap allows, or after ACK_TIMEOUT_MS.
+	private pendingAcks: { sessionId: number; sequence: bigint; emittedAt: number }[] = [];
+	private lastAckAt = 0;
+	private ackTimer?: ReturnType<typeof setTimeout>;
 	private readonly listener: (event: unknown, method: string, params: Record<string, unknown>) => void;
 
 	constructor(
@@ -88,8 +90,8 @@ export class BrowserScreencast {
 			return;
 		}
 		this.quality = quality;
-		// A frame Chromium waits on would be lost with the old capture.
-		this.releaseAck();
+		// Frames Chromium waits on would be lost with the old capture.
+		this.releaseAllAcks();
 		await this.debug.sendCommand("Page.stopScreencast").catch(() => undefined);
 		if (!this.stopped) await this.startCapture();
 	}
@@ -98,14 +100,15 @@ export class BrowserScreencast {
 	frameWritten(sequence: bigint): void {
 		this.backpressure = true;
 		if (sequence > this.lastWritten) this.lastWritten = sequence;
-		this.tryReleaseAck();
+		this.pumpAcks();
 	}
 
 	async stop(): Promise<void> {
 		if (this.stopped) return;
 		this.stopped = true;
-		this.clearAckTimers();
-		this.pendingAck = undefined;
+		if (this.ackTimer) clearTimeout(this.ackTimer);
+		this.ackTimer = undefined;
+		this.pendingAcks = [];
 		if (this.fallbackTimer) clearInterval(this.fallbackTimer);
 		this.fallbackTimer = undefined;
 		this.removeListener();
@@ -199,33 +202,37 @@ export class BrowserScreencast {
 		}
 		// Nothing went to the phone: nothing to wait for.
 		if (!sent || (!this.backpressure && this.minFrameMs === 0)) return this.ack(sessionId);
-		this.releaseAck();
-		const emittedAt = Date.now();
-		const timers = [setTimeout(() => this.releaseAck(), ACK_TIMEOUT_MS)];
-		if (this.minFrameMs > 0) timers.push(setTimeout(() => this.tryReleaseAck(), this.minFrameMs));
-		for (const timer of timers) timer.unref?.();
-		this.pendingAck = { sessionId, sequence: this.sequence, emittedAt, timers };
-		this.tryReleaseAck();
+		this.pendingAcks.push({ sessionId, sequence: this.sequence, emittedAt: Date.now() });
+		this.pumpAcks();
 	}
 
-	private tryReleaseAck(): void {
-		const pending = this.pendingAck;
-		if (!pending) return;
-		if (this.backpressure && this.lastWritten < pending.sequence) return;
-		if (Date.now() - pending.emittedAt < this.minFrameMs) return;
-		this.releaseAck();
+	// Acks every frame in flight that may go now, in order, then waits for the
+	// next one's turn: the frame cap, the phone having it, or the timeout.
+	private pumpAcks(): void {
+		if (this.ackTimer) clearTimeout(this.ackTimer);
+		this.ackTimer = undefined;
+		while (this.pendingAcks.length && !this.stopped) {
+			const head = this.pendingAcks[0]!;
+			const now = Date.now();
+			const timeoutAt = head.emittedAt + ACK_TIMEOUT_MS;
+			const capAt = Math.max(head.emittedAt, this.lastAckAt) + this.minFrameMs;
+			const waitingForPhone = this.backpressure && this.lastWritten < head.sequence;
+			if (now < timeoutAt && (waitingForPhone || now < capAt)) {
+				const at = waitingForPhone ? timeoutAt : Math.min(capAt, timeoutAt);
+				this.ackTimer = setTimeout(() => this.pumpAcks(), at - now);
+				this.ackTimer.unref?.();
+				return;
+			}
+			this.pendingAcks.shift();
+			this.lastAckAt = now;
+			void this.ack(head.sessionId);
+		}
 	}
 
-	private releaseAck(): void {
-		const pending = this.pendingAck;
-		if (!pending) return;
-		this.clearAckTimers();
-		this.pendingAck = undefined;
-		if (!this.stopped) void this.ack(pending.sessionId);
-	}
-
-	private clearAckTimers(): void {
-		for (const timer of this.pendingAck?.timers ?? []) clearTimeout(timer);
+	private releaseAllAcks(): void {
+		if (this.ackTimer) clearTimeout(this.ackTimer);
+		this.ackTimer = undefined;
+		for (const pending of this.pendingAcks.splice(0)) void this.ack(pending.sessionId);
 	}
 
 	private async ack(sessionId: number): Promise<void> {

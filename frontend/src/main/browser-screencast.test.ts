@@ -226,6 +226,51 @@ describe("BrowserScreencast", () => {
 			}
 		});
 
+		it("spaces acks to the frame cap even with two frames in flight", async () => {
+			vi.useFakeTimers();
+			try {
+				const { cast, frame, acks } = setup();
+				await cast.start();
+				await cast.setQuality({ quality: 60, maxFps: 10 });
+				// Chromium keeps two screencast frames in flight.
+				frame(1);
+				frame(2);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([]);
+				await vi.advanceTimersByTimeAsync(100);
+				expect(acks()).toEqual([1]);
+				await vi.advanceTimersByTimeAsync(99);
+				expect(acks()).toEqual([1]);
+				await vi.advanceTimersByTimeAsync(1);
+				expect(acks()).toEqual([1, 2]);
+				await cast.stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("acks frames in flight in order, each once the phone has it", async () => {
+			vi.useFakeTimers();
+			try {
+				const { cast, frame, acks } = setup();
+				await cast.start();
+				cast.frameWritten(0n);
+				frame(1);
+				frame(2);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([]);
+				cast.frameWritten(1n);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([1]);
+				cast.frameWritten(2n);
+				await vi.advanceTimersByTimeAsync(0);
+				expect(acks()).toEqual([1, 2]);
+				await cast.stop();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it("acks an unchanged frame at once: nothing goes to the phone", async () => {
 			vi.useFakeTimers();
 			try {
