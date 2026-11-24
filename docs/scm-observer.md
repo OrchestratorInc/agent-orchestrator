@@ -191,7 +191,7 @@ transfer is exactly the event that made them disagree.
 | 5 | Store identity machinery | `provider_id` (unique per provider+host) + `pr_url_alias` | migration 0097, added by #3923 |
 
 Before #4090, after a rename (`AgentWrapper/agent-orchestrator` →
-`OrchestratorInc/agent-orchestrator`):
+`Untrivial-ai/agent-orchestrator`):
 
 - (1) keeps the old `repo` string forever unless something rewrites it.
 - (2) trusts (1), so subjects poll under the old name — which *works*, because
