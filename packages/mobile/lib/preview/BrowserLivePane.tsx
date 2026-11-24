@@ -149,6 +149,8 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			return;
 		}
 		let disposed = false;
+		// The last stream's image stays up, but its load is not this stream's frame.
+		arrivedAt.current.clear();
 		stats.current?.connecting(performance.now());
 		setStatus("connecting");
 		setError(undefined);
