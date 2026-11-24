@@ -37,6 +37,7 @@ import {
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../lib/agent-options";
 import { DEFAULT_AGENT_PRIORITY_RANK, defaultProjectAgents } from "../../lib/agent-select-options";
+import { toReviewerHarnessId } from "../../lib/reviewer-harnesses";
 import { INITIAL_PROJECT_DEFAULTS, readProjectDefaults, saveProjectDefaults, type ProjectDefaults } from "../../lib/project-defaults";
 import { useSettings } from "../../hooks/useSettings";
 import { freshMachineSimActive, setFreshMachineSim } from "../../lib/fresh-machine-sim";
@@ -1401,10 +1402,13 @@ function WorkDefaultsStep({ onNext }: { onNext: () => void }) {
 	const intakeAvailable = settings?.trackerIntakeEnabled === true;
 	const [choices, setChoices] = useState<ProjectDefaults>(() => readProjectDefaults() ?? INITIAL_PROJECT_DEFAULTS);
 	const change = (patch: Partial<ProjectDefaults>) => setChoices((current) => ({ ...current, ...patch }));
-	// Reviewers: only the agents ready on this machine, the usual pick first
-	// when it is one of them (its fallback can be an agent that isn't).
+	// Reviewers: only ready agents that can review (not every worker agent
+	// can), the usual pick first when it is one of them (its fallback can be
+	// an agent that isn't ready).
 	const agents = readiness.data?.agents ?? [];
-	const readyIds = agents.filter((agent) => agent.effectiveReadiness === "ready").map((agent) => agent.id);
+	const readyIds = agents
+		.filter((agent) => agent.effectiveReadiness === "ready" && toReviewerHarnessId(agent.id) !== undefined)
+		.map((agent) => agent.id);
 	const suggested = readyIds.length ? defaultProjectAgents(agents).reviewerAgent : undefined;
 	const reviewerIds = suggested && readyIds.includes(suggested) ? [suggested, ...readyIds.filter((id) => id !== suggested)] : readyIds;
 	const reviewer = choices.reviewerAgent && reviewerIds.includes(choices.reviewerAgent) ? choices.reviewerAgent : reviewerIds[0];
