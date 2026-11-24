@@ -141,6 +141,9 @@ func (m *Manager) PrepareTransfer(ctx context.Context, id domain.SessionID, tran
 	if !ok {
 		return domain.SessionTransfer{}, fmt.Errorf("%w: workspace adapter cannot transfer", ErrTransferUnsupported)
 	}
+	if err := git.CheckTransfer(ctx, workspaceInfo(rec)); err != nil {
+		return domain.SessionTransfer{}, fmt.Errorf("transfer %s: %w", id, err)
+	}
 	if !stopTurn && (rec.Activity.State == domain.ActivityActive || rec.Activity.State == domain.ActivityBlocked) {
 		return domain.SessionTransfer{}, ErrTransferAgentBusy
 	}
@@ -487,6 +490,9 @@ func (m *Manager) ReceiveTransfer(ctx context.Context, projectID domain.ProjectI
 	project, err := m.loadProject(ctx, projectID)
 	if err != nil {
 		return domain.SessionRecord{}, err
+	}
+	if project.ID == "" {
+		return domain.SessionRecord{}, fmt.Errorf("%w: the project no longer exists on that computer", ErrTransferUnsupported)
 	}
 	if project.Kind.WithDefault() != domain.ProjectKindSingleRepo {
 		return domain.SessionRecord{}, fmt.Errorf("%w: only single-repository projects can receive a session", ErrTransferUnsupported)

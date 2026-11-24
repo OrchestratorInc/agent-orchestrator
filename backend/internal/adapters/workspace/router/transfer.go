@@ -19,6 +19,15 @@ func (w *Workspace) gitTransfer() (ports.WorkspaceTransfer, error) {
 	return t, nil
 }
 
+// CheckTransfer delegates to the Git adapter.
+func (w *Workspace) CheckTransfer(ctx context.Context, info ports.WorkspaceInfo) error {
+	t, err := w.gitTransfer()
+	if err != nil {
+		return err
+	}
+	return t.CheckTransfer(ctx, info)
+}
+
 // PushTransfer delegates to the Git adapter.
 func (w *Workspace) PushTransfer(ctx context.Context, info ports.WorkspaceInfo, preservedRef, remotePreservedRef string) (string, error) {
 	t, err := w.gitTransfer()
@@ -64,13 +73,13 @@ func (w *Workspace) ReleaseTransferBranch(ctx context.Context, info ports.Worksp
 	return t.ReleaseTransferBranch(ctx, info)
 }
 
-// UnstageTransfer delegates to the Git adapter.
-func (w *Workspace) UnstageTransfer(ctx context.Context, info ports.WorkspaceInfo) error {
+// RestoreTransferIndex delegates to the Git adapter.
+func (w *Workspace) RestoreTransferIndex(ctx context.Context, info ports.WorkspaceInfo, remotePreservedRef string) error {
 	t, err := w.gitTransfer()
 	if err != nil {
 		return err
 	}
-	return t.UnstageTransfer(ctx, info)
+	return t.RestoreTransferIndex(ctx, info, remotePreservedRef)
 }
 
 // DeleteTransferRef delegates to the Git adapter.

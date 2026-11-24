@@ -437,9 +437,11 @@ type Workspace interface {
 
 // WorkspaceTransfer moves a session's git state between machines through origin.
 type WorkspaceTransfer interface {
+	// CheckTransfer refuses a worktree whose work PushTransfer cannot carry.
+	CheckTransfer(ctx context.Context, info WorkspaceInfo) error
 	// PushTransfer pushes the worktree's branch and, when preservedRef is set,
-	// that ref to remotePreservedRef on origin, never forcing. It returns the
-	// branch head.
+	// that ref to remotePreservedRef on origin, never forcing. What was staged
+	// goes beside it. It returns the branch head.
 	PushTransfer(ctx context.Context, info WorkspaceInfo, preservedRef, remotePreservedRef string) (head string, err error)
 	// FetchTransfer fetches a moved branch and, when set, a preserved ref from origin.
 	FetchTransfer(ctx context.Context, repoPath, branch, remotePreservedRef string) error
@@ -451,8 +453,9 @@ type WorkspaceTransfer interface {
 	// ReleaseTransferBranch detaches HEAD in a moved session's worktree so the
 	// branch can be checked out again. Files and index are kept.
 	ReleaseTransferBranch(ctx context.Context, info WorkspaceInfo) error
-	// UnstageTransfer unstages moved uncommitted work after ApplyPreserved.
-	UnstageTransfer(ctx context.Context, info WorkspaceInfo) error
+	// RestoreTransferIndex puts the index back as it was on the source after
+	// ApplyPreserved, which leaves everything staged.
+	RestoreTransferIndex(ctx context.Context, info WorkspaceInfo, remotePreservedRef string) error
 	// DeleteTransferRef removes a preserved ref from origin once it is no
 	// longer needed.
 	DeleteTransferRef(ctx context.Context, repoPath, remotePreservedRef string) error
@@ -602,6 +605,16 @@ var (
 	// ErrTransferBranchDiverged is returned when this machine already has the
 	// moved session's branch and it does not lead to the moved head.
 	ErrTransferBranchDiverged = errors.New("workspace: local branch has commits the moved session does not")
+	// ErrTransferGitBusy is returned when a moved session's worktree is in the
+	// middle of a merge, rebase or similar, or has unresolved conflicts.
+	ErrTransferGitBusy = errors.New("workspace: a git operation is unfinished")
+	// ErrTransferNestedRepo is returned when the worktree holds an untracked
+	// repository of its own, which a move cannot carry.
+	ErrTransferNestedRepo = errors.New("workspace: folder is its own git repository")
+	// ErrTransferPush is returned when origin does not take the moved work.
+	ErrTransferPush = errors.New("workspace: could not push to origin")
+	// ErrTransferFetch is returned when the moved work cannot be read from origin.
+	ErrTransferFetch = errors.New("workspace: could not fetch from origin")
 	// ErrDetachedHead is returned when a moved session's worktree is not on its branch.
 	ErrDetachedHead = errors.New("workspace: worktree is not on its branch")
 	// ErrRuntimePrerequisite reports a missing host prerequisite for the selected

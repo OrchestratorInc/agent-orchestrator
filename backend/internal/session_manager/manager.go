@@ -1630,8 +1630,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnTransfer, err)
 		}
 		if git, ok := m.workspace.(ports.WorkspaceTransfer); ok {
-			if err := git.UnstageTransfer(ctx, ws); err != nil {
-				m.logger.Warn("spawn: moved work stays staged", "sessionID", id, "error", err)
+			if err := git.RestoreTransferIndex(ctx, ws, cfg.Transfer.PreservedRef); err != nil {
+				m.logger.Warn("spawn: staged state of moved work not restored", "sessionID", id, "error", err)
 			}
 		}
 	}
