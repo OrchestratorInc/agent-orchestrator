@@ -316,10 +316,8 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 				<span className="text-caption text-muted-foreground">
 					{language || "text"}
 				</span>
-				{/* Hover-revealed, and focus-revealed so the keyboard can reach it. The
-				    timeline's whole point is that prose dominates; a permanent row of
-				    controls on every fence is the opposite. */}
-				<div className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/code:opacity-100">
+				{/* Always shown, like every box's copy. */}
+				<div className="ml-auto flex items-center gap-0.5">
 					<Button
 						type="button"
 						variant="quiet"
