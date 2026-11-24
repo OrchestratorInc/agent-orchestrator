@@ -1229,16 +1229,18 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			// Only the files that went drop. A file pasted while the send was on its way
 			// belongs to the next message, even if it landed after this result was saved;
-			// clearing would also cancel one still uploading.
+			// clearing would also cancel one still uploading. Where attaching stays closed
+			// during a send (a new chat's launch), every file here went with it, held
+			// files too, which the delivery does not record.
 			for (const attachment of fileAttachments.getAttachments()) {
-				const went = result.delivered
+				const went = result.delivered && parkUnsentSends
 					? result.delivered.includes(attachment.id)
 					: !result.draft.composer.attachments.some((kept) => kept.id === attachment.id);
 				if (went) fileAttachments.remove(attachment.id);
 			}
 			return result.cleared && !unsavedText.current;
 		},
-		[clearEditorView, fileAttachments],
+		[clearEditorView, fileAttachments, parkUnsentSends],
 	);
 
 	const clearAcceptedDraft = useCallback(
