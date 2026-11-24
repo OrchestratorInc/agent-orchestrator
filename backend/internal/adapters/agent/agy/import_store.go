@@ -25,6 +25,7 @@ import (
 // maxImportDB bounds source admission only. A prepared private DB is AO-owned
 // live state that keeps growing as the user continues the conversation.
 var maxImportDB int64 = 256 << 20
+
 const maxImportText = 32 << 20
 
 var importID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
