@@ -658,6 +658,19 @@ describe("shell workspace startup", () => {
 		}
 	});
 
+	it("sends device availability even while another Developer Mode setting fails", async () => {
+		useUiStore.setState({ developerMode: true });
+		vi.mocked(apiClient.PUT).mockImplementation(async (path: string) =>
+			(path === "/api/v1/usage/limit-history" ? { error: { code: "STORE_UNAVAILABLE", message: "disk full" } } : { error: undefined }) as never);
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		await renderShell();
+
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/devices/availability", {
+			body: { enabled: true },
+		}));
+		expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", { body: { enabled: true } });
+	});
+
 	it("keeps chat hibernation and devices disabled when Developer Mode is off", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
 		await renderShell();

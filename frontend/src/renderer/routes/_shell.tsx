@@ -439,7 +439,13 @@ function ShellLayout() {
 	// While the full-window onboarding shows, the shell behind it takes no
 	// focus or clicks; Settings opened from it lifts that, as it steps aside.
 	const onboardingCoversShell = useUiStore((state) => state.firstRunOnboardingOpen && state.settingsModal?.scope !== "global");
-	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
+	// One chain per daemon setting Developer Mode drives: each request waits for
+	// its own previous one, so an older enable cannot finish after a disable.
+	const developerModeSyncRef = useRef<Record<"chatHibernation" | "limitHistory" | "devices", Promise<void>>>({
+		chatHibernation: Promise.resolve(),
+		limitHistory: Promise.resolve(),
+		devices: Promise.resolve(),
+	});
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
@@ -1215,34 +1221,33 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// The renderer owns Developer Mode; the daemon must know its value before
 	// either the view-close path or the idle sweep can hibernate a provider,
 	// and devices (a Developer mode preview) stay off in the daemon until it does.
+	// Each setting syncs and retries on its own: one failing request must not
+	// leave another, such as devices, stuck at its old value.
 	useEffect(() => {
 		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
-		let retry: ReturnType<typeof setTimeout> | undefined;
-		const sync = () => {
-			// Serialize toggles so an older enable request cannot finish after disable.
-			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
+		const retries = new Set<ReturnType<typeof setTimeout>>();
+		const chains = developerModeSyncRef.current;
+		const sync = (key: keyof typeof chains, send: () => Promise<{ error?: unknown }>) => {
+			chains[key] = chains[key].then(async () => {
 				if (cancelled) return;
-				const { error } = await apiClient.PATCH("/api/v1/settings/chat-hibernation", {
-					body: { enabled: developerMode },
-				});
+				const { error } = await send();
 				if (error) throw error;
-				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
-					body: { enabled: developerMode },
-				});
-				if (limitHistoryError) throw limitHistoryError;
-				const { error: devicesError } = await apiClient.PUT("/api/v1/devices/availability", {
-					body: { enabled: developerMode },
-				});
-				if (devicesError) throw devicesError;
 			}).catch(() => {
-				if (!cancelled) retry = setTimeout(sync, 5_000);
+				if (cancelled) return;
+				const retry = setTimeout(() => {
+					retries.delete(retry);
+					sync(key, send);
+				}, 5_000);
+				retries.add(retry);
 			});
 		};
-		sync();
+		sync("chatHibernation", () => apiClient.PATCH("/api/v1/settings/chat-hibernation", { body: { enabled: developerMode } }));
+		sync("limitHistory", () => apiClient.PUT("/api/v1/usage/limit-history", { body: { enabled: developerMode } }));
+		sync("devices", () => apiClient.PUT("/api/v1/devices/availability", { body: { enabled: developerMode } }));
 		return () => {
 			cancelled = true;
-			clearTimeout(retry);
+			for (const retry of retries) clearTimeout(retry);
 		};
 	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
 
