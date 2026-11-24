@@ -1018,3 +1018,119 @@ func TestBackgroundTaskOutputSeesALaterRunWritingTheSameLogThroughAnotherPath(t 
 		t.Fatalf("first run output=%+v err=%v", got, err)
 	}
 }
+
+func TestBackgroundTaskOutputEndsARunFromASparseUpdate(t *testing.T) {
+	ctx := context.Background()
+	started := time.Now().Add(-time.Minute)
+	task := ports.ChatBackgroundTask{ID: "build", RunID: "r1", Kind: "shell", State: "running", Command: "npm run build > build.log 2>&1", StartedAt: &started}
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}}
+	h := newHarnessWithConversation(t, conv)
+	logPath := filepath.Join(h.workspace, "build.log")
+	if err := os.WriteFile(logPath, []byte("error TS2322\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ended := time.Now()
+	if err := os.Chtimes(logPath, ended, ended); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	// The provider reports the end without repeating the command.
+	sparse := ports.ChatBackgroundTask{ID: "build", RunID: "r1", Kind: "shell", State: "failed", StartedAt: &started, EndedAt: &ended}
+	conv.tasks = []ports.ChatBackgroundTask{sparse}
+	h.advance(2 * time.Second)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	// Something else writes the file a minute after the run ended.
+	if err := os.WriteFile(logPath, []byte("another writer\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	later := ended.Add(time.Minute)
+	if err := os.Chtimes(logPath, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "build"); err != nil || got.Text != "error TS2322" || got.RunID != "r1" {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTaskOutputNamesTheRunOfATaskWithNoCommand(t *testing.T) {
+	ctx := context.Background()
+	task := ports.ChatBackgroundTask{ID: "helper", RunID: "r7", Kind: "other", State: "running"}
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}, output: ports.ChatBackgroundTaskOutput{Text: "working"}}
+	h := newHarnessWithConversation(t, conv)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "helper"); err != nil || got.Text != "working" || got.RunID != "r7" {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTaskOutputRefusesOutputTheProviderReadForAnotherRun(t *testing.T) {
+	ctx := context.Background()
+	task := ports.ChatBackgroundTask{ID: "shell", RunID: "r1", Kind: "shell", State: "running"}
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}, output: ports.ChatBackgroundTaskOutput{Text: "second run", RunID: "r2"}}
+	h := newHarnessWithConversation(t, conv)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+	conv.output.RunID = "r1"
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.RunID != "r1" {
+		t.Fatalf("matching run output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTaskOutputShowsTheLiveTailWhileAFinalReadIsTriedAgain(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file its owner can't open")
+	}
+	ctx := context.Background()
+	started := time.Now().Add(-time.Minute)
+	task := ports.ChatBackgroundTask{ID: "build", Kind: "shell", State: "running", Command: "npm run build > build.log 2>&1", StartedAt: &started}
+	conv := &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}}
+	h := newHarnessWithConversation(t, conv)
+	logPath := filepath.Join(h.workspace, "build.log")
+	if err := os.WriteFile(logPath, []byte("compiling\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "build"); err != nil || got.Text != "compiling" {
+		t.Fatalf("live output=%+v err=%v", got, err)
+	}
+	// The run ends with its last lines, but the reading that sees the end
+	// can't open the log yet.
+	ended := time.Now()
+	if err := os.WriteFile(logPath, []byte("compiling\nerror TS2322\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(logPath, ended, ended); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(logPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(logPath, 0o600) })
+	task.State, task.EndedAt = "failed", &ended
+	conv.tasks = []ports.ChatBackgroundTask{task}
+	h.advance(2 * time.Second)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "build"); err != nil || got.Text != "compiling" {
+		t.Fatalf("while unreadable output=%+v err=%v", got, err)
+	}
+	if err := os.Chmod(logPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "build"); err != nil || got.Text != "compiling\nerror TS2322" {
+		t.Fatalf("final output=%+v err=%v", got, err)
+	}
+}

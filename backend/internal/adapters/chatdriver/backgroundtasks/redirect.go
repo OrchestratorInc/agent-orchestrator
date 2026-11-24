@@ -89,7 +89,11 @@ func leavesDir(dir, path string) bool {
 		return false
 	}
 	rel, err := filepath.Rel(base, resolved)
-	return err == nil && rel != "." && !filepath.IsLocal(rel)
+	if err != nil {
+		// No relative path at all: another volume, which is outside dir.
+		return true
+	}
+	return rel != "." && !filepath.IsLocal(rel)
 }
 
 // SharesLog reports whether any of others writes its output to the log file
@@ -256,9 +260,17 @@ func stdoutFileAs(command, dir, home string, cmd bool) (string, bool) {
 	var commands []redirect  // every finished command's redirect, in order
 	var background *redirect // the redirect of the command run with `&`
 	lastGroup := -1          // after `)`: where that group began in commands
+	// stderr is where the current simple command's descriptor 2 points once a
+	// redirect moved it (bound), so `1>&2` can follow it: `> out.log 2>&1 1>&2`
+	// still ends at out.log, but a bare `1>&2` ends at the inherited stderr.
+	var stderr struct {
+		to    redirect
+		bound bool
+	}
 	finish := func() {
 		commands = append(commands, current)
 		current = redirect{}
+		stderr.to, stderr.bound = redirect{}, false
 	}
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
@@ -297,7 +309,9 @@ func stdoutFileAs(command, dir, home string, cmd bool) (string, bool) {
 				case ran.set:
 					background = &ran
 				case hadGroup >= 0:
-					// `( cd app && npm run dev > dev.log ) &`: the group's first redirect.
+					// `( cd app && npm run dev > dev.log ) &`: the group's first
+					// redirect, or none: not an earlier background command's.
+					background = nil
 					for _, inner := range commands[hadGroup:] {
 						if inner.set {
 							background = &inner
@@ -319,24 +333,33 @@ func stdoutFileAs(command, dir, home string, cmd bool) (string, bool) {
 			}
 			i++
 			to := tokens[i]
-			if token.input || (token.fd != 1 && token.fd != -1) {
+			if token.input || (token.fd != 1 && token.fd != 2 && token.fd != -1) {
 				continue
 			}
-			// `>&2` copies a descriptor; only `>&file` names a file. Copying
-			// another descriptor onto stdout, or closing it, moves it off any file
-			// named before (`> out.log 1>&2` ends at stderr); `>&1` leaves it.
-			if token.dup && (to.text == "-" || allDigits(to.text)) {
-				if to.text != "1" {
-					current = redirect{set: true}
+			// Where the redirect points, in order: `>&1` and `>&2` copy that
+			// descriptor's current target, `>&-` closes it, and only `>&file`
+			// names a file. A redirect that can't be followed still counts: the
+			// command's last stdout redirect decides.
+			var next redirect
+			switch {
+			case token.dup && to.text == "1":
+				next = current
+			case token.dup && to.text == "2" && stderr.bound:
+				next = stderr.to
+			case token.dup && (to.text == "-" || allDigits(to.text)):
+				next = redirect{set: true}
+			default:
+				next = redirect{set: true}
+				if !isDevice(to.text) && (!hostWindows || !to.escaped) && (!cmd || !strings.EqualFold(to.text, "NUL")) {
+					next.target, next.found = resolveShellPath(to, cwd.dir, cwd.known, home)
 				}
-				continue
 			}
-			// The command's last redirect decides, even one that can't be followed.
-			current = redirect{set: true}
-			if isDevice(to.text) || (hostWindows && to.escaped) || (cmd && strings.EqualFold(to.text, "NUL")) {
-				continue
+			if token.fd == 2 || token.fd == -1 {
+				stderr.to, stderr.bound = next, true
 			}
-			current.target, current.found = resolveShellPath(to, cwd.dir, cwd.known, home)
+			if token.fd == 1 || token.fd == -1 {
+				current = next
+			}
 		}
 	}
 	finish()

@@ -66,9 +66,15 @@ func TestStdoutFileFollowsWhereACommandSendsItsOutput(t *testing.T) {
 		{`./server > out.log >&-`, ""},
 		{`./server > out.log >&1`, "/work/out.log"},
 		{`./server > out.log 2>&1`, "/work/out.log"},
+		// Copies follow where the copied descriptor points by then.
+		{`./server > out.log 2>&1 1>&2`, "/work/out.log"},
+		{`./server 2> err.log 1>&2`, "/work/err.log"},
+		{`./server 2>&1 1>&2`, ""},
 		// A background command that prints its own output: a later file is not it.
 		{`./server & echo $! > server.pid`, ""},
 		{`(cd app && ./server) & echo $! > server.pid`, ""},
+		// The last group run with & decides, not an earlier one's redirect.
+		{`(./a > a.log) & (./b) & echo $! > b.pid`, ""},
 		{`echo "npm run dev > dev.log"`, ""},
 		{`echo 'a > b.log'`, ""},
 		{`echo a\>b.log`, ""},

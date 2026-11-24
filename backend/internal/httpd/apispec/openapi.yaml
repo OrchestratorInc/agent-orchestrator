@@ -17749,9 +17749,11 @@ components:
           - unavailable
           type: string
         logOmitted:
-          description: True when the task's command writes a log that another writer
-            has taken over since the task ended, so output holds only what the task
-            printed itself.
+          description: 'True when the task''s command writes a log that output leaves
+            out because it can''t be shown as this run''s: a later run writes the
+            same file, the file was written after the run ended, or the run''s final
+            log isn''t kept yet and no earlier read of it was saved. Output then holds
+            only what the task printed itself.'
           type: boolean
         logOutsideWorkspace:
           description: True when the task's command writes its output to a log file

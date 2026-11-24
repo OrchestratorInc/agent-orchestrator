@@ -6011,7 +6011,7 @@ export interface components {
              * @enum {string}
              */
             availability: "ready" | "unavailable";
-            /** @description True when the task's command writes a log that another writer has taken over since the task ended, so output holds only what the task printed itself. */
+            /** @description True when the task's command writes a log that output leaves out because it can't be shown as this run's: a later run writes the same file, the file was written after the run ended, or the run's final log isn't kept yet and no earlier read of it was saved. Output then holds only what the task printed itself. */
             logOmitted?: boolean;
             /** @description True when the task's command writes its output to a log file outside the session's workspace, which is not read. */
             logOutsideWorkspace?: boolean;

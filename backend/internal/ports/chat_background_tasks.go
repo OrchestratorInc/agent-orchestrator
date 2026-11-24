@@ -64,9 +64,11 @@ type ChatBackgroundTaskOutput struct {
 	// LogOutsideWorkspace is true when the task's command sends its output to
 	// a log file outside the session's workspace, which is never read.
 	LogOutsideWorkspace bool
-	// LogOmitted is true when the task's command writes a log that no longer
-	// holds this run's output, because another writer has taken it over since
-	// the run ended. Text then holds only what the task printed itself.
+	// LogOmitted is true when the task's command writes a log that can't be
+	// shown as this run's: a later run writes the same file, the file was
+	// written after the run ended, or the run's final log isn't kept yet and
+	// no earlier read of it was saved. Text then holds only what the task
+	// printed itself.
 	LogOmitted bool
 	// RunID names the run this output belongs to, when the provider gives
 	// runs their own ID, so a reader of an earlier run under a reused task ID

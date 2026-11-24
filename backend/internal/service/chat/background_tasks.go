@@ -199,12 +199,17 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 	if controller == nil {
 		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	}
+	// The run the readings report before the provider is asked: the output,
+	// the log chosen for it and the run ID it answers with must all be its.
+	run, known := controller.backgroundRun(taskID)
 	output, err := ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	if reader, ok := controller.conv.(ports.ChatBackgroundTaskOutputReader); ok {
 		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		output, err = reader.BackgroundTaskOutput(readCtx, taskID)
 		cancel()
 	}
+	// A provider that names the run its output came from is the authority.
+	providerRun := output.RunID
 	if ctx.Err() != nil {
 		// The panel cancelled its poll: a moment without output, not a server failure.
 		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
@@ -253,16 +258,27 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 	if current, err := s.attachedChatController(ctx, id); err != nil || current != controller {
 		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	}
-	output.RunID = controller.backgroundRunID(taskID)
+	// A reading that moved the task ID to another run meanwhile, or a provider
+	// answering for a run the readings don't report, leaves the output and the
+	// log on different runs: unavailable for now, and the next poll agrees.
+	after, stillKnown := controller.backgroundRun(taskID)
+	if known != stillKnown || (known && !sameRun(run, after)) ||
+		(providerRun != "" && after.RunID != "" && providerRun != after.RunID) {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	}
+	output.RunID = providerRun
+	if output.RunID == "" {
+		output.RunID = after.RunID
+	}
 	return output, nil
 }
 
-// backgroundRunID returns the provider's run ID for the latest run the
-// readings report under taskID, or "" when there is none.
-func (c *Controller) backgroundRunID(taskID string) string {
+// backgroundRun returns the latest run the readings report under taskID.
+func (c *Controller) backgroundRun(taskID string) (ports.ChatBackgroundTask, bool) {
 	c.backgroundMu.Lock()
 	defer c.backgroundMu.Unlock()
-	return c.backgroundCommands[taskID].task.RunID
+	entry, ok := c.backgroundCommands[taskID]
+	return entry.task, ok
 }
 
 // attachedChatController returns the session's live controller for its
@@ -395,14 +411,12 @@ func (c *Controller) rememberBackgroundCommands(tasks []ports.ChatBackgroundTask
 	for _, task := range tasks {
 		listed[task.ID] = true
 		entry, ok := c.backgroundCommands[task.ID]
-		if task.Command == "" {
-			// A sparse update of the remembered run keeps its command. A new run
-			// under the same ID, whose command isn't known yet, drops the last
-			// run's: its log is not this run's.
-			if ok && !sameRun(entry.task, task) {
-				c.backgroundCommands[task.ID] = backgroundCommand{task: task, run: c.nextBackgroundRun()}
-			}
-			continue
+		// A sparse update of the remembered run keeps its command and still
+		// moves its state. A new run under the same ID whose command isn't known
+		// yet starts with none: the last run's log is not its. A task with no
+		// command at all is remembered too, for its run ID.
+		if task.Command == "" && ok && sameRun(entry.task, task) {
+			task.Command = entry.task.Command
 		}
 		switch {
 		case !ok:
@@ -495,7 +509,8 @@ func (c *Controller) keepFinalLogs(ids []string) {
 			logged, has, retry = backgroundtasks.FinalRedirectedOutput(entry.task.Command, c.workspacePath, entry.task.StartedAt, entry.task.EndedAt)
 		}
 		if !has && entry.hasLive {
-			logged, has, retry = entry.liveLog, true, false
+			// Shown meanwhile; a read that can pass is still tried again.
+			logged, has = entry.liveLog, true
 		}
 		c.backgroundMu.Lock()
 		if current, ok := c.backgroundCommands[id]; ok && current.over && !current.frozen && current.run == entry.run {
