@@ -1,3 +1,4 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 import { createWebSideCloseBridge } from "./web-side-close";
@@ -476,6 +477,9 @@ export const aoBridge: AoBridge =
 			remove: async () => undefined,
 			connect: async () => { throw new Error("remote hosts need the desktop app"); },
 			disconnect: async () => undefined,
+			hostUpdate: async () => null,
+			checkHostUpdate: async () => { throw new AoError("REMOTE_HOSTS_NEED_DESKTOP", "remote hosts need the desktop app"); },
+			startHostUpdate: async () => { throw new AoError("REMOTE_HOSTS_NEED_DESKTOP", "remote hosts need the desktop app"); },
 			computerName: async () => { throw new Error("remote hosts need the desktop app"); },
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,

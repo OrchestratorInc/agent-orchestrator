@@ -232,6 +232,11 @@ vi.mock("../hooks/useRemoteHosts", async (importOriginal) => {
 	};
 });
 
+vi.mock("../hooks/useHostUpdates", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useHostUpdates")>()),
+	useHostUpdatePolling: () => {},
+}));
+
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({
 		status: shellMocks.state.cloudSessionStatus,
