@@ -494,6 +494,7 @@ describe("transport contract", () => {
 		});
 		expect(nodes("EmptyState").map((node) => node.props.title)).toContain("Waiting for the agent browser…");
 		expect(nodes("View").some((node) => node.props.accessibilityLabel === "Agent browser, Todo app")).toBe(true);
+		expect(nodes("OpenURLPrompt")[0].props.browserName).toBe("agent browser");
 	});
 
 	it("draws only a fullscreen frame's page part, so taps land where it shows", async () => {
