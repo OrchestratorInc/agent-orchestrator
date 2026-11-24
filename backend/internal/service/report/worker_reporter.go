@@ -26,7 +26,8 @@ type ReportCreator interface {
 
 // DoneQuietPeriod is how long a worker must stay idle before its done report
 // is written. A harness that reports idle between steps, or a worker that
-// picks up a queued message, resumes within it, so one task yields one done.
+// picks up a queued message, usually resumes within it, so its idle gaps add
+// no extra done reports.
 const DoneQuietPeriod = 30 * time.Second
 
 // WorkerReporter writes worker reports from the signals the daemon already

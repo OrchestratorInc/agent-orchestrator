@@ -95,7 +95,10 @@ final message is its result.
   covers everything since the work started. Work that resumes sooner, such as
   a harness that reports idle between steps or a queued message, joins the
   same report. Work that resumes after a done has been written starts a new
-  stretch, which gets its own done.
+  stretch, which gets its own done. The 30 seconds are measured when the daemon
+  receives the events, so a resumption whose event is delivered after the
+  quiet period has passed can also start a new stretch; the cost is an extra
+  done, never a lost one.
 
 ## Rollout
 
