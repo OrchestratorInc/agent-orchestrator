@@ -83,6 +83,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/panes"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	prpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/prpreview"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
@@ -665,6 +666,8 @@ func Run(buildVersion string) (retErr error) {
 	// across restarts so a model stays marked unavailable until the CLI updates.
 	claudecodeagent.ConfigureModelVersionRequirements(
 		filepath.Join(cfg.StateDir, "harnesses", "claude-code", "model-versions.json"))
+	codexagent.ConfigureUnavailableModels(
+		filepath.Join(cfg.StateDir, "harnesses", "codex", "unavailable-models.json"))
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
 
 	persistentHostsReconciled := make(chan struct{})
@@ -830,6 +833,10 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetTerminalInputGate(termMgr)
 	sessionImportSvc := sessionimport.New(store, cfg.DataDir, chatDrivers.SupportsChat)
 	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
+	// The Orchestrator attribution beta credits Orchestrator on new sessions'
+	// commits and PRs. Wired before tracker intake starts, so a session its
+	// first poll spawns already sees the setting.
+	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
 	// Lifecycle reactions deliberately do not hold Session Manager's input
@@ -842,7 +849,11 @@ func Run(buildVersion string) (retErr error) {
 	if githubRepos != nil {
 		sessionSvc.SetGitHubRepositoryResolver(githubRepos)
 	}
-	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), PreferredAgent: preferredProjectAgent(agentSvc), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
+	// Neither project creation nor session start saves an uninstalled fallback:
+	// when no launchable agent is found, empty roles stay empty so the next
+	// start fills them once an agent is installed.
+	sessionSvc.SetPreferredProjectAgent(preferredProjectAgent(agentSvc))
 	go projectSvc.WarmCanonicalRepos(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
@@ -1111,6 +1122,12 @@ func Run(buildVersion string) (retErr error) {
 	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, reviewRefresher, log)
 	var prActions prsvc.ActionManager
 	prReader := newMultiSCMProvider(cfg.GitLab, log)
+	// A nil service leaves the route answering 501, so chat PR links fall
+	// back to their plain chip; an interface holding a nil pointer would not.
+	var prPreview controllers.PRPreviewService
+	if prReader != nil {
+		prPreview = prpreviewsvc.New(prReader)
+	}
 	prMerger := newMultiSCMMerger(cfg.GitLab, log)
 	if prReader != nil && prMerger != nil {
 		prActions = prsvc.NewActionService(prsvc.ActionDeps{
@@ -1368,6 +1385,7 @@ func Run(buildVersion string) (retErr error) {
 		BrowserChrome:            browserChrome,
 		Panes:                    paneBroker,
 		LinkPreview:              linkpreviewsvc.New(nil),
+		PRPreview:                prPreview,
 		SessionSearch:            sessionSearchSvc,
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
@@ -1857,6 +1875,49 @@ type pluginBinaryCache struct {
 func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarness) {
 	if harness == c.harness {
 		c.plugin.InvalidateBinaryResolution()
+	}
+}
+
+// preferredProjectAgent ranks this machine's installed agents from the cached readiness snapshot,
+// running display checks first when the agent AO prefers most is not confirmed
+// yet or no agent has been found installed. When nothing launchable is installed,
+// cached not_installed and unauthorized entries are invalidated first so an agent
+// installed or signed in within the display TTL is seen immediately. It returns ""
+// when the checks have found no launchable agent installed, so a guess is never saved.
+func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domain.AgentHarness {
+	return func(ctx context.Context) domain.AgentHarness {
+		if agents == nil {
+			return ""
+		}
+		readiness, err := agents.CachedReadiness(ctx)
+		if err != nil {
+			return ""
+		}
+		snapshot := readiness.Agents
+		noInstalled := domain.PreferredInstalledProjectAgent(snapshot) == ""
+		if domain.PreferredProjectAgentNeedsChecks(snapshot) || noInstalled {
+			if noInstalled {
+				for _, item := range snapshot {
+					if item.Installation.State == domain.AgentInstallationNotInstalled {
+						agents.InvalidateAgentInstallation(item.ID)
+					} else if item.Installation.State == domain.AgentInstallationInstalled &&
+						item.Authentication.State == domain.AgentAuthenticationUnauthorized {
+						agents.InvalidateAgentAuthentication(item.ID)
+					}
+				}
+			}
+			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			checked, err := agents.EnsureReadiness(checkCtx, nil, domain.AgentReadinessPurposeDisplay)
+			cancel()
+			if err == nil && len(checked.Agents) > 0 {
+				snapshot = checked.Agents
+			} else if latest, latestErr := agents.CachedReadiness(ctx); latestErr == nil {
+				// The checks keep running after the wait ends and record each
+				// agent as it finishes, so rank what they found so far.
+				snapshot = latest.Agents
+			}
+		}
+		return domain.PreferredInstalledProjectAgent(snapshot)
 	}
 }
 

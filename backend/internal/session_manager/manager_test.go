@@ -55,6 +55,12 @@ type fakeStore struct {
 	projects                           map[string]domain.ProjectRecord
 	conversations                      map[domain.SessionID]domain.ConversationRecord
 	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
+	workspaceRepoErr                   error
+	workspaceRepoErrOnce               bool  // fail only the next lookup
+	commitAttributionErr               error // fails trailer writes
+	commitAttributionMu                sync.Mutex
+	commitAttribution                  map[domain.SessionID]string
+	prFooter                           map[domain.SessionID]bool
 	num                                int
 	deleteErr                          error
 	upsertWTErr                        error
@@ -99,8 +105,47 @@ func (f *fakeStore) GetProject(_ context.Context, id string) (domain.ProjectReco
 	return r, ok, nil
 }
 func (f *fakeStore) ListWorkspaceRepos(_ context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
+	if err := f.workspaceRepoErr; err != nil {
+		if f.workspaceRepoErrOnce {
+			f.workspaceRepoErr = nil
+		}
+		return nil, err
+	}
 	return f.workspaceRepo[projectID], nil
 }
+func (f *fakeStore) SetSessionCommitAttribution(_ context.Context, id domain.SessionID, coAuthor string) error {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	if f.commitAttributionErr != nil {
+		return f.commitAttributionErr
+	}
+	if f.commitAttribution == nil {
+		f.commitAttribution = map[domain.SessionID]string{}
+	}
+	f.commitAttribution[id] = coAuthor
+	return nil
+}
+func (f *fakeStore) SessionCommitAttribution(_ context.Context, id domain.SessionID) (string, error) {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	return f.commitAttribution[id], nil
+}
+func (f *fakeStore) SetSessionPRFooter(_ context.Context, id domain.SessionID, footer bool) error {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	if f.prFooter == nil {
+		f.prFooter = map[domain.SessionID]bool{}
+	}
+	f.prFooter[id] = footer
+	return nil
+}
+func (f *fakeStore) SessionPRFooter(_ context.Context, id domain.SessionID) (footer, recorded bool, err error) {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	footer, recorded = f.prFooter[id]
+	return footer, recorded, nil
+}
+
 func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	f.num++
 	prefix := string(rec.ProjectID)
@@ -326,6 +371,17 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 	rec.Metadata.Branch = current.Metadata.Branch
 	rec.Metadata.WorkspacePath = current.Metadata.WorkspacePath
 	rec.Metadata.WorkspaceRepoPath = current.Metadata.WorkspaceRepoPath
+	f.sessions[id] = rec
+	return true, nil
+}
+
+func (f *fakeStore) SetSessionTerminateOnPRMerge(_ context.Context, id domain.SessionID, terminate bool, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.TerminateOnPRMerge = terminate
+	rec.UpdatedAt = now
 	f.sessions[id] = rec
 	return true, nil
 }
@@ -3945,8 +4001,8 @@ func TestSpawn_WorkspaceProjectRecordsRootAndChildWorktrees(t *testing.T) {
 	if rec.Metadata.WorkspacePath != managedPath {
 		t.Fatalf("workspace path = %q, want root worktree path", rec.Metadata.WorkspacePath)
 	}
-	if rec.Metadata.Branch != "ao/mer-1" {
-		t.Fatalf("workspace branch = %q, want ao/mer-1", rec.Metadata.Branch)
+	if rec.Metadata.Branch != "orchestrator/mer-1" {
+		t.Fatalf("workspace branch = %q, want orchestrator/mer-1", rec.Metadata.Branch)
 	}
 	if got := ws.lastProjectCfg.RootRepoPath; got != projectPath {
 		t.Fatalf("root repo path = %q, want %q", got, projectPath)
@@ -5872,8 +5928,8 @@ func TestSpawn_DefaultsBranchFromSessionID(t *testing.T) {
 	}
 	// An empty SpawnConfig.Branch defaults to a unique per-session root branch
 	// under a namespace that can also hold sibling PR branches.
-	if got := st.sessions[s.ID].Metadata.Branch; got != "ao/mer-1/root" {
-		t.Fatalf("default branch = %q, want ao/mer-1/root", got)
+	if got := st.sessions[s.ID].Metadata.Branch; got != "orchestrator/mer-1/root" {
+		t.Fatalf("default branch = %q, want orchestrator/mer-1/root", got)
 	}
 	if !st.sessions[s.ID].AutoInjectReview {
 		t.Fatal("automatic review injection must default to enabled")
@@ -5896,6 +5952,233 @@ func TestSpawn_InheritsAutoReviewFromProjectConfig(t *testing.T) {
 	if !st.sessions[s.ID].AutoReviewEnabled {
 		t.Fatal("auto review must be enabled when project config enables it")
 	}
+}
+
+func TestSpawn_TerminateOnPRMergeResolution(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
+	t.Run("hardcoded false default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "")
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("terminate_on_pr_merge must default to false")
+		}
+	})
+
+	t.Run("global default via env var", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "true")
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("terminate_on_pr_merge must inherit global env default true")
+		}
+	})
+
+	t.Run("global default via manager deps", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "")
+		st := newFakeStore()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		rt := &fakeRuntime{}
+		ws := &fakeWorkspace{}
+		lookPath := func(string) (string, error) { return "/bin/true", nil }
+		m := New(Deps{
+			Runtime:            rt,
+			Agents:             fakeAgents{},
+			Workspace:          ws,
+			Store:              st,
+			Messenger:          &fakeMessenger{},
+			Lifecycle:          &fakeLCM{store: st},
+			LookPath:           lookPath,
+			TerminateOnPRMerge: boolPtr(true),
+		})
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("terminate_on_pr_merge must inherit manager deps default true")
+		}
+	})
+
+	t.Run("project default overrides global default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "true")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project default false must override global default true")
+		}
+
+		// Also test project default true overrides global false
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		cfg.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s2, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s2.ID].TerminateOnPRMerge {
+			t.Fatal("project default true must override global default false")
+		}
+	})
+
+	t.Run("project base agentConfig default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project base AgentConfig true must resolve when project root is unset")
+		}
+	})
+
+	t.Run("project root default overrides project base agentConfig", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		cfg.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project root false must override project base AgentConfig true")
+		}
+	})
+
+	t.Run("role override agentConfig wins over project default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		cfg.Worker.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("role override true must win over project default false")
+		}
+	})
+
+	t.Run("explicit spawn config wins over project and global defaults", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "true")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+
+		// Explicit false on SpawnConfig
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID:          "mer",
+			Kind:               domain.KindWorker,
+			TerminateOnPRMerge: boolPtr(false),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("explicit spawn config false must win over project true")
+		}
+
+		// Explicit true on SpawnConfig with project false
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s2, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID:          "mer",
+			Kind:               domain.KindWorker,
+			TerminateOnPRMerge: boolPtr(true),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s2.ID].TerminateOnPRMerge {
+			t.Fatal("explicit spawn config true must win over project false")
+		}
+	})
+
+	t.Run("explicit spawn agentConfig wins over project default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID: "mer",
+			Kind:      domain.KindWorker,
+			AgentConfig: ports.AgentConfig{
+				TerminateOnPRMerge: boolPtr(true),
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("explicit spawn AgentConfig true must win over project false")
+		}
+	})
+
+	t.Run("per-session toggle overrides resolved default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "")
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("initial terminate_on_pr_merge must be false")
+		}
+
+		// Toggle on via store and verify
+		ok, err := st.SetSessionTerminateOnPRMerge(ctx, s.ID, true, time.Now())
+		if err != nil || !ok {
+			t.Fatalf("set terminate_on_pr_merge true: %v, %v", ok, err)
+		}
+		got, ok, err := st.GetSession(ctx, s.ID)
+		if err != nil || !ok {
+			t.Fatalf("get session: %v, %v", ok, err)
+		}
+		if !got.TerminateOnPRMerge {
+			t.Fatal("per-session toggle must override to true")
+		}
+
+		// Toggle off via store and verify
+		ok, err = st.SetSessionTerminateOnPRMerge(ctx, s.ID, false, time.Now())
+		if err != nil || !ok {
+			t.Fatalf("set terminate_on_pr_merge false: %v, %v", ok, err)
+		}
+		got, ok, err = st.GetSession(ctx, s.ID)
+		if err != nil || !ok {
+			t.Fatalf("get session: %v, %v", ok, err)
+		}
+		if got.TerminateOnPRMerge {
+			t.Fatal("per-session toggle must override to false")
+		}
+	})
 }
 
 func TestPromptProjectContextOmitsAutomaticBranchSentinel(t *testing.T) {
@@ -6227,8 +6510,8 @@ func TestSpawn_DefaultBranchFetchFailureDoesNotBlockWorkerSpawn(t *testing.T) {
 	if len(ws.fetches) != 1 {
 		t.Fatalf("fetches = %d, want 1", len(ws.fetches))
 	}
-	if ws.lastCfg.Branch != "ao/mer-1/root" {
-		t.Fatalf("created branch = %q, want ao/mer-1/root", ws.lastCfg.Branch)
+	if ws.lastCfg.Branch != "orchestrator/mer-1/root" {
+		t.Fatalf("created branch = %q, want orchestrator/mer-1/root", ws.lastCfg.Branch)
 	}
 }
 
@@ -6242,16 +6525,16 @@ func TestSpawn_DefaultsBranchUnderDevNamespaceForDevDataDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions[worker.ID].Metadata.Branch; got != "ao/dev/mer-1/root" {
-		t.Fatalf("worker branch = %q, want ao/dev/mer-1/root", got)
+	if got := st.sessions[worker.ID].Metadata.Branch; got != "orchestrator/dev/mer-1/root" {
+		t.Fatalf("worker branch = %q, want orchestrator/dev/mer-1/root", got)
 	}
 
 	orchestrator, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := st.sessions[orchestrator.ID].Metadata.Branch; got != "ao/dev/mer-orchestrator" {
-		t.Fatalf("orchestrator branch = %q, want ao/dev/mer-orchestrator", got)
+	if got := st.sessions[orchestrator.ID].Metadata.Branch; got != "orchestrator/dev/mer-orchestrator" {
+		t.Fatalf("orchestrator branch = %q, want orchestrator/dev/mer-orchestrator", got)
 	}
 }
 

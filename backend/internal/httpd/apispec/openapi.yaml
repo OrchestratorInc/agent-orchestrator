@@ -5310,6 +5310,50 @@ paths:
       summary: Start a worker task and refine its title in the background
       tags:
       - sessions
+  /api/v1/pr-preview:
+    get:
+      operationId: getPRPreview
+      parameters:
+      - description: A github.com pull request URL.
+        in: query
+        name: url
+        schema:
+          description: A github.com pull request URL.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PRPreviewResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Gateway
+      summary: Read the state and summary of a GitHub pull request a chat links to
+      tags:
+      - link-preview
   /api/v1/projects:
     get:
       operationId: listProjects
@@ -8588,6 +8632,46 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Found
       summary: Inspect native background work without waking the session
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/background-tasks/{taskId}/output:
+    get:
+      operationId: getBackgroundTaskOutput
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Provider-scoped background task identifier.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: Provider-scoped background task identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackgroundTaskOutputResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+      summary: Read one background task's recent output without waking the session
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop:
@@ -14949,6 +15033,44 @@ paths:
       summary: Turn idle Chat hibernation on or off for this machine
       tags:
       - settings
+  /api/v1/settings/commit-attribution:
+    patch:
+      operationId: updateCommitAttribution
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCommitAttributionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Choose whether new sessions credit Orchestrator on their commits and
+        PRs (beta)
+      tags:
+      - settings
   /api/v1/settings/computer-use:
     patch:
       operationId: updateComputerUse
@@ -16473,6 +16595,10 @@ components:
           type: string
         permissions:
           type: string
+        terminateOnPrMerge:
+          type:
+          - "null"
+          - boolean
       type: object
     AgentInfo:
       properties:
@@ -17095,6 +17221,13 @@ components:
       - uploadId
       - bytes
       type: object
+    AttributionConfig:
+      properties:
+        disableCommitTrailer:
+          type: boolean
+        disablePRFooter:
+          type: boolean
+      type: object
     AutoSpawnPause:
       properties:
         effort:
@@ -17643,8 +17776,42 @@ components:
       - paused
       - networkOutcome
       type: object
+    BackgroundTaskOutputResponse:
+      properties:
+        availability:
+          description: unavailable when this provider or session cannot report the
+            task's output; output is then empty.
+          enum:
+          - ready
+          - unavailable
+          type: string
+        output:
+          description: 'The most recent output: at most the last 200 lines and 64
+            KB, with terminal escapes and control characters removed.'
+          type: string
+        sessionId:
+          type: string
+        stale:
+          description: True when the provider stopped sending this task's output,
+            so anything it printed since is missing.
+          type: boolean
+        taskId:
+          type: string
+        truncated:
+          description: True when older output was left out or is missing.
+          type: boolean
+      required:
+      - sessionId
+      - taskId
+      - availability
+      - output
+      type: object
     BackgroundTaskResponse:
       properties:
+        command:
+          description: The shell command line, when the provider reports one. Credentials
+            in it are redacted.
+          type: string
         description:
           type: string
         endedAt:
@@ -20006,6 +20173,7 @@ components:
       - id
       - name
       - type
+      - choices
       type: object
     ConversationConfigOptionsResponse:
       properties:
@@ -22838,6 +23006,57 @@ components:
       - contentType
       - data
       type: object
+    PRPreviewResponse:
+      properties:
+        additions:
+          type: integer
+        author:
+          type: string
+        changedFiles:
+          type: integer
+        checks:
+          enum:
+          - passing
+          - failing
+          - pending
+          type: string
+        deletions:
+          type: integer
+        number:
+          type: integer
+        repo:
+          description: owner/name
+          type: string
+        sourceBranch:
+          type: string
+        state:
+          enum:
+          - open
+          - draft
+          - merged
+          - closed
+          type: string
+        stateChangedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        targetBranch:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - url
+      - repo
+      - number
+      - title
+      - state
+      - additions
+      - deletions
+      - changedFiles
+      type: object
     PRReviewState:
       properties:
         latestRun:
@@ -23114,6 +23333,8 @@ components:
           type: string
         agentRulesFile:
           type: string
+        attribution:
+          $ref: '#/components/schemas/AttributionConfig'
         autoReview:
           type: boolean
         canonicalRepoURL:
@@ -23150,6 +23371,10 @@ components:
           items:
             type: string
           type: array
+        terminateOnPrMerge:
+          type:
+          - "null"
+          - boolean
         trackerIntake:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:
@@ -25654,6 +25879,11 @@ components:
           type: string
         cloudEnabled:
           type: boolean
+        commitAttribution:
+          description: 'Beta: new sessions add a Co-authored-by: orchestrator-inc[bot]
+            trailer to commits and an Generated by Orchestrator line to PR bodies,
+            unless the project turns them off.'
+          type: boolean
         computerUse:
           description: New chat sessions get tools to drive desktop apps through Cua
             Driver (Settings, Computer use agents).
@@ -25688,6 +25918,7 @@ components:
       - versionRefresh
       - computerUse
       - accountHandoff
+      - commitAttribution
       - sessionRetentionDays
       - cloudEnabled
       - cloudControlPlaneUrl
@@ -26306,6 +26537,10 @@ components:
           enum:
           - artifact
           type: string
+        terminateOnPrMerge:
+          type:
+          - "null"
+          - boolean
         trackerProvider:
           enum:
           - github
@@ -27055,6 +27290,15 @@ components:
           - string
       type: object
     UpdateChatHibernationRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
+    UpdateCommitAttributionRequest:
       properties:
         enabled:
           type:

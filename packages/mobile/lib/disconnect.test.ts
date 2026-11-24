@@ -65,6 +65,11 @@ vi.mock("./chat/eventCursor", () => ({
 		calls.push(`clearEventCursor:${host.id}`);
 	}),
 }));
+vi.mock("./chat/savedConversations", () => ({
+	forgetSavedConversations: vi.fn(async (host: typeof active | null) => {
+		calls.push(`forgetSavedConversations:${host?.id ?? "all"}`);
+	}),
+}));
 // What the app kept across being closed for that machine (board, New task
 // draft, review comments, last screen) goes with it.
 vi.mock("./forgetLocalState", () => ({
@@ -96,6 +101,7 @@ describe("forgetPairedHost", () => {
 			"unpairFromServer",
 			"removeHost:h_other",
 			"clearEventCursor:h_other",
+			"forgetSavedConversations:h_other",
 			"forgetMachineState:h_other",
 		]);
 		expect(calls).not.toContain("clearConfig");
@@ -113,7 +119,7 @@ describe("forgetPairedHost", () => {
 	it("hides a manually paired machine from the signed-in account before removing it", async () => {
 		accountId = "user-a";
 		await forgetPairedHost(other);
-		expect(calls).toEqual(["unpairFromServer", "ignore:user-a:h_other", "removeHost:h_other", "clearEventCursor:h_other", "forgetMachineState:h_other"]);
+		expect(calls).toEqual(["unpairFromServer", "ignore:user-a:h_other", "removeHost:h_other", "clearEventCursor:h_other", "forgetSavedConversations:h_other", "forgetMachineState:h_other"]);
 	});
 
 	it("preserves pairing when hiding it from account sync cannot be persisted", async () => {
@@ -126,7 +132,7 @@ describe("forgetPairedHost", () => {
 	it("unpairs sign-out removals without hiding them on the next sign-in", async () => {
 		accountId = "user-a";
 		await forgetPairedHost(other, { ignoreAccount: false });
-		expect(calls).toEqual(["unpairFromServer", "removeHost:h_other", "clearEventCursor:h_other", "forgetMachineState:h_other"]);
+		expect(calls).toEqual(["unpairFromServer", "removeHost:h_other", "clearEventCursor:h_other", "forgetSavedConversations:h_other", "forgetMachineState:h_other"]);
 	});
 });
 
@@ -148,6 +154,7 @@ describe("forgetServer", () => {
 			"unpairFromServer",
 			"removeHost:h_active",
 			"clearEventCursor:h_active",
+			"forgetSavedConversations:h_active",
 			"forgetMachineState:h_active",
 			"clearConfig",
 			"clearOnboardingSkipped",
@@ -192,6 +199,8 @@ describe("forgetServer", () => {
 		expect(calls).toContain("unpairFromServer");
 		expect(calls).toContain("clearConfig");
 		expect(calls).toContain("clearOnboardingSkipped");
+		// With the machine unknown, no machine's chats are left saved on the phone.
+		expect(calls).toContain("forgetSavedConversations:all");
 	});
 });
 

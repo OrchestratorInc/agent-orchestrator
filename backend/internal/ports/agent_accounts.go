@@ -23,6 +23,11 @@ var (
 	ErrAgentAccountDefaultUnusable  = errors.New("the default account is signed out or now holds another login")
 )
 
+// ErrAgentAccountRenewalPending skips a check of a stored login whose access
+// token expired and is renewed by the agent's next run. The login is still
+// signed in; asking the CLI would try the renewal itself.
+var ErrAgentAccountRenewalPending = errors.New("the saved login token expired")
+
 // Account kind and sign-in method errors the API maps to client responses.
 var (
 	ErrAgentAccountKeyRejected       = errors.New("the provider rejected the key or token")
