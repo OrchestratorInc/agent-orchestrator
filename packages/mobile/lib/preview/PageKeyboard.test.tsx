@@ -4,10 +4,13 @@ import type { BrowserCommand, BrowserControl, FocusedEditable } from "../browser
 
 const mounts = vi.hoisted(() => ({ count: 0 }));
 
+const renders = vi.hoisted(() => ({ values: [] as Array<{ label?: string; value?: string }> }));
+
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	const TextInput = React.forwardRef((props: object, ref) => {
+	const TextInput = React.forwardRef((props: { accessibilityLabel?: string; value?: string }, ref) => {
+		renders.values.push({ label: props.accessibilityLabel, value: props.value });
 		React.useImperativeHandle(ref, () => ({ focus: vi.fn(), blur: vi.fn() }));
 		React.useEffect(() => { mounts.count++; }, []);
 		return React.createElement("TextInput", props);
@@ -125,5 +128,21 @@ describe("PageKeyboard", () => {
 		render({ kind: "password" });
 		expect(mounts.count).toBe(before + 1);
 		expect(field()!.props).toMatchObject({ secureTextEntry: true, autoCorrect: false });
+	});
+
+	// Found on Android: the keyboard took the remounted input's first value as
+	// its buffer, and the next keystroke typed the password into the search box.
+	it("never shows one field's text, a password's least of all, in the next field's input", () => {
+		setup();
+		render({ kind: "password", field: "t1:1:1" });
+		act(() => field()!.props.onChangeText("hunter2"));
+		renders.values.length = 0;
+		render({ kind: "search", value: "", field: "t1:1:2" });
+		const searchRenders = renders.values.filter((entry) => entry.label?.includes("search"));
+		expect(searchRenders.length).toBeGreaterThan(0);
+		for (const entry of searchRenders) expect(entry.value).toBe("");
+		act(() => field()!.props.onChangeText("cats"));
+		expect(sent.at(-1)).toEqual({ type: "input", payload: { kind: "text", value: "cats" } });
+		expect(JSON.stringify(sent)).not.toContain("hunter2cats");
 	});
 });

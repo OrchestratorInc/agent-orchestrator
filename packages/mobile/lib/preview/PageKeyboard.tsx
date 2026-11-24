@@ -40,12 +40,19 @@ export function PageKeyboard({ typing, focused, control, connection, openRequest
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const input = useRef<TextInput>(null);
-	const [text, setText] = useState("");
+	// The text belongs to one field. A field the input hasn't shown yet starts
+	// from its own value on its very first render: the keyboard takes that
+	// render's text as its buffer, so the last field's (a password's) must
+	// never reach it.
+	const fieldKey = focused ? `${focused.kind}:${focused.field ?? ""}` : "";
+	const [shown, setShown] = useState({ key: fieldKey, text: "" });
+	const text = shown.key === fieldKey ? shown.text : focused?.value ?? "";
+	const setText = (next: string) => setShown({ key: fieldKey, text: next });
 	const [dismissed, setDismissed] = useState(false);
 
 	useEffect(() => {
 		const reset = typing.observe(focused, connection, control);
-		if (reset !== null) setText(reset);
+		if (reset !== null) setShown({ key: focused ? `${focused.kind}:${focused.field ?? ""}` : "", text: reset });
 	}, [connection, control, focused, typing]);
 	useEffect(() => {
 		setDismissed(false);
@@ -59,7 +66,7 @@ export function PageKeyboard({ typing, focused, control, connection, openRequest
 		<TextInput
 			// iOS keeps a focused field's keyboard as it was, so another field is
 			// a new input: a password then gets a secure one, starting empty.
-			key={`${focused.kind}:${focused.field ?? ""}`}
+			key={fieldKey}
 			ref={input}
 			autoFocus
 			value={text}
