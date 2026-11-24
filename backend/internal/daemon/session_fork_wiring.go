@@ -188,10 +188,12 @@ func (d dirForkSeeds) Capture(ctx context.Context, workspace string) (string, er
 
 // CaptureTurn writes the files a turn left, from the folder's snapshot, to a
 // new seed.
-// A folder the agent made a repository, or one holding a repository it cloned,
-// is refused: snapshots never record a repository's own files and history.
+// A snapshot holding a repository the agent cloned is refused, and so is one
+// taken after the agent made the folder itself a repository, which went to
+// that repository without its history: snapshots never record a repository's
+// own files and history. One the store kept from before is written back.
 func (d dirForkSeeds) CaptureTurn(ctx context.Context, workspace, snapshotRef string) (string, error) {
-	if _, err := os.Lstat(filepath.Join(workspace, ".git")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(workspace, ".git")); !errors.Is(err, os.ErrNotExist) && !filesnapshot.InDetachedStore(ctx, workspace, snapshotRef) {
 		return "", sessionfork.ErrSnapshotHasRepository
 	}
 	seed, err := d.newSeedPath()
@@ -240,9 +242,6 @@ func folderSnapshotStores(dataDir string) filesnapshot.DetachedStores {
 	return func(workspace string) (string, bool) {
 		id, ok := plainSessionFolder(managed, workspace)
 		if !ok {
-			return "", false
-		}
-		if _, err := os.Lstat(filepath.Join(workspace, ".git")); !errors.Is(err, os.ErrNotExist) {
 			return "", false
 		}
 		return filepath.Join(root, id+".git"), true

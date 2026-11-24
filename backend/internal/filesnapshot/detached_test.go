@@ -333,3 +333,33 @@ func TestDetachedSnapshotsFromBeforeTheLimitStayUsable(t *testing.T) {
 		t.Fatalf("Plan back under the limit = %v", err)
 	}
 }
+
+// A store that lost its index keeps its snapshots and gets a new index; a
+// leftover at the store's path that isn't a repository is replaced. Either
+// way the next snapshot works instead of failing on every turn.
+func TestDetachedStoreLeftIncompleteIsRepaired(t *testing.T) {
+	folder, store := plainFolder(t)
+	write(t, folder, "a.txt", "one\n")
+	first := Ref("s1", "turn-2")
+	if err := Capture(context.Background(), folder, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store, "index")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, folder, "a.txt", "two\n")
+	if err := Capture(context.Background(), folder, Ref("s1", "turn-3")); err != nil {
+		t.Fatalf("Capture with the store's index gone = %v", err)
+	}
+	if _, err := Plan(context.Background(), folder, first); err != nil {
+		t.Fatalf("the repaired store lost an earlier snapshot: %v", err)
+	}
+
+	if err := os.RemoveAll(store); err != nil {
+		t.Fatal(err)
+	}
+	write(t, store, "junk", "not a repository\n")
+	if err := Capture(context.Background(), folder, Ref("s1", "turn-4")); err != nil {
+		t.Fatalf("Capture over a leftover that isn't a repository = %v", err)
+	}
+}

@@ -130,14 +130,18 @@ func TestFolderSnapshotStoresOnlyForPlainFolders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// The agent made the folder a repository of its own; its snapshots go there.
+	// A folder the agent made a repository keeps its store, which holds the
+	// snapshots from before; filesnapshot sends new ones to the repository.
 	if err := os.Mkdir(filepath.Join(withGit, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if store, ok := stores(standalone); !ok || store != filepath.Join(dataDir, folderSnapshotsDir, "standalone-1.git") {
 		t.Fatalf("stores(standalone) = %q, %v", store, ok)
 	}
-	for _, path := range []string{withGit, gitOrchestrator, t.TempDir(), filepath.Join(dataDir, "worktrees")} {
+	if store, ok := stores(withGit); !ok || store != filepath.Join(dataDir, folderSnapshotsDir, "standalone-2.git") {
+		t.Fatalf("stores(folder made a repository) = %q, %v", store, ok)
+	}
+	for _, path := range []string{gitOrchestrator, t.TempDir(), filepath.Join(dataDir, "worktrees")} {
 		if store, ok := stores(path); ok {
 			t.Fatalf("stores(%q) = %q, want none", path, store)
 		}
@@ -259,5 +263,97 @@ func TestDirForkSeedsCaptureTurnRefusesFoldersHoldingARepository(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(dataDir, dirseed.DirName)); len(entries) != 0 {
 		t.Fatalf("refused captures left seeds: %v", entries)
+	}
+}
+
+// An agent can make its folder a repository mid-chat. Snapshots from before
+// that stay in the folder's store: Roll back still restores them, without
+// touching the new repository, and an older-turn fork still starts from them.
+// Only snapshots taken after it, kept in the agent's repository without its
+// history, refuse an older-turn fork.
+func TestFolderSnapshotsFromBeforeGitInitStayUsable(t *testing.T) {
+	dataDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	filesnapshot.SetDetachedStores(folderSnapshotStores(dataDir))
+	t.Cleanup(func() { filesnapshot.SetDetachedStores(nil) })
+	seeds := newDirForkSeeds(dataDir)
+	folder := filepath.Join(dataDir, "worktrees", "standalone", "sessions", "standalone-1")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", folder, "-c", "user.email=t@example.com", "-c", "user.name=T"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(folder, "notes.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+
+	write("turn one\n")
+	before := filesnapshot.Ref("standalone-1", "turn-2")
+	if err := filesnapshot.Capture(ctx, folder, before); err != nil {
+		t.Fatal(err)
+	}
+	git("init", "-q")
+	git("add", ".")
+	git("commit", "-qm", "agent's own repository")
+	head := git("rev-parse", "HEAD")
+	write("turn two\n")
+	after := filesnapshot.Ref("standalone-1", "turn-3")
+	if err := filesnapshot.Capture(ctx, folder, after); err != nil {
+		t.Fatal(err)
+	}
+	write("turn three\n")
+
+	// An older-turn fork from before the repository starts from that snapshot.
+	seed, err := seeds.CaptureTurn(ctx, folder, before)
+	if err != nil {
+		t.Fatalf("CaptureTurn of a snapshot from before git init = %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(seed, "notes.md")); err != nil || string(b) != "turn one\n" {
+		t.Fatalf("seed notes.md = %q, %v", b, err)
+	}
+	// One from after it would lack the repository's history.
+	if _, err := seeds.CaptureTurn(ctx, folder, after); !errors.Is(err, sessionfork.ErrSnapshotHasRepository) {
+		t.Fatalf("CaptureTurn of a snapshot from after git init = %v, want ErrSnapshotHasRepository", err)
+	}
+
+	// Roll back restores the earlier snapshot's files and leaves the repository alone.
+	plan, err := filesnapshot.Plan(ctx, folder, before)
+	if err != nil {
+		t.Fatalf("Plan of a snapshot from before git init = %v", err)
+	}
+	if err := plan.Save(ctx, filesnapshot.BeforeRollbackRef("standalone-1", "turn-2")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := plan.Apply(ctx); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(folder, "notes.md")); err != nil || string(b) != "turn one\n" {
+		t.Fatalf("restored notes.md = %q, %v", b, err)
+	}
+	if got := git("rev-parse", "HEAD"); got != head {
+		t.Fatalf("the agent's repository moved: HEAD %s, want %s", got, head)
+	}
+	if err := plan.Undo(ctx); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(folder, "notes.md")); err != nil || string(b) != "turn three\n" {
+		t.Fatalf("notes.md after Undo = %q, %v", b, err)
+	}
+	// The later snapshot, kept in the agent's repository, still restores too.
+	if _, err := filesnapshot.Plan(ctx, folder, after); err != nil {
+		t.Fatalf("Plan of a snapshot from after git init = %v", err)
 	}
 }
