@@ -1309,6 +1309,16 @@ func TestDeriveKanbanPresentationResumedAfterPRsSettled(t *testing.T) {
 			want: building(contract.DisplayIdle),
 		},
 		{
+			name: "earlier artifact output does not hold a resumed session in validating",
+			session: func() contract.KanbanSessionFacts {
+				session := directed(contract.ActivityIdle, after)
+				session.HasArtifactOutput = true
+				return session
+			}(),
+			prs:  []contract.KanbanPRFacts{{URL: "pr/1", Merged: true, SettledAt: merged}},
+			want: building(contract.DisplayIdle),
+		},
+		{
 			name:    "a live pr still speaks for a resumed session",
 			session: directed(contract.ActivityIdle, after),
 			prs: []contract.KanbanPRFacts{

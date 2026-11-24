@@ -383,7 +383,10 @@ func DeriveKanbanPresentation(
 	if len(pool) == 0 {
 		// Directed again after every PR landed: the session is building its
 		// next change, so it reads as building rather than done. Its merged
-		// and closed PRs stay on the card as history.
+		// and closed PRs stay on the card as history. HasArtifactOutput is
+		// deliberately not consulted here: it says the session has ever
+		// written an artifact, not that the resumed work did, so honouring it
+		// would park every resumed session with older files in Validating.
 		if resumedAfterPRsSettled(session, prs) {
 			return KanbanPresentation{
 				Column:        KanbanBuilding,
