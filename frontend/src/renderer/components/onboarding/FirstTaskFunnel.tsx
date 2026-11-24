@@ -4,12 +4,14 @@ import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { onComposerSent } from "../../lib/guided-tour-signals";
 import type { OnboardingStep } from "../../lib/onboarding-steps";
 import {
+	ONBOARDING_ACTIVATION_WINDOW_MS,
 	endOnboardingReplay,
 	ensureOnboardingStepViewed,
 	leaveOnboardingActions,
 	onboardingProjectSource,
 	reportOnboardingStep,
 	setOnboardingTourStep,
+	skipOnboardingStep,
 	useOnboardingActivation,
 } from "../../lib/onboarding-telemetry";
 import { useUiStore } from "../../stores/ui-store";
@@ -18,14 +20,18 @@ import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID } 
 // After setup the app is on its own: Home with Add Project open, then the new
 // project's orchestrator chat. There is no tour to walk the person through it;
 // the app has to make the next step obvious. This only measures whether it
-// does, as the onboarding funnel's last steps (their `tour_*` names predate
-// the tour's removal and are kept so the funnel reads the same):
+// does, as the onboarding funnel's last steps. Their `tour_*` names come from
+// the guided tour that used to cover them; every event sent here carries
+// `funnel_variant: "unguided"`, because the steps now complete on different
+// signals (docs/telemetry.md):
 //
-//   tour_project       a project is added, or an existing one opened
+//   tour_project       a project is added, or an existing one (local or remote) opened
 //   tour_orchestrator  a chat is showing (Add Project lands on the orchestrator's)
-//   first_task         a message is sent from any chat
+//   first_task         a message is sent from a chat on that step
 //
-// It renders nothing.
+// The run ends on the first message whatever step it is on (the steps not
+// reached are skipped as `activated`), or once the activation window has
+// passed (`expired`). It renders nothing.
 
 type FunnelStep = "project" | "orchestrator" | "task";
 const FUNNEL_STEP: Record<FunnelStep, OnboardingStep> = {
@@ -34,9 +40,11 @@ const FUNNEL_STEP: Record<FunnelStep, OnboardingStep> = {
 	task: "first_task",
 };
 const STEPS: readonly FunnelStep[] = ["project", "orchestrator", "task"];
+/** On every event this funnel sends, so it reads apart from the guided tour's. */
+const VARIANT = { funnel_variant: "unguided" } as const;
 
-/** A project's board or one of its chats (this machine's routes). */
-const PROJECT_ROUTE = /^\/projects\/([^/]+)/;
+/** A project's board or one of its chats, on this machine or a remote host. */
+const PROJECT_ROUTE = /^\/(?:projects|host\/[^/]+\/project)\/([^/]+)/;
 /** A page with a chat composer: any session on this machine
  * (`/sessions/…`), on a remote host (`/host/…/session/…`), or the new chat page. */
 const CHAT_ROUTE = /(^|\/)sessions?\/[^/]+|^\/new(\/|$)/;
@@ -45,19 +53,43 @@ const CHAT_ROUTE = /(^|\/)sessions?\/[^/]+|^\/new(\/|$)/;
 
 // `known`: the projects there when the funnel started, so a new one is told
 // apart (null until the list loads). `projectId`: the project it settled on.
-// `replay`: started by a Developer Mode replay, which lasts one launch.
+// `startedAt`: when setup finished, for the activation window. `replay`:
+// started by a Developer Mode replay, which lasts one launch. `addProjectOpen`:
+// Add Project was opened for the person and they haven't closed it yet.
 // A per-viewer convenience, so localStorage (the key predates the rename).
-type FunnelState = { step: FunnelStep; known: string[] | null; projectId?: string; replay?: boolean };
+type FunnelState = {
+	step: FunnelStep;
+	known: string[] | null;
+	startedAt: number;
+	projectId?: string;
+	replay?: boolean;
+	addProjectOpen?: boolean;
+};
 const STORAGE_KEY = "ao.guidedTour";
+
+function clearStored() {
+	try {
+		window.localStorage.removeItem(STORAGE_KEY);
+	} catch {
+		// Nothing to clear.
+	}
+}
 
 function readState(): FunnelState | null {
 	try {
 		const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<FunnelState> | null;
-		// A tour stored by an earlier version that had reached its closing note is over.
-		if (!parsed || !STEPS.includes(parsed.step as FunnelStep) || parsed.replay) return null;
+		if (!parsed) return null;
+		// A tour stored by an earlier version that had reached its closing note,
+		// or a replay from an earlier launch, is over.
+		if (!STEPS.includes(parsed.step as FunnelStep) || parsed.replay) {
+			clearStored();
+			return null;
+		}
 		return {
 			step: parsed.step as FunnelStep,
 			known: Array.isArray(parsed.known) ? parsed.known.filter((id): id is string => typeof id === "string") : null,
+			// A run stored before the window was tracked starts it now.
+			startedAt: typeof parsed.startedAt === "number" ? parsed.startedAt : Date.now(),
 			projectId: typeof parsed.projectId === "string" ? parsed.projectId : undefined,
 		};
 	} catch {
@@ -82,6 +114,13 @@ function subscribe(listener: () => void) {
 	return () => listeners.delete(listener);
 }
 
+/** Onboarding is over: anything still running from its pages ends here. */
+function finishRun() {
+	leaveOnboardingActions();
+	setState(null);
+	endOnboardingReplay();
+}
+
 /** Completes `from` if the funnel is still on it (a late signal changes nothing)
  * and moves on, or ends the run after the first task. */
 function moveOn(from: FunnelStep, patch: Partial<FunnelState> = {}) {
@@ -92,24 +131,46 @@ function moveOn(from: FunnelStep, patch: Partial<FunnelState> = {}) {
 	const extra = from === "project" ? { project_source: onboardingProjectSource(projectId, !projectId || !(state.known ?? []).includes(projectId)) } : {};
 	// A step can end before its view effect runs (restored on a page already
 	// past it), so its view is reported first.
-	ensureOnboardingStepViewed(FUNNEL_STEP[from]);
-	reportOnboardingStep(FUNNEL_STEP[from], "completed", extra);
+	ensureOnboardingStepViewed(FUNNEL_STEP[from], VARIANT);
+	reportOnboardingStep(FUNNEL_STEP[from], "completed", { ...extra, ...VARIANT });
 	const next = STEPS[STEPS.indexOf(from) + 1];
 	if (next) {
-		setState({ ...state, ...patch, step: next });
+		setState({ ...state, ...patch, step: next, addProjectOpen: false });
 		return;
 	}
-	// The first task was sent: onboarding is over. An install or sign-in from
-	// the onboarding pages still running ends here.
-	leaveOnboardingActions();
-	setState(null);
-	endOnboardingReplay();
+	finishRun();
 }
 
-/** Starts measuring from the first step. Onboarding calls this as it closes
- * onto Home with Add Project open. */
-export function startFirstTaskFunnel({ replay = false }: { replay?: boolean } = {}) {
-	setState({ step: "project", known: null, ...(replay ? { replay } : {}) });
+/** Ends the run early: the step it is on and those after it are skipped. */
+function endEarly(reason: "activated" | "expired") {
+	if (!state) return;
+	for (const step of STEPS.slice(STEPS.indexOf(state.step))) skipOnboardingStep(FUNNEL_STEP[step], reason, VARIANT);
+	finishRun();
+}
+
+/** Starts measuring from the first step. */
+export function startFirstTaskFunnel({ replay = false, addProjectOpen = false }: { replay?: boolean; addProjectOpen?: boolean } = {}) {
+	setState({ step: "project", known: null, startedAt: Date.now(), ...(replay ? { replay } : {}), ...(addProjectOpen ? { addProjectOpen } : {}) });
+}
+
+/**
+ * Where onboarding lands once its pages are done: Home, with Add Project open
+ * and the funnel started. A skipped setup has no harness to run a project's
+ * agents with, so it lands on Home without either.
+ */
+export async function landAfterSetup(navigateHome: () => Promise<unknown>, { skipped, replay }: { skipped: boolean; replay: boolean }) {
+	await navigateHome();
+	if (skipped) return;
+	startFirstTaskFunnel({ replay, addProjectOpen: true });
+	useUiStore.getState().requestCreateProject();
+}
+
+/** Add Project was closed. When it was the one opened for the person and no
+ * project came of it, the project step records that it was dismissed. */
+export function noteAddProjectClosed() {
+	if (state?.step !== "project" || !state.addProjectOpen) return;
+	skipOnboardingStep("tour_project", "dismissed", VARIANT);
+	setState({ ...state, addProjectOpen: false });
 }
 
 export function FirstTaskFunnel() {
@@ -121,10 +182,15 @@ export function FirstTaskFunnel() {
 
 	useEffect(() => {
 		setOnboardingTourStep(step ? FUNNEL_STEP[step] : undefined);
-		if (step) reportOnboardingStep(FUNNEL_STEP[step], "viewed");
+		if (step) reportOnboardingStep(FUNNEL_STEP[step], "viewed", VARIANT);
+	}, [step]);
+	// Past the activation window the run is over, even if the person never
+	// came back to it.
+	useEffect(() => {
+		if (step && state && Date.now() - state.startedAt > ONBOARDING_ACTIVATION_WINDOW_MS) endEarly("expired");
 	}, [step]);
 	// The first message after onboarding (activation). It runs before the
-	// first-task listener below, so a message sent on that step counts as sent
+	// listener below, so a message sent on the first-task step counts as sent
 	// while onboarding was still going.
 	useOnboardingActivation(() => state?.step === "task");
 
@@ -157,10 +223,14 @@ export function FirstTaskFunnel() {
 		}
 	}, [step, pathname]);
 
-	// The last step ends when any chat sends a message.
+	// A message ends the run: the first task on its own step, or, sent before
+	// the funnel got there (a chat started another way), early.
 	useEffect(() => {
-		if (step !== "task") return;
-		return onComposerSent(() => moveOn("task"));
+		if (!step) return;
+		return onComposerSent(() => {
+			if (state?.step === "task") moveOn("task");
+			else endEarly("activated");
+		});
 	}, [step]);
 
 	return null;

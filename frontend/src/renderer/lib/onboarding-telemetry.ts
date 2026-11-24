@@ -8,6 +8,7 @@ import type {
 	OnboardingOutcome,
 	OnboardingProjectSource,
 	OnboardingRunKind,
+	OnboardingSkipReason,
 } from "./onboarding-telemetry-schema";
 import { isAnalyticsOptedOut, onAnalyticsOptedOut } from "./analytics-opt-out";
 import { captureRendererEvent, captureRendererEventOnUnload } from "./telemetry";
@@ -50,6 +51,8 @@ const STEPS_KEY = "ao.telemetry.onboardingSteps";
 const RUN_KEY = "ao.telemetry.onboardingRun";
 /** Activation is only looked for this long after onboarding finished. */
 const ACTIVATION_WINDOW_MS = 7 * 24 * 60 * 60_000;
+/** How long after onboarding the first message still counts as activation. */
+export const ONBOARDING_ACTIVATION_WINDOW_MS = ACTIVATION_WINDOW_MS;
 /** A project noted by the add or clone handler counts for the tour this long. */
 const PROJECT_NOTE_TTL_MS = 60_000;
 
@@ -235,7 +238,7 @@ export function completeOnboardingStepIfViewed(step: OnboardingStep): void {
  * past it) is counted once per install; a person skipping or dismissing is
  * counted on every click.
  */
-export function skipOnboardingStep(step: OnboardingStep, reason: "already_done" | "user" | "dismissed"): void {
+export function skipOnboardingStep(step: OnboardingStep, reason: OnboardingSkipReason, extra: Record<string, unknown> = {}): void {
 	if (!tracking()) return;
 	if (reason === "already_done") {
 		if (!reserve(`${step}:skipped`)) return;
@@ -244,10 +247,10 @@ export function skipOnboardingStep(step: OnboardingStep, reason: "already_done" 
 			run.autoSkipped += 1;
 			saveRun(run);
 		}
-		capture("ao.onboarding.step_skipped", { step, reason });
+		capture("ao.onboarding.step_skipped", { step, reason, ...extra });
 		return;
 	}
-	capture("ao.onboarding.step_skipped", { step, reason, time_on_step_ms: timeOnStep(step) });
+	capture("ao.onboarding.step_skipped", { step, reason, ...extra, time_on_step_ms: timeOnStep(step) });
 }
 
 /** Back, from one page to an earlier one. Sent per click. */
@@ -560,6 +563,8 @@ export function recordOnboardingActivation(duringTour: boolean, now = Date.now()
 		milestone: "first_message",
 		time_since_completed_ms: now - run.completedAt,
 		during_tour: duringTour,
+		// Only the unguided funnel sends activation now (FirstTaskFunnel).
+		funnel_variant: "unguided",
 	});
 }
 

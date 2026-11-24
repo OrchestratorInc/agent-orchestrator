@@ -1,4 +1,5 @@
 import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
+import { noteAddProjectClosed } from "./onboarding/FirstTaskFunnel";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
@@ -3784,7 +3785,12 @@ function CreateProjectButton({
 			hostLabel={host?.label ?? hostId}
 			connected={!hostId || host?.status === "connected"}
 			onSelectHost={setHostId}
-			onDismiss={() => setHostId(undefined)}
+			onDismiss={() => {
+				setHostId(undefined);
+				// Onboarding opens this flow for a new install; closing it with no
+				// project is a signal for its funnel (FirstTaskFunnel).
+				noteAddProjectClosed();
+			}}
 			mode="choose"
 			onCloneProject={onCloneProject}
 			onCreateProject={async (input) => {

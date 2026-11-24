@@ -989,8 +989,12 @@ The funnel to read is the pages and then the app: `welcome` → `sign_in` →
 `tools` → `work_defaults` → `tour_project` → `tour_orchestrator` →
 `first_task`. `work_defaults` was added after the others, so its
 `step_index` (10) is out of flow order. The `tour_*`
-names are from the guided tour that used to cover those steps; they are kept so
-the funnel reads across versions.
+names are from the guided tour that used to cover those steps, but the steps
+now complete on different signals (below), so they do not read the same across
+versions: every event the unguided funnel sends for `tour_project`,
+`tour_orchestrator` and `first_task`, and every `activated`, carries
+`funnel_variant: "unguided"`. Compare across the change by that property, not
+by step name alone.
 Three steps are conditional sub-steps, not stages every run passes through,
 so `step_index` is an order, not a dense funnel:
 
@@ -1015,9 +1019,9 @@ Every step is identified by `step` and its position in the flow,
 | 3 | `tools` | Your tools: the GitHub CLI and coding agents |
 | 4 | `github_auth` | Signing the GitHub CLI in, on Your tools |
 | 5 | `import_chats` | Importing earlier chats. Not shown since the first-run prompt on Home was removed; recorded if it returns |
-| 6 | `tour_project` | A project is added (Add Project opens as onboarding closes), or an existing one opened |
-| 7 | `tour_orchestrator` | A chat is showing; adding a project lands on its orchestrator's |
-| 8 | `first_task` | The first message is sent, from any chat |
+| 6 | `tour_project` | A project is added (Add Project opens as onboarding closes), or an existing one opened, local or on a remote host. Skipped as `dismissed` when the Add Project that onboarding opened is closed with no project (the step can still complete later) |
+| 7 | `tour_orchestrator` | Any chat is showing, not only the orchestrator's; adding a project lands on its orchestrator's, so this usually completes at once |
+| 8 | `first_task` | The first message is sent from a chat while the funnel is on this step |
 | 9 | `finish` | The guided tour's closing note. Not sent since the tour was removed |
 | 10 | `work_defaults` | How agents finish their work: archive chats on merge, review every PR, work on assigned issues |
 
@@ -1137,7 +1141,12 @@ sampling.
   played at least once, CI part included.
 - `project_source` is `clone`, `local_folder`, `existing` (a project that was
   already there) or `other` (such as an AO Cloud project).
-- `reason` on `step_skipped` is `already_done`, `user` or `dismissed`.
+- `reason` on `step_skipped` is `already_done`, `user`, `dismissed`,
+  `activated` (the first message was sent before the funnel reached that step;
+  the run ends and every step not yet completed is skipped) or `expired` (the
+  7-day activation window passed with the run unfinished; same).
+- `funnel_variant` is `unguided` on the post-setup funnel's events and on
+  `activated`; events from versions with the guided tour have none.
 - `outcome` on `completed` is `finished` (the last page's Continue),
   `skipped_setup` (Skip setup on Your tools) or `superseded` (a later launch
   found a project, or an offer to bring over data from an older installation,
@@ -1147,8 +1156,10 @@ sampling.
   the run has spanned. Durations are capped at 30 days.
 - `time_bucket` on `activated` is `lt_5m`, `5m_15m`, `15m_1h`, `1h_1d` or
   `1d_7d`. `milestone` is `first_message`. `during_tour` is true when the
-  message was sent on the `first_task` step (the name predates the tour's
-  removal).
+  message was sent on the `first_task` step. With `funnel_variant: "unguided"`
+  that means the person got there through Add Project, which is most first
+  messages; it meant the tour was showing before, so do not compare it across
+  the change.
 - `action` is `dependency_install`, `gh_install`, `gh_sign_in`,
   `agent_install`, `agent_sign_in` or `cloud_sign_in`. `target` is the install target or agent id from AO's own
   registry, such as `gh`, `tmux` or `claude-code`.

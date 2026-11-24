@@ -79,7 +79,7 @@ import { Button, type ButtonProps } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
-import { startFirstTaskFunnel } from "./FirstTaskFunnel";
+import { landAfterSetup } from "./FirstTaskFunnel";
 import { agentRowState, closeLoginWorkflow, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useLoginLifetime, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
@@ -257,12 +257,7 @@ export function FirstRunOnboarding() {
 				// Setup done: Home (not whatever page was behind the onboarding),
 				// with Add Project open over it. A skipped setup has no harness to
 				// run a project's agents with, so it lands on Home without it.
-				const replay = runKind.current === "replay";
-				void navigate({ to: "/" }).then(() => {
-					if (skipped) return;
-					startFirstTaskFunnel({ replay });
-					useUiStore.getState().requestCreateProject();
-				});
+				void landAfterSetup(() => navigate({ to: "/" }), { skipped, replay: runKind.current === "replay" });
 			}}
 		/>
 	);

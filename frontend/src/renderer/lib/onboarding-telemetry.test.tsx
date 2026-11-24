@@ -433,7 +433,7 @@ describe("onboarding activation telemetry", () => {
 		vi.advanceTimersByTime(3 * 60_000);
 		notifyComposerSent();
 		notifyComposerSent();
-		expect(capture.mock.calls).toEqual([["ao.onboarding.activated", { milestone: "first_message", time_since_completed_ms: 3 * 60_000, during_tour: true }]]);
+		expect(capture.mock.calls).toEqual([["ao.onboarding.activated", { milestone: "first_message", time_since_completed_ms: 3 * 60_000, during_tour: true, funnel_variant: "unguided" }]]);
 	});
 
 	it("stops looking a week after onboarding", () => {
