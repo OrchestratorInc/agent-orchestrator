@@ -453,6 +453,40 @@ describe("live browser gestures", () => {
 	});
 });
 
+describe("live browser frames", () => {
+	const jpeg = (marker: number) => Uint8Array.from([0xff, 0xd8, 0xff, marker]).buffer;
+	const source = () => nodes("Image")[0]?.props.source.uri as string | undefined;
+	const encoded = (marker: number) => `data:image/jpeg;base64,${btoa(String.fromCharCode(0xff, 0xd8, 0xff, marker))}`;
+
+	it("shows only the newest frame once the one decoding is done, dropping those between", async () => {
+		await render();
+		await open();
+		await showFrame();
+		const first = source();
+		await act(async () => {
+			client().handlers.onFrame({ sequence: 2n, capturedAtMs: 2n, width: 1280, height: 800, jpeg: jpeg(2) });
+			client().handlers.onFrame({ sequence: 3n, capturedAtMs: 3n, width: 1280, height: 800, jpeg: jpeg(3) });
+		});
+		// Still decoding the first: nothing replaces it yet.
+		expect(source()).toBe(first);
+		await act(async () => { nodes("Image")[0].props.onLoad(); });
+		expect(source()).toBe(encoded(3));
+		await act(async () => { nodes("Image")[0].props.onLoad(); });
+		await act(async () => { client().handlers.onFrame({ sequence: 4n, capturedAtMs: 4n, width: 1280, height: 800, jpeg: jpeg(4) }); });
+		// Idle again: the next frame shows at once.
+		expect(source()).toBe(encoded(4));
+	});
+
+	it("moves on when a frame fails to decode", async () => {
+		await render();
+		await open();
+		await showFrame();
+		await act(async () => { client().handlers.onFrame({ sequence: 2n, capturedAtMs: 2n, width: 1280, height: 800, jpeg: jpeg(2) }); });
+		await act(async () => { nodes("Image")[0].props.onError(); });
+		expect(source()).toBe(encoded(2));
+	});
+});
+
 describe("stream stats HUD", () => {
 	it("is absent from release builds", async () => {
 		vi.useFakeTimers();

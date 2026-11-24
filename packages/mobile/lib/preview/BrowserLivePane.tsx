@@ -5,7 +5,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
-import { BrowserLiveClient, type BrowserLiveCommand, type BrowserLiveState } from "../browserLive";
+import { BrowserLiveClient, type BrowserLiveCommand, type BrowserLiveFrame, type BrowserLiveState } from "../browserLive";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
 import { machineState, rejectedMachineLine } from "../hostRoute";
 import { useApp } from "../store";
@@ -20,6 +20,7 @@ import { bottomToolbarHeight, browserMenu, browserToolbar, hasBottomToolbar, typ
 import { FRAME_ZOOM_SNAP, pinchZoom, unzoomed, unzoomPoint, type FramePoint, type FrameSize, type FrameZoom } from "./frameZoom";
 import { LoadingBar } from "./LoadingBar";
 import { OpenURLPrompt } from "./OpenURLPrompt";
+import { FrameQueue } from "./frameQueue";
 import { StreamStats } from "./StreamStats";
 
 type BrowserStatus = "connecting" | "open" | "error";
@@ -110,6 +111,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		}, 1_000);
 		return () => clearInterval(timer);
 	}, []);
+	// This stream's frames: one decoding in the Image, the newest waiting.
+	const frames = useRef<FrameQueue<BrowserLiveFrame & { arrived: number }> | null>(null);
+	const shownURI = useRef<string | undefined>(undefined);
 	const frameShown = useCallback((uri: string) => {
 		const at = arrivedAt.current.get(uri);
 		if (at === undefined) return;
@@ -121,6 +125,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		const now = performance.now();
 		stats.current?.shown(now, now - at);
 	}, []);
+	// The Image finished with its source, loaded or not: the next frame may go.
+	const frameDone = useCallback((uri: string) => {
+		frameShown(uri);
+		frames.current?.decoded();
+	}, [frameShown]);
 
 	useEffect(() => {
 		setPage(null);
@@ -142,6 +151,29 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		}
 		let disposed = false;
 		stats.current?.connecting(performance.now());
+		// Only frames that reach the screen are encoded; one that arrives while
+		// another decodes replaces the one waiting (Review focus 4).
+		const queue = new FrameQueue<BrowserLiveFrame & { arrived: number }>((frame) => {
+			if (disposed) return;
+			try {
+				setFrameSize({ width: frame.width, height: frame.height });
+				const uri = browserJPEGDataURI(frame.jpeg);
+				if (stats.current) {
+					arrivedAt.current.set(uri, frame.arrived);
+					// Bounded: sources that never load are forgotten.
+					if (arrivedAt.current.size > 8) arrivedAt.current.delete(arrivedAt.current.keys().next().value!);
+				}
+				// The same source again loads nothing: it is already done.
+				if (uri === shownURI.current) queueMicrotask(() => queue.decoded());
+				shownURI.current = uri;
+				setFrameURI(uri);
+				setFrameIsLive(true);
+			} catch {
+				setStatus("error");
+				setError("This mobile build couldn't display the browser frame.");
+			}
+		});
+		frames.current = queue;
 		setStatus("connecting");
 		setError(undefined);
 		const live = new BrowserLiveClient(config, sessionID, {
@@ -166,20 +198,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				if (disposed) return;
 				const arrived = performance.now();
 				stats.current?.received(arrived, frame.jpeg.byteLength);
-				try {
-					setFrameSize({ width: frame.width, height: frame.height });
-					const uri = browserJPEGDataURI(frame.jpeg);
-					if (stats.current) {
-						arrivedAt.current.set(uri, arrived);
-						// Bounded: sources that never load are forgotten.
-						if (arrivedAt.current.size > 8) arrivedAt.current.delete(arrivedAt.current.keys().next().value!);
-					}
-					setFrameURI(uri);
-					setFrameIsLive(true);
-				} catch {
-					setStatus("error");
-					setError("This mobile build couldn't display the browser frame.");
-				}
+				queue.push({ ...frame, arrived });
 			},
 		});
 		client.current = live;
@@ -187,6 +206,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 
 		return () => {
 			disposed = true;
+			if (frames.current === queue) frames.current = null;
 			live?.close();
 			if (client.current === live) client.current = null;
 		};
@@ -365,7 +385,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					onLayout={onViewportLayout}
 				>
 					<Animated.View pointerEvents="none" style={[styles.overlay, zoomStyle]}>
-						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} onLoad={stats.current ? () => frameShown(frameURI) : undefined} /></View> : null}
+						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} onLoad={() => frameDone(frameURI)} onError={() => frameDone(frameURI)} /></View> : null}
 					</Animated.View>
 					<Animated.View pointerEvents="none" style={[styles.touchMark, markStyle]} />
 				</View>
