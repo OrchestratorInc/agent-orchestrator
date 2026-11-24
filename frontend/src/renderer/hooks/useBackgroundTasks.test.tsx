@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useBackgroundTaskReadings, useBackgroundTasks, useStopBackgroundTask } from "./useBackgroundTasks";
+import { useBackgroundTaskOutput, useBackgroundTaskReadings, useBackgroundTasks, useReleaseTaskOutputs, useStopBackgroundTask } from "./useBackgroundTasks";
 
 const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: getMock, POST: postMock } }));
@@ -89,6 +89,98 @@ describe("background task queries", () => {
 		await waitFor(() => expect(screen.getByText("unavailable")).toBeVisible());
 		expect(getMock).toHaveBeenCalledTimes(1);
 		view.unmount();
+		client.clear();
+	});
+});
+
+describe("a background task's output", () => {
+	beforeEach(() => vi.clearAllMocks());
+	function Output({ runId = "r1", over = true }: { runId?: string; over?: boolean }) {
+		const query = useBackgroundTaskOutput("s", "dev", runId, { enabled: true, live: false, over });
+		const error = query.isError ? ":error" : "";
+		return <span>{query.data ? `${query.data.availability}:${query.data.output}:${query.data.lastRead ? "last" : "live"}${error}` : "loading"}</span>;
+	}
+	const reply = (availability: string, output: string) => ({ data: { sessionId: "s", taskId: "dev", availability, output } });
+
+	it("keeps the last output read when the daemon no longer has it, across remounts", async () => {
+		getMock.mockResolvedValueOnce(reply("ready", "ready on :3000"));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Output /></QueryClientProvider>);
+		await screen.findByText("ready:ready on :3000:live");
+		// The chat ended: the daemon answers unavailable.
+		getMock.mockResolvedValue(reply("unavailable", ""));
+		await client.refetchQueries();
+		await screen.findByText("ready:ready on :3000:last");
+		// Never collected, so reopening it minutes later still shows it.
+		expect(client.getQueryCache().find({ queryKey: ["background-task-output", "s", "dev", "r1"] })?.gcTime).toBe(Infinity);
+		// Reopening the task later still shows it.
+		view.unmount();
+		const again = render(<QueryClientProvider client={client}><Output /></QueryClientProvider>);
+		await client.refetchQueries();
+		await screen.findByText("ready:ready on :3000:last");
+		again.unmount();
+		client.clear();
+		// Nothing read before: unavailable stays unavailable.
+		const fresh = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={fresh}><Output /></QueryClientProvider>);
+		await screen.findByText("unavailable::live");
+		fresh.clear();
+	});
+
+	it("treats an unavailable read of a running task as a failed poll, and never shows another run's output", async () => {
+		getMock.mockResolvedValueOnce(reply("ready", "watching"));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><Output over={false} /></QueryClientProvider>);
+		await screen.findByText("ready:watching:live");
+		getMock.mockResolvedValue(reply("unavailable", ""));
+		await client.refetchQueries();
+		// Still running: the output read so far stays, not marked last read.
+		await screen.findByText("ready:watching:live:error");
+		view.unmount();
+		// A rerun under the same task id starts with nothing read.
+		render(<QueryClientProvider client={client}><Output runId="r2" /></QueryClientProvider>);
+		await screen.findByText("unavailable::live");
+		client.clear();
+	});
+
+	it("keeps the log read before when the daemon leaves it out, followed by what the task printed", async () => {
+		getMock.mockResolvedValueOnce(reply("ready", "first run ready"));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={client}><Output /></QueryClientProvider>);
+		await screen.findByText("ready:first run ready:live");
+		// A restart took the log over: the final read holds only the task's own marker.
+		getMock.mockResolvedValue({ data: { ...reply("ready", "\n[killed]").data, logOmitted: true } });
+		await client.refetchQueries();
+		// The matcher collapses the line break to a space.
+		await screen.findByText("ready:first run ready [killed]:live");
+		// Later reads keep it, without repeating the marker.
+		await client.refetchQueries();
+		await screen.findByText("ready:first run ready [killed]:live");
+		// An empty provider tail keeps the log rather than "No output yet".
+		getMock.mockResolvedValue({ data: { ...reply("ready", "").data, logOmitted: true } });
+		await client.refetchQueries();
+		await screen.findByText("ready:first run ready:live");
+		client.clear();
+	});
+});
+
+describe("releasing pruned task output", () => {
+	function Release({ tabs }: { tabs: { task: { id: string; runId?: string } }[] }) {
+		useReleaseTaskOutputs("s", tabs);
+		return null;
+	}
+
+	it("frees the output of runs the side panel no longer lists, and keeps the rest", () => {
+		const client = new QueryClient();
+		for (const [taskId, runId] of [["kept", "r1"], ["pruned", "r1"], ["kept", "r0"]]) {
+			client.setQueryData(["background-task-output", "s", taskId, runId], { output: `${taskId} ${runId}` });
+		}
+		client.setQueryData(["background-task-output", "other", "pruned", "r1"], { output: "another session" });
+		render(<QueryClientProvider client={client}><Release tabs={[{ task: { id: "kept", runId: "r1" } }]} /></QueryClientProvider>);
+		expect(client.getQueryData(["background-task-output", "s", "kept", "r1"])).toEqual({ output: "kept r1" });
+		expect(client.getQueryData(["background-task-output", "s", "pruned", "r1"])).toBeUndefined();
+		expect(client.getQueryData(["background-task-output", "s", "kept", "r0"])).toBeUndefined();
+		expect(client.getQueryData(["background-task-output", "other", "pruned", "r1"])).toEqual({ output: "another session" });
 		client.clear();
 	});
 });

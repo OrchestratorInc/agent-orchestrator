@@ -61,6 +61,13 @@ type ChatBackgroundTaskOutput struct {
 	// Stale is true when the provider stopped sending this task's output, so
 	// anything it printed since is missing.
 	Stale bool
+	// LogOutsideWorkspace is true when the task's command sends its output to
+	// a log file outside the session's workspace, which is never read.
+	LogOutsideWorkspace bool
+	// LogOmitted is true when the task's command writes a log that no longer
+	// holds this run's output, because another writer has taken it over since
+	// the run ended. Text then holds only what the task printed itself.
+	LogOmitted bool
 }
 
 // ChatBackgroundTaskOutputReader reads one task's recent output. Like a
