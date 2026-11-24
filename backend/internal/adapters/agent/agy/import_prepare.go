@@ -37,6 +37,11 @@ type agyImportProof struct {
 	Brain                                        bool `json:",omitempty"`
 }
 
+var _ ports.AgentImportVersionChecker = (*Plugin)(nil)
+
+// CheckImportVersion refuses new imports on an unverified Agy CLI version.
+func (p *Plugin) CheckImportVersion(ctx context.Context) error { return p.checkImportVersion(ctx) }
+
 func (p *Plugin) checkImportVersion(ctx context.Context) error {
 	var version string
 	var err error

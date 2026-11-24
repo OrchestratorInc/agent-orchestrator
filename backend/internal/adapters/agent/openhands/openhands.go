@@ -146,9 +146,11 @@ func (p *Plugin) command(ctx context.Context, mode ports.PermissionMode, cfg por
 	var cmd []string
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		cmd = append(cmd, "env", modelEnvVar+"="+model, bin, "--override-with-envs")
-	} else if sessionEnv(env, "LLM_API_KEY") != "" || sessionEnv(env, "LLM_MODEL") != "" || sessionEnv(env, "LLM_BASE_URL") != "" {
-		// OpenHands ignores all LLM_* overrides without this flag. Unset
-		// fields retain their saved native values.
+	} else if sessionEnv(env, "LLM_API_KEY") != "" || explicitSessionEnv(env, "LLM_MODEL") || explicitSessionEnv(env, "LLM_BASE_URL") {
+		// OpenHands ignores all LLM_* overrides without this flag; unset fields
+		// retain their saved native values. A model or endpoint enables it only
+		// when set in the session's own env: an ambient LLM_BASE_URL inherited
+		// by the daemon must not redirect the saved native key.
 		cmd = append(cmd, bin, "--override-with-envs")
 	} else {
 		cmd = append(cmd, bin)
@@ -157,6 +159,12 @@ func (p *Plugin) command(ctx context.Context, mode ports.PermissionMode, cfg por
 		cmd = append(cmd, flag)
 	}
 	return cmd, nil
+}
+
+// explicitSessionEnv reports a non-empty value set in the session's own env,
+// ignoring values inherited from the daemon.
+func explicitSessionEnv(env map[string]string, name string) bool {
+	return strings.TrimSpace(env[name]) != ""
 }
 
 // sessionEnv is name as the launched process sees it: the session's own value,

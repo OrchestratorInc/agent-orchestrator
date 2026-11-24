@@ -136,6 +136,32 @@ func TestOpenHandsAppliesEachProcessEnvironmentOverride(t *testing.T) {
 	}
 }
 
+// An inherited endpoint or model alone must not enable --override-with-envs:
+// that would send the saved native key to an ambient LLM_BASE_URL.
+func TestOpenHandsAmbientEndpointDoesNotOverrideSavedSettings(t *testing.T) {
+	for _, name := range []string{"LLM_BASE_URL", "LLM_MODEL"} {
+		t.Run(name, func(t *testing.T) {
+			clearOpenHandsLLMEnv(t)
+			value := "https://ambient-gateway.invalid/v1"
+			if name == "LLM_MODEL" {
+				value = "openai/gpt-4.1-mini"
+			}
+			t.Setenv(name, value)
+			cmd, err := testPlugin().GetLaunchCommand(t.Context(), ports.LaunchConfig{Env: map[string]string{}})
+			if err != nil || !reflect.DeepEqual(cmd, []string{"openhands"}) {
+				t.Fatalf("ambient %s launch = %q, %v", name, cmd, err)
+			}
+			cmd, ok, err := testPlugin().GetRestoreCommand(t.Context(), ports.RestoreConfig{
+				Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native"}},
+				Env:     map[string]string{},
+			})
+			if want := []string{"openhands", "--resume", "native"}; err != nil || !ok || !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("ambient %s restore = %q, %v, %v", name, cmd, ok, err)
+			}
+		})
+	}
+}
+
 func TestOpenHandsImportedEndpointScope(t *testing.T) {
 	clearOpenHandsLLMEnv(t)
 	t.Setenv("OPENAI_BASE_URL", "https://ambient.invalid/v1")

@@ -17,6 +17,7 @@ import (
 )
 
 var _ ports.AgentImportedSessionPreparer = (*Plugin)(nil)
+var _ ports.AgentImportVersionChecker = (*Plugin)(nil)
 
 type kimiImportProof struct {
 	Source    string `json:"source"`

@@ -2,6 +2,7 @@ package sessionimport
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,5 +194,49 @@ func TestMemcodeRescanSkipsOldAndUnchangedHistories(t *testing.T) {
 	defer mu.Unlock()
 	if len(reads) != 1 || reads[0] != "sess_01234567" {
 		t.Fatalf("memcode histories parsed = %v; want only the recent one, once", reads)
+	}
+}
+
+// An unsupported installed CLI must fail on the import row, naming the
+// supported version, instead of creating a session that cannot open.
+func TestImportRefusesUnsupportedCLIVersionOnItsRow(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, ".memcode", "sessions", "sess_01234567", "messages.json"), memcodeImportFixture)
+	writeFile(t, filepath.Join(project, ".memcode", "sessions", "sess_89abcdef", "messages.json"), strings.Replace(memcodeImportFixture, "sess_01234567", "sess_89abcdef", 1))
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
+	svc := New(st, "", chatSupported)
+	svc.roots = map[domain.AgentHarness]string{}
+	svc.now = func() time.Time { return time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC) }
+	const message = "memcode: native import requires verified version 1.2.3"
+	var checks []domain.AgentHarness
+	unsupported := errors.New(message)
+	svc.SetImportVersionCheck(func(_ context.Context, harness domain.AgentHarness) error {
+		checks = append(checks, harness)
+		return unsupported
+	})
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 2 {
+		t.Fatalf("scan = %+v, %v", preview, err)
+	}
+	ids := []string{preview.Candidates[0].ID, preview.Candidates[1].ID}
+	results, err := svc.Import(context.Background(), ids)
+	if err != nil || len(results) != 2 {
+		t.Fatalf("import = %+v, %v", results, err)
+	}
+	for _, r := range results {
+		if r.Status != "failed" || r.Error != message || r.SessionID != "" {
+			t.Fatalf("unsupported version row = %+v", r)
+		}
+	}
+	if len(st.sessions) != 0 {
+		t.Fatalf("unsupported version created sessions: %+v", st.sessions)
+	}
+	if len(checks) != 1 || checks[0] != domain.HarnessMemcode {
+		t.Fatalf("version checks = %v; want one per harness per import", checks)
+	}
+	unsupported = nil
+	results, err = svc.Import(context.Background(), ids)
+	if err != nil || len(results) != 2 || results[0].Status != "created" || results[1].Status != "created" {
+		t.Fatalf("supported version import = %+v, %v", results, err)
 	}
 }
