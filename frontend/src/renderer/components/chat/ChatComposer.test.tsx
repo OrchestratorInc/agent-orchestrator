@@ -2899,6 +2899,44 @@ describe("attachments", () => {
 		expect(await screen.findByRole("button", { name: "Remove second.png" })).toBeInTheDocument();
 	});
 
+	it("waits for a replaced surface's upload before taking a new file for the same draft", async () => {
+		const stage = vi.fn(() => new Promise<string[]>(() => undefined));
+		const sessionId = "composer-foreign-upload";
+		const first = render(<ChatComposer draftSessionId={sessionId} onSend={vi.fn()} onStageAttachments={stage} />);
+		fireEvent.paste(screen.getByLabelText("Message the agent"), { clipboardData: clipboardData([png("large.png")]) });
+		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		first.unmount();
+		render(<ChatComposer draftSessionId={sessionId} onSend={vi.fn()} onStageAttachments={stage} />);
+		// The old surface's queue would commit after this one's and overwrite the new file.
+		fireEvent.paste(screen.getByLabelText("Message the agent"), { clipboardData: clipboardData([png("small.png")]) });
+		expect(stage).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("status", { name: "Attaching small.png" })).not.toBeInTheDocument();
+	});
+
+	it("shows a restored staged image in the uploading row beside the one pasted after it", async () => {
+		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
+		URL.createObjectURL = vi.fn((blob: Blob) => `blob:${(blob as File).name}`);
+		URL.revokeObjectURL = vi.fn();
+		try {
+			const sessionId = "composer-restored-uploading";
+			const restored = ".ao/attachments/attachment-restored.png";
+			writeChatAttachments(sessionId, [{ id: "restored", path: restored, name: "restored.png", mimeType: "image/png", bytes: 4 }]);
+			const stage = vi.fn(() => new Promise<string[]>(() => undefined));
+			const onUploadingSendChange = vi.fn();
+			const { field } = renderComposer({ draftSessionId: sessionId, onStageAttachments: stage, onUploadingSendChange });
+			await typeInComposer(field, "compare");
+			fireEvent.paste(field, { clipboardData: clipboardData([png("second.png")]) });
+			await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+			fireEvent.keyDown(field, { key: "Enter" });
+			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({
+				images: [{ path: restored }, { src: "blob:second.png" }],
+			})));
+		} finally {
+			URL.createObjectURL = original.createObjectURL;
+			URL.revokeObjectURL = original.revokeObjectURL;
+		}
+	});
+
 	it("takes an image cancelled while the message waits out of its queued row", async () => {
 		const original = { createObjectURL: URL.createObjectURL, revokeObjectURL: URL.revokeObjectURL };
 		URL.createObjectURL = vi.fn((blob: Blob) => `blob:${(blob as File).name}`);
@@ -2912,10 +2950,10 @@ describe("attachments", () => {
 			fireEvent.paste(field, { clipboardData: clipboardData([png("second.png")]) });
 			await screen.findByRole("button", { name: "Cancel attaching second.png" });
 			fireEvent.keyDown(field, { key: "Enter" });
-			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({ images: ["blob:first.png", "blob:second.png"] })));
+			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({ images: [{ src: "blob:first.png" }, { src: "blob:second.png" }] })));
 
 			await userEvent.click(screen.getByRole("button", { name: "Cancel attaching first.png" }));
-			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({ images: ["blob:second.png"] })));
+			await waitFor(() => expect(onUploadingSendChange).toHaveBeenLastCalledWith(expect.objectContaining({ images: [{ src: "blob:second.png" }] })));
 		} finally {
 			URL.createObjectURL = original.createObjectURL;
 			URL.revokeObjectURL = original.revokeObjectURL;

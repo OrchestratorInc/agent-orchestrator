@@ -246,6 +246,16 @@ function subscribeSharedAttachmentWork(
 	};
 }
 
+/** Whether files are still being staged for this scope by work other than `own`, such as a replaced surface. */
+function sharedForeignPending(key: string, own: ReadonlySet<symbol>): boolean {
+	const entry = sharedAttachmentEntries.get(key);
+	if (!entry) return false;
+	for (const [token, files] of entry.pending) {
+		if (!own.has(token) && files.length > 0) return true;
+	}
+	return false;
+}
+
 function sharedAttachmentPending(key: string | undefined): boolean {
 	return Boolean(key && (sharedAttachmentEntries.get(key)?.pending.size ?? 0) > 0);
 }
@@ -401,6 +411,8 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 	const queuedAddsRef = useRef(0);
 	// Files in batches still being read or staged, which already claim attachment slots.
 	const outstandingFilesRef = useRef(0);
+	// This instance's own shared staging work, told apart from a replaced surface's.
+	const ownWorkRef = useRef(new Set<symbol>());
 	const generationRef = useRef(0);
 
 	useEffect(() => {
@@ -617,6 +629,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		for (const file of pending) pendingFileControllers.set(file.id, new AbortController());
 		const entries = batch.map((file, index) => ({ file, id: pending[index]!.id }));
 		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey, pending) : undefined;
+		if (sharedWork) ownWorkRef.current.add(sharedWork.token);
 		if (!sharedKey) setPendingAttachments((current) => [...current, ...pending]);
 		queuedAddsRef.current += 1;
 		setPreparing(true);
@@ -640,6 +653,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 					if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
 				}
 				queuedAddsRef.current = Math.max(0, queuedAddsRef.current - 1);
+				if (sharedWork) ownWorkRef.current.delete(sharedWork.token);
 				if (sharedKey && sharedWork) endSharedAttachmentWork(sharedKey, sharedWork.token);
 				else {
 					setPendingAttachments((current) => current.filter((file) => !pending.some((item) => item.id === file.id)));
@@ -761,5 +775,11 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		toSettledPayload,
 		attachmentSignature,
 		hasPendingReads,
+		/**
+		 * Files are still being staged for this draft by another instance, such as
+		 * the surface this one replaced. Its queue would commit after this one's and
+		 * overwrite what this instance adds, so new files wait for it.
+		 */
+		hasForeignPendingWork: () => (initialKey ? sharedForeignPending(initialKey, ownWorkRef.current) : false),
 	};
 }

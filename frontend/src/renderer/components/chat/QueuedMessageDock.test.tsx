@@ -461,7 +461,7 @@ describe("QueuedMessageDock attachments", () => {
 
 	it("says a message is still uploading and shows its picture meanwhile", () => {
 		const [message] = queuedMessages(["then i got this"]);
-		render(<QueuedMessageDock messages={[{ ...message!, pending: true, uploadingImages: ["blob:local-shot"] }]} />);
+		render(<QueuedMessageDock messages={[{ ...message!, pending: true, uploadingImages: [{ src: "blob:local-shot" }] }]} />);
 		const row = screen.getByTestId("queued-message-queued-1");
 		expect(within(row).getByRole("status")).toHaveTextContent("Uploading…");
 		expect(row).toHaveTextContent("then i got thisImage 1");

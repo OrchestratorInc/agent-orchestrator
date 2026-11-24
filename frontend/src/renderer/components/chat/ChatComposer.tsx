@@ -279,13 +279,19 @@ export type StoredComposerAttachment = ChatDraftRetainedAttachment & { dataUrl?:
  * once and shows in the queue under the id its send will use, so the real row
  * takes its place without a jump.
  */
-export type UploadingSend = { clientMessageId: string; text: string; images: string[] };
+export type UploadingSend = { clientMessageId: string; text: string; images: UploadingImage[] };
+/** A picture in hand, or a staged image restored with a draft, which the queue reads by its path. */
+export type UploadingImage = { src: string; path?: undefined } | { path: string; src?: undefined };
 
 /** The pictures a message waiting on its uploads shows: its attached images, then those still uploading. */
-function uploadingImages(attachments: FileAttachment[], pending: { previewUrl?: string }[]): string[] {
+function uploadingImages(attachments: FileAttachment[], pending: { previewUrl?: string }[]): UploadingImage[] {
 	return [
-		...attachments.flatMap((attachment) => attachment.dataUrl && isSupportedImageAttachment(attachment.mimeType) ? [attachment.dataUrl] : []),
-		...pending.flatMap((file) => (file.previewUrl ? [file.previewUrl] : [])),
+		...attachments.flatMap((attachment): UploadingImage[] => {
+			if (!isSupportedImageAttachment(attachment.mimeType)) return [];
+			if (attachment.dataUrl) return [{ src: attachment.dataUrl }];
+			return attachment.stagedPath ? [{ path: attachment.stagedPath }] : [];
+		}),
+		...pending.flatMap((file): UploadingImage[] => (file.previewUrl ? [{ src: file.previewUrl }] : [])),
 	];
 }
 export type ChatComposerHandle = {
@@ -894,7 +900,8 @@ export const ChatComposer = memo(function ChatComposer({
 		const send = uploadingSend.current;
 		if (!awaitingUploads || !send) return;
 		const images = uploadingImages(fileAttachments.attachments, pendingAttachments);
-		if (images.length === send.images.length && images.every((src, index) => src === send.images[index])) return;
+		const same = (a: UploadingImage, b: UploadingImage | undefined) => a.src === b?.src && a.path === b?.path;
+		if (images.length === send.images.length && images.every((image, index) => same(image, send.images[index]))) return;
 		publishUploadingSend({ ...send, images });
 	}, [awaitingUploads, fileAttachments.attachments, pendingAttachments, publishUploadingSend]);
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
@@ -2522,7 +2529,8 @@ export const ChatComposer = memo(function ChatComposer({
 	 * handed on afterwards, so files wait for the send to finish there.
 	 */
 	function attachBlocked() {
-		return !canAttach || ((draftMutationPending || submitInFlight.current !== null) && (!optimisticSend || !parkUnsentSends));
+		return !canAttach || fileAttachments.hasForeignPendingWork() ||
+			((draftMutationPending || submitInFlight.current !== null) && (!optimisticSend || !parkUnsentSends));
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {

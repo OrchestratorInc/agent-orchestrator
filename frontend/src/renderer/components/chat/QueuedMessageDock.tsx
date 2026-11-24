@@ -19,6 +19,7 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import type { ConversationContentSummary, ConversationMessage } from "../../types/conversation";
+import type { UploadingImage } from "./ChatComposer";
 import { useTranslation } from "react-i18next";
 import { attachmentName, IMAGE_ATTACHMENT_PATH, labelInlineImages, splitInlineImagePaths, stagedAttachmentParts } from "./messageAttachments";
 import { withoutAnnotationPlaceholder } from "./ChatTimelineItems";
@@ -34,8 +35,8 @@ export type QueuedMessage = {
 	message: ConversationMessage;
 	/** Sent but not yet confirmed by the daemon: shown at once, with no actions until it has a turn id. */
 	pending?: boolean;
-	/** Sent while its files upload: the local pictures of its images, shown until the upload settles. */
-	uploadingImages?: string[];
+	/** Sent while its files upload: its images, shown until the upload settles. */
+	uploadingImages?: UploadingImage[];
 };
 
 const CHIP_CLASS = "mx-0.5 inline-flex max-w-32 items-center gap-1 rounded-md border border-border-strong bg-interactive-hover py-px pl-px pr-1 align-middle leading-none text-foreground";
@@ -72,7 +73,7 @@ function QueuedFileChip({ path }: { path: string }) {
  * and the rest after the text. AO's reference block, the agent's instruction to
  * open the files, is not part of the message and is not shown.
  */
-function QueuedMessageText({ text, uploadingImages, label }: { text: string; uploadingImages?: string[]; label: (index: number) => string }) {
+function QueuedMessageText({ text, uploadingImages, label }: { text: string; uploadingImages?: UploadingImage[]; label: (index: number) => string }) {
 	const { body, attachments } = stagedAttachmentParts(text);
 	const images = attachments.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
 	const files = attachments.filter((path) => !IMAGE_ATTACHMENT_PATH.test(path));
@@ -89,7 +90,7 @@ function QueuedMessageText({ text, uploadingImages, label }: { text: string; upl
 				<QueuedImageChip key={path} path={path} label={label(images.indexOf(path) + 1)} />
 			))}
 			{files.map((path) => <QueuedFileChip key={path} path={path} />)}
-			{uploadingImages?.map((src, index) => <QueuedImageChip key={`uploading-${index}`} src={src} label={label(index + 1)} />)}
+			{uploadingImages?.map((image, index) => <QueuedImageChip key={`uploading-${index}`} src={image.src} path={image.path} label={label(index + 1)} />)}
 		</>
 	);
 }
@@ -182,7 +183,7 @@ function QueuedMessageRowContent({
 	dragHandleProps,
 }: {
 	message: ConversationMessage;
-	uploadingImages?: string[];
+	uploadingImages?: UploadingImage[];
 	showPersistentSteer?: boolean;
 	/** Cmd/Ctrl+Enter in the empty composer steers this row; the button shows the key. */
 	enterSteers?: boolean;
@@ -404,7 +405,7 @@ function SortableQueuedMessageRow({
 }: {
 	turnId: string;
 	message: ConversationMessage;
-	uploadingImages?: string[];
+	uploadingImages?: UploadingImage[];
 	hiddenFromView?: boolean;
 	showPersistentSteer?: boolean;
 	enterSteers?: boolean;
