@@ -285,16 +285,21 @@ func (r *WorkerReporter) finalMessage(ctx context.Context, id domain.SessionID, 
 			continue
 		}
 		if text := strings.TrimSpace(msg.Text); text != "" {
-			return truncateRunes(text, domain.MaxReportTextCharacters)
+			return fitNote(text, id)
 		}
 	}
 	return ""
 }
 
-func truncateRunes(text string, limit int) string {
+// fitNote keeps a final message within the report limit. A message that is
+// too long keeps its beginning and says where to read the rest, so a question
+// at its end is never silently lost.
+func fitNote(text string, id domain.SessionID) string {
+	limit := domain.MaxReportTextCharacters
 	if utf8.RuneCountInString(text) <= limit {
 		return text
 	}
-	runes := []rune(text)
-	return string(runes[:limit-1]) + "…"
+	suffix := "… [Truncated. Read the full message with `ao session history " + string(id) + "`.]"
+	keep := limit - utf8.RuneCountInString(suffix)
+	return strings.TrimSpace(string([]rune(text)[:keep])) + suffix
 }

@@ -229,8 +229,12 @@ func TestWorkerReporterWriteTruncatesLongMessage(t *testing.T) {
 	store.messages["c1"] = []domain.ConversationMessage{{Role: domain.MessageRoleAssistant, Text: strings.Repeat("é", 5000), CreatedAt: since}}
 	r, creator := newTestReporter(store, since)
 	r.Write(t.Context(), "w1", domain.ReportDone, Stretch{Since: since, Until: since.Add(time.Hour)})
-	if n := utf8.RuneCountInString(creator.created[0].Note); n != domain.MaxReportTextCharacters {
+	note := creator.created[0].Note
+	if n := utf8.RuneCountInString(note); n != domain.MaxReportTextCharacters {
 		t.Fatalf("note has %d runes, want %d", n, domain.MaxReportTextCharacters)
+	}
+	if !strings.HasSuffix(note, "`ao session history w1`.]") {
+		t.Fatalf("truncated note does not point at the full message: %q", note[len(note)-80:])
 	}
 }
 

@@ -79,18 +79,23 @@ final message is its result.
 - TUI workers have no ACP stream. The reporter uses their hook-derived
   activity (`idle`, `waiting_input`, `blocked`, `exited`) and points the
   orchestrator at `ao session history` instead of quoting a final message.
-- A daemon-written done report means "the worker's turn ended and it is
-  waiting", not "the assigned work is complete". The daemon cannot tell a
+- A daemon-written done report means "the worker's turn ended", not "the
+  assigned work is complete". The worker is usually waiting, but it may have
+  exited since. The daemon cannot tell a
   finished task from a turn that ends on a plain-text question, and it never
-  claims completion. The note carries the worker's final message verbatim, and
+  claims completion. The note carries the worker's final message verbatim (a
+  message over the report limit keeps its start and points at
+  `ao session history`), and
   the orchestrator judges from it whether the work is finished or needs an
   answer, as a parent agent does with a subagent's result. Questions raised
   through ACP permission or elicitation requests are reported as needs_input.
   Step 2 renames the state shown to the orchestrator and in Worker Updates to
   match, so the label does not overstate completion.
-- A done report waits until the worker has stayed idle for 30 seconds. Work
-  that resumes sooner, such as a harness that reports idle between steps or a
-  queued message, continues the same task, so one task yields one done.
+- A done report waits until the worker has stayed idle for 30 seconds, and
+  covers everything since the work started. Work that resumes sooner, such as
+  a harness that reports idle between steps or a queued message, joins the
+  same report. Work that resumes after a done has been written starts a new
+  stretch, which gets its own done.
 
 ## Rollout
 
