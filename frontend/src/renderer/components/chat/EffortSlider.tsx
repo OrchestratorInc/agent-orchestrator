@@ -16,7 +16,7 @@ function centre(percent: number): string {
 
 /**
  * The reasoning-effort setting as a stepped slider: a tick per level, filled up to the chosen one
- * in the faintest grey.
+ * in a lighter grey, or in the ultra colours at the top level.
  * It is a menu row, so the menu's arrow keys reach it like any other; Left and Right change the level.
  */
 export function EffortSlider({
@@ -57,6 +57,8 @@ export function EffortSlider({
 	const index = drag !== undefined ? Math.round(drag * last) : sent ?? Math.max(chosen, 0);
 	const shown = drag !== undefined || sent !== undefined || chosen >= 0 ? choices[index] : undefined;
 	const percent = drag !== undefined ? drag * 100 : (index / last) * 100;
+	// The top level past Max (Codex's ultra, Claude Code's ultracode) fills the bar in its own colours.
+	const ultra = Boolean(shown && ultraValue?.(shown.value));
 
 	const commit = (next: number) => {
 		setDrag(undefined);
@@ -92,7 +94,7 @@ export function EffortSlider({
 			}}
 			// No hover or highlight fill like the other rows: the slider is not picked by clicking the row.
 			// A keyboard visit rings the thumb instead.
-			className="group/effort flex-col items-stretch gap-1 text-xs text-foreground focus:before:bg-transparent data-highlighted:before:bg-transparent"
+			className="group/effort flex-col items-stretch gap-0.5 py-1 text-xs text-foreground focus:before:bg-transparent data-highlighted:before:bg-transparent"
 		>
 			<span className="flex items-baseline justify-between gap-3">
 				<span>{label}</span>
@@ -120,10 +122,10 @@ export function EffortSlider({
 				onPointerCancel={() => setDrag(undefined)}
 			>
 				<div className="absolute inset-x-0 top-1/2 -translate-y-1/2 overflow-hidden rounded-[3px] bg-interactive-active" style={{ height: TRACK_H }}>
-					{/* The filled part, up to the thumb's centre, in the faintest grey, a hair darker than the bar. */}
+					{/* The filled part, up to the thumb's centre: a lighter grey than the bar, or the ultra colours. */}
 					<div
 						// Eased only into a level, never while it follows the pointer.
-						className={cn("absolute inset-y-0 left-0 bg-muted-foreground/8", drag === undefined && "motion-safe:transition-[width] motion-safe:duration-150")}
+						className={cn("absolute inset-y-0 left-0", ultra ? "ultra-fill" : "bg-foreground/20", drag === undefined && "motion-safe:transition-[width] motion-safe:duration-150")}
 						style={{ width: centre(percent) }}
 					/>
 				</div>
@@ -136,7 +138,8 @@ export function EffortSlider({
 				))}
 				<span
 					className={cn(
-						"absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[3px] border border-(--color-border-strong) bg-card shadow-[0_1px_2px_rgb(0_0_0/0.12)] group-focus-visible/effort:ring-2 group-focus-visible/effort:ring-ring/60",
+						// The brightest part of the slider, in either theme, with a hairline edge.
+						"absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[3px] border-[0.5px] border-(--color-border-strong) bg-white shadow-[0_1px_2px_rgb(0_0_0/0.2)] group-focus-visible/effort:ring-2 group-focus-visible/effort:ring-ring/60",
 						drag === undefined && "motion-safe:transition-[left] motion-safe:duration-150",
 						chosen < 0 && drag === undefined && sent === undefined && "opacity-70",
 					)}

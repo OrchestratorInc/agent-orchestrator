@@ -168,7 +168,7 @@ const TRIGGER_CLASS = cn(
 );
 const SUB_CLASS = "chat-settings-menu min-w-48 text-[12px]!";
 // Model rows shown before the list scrolls, so a long catalog never stretches the menu.
-const VISIBLE_MODEL_ROWS = 4;
+const VISIBLE_MODEL_ROWS = 7;
 const DIVIDER = "mt-1 border-t border-border pt-1";
 // Shared with the review controls' reviewer picker, which is laid out like this menu.
 export { TRIGGER_CLASS as CHAT_PICKER_TRIGGER_CLASS, SUB_CLASS as CHAT_PICKER_SUB_CLASS, DIVIDER as CHAT_PICKER_DIVIDER };
@@ -530,7 +530,8 @@ export function AgentModelPicker({
 	].filter(Boolean);
 	const settingsFooter = settingsGroups.length > 0
 		// Each group's line runs through the menu's padding to both edges.
-		? settingsGroups.map((group, index) => <div key={index} className={cn(DIVIDER, "-mx-(--space-1) px-(--space-1)")}>{group}</div>)
+		// Each line sits right under what is above it, with no gap over it.
+		? settingsGroups.map((group, index) => <div key={index} className="-mx-(--space-1) border-t border-border px-(--space-1) pt-1">{group}</div>)
 		: undefined;
 
 	return (
