@@ -96,6 +96,62 @@ func TestUsageLimitRefusedAtSendHoldsTheQueue(t *testing.T) {
 	}
 }
 
+func TestOnlyAUsageLimitFailureHoldsTheQueue(t *testing.T) {
+	ctx := context.Background()
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	for _, tc := range []struct {
+		name    string
+		state   domain.TurnState
+		message string
+		held    bool
+	}{
+		{"usage limit", domain.TurnStateFailed, refusal, true},
+		{"another failure", domain.TurnStateFailed, "API Error: 529 overloaded", false},
+		{"interrupted", domain.TurnStateInterrupted, refusal, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, session, conversation := seededChatConversation(t)
+			appendBranchPrompt(t, s, session, conversation, "generation-root", "prompt", "finish this task")
+			mustNoError(t, s.BindTurnToProvider(ctx, "turn-prompt", "provider-prompt", testNow))
+			mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-prompt", tc.state, tc.message, testNow))
+			if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || held != tc.held {
+				t.Fatalf("queue held = %v, %v, want %v", held, err, tc.held)
+			}
+		})
+	}
+}
+
+func TestCleanupKeepsOnlyTheHeldConversationsQueue(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	other, err := s.CreateConversation(ctx, "conversation-other", domain.ConversationScopeProject, "branches", session.ID, testNow)
+	mustNoError(t, err)
+	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
+	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
+	mustNoError(t, s.SettleTurnByID(ctx, "turn-limited", domain.TurnStateFailed, refusal, testNow))
+	for id, queued := range map[string]string{conversation.ID: "held", other.ID: "elsewhere"} {
+		if _, err := s.AppendUserMessage(ctx, id, session.ID, "generation-root", domain.ConversationMessage{
+			ID: "message-" + queued, Origin: domain.MessageOriginAutomation, Text: queued, ClientMessageID: "client-" + queued,
+		}, "turn-"+queued, testNow); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cleanup := func(heldState domain.TurnState) {
+		t.Helper()
+		if owned, err := s.CleanupOwnedControllerWorkKeepingHeldQueue(ctx, session.ID, conversation.ID, "generation-root", testNow); err != nil || !owned {
+			t.Fatalf("cleanup = %v, %v", owned, err)
+		}
+		for id, want := range map[string]domain.TurnState{"turn-held": heldState, "turn-elsewhere": domain.TurnStateFailed} {
+			if turn, err := s.TurnByID(ctx, id); err != nil || turn.State != want {
+				t.Fatalf("%s = %q, %v, want %q", id, turn.State, err, want)
+			}
+		}
+	}
+	cleanup(domain.TurnStateQueued)
+	mustNoError(t, s.ReleaseConversationQueue(ctx, conversation.ID))
+	cleanup(domain.TurnStateFailed)
+}
+
 func TestQueueHoldFollowsTheTurnThatOwnsIt(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)

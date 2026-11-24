@@ -575,6 +575,35 @@ func TestAccountHandoffKeepsTheHeldQueueWhenTheAgentStopsDuringPreflight(t *test
 	}
 }
 
+func TestHeldQueueFailsWhenTheAgentStopsOutsideAnAccountMove(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		accountMove bool
+	}{{"terminal switch", false}, {"aborted account move", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+			ctx := context.Background()
+			failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+			if err := hh.svc.ArmChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionDrain, tc.accountMove); err != nil {
+				t.Fatal(err)
+			}
+			if tc.accountMove {
+				hh.svc.AbortChatHandoff(testSession)
+			}
+			if err := hh.svc.Stop(ctx, testSession); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := hh.st.LoadConversationSnapshot(ctx, hh.ctrl.ConversationID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := turnStateByText(t, snapshot)["queued note"]; got != domain.TurnStateFailed {
+				t.Fatalf("queued note = %q after the agent stopped", got)
+			}
+		})
+	}
+}
+
 func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
 	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
 	ctx := context.Background()
@@ -593,6 +622,9 @@ func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
 		t.Fatalf("handoff note retry = %q", retry)
 	}
 	assertTurnStaysQueued(t, hh.harness, "queued note")
+	if held, err := hh.st.ConversationQueueHeld(ctx, source.ConversationID); err != nil || !held {
+		t.Fatalf("queue held = %v, %v while the retry runs", held, err)
+	}
 
 	retryID, found, err := hh.st.RetryTurnIDForSource(ctx, source.ConversationID, source.ID)
 	if err != nil || !found {
@@ -626,6 +658,31 @@ func TestAccountHandoffSkippedRetryReleasesTheHeldQueue(t *testing.T) {
 
 	if _, found, _ := hh.st.RetryTurnIDForSource(ctx, source.ConversationID, source.ID); found {
 		t.Fatal("retried after the session left the target account")
+	}
+	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+	})
+}
+
+func TestAccountHandoffGivingUpTheRetryReleasesTheHeldQueue(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	ctx := context.Background()
+	source := failUsageLimitedTurnBehindQueue(t, hh.harness, "queued note")
+	hh.tick(t)
+	hh.mover.finish(t, domain.SessionInterfaceTransitionCompleted)
+	if err := hh.st.EnqueueSessionInterfaceTransitionMessage(ctx, hh.mover.moves()[0].ID, "client-during-move", "sent during the move",
+		hh.now(), ports.MessageDeliveryOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := hh.svc.HandoffUsageLimitedTurns(ctx); err == nil {
+		t.Fatal("retried while a message sent during the move was still pending")
+	}
+	assertTurnStaysQueued(t, hh.harness, "queued note")
+
+	hh.advance(11 * time.Minute)
+	hh.tick(t)
+	if _, retry := handoffNotes(t, hh.harness, source.ID); retry != "skipped" {
+		t.Fatalf("handoff note retry = %q", retry)
 	}
 	hh.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
