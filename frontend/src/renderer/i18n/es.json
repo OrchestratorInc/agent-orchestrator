@@ -282,7 +282,7 @@
 	"agentSwitch.fastMode": "Modo rápido",
 	"agentSwitch.fastModeHint": "Respuestas más rápidas del mismo modelo, con un mayor consumo",
 	"agentSwitch.ultracode": "Ultracode",
-	"agentSwitch.ultracodeHint": "Los flujos de trabajo propios de Claude Code, con esfuerzo Extra alto",
+	"agentSwitch.ultracodeHint": "Los flujos de trabajo propios de Claude Code, con cualquier nivel de esfuerzo",
 	"agentSwitch.thinking": "Razonamiento",
 	"agentSwitch.loadingSettings": "Cargando ajustes",
 	"agentSwitch.autoCompact": "Compactación automática",

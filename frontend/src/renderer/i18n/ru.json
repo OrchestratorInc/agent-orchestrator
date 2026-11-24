@@ -275,7 +275,7 @@
 	"agentSwitch.fastMode": "Быстрый режим",
 	"agentSwitch.fastModeHint": "Более быстрые ответы той же модели при большем расходе",
 	"agentSwitch.ultracode": "Ultracode",
-	"agentSwitch.ultracodeHint": "Собственные процессы Claude Code с уровнем усилий «Очень высокое»",
+	"agentSwitch.ultracodeHint": "Собственные процессы Claude Code при любом уровне усилий",
 	"agentSwitch.thinking": "Размышление",
 	"agentSwitch.loadingSettings": "Загрузка настроек",
 	"agentSwitch.autoCompact": "Автосжатие",

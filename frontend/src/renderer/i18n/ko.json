@@ -281,7 +281,7 @@
 	"agentSwitch.fastMode": "빠른 모드",
 	"agentSwitch.fastModeHint": "같은 모델로 더 빠르게 응답합니다. 사용량이 더 많이 듭니다",
 	"agentSwitch.ultracode": "Ultracode",
-	"agentSwitch.ultracodeHint": "Claude Code 자체 워크플로를 매우 높음 추론 수준으로 실행",
+	"agentSwitch.ultracodeHint": "Claude Code 자체 워크플로를 모든 추론 수준에서 실행",
 	"agentSwitch.thinking": "사고",
 	"agentSwitch.loadingSettings": "설정 불러오는 중",
 	"agentSwitch.autoCompact": "자동 압축",

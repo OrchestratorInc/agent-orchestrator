@@ -106,7 +106,7 @@ export interface AgentSwitchProps {
 	onPendingChange: (next: PendingAgentSwitch | undefined) => void;
 	/** Switching is refused while the agent is working. */
 	disabled?: boolean;
-	/** Claude Code's Ultracode: Extra High effort plus its workflows, asked for by a keyword in each message. */
+	/** Claude Code's Ultracode: its own workflows at any effort level, asked for by a keyword in each message. */
 	ultracode?: { on: boolean; onChange: (on: boolean) => void };
 	/** When the running agent compacts on its own. Applies the next time it starts. */
 	autoCompact?: AutoCompactControl;
@@ -161,8 +161,8 @@ export interface PickerSource {
 	thinking?: boolean;
 	onToggleThinking?: (next: boolean) => void;
 	/**
-	 * Claude Code's Ultracode: a mode, not an effort level. It runs at Extra High with Claude Code's own
-	 * workflows, so turning it on sets that level. Undefined where it is not offered.
+	 * Claude Code's Ultracode: a mode beside the effort level, not one of its levels, and it works at any
+	 * of them. Undefined where it is not offered.
 	 */
 	ultracode?: boolean;
 	onToggleUltracode?: (next: boolean) => void;
@@ -965,10 +965,13 @@ function otherAgentSource(
 	const offersFast = Boolean(effortSource?.supportsFast);
 	const fastOn = offersFast && Boolean(pending?.fastMode);
 	const levels = (effortSource?.efforts ?? []).filter((value) => value && value.toLowerCase() !== "default");
-	// Ultracode runs at Extra High, so it is only for models that have that level.
-	const offersUltracode = harness === "claude-code" && levels.includes("xhigh");
+	// Ultracode works at any effort level, so every Claude Code model offers it.
+	const offersUltracode = harness === "claude-code";
 	const ultracodeOn = offersUltracode && Boolean(pending?.ultracode);
-	const keep = { harness, model: pending?.model, modelLabel: pending?.modelLabel, shownEffort: defaultEffort, fastMode: fastOn || undefined, autoCompactWindow: pending?.autoCompactWindow };
+	const keep = {
+		harness, model: pending?.model, modelLabel: pending?.modelLabel, shownEffort: defaultEffort,
+		fastMode: fastOn || undefined, ultracode: ultracodeOn || undefined, autoCompactWindow: pending?.autoCompactWindow,
+	};
 	return {
 		// The plain row is only for an agent that lists no models.
 		models: listed.length > 0 ? listed : [{ id: "", label: t("agentSwitch.defaultModel") }],
@@ -987,12 +990,11 @@ function otherAgentSource(
 		},
 		efforts: levels.map((value) => ({ value, label: formatEffortLabel(value, t) })),
 		effort: pending?.effort ?? defaultEffort,
-		// Ultracode runs only at Extra High: another level turns it off.
-		onPickEffort: (effort) => onPick({ ...keep, effort, ultracode: (ultracodeOn && effort === "xhigh") || undefined }),
+		onPickEffort: (effort) => onPick({ ...keep, effort }),
 		fast: offersFast ? fastOn : undefined,
-		onToggleFast: (fast) => onPick({ ...keep, effort: pending?.effort, ultracode: pending?.ultracode, fastMode: fast || undefined }),
+		onToggleFast: (fast) => onPick({ ...keep, effort: pending?.effort, fastMode: fast || undefined }),
 		ultracode: offersUltracode ? ultracodeOn : undefined,
-		onToggleUltracode: (on) => onPick({ ...keep, effort: on ? "xhigh" : pending?.effort, ultracode: on || undefined }),
+		onToggleUltracode: (on) => onPick({ ...keep, effort: pending?.effort, ultracode: on || undefined }),
 	};
 }
 

@@ -682,7 +682,7 @@ describe("AgentModelPicker", () => {
 			open(undefined, false, "claude-code", { fast: false, onToggleFast: vi.fn(), ultracode: false, onToggleUltracode: vi.fn() });
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			await user.hover(screen.getByRole("menuitemcheckbox", { name: "Ultracode" }));
-			expect(await screen.findByRole("tooltip")).toHaveTextContent("Claude Code's own workflows, at Extra high effort");
+			expect(await screen.findByRole("tooltip")).toHaveTextContent("Claude Code's own workflows, at any effort level");
 			await user.hover(screen.getByRole("menuitemcheckbox", { name: "Fast mode" }));
 			await waitFor(() => expect(screen.getByRole("tooltip")).toHaveTextContent("Faster replies from the same model"));
 		});
@@ -702,23 +702,23 @@ describe("AgentModelPicker", () => {
 			expect(screen.queryByRole("menuitemcheckbox", { name: "Ultracode" })).not.toBeInTheDocument();
 		});
 
-		it("sets Extra high on a switch to Claude Code, and another level turns it off", async () => {
+		it("turns on for a switch to Claude Code without changing the effort", async () => {
 			const user = userEvent.setup();
-			const { onPendingChange } = open({ harness: "claude-code" }, false, "codex");
+			const { onPendingChange } = open({ harness: "claude-code", effort: "high" }, false, "codex");
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			await user.click(await screen.findByRole("menuitemcheckbox", { name: "Ultracode" }));
-			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ harness: "claude-code", effort: "xhigh", ultracode: true }));
+			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ harness: "claude-code", effort: "high", ultracode: true }));
 			expect(screen.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuemax", "2");
 		});
 
-		it("turns off when a switch to Claude Code picks another level", async () => {
+		it("stays on when a switch to Claude Code picks another level", async () => {
 			const user = userEvent.setup();
 			const { onPendingChange } = open({ harness: "claude-code", effort: "xhigh", ultracode: true }, false, "codex");
 			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
 			expect(await screen.findByRole("menuitemcheckbox", { name: "Ultracode" })).toHaveAttribute("aria-checked", "true");
 			act(() => screen.getByRole("slider", { name: "Effort" }).focus());
 			await user.keyboard("{ArrowRight}");
-			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ effort: "max", ultracode: undefined }));
+			expect(onPendingChange).toHaveBeenLastCalledWith(expect.objectContaining({ effort: "max", ultracode: true }));
 		});
 	});
 

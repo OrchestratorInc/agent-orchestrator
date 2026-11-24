@@ -366,11 +366,8 @@ export function TurnSettingsBar({
 		? { fast: Boolean(settings.fastMode), onToggleFast: (on: boolean) => onChange({ ...settings, fastMode: on || undefined }) }
 		: fastControls;
 	const { ultracode, autoCompact } = agentSwitch ?? {};
-	// Ultracode runs at Extra High, so it is only for models that have that level.
-	const offersUltracode = Boolean(
-		ultracode && harness === "claude-code" && onChangeConfigOption &&
-		acpEffortOption?.choices.some((choice) => choice.value === "xhigh"),
-	);
+	// Ultracode works at any effort level, so it is not tied to one.
+	const offersUltracode = Boolean(ultracode && harness === "claude-code");
 	const compactKind = autoCompact ? autoCompactKind(harness, primaryModelOption?.currentValue) : undefined;
 	// A model the installed CLI is too old for is shown, disabled, but never sent.
 	const nativeUnavailable = (id: string) => Boolean(displayModels.find((model) => model.id === id)?.unavailableReason);
@@ -417,22 +414,10 @@ export function TurnSettingsBar({
 				? acpEffortOption.currentValue
 				: undefined,
 			onPickEffort: acpEffortOption && onChangeConfigOption
-				? (value) => {
-					// Ultracode runs only at Extra High: another level turns it off.
-					if (value !== ULTRACODE_EFFORT) ultracode?.onChange(false);
-					applyOption(acpEffortOption.id, { value });
-				}
+				? (value) => applyOption(acpEffortOption.id, { value })
 				: undefined,
-			// A mode beside Fast mode, not an effort level: on, it sets Extra High.
-			...(offersUltracode && acpEffortOption && ultracode
-				? {
-					ultracode: ultracode.on,
-					onToggleUltracode: (on: boolean) => {
-						ultracode.onChange(on);
-						if (on && acpEffortOption.currentValue !== ULTRACODE_EFFORT) applyOption(acpEffortOption.id, { value: ULTRACODE_EFFORT });
-					},
-				}
-				: {}),
+			// A mode beside Fast mode, not an effort level.
+			...(offersUltracode && ultracode ? { ultracode: ultracode.on, onToggleUltracode: ultracode.onChange } : {}),
 			...fastControls,
 			...(thinkingOption && onChangeConfigOption
 				? { thinking: optionIsEnabled(thinkingOption), onToggleThinking: (on: boolean) => setConfigToggle(thinkingOption, on, applyOption) }
@@ -1493,9 +1478,6 @@ export function ComposerMenuRow({
 		</OptionMenuItem>
 	);
 }
-
-// The effort level Ultracode runs at.
-const ULTRACODE_EFFORT = "xhigh";
 
 /** Claude Code turns Ultracode on for a turn when the user's message names it. */
 export function withUltracode(text: string): string {

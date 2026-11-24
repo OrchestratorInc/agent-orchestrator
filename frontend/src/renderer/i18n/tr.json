@@ -281,7 +281,7 @@
 	"agentSwitch.fastMode": "Hızlı mod",
 	"agentSwitch.fastModeHint": "Aynı modelden daha hızlı yanıtlar, daha yüksek kullanımla",
 	"agentSwitch.ultracode": "Ultracode",
-	"agentSwitch.ultracodeHint": "Claude Code'un kendi iş akışları, Çok yüksek çabayla",
+	"agentSwitch.ultracodeHint": "Claude Code'un kendi iş akışları, her çaba düzeyinde",
 	"agentSwitch.thinking": "Düşünme",
 	"agentSwitch.loadingSettings": "Ayarlar yükleniyor",
 	"agentSwitch.autoCompact": "Otomatik sıkıştırma",

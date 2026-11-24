@@ -1817,21 +1817,20 @@ describe("agent picker effort names", () => {
 		const source = agentPicker.current!;
 		expect(source.efforts.map((effort) => effort.value)).toEqual(["high", "xhigh", "max"]);
 		expect(source.ultracode).toBe(false);
-		// On, it runs at Extra high.
+		// It works at any level: turning it on leaves the effort alone, and so does a level its own.
 		act(() => source.onToggleUltracode?.(true));
 		expect(ultracode.onChange).toHaveBeenLastCalledWith(true);
-		expect(onChangeConfigOption).toHaveBeenLastCalledWith("effort", { value: "xhigh" });
-		// Another level turns it off.
+		expect(onChangeConfigOption).not.toHaveBeenCalled();
 		act(() => source.onPickEffort?.("max"));
-		expect(ultracode.onChange).toHaveBeenLastCalledWith(false);
+		expect(ultracode.onChange).toHaveBeenCalledTimes(1);
 		expect(onChangeConfigOption).toHaveBeenLastCalledWith("effort", { value: "max" });
 	});
 
-	it("offers no Ultracode on a model without Extra high", () => {
+	it("offers Ultracode on a model without Extra high", () => {
 		agentPicker.current = undefined;
 		render(<TurnSettingsBar harness="claude-code" models={[]} settings={{}} configOptions={options([{ value: "high", name: "High" }])}
 			onChangeConfigOption={vi.fn()} agentSwitch={{ projectId: "p", onPendingChange: vi.fn(), ultracode: { on: false, onChange: vi.fn() } }} />);
-		expect(agentPicker.current!.ultracode).toBeUndefined();
+		expect(agentPicker.current!.ultracode).toBe(false);
 	});
 
 	it("keeps the names a provider gives its levels", () => {
