@@ -3490,6 +3490,24 @@ describe("ChatWorkspace timeline", () => {
 		expect(send).not.toHaveBeenCalled();
 	});
 
+	it("offers Retry update for a failed version switch, but not on an archived chat", () => {
+		const resume = vi.fn();
+		const view = (isTerminated: boolean) => (
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, sessionId: "stale-archived", controller: { state: "stopped" } }}
+				session={{ ...chatSession, id: "stale-archived", isTerminated, staleBinary: { version: "2.1.0", since: "2026-11-23T11:00:00Z", switchFailedAt: "2026-11-23T12:00:00Z" } }}
+				onResumeAgent={resume}
+			/>
+		);
+		const { rerender } = render(view(false));
+		expect(screen.getByRole("button", { name: /Retry update/ })).toBeInTheDocument();
+
+		// Retrying would restore the archived session and start its agent.
+		rerender(view(true));
+		expect(screen.queryByRole("button", { name: /Retry update/ })).not.toBeInTheDocument();
+		expect(resume).not.toHaveBeenCalled();
+	});
+
 	it("sends from an archived chat once, and shows the restore in the composer while it runs", async () => {
 		const user = userEvent.setup();
 		const restore = vi.fn();

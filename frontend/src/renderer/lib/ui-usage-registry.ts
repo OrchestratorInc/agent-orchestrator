@@ -20,6 +20,7 @@ export const UI_CONTROLS = [
 	"sidebar.project_row",
 	"sidebar.project_toggle",
 	"sidebar.project_new_session",
+	"sidebar.project_orchestrator",
 	"sidebar.project_menu",
 	"sidebar.project_unpin",
 	"sidebar.session_row",
@@ -176,6 +177,7 @@ export const ERROR_CODES = [
 	"DATADIR_UNWRITABLE",
 	"AUTH_REQUIRED",
 	"PROVIDER_KEY_MISSING",
+	"USAGE_LIMIT",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
