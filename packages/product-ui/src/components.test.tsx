@@ -298,12 +298,12 @@ describe("portable leaf components", () => {
 		expect(shown).toHaveTextContent("2 failing");
 		expect(shown?.querySelector("svg")).toBeNull();
 		expect([...tally.querySelectorAll("[data-state].sr-only")].map((count) => count.getAttribute("data-state"))).toEqual(["running", "passed"]);
-		// The bar: done on the left, each state sized by its count; only the running segment pulses.
+		// The bar: done on the left, each state sized by its count; static colours, nothing pulses.
 		const bar = screen.getByTestId("pr-checks-bar");
 		expect([...bar.children].map((segment) => segment.getAttribute("data-state"))).toEqual(["passed", "running", "failed"]);
 		expect((bar.children[0] as HTMLElement).style.flexGrow).toBe("9");
-		expect(bar.querySelector('[data-state="running"]')).toHaveClass("motion-safe:animate-status-pulse");
-		expect(bar.querySelector('[data-state="passed"]')).not.toHaveClass("motion-safe:animate-status-pulse");
+		expect(bar.querySelector('[data-state="running"]')).toHaveClass("bg-status-working");
+		expect(bar.querySelector("[class*='animate-']")).toBeNull();
 		expect(bar).toHaveAttribute("title", "2 failing · 1 running · 9 passed");
 		// A row without a link of its own has no arrow beside it.
 		expect(screen.queryByRole("link")).not.toBeInTheDocument();

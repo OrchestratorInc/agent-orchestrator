@@ -72,7 +72,31 @@ export type PRChecksTally = {
 	counts: PRChecksCount[];
 };
 
+/** A bar segment's colour: what that share of the cell stands for. */
+export type PRStripTone = "success" | "passive" | "neutral" | "working" | "warning" | "error";
+
+/**
+ * One cell of the readiness strip (Checks, Comments, Approvals), as on GitHub's
+ * merge box: a title, a short note only when something needs a look, and a
+ * segmented bar. Everything already translated.
+ */
+export type PRStripCell = {
+	key: "ci" | "comments" | "approvals";
+	title: string;
+	/** What still needs a look ("2 failing", "1 unresolved"); left out when nothing does. */
+	note?: string;
+	noteTone?: "error" | "warning" | "neutral";
+	/** Left to right; an empty list draws an empty, hatched bar. */
+	segments: { tone: PRStripTone; count: number; label: string }[];
+	/** Every count in words, for screen readers and the bar's tooltip. */
+	summary: string;
+	/** A line shown when the cell opens, such as who approved. */
+	detail?: string;
+};
+
 export type PRCardPresentation = {
+	/** The strip of Checks, Comments and Approvals cells the inspector's card shows in place of readiness rows. */
+	strip?: PRStripCell[];
 	primary: PRCardStatus;
 	supporting: PRCardStatus[];
 	/** Compact, priority-ordered rows used by pull-request cards. */

@@ -9,6 +9,8 @@ import type {
 	PRCardStatus,
 	PRCheckState,
 	PRChecksTally,
+	PRStripCell,
+	PRStripTone,
 	PRDisplayTone,
 	PRNoun,
 	PRSummaryLink,
@@ -309,6 +311,21 @@ export function PRCardStatusSummary({
 		(status) => status.key === "lifecycle" || !omitted?.has(status.key),
 	);
 	const rows = presentation.statusRows?.filter((status) => status.key === "lifecycle" || !omitted?.has(status.key));
+	if (presentation.strip && presentation.readinessRows && presentation.readiness && compactReadiness) {
+		return (
+			<ReadinessStrip
+				action={action}
+				cells={presentation.strip}
+				className={className}
+				details={readinessDetails}
+				explained={presentation.readinessExplained === true}
+				externalLink={externalLink}
+				readiness={presentation.readiness}
+				reviewDetailsAction={reviewDetailsAction}
+				rows={presentation.readinessRows}
+			/>
+		);
+	}
 	if (presentation.readinessRows && presentation.readiness && compactReadiness) {
 		return (
 			<ReadinessFacts
@@ -589,7 +606,7 @@ const barClass: Record<PRCheckState, string> = {
 	passed: "bg-success",
 	skipped: "bg-passive/50",
 	pending: "bg-muted-foreground/45",
-	running: "bg-status-working motion-safe:animate-status-pulse",
+	running: "bg-status-working",
 	failed: "bg-error",
 };
 
@@ -676,6 +693,147 @@ function ReadinessFacts({
 				/>
 			</div>
 			{action ? <div className="shrink-0">{action}</div> : null}
+		</div>
+	);
+}
+
+const stripToneClass: Record<PRStripTone, string> = {
+	success: "bg-success",
+	passive: "bg-passive/50",
+	neutral: "bg-muted-foreground/45",
+	working: "bg-status-working",
+	warning: "bg-warning",
+	error: "bg-error",
+};
+const stripNoteClass = { error: "text-error", warning: "text-warning", neutral: "text-muted-foreground" } as const;
+
+/** A strip cell's bar: a static segment per share, or an empty hatched track when there is nothing to count. */
+function StripBar({ cell }: { cell: PRStripCell }) {
+	const segments = cell.segments.filter((segment) => segment.count > 0);
+	return (
+		<span aria-hidden="true" className="mt-1.5 flex h-1.5 min-w-0 gap-0.5 overflow-hidden rounded-full" data-testid={`pr-strip-bar-${cell.key}`} title={cell.summary}>
+			{segments.length > 0 ? segments.map((segment, index) => (
+				<span
+					className={cn("h-full min-w-1 first:rounded-l-full last:rounded-r-full", stripToneClass[segment.tone])}
+					data-tone={segment.tone}
+					key={`${segment.tone}-${index}`}
+					style={{ flexGrow: segment.count, flexBasis: 0 }}
+				/>
+			)) : (
+				<span className="h-full flex-1 rounded-full border border-border bg-[repeating-linear-gradient(135deg,var(--color-border)_0_2px,transparent_2px_5px)]" data-tone="empty" />
+			)}
+		</span>
+	);
+}
+
+/**
+ * The merge readiness as GitHub's merge box draws it: a cell each for Checks,
+ * Comments (when the PR has any) and Approvals (when the repo requires them),
+ * each a title, a note for what still needs a look, and a bar. A cell opens its
+ * details under the whole strip, flush with it. A conflict, which no cell
+ * covers, gets its own line above.
+ */
+function ReadinessStrip({
+	action,
+	cells,
+	className,
+	details,
+	explained,
+	externalLink,
+	readiness,
+	reviewDetailsAction,
+	rows,
+}: {
+	action?: ReactNode;
+	cells: PRStripCell[];
+	className?: string;
+	details?: Partial<Record<string, ReactNode>>;
+	explained: boolean;
+	externalLink: ExternalLinkComponent;
+	readiness: NonNullable<PRCardPresentation["readiness"]>;
+	reviewDetailsAction?: ReactNode;
+	rows: PRCardStatus[];
+}) {
+	const [open, setOpen] = useState<PRStripCell["key"] | null>(null);
+	const regionId = useId();
+	const reduceMotion = useReducedMotion();
+	const conflict = rows.find((status) => status.key === "merge" && status.tone === "error");
+	// Without a fact that explains it, the verdict itself says why the PR can't merge.
+	const verdict = !explained && !conflict && (readiness.tone === "error" || readiness.tone === "warning") ? readiness : undefined;
+	const panel = (cell: PRStripCell): ReactNode => {
+		const node = cell.key === "ci" ? details?.ci : undefined;
+		const review = cell.key !== "ci" ? reviewDetailsAction : undefined;
+		if (!node && !cell.detail && !review) return null;
+		return (
+			<div className="flex min-w-0 flex-col gap-1.5">
+				{cell.detail ? <p className="m-0 text-xs leading-4 text-muted-foreground">{cell.detail}</p> : null}
+				{node}
+				{review ? <div className="min-w-0">{review}</div> : null}
+			</div>
+		);
+	};
+	const narrow = cells.length >= 3;
+	const openCell = cells.find((cell) => cell.key === open);
+	const openPanel = openCell ? panel(openCell) : null;
+	return (
+		<div className={cn("min-w-0 border-t border-border pt-2", className)} data-testid="pr-readiness-strip">
+			{conflict ? (
+				<div className="mb-2 min-w-0">
+					<StatusRow details={details?.merge} externalLink={externalLink} status={conflict} />
+				</div>
+			) : verdict ? (
+				<p className={cn("m-0 mb-2 text-xs font-medium leading-4", toneClass[verdict.tone])}>{verdict.label}</p>
+			) : null}
+			<div className="grid min-w-0 gap-3" style={{ gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))` }}>
+				{cells.map((cell) => {
+					const opens = panel(cell) !== null;
+					const note = cell.note ? <span className={cn("min-w-0 truncate text-micro tabular-nums", stripNoteClass[cell.noteTone ?? "neutral"])} data-note="">{cell.note}</span> : null;
+					const head = (
+						<>
+							<span className="flex min-w-0 items-baseline gap-1.5 text-xs leading-4">
+								<span className="shrink-0 font-medium text-foreground">{cell.title}</span>
+								{narrow ? null : note}
+								{opens ? <ChevronIcon aria-hidden="true" className="ml-auto size-icon-2xs shrink-0 self-center text-muted-foreground" direction={open === cell.key ? "up" : "down"} /> : null}
+							</span>
+							<span className="sr-only">, {cell.summary}</span>
+							<StripBar cell={cell} />
+							{/* Three cells leave no room beside the title, so the note goes under the bar and the bars stay level. */}
+							{narrow && note ? <span className="mt-1 flex min-w-0">{note}</span> : null}
+						</>
+					);
+					return opens ? (
+						<button
+							aria-controls={open === cell.key ? regionId : undefined}
+							aria-expanded={open === cell.key}
+							className="flex min-w-0 flex-col rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+							data-cell={cell.key}
+							key={cell.key}
+							onClick={() => setOpen((value) => (value === cell.key ? null : cell.key))}
+							type="button"
+						>
+							{head}
+						</button>
+					) : (
+						<div className="flex min-w-0 flex-col" data-cell={cell.key} key={cell.key}>{head}</div>
+					);
+				})}
+			</div>
+			<AnimatePresence initial={false}>
+				{openPanel ? (
+					<motion.div
+						animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+						className="min-w-0"
+						exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+						id={regionId}
+						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+						key={open}
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+					>
+						<div className="min-w-0 pt-2.5" data-testid="pr-strip-panel">{openPanel}</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+			{action ? <div className="mt-2 flex justify-end">{action}</div> : null}
 		</div>
 	);
 }
