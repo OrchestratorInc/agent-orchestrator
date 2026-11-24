@@ -95,8 +95,7 @@ export function ComposerAttachmentTile({
 	const src = previewsLocally ? localUrl : mediaUrl;
 	const details = [attachmentTypeLabel(name), bytes === undefined ? undefined : formatAttachmentSize(bytes)].filter(Boolean).join(" · ") || undefined;
 	if (imageSrc) return <ImageTile src={imageSrc} name={name} details={details}>{remove}</ImageTile>;
-	// Keyed by source: a new source gets its own load attempt, failure state and duration.
-	if (previewKind === "video" && src) return <VideoTile key={src} src={src} name={name} details={details}>{remove}</VideoTile>;
+	if (previewKind === "video" && src) return <VideoTile src={src} name={name} details={details}>{remove}</VideoTile>;
 	return (
 		<FileCard name={name} bytes={bytes}>
 			{previewKind === "pdf" && src ? <PdfThumbnail key={src} src={src} name={name} /> : null}
@@ -126,8 +125,12 @@ function ImageTile({ src, name, details, children }: { src: string; name: string
 
 function VideoTile({ src, name, details, children }: { src: string; name: string; details?: string; children: ReactNode }) {
 	const [open, setOpen] = useState(false);
-	const [duration, setDuration] = useState<number>();
-	const [failed, setFailed] = useState(false);
+	// Failure and length belong to one source: when the picked file gives way to the staged
+	// copy they start over, while an open preview stays open.
+	const [failedSrc, setFailedSrc] = useState<string>();
+	const [measured, setMeasured] = useState<{ src: string; seconds: number }>();
+	const failed = failedSrc === src;
+	const duration = measured?.src === src ? measured.seconds : undefined;
 	return (
 		<li title={name} className={cn(TILE_CLASS, "size-14")}>
 			<Pressable
@@ -145,9 +148,9 @@ function VideoTile({ src, name, details, children }: { src: string; name: string
 						tabIndex={-1}
 						onLoadedMetadata={(event) => {
 							const value = event.currentTarget.duration;
-							if (Number.isFinite(value)) setDuration(value);
+							if (Number.isFinite(value)) setMeasured({ src, seconds: value });
 						}}
-						onError={() => setFailed(true)}
+						onError={() => setFailedSrc(src)}
 						className="pointer-events-none size-full object-cover"
 					/>
 				)}
