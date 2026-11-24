@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 
@@ -79,13 +80,21 @@ func (s *server) loadCuaTools(ctx context.Context) {
 	}
 }
 
-// cuaInputSchema returns the driver's schema, or an open object schema when
-// the driver sent none, since MCP requires every tool to declare one.
+// cuaInputSchema returns the driver's schema with an object root, since MCP
+// requires every tool to declare one: a schema without a root type keeps its
+// properties under type "object", and a missing or non-object schema becomes
+// an open object.
 func cuaInputSchema(schema map[string]any) map[string]any {
-	if schema["type"] != "object" {
+	rootType, hasType := schema["type"]
+	if schema == nil || (hasType && rootType != "object") {
 		return map[string]any{"type": "object"}
 	}
-	return schema
+	if hasType {
+		return schema
+	}
+	withType := maps.Clone(schema)
+	withType["type"] = "object"
+	return withType
 }
 
 // callCua runs one Cua Driver tool through the daemon and returns its result

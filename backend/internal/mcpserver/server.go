@@ -64,16 +64,33 @@ func newServer(daemon Daemon, version string) *server {
 	s.mcp.AddTool(htmlPreviewTool, s.callHTMLPreview)
 	s.mcp.AddTool(htmlRenderTool, s.callHTMLRender)
 	// Computer use tools come from the daemon, so they are listed lazily: each
-	// tools/list or tools/call tries again until the daemon can list them.
+	// tools/list, or call of a tool that is not one of the HTML tools, tries
+	// again until the daemon can list them. HTML calls never wait on it.
 	s.mcp.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
-			if method == "tools/list" || method == "tools/call" {
+			if needsCuaTools(method, req) {
 				s.loadCuaTools(ctx)
 			}
 			return next(ctx, method, req)
 		}
 	})
 	return s
+}
+
+// needsCuaTools reports whether a request may need the computer-use tools:
+// a tools/list, or a tools/call of any tool but the HTML ones.
+func needsCuaTools(method string, req mcp.Request) bool {
+	switch method {
+	case "tools/list":
+		return true
+	case "tools/call":
+		call, ok := req.(*mcp.CallToolRequest)
+		if !ok || call.Params == nil {
+			return true
+		}
+		return call.Params.Name != htmlPreviewTool.Name && call.Params.Name != htmlRenderTool.Name
+	}
+	return false
 }
 
 type nopWriteCloser struct{ io.Writer }
