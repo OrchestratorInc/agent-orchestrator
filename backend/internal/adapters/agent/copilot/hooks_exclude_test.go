@@ -103,6 +103,59 @@ func TestInstallAgentProfileDoesNotRewriteNormalizedExclude(t *testing.T) {
 	}
 }
 
+func TestInstallAgentProfileNormalizesCRLFLegacyExcludeBlocks(t *testing.T) {
+	existing := "# user's own rules\r\n/build\r\n" +
+		testCopilotExcludeHeader + "\r\n/.github/agents/ao-work-1.agent.md\r\n" +
+		testCopilotExcludeHeader + "\r\n/.github/agents/ao-work-2.agent.md\r\n" +
+		testCopilotExcludePattern + "\r\n" +
+		"/cache/\r\n"
+	workspace := copilotWorkspaceWithExclude(t, existing)
+
+	installCopilotTestProfile(t, workspace, "work-3")
+
+	want := "# user's own rules\r\n/build\r\n" +
+		testCopilotExcludeHeader + "\r\n" + testCopilotExcludePattern + "\r\n" +
+		"/cache/\r\n"
+	if got := readCopilotExclude(t, workspace); got != want {
+		t.Fatalf("exclude = %q, want %q", got, want)
+	}
+}
+
+func TestInstallAgentProfileAppendsCRLFBlockToCRLFExclude(t *testing.T) {
+	existing := "# user's own rules\r\n/build"
+	workspace := copilotWorkspaceWithExclude(t, existing)
+
+	installCopilotTestProfile(t, workspace, "fresh")
+
+	want := existing + "\r\n" + testCopilotExcludeHeader + "\r\n" + testCopilotExcludePattern + "\r\n"
+	if got := readCopilotExclude(t, workspace); got != want {
+		t.Fatalf("exclude = %q, want %q", got, want)
+	}
+}
+
+func TestInstallAgentProfileDoesNotRewriteNormalizedCRLFExclude(t *testing.T) {
+	existing := "/build\r\n" + testCopilotExcludeHeader + "\r\n" + testCopilotExcludePattern + "\r\n"
+	workspace := copilotWorkspaceWithExclude(t, existing)
+	excludePath := filepath.Join(workspace, ".git", "info", "exclude")
+	wantModTime := time.Unix(123, 0)
+	if err := os.Chtimes(excludePath, wantModTime, wantModTime); err != nil {
+		t.Fatal(err)
+	}
+
+	installCopilotTestProfile(t, workspace, "fresh")
+
+	info, err := os.Stat(excludePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(wantModTime) {
+		t.Fatalf("normalized CRLF exclude was rewritten: modtime = %s, want %s", info.ModTime(), wantModTime)
+	}
+	if got := readCopilotExclude(t, workspace); got != existing {
+		t.Fatalf("exclude = %q, want %q", got, existing)
+	}
+}
+
 func copilotWorkspaceWithExclude(t *testing.T, existing string) string {
 	t.Helper()
 	workspace := t.TempDir()

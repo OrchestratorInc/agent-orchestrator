@@ -241,18 +241,27 @@ func ignoreCopilotPath(workspacePath, pattern string) error {
 	return nil
 }
 
+// normalizeCopilotExcludes collapses AO's Copilot exclude entries (legacy
+// per-session pairs and duplicate glob copies) into one header+glob block.
+// Lines are compared without their terminator so CRLF files match too; every
+// kept line, including a reused AO block, retains its original line ending so
+// an already-normalized file round-trips byte-for-byte.
 func normalizeCopilotExcludes(data, pattern string) string {
 	lines := strings.SplitAfter(data, "\n")
 	kept := make([]string, 0, len(lines)+2)
 	inserted := false
+	newline := "\n"
+	if strings.Contains(data, "\r\n") {
+		newline = "\r\n"
+	}
 
 	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSuffix(lines[i], "\n")
+		line, eol := splitExcludeLine(lines[i])
 		if line == copilotAgentExcludeHeader && i+1 < len(lines) {
-			next := strings.TrimSuffix(lines[i+1], "\n")
+			next, nextEOL := splitExcludeLine(lines[i+1])
 			if next == pattern || isLegacyCopilotAgentExclude(next) {
 				if !inserted {
-					kept = append(kept, copilotAgentExcludeHeader+"\n", pattern+"\n")
+					kept = append(kept, lines[i], pattern+nextEOL)
 					inserted = true
 				}
 				i++
@@ -261,7 +270,7 @@ func normalizeCopilotExcludes(data, pattern string) string {
 		}
 		if line == pattern {
 			if !inserted {
-				kept = append(kept, copilotAgentExcludeHeader+"\n", pattern+"\n")
+				kept = append(kept, copilotAgentExcludeHeader+newline, pattern+eol)
 				inserted = true
 			}
 			continue
@@ -274,9 +283,21 @@ func normalizeCopilotExcludes(data, pattern string) string {
 		return body
 	}
 	if body != "" && !strings.HasSuffix(body, "\n") {
-		body += "\n"
+		body += newline
 	}
-	return body + copilotAgentExcludeHeader + "\n" + pattern + "\n"
+	return body + copilotAgentExcludeHeader + newline + pattern + newline
+}
+
+// splitExcludeLine separates a line produced by strings.SplitAfter(_, "\n")
+// into its content and its terminator ("\r\n", "\n", or "" at EOF).
+func splitExcludeLine(raw string) (line, eol string) {
+	if content, ok := strings.CutSuffix(raw, "\r\n"); ok {
+		return content, "\r\n"
+	}
+	if content, ok := strings.CutSuffix(raw, "\n"); ok {
+		return content, "\n"
+	}
+	return raw, ""
 }
 
 func isLegacyCopilotAgentExclude(line string) bool {
