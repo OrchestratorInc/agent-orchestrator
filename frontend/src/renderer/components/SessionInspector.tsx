@@ -86,6 +86,8 @@ import {
 } from "../hooks/useSessionScmSummary";
 import { sessionWorkspaceFilesQueryKey, sessionWorkspaceHistoryQueryOptions, useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { cloudWorkspaceReviewSummaryQueryOptions } from "../hooks/useCloudWorkspaceReview";
+import { useCloudWorkspaceReady } from "../hooks/useCloudWorkspaceReady";
 import { useSendToSessionWorker } from "../hooks/useSendToSessionWorker";
 import { sanitizeWorkerMessagePart } from "../lib/worker-message";
 import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
@@ -249,14 +251,15 @@ export const SessionInspector = memo(function SessionInspector({
 	const localWorkspaceData = session ? inspectorQueryClient.getQueryData<{ files?: unknown[] }>(sessionWorkspaceFilesQueryKey(session.id, hostId)) : undefined;
 	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
 	const cloudOrgId = session?.cloud?.orgId;
+	const cloudWorkspaceReady = useCloudWorkspaceReady(session);
 	const cloudReview = useQuery({
-		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session?.id ?? "", "summary"],
-		// Only a connected worker answers for its files, as in the Files panel: a
-		// waking session's count is not polled until its worker is back, and the
-		// count read before stays on the tab meanwhile.
-		enabled: cloudReady && session?.cloud !== undefined && cloudOrgId !== undefined && session.runtimeConnected === true,
-		refetchInterval: 5_000,
-		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session!.id),
+		...cloudWorkspaceReviewSummaryQueryOptions({
+			client: cloudCpClient, baseUrl: cloudBaseUrl, orgId: cloudOrgId ?? "", sessionId: session?.id ?? "",
+			// Only a worker with its workspace ready answers for its files, as in
+			// the Files panel: a waking or starting session's count is not polled
+			// until it is, and the count read before stays on the tab meanwhile.
+			enabled: cloudReady && session?.cloud !== undefined && cloudOrgId !== undefined && cloudWorkspaceReady,
+		}),
 	});
 	const cloudFilesChangedCount = cloudReview.data?.summary.files;
 	const filesChangedCount = session?.cloud ? (cloudFilesChangedCount ? cloudFilesChangedCount : undefined) : localFilesChangedCount;
@@ -1655,11 +1658,13 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 	// same read (and cache entry) the inspector polls for its Files count.
 	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
 	const cloudOrgId = session.cloud?.orgId;
+	const cloudWorkspaceReady = useCloudWorkspaceReady(session);
 	const cloudReview = useQuery({
-		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session.id, "summary"],
-		enabled: cloudReady && cloudOrgId !== undefined && session.runtimeConnected === true && session.kind !== "orchestrator",
+		...cloudWorkspaceReviewSummaryQueryOptions({
+			client: cloudCpClient, baseUrl: cloudBaseUrl, orgId: cloudOrgId ?? "", sessionId: session.id, visible: false,
+			enabled: cloudReady && cloudOrgId !== undefined && cloudWorkspaceReady && session.kind !== "orchestrator",
+		}),
 		placeholderData: (previous) => previous,
-		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session.id),
 	});
 	const commits = session.cloud ? cloudReview.data?.commits : history.data?.commits;
 	const events: SortableTimelineEvent[] = [];

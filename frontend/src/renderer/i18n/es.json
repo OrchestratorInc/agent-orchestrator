@@ -419,6 +419,7 @@
 	"cloud.startupError.workspaceSetupNotReadyTitle": "La configuración del espacio de trabajo no terminó",
 	"cloud.startupError.projectSetupFailedTitle": "El script de configuración del proyecto falló",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "La extracción del repositorio falló",
+	"cloud.startupError.conversationRestoreFailedTitle": "No se pudo restaurar la conversación",
 	"cloud.startupError.workingDirectoryUnusableTitle": "No se puede usar el directorio de trabajo",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "La carpeta de trabajo ya está en uso",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "La carpeta de trabajo no se conserva entre reinicios",

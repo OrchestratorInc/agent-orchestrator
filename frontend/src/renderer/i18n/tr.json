@@ -380,6 +380,7 @@
 	"cloud.startupError.workspaceSetupNotReadyTitle": "Çalışma alanının kurulumu tamamlanmadı",
 	"cloud.startupError.projectSetupFailedTitle": "Projenin Kurulum betiği başarısız oldu",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "Depo dalına geçilemedi",
+	"cloud.startupError.conversationRestoreFailedTitle": "Konuşma geri yüklenemedi",
 	"cloud.startupError.workingDirectoryUnusableTitle": "Çalışma dizini kullanılamıyor",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "Çalışma klasörü zaten kullanılıyor",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "Çalışma klasörü yeniden başlatmalar arasında korunmuyor",

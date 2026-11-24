@@ -130,7 +130,8 @@ import {
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, requestCloudWorkspaceCheckout, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { cloudWorkerStartingWait, recordCloudWorkspaceStartupEvent } from "../lib/cloud-worker-starting";
 import { FREESTYLE_PROVIDER, SHARE_FEATURE } from "../lib/cloud-offering";
 import { useCloudSessionEventStream } from "../hooks/useCloudSessionEvents";
 import { latestScriptRun } from "../lib/cloud-script-runs";
@@ -366,6 +367,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 		resumeAfter: () => 0,
 		onEvent: (event) => {
 			if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
+			if (orgId) recordCloudWorkspaceStartupEvent(orgId, sessionId, event);
 			const occurredAt = Date.parse(event.createdAt);
 			if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
 			// sandbox.provisioning only marks the start of workspace creation;
@@ -925,7 +927,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const requestCloudResume = useCallback(async (prepareWorkspace: boolean) => {
 		if (!session?.cloud) return;
 		await resumeCloudSession(cloudCpClient, session.cloud.orgId, session.id);
-		if (prepareWorkspace) await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
+		// A worker that just said it is still preparing the workspace is already
+		// doing what this asks; the request would only wait on it. A recorded
+		// startup failure (a checkout or conversation restore) is not being
+		// prepared: it waits for this request, so it is always sent.
+		const startupFailed = cloudStartupProblem(session)?.phase === "failed";
+		if (prepareWorkspace && (startupFailed || !cloudWorkerStartingWait(session.cloud.orgId, session.id))) {
+			await requestCloudWorkspaceCheckout(cloudCpClient, session.cloud.orgId, session.id);
+		}
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
