@@ -3,8 +3,8 @@ package controllers
 import (
 	"net/http"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apispec"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
 // stageAttachments writes files into a live session's worktree and answers with

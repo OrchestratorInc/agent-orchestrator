@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/agy"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // TestLiveAntigravityACPConformance is the registration gate for this binding.

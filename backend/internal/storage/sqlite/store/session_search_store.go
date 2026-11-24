@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/searchtext"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/gen"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/searchtext"
 )
 
 // This file is the persistence half of session search. It writes only the three

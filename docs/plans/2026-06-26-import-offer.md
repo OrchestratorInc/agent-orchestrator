@@ -16,7 +16,7 @@
 
 ## Global Constraints
 
-- Module path: `github.com/aoagents/agent-orchestrator/backend`.
+- Module path: `github.com/OrchestratorInc/agent-orchestrator/backend`.
 - **No em dashes** anywhere (prose, comments, copy). Use `.`/`,`/`(...)`.
 - `openapi.yaml` and `frontend/src/api/schema.ts` are **generated** (never hand-edit); change the Go reflection source then run `npm run api:spec && npm run api:ts`.
 - All app state under `~/.ao` only (already enforced; don't regress).
@@ -132,8 +132,8 @@ package importer
 import (
 	"context"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/legacyimport"
 )
 
 // Store is the storage slice the import service needs: the legacy importer's
@@ -272,7 +272,7 @@ type ImportRunResponse struct {
   - `NewAPI`: add `imports: &controllers.ImportController{Svc: deps.Import},` (after the `notifications:` line).
   - `Register` timeout group: add `a.imports.Register(r)` (after `a.notifications.Register(r)`).
 - [ ] **Step 2:** `daemon.go` edits:
-  - Add import: `importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"`.
+  - Add import: `importsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/importer"`.
   - In the `httpd.APIDeps{...}` literal, add: `Import: importsvc.New(importsvc.Deps{Store: store}),` (projects-only: **no** `DataDir`).
 - [ ] **Step 3:** `cd backend && go build ./... && go test ./internal/httpd/... ./internal/service/importer/...` → expect PASS (gate for Task 3's tests too).
 - [ ] **Step 4:** Commit: `feat(daemon): mount import service on the API`

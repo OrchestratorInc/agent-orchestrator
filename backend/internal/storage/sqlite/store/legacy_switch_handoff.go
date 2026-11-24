@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamps"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/timestamps"
 )
 
 // LegacySwitchHandoffPath is the finalized handoff file the agent switching on

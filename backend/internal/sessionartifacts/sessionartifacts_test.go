@@ -10,7 +10,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 func TestDir_JoinsDataDirArtifactsAndID(t *testing.T) {

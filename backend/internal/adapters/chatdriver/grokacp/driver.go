@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"strings"
 
-	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // New launches the executable resolved by the Grok agent plugin. Grok keeps

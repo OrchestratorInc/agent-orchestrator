@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 const cliTelemetryStateFile = "telemetry_cli_daily.json"

@@ -12,7 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // OptOutFile is the marker the desktop app writes when the user turns off

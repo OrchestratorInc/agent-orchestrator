@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/clienttz"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/clienttz"
 )
 
 func TestResolveTimeZone(t *testing.T) {

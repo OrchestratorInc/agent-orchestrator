@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/fx"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 var fxProviderName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)

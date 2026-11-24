@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // Provider describes one row of the released `tau providers` TSV contract.

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const otherCodexAccountID = "bb1e9a5d-37ad-43f8-83bd-13de8168f8af"

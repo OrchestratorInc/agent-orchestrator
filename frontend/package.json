@@ -6,11 +6,11 @@
 	"description": "Electron + TypeScript frontend for the agent-orchestrator rewrite",
 	"author": "Orchestrator.inc",
 	"license": "MIT",
-	"homepage": "https://github.com/aoagents/agent-orchestrator",
+	"homepage": "https://github.com/OrchestratorInc/agent-orchestrator",
 	"main": ".vite/build/main.js",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/aoagents/agent-orchestrator"
+		"url": "https://github.com/OrchestratorInc/agent-orchestrator"
 	},
 	"scripts": {
 		"build:acp-runtime": "node ./scripts/build-acp-runtime.mjs",

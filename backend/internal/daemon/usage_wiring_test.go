@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	usagepipeline "github.com/aoagents/agent-orchestrator/backend/internal/observe/usage"
-	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
+	usagepipeline "github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/usage"
+	usagesvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/usage"
 )
 
 // TestUsagePipelineWatchRootsIncludesKimiWrites catches daemon wiring that

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // Every scripted reply below is a SINGLE line. readFrame is newline-delimited, so a

@@ -6,7 +6,7 @@ import (
 	"context"
 	"os/exec"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 func workspaceStepCommand(ctx context.Context, command string) *exec.Cmd {

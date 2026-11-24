@@ -3,8 +3,8 @@ package httpd
 import (
 	"net/http"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // requestSurfaceMiddleware tags each request with the client it came from, so

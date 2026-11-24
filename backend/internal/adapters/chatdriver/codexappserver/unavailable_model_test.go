@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
+	codexagent "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 )
 
 // Codex refuses a model the ChatGPT account cannot use only on the first turn.

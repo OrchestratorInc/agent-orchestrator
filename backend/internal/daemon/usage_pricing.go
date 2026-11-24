@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
-	usagepipeline "github.com/aoagents/agent-orchestrator/backend/internal/observe/usage"
-	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
-	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
-	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/controllers"
+	usagepipeline "github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/usage"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/pricing"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/pricing/catalogsync"
+	usagesvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/usage"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 type usagePricingRuntimeConfig struct {

@@ -18,8 +18,8 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
 	"github.com/unreallabsai/unreal-agent/harness/sessionstore/localfile"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 func nativeForkFixture(t *testing.T) (string, *localfile.Store) {

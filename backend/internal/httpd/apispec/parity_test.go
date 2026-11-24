@@ -11,11 +11,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	yaml "gopkg.in/yaml.v3"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
-	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apispec"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/mobilebridge"
 )
 
 // stubDeviceRoster and stubDeviceLive give TestRouteSpecParity a non-nil

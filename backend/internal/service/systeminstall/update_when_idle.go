@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // errUpdateWhenIdle tells StartAgentOperation to queue the update

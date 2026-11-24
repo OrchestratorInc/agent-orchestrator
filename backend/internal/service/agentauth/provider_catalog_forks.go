@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
-	"github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 // xdgDir returns $env/name when env holds an absolute path, else

@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/pricing"
 )
 
 const (

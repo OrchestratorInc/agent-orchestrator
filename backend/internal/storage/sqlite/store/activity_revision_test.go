@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 func TestActivityProjectionCannotOverwriteHumanMessageWithUnchangedTimestamp(t *testing.T) {

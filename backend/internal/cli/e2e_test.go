@@ -46,7 +46,7 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "windows" {
 		aoBin += ".exe"
 	}
-	build := exec.Command("go", "build", "-o", aoBin, "github.com/aoagents/agent-orchestrator/backend/cmd/ao")
+	build := exec.Command("go", "build", "-o", aoBin, "github.com/OrchestratorInc/agent-orchestrator/backend/cmd/ao")
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "e2e: build ao:", err)

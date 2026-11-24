@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 // ErrorKindAndCode extracts a telemetry-safe error category and optional code.
@@ -147,7 +147,7 @@ func CurrentFailureSite() FailureSite {
 	for {
 		frame, more := frames.Next()
 		name := frame.Function
-		if strings.Contains(name, "github.com/aoagents/agent-orchestrator/backend/internal/") &&
+		if strings.Contains(name, "github.com/OrchestratorInc/agent-orchestrator/backend/internal/") &&
 			!strings.Contains(name, "/telemetrymeta.") &&
 			!strings.Contains(name, "/observe/sentryobs.RecoverBackground") &&
 			!strings.Contains(name, "/httpd/envelope.") &&

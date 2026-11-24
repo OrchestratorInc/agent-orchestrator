@@ -31,14 +31,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
-	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
-	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/runfile"
+	agentsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/agent"
+	projectsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/project"
 )
 
 // fakeSessionService captures the ports.SpawnConfig the controller decodes from

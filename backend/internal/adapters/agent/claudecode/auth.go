@@ -14,12 +14,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
-	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 // The auth ladder.

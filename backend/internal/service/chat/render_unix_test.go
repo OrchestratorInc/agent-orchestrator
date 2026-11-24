@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
 // A FIFO under the render's name must not hang the same-bytes check.

@@ -6,7 +6,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // timestampZones are the zones a hook or API caller can stamp a time in. A zone

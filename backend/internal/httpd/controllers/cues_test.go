@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
-	cuesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/cue"
-	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/requestscope"
+	cuesvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/cue"
+	shelltermsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/shellterm"
 )
 
 type fakeCueService struct {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 const grokTestSessionID = "01a1a16e-c4c7-7c51-92d5-bf8beef81073"

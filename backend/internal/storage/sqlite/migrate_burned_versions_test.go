@@ -8,8 +8,8 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	sqlitestore "github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 // shippedMigrations freezes every migration version that has shipped in a

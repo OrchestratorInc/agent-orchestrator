@@ -19,109 +19,109 @@ sql:
         overrides:
           - column: "change_log.project_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
               pointer: true
           - column: "change_log.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
               pointer: true
           - column: "change_log.event_type"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/cdc"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/cdc"
               type: "EventType"
           - column: "pr.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "pr.pr_state"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "PRState"
           - column: "pr.review_decision"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ReviewDecision"
           - column: "pr.ci_state"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "CIState"
           - column: "pr.mergeability"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "Mergeability"
           - column: "pr_checks.status"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "PRCheckStatus"
           - column: "pr_comment.resolved"
             go_type: "bool"
           - column: "notifications.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "notifications.project_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
               pointer: true
           - column: "notifications.type"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "NotificationType"
           - column: "notifications.status"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "NotificationStatus"
           - column: "projects.id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
           - column: "workspace_repos.project_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
           - column: "session_worktrees.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "session_cleanup_facts.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "sessions.id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "session_artifacts.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "session_artifact_versions.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "sessions.project_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
               pointer: true
           - column: "sessions.issue_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "IssueID"
           - column: "sessions.kind"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionKind"
           - column: "sessions.harness"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "AgentHarness"
           - column: "sessions.reviewer_harness"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ReviewerHarness"
           - column: "sessions.auto_review_enabled"
             go_type: "bool"
@@ -129,113 +129,113 @@ sql:
             go_type: "bool"
           - column: "sessions.activity_state"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ActivityState"
           - column: "sessions.automation_run_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "AutomationRunID"
               pointer: true
           - column: "automations.id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "AutomationID"
           - column: "automations.project_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
           - column: "automations.kind"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionKind"
           - column: "automations.harness"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "AgentHarness"
           - column: "automation_runs.id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "AutomationRunID"
           - column: "automation_runs.automation_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "AutomationID"
           - column: "automation_runs.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
               pointer: true
           - column: "automation_runs.status"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "AutomationRunStatus"
           - column: "usage_bindings.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "usage_bindings.harness"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "AgentHarness"
           - column: "usage_bindings.state"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "UsageBindingState"
           - column: "usage_sources.kind"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "UsageSourceKind"
           - column: "usage_sources.state"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "UsageSourceState"
           - column: "review.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "review.project_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
           - column: "review.harness"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ReviewerHarness"
           - column: "review_run.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "review_run.requester_session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "review_run.harness"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ReviewerHarness"
           - column: "review_run.status"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ReviewRunStatus"
           - column: "review_run.verdict"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ReviewVerdict"
           - column: "review_run.trigger_source"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ReviewTriggerSource"
           - column: "review_run.failure_reason"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ReviewFailureReason"
           - column: "review_run.cancelled_by"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ReviewCancelledBy"
           - column: "app_settings.default_session_mode"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionMode"
           - column: "app_settings.cloud_offering"
             go_type: "bool"
@@ -249,106 +249,106 @@ sql:
             go_type: "bool"
           - column: "sessions.provision_state"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionProvisionState"
           - column: "sessions.is_task_preparation"
             go_type: "bool"
           - column: "sessions.session_mode"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionMode"
           - column: "session_interface_transitions.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "session_interface_transitions.source_mode"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionMode"
           - column: "session_interface_transitions.target_mode"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionMode"
           - column: "session_interface_transitions.policy"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionInterfaceTransitionPolicy"
           - column: "session_interface_transitions.history_policy"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionInterfaceTransitionHistoryPolicy"
           - column: "session_interface_transitions.phase"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionInterfaceTransitionPhase"
           - column: "sessions.conversation_checkpoint_state"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ConversationCheckpointState"
           - column: "conversations.project_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
               pointer: true
           - column: "conversations.scope"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ConversationScope"
           # Nullable: a project-scoped conversation has no single owning session.
           - column: "conversations.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
               pointer: true
           - column: "conversations.current_session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
               pointer: true
           - column: "conversation_turns.handled_by_session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           - column: "conversation_turns.state"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "TurnState"
           - column: "conversation_messages.role"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "MessageRole"
           - column: "conversation_messages.origin"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "MessageOrigin"
           - column: "conversation_activities.kind"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ActivityKind"
           - column: "conversation_activities.status"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ActivityStatus"
           - column: "conversation_provider_events.session_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
           # Nullable: a shell terminal opened with no project context has no
           # project row to point at (it starts in the daemon's data dir).
           - column: "shell_terminals.project_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
               pointer: true
           - column: "cues.id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "CueID"
           - column: "cues.project_id"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "ProjectID"
           - column: "cues.type"
             go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              import: "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
               type: "CueType"

@@ -1,4 +1,4 @@
-module github.com/aoagents/agent-orchestrator/backend
+module github.com/OrchestratorInc/agent-orchestrator/backend
 
 go 1.27.4
 

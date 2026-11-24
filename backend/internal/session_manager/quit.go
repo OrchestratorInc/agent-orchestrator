@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // StopAgentsForQuit releases processes without terminating sessions or removing worktrees.

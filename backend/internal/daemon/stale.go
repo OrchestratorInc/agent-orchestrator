@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
-	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/daemonmeta"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/runfile"
 )
 
 // staleProbeTimeout bounds the startup ownership probe so a run-file pointing at

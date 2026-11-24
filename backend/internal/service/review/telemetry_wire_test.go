@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
+	telemetryadapter "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/telemetry"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	reviewcore "github.com/OrchestratorInc/agent-orchestrator/backend/internal/review"
 )
 
 type wireRoundTripper func(*http.Request) (*http.Response, error)

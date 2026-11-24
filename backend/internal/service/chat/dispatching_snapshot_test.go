@@ -3,7 +3,7 @@ package chat
 import (
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 func TestWithDispatchingTurnRunning(t *testing.T) {

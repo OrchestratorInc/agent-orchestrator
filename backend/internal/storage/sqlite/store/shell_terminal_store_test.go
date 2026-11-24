@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	shelltermsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/shellterm"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 // TestSelectShellTerminalsBySessionID: Session Manager uses this to find and

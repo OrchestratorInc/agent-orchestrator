@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 type process struct {

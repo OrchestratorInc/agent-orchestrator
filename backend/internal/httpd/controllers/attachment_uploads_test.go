@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd"
 )
 
 func newUploadTestServer(t *testing.T, svc *fakeSessionService) (*httptest.Server, string) {

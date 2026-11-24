@@ -6,9 +6,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apispec"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/envelope"
+	fsbrowsersvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/fsbrowser"
 )
 
 // DirectoryBrowserService lists directories on the daemon host.

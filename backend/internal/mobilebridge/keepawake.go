@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 // KeepAwakeSupported reports whether this platform can hold the machine awake.

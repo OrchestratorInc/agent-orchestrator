@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 func TestReviewCommandUsesVisibleInteractiveTUI(t *testing.T) {

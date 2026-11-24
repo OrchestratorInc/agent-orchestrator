@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 var databaseTemplate struct {

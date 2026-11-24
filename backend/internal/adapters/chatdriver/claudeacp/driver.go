@@ -24,12 +24,12 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
-	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
-	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 const minimumNodeMajor = 22

@@ -3,8 +3,8 @@
 package cue
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/shellterm"
 )
 
 // Input is the editable cue definition shared by create and update. Update

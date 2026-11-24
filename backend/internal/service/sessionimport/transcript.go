@@ -17,8 +17,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // Tool output and images dominate provider files, so whole files stream while

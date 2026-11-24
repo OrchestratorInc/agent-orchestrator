@@ -12,9 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/skillassets"
 )
 
 // triagePromptTemplate holds only what the program's draft format needs. How to

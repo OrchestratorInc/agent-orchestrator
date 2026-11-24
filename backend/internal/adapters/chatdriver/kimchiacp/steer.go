@@ -8,7 +8,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
-	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
 // Kimchi steers a running turn with its own vendor method rather than ACP's

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/registry"
 )
 
 func authorizedAgentsJSON(agent string) string {
@@ -176,7 +176,7 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
-			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/OrchestratorInc/agent-orchestrator","defaultBranch":"main"}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
 			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
@@ -184,10 +184,10 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-9/pr/claim":
 			var req claimPRRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req.PR != "https://github.com/aoagents/agent-orchestrator/pull/142" || req.AllowTakeover {
+			if req.PR != "https://github.com/OrchestratorInc/agent-orchestrator/pull/142" || req.AllowTakeover {
 				t.Fatalf("claim request = %#v", req)
 			}
-			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/aoagents/agent-orchestrator/pull/142","number":142,"state":"open","ci":"passing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/OrchestratorInc/agent-orchestrator/pull/142","number":142,"state":"open","ci":"passing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -199,7 +199,7 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn claim-pr failed: %v stderr=%s", err, errOut)
 	}
-	if !strings.Contains(out, "claimed https://github.com/aoagents/agent-orchestrator/pull/142") {
+	if !strings.Contains(out, "claimed https://github.com/OrchestratorInc/agent-orchestrator/pull/142") {
 		t.Fatalf("output missing claimed label: %s", out)
 	}
 	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/agents/readiness/ensure", "POST /api/v1/sessions", "POST /api/v1/sessions/demo-9/pr/claim"}
@@ -220,7 +220,7 @@ func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
-			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/OrchestratorInc/agent-orchestrator","defaultBranch":"main"}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
 			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
@@ -248,7 +248,7 @@ func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AllowTakeover {
 				t.Errorf("claim request = %#v err=%v, want allowTakeover false (--review implies --no-takeover)", req, err)
 			}
-			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/aoagents/agent-orchestrator/pull/142","number":142,"state":"open","ci":"failing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/OrchestratorInc/agent-orchestrator/pull/142","number":142,"state":"open","ci":"failing","review":"review_required","mergeability":"mergeable","reviewComments":false,"updatedAt":"2026-06-04T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -284,7 +284,7 @@ func TestSpawnClaimPR_Draft(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
-			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/OrchestratorInc/agent-orchestrator","defaultBranch":"main"}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
 			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
@@ -292,10 +292,10 @@ func TestSpawnClaimPR_Draft(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-9/pr/claim":
 			var req claimPRRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req.PR != "https://github.com/aoagents/agent-orchestrator/pull/4168" {
+			if req.PR != "https://github.com/OrchestratorInc/agent-orchestrator/pull/4168" {
 				t.Fatalf("claim request = %#v", req)
 			}
-			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/aoagents/agent-orchestrator/pull/4168","number":4168,"state":"draft","ci":"pending","review":"none","mergeability":"unknown","reviewComments":false,"updatedAt":"2026-08-20T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
+			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-9","prs":[{"url":"https://github.com/OrchestratorInc/agent-orchestrator/pull/4168","number":4168,"state":"draft","ci":"pending","review":"none","mergeability":"unknown","reviewComments":false,"updatedAt":"2026-08-20T12:00:00Z"}],"branchChanged":false,"takenOverFrom":[]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -307,7 +307,7 @@ func TestSpawnClaimPR_Draft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn claim-pr draft failed: %v stderr=%s", err, errOut)
 	}
-	if !strings.Contains(out, "claimed https://github.com/aoagents/agent-orchestrator/pull/4168") {
+	if !strings.Contains(out, "claimed https://github.com/OrchestratorInc/agent-orchestrator/pull/4168") {
 		t.Fatalf("output missing claimed label: %s", out)
 	}
 	// No rollback: the draft claim succeeded.
@@ -366,7 +366,7 @@ func TestSpawnClaimPRFailureRollsBackSession(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
-			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/OrchestratorInc/agent-orchestrator","defaultBranch":"main"}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
 			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":
@@ -1328,7 +1328,7 @@ func spawnStartServer(t *testing.T, states []string, requests *[]string, spawnBo
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/demo":
-			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/aoagents/agent-orchestrator","defaultBranch":"main"}}`)
+			_, _ = io.WriteString(w, `{"status":"ok","project":{"id":"demo","name":"Demo","path":"/repo/demo","repo":"https://github.com/OrchestratorInc/agent-orchestrator","defaultBranch":"main"}}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/agents/readiness/ensure":
 			_, _ = io.WriteString(w, authorizedAgentsJSON("codex"))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions":

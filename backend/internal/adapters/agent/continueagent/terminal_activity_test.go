@@ -3,7 +3,7 @@ package continueagent
 import (
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 func TestDetectTerminalActivityContinueQuestionPicker(t *testing.T) {

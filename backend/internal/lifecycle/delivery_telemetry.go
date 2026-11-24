@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/deliverytelemetry"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // DeliveryTelemetry returns the shared delivery recorder, so the services that

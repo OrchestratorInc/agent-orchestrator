@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/agentauth"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/shellterm"
 )
 
 type fakeAgentAuthService struct {

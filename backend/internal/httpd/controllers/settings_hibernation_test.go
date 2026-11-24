@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	settingssvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/settings"
 )
 
 type hibernationSettingsService struct {

@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"syscall"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 // Alive reports whether pid maps to a running process. EPERM counts as alive:

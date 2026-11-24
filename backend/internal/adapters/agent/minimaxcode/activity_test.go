@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const footer = "  workspace │ Full access │ ✦ glm-5.3-flash · Thinking On\n"

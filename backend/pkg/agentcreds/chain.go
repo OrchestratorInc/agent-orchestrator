@@ -4,7 +4,7 @@ import (
 	"context"
 	"os/exec"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 // commandRunner is the narrow keychain helper seam.

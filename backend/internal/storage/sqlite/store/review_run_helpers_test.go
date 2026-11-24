@@ -3,8 +3,8 @@ package store_test
 import (
 	"context"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 // finishReviewRun moves an active run to a final state with the fields a

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // countingTurnFailureSessions is fakeTurnFailureSessions, safe to read while the

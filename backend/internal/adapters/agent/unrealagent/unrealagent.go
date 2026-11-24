@@ -8,9 +8,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const adapterID = "unreal-agent"

@@ -52,7 +52,7 @@ if (isWindowsDev) {
 }
 
 // Stamp `ao version` so a packaged CLI names its build instead of "dev".
-const cliPackage = "github.com/aoagents/agent-orchestrator/backend/internal/cli";
+const cliPackage = "github.com/OrchestratorInc/agent-orchestrator/backend/internal/cli";
 const appVersion = JSON.parse(readFileSync(join(frontendRoot, "package.json"), "utf8")).version;
 const ldflags = [
 	`-X ${cliPackage}.Version=${process.argv.includes("--dev") ? `${appVersion}-dev` : appVersion}`,
@@ -99,7 +99,7 @@ if (host.error) {
 }
 if (host.status !== 0) process.exit(host.status ?? 1);
 
-const mcpVersion = `-X github.com/aoagents/agent-orchestrator/backend/internal/mcpserver.Version=${process.argv.includes("--dev") ? `${appVersion}-dev` : appVersion}`;
+const mcpVersion = `-X github.com/OrchestratorInc/agent-orchestrator/backend/internal/mcpserver.Version=${process.argv.includes("--dev") ? `${appVersion}-dev` : appVersion}`;
 const mcp = spawnSync("go", ["build", "-ldflags", mcpVersion, "-o", join(dirname(buildOutPath), process.platform === "win32" ? "ao-mcp.exe" : "ao-mcp"), "./cmd/ao-mcp"], {
 	cwd: backendRoot,
 	stdio: "inherit",

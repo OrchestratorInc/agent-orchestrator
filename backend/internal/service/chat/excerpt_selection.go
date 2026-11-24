@@ -14,7 +14,7 @@ import (
 	mdtext "github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // The browser selects rendered text, whereas assistant messages are stored as

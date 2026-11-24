@@ -14,7 +14,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 const codexThread = "01a10364-aebe-72d1-9f77-5b8d924c4fbd"

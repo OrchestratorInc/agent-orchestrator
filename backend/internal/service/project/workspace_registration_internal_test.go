@@ -8,8 +8,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/gitdefault"
 )
 
 func TestInitWorkspaceParentRollsBackWhenDefaultMarkerFails(t *testing.T) {

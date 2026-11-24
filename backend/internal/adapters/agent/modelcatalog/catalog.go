@@ -20,16 +20,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
-	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/tau"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/agentcreds"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 )
 
 type smallToolCase struct {

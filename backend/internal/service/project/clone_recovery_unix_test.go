@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	projectsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/project"
 )
 
 func cloneTestGit(t *testing.T, cloneScript string) string {

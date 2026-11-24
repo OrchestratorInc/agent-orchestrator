@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	agentregistry "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/registry"
 )
 
 func TestReadinessAdvertisesDeclaredTurnInterrupts(t *testing.T) {

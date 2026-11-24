@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	workerdevin "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/devin"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	workerdevin "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/devin"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // HostTrustWarning describes the authority retained by Devin's interactive

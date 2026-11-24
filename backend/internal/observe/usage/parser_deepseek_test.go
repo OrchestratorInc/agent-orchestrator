@@ -12,9 +12,9 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	usagesvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/usage"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 const deepseekTestSessionID = "bbeef2fa-f748-4ed4-bd69-73f91f71f8dc"

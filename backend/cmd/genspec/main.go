@@ -9,7 +9,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec/specgen"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apispec/specgen"
 )
 
 func main() {

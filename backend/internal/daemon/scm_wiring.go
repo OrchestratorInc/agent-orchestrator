@@ -6,16 +6,16 @@ import (
 	"log/slog"
 	"sync"
 
-	scmgithub "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/github"
-	scmgitlab "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/gitlab"
-	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
-	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	scmgithub "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/scm/github"
+	scmgitlab "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/scm/gitlab"
+	scmmulti "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/scm/multi"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/lifecycle"
+	scmobserve "github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/scm"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	reviewsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/review"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 // startSCMObserver wires the provider-neutral SCM observer with both GitHub

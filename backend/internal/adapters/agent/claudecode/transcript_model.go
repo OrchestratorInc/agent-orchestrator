@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // transcriptTailBytes bounds how much of a transcript is read to find the

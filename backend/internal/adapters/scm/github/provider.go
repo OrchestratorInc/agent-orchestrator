@@ -16,8 +16,8 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // ciFailureLogTailLines is the number of trailing lines of a failed job's

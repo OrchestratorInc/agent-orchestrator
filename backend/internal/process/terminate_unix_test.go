@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 func startGroup(t *testing.T, script string) *exec.Cmd {

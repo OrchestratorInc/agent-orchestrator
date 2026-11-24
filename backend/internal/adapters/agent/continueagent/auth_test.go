@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 func TestAuthStatusAuthorizedWhenContinueIsInstalled(t *testing.T) {

@@ -15,11 +15,11 @@ import (
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/browserstream"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
-	"github.com/aoagents/agent-orchestrator/backend/internal/preview"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/browserstream"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/requestscope"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/preview"
 )
 
 const (

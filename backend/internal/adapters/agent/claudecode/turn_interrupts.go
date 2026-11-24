@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/hookutil"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 var _ ports.TranscriptTurnFailureDetector = (*Plugin)(nil)

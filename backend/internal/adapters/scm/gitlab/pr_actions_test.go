@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const gitlabMRPath = "/api/v4/projects/myorg%2Fmyrepo/merge_requests/42"

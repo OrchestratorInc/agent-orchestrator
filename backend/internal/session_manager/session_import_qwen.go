@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/processalive"
 )
 
 // Qwen 0.26.4 publishes both a live-session registry and runtime sidecars.

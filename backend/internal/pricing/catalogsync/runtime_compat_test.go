@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
-	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/pricing"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/pricing/catalogsync"
 )
 
 // Break caught: the generator accepted fractional trailing zeroes that the

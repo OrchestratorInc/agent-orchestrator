@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 type installCapabilitiesStub struct {

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/runfile"
 )
 
 // sendServer wires an httptest server expecting POST /api/v1/sessions/{id}/send

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/mobilebridge"
 )
 
 func lanOnlyBridge(t *testing.T, tunnel *fakeTunnel) *BridgeService {

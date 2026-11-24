@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 // repoConfigRefPatterns are the refs a launch worktree can be seeded from or

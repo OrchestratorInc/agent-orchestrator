@@ -1,8 +1,8 @@
 package session
 
 import (
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/contract"
 )
 
 // stackInfo is the derived position of one PR within its session's set of PRs.

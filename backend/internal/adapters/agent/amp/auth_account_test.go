@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 )
 
 func TestAmpActiveEmailFromList(t *testing.T) {

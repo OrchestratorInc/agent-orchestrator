@@ -3,10 +3,10 @@ package agentauth
 import (
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/copilot"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/kimi"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/shellterm"
 )
 
 // plans is the code-reviewed authentication allowlist in stable Harness

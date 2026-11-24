@@ -1,7 +1,7 @@
 // Package notification exposes read-only notification DTOs for REST controllers.
 package notification
 
-import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+import "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 
 // TargetKind describes what a dashboard should navigate to for a notification.
 type TargetKind string

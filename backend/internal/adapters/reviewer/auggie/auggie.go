@@ -5,9 +5,9 @@ import (
 	"context"
 	"strings"
 
-	workerauggie "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/auggie"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	workerauggie "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/auggie"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // HostTrustWarning documents that Auggie permissions remain user-controlled.

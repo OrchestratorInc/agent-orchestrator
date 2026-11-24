@@ -3,8 +3,8 @@ package lifecycle
 import (
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cline"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/cline"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // TestToolPrecedence_ClineApprovalThenPreToolUsePersistsActive covers the

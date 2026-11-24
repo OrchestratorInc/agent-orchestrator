@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/pkg/contract"
 )
 
 // ---- PR read model ----

@@ -20,12 +20,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
-	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/tau"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/tmuxbin"
 )
 
 type doctorLevel string

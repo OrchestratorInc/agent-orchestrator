@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/chat"
 )
 
 const acpReplayFrames = 20543

@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/agentlaunch"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
 )
 
 var versionPattern = regexp.MustCompile(`\b(\d+)\.(\d+)\.(\d+)\b`)

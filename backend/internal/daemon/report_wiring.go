@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/cdc"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // reportActivityObserver is the report coordinator's session-stop hook.

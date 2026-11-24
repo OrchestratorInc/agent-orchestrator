@@ -5,7 +5,7 @@ package sessionartifacts
 import (
 	"io/fs"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // quickIdentity reports nothing on this platform, so a rename here is seen

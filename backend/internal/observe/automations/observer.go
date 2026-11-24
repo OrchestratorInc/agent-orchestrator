@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe"
 )
 
 // DefaultTickInterval is the scheduler polling cadence used when Config.Tick is unset.

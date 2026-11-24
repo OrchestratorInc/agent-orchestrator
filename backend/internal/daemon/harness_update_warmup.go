@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
-	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/sentryobs"
+	agentsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/agent"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
 // watchInstalledHarnessUpdates checks installed harnesses for updates once

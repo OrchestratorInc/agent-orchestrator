@@ -8,9 +8,9 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/sentryobs"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 type chatFaultTransport struct{ events chan *sentry.Event }

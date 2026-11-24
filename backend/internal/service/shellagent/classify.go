@@ -7,7 +7,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // executableHarness maps the command a harness installs onto its harness id.

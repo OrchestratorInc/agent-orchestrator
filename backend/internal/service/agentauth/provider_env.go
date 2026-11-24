@@ -3,7 +3,7 @@ package agentauth
 import (
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/providerkeys"
 )
 
 var publishProviderKey = providerkeys.Publish

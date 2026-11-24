@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const inputParams = `{"threadId":"thread-1","turnId":"turn-1","itemId":"tool-1","questions":[{"id":"first_value","header":"Direction","question":"Which direction should we take?","options":[{"label":"Native","description":"Use the native protocol"},{"label":"Bridge","description":"Keep the bridge"}]}]}`

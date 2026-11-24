@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 )
 
 // The Chat driver starts Codex directly, so AO's managed .cmd launcher must

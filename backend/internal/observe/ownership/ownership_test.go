@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/ownership"
 )
 
 func TestOwnedErrorSurvivesMultipleWraps(t *testing.T) {

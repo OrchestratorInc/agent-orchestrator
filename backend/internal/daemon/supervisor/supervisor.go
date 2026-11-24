@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/sentryobs"
 )
 
 // acceptRetryBackoff bounds the retry after a transient Accept error so a

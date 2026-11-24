@@ -12,10 +12,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apispec"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/envelope"
+	notificationsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/notification"
 )
 
 // NotificationService is the controller-facing notification service contract.

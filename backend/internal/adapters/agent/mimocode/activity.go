@@ -1,6 +1,6 @@
 package mimocode
 
-import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+import "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 
 // DeriveActivityState maps MiMo Code hook events to AO activity states.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {

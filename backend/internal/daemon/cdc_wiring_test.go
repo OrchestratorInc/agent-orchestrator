@@ -3,7 +3,7 @@ package daemon
 import (
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/cdc"
 )
 
 // sessionChanges wakes a resting loop for each session created or updated,

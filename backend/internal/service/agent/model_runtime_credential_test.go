@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
-	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters"
+	agentregistry "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 type runtimeCredentialAgent struct {

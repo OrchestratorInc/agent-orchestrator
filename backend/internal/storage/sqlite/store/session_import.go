@@ -10,8 +10,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
 // CreateImportedSession registers identity and its archive in one transaction. A retry returns the original row.

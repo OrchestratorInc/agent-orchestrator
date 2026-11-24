@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamps"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/gen"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/timestamps"
 )
 
 // A readable legacy time still sorts by its local clock in SQL. Normalize the

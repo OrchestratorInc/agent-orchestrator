@@ -51,9 +51,9 @@ app present? if not, fetch it; then open it."
 > `aoagents/agent-orchestrator` was the **temporary** home during the rewrite; the
 > code is now ported and releases land on **`AgentWrapper/agent-orchestrator`**.
 > The forge publisher still points at `aoagents` and must be corrected (task T3).
-> The Go **module path** is also `github.com/aoagents/agent-orchestrator`; renaming
-> the module is a large, separate change and is **out of scope** here (it does not
-> affect the release/download URL).
+> The Go **module path** was also `github.com/aoagents/agent-orchestrator` at the
+> time; it has since moved to `github.com/OrchestratorInc/agent-orchestrator`
+> (it does not affect the release/download URL).
 
 ### 1.2 Release / build pipeline
 

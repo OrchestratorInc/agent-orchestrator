@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
 // agentBrowserDownloadGUID matches the browser's download GUIDs. Anything else,

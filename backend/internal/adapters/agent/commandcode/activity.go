@@ -1,6 +1,6 @@
 package commandcode
 
-import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+import "github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 
 // DeriveActivityState maps Command Code's available lifecycle hooks onto AO
 // activity. Command Code exposes no permission-request hook, so the adapter

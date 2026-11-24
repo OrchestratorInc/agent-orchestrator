@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
-	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/pricing"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/pricing/catalogsync"
 )
 
 // Break caught: a Codex token_count record may carry only cumulative totals.

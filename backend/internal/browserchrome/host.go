@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/browserruntime"
 )
 
 const (

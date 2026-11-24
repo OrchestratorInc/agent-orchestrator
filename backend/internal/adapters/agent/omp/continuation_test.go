@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const ompTestID = "01a17cf3-99d0-76cd-b084-4cdce17a0fec"

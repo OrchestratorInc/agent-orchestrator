@@ -26,7 +26,7 @@ if git ls-files --error-unmatch cloud >/dev/null 2>&1 || [[ -n "$(git ls-files c
 fi
 
 # 3. No public Go code may import the control plane's module.
-if matches="$(git grep -lE '"github\.com/aoagents/agent-orchestrator/cloud(/|")' -- '*.go' || true)" && [[ -n "$matches" ]]; then
+if matches="$(git grep -lE '"github\.com/(aoagents|OrchestratorInc)/agent-orchestrator/cloud(/|")' -- '*.go' || true)" && [[ -n "$matches" ]]; then
 	fail "Go files import the control plane module:"$'\n'"$matches"
 fi
 

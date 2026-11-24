@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	unrealchat "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/unrealagent"
+	unrealchat "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/unrealagent"
 )
 
 func newUnrealProviderCommand() *cobra.Command {

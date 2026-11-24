@@ -4,10 +4,10 @@ package kimchi
 import (
 	"context"
 
-	workeragent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/agentrestore"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	workeragent "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/kimchi"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/reviewer/agentrestore"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // HostTrustWarning documents the boundary users accept when selecting Kimchi.

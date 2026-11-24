@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/testenv"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/testenv"
 )
 
 func TestMain(m *testing.M) {

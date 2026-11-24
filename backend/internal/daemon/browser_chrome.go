@@ -7,12 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/browserchrome"
-	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
-	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
-	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/browserchrome"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/browserruntime"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/config"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/observe/sentryobs"
+	browsersvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/browser"
 )
 
 // chromeMode wires the Chrome extension runtime: its broker, the per-session

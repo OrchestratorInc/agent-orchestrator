@@ -32,7 +32,7 @@ function pr(
 	overrides: Partial<PullRequestFacts> = {},
 ): PullRequestFacts {
 	return {
-		url: `https://github.com/aoagents/agent-orchestrator/pull/${number}`,
+		url: `https://github.com/OrchestratorInc/agent-orchestrator/pull/${number}`,
 		number,
 		state: "open",
 		ci: "passing",

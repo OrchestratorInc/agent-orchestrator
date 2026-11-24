@@ -442,7 +442,7 @@ const config: ForgeConfig = {
 					bin: EXECUTABLE_NAME,
 					icon: "assets/icon.png",
 					maintainer: appPackage.author,
-					homepage: "https://github.com/aoagents/agent-orchestrator",
+					homepage: "https://github.com/OrchestratorInc/agent-orchestrator",
 					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
 				},
 			},
@@ -454,7 +454,7 @@ const config: ForgeConfig = {
 					icon: "assets/icon.png",
 					// rpmbuild rejects a spec with an empty License field.
 					license: "MIT",
-					homepage: "https://github.com/aoagents/agent-orchestrator",
+					homepage: "https://github.com/OrchestratorInc/agent-orchestrator",
 					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
 				},
 			},

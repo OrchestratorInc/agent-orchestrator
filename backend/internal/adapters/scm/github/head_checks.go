@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 // HeadChecks reads what GitHub knows about the checks on sha: its check

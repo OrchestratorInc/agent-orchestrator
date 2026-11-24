@@ -3,9 +3,9 @@ package session
 import (
 	"errors"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
-	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
+	sessionmanager "github.com/OrchestratorInc/agent-orchestrator/backend/internal/session_manager"
 )
 
 // addSpawnLaunchProps adds what a spawn outcome event says about the launch:

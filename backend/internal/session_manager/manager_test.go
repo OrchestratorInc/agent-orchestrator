@@ -20,16 +20,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/amp"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/amp"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/workspace/scratch"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/lifecycle"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 var ctx = context.Background()

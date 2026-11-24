@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/runtime/conpty"
 )
 
 // newPtyHostCommand registers the "ao pty-host" hidden subcommand that the

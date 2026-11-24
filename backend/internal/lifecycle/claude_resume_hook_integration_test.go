@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 func TestClaudeSessionStartHookIncludesResumeSources(t *testing.T) {

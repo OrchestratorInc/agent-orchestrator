@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // searchConversationMessagesSQL orders finished chat messages matching ?1

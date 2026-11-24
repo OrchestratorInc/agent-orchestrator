@@ -15,16 +15,16 @@ import (
 	"testing"
 	"time"
 
-	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
-	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
+	acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/lifecycle"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/chat"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 // These run against a real SQLite store rather than a mock, because the point is

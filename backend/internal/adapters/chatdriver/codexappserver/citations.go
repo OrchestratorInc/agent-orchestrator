@@ -9,9 +9,9 @@ import (
 	"github.com/yuin/goldmark/ast"
 	gmtext "github.com/yuin/goldmark/text"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/citation"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/citation"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
 const (

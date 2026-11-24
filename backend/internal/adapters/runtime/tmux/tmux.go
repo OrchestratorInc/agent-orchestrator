@@ -18,12 +18,12 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/inputdelay"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
-	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/runtime/inputdelay"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/OrchestratorInc/agent-orchestrator/backend/internal/process"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/tmuxbin"
 )
 
 const (

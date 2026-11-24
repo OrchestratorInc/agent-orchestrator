@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
-	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	scmmulti "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/scm/multi"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
+	reviewcore "github.com/OrchestratorInc/agent-orchestrator/backend/internal/review"
+	sessionsvc "github.com/OrchestratorInc/agent-orchestrator/backend/internal/service/session"
 )
 
 type fakeClaimer struct {

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
 // utcTimes is how every sqlc query in the store reaches the database. It puts

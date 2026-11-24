@@ -3,7 +3,7 @@ package kimchi
 import (
 	"encoding/json"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 )
 
 // DeriveActivityState maps a Kimchi hook event (and its native stdin payload)

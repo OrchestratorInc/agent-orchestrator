@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
-	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/daemonmeta"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/runfile"
 )
 
 // These tests cover a CLI that cannot see the daemon's PID, as inside Codex's
