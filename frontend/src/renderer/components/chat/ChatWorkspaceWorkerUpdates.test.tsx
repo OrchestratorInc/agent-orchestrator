@@ -682,6 +682,16 @@ describe("background turns in the orchestrator chat", () => {
 		expect(screen.getByText(/1 needs you/)).toBeInTheDocument();
 	});
 
+	it("keeps a failed turn whose reply asks the user out of the merged failures", () => {
+		const base = snapshot([
+			report("t1", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."), reply("t1", 2, "Should I close the PR?"),
+			report("t3", 3, "[done] [Menus](ao://sessions/proj/proj-285)\nStep 3."),
+		]);
+		renderSnapshot({ ...base, turns: base.turns.map((turn) => ({ ...turn, state: "failed", errorMessage: "Provider returned HTTP 500." })) });
+		expect(screen.queryByRole("button", { name: /failed the same way/ })).not.toBeInTheDocument();
+		expect(screen.getByText("Should I close the PR?")).toBeInTheDocument();
+	});
+
 	it("keeps failures whose errors differ apart", () => {
 		const base = snapshot([1, 3].flatMap((minute) => [report(`t${minute}`, minute, `[done] [Menus](ao://sessions/proj/proj-285)\nStep ${minute}.`)]));
 		renderSnapshot({ ...base, turns: base.turns.map((turn, index) => ({ ...turn, state: "failed", errorMessage: `Provider returned HTTP ${index ? 500 : 429}.` })) });
@@ -768,6 +778,24 @@ describe("background turns in the orchestrator chat", () => {
 			batchedDeliveries: [{ turnId: "t-report", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
 		});
 		expect(screen.queryByTestId("background-updates")).not.toBeInTheDocument();
+	});
+
+	it("counts a worker's steer and the reports it carried on the background line", () => {
+		const steer: ConversationActivity = {
+			kind: "activity", id: "steer-1", turnId: "run", sequence: 12, revision: 0, activityKind: "system", status: "completed",
+			summary: "Steer", createdAt: at(1), detail: { event: "steer", senderSessionId: "proj-7", senderDisplayName: "Docs", text: "Rebased." },
+		};
+		const carried = report("t-report", 1, "[done] [iOS pages](ao://sessions/proj/proj-286)\nPages ship.");
+		const items: ConversationItem[] = [
+			report("run", 1, "[done] [Menus](ao://sessions/proj/proj-285)\nMenus render."),
+			{ ...command("run", 1, "ao status"), sequence: 11 }, steer, { ...carried, sequence: 13 }, reply("run", 2, "Noted."),
+		];
+		renderSnapshot({
+			...chatFixtureEmpty, latestSequence: 22, items,
+			turns: [{ id: "run", state: "completed", providerTurnId: "provider-run", requestedAt: at(1), completedAt: at(2) }],
+			batchedDeliveries: [{ turnId: "t-report", deliveredWithTurnId: "run", steerActivityId: "steer-1" }],
+		});
+		expect(screen.getByRole("button", { name: /^3 background updates · 2 done/ })).toBeInTheDocument();
 	});
 
 	it("keeps failures apart when the field after a timestamp differs", () => {

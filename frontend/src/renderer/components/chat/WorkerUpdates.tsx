@@ -487,7 +487,7 @@ function pastState(t: TFunction, state: string | undefined): string | undefined 
 }
 
 export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenChange, children }: {
-	turns: readonly (readonly ConversationItem[])[];
+	turns: readonly { at: string; updates: readonly WorkerUpdate[] }[];
 	tally?: BackgroundTally;
 	failed?: boolean;
 	open: boolean;
@@ -495,10 +495,10 @@ export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenCh
 	children: ReactNode;
 }) {
 	const { t } = useTranslation();
-	const workers = new Set(turns.flatMap((items) => (items[0] ? workerUpdatesOf(items[0]) : []).map(senderOf))).size;
+	const workers = new Set(turns.flatMap((turn) => turn.updates.map(senderOf))).size;
 	const tallies = TALLY_ORDER.filter((name) => tally?.[name]).map((name) => t(`chat.background.tally.${name}`, { count: tally![name] }));
-	const first = turns[0]?.[0]?.createdAt ?? "";
-	const last = turns.at(-1)?.[0]?.createdAt ?? first;
+	const first = turns[0]?.at ?? "";
+	const last = turns.at(-1)?.at ?? first;
 	const start = formatMessageTimestamp(first);
 	const span = new Date(first).toDateString() !== new Date(last).toDateString()
 		? `${start} – ${formatMessageTimestamp(last)}`
@@ -517,7 +517,7 @@ export function BackgroundUpdates({ turns, tally, failed = false, open, onOpenCh
 					<span className="font-medium text-foreground/85">
 						{failed
 							? t("chat.background.failedEarlier", { count: turns.length })
-							: t("chat.background.count", { count: turns.reduce((sum, items) => sum + Math.max(1, items[0] ? workerUpdatesOf(items[0]).length : 0), 0) })}
+							: t("chat.background.count", { count: turns.reduce((sum, turn) => sum + Math.max(1, turn.updates.length), 0) })}
 					</span>
 					{workers > 0 && !STATE_TALLIES.some((name) => tally?.[name]) ? ` · ${t("chat.background.workers", { count: workers })}` : null}
 					{tallies.map((label) => ` · ${label}`).join("")} · {span}

@@ -197,7 +197,7 @@ import {
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 import { AutomationMessage, ReplacedNotice, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
-import { accountFailure, turnStanding } from "./background-turns";
+import { accountFailure, turnStanding, turnUpdates } from "./background-turns";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
@@ -7103,11 +7103,11 @@ function withoutLead(member: TimelineGroup): TimelineGroup {
 	return body;
 }
 
-function backgroundRows(members: readonly TimelineGroup[]) {
+function backgroundRows(members: readonly TimelineGroup[], updatesOf: ReadonlyMap<TimelineGroup, readonly WorkerUpdate[]>) {
 	const rows: { key: string; members: TimelineGroup[]; sender?: string; latest?: WorkerUpdate; at?: string; handled?: boolean; count: number }[] = [];
 	const latest = new Map<string, WorkerUpdate>();
 	for (const member of members) {
-		const updates = isLooseNotices(member) ? [] : workerUpdatesOf(member.items[0]!);
+		const updates = updatesOf.get(member) ?? [];
 		if (!isAccountFailure(member)) for (const update of updates) latest.set(senderOf(update), update);
 		const senders = new Set(updates.map(senderOf));
 		const sender = senders.size === 1 ? [...senders][0] : undefined;
@@ -7133,7 +7133,7 @@ function backgroundRows(members: readonly TimelineGroup[]) {
 		else if (state === "stuck") add("stuck");
 	}
 	for (const member of members) {
-		if (isAccountFailure(member)) add("notHandled", Math.max(1, workerUpdatesOf(member.items[0]!).length));
+		if (isAccountFailure(member)) add("notHandled", Math.max(1, updatesOf.get(member)?.length ?? 0));
 		if (isLooseNotices(member)) for (const item of member.items) add(looseNotice(item)!);
 	}
 	return { rows, tally };
@@ -7145,6 +7145,7 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 	onOpenChange: (key: string, open: boolean) => void;
 	renderTurn: (turn: TimelineGroup) => ReactNode;
 }) {
+	const carried = (useContext(BatchedReportsContext) ?? NO_BATCHED_REPORTS).under;
 	const { kind, members } = group.folded!;
 	const lineKey = `${group.key}:open`;
 	const body = (member: TimelineGroup) => renderTurn(withoutLead(member));
@@ -7157,6 +7158,7 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 	}
 	const banner = bannerOf(group);
 	const listed = kind === "failed" ? members.slice(0, -1) : members;
+	const updates = new Map(listed.map((member) => [member, turnUpdates(member.items, carried)] as const));
 	const toggleAll = (suffix: string, among: readonly TimelineGroup[]) => ({
 		open: among.some((member) => overrides[`${member.key}:${suffix}`]),
 		onOpenChange: (open: boolean) => { for (const member of among) onOpenChange(`${member.key}:${suffix}`, open); },
@@ -7171,10 +7173,10 @@ function FoldedTurns({ group, overrides, onOpenChange, renderTurn }: {
 			{member === banner ? null : body(member)}
 		</BackgroundTurnRow>
 	);
-	const { rows, tally } = kind === "background" ? backgroundRows(listed) : { rows: undefined, tally: undefined };
+	const { rows, tally } = kind === "background" ? backgroundRows(listed, updates) : { rows: undefined, tally: undefined };
 	const line = (
 		<BackgroundUpdates
-			turns={listed.filter((member) => !isLooseNotices(member)).map((member) => member.items)}
+			turns={listed.filter((member) => !isLooseNotices(member)).map((member) => ({ at: member.items[0]!.createdAt, updates: updates.get(member)! }))}
 			tally={tally}
 			failed={kind === "failed"}
 			{...toggleAll("line", listed)}

@@ -8,6 +8,9 @@ type Outcome = { state: string; usageLimit?: unknown; failureCode?: string };
 
 export const accountFailure = ({ state, usageLimit, failureCode }: Outcome) => state === "failed" && Boolean(usageLimit || failureCode === "auth_required");
 
+export const turnUpdates = (items: readonly ConversationItem[], carried: ReadonlyMap<string, readonly WorkerUpdate[]>) =>
+	items.flatMap((item) => [...workerUpdatesOf(item), ...(carried.get(item.id) ?? [])]);
+
 const isYours = (item: ConversationItem) =>
 	isUserQueuePrompt(item) || relayedVia(item) !== null ||
 	(item.kind === "activity" && ((isSteer(item) && !item.detail?.senderSessionId) || item.activityKind === "approval" || item.activityKind === "user_input"));
@@ -20,9 +23,9 @@ export function turnStanding(items: readonly ConversationItem[], outcome: Outcom
 	const settled = state === "completed" || state === "recovered";
 	if (automation?.kind === "notice" && automation.notice === "orchestratorReplaced") return settled ? "replaced" : "up";
 	if (lead.kind !== "message" || !isWorkerLead(lead) || (isTaskTitleUpdate(lead) && !renamedTitle(items))) return "yours";
-	if (items.some((item) => [...workerUpdatesOf(item), ...(carried.get(item.id) ?? [])].some((update) => needsYouNow(index, update)))) return "up";
+	if (turnUpdates(items, carried).some((update) => needsYouNow(index, update))) return "up";
 	const asks = /[?？][*_)\]"'”’`」』）】》〉»›]*$/.test(finalReply(items));
-	if (state === "failed") return accountFailure(outcome) && !asks ? "background" : "failed";
-	if (!settled) return "up";
-	return asks ? "up" : "background";
+	if (asks) return "up";
+	if (state === "failed") return accountFailure(outcome) ? "background" : "failed";
+	return settled ? "background" : "up";
 }
