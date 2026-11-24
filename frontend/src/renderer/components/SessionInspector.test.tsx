@@ -3535,13 +3535,22 @@ describe("SessionInspector tabs", () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
     renderWithQuery(<SessionInspector session={session([pr(1, "open")])} sideChatView={<div />} />);
     const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Device", "Side chat"]);
+    expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Side chat"]);
     expect(screen.queryByText("Review controls")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
 
     expect(await screen.findByText("Review controls")).toBeInTheDocument();
     expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+  });
+
+  it("offers the Device tab to local worker sessions only with Developer mode on", async () => {
+    mockCommonGets([], "", [reviewState(1, "needs_review")]);
+    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} />);
+    expect(screen.queryByRole("tab", { name: "Device" })).not.toBeInTheDocument();
+
+    act(() => useUiStore.setState({ developerMode: true }));
+    expect(screen.getAllByRole("tab").map((el) => el.textContent?.trim())).toEqual(["Summary", "Files", "Reviews", "Browser", "Device"]);
   });
 
   it("offers a Subagents tab after Side chat while the chat passes its panel", async () => {
@@ -3554,7 +3563,7 @@ describe("SessionInspector tabs", () => {
       />,
     );
     const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Device", "Side chat", "Subagents"]);
+    expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Side chat", "Subagents"]);
 
     await userEvent.click(screen.getByRole("tab", { name: "Subagents" }));
 
@@ -6410,12 +6419,10 @@ describe("SessionInspector summary reviews", () => {
     await screen.findByRole("tab", { name: /Summary/ });
     expect(screen.queryByRole("tab", { name: /Reviews/ })).not.toBeInTheDocument();
     // No side chat view from the host (side chats off or unsupported): no tab.
-    // A local worker session has the Device tab.
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual([
       "Summary",
       "Files",
       "Browser",
-      "Device",
     ]);
     expect(
       screen.queryByRole("switch", { name: "Automatically fix review comments" }),

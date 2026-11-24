@@ -1194,7 +1194,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, [themeStyle]);
 
 	// The renderer owns Developer Mode; the daemon must know its value before
-	// either the view-close path or the idle sweep can hibernate a provider.
+	// either the view-close path or the idle sweep can hibernate a provider,
+	// and devices (a Developer mode preview) stay off in the daemon until it does.
 	useEffect(() => {
 		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
@@ -1211,6 +1212,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					body: { enabled: developerMode },
 				});
 				if (limitHistoryError) throw limitHistoryError;
+				const { error: devicesError } = await apiClient.PUT("/api/v1/devices/availability", {
+					body: { enabled: developerMode },
+				});
+				if (devicesError) throw devicesError;
 			}).catch(() => {
 				if (!cancelled) retry = setTimeout(sync, 5_000);
 			});
