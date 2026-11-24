@@ -240,7 +240,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				>
 					<div className="relative">
 						<Search
-							className="pointer-events-none absolute left-2 top-1/2 size-icon-sm -translate-y-1/2 text-settings-muted"
+							className="pointer-events-none absolute left-1 top-1/2 size-icon-sm -translate-y-1/2 text-settings-muted"
 							aria-hidden="true"
 						/>
 						<input
@@ -253,8 +253,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 							onFocus={() => setSearchFocused(true)}
 							onBlur={() => setSearchFocused(false)}
 							placeholder={searchPlaceholder ?? t("settings.models.searchPlaceholder")}
-							// No box or fill: the search is part of the menu's top, its icon in line with the rows' text.
-							className="menu-search-input h-auto! rounded-none border-transparent! bg-transparent! py-[7px]! pl-7! text-xs!"
+							// No box or fill: the search is part of the menu's top, its icon at the start.
+							className="menu-search-input h-auto! rounded-none border-transparent! bg-transparent! py-[7px]! pl-6! text-xs!"
 						/>
 					</div>
 					{normalizedQuery ? (
