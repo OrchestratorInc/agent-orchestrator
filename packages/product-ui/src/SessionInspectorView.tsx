@@ -23,6 +23,18 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
+// Usage telemetry names for each inspector view: the desktop's
+// `inspector_<name>` surfaces and `inspector.tab_<name>` controls.
+const INSPECTOR_TELEMETRY_NAMES: Record<InspectorView, string> = {
+	summary: "summary",
+	reviews: "reviews",
+	browser: "browser",
+	sideChat: "side_chat",
+	subagents: "subagents",
+	files: "files",
+	artifacts: "artifacts",
+};
+
 export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
 
 export type InspectorTab = {
@@ -134,6 +146,7 @@ export function SessionInspectorShellView({
 								key={tab.id}
 								type="button"
 								role="tab"
+								data-telemetry-id={`inspector.tab_${INSPECTOR_TELEMETRY_NAMES[tab.id]}`}
 								aria-selected={activeView === tab.id}
 								tabIndex={activeView === tab.id ? 0 : -1}
 								className={cn(
@@ -191,6 +204,7 @@ export function SessionInspectorShellView({
 					activeView === "files" && "p-0 overflow-hidden [&>[role=tabpanel]]:h-full",
 				)}
 				inert={!isVisible}
+				data-telemetry-surface={`inspector_${INSPECTOR_TELEMETRY_NAMES[activeView]}`}
 			>
 				{activeView === "summary" ? summaryView : null}
 				{activeView === "reviews" ? reviewsView : null}

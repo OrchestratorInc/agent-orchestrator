@@ -4,6 +4,7 @@ import { appI18n } from "../../../i18n";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentAuthPlan } from "../../../hooks/useAgentAuth";
+import type { InstallJob } from "../../../hooks/useHarnessUpdates";
 import { agentReadiness } from "../../../test/agent-readiness-fixtures";
 import { describeHarness } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
@@ -48,5 +49,26 @@ describe("HarnessAccountTab sign-in row", () => {
 			onLogin={vi.fn()} onLogout={vi.fn()} onVerify={vi.fn()} onCloseAuth={vi.fn()} onRetryAuth={vi.fn()} onTerminalState={vi.fn()} />);
 		expect(announcer).toHaveTextContent("Connected");
 		expect(screen.getByRole("button", { name: "Log in again" })).toHaveFocus();
+	});
+});
+
+describe("HarnessAccountTab diagnostics", () => {
+	function withDiagnostics() {
+		const job = { agentId: "goose", status: "failed", method: "npm", error: "install failed" } as unknown as InstallJob;
+		return { ...details(), hasDiagnostics: true, job };
+	}
+
+	it("labels the copy button Copy diagnostics before a copy", () => {
+		const view = renderTab({ details: withDiagnostics(), diagnosticsExpanded: true });
+		const button = view.container.querySelector("[data-harness-copy-diagnostics]");
+		expect(button).toHaveAccessibleName("Copy diagnostics");
+	});
+
+	it("confirms a copy with a check and Copied, like the Health tab", () => {
+		const view = renderTab({ details: withDiagnostics(), diagnosticsExpanded: true, copied: true });
+		const button = view.container.querySelector("[data-harness-copy-diagnostics]");
+		expect(button).toHaveAccessibleName("Copied");
+		expect(button?.querySelector(".icon-check")).not.toBeNull();
+		expect(button?.querySelector(".icon-copy")).toBeNull();
 	});
 });

@@ -491,7 +491,7 @@ func scmPRFields() string {
 	return strings.ReplaceAll(`
 number id url state isDraft merged closed title additions deletions changedFiles
 mergeable mergeStateStatus reviewDecision headRefName headRefOid baseRefName baseRefOid
-isCrossRepository headRepository{ defaultBranchRef{ name } }
+isCrossRepository headRepository{ defaultBranchRef{ name } } isMergeQueueEnabled mergeQueueEntry{ state position estimatedTimeToMerge enqueuedAt }
 createdAt updatedAt mergedAt closedAt
 author{ login avatarUrl }
 mergeCommit{ oid }
@@ -661,6 +661,8 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 			ProviderMergeable:        providerMergeable,
 			ProviderMergeStateStatus: providerMergeState,
 			HTMLURL:                  str(pr["url"]),
+			MergeQueueRequired:       boolv(pr["isMergeQueueEnabled"]),
+			MergeQueue:               mergeQueueEntryFromGraphQL(pr["mergeQueueEntry"]),
 			CreatedAtProvider:        parseGitHubTime(str(pr["createdAt"])),
 			UpdatedAtProvider:        parseGitHubTime(str(pr["updatedAt"])),
 			MergedAtProvider:         parseGitHubTime(str(pr["mergedAt"])),

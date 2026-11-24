@@ -163,8 +163,8 @@ export type ProjectInfo = {
 export type ProjectDetail = ProjectInfo & {
 	agent?: string;
 	config?: {
-		agentConfig?: { model?: string; effort?: string; permissions?: string };
-		worker?: { agent?: string; agentConfig?: { model?: string; effort?: string; permissions?: string } };
+		agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string };
+		worker?: { agent?: string; agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string } };
 		reviewers?: { harness?: string; agentConfig?: { model?: string; mode?: string; effort?: string } }[];
 	};
 };
@@ -420,6 +420,7 @@ export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 // server is unreachable" need very different advice. The message keeps the
 // `${status} ${statusText}` prefix that call sites already match on.
 export class ApiError extends Error {
+	readonly telemetryCode: string = "API_ERROR";
 	constructor(
 		readonly status: number,
 		message: string,
@@ -512,7 +513,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		}
 		// Server answered with an error: classify by status + daemon code, and tag
 		// the requestId so a mobile event pivots to the daemon's own capture.
-		captureMobileApiError(path, httpCategory(res.status), res.status, code, requestId);
+		captureMobileApiError(path, httpCategory(res.status), res.status, code, requestId, detail);
 		throw new ApiError(
 			res.status,
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,
@@ -812,6 +813,7 @@ export function artifactMarkdownImageSource(cfg: ServerConfig, sessionId: string
  */
 /** A text read stopped at its limit: the file is larger than the viewer loads. */
 export class ArtifactTextTooLargeError extends Error {
+	readonly code: string = "ARTIFACT_TEXT_TOO_LARGE_ERROR";
 	constructor() {
 		super("This file is too large to load as text.");
 		this.name = "ArtifactTextTooLargeError";

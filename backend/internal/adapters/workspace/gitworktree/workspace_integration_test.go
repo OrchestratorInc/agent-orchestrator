@@ -1009,11 +1009,18 @@ func TestWorkspaceIntegrationAutoRejectsUnmarkedRemotelessRepo(t *testing.T) {
 	if !errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) {
 		t.Fatalf("Create error = %v, want ErrWorkspaceDefaultBranchUnresolved", err)
 	}
-	if !strings.Contains(err.Error(), "remote set-head") || !strings.Contains(err.Error(), repo) {
-		t.Fatalf("Create error = %v, want repository-specific remote HEAD remediation", err)
+	if strings.Contains(err.Error(), "remote set-head") || !strings.Contains(err.Error(), "set the project's default branch") || !strings.Contains(err.Error(), repo) {
+		t.Fatalf("Create error = %v, want a repository-specific remedy that works without a remote", err)
 	}
 	if out, err := exec.Command(git, "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/ao/proj-1").CombinedOutput(); err == nil {
 		t.Fatalf("unresolved auto selection leaked a session branch: %s", out)
+	}
+
+	// With a remote that advertises no HEAD, the remote HEAD is the thing to fix.
+	runGit(t, git, repo, "remote", "add", "origin", filepath.Join(tmp, "missing.git"))
+	_, err = ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess2", Branch: "ao/proj-2"})
+	if !errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) || !strings.Contains(err.Error(), "remote set-head") {
+		t.Fatalf("Create error = %v, want remote HEAD remediation", err)
 	}
 }
 

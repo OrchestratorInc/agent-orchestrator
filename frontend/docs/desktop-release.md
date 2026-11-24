@@ -35,8 +35,9 @@ is never bypassed by publishing directly from this repository.
 
 `.github/workflows/build-artifacts.yml` remains intentionally dispatchable. It
 accepts an explicit public ref/SHA and version, builds the four supported
-desktop targets, and uploads unsigned workflow artifacts plus their SHA-256
-digests. It has read-only repository permissions, does not use release signing
+desktop targets plus the headless Linux arm64 host package
+(`ao-host-linux-arm64.tar.gz`, from `linux-arm64-host.yml`), and uploads
+unsigned workflow artifacts plus their SHA-256 digests. It has read-only repository permissions, does not use release signing
 secrets, and does not create, edit, or publish GitHub Releases.
 
 The private conductor pins the immutable source SHA before dispatch and treats

@@ -93,46 +93,55 @@ describe("ShareArtifactButton on a team workspace", () => {
 		await waitFor(() => expect(within(people).queryByText("Design")).toBeNull());
 	});
 
-	it("offers Everyone at the workspace in General access, and stops it with another choice", async () => {
+	it("does not offer Everyone at the workspace in General access", async () => {
 		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });
 		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
 		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
-		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ ...none, workspaces: [everyone] });
+		renderButton(cloudFile);
+		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
+		await userEvent.click(await screen.findByRole("button", { name: /Only you/ }));
+		expect(screen.getByRole("menuitemradio", { name: /Only people invited/ })).toBeTruthy();
+		expect(screen.queryByRole("menuitemradio", { name: /Everyone at/ })).toBeNull();
+	});
+
+	it("still shows a link already shared with the workspace, and another choice stops it", async () => {
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue({ ...none, workspaces: [everyone] });
 		const remove = vi.spyOn(aoBridge.cloudShare, "removeGrant").mockResolvedValue();
 		const setAccess = vi.spyOn(aoBridge.cloudShare, "setAccess");
 		renderButton(cloudFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
-		await userEvent.click(await screen.findByRole("button", { name: /Only you/ }));
-		await userEvent.click(screen.getByRole("menuitemradio", { name: /Everyone at Acme/ }));
-		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { orgId: ORG_ID, workspace: true });
 		expect(await screen.findByText("Everyone at Acme can open it after signing in, and finds it under Shared with you.")).toBeTruthy();
-		// Already private: no access change.
-		expect(setAccess).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("button", { name: /Everyone at Acme/ }));
 		await userEvent.click(screen.getByRole("menuitemradio", { name: /Only people invited/ }));
 		expect(remove).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, everyone.id);
 		expect(await screen.findByText("Only you")).toBeTruthy();
 		expect(setAccess).not.toHaveBeenCalled();
+		// Once stopped, it is not offered again.
+		await userEvent.click(screen.getByRole("button", { name: /Only you/ }));
+		expect(screen.queryByRole("menuitemradio", { name: /Everyone at/ })).toBeNull();
 	});
 
-	it("shares a new link with the teams and workspace set up before Publish, once it is live", async () => {
+	it("shares a new link with the teams set up before Publish, once it is live, and offers no workspace", async () => {
 		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue(inspection);
 		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue(links);
 		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
 		const publish = vi.spyOn(aoBridge.cloudShare, "publish").mockResolvedValue({ status: "published", replaced: false, share });
-		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ ...none, teams: [design], workspaces: [everyone] });
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ ...none, teams: [design] });
 		renderButton(localFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Publish: report.html" }));
 		await screen.findByRole("combobox", { name: "Add people by email or team" });
 		await pickDesign();
 		expect(await screen.findByText("Gets access when you publish")).toBeTruthy();
 		await userEvent.click(screen.getByRole("button", { name: /Only people invited/ }));
-		await userEvent.click(screen.getByRole("menuitemradio", { name: /Everyone at Acme/ }));
+		expect(screen.queryByRole("menuitemradio", { name: /Everyone at/ })).toBeNull();
+		await userEvent.keyboard("{Escape}");
 		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
-		// Publishing sends people only, privately; the teams and workspace follow.
+		// Publishing sends people only, privately; the teams follow.
 		expect(publish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ access: "restricted" }));
 		expect(publish.mock.calls[0]![0]).not.toHaveProperty("teamIds");
-		await waitFor(() => expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { orgId: ORG_ID, teamIds: [TEAM_ID], workspace: true }));
+		await waitFor(() => expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { orgId: ORG_ID, teamIds: [TEAM_ID] }));
 		expect(await screen.findByText("3 members")).toBeTruthy();
 	});
 

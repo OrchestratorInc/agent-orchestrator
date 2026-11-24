@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
@@ -152,11 +153,28 @@ func TestCodexLoginReportsMissingBinaryAndNativeFailure(t *testing.T) {
 			deps: Deps{
 				In:       strings.NewReader("1\n"),
 				LookPath: func(string) (string, error) { return "/codex", nil },
-				RunInteractiveCommand: func(context.Context, string, string, []string, io.Reader, io.Writer, io.Writer) error {
+				RunInteractiveCommand: func(_ context.Context, _, _ string, args []string, _ io.Reader, _, _ io.Writer) error {
+					if slices.Equal(args, []string{"--version"}) {
+						return nil // Codex starts; the sign-in itself failed
+					}
 					return errors.New("exit status 1")
 				},
 			},
 			want: "codex login failed",
+		},
+		{
+			// An npm launcher whose native binary is gone fails every run with a
+			// raw spawn error (#7579).
+			name: "codex cannot start",
+			deps: Deps{
+				In:       strings.NewReader("1\n"),
+				LookPath: func(string) (string, error) { return "/nvm/bin/codex", nil },
+				RunInteractiveCommand: func(_ context.Context, _, _ string, _ []string, _ io.Reader, stdout, _ io.Writer) error {
+					_, _ = io.WriteString(stdout, "Error: spawn /nvm/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT\n")
+					return errors.New("exit status 1")
+				},
+			},
+			want: "the Codex CLI at /nvm/bin/codex could not start (Error: spawn /nvm/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT). Reinstall or update Codex, then try again",
 		},
 	}
 	for _, tt := range tests {
@@ -291,6 +309,21 @@ func TestCodexLoginChecksAnAPIKeyWithOpenAIFirst(t *testing.T) {
 			}
 			if strings.Contains(stdout.String(), key) || (err != nil && strings.Contains(err.Error(), key)) {
 				t.Fatal("the key leaked into output or the error")
+			}
+		})
+	}
+}
+
+func TestLastLineKeepsTheLauncherErrorWhole(t *testing.T) {
+	long := strings.Repeat("a", 299) + "é" + "tail"
+	for _, tt := range []struct{ name, in, want string }{
+		{name: "last non-blank line", in: "starting\nError: spawn codex ENOENT\n\n", want: "Error: spawn codex ENOENT"},
+		{name: "cut by character", in: long, want: strings.Repeat("a", 299) + "é..."},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := lastLine(tt.in)
+			if got != tt.want || !utf8.ValidString(got) {
+				t.Fatalf("lastLine = %q, want %q", got, tt.want)
 			}
 		})
 	}

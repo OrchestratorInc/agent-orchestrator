@@ -330,6 +330,17 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 	return true, nil
 }
 
+func (f *fakeStore) SetSessionTerminateOnPRMerge(_ context.Context, id domain.SessionID, terminate bool, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.TerminateOnPRMerge = terminate
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
+}
+
 func (f *fakeStore) DeleteTaskPreparation(_ context.Context, id domain.SessionID) (bool, error) {
 	if f.deletePrepErr != nil {
 		return false, f.deletePrepErr
@@ -5896,6 +5907,233 @@ func TestSpawn_InheritsAutoReviewFromProjectConfig(t *testing.T) {
 	if !st.sessions[s.ID].AutoReviewEnabled {
 		t.Fatal("auto review must be enabled when project config enables it")
 	}
+}
+
+func TestSpawn_TerminateOnPRMergeResolution(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
+	t.Run("hardcoded false default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "")
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("terminate_on_pr_merge must default to false")
+		}
+	})
+
+	t.Run("global default via env var", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "true")
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("terminate_on_pr_merge must inherit global env default true")
+		}
+	})
+
+	t.Run("global default via manager deps", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "")
+		st := newFakeStore()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		rt := &fakeRuntime{}
+		ws := &fakeWorkspace{}
+		lookPath := func(string) (string, error) { return "/bin/true", nil }
+		m := New(Deps{
+			Runtime:            rt,
+			Agents:             fakeAgents{},
+			Workspace:          ws,
+			Store:              st,
+			Messenger:          &fakeMessenger{},
+			Lifecycle:          &fakeLCM{store: st},
+			LookPath:           lookPath,
+			TerminateOnPRMerge: boolPtr(true),
+		})
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("terminate_on_pr_merge must inherit manager deps default true")
+		}
+	})
+
+	t.Run("project default overrides global default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "true")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project default false must override global default true")
+		}
+
+		// Also test project default true overrides global false
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		cfg.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s2, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s2.ID].TerminateOnPRMerge {
+			t.Fatal("project default true must override global default false")
+		}
+	})
+
+	t.Run("project base agentConfig default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project base AgentConfig true must resolve when project root is unset")
+		}
+	})
+
+	t.Run("project root default overrides project base agentConfig", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		cfg.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project root false must override project base AgentConfig true")
+		}
+	})
+
+	t.Run("role override agentConfig wins over project default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		cfg.Worker.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("role override true must win over project default false")
+		}
+	})
+
+	t.Run("explicit spawn config wins over project and global defaults", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "true")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+
+		// Explicit false on SpawnConfig
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID:          "mer",
+			Kind:               domain.KindWorker,
+			TerminateOnPRMerge: boolPtr(false),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("explicit spawn config false must win over project true")
+		}
+
+		// Explicit true on SpawnConfig with project false
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s2, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID:          "mer",
+			Kind:               domain.KindWorker,
+			TerminateOnPRMerge: boolPtr(true),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s2.ID].TerminateOnPRMerge {
+			t.Fatal("explicit spawn config true must win over project false")
+		}
+	})
+
+	t.Run("explicit spawn agentConfig wins over project default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID: "mer",
+			Kind:      domain.KindWorker,
+			AgentConfig: ports.AgentConfig{
+				TerminateOnPRMerge: boolPtr(true),
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("explicit spawn AgentConfig true must win over project false")
+		}
+	})
+
+	t.Run("per-session toggle overrides resolved default", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "")
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("initial terminate_on_pr_merge must be false")
+		}
+
+		// Toggle on via store and verify
+		ok, err := st.SetSessionTerminateOnPRMerge(ctx, s.ID, true, time.Now())
+		if err != nil || !ok {
+			t.Fatalf("set terminate_on_pr_merge true: %v, %v", ok, err)
+		}
+		got, ok, err := st.GetSession(ctx, s.ID)
+		if err != nil || !ok {
+			t.Fatalf("get session: %v, %v", ok, err)
+		}
+		if !got.TerminateOnPRMerge {
+			t.Fatal("per-session toggle must override to true")
+		}
+
+		// Toggle off via store and verify
+		ok, err = st.SetSessionTerminateOnPRMerge(ctx, s.ID, false, time.Now())
+		if err != nil || !ok {
+			t.Fatalf("set terminate_on_pr_merge false: %v, %v", ok, err)
+		}
+		got, ok, err = st.GetSession(ctx, s.ID)
+		if err != nil || !ok {
+			t.Fatalf("get session: %v, %v", ok, err)
+		}
+		if got.TerminateOnPRMerge {
+			t.Fatal("per-session toggle must override to false")
+		}
+	})
 }
 
 func TestPromptProjectContextOmitsAutomaticBranchSentinel(t *testing.T) {
@@ -12685,6 +12923,57 @@ func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	}
 	if !st.sessions["mer-1"].IsTerminated {
 		t.Fatal("session must be marked terminated even though the teardown budget expired")
+	}
+}
+
+// Archiving a session while its wake holds the resume must wait for the wake
+// and then archive, not fail with ErrOperationInProgress (#8645).
+func TestKill_WaitsForAnInFlightWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	killed := make(chan error, 1)
+	go func() {
+		_, err := m.Kill(ctx, "mer-1")
+		killed <- err
+	}()
+	select {
+	case err := <-killed:
+		m.endAgentResume("mer-1")
+		t.Fatalf("Kill returned while the wake held the session: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	m.endAgentResume("mer-1")
+	if err := <-killed; err != nil {
+		t.Fatalf("Kill after the wake finished: %v", err)
+	}
+	if !st.sessions["mer-1"].IsTerminated || rt.destroyed != 1 || ws.destroyed != 1 {
+		t.Fatalf("terminated=%v runtime=%d workspace=%d, want a full teardown",
+			st.sessions["mer-1"].IsTerminated, rt.destroyed, ws.destroyed)
+	}
+}
+
+// A wake that outlasts the limit leaves Kill's refusal in place and the
+// session untouched.
+func TestKill_GivesUpOnAWedgedWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.killResumeWait = 50 * time.Millisecond
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	defer m.endAgentResume("mer-1")
+	started := time.Now()
+	if _, err := m.Kill(ctx, "mer-1"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("Kill = %v, want ErrOperationInProgress", err)
+	}
+	if waited := time.Since(started); waited < m.killResumeWait {
+		t.Fatalf("Kill refused after %v, want a wait of at least %v", waited, m.killResumeWait)
+	}
+	if st.sessions["mer-1"].IsTerminated || rt.destroyed != 0 || ws.destroyed != 0 {
+		t.Fatal("a refused kill touched the session")
 	}
 }
 

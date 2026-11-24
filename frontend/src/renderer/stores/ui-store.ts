@@ -1,3 +1,4 @@
+import { uiUsage } from "../lib/ui-usage-telemetry";
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
@@ -240,8 +241,6 @@ export type UiState = {
 	remoteHosts: boolean;
 	/** Memory and CPU monitoring (card chips, memory light, Diagnostics page). Only takes effect in Developer mode. Default off. */
 	diagnostics: boolean;
-	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
-	sideChats: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
 	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
@@ -334,7 +333,6 @@ export type UiState = {
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
-	setSideChats: (enabled: boolean) => void;
 	setSplitPanes: (enabled: boolean) => void;
 	setPRView: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
@@ -351,7 +349,7 @@ export type UiState = {
 	closeUpdateInstallPrompt: () => void;
 	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
-	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
+	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string; hostId?: string }) => void;
 	closeSettings: () => void;
 	loginReturn: LoginReturn | null;
 	/** Remember a chat whose agent refused its login while that login is fixed. */
@@ -429,7 +427,6 @@ export type OrchestratorReplacementFailure = {
 const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
-const sideChatsStorageKey = "ao.sideChats";
 const splitPanesStorageKey = "ao.splitPanes";
 const prViewStorageKey = "ao.prView";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
@@ -442,6 +439,9 @@ const projectAvatarsStorageKey = "ao.projectAvatars";
 // The retired Developer Mode opt-out from the old left sidebar. Ignored, and
 // cleared at startup so a stored "false" leaves nothing behind.
 const retiredNewSidebarDesignStorageKey = "ao.newSidebarDesign";
+// The retired Side chats switch. Side chats are always on; a stored "false" is
+// ignored and cleared at startup.
+const retiredSideChatsStorageKey = "ao.sideChats";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -463,10 +463,6 @@ function initialRemoteHosts() {
 
 function initialDiagnostics() {
 	return getLocalStorage()?.getItem(diagnosticsStorageKey) === "true";
-}
-
-function initialSideChats() {
-	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
 }
 
 function initialTerminalClickMode(): TerminalClickMode {
@@ -576,7 +572,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	developerMode: initialDeveloperModeValue,
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
-	sideChats: initialSideChats(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
@@ -707,10 +702,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(diagnosticsStorageKey, String(diagnostics));
 		set({ diagnostics });
 	},
-	setSideChats: (sideChats) => {
-		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
-		set({ sideChats });
-	},
 	setSplitPanes: (splitPanes) => {
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
 		set({ splitPanes });
@@ -773,16 +764,19 @@ export const useUiStore = create<UiState>((set, get) => ({
 					: {}),
 		},
 	})),
-	openProjectSettings: (projectId, options) => set({
-		accountLogin: null,
-		settingsModal: {
-			scope: "project",
-			projectId,
-			...(typeof options === "string" && options !== "local" ? { hostId: options } : {}),
-			...(typeof options === "object" && options?.section ? { section: options.section } : {}),
-			...(typeof options === "object" && options?.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
-		},
-	}),
+	openProjectSettings: (projectId, options) => {
+		const hostId = typeof options === "string" ? options : options?.hostId;
+		set({
+			accountLogin: null,
+			settingsModal: {
+				scope: "project",
+				projectId,
+				...(hostId && hostId !== "local" ? { hostId } : {}),
+				...(typeof options === "object" && options.section ? { section: options.section } : {}),
+				...(typeof options === "object" && options.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
+			},
+		});
+	},
 	closeSettings: () => set((state) => ({
 		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
@@ -1067,7 +1061,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			}
 			return { orchestratorStartupErrors };
 		}),
-	showGlobalToast: (title, body, style) =>
+	showGlobalToast: (title, body, style) => {
 		set((state) => {
 			const nonce = state.globalToastSequence + 1;
 			const options = typeof style === "object" ? style : undefined;
@@ -1078,7 +1072,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 				? state.globalToasts.filter((existing) => existing.dedupeKey !== toast.dedupeKey)
 				: state.globalToasts;
 			return { globalToast: toast, globalToasts: [...globalToasts, toast], globalToastSequence: nonce };
-		}),
+		});
+		// Every error toast in the app passes through here, so this one line counts them all.
+		if (get().globalToast?.tone === "error") uiUsage.errorShown("toast", "toast");
+	},
 	dismissGlobalToast: (nonce) =>
 		set((state) => ({
 			globalToasts: state.globalToasts.filter((toast) => toast.nonce !== nonce),
@@ -1156,6 +1153,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 
 try {
 	getLocalStorage()?.removeItem(retiredNewSidebarDesignStorageKey);
+	getLocalStorage()?.removeItem(retiredSideChatsStorageKey);
 } catch {
 	// Storage can be unavailable (private mode, quota); nothing to clean then.
 }

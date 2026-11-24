@@ -150,16 +150,6 @@ function rendersNothing(item: ConversationItem): boolean {
 }
 
 /**
- * The one reply that draws the typing cursor: the newest item, while it is
- * still streaming. ACP providers settle a turn's text blocks only when the turn
- * ends, so earlier blocks stay marked streaming after a tool call follows them.
- */
-export function streamingCursorMessageId(items: ConversationItem[]): string | undefined {
-	const last = items.at(-1);
-	return last?.kind === "message" && last.role === "assistant" && last.streaming ? last.id : undefined;
-}
-
-/**
  * A finished turn's items as the timeline draws them. Older daemons store the
  * provider's failure notice ("You've hit your 5-hour limit…") again as a running
  * row each time the agent restarts and replays its history, after the turn has

@@ -1,3 +1,4 @@
+import { uiUsage, useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -9,7 +10,7 @@ import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
-import { apiClient } from "../lib/api-client";
+import { apiClient, apiErrorCode } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -87,7 +88,6 @@ import { useKeybindingsStore } from "../stores/keybindings-store";
 import {
 	CLOUD_PROJECT_KIND,
 	findProjectOrchestrator,
-	hasConfiguredOrchestratorAgent,
 	isOrchestratorSession,
 	openPRs,
 	STANDALONE_WORKSPACE_ID,
@@ -172,6 +172,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, removeProject } = useShell();
 	const toggleThemePreference = useUiStore((s) => s.toggleThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
+	const markCommandPick = useTelemetrySurface("cmdk", isOpen, { choice: true });
 	const setOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
 	const developerMode = useUiStore((s) => s.developerMode);
@@ -455,7 +456,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	const renderMath = useUiStore((s) => s.renderMath);
 	const navigationGestures = useUiStore((s) => s.navigationGestures);
 	const terminalCopyOnSelect = useUiStore((s) => s.terminalCopyOnSelect);
-	const sideChats = useUiStore((s) => s.sideChats);
 	const soundNotifications = useSoundNotificationsStore((s) => s.enabled);
 	// Stay Awake, as the sidebar's switch: polled only while the palette is open.
 	const stayAwake = useStayAwake(isOpen && isMac);
@@ -493,10 +493,9 @@ export const CommandPalette = memo(function CommandPalette() {
 			"copy-on-select": terminalCopyOnSelect,
 			sound: soundNotifications,
 			"developer-mode": developerMode,
-			"side-chats": sideChats,
 			"split-panes": splitPanes,
 		},
-	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, sideChats, splitPanes]);
+	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, splitPanes]);
 
 	const rootItems = useMemo(
 		() => [
@@ -971,14 +970,20 @@ export const CommandPalette = memo(function CommandPalette() {
 				if (isCurrentRun()) closePalette();
 				return;
 			}
-			if (!hasConfiguredOrchestratorAgent(workspace)) {
-				if (workspace) {
-					navigateToTarget({ to: "/projects/$projectId/settings", params: { projectId } });
-					closePalette();
+			if (!workspace) return;
+			// A project that lost its orchestrator agent starts on the ranked
+			// default: the daemon fills the empty role as it starts.
+			let sessionId: string;
+			try {
+				sessionId = await spawnOrchestrator(projectId, "command_palette");
+			} catch (err) {
+				if (apiErrorCode(err) === "AGENT_REQUIRED") {
+					useUiStore.getState().openProjectSettings(projectId, { section: "agents" });
+					if (isCurrentRun()) closePalette();
+					return;
 				}
-				return;
+				throw err;
 			}
-			const sessionId = await spawnOrchestrator(projectId, "command_palette");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			navigateToTarget(sessionRoute(projectId, sessionId));
 			// A palette reopened while the spawn ran stays open.
@@ -1198,9 +1203,12 @@ export const CommandPalette = memo(function CommandPalette() {
 			const chosen = secondary ? { ...item, action: item.secondaryAction } : item;
 			if (chosen.disabled || !chosen.action) return;
 			if (pendingRef.current) return;
+			markCommandPick();
+			// What this pick opens or switches to is attributed to Cmd+K.
+			uiUsage.noteIntent("cmdk");
 			void runAction(chosen);
 		},
-		[runAction],
+		[markCommandPick, runAction],
 	);
 
 	// ⌘K / ⌘⇧P and ⌘P arrive from the main process (it also yields plain Ctrl+K and
@@ -1214,6 +1222,7 @@ export const CommandPalette = memo(function CommandPalette() {
 				return;
 			}
 			if (isDialogOrMenuOpen()) return;
+			uiUsage.noteIntent("shortcut");
 			setOpen(true);
 		},
 		enabled,
@@ -1230,6 +1239,7 @@ export const CommandPalette = memo(function CommandPalette() {
 			if (isDialogOrMenuOpen()) return;
 			resetTransient();
 			setView(currentFileTarget ? { mode: "file-search", target: currentFileTarget, parent: "root" } : { mode: "root" });
+			uiUsage.noteIntent("shortcut");
 			setOpen(true);
 		},
 		enabled,
@@ -1332,6 +1342,7 @@ export const CommandPalette = memo(function CommandPalette() {
 					// every retained shell node.
 					modal={false}
 					open={isOpen}
+					telemetrySurface="cmdk"
 					title={t("command.palette")}
 					description={t("command.searchEverywherePlaceholder")}
 				onOpenChange={(open) => (open ? setOpen(true) : requestDismiss("close"))}
