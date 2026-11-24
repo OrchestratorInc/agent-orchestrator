@@ -203,3 +203,76 @@ func TestBrowserRemoteAcceptsBase64PayloadsPast64MiB(t *testing.T) {
 		t.Fatalf("saved file size=%d err=%v, want %d", info.Size(), statErr, len(content))
 	}
 }
+
+// TestBrowserRemoteRejectsNonLoopbackURL keeps the bearer token on this
+// machine: the CLI applies the daemon's loopback-only rule to the URL.
+func TestBrowserRemoteRejectsNonLoopbackURL(t *testing.T) {
+	t.Setenv(envAgentBrowserToken, "remote-token")
+	for _, raw := range []string{"https://browser.example.com", "http://10.0.0.5:9222", "http://user:pw@127.0.0.1:9"} {
+		t.Setenv(envAgentBrowserURL, raw)
+		cfg, _, err := remoteBrowserForward(os.Getenv, []string{"browser", "get", "url"})
+		if err == nil || cfg != nil {
+			t.Fatalf("%s: cfg=%v err=%v, want loopback rejection", raw, cfg, err)
+		}
+	}
+}
+
+// TestBrowserRemoteUploadsOnlyForUploadCommand: a path typed into a page is
+// text, never a file to send, even when it is absolute and exists.
+func TestBrowserRemoteUploadsOnlyForUploadCommand(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "id_ed25519")
+	if err := os.WriteFile(secret, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capture := &remoteBrowserCapture{}
+	srv := remoteBrowserServer(t, capture, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":"ok"}`))
+	})
+	t.Setenv(envAgentBrowserURL, srv.URL)
+	t.Setenv(envAgentBrowserToken, "remote-token")
+
+	if _, _, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "fill", "@e1", secret); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.body.Files) != 0 {
+		t.Fatalf("fill uploaded files: %v", capture.body.Files)
+	}
+
+	if _, _, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "upload", "@e2", secret); err != nil {
+		t.Fatal(err)
+	}
+	if got := capture.body.Files[secret]; got != base64.StdEncoding.EncodeToString([]byte("private")) {
+		t.Fatalf("upload files = %v", capture.body.Files)
+	}
+}
+
+// TestBrowserRemoteConfinesUnnamedReturnedFiles: the service chooses the
+// paths it returns, so a path the command did not name lands under the AO
+// state dir by base name instead of anywhere on disk.
+func TestBrowserRemoteConfinesUnnamedReturnedFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	target := filepath.Join(t.TempDir(), ".bashrc")
+	srv := remoteBrowserServer(t, &remoteBrowserCapture{}, func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(remoteBrowserResponse{Files: map[string]string{target: "aGVsbG8="}})
+	})
+	t.Setenv(envAgentBrowserURL, srv.URL)
+	t.Setenv(envAgentBrowserToken, "remote-token")
+
+	_, errOut, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "screenshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("unnamed path was written: %v", statErr)
+	}
+	confined := filepath.Join(dataDir, "browser-files", ".bashrc")
+	if data, readErr := os.ReadFile(confined); readErr != nil || string(data) != "hello" {
+		t.Fatalf("confined file = %q err=%v", data, readErr)
+	}
+	if !strings.Contains(errOut, confined) {
+		t.Fatalf("stderr should say where the file went: %q", errOut)
+	}
+}

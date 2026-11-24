@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
 const (
@@ -45,11 +47,17 @@ func remoteBrowserForward(getenv func(string) string, args []string) (*remoteBro
 	if baseURL == "" {
 		return nil, nil, nil
 	}
+	// Same rule as the daemon's config: the bearer token must never leave
+	// this machine, so only a loopback http URL is accepted.
+	validated, err := config.ParseAgentBrowserURL(baseURL)
+	if err != nil {
+		return nil, nil, err
+	}
 	token := strings.TrimSpace(getenv(envAgentBrowserToken))
 	if token == "" {
 		return nil, nil, fmt.Errorf("%s is set but %s is empty: the remote browser refuses every request without its token", envAgentBrowserURL, envAgentBrowserToken)
 	}
-	return &remoteBrowserConfig{baseURL: strings.TrimRight(baseURL, "/"), token: token}, args[1:], nil
+	return &remoteBrowserConfig{baseURL: validated, token: token}, args[1:], nil
 }
 
 // remoteBrowserRequest mirrors the agent-browser service command contract:
@@ -103,7 +111,7 @@ func runRemoteBrowserCommand(ctx context.Context, deps Deps, cfg remoteBrowserCo
 	if err := json.NewDecoder(io.LimitReader(resp.Body, remoteBrowserMaxResponseBytes)).Decode(&out); err != nil {
 		return fmt.Errorf("decode remote browser response: %w", err)
 	}
-	if err := writeRemoteBrowserFiles(out.Files); err != nil {
+	if err := writeRemoteBrowserFiles(deps.Err, args, out.Files); err != nil {
 		return err
 	}
 	if out.Output != "" {
@@ -125,28 +133,45 @@ func runRemoteBrowserCommand(ctx context.Context, deps Deps, cfg remoteBrowserCo
 	return nil
 }
 
-// remoteBrowserUploadArgs inlines local files named by the command, mirroring
-// the agent-browser service client contract: an absolute path that exists is
-// file content, and relative paths travel only for the upload command (a word
-// typed into a page, like README.md, is not a file to copy).
-func remoteBrowserUploadArgs(args []string) (map[string]string, error) {
-	upload := false
+// remoteBrowserFileInputCommands are the commands whose path arguments are
+// local files the service must receive. Every other command sends its
+// arguments only as text: a path typed into a page (`fill @e1 /etc/hosts`)
+// must never upload that file.
+var remoteBrowserFileInputCommands = map[string]bool{"upload": true}
+
+// remoteBrowserCommand returns the first non-flag argument: the command name.
+func remoteBrowserCommand(args []string) string {
 	for _, arg := range args {
 		if !strings.HasPrefix(arg, "-") {
-			upload = arg == "upload"
-			break
+			return arg
 		}
 	}
+	return ""
+}
+
+// remoteBrowserUploadArgs inlines the local files named by a file-input
+// command (see remoteBrowserFileInputCommands), mirroring the agent-browser
+// service client contract. Other commands upload nothing.
+func remoteBrowserUploadArgs(args []string) (map[string]string, error) {
+	command := remoteBrowserCommand(args)
+	if !remoteBrowserFileInputCommands[command] {
+		return nil, nil
+	}
 	var files map[string]string
+	seenCommand := false
 	for _, arg := range args {
-		if !upload && !filepath.IsAbs(arg) {
+		if !seenCommand {
+			seenCommand = arg == command
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
 			continue
 		}
 		info, err := os.Stat(arg)
 		if err != nil || info.IsDir() {
 			continue
 		}
-		data, err := os.ReadFile(arg)
+		data, err := os.ReadFile(arg) // #nosec G304 -- the user named this file for upload.
 		if err != nil {
 			return nil, fmt.Errorf("read %s for upload to the remote browser: %w", arg, err)
 		}
@@ -158,13 +183,57 @@ func remoteBrowserUploadArgs(args []string) (map[string]string, error) {
 	return files, nil
 }
 
+// remoteBrowserFilesDir is where files the service returns are saved when the
+// command did not name their path: <AO state dir>/browser-files.
+func remoteBrowserFilesDir() (string, error) {
+	stateDir, _, _, err := config.ResolvePaths()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(stateDir, "browser-files"), nil
+}
+
+// remoteBrowserSavePath decides where a file the service returned is written.
+// The service chooses the reported path, so it is trusted only when the
+// command named that exact path as an argument (`screenshot /tmp/page.png`).
+// Any other file is saved under remoteBrowserFilesDir by its base name, so a
+// response can never write outside the paths the user asked for.
+func remoteBrowserSavePath(args []string, reported string) (string, bool, error) {
+	if reported != "" {
+		clean := filepath.Clean(reported)
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "-") || arg == "" {
+				continue
+			}
+			if filepath.Clean(arg) == clean {
+				return arg, false, nil
+			}
+		}
+	}
+	base := filepath.Base(filepath.Clean(reported))
+	if base == "." || base == ".." || base == string(filepath.Separator) || base == "" {
+		base = "file"
+	}
+	dir, err := remoteBrowserFilesDir()
+	if err != nil {
+		return "", false, err
+	}
+	return filepath.Join(dir, base), true, nil
+}
+
 // writeRemoteBrowserFiles saves the files the service wrote (screenshots,
-// downloads) at their reported paths.
-func writeRemoteBrowserFiles(files map[string]string) error {
-	for path, encoded := range files {
+// downloads). A file lands at its reported path only when the command named
+// that path; otherwise it is confined to remoteBrowserFilesDir and stderr says
+// where it went.
+func writeRemoteBrowserFiles(errOut io.Writer, args []string, files map[string]string) error {
+	for reported, encoded := range files {
 		data, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return fmt.Errorf("decode remote browser file %s: %w", path, err)
+			return fmt.Errorf("decode remote browser file %s: %w", reported, err)
+		}
+		path, moved, err := remoteBrowserSavePath(args, reported)
+		if err != nil {
+			return fmt.Errorf("choose where to save remote browser file %s: %w", reported, err)
 		}
 		if dir := filepath.Dir(path); dir != "" {
 			if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -173,6 +242,11 @@ func writeRemoteBrowserFiles(files map[string]string) error {
 		}
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			return fmt.Errorf("write remote browser file %s: %w", path, err)
+		}
+		if moved {
+			if _, err := fmt.Fprintf(errOut, "remote browser file %s saved to %s\n", reported, path); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
