@@ -45,18 +45,23 @@ describe.skipIf(process.platform === "win32")("registerCliLinkIpc", () => {
 				pending = false;
 			}),
 		};
+		const shellPath = vi.fn(() => bin);
 		const linkOnFirstLaunch = registerCliLinkIpc({
 			isPackaged: () => true,
 			resourcesPath: path.join(root, "resources"),
 			appImage: undefined,
 			dataDir: path.join(root, "data"),
 			appVersion: "1.0.0",
-			shellPath: () => bin,
+			shellPath,
 			firstLaunch,
 		});
 
 		expect(await linkOnFirstLaunch(undefined)).toBeNull();
 		expect(firstLaunch.pending).not.toHaveBeenCalled();
+		pending = false;
+		expect(await linkOnFirstLaunch(bin)).toBeNull();
+		expect(shellPath).not.toHaveBeenCalled();
+		pending = true;
 		expect(await linkOnFirstLaunch(bin)).toMatchObject({ ok: true, changed: true, linkPath: link });
 		const target = await readlink(link);
 

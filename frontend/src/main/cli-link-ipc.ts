@@ -44,5 +44,7 @@ export function registerCliLinkIpc(input: {
 		if (result.ok) await input.firstLaunch.spend().catch(() => undefined);
 		return result;
 	});
-	return async (loginShellPath) => linkCliOnFirstLaunch(io, { ...(await request()), shellPath: loginShellPath }, input.firstLaunch);
+	return async (loginShellPath) => loginShellPath && (await input.firstLaunch.pending())
+		? linkCliOnFirstLaunch(io, { ...(await request()), shellPath: loginShellPath }, input.firstLaunch)
+		: null;
 }
