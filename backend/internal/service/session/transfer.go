@@ -234,7 +234,8 @@ func transferError(err error) error {
 	case errors.Is(err, ports.ErrWorkspaceBranchInvalid):
 		return apierr.Invalid("TRANSFER_UNSUPPORTED", msg, nil)
 	}
-	return err
+	// Receive spawns a session, so spawn failures (missing tmux, agent binary) keep their codes.
+	return mapSessionError(err)
 }
 
 // MachineName is this computer's hostname without the ".local" suffix, used
