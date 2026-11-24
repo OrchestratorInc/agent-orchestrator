@@ -2,89 +2,21 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { cn } from "../../lib/utils";
 import { OptionMenuItem } from "../ui/option-menu";
 
-// An upright pill, a little taller than the bar it sits on.
-const THUMB_W = 16;
-const THUMB_H = 24;
-const TRACK_H = 18;
+// A small upright rounded square, a little taller than the squared bar it sits on.
+const THUMB_W = 14;
+const THUMB_H = 22;
+const TRACK_H = 16;
 // How long a sent level is held on screen while the agent has not reported it.
 const SENT_HOLD_MS = 2500;
-// The scale's colour, Orchestrator's brand blue (themed): the dots of the fill and the thumb's ring.
-const BRAND = "var(--color-brand-logo)";
 
 /** Where a level's centre sits on the track: inset by half a thumb at each end, so the thumb stays inside. */
 function centre(percent: number): string {
 	return `calc(${percent}% + ${(THUMB_W / 2) * (1 - percent / 50)}px)`;
 }
 
-// Cells of the dot field: a 2px dot every 4px.
-const CELL = 4;
-const DOT = 2;
-
-/** A stable pseudo-random number in [0, 1) for a cell, so the pattern does not reshuffle on each frame. */
-function hash(column: number, row: number, salt: number): number {
-	const value = Math.sin(column * 127.1 + row * 311.7 + salt * 74.7) * 43758.5453;
-	return value - Math.floor(value);
-}
-
-/**
- * The filled part's texture: a grid of small dots that grows denser and brighter towards the thumb,
- * each twinkling on its own beat. Still, and drawn once, when motion is reduced or the slider is off.
- */
-function DotField({ still }: { still: boolean }) {
-	const canvasRef = useRef<HTMLCanvasElement>(null);
-	useEffect(() => {
-		const canvas = canvasRef.current;
-		const context = canvas?.getContext("2d");
-		// No drawing surface (a test DOM): the gradient alone stands in.
-		if (!canvas || !context || typeof context.fillRect !== "function") return;
-		const reduce = still || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-		let width = 0;
-		let height = 0;
-		const draw = (time: number) => {
-			const ratio = window.devicePixelRatio || 1;
-			const box = canvas.getBoundingClientRect();
-			if (box.width !== width || box.height !== height) {
-				width = box.width;
-				height = box.height;
-				canvas.width = Math.round(width * ratio);
-				canvas.height = Math.round(height * ratio);
-			}
-			context.setTransform(ratio, 0, 0, ratio, 0, 0);
-			context.clearRect(0, 0, width, height);
-			// The canvas carries the brand colour as its text colour, so a theme change is picked up here.
-			context.fillStyle = getComputedStyle(canvas).color;
-			const columns = Math.floor(width / CELL);
-			const rows = Math.floor(height / CELL);
-			const top = (height - rows * CELL) / 2;
-			for (let column = 0; column < columns; column++) {
-				// How far along the fill: dots thin out towards its start.
-				const along = columns > 1 ? column / (columns - 1) : 1;
-				for (let row = 0; row < rows; row++) {
-					if (hash(column, row, 1) > 0.15 + along * 0.6) continue;
-					const beat = reduce ? 1 : 0.5 + 0.5 * Math.sin(time / (600 + hash(column, row, 2) * 900) + hash(column, row, 3) * 6.28);
-					const alpha = (0.15 + along * 0.75) * (0.35 + 0.65 * beat);
-					context.globalAlpha = alpha;
-					context.fillRect(column * CELL + (CELL - DOT) / 2, top + row * CELL + (CELL - DOT) / 2, DOT, DOT);
-				}
-			}
-		};
-		draw(performance.now());
-		// The fill widens and narrows with the level, so the field is drawn again to its new size.
-		const resized = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => draw(performance.now()));
-		resized?.observe(canvas);
-		// A gentle shimmer is enough: a dozen frames a second, only while the menu is open.
-		const timer = reduce ? undefined : window.setInterval(() => draw(performance.now()), 80);
-		return () => {
-			resized?.disconnect();
-			if (timer !== undefined) window.clearInterval(timer);
-		};
-	}, [still]);
-	return <canvas ref={canvasRef} aria-hidden="true" className="absolute inset-0 size-full" style={{ color: BRAND }} />;
-}
-
 /**
  * The reasoning-effort setting as a stepped slider: a tick per level, filled up to the chosen one
- * with a field of dots that grows denser towards the thumb.
+ * in the faintest grey.
  * It is a menu row, so the menu's arrow keys reach it like any other; Left and Right change the level.
  */
 export function EffortSlider({
@@ -185,26 +117,24 @@ export function EffortSlider({
 				}}
 				onPointerCancel={() => setDrag(undefined)}
 			>
-				<div className="absolute inset-x-0 top-1/2 -translate-y-1/2 overflow-hidden rounded-md bg-interactive-active" style={{ height: TRACK_H }}>
-					{/* The filled part reaches the thumb's centre: the bar keeps its own colour, the dots mark the fill. */}
+				<div className="absolute inset-x-0 top-1/2 -translate-y-1/2 overflow-hidden rounded-[3px] bg-interactive-active" style={{ height: TRACK_H }}>
+					{/* The filled part, up to the thumb's centre, in the faintest grey, a hair darker than the bar. */}
 					<div
 						// Eased only into a level, never while it follows the pointer.
-						className={cn("absolute inset-y-0 left-0 overflow-hidden", drag === undefined && "motion-safe:transition-[width] motion-safe:duration-150")}
+						className={cn("absolute inset-y-0 left-0 bg-muted-foreground/8", drag === undefined && "motion-safe:transition-[width] motion-safe:duration-150")}
 						style={{ width: centre(percent) }}
-					>
-						<DotField still={Boolean(disabled)} />
-					</div>
+					/>
 				</div>
 				{choices.map((choice, step) => (
 					<span
 						key={choice.value}
-						className="absolute top-1/2 h-2.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground/25"
+						className="absolute top-1/2 h-2 w-0.5 -translate-x-1/2 -translate-y-1/2 bg-foreground/25"
 						style={{ left: centre((step / last) * 100) }}
 					/>
 				))}
 				<span
 					className={cn(
-						"absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 bg-white",
+						"absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[3px] border border-(--color-border-strong) bg-card shadow-[0_1px_2px_rgb(0_0_0/0.12)]",
 						drag === undefined && "motion-safe:transition-[left] motion-safe:duration-150",
 						chosen < 0 && drag === undefined && sent === undefined && "opacity-70",
 					)}
@@ -212,7 +142,6 @@ export function EffortSlider({
 						left: centre(percent),
 						width: THUMB_W,
 						height: THUMB_H,
-						borderColor: BRAND,
 					}}
 				/>
 			</div>
