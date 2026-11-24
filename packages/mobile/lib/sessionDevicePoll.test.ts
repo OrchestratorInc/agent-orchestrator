@@ -1,5 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEVICE_SUPPORT_CHECK_MS, LEASE_FAILED_MS, LEASE_HELD_MS, LEASE_IDLE_MS, startSessionDevicePoll } from "./sessionDevicePoll";
+import { DEVICE_SUPPORT_CHECK_MS, LEASE_FAILED_MS, LEASE_HELD_MS, LEASE_IDLE_MS, deviceSupportOn, startSessionDevicePoll } from "./sessionDevicePoll";
+
+describe("deviceSupportOn", () => {
+	it("needs Developer mode on the desktop, the opt-in and a started provider", () => {
+		expect(deviceSupportOn({ available: true, enabled: true, state: "ready" })).toBe(true);
+		expect(deviceSupportOn({ available: true, enabled: true, state: "installing" })).toBe(true);
+		expect(deviceSupportOn({ available: false, enabled: true, state: "ready" })).toBe(false);
+		// A daemon from before the Developer mode gate does not say.
+		expect(deviceSupportOn({ enabled: true, state: "ready" })).toBe(false);
+		expect(deviceSupportOn({ available: true, enabled: false, state: "off" })).toBe(false);
+		expect(deviceSupportOn({ available: true, enabled: true, state: "off" })).toBe(false);
+	});
+});
 
 describe("startSessionDevicePoll", () => {
 	beforeEach(() => vi.useFakeTimers());

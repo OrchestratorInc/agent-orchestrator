@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getDeviceStatus, getSessionDevice, type SessionDeviceLease } from "./api";
 import type { ServerConfig } from "./config";
-import { startSessionDevicePoll } from "./sessionDevicePoll";
+import { deviceSupportOn, startSessionDevicePoll } from "./sessionDevicePoll";
 import { useForeground } from "./useForeground";
 
 /**
@@ -18,7 +18,7 @@ export function useSessionDevice(config: ServerConfig | null | undefined, sessio
 		const controller = new AbortController();
 		const stop = startSessionDevicePoll(
 			{
-				supportOn: () => getDeviceStatus(config, { signal: controller.signal }).then((status) => status.enabled && status.state !== "off"),
+				supportOn: () => getDeviceStatus(config, { signal: controller.signal }).then(deviceSupportOn),
 				lease: () => getSessionDevice(config, sessionId, { signal: controller.signal }),
 			},
 			setLease,

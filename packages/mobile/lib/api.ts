@@ -714,6 +714,8 @@ export type DeviceSummary = SessionDeviceLease["device"];
 
 /** The machine's device support: whether it is on, its devices, and which sessions hold which. */
 export type DeviceStatus = {
+	/** False while the desktop app's Developer mode is off: devices are a Developer mode preview. */
+	available: boolean;
 	enabled: boolean;
 	state: "off" | "installing" | "ready" | "error";
 	error?: string;

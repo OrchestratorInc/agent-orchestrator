@@ -1,3 +1,11 @@
+/**
+ * Whether the machine serves devices: the desktop's Developer mode is on, the
+ * user turned device support on, and it has started.
+ */
+export function deviceSupportOn(status: { available?: boolean; enabled: boolean; state: string }): boolean {
+	return status.available === true && status.enabled && status.state !== "off";
+}
+
 /** How often whether device support is on is checked again. */
 export const DEVICE_SUPPORT_CHECK_MS = 30_000;
 /** How often the lease is read while the session holds a device. */
