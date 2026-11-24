@@ -297,6 +297,22 @@ describe("TurnChangedFiles", () => {
 		expectCardPath("src/file-5.ts");
 	});
 
+	it("marks each row with its file type's icon, like the Files panel", () => {
+		render(
+			<TurnChangedFiles
+				diff={diff({
+					files: [
+						{ path: "src/Button.tsx", additions: 1, deletions: 0, status: "modified" },
+						{ path: "notes.md", additions: 1, deletions: 0, status: "modified" },
+					],
+				})}
+			/>,
+		);
+		const [tsx, markdown] = screen.getAllByRole("listitem").map((row) => row.querySelector("svg"));
+		expect(tsx).not.toBeNull();
+		expect(tsx?.innerHTML).not.toBe(markdown?.innerHTML);
+	});
+
 	it("marks a running turn's diff as still growing", () => {
 		render(<TurnChangedFiles diff={diff()} live />);
 		expect(screen.getByLabelText("still changing")).toBeInTheDocument();
