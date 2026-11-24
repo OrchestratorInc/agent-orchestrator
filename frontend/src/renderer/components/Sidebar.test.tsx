@@ -5164,7 +5164,7 @@ describe("Sidebar pins in their home group", () => {
 			(node) => node.getAttribute("aria-label")?.replace(/^Open /, ""),
 		);
 
-	function mount(workspaces: WorkspaceSummary[], expandedProjectIds: string[]) {
+	function mount(workspaces: WorkspaceSummary[], expandedProjectIds: string[], remote?: { hosts: RemoteHost[]; workspaces: WorkspaceSummary[] }) {
 		window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify(expandedProjectIds));
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const tree = (current: WorkspaceSummary[]) => (
@@ -5173,6 +5173,8 @@ describe("Sidebar pins in their home group", () => {
 					<SidebarProvider>
 						<Sidebar
 							workspaces={current}
+							remoteHosts={remote?.hosts}
+							remoteWorkspaces={remote?.workspaces}
 							onCloneProject={noop()}
 							onCreateProject={noop()}
 							onInitializeProject={noop()}
@@ -5230,6 +5232,38 @@ describe("Sidebar pins in their home group", () => {
 		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha recent", "alpha older"]);
 		drop("a-3", "a-1");
 		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha older", "alpha recent"]);
+	});
+
+	it("puts a session pinned after a drag on top of the older pins", () => {
+		const before = [worker("a-1", "alpha recent", 8), worker("a-2", "alpha pin", 2, 1), worker("a-3", "alpha older", 4)];
+		const view = mount([project("alpha", "Alpha", before)], ["alpha"]);
+		act(() => dragEnds.get("sidebar-sessions-alpha")?.({ active: { id: "a-3" }, over: { id: "a-1" } }));
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha older", "alpha recent"]);
+
+		// Pinning the last row makes it the newest pin, so it leads, whatever
+		// slot the drag gave it while it was unpinned.
+		view.rerender([project("alpha", "Alpha", [before[0], before[1], worker("a-3", "alpha older", 4, 9)])]);
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha older", "alpha pin", "alpha recent"]);
+	});
+
+	it("opens a collapsed remote project to reveal a session opened on that host", async () => {
+		const hosts: RemoteHost[] = [{ hostId: "box-a", label: "Host A", url: "http://box-a:3011", status: "connected" }];
+		const remoteProject = (): WorkspaceSummary => {
+			const base = project("rproj", "Remote Project", [worker("r-1", "remote plain", 9), worker("r-2", "remote pin", 1, 1)]);
+			return { ...base, hostId: "box-a", sessions: base.sessions.map((item) => ({ ...item, hostId: "box-a" })) };
+		};
+		const view = mount([], [], { hosts, workspaces: [remoteProject()] });
+		fireEvent.click(screen.getByLabelText("Toggle Remote Project · Host A sessions"));
+		expect(screen.getByLabelText("Toggle Remote Project · Host A sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByRole("button", { name: /^Open remote pin/ })).not.toBeInTheDocument();
+
+		mockParams.hostId = "box-a";
+		mockParams.projectId = "rproj";
+		mockParams.sessionId = "r-2";
+		view.rerender([]);
+		await settle();
+		expect(screen.getByLabelText("Toggle Remote Project · Host A sessions")).toHaveAttribute("aria-expanded", "true");
+		expect(titlesIn(`session-list-${sessionUiKey("rproj", "box-a")}`).map((title) => title?.split(" · ")[0])).toEqual(["remote pin", "remote plain"]);
 	});
 
 	it("keeps every pin listed past the session cutoff and counts only the rest behind Show more", () => {

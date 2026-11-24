@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { buildSidebarSessionOrder, orderGroupSessions, pinnedFirst } from "./sidebar-order";
+import { buildSidebarSessionOrder, EMPTY_GROUP_ORDER, orderGroupSessions, pinnedFirst, splitGroupOrder } from "./sidebar-order";
 
 function row(id: string, pinnedAt?: string, kind: WorkspaceSession["kind"] = "worker"): WorkspaceSession {
 	return {
@@ -13,21 +13,28 @@ describe("orderGroupSessions", () => {
 	const sessions = [row("a"), row("old-pin", "2026-06-30T01:00:00Z"), row("b"), row("new-pin", "2026-06-30T02:00:00Z")];
 
 	it("puts pins first, newest pin on top, and keeps the rest in incoming order", () => {
-		expect(orderGroupSessions(sessions, []).map((s) => s.id)).toEqual(["new-pin", "old-pin", "a", "b"]);
+		expect(orderGroupSessions(sessions, EMPTY_GROUP_ORDER).map((s) => s.id)).toEqual(["new-pin", "old-pin", "a", "b"]);
 	});
 
 	it("applies a drag order within each part but never across the pin boundary", () => {
 		const order = ["b", "old-pin", "a", "new-pin"];
-		expect(orderGroupSessions(sessions, order).map((s) => s.id)).toEqual(["old-pin", "new-pin", "b", "a"]);
+		expect(orderGroupSessions(sessions, splitGroupOrder(order, sessions)).map((s) => s.id)).toEqual(["old-pin", "new-pin", "b", "a"]);
+	});
+
+	it("puts a row pinned after a drag above the pins the drag ordered", () => {
+		// Dragged while "b" was unpinned: its slot belongs to the unpinned part.
+		const saved = splitGroupOrder(["old-pin", "new-pin", "b", "a"], sessions);
+		const pinnedLater = sessions.map((s) => (s.id === "b" ? row("b", "2026-06-30T03:00:00Z") : s));
+		expect(orderGroupSessions(pinnedLater, saved).map((s) => s.id)).toEqual(["b", "old-pin", "new-pin", "a"]);
 	});
 
 	it("never treats a pinned orchestrator as a pinned row", () => {
 		const orchestrator = row("orc", "2026-06-30T03:00:00Z", "orchestrator");
-		expect(orderGroupSessions([orchestrator, ...sessions], []).map((s) => s.id)).toEqual(["new-pin", "old-pin", "orc", "a", "b"]);
+		expect(orderGroupSessions([orchestrator, ...sessions], EMPTY_GROUP_ORDER).map((s) => s.id)).toEqual(["new-pin", "old-pin", "orc", "a", "b"]);
 	});
 
 	it("sorts only the unpinned part with arrangeRest", () => {
-		expect(orderGroupSessions(sessions, [], (rest) => [...rest].reverse()).map((s) => s.id)).toEqual(["new-pin", "old-pin", "b", "a"]);
+		expect(orderGroupSessions(sessions, EMPTY_GROUP_ORDER, (rest) => [...rest].reverse()).map((s) => s.id)).toEqual(["new-pin", "old-pin", "b", "a"]);
 	});
 });
 

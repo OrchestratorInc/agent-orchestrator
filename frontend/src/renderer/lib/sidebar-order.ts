@@ -46,6 +46,21 @@ export function isPinnedWorker(session: WorkspaceSession): boolean {
 }
 
 /**
+ * A group's saved drag order, kept per part. A row that gains or loses its pin
+ * after the drag is new to its part, so a fresh pin still lands on top instead
+ * of taking the slot it had while unpinned.
+ */
+export type GroupOrder = { readonly pinned: readonly string[]; readonly rest: readonly string[] };
+
+export const EMPTY_GROUP_ORDER: GroupOrder = { pinned: [], rest: [] };
+
+/** Splits a group's shown order into its parts, by each session's pin now. */
+export function splitGroupOrder(order: readonly string[], sessions: readonly WorkspaceSession[]): GroupOrder {
+	const pinned = new Set(sessions.filter(isPinnedWorker).map((session) => session.id));
+	return { pinned: order.filter((id) => pinned.has(id)), rest: order.filter((id) => !pinned.has(id)) };
+}
+
+/**
  * One sidebar group's sessions (a project's, or the Sessions section's) in
  * the order the group lists them: its pinned workers on top, newest pin first,
  * then everything else. A drag order reorders each part within itself, so a
@@ -54,13 +69,13 @@ export function isPinnedWorker(session: WorkspaceSession): boolean {
  */
 export function orderGroupSessions(
 	sessions: readonly WorkspaceSession[],
-	order: readonly string[],
+	order: GroupOrder,
 	arrangeRest: (rest: WorkspaceSession[]) => WorkspaceSession[] = (rest) => rest,
 ): WorkspaceSession[] {
 	const pinned = sessions.filter(isPinnedWorker).sort((a, b) => pinnedTime(b) - pinnedTime(a));
 	const rest = sessions.filter((session) => !isPinnedWorker(session));
 	const idOf = (session: WorkspaceSession) => session.id;
-	return [...applyOrder(pinned, idOf, order, "start"), ...arrangeRest(applyOrder(rest, idOf, order, "start"))];
+	return [...applyOrder(pinned, idOf, order.pinned, "start"), ...arrangeRest(applyOrder(rest, idOf, order.rest, "start"))];
 }
 
 export type SidebarNavSession = {
@@ -87,7 +102,9 @@ function listedSessions(
 	sessionOrders: SidebarOrderInput["sessionOrders"],
 ): WorkspaceSession[] {
 	const visible = sortedWorkerSessions(workspace.sessions).filter((session) => session.isTerminated !== true);
-	return orderGroupSessions(visible, sessionOrders?.[sessionUiKey(workspace.id, workspace.hostId)] ?? []);
+	// The published order is what the group shows now, so splitting it by each
+	// session's current pin reproduces that list exactly.
+	return orderGroupSessions(visible, splitGroupOrder(sessionOrders?.[sessionUiKey(workspace.id, workspace.hostId)] ?? [], visible));
 }
 
 /**

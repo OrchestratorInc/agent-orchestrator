@@ -155,7 +155,7 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { isSessionUnread, sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
-import { applyOrder, isPinnedWorker, orderGroupSessions, pinnedFirst } from "../lib/sidebar-order";
+import { applyOrder, EMPTY_GROUP_ORDER, type GroupOrder, isPinnedWorker, orderGroupSessions, pinnedFirst, splitGroupOrder } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -864,6 +864,24 @@ export const Sidebar = memo(function Sidebar({
 				const next = new Set(prev);
 				next.add(activeProjectKey);
 				window.localStorage?.setItem(expandedProjectsStorageKey, JSON.stringify([...next]));
+				return next;
+			});
+		}
+		// A remote project keeps its own collapse state. Open it for a worker row;
+		// an orchestrator has no row, so its project stays as the user left it.
+		const remoteHostId = selection.activeRemoteHostId;
+		const remoteProjectId = selection.activeRemoteProjectId;
+		const remoteSession = remoteHostId && remoteProjectId
+			? remoteWorkspaces
+				.find((workspace) => workspace.hostId === remoteHostId && workspace.id === remoteProjectId)
+				?.sessions.find((session) => session.id === selection.activeRemoteSessionId)
+			: undefined;
+		if (remoteHostId && remoteProjectId && remoteSession && !isOrchestratorSession(remoteSession)) {
+			const remoteKey = sessionUiKey(remoteProjectId, remoteHostId);
+			setCollapsedRemoteProjects((prev) => {
+				if (!prev.has(remoteKey)) return prev;
+				const next = new Set(prev);
+				next.delete(remoteKey);
 				return next;
 			});
 		}
@@ -1582,11 +1600,11 @@ const ProjectItem = memo(function ProjectItem({
 			? ("unread" as const)
 			: null;
 	}, [openSessionId, projectNeedsInput, readAt, readBaseline, visibleSessions]);
-	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
+	const [sessionOrder, setSessionOrder] = useState<GroupOrder>(EMPTY_GROUP_ORDER);
 	// Pinned sessions lead the project's own list; the rest float attention
 	// until the user drags an order of their own.
 	const sessions = useMemo(
-		() => orderGroupSessions(visibleSessions, sessionOrder, (rest) => floatAttention(rest, sessionOrder.length > 0)),
+		() => orderGroupSessions(visibleSessions, sessionOrder, (rest) => floatAttention(rest, sessionOrder.pinned.length + sessionOrder.rest.length > 0)),
 		[sessionOrder, visibleSessions],
 	);
 	const pinnedCount = leadingPinnedCount(sessions);
@@ -1633,7 +1651,7 @@ const ProjectItem = memo(function ProjectItem({
 			// Only the listed slice is draggable, so keep the still-hidden tail
 			// behind it rather than letting applyOrder float it to the front.
 			const listed = new Set(next);
-			setSessionOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)]);
+			setSessionOrder(splitGroupOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)], sessions));
 		},
 		[sessions],
 	);
@@ -2283,7 +2301,7 @@ function ScratchpadSection({
 		() => sortedWorkerSessions(workspace.sessions).filter(scratchpadListsSession),
 		[workspace.sessions],
 	);
-	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
+	const [sessionOrder, setSessionOrder] = useState<GroupOrder>(EMPTY_GROUP_ORDER);
 	// Projectless pinned sessions lead this list, as a project's lead its own.
 	const sessions = useMemo(() => orderGroupSessions(visibleSessions, sessionOrder), [sessionOrder, visibleSessions]);
 	const pinnedCount = leadingPinnedCount(sessions);
@@ -2313,7 +2331,7 @@ function ScratchpadSection({
 			// Only the listed slice is draggable, so keep the still-hidden tail
 			// behind it rather than letting applyOrder float it to the front.
 			const listed = new Set(next);
-			setSessionOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)]);
+			setSessionOrder(splitGroupOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)], sessions));
 		},
 		[sessions],
 	);
