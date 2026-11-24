@@ -111,6 +111,53 @@ func TestACPInterruptCancelsPendingElicitation(t *testing.T) {
 	}
 }
 
+// A request the agent sends after session/cancel, while the stopped turn is
+// still winding down, is answered cancelled at once instead of being parked.
+func TestACPInterruptCancelsPermissionRequestedAfterCancel(t *testing.T) {
+	started := make(chan struct{})
+	outcome := make(chan acpsdk.RequestPermissionOutcome, 1)
+	agent := &fakeAgent{}
+	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+		close(started)
+		<-ctx.Done() // session/cancel arrived
+		response, err := agent.conn.RequestPermission(context.WithoutCancel(ctx), acpsdk.RequestPermissionRequest{
+			SessionId: params.SessionId,
+			ToolCall:  acpsdk.ToolCallUpdate{ToolCallId: "tool-late", Title: acpsdk.Ptr("Edit file")},
+			Options: []acpsdk.PermissionOption{
+				{OptionId: "allow", Name: "Allow", Kind: acpsdk.PermissionOptionKindAllowOnce},
+			},
+		})
+		if err != nil {
+			return acpsdk.PromptResponse{}, err
+		}
+		outcome <- response.Outcome
+		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
+	}
+	conversation, turnID := startInterruptPendingTurn(t, agent)
+	defer conversation.Close()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("prompt did not start")
+	}
+	if err := conversation.Interrupt(context.Background(), turnID); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	select {
+	case got := <-outcome:
+		if got.Cancelled == nil || got.Selected != nil {
+			t.Fatalf("permission outcome = %#v, want cancelled", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("permission requested after session/cancel was parked")
+	}
+	completed := waitForEventKind(t, conversation.Events(), ports.ChatEventTurnCompleted)
+	if completed.TurnState != domain.TurnStateInterrupted {
+		t.Fatalf("turn state = %q, want interrupted", completed.TurnState)
+	}
+}
+
 func startInterruptPendingTurn(t *testing.T, agent *fakeAgent) (ports.ChatConversation, string) {
 	t.Helper()
 	driver := New(Config{

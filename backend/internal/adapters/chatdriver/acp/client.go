@@ -133,7 +133,9 @@ func (c *conversation) requestApproval(
 	}
 
 	c.mu.Lock()
-	if c.closed {
+	// After a successful session/cancel the turn is winding down: answer any
+	// further request with the cancelled outcome instead of parking it.
+	if c.closed || c.cancelledByInterruptLocked() {
 		c.mu.Unlock()
 		return "", nil
 	}
@@ -257,7 +259,7 @@ func (c *conversation) requestInput(
 		request: request, result: make(chan ports.ChatInputResponse, 1), ready: make(chan struct{}),
 	}
 	c.mu.Lock()
-	if c.closed {
+	if c.closed || c.cancelledByInterruptLocked() {
 		c.mu.Unlock()
 		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	}
