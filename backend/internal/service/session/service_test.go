@@ -588,6 +588,48 @@ func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID
 	return []domain.PRFacts{pr}, nil
 }
 
+// ListPRStateTimes answers from the same PR facts the fake serves to
+// ListPRFactsForSessions, so a test seeds one place.
+func (f *fakeStore) ListPRStateTimes(_ context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error) {
+	out := map[domain.SessionID]time.Time{}
+	add := func(id domain.SessionID, pr domain.PRFacts) {
+		if fakePRFactsState(pr) != state {
+			return
+		}
+		at := pr.StateChangedAt
+		if at.IsZero() {
+			at = pr.UpdatedAt
+		}
+		if prev, seen := out[id]; !seen || at.After(prev) {
+			out[id] = at
+		}
+	}
+	for id, prs := range f.prFacts {
+		for _, pr := range prs {
+			add(id, pr)
+		}
+	}
+	for id, pr := range f.pr {
+		if _, listed := f.prFacts[id]; !listed {
+			add(id, pr)
+		}
+	}
+	return out, nil
+}
+
+func fakePRFactsState(pr domain.PRFacts) domain.PRState {
+	switch {
+	case pr.Merged:
+		return domain.PRStateMerged
+	case pr.Closed:
+		return domain.PRStateClosed
+	case pr.Draft:
+		return domain.PRStateDraft
+	default:
+		return domain.PRStateOpen
+	}
+}
+
 func (f *fakeStore) ListPRFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error) {
 	f.listPRFactsCalls++
 	out := make(map[domain.SessionID][]domain.PRFacts, len(ids))
@@ -796,12 +838,21 @@ func TestSessionSetTerminateOnPRMergePersistsPolicy(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
 
-	sess, err := (&Service{store: st}).SetTerminateOnPRMerge(context.Background(), "mer-1", true)
+	svc := &Service{store: st}
+	sess, err := svc.SetTerminateOnPRMerge(context.Background(), "mer-1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !sess.TerminateOnPRMerge || !st.sessions["mer-1"].TerminateOnPRMerge {
 		t.Fatalf("terminate-on-merge policy was not persisted: session=%+v stored=%+v", sess, st.sessions["mer-1"])
+	}
+
+	sess, err = svc.SetTerminateOnPRMerge(context.Background(), "mer-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.TerminateOnPRMerge || st.sessions["mer-1"].TerminateOnPRMerge {
+		t.Fatalf("terminate-on-merge policy was not toggled off: session=%+v stored=%+v", sess, st.sessions["mer-1"])
 	}
 }
 
@@ -5855,6 +5906,33 @@ func TestDeduplicatePRFactsKeepsSameNumberAcrossDifferentRepos(t *testing.T) {
 	}
 }
 
+func TestDeduplicatePRFactsCarriesStackParentOnlyForTheSameBase(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	stale := domain.PRFacts{URL: "https://github.com/acme/app/pull/9", Number: 9, TargetBranch: "feat/base", StackParent: 8, UpdatedAt: now}
+
+	// Retargeted onto main since: the old base's parent no longer applies.
+	got := deduplicatePRFacts([]domain.PRFacts{stale, {URL: "https://github.com/Acme/App/pull/9", Number: 9, TargetBranch: "main", UpdatedAt: now.Add(time.Minute)}})
+	if len(got) != 1 || got[0].TargetBranch != "main" || got[0].StackParent != 0 {
+		t.Fatalf("retargeted alias = %+v, want main with no stack parent", got)
+	}
+
+	// An alias with no target inherits the base and its parent together.
+	got = deduplicatePRFacts([]domain.PRFacts{stale, {URL: "https://github.com/Acme/App/pull/9", Number: 9, UpdatedAt: now.Add(time.Minute)}})
+	if len(got) != 1 || got[0].TargetBranch != "feat/base" || got[0].StackParent != 8 {
+		t.Fatalf("alias without a target = %+v, want feat/base waiting on #8", got)
+	}
+
+	// Branch names are case-sensitive: feat/Base is a different base, in
+	// either input order.
+	recased := domain.PRFacts{URL: "https://github.com/Acme/App/pull/9", Number: 9, TargetBranch: "feat/Base", UpdatedAt: now.Add(time.Minute)}
+	for _, in := range [][]domain.PRFacts{{stale, recased}, {recased, stale}} {
+		got = deduplicatePRFacts(in)
+		if len(got) != 1 || got[0].TargetBranch != "feat/Base" || got[0].StackParent != 0 {
+			t.Fatalf("alias retargeted to feat/Base = %+v, want no stack parent", got)
+		}
+	}
+}
+
 func TestDeduplicatePRFactsKeepsSameBasenameAcrossDifferentOwners(t *testing.T) {
 	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
 	got := deduplicatePRFacts([]domain.PRFacts{
@@ -6010,7 +6088,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 		{
 			SessionID: rec.ID, Harness: "claude-code", PRURL: newURL,
-			Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
+			Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved,
 			ID: "run-new", CreatedAt: rec.UpdatedAt.Add(time.Minute),
 		},
 	}
@@ -6695,5 +6773,33 @@ func TestWorkspaceGitRecoveryIsScopedToOperation(t *testing.T) {
 		if !sentryobs.IsRepeat(read("diff")) {
 			t.Error("successful status rearmed unrelated diff")
 		}
+	}
+}
+
+type renewingCommander struct {
+	*fakeCommander
+	renewed []domain.TaskPreparationToken
+}
+
+func (c *renewingCommander) RenewTaskPreparation(token domain.TaskPreparationToken) {
+	c.renewed = append(c.renewed, token)
+}
+
+func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
+	st := newFakeStore()
+	// Still being created: no worktree yet, which the page polls through.
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", IsTaskPreparation: true}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2"}
+	commander := &renewingCommander{fakeCommander: &fakeCommander{}}
+	svc := &Service{store: st, manager: commander}
+
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-1"); err == nil {
+		t.Fatal("listed files of a preparation with no worktree yet")
+	}
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-2"); err == nil {
+		t.Fatal("listed files of a session with no worktree")
+	}
+	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
+		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
 	}
 }

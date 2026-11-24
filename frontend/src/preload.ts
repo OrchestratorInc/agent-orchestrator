@@ -1,3 +1,4 @@
+import type { GitHubIssueArtifact, GitHubIssueArtifactResult, GitHubIssueChoice } from "./shared/github-issue-artifact";
 import type { TriageResult } from "./main/triage-launch";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { installRendererErrorHandlers } from "./shared/renderer-error-handlers";
@@ -48,6 +49,7 @@ import type {
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
 import type { TelemetryBootstrap } from "./shared/telemetry";
+import type { LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
 	TELEMETRY_POLICY_CHANGED_CHANNEL,
@@ -64,12 +66,14 @@ import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareAccess,
 	type CloudShareFile,
-	type CloudShareGrant,
+	type CloudShareGrants,
+	type CloudShareInvite,
 	type CloudShareInspection,
 	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudShareProgress,
 	type CloudSharePublishResult,
+	type HostShareLink,
 } from "./shared/cloud-share";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
 import type { PushFolderInput, PushFolderPreview, PushFolderResult } from "./main/cloud-folder-push";
@@ -299,6 +303,8 @@ const api = {
 		getRepositoryBranch: (path: string) =>
 			ipcRenderer.invoke("app:getRepositoryBranch", path) as Promise<string | undefined>,
 		getGitHubLogin: (repoPath?: string) => ipcRenderer.invoke("app:getGitHubLogin", repoPath) as Promise<string>,
+		findArtifactIssues: (repo: string, query: string) => ipcRenderer.invoke("app:findArtifactIssues", repo, query) as Promise<GitHubIssueChoice[]>,
+		publishIssueArtifact: (input: GitHubIssueArtifact) => ipcRenderer.invoke("app:publishIssueArtifact", input) as Promise<GitHubIssueArtifactResult>,
 		listGitHubRepos: (query: string) =>
 			ipcRenderer.invoke("app:listGitHubRepos", query) as Promise<Array<{ fullName: string; description: string; isPrivate: boolean; url: string; avatarUrl: string }>>,
 		getCachedGitHubOwners: () => ipcRenderer.invoke("app:getCachedGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
@@ -503,6 +509,8 @@ const api = {
 		// WebContentsView previews (which follow prefers-color-scheme) stay in sync
 		// with the shell. "system" lets both follow the OS.
 		set: (preference: "light" | "dark" | "system") => ipcRenderer.invoke("theme:set", preference) as Promise<void>,
+		// The OS light/dark appearance, even while the app forces Light or Dark.
+		systemAppearance: () => ipcRenderer.invoke("theme:system-appearance") as Promise<"light" | "dark">,
 		persistTerminal: (scheme: "light" | "dark") =>
 			ipcRenderer.invoke("theme:persist-terminal", scheme) as Promise<void>,
 		// The shell goes transparent over a live native browser page, so whatever
@@ -548,14 +556,16 @@ const api = {
 		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
+		/** The links this computer published remote hosts' files to; their daemons list none. */
+		hostLinks: (baseUrl: string) => ipcRenderer.invoke("cloudShare:hostLinks", { baseUrl }) as Promise<HostShareLink[]>,
 		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
 		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
 		setAccess: (baseUrl: string, shareId: string, access: CloudShareAccess) =>
 			ipcRenderer.invoke("cloudShare:setAccess", { baseUrl, shareId, access }) as Promise<CloudShareLink>,
-		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrant[]>,
-		invite: (baseUrl: string, shareId: string, emails: string[]) =>
-			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, emails }) as Promise<CloudShareGrant[]>,
+		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrants>,
+		invite: (baseUrl: string, shareId: string, invite: CloudShareInvite) =>
+			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, ...invite }) as Promise<CloudShareGrants>,
 		removeGrant: (baseUrl: string, shareId: string, grantId: string) =>
 			ipcRenderer.invoke("cloudShare:removeGrant", { baseUrl, shareId, grantId }) as Promise<void>,
 		onProgress: (listener: (progress: CloudShareProgress) => void) => {
@@ -645,6 +655,8 @@ const api = {
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
 		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
+		takeLaunchStart: () => ipcRenderer.invoke("telemetry:takeLaunchStart") as Promise<LaunchTimingStart | null>,
+		takeResourceSummary: () => ipcRenderer.invoke("telemetry:takeResourceSummary") as Promise<ResourceSummary | null>,
 		claimFirstOpen: () => ipcRenderer.invoke("telemetry:claimFirstOpen") as Promise<"claimed" | "ineligible" | "unknown">,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
@@ -945,6 +957,19 @@ const api = {
 			ipcRenderer.invoke("keybindings:set", overrides) as Promise<KeybindingOverrides>,
 		setRecording: (active: boolean) => ipcRenderer.invoke("keybindings:setRecording", active) as Promise<void>,
 	},
+	awake: {
+		// Main pushes Stay Awake changes on this bridge; stubs set false and keep polling.
+		pushes: true,
+		// Main reads the daemon's Stay Awake state every 5 s for the menu bar and
+		// forwards each change here, so the sidebar need not poll the same endpoint.
+		onState: (listener: (state: unknown) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, state: unknown) => listener(state);
+			ipcRenderer.on("awake:state", wrapped);
+			return () => {
+				ipcRenderer.off("awake:state", wrapped);
+			};
+		},
+	},
 	updates: {
 		getStatus: () => ipcRenderer.invoke("updates:getStatus") as Promise<UpdateStatus>,
 		check: (options?: UpdateCheckOptions) => ipcRenderer.invoke("updates:check", options) as Promise<void>,
@@ -980,7 +1005,7 @@ const api = {
 	// back is password-free (see main/remotes-ipc.ts); a password only travels
 	// renderer -> main on add or credential edit. Account host tokens stay in main.
 	remotes: {
-		list: () => ipcRenderer.invoke("remotes:list") as Promise<RemoteHostView[]>,
+		list: () => ipcRenderer.invoke("remotes:list", true) as Promise<RemoteHostView[] | { code: string; message: string; expected?: true }>,
 		// Saves the account's machines from AO Cloud and forgets the ones it no longer lists.
 		syncAccountHosts: (accountId: string) => ipcRenderer.invoke("remotes:syncAccountHosts", accountId) as Promise<void>,
 		// Lists a paired host under the signed-in account.
@@ -1045,6 +1070,20 @@ const api = {
 		},
 		// One that arrived before the window was ready, taken once.
 		takePendingShareLink: () => ipcRenderer.invoke("cloud:takePendingShareLink") as Promise<string | null>,
+		// A published artifact's viewer URL, from "Open on orchestrator" on its web page
+		// (ao-app://shared-artifact): the Artifacts page opens it.
+		onOpenSharedArtifact: (listener: (viewerUrl: string) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, viewerUrl: string) => listener(viewerUrl);
+			ipcRenderer.on("cloud:openSharedArtifact", wrapped);
+			return () => {
+				ipcRenderer.off("cloud:openSharedArtifact", wrapped);
+			};
+		},
+		// One that arrived before the window was ready, taken once.
+		takePendingSharedArtifact: () => ipcRenderer.invoke("cloud:takePendingSharedArtifact") as Promise<string | null>,
+		// Shows it in its own isolated window when the Artifacts page cannot: signed
+		// out of Cloud, or it does not open for this account.
+		openSharedArtifactWindow: (viewerUrl: string) => ipcRenderer.invoke("cloud:openSharedArtifactWindow", viewerUrl) as Promise<void>,
 		// Uploads a local folder into the empty repository AO Cloud made for it
 		// (main/cloud-folder-push.ts); the token stays in main.
 		pushFolderToRepository: (input: PushFolderInput) =>

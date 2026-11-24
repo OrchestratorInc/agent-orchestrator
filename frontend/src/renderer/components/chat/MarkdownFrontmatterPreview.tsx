@@ -23,7 +23,7 @@ export function MarkdownFrontmatterPreview({ path, source }: { path: string; sou
 	if (meta.status === "malformed") return <UnavailableCard message="This file's frontmatter could not be read." />;
 	const name = meta.name ? clampPreviewText(meta.name) : undefined;
 	const description = meta.description ? clampPreviewText(meta.description) : undefined;
-	if (!name && !description) return <UnavailableCard message="No name or description." />;
+	if (!name && !description) return null;
 	return (
 		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
 			<div className="space-y-1" role="status" aria-label={[name, description].filter(Boolean).join(". ")}>

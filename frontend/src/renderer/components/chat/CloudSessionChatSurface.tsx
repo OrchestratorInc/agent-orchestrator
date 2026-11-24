@@ -8,6 +8,7 @@ import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
 import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
+import { useRestoreSession } from "../../hooks/useRestoreSession";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
 import { sessionUiKey } from "../../lib/hosts";
@@ -21,9 +22,12 @@ import { sessionArtifactPath } from "../../lib/session-links";
 import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
-import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { reportPlanRefusal } from "../../lib/cloud-telemetry";
+import { useCloudBilling } from "../../hooks/useCloudBilling";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -48,10 +52,15 @@ import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
 import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
+import { Button } from "../ui/button";
 import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
 
 type EventPayload = {
 	attempt?: unknown;
+	/** chat.turn_started: the epoch of the worker that took the turn. */
+	workerEpoch?: unknown;
+	/** worker.connected and worker.ready: the epoch of the worker that connected. */
+	epoch?: unknown;
 	/**
 	 * chat.turn_interrupted: why a turn ended before it started (deleted,
 	 * interface_switch, steered); chat.turn_aborted: author_cannot_write for a message
@@ -437,6 +446,7 @@ export function ownMessageTurns(events: readonly CloudCpClientEvent[] | undefine
  * which leaves the queue with the steer.
  */
 export class AlreadyDeliveredError extends Error {
+	readonly code: string = "ALREADY_DELIVERED_ERROR";
 	constructor() {
 		super("Not deleted: the agent had already taken this message as a steer into its running turn, so it was delivered.");
 		this.name = "AlreadyDeliveredError";
@@ -527,6 +537,79 @@ function useCloudChatEventStream(orgId: string | undefined, sessionId: string, e
 	return useCloudSessionEventStream({ baseUrl, orgId, sessionId, enabled, onEvent, resumeAfter });
 }
 
+const PLAN_REFUSAL_CODE_ALTERNATION = [...PLAN_REFUSAL_CODES].join("|");
+// Failed MCP tools also report the code in parentheses or a JSON `code` field.
+// A bare code is not enough: a failing test or grep can print it too.
+const PLAN_REFUSAL_PATTERN = new RegExp(
+	`\\((${PLAN_REFUSAL_CODE_ALTERNATION})\\)|"code"\\s*:\\s*"(${PLAN_REFUSAL_CODE_ALTERNATION})"`,
+);
+const CLI_PLAN_REFUSAL_PATTERN = new RegExp(`^\\s*(?:[\\w./][\\w./-]*\\s+=>\\s+)?ao: (${PLAN_REFUSAL_CODE_ALTERNATION}): \\S`);
+
+/** A command or MCP tool that failed, by the same rule the timeline rows use. */
+function failedTool(item: ConversationItem): item is ConversationItem & { kind: "activity" } {
+	if (item.kind !== "activity") return false;
+	if (item.activityKind === "command") return item.status === "failed";
+	if (item.activityKind !== "mcp_tool") return false;
+	return item.status === "failed" || item.detail?.success === false || Boolean(item.detail?.error);
+}
+
+/**
+ * The plan refusal code a tool reported, if any. An agent's own call to
+ * the control plane (an orchestrator spawning a worker) is refused inside the
+ * sandbox, so the tool's output is the only place this desktop sees it. A
+ * command reports it in its output, an MCP tool in its error.
+ */
+export function planRefusalCode(item: ConversationItem): string | undefined {
+	if (item.kind === "activity" && item.activityKind === "command" && typeof item.detail?.output === "string") {
+		// A shell loop can finish successfully after individual spawns are refused.
+		for (const line of item.detail.output.split(/\r?\n/)) {
+			const match = CLI_PLAN_REFUSAL_PATTERN.exec(line);
+			if (match) return match[1];
+		}
+	}
+	if (!failedTool(item) || item.activityKind !== "mcp_tool") return undefined;
+	const text = [item.detail?.error, item.detail?.output].filter((part): part is string => typeof part === "string").join("\n");
+	const match = PLAN_REFUSAL_PATTERN.exec(text);
+	return match?.[1] ?? match?.[2];
+}
+
+/**
+ * Why the agent's request was refused, with Upgrade for an org that can buy a
+ * plan. A shared session runs on its owner's plan, not the viewer's org, so a
+ * guest sees neither this org's plan nor a link to its billing.
+ */
+function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: boolean; onDismiss: () => void }) {
+	const { data, offering } = useCloudBilling();
+	const plan = shared ? undefined : data?.limits?.plan ?? data?.plan;
+	const planName = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined;
+	const limit = data?.limits?.maxRunningSandboxes;
+	const canUpgrade = offering.selfServeBilling && offering.canManageBilling;
+	const reason = !code.endsWith("_SLOTS_FULL") ? appI18n.t("cloud.planLimit.refused")
+		: !planName ? appI18n.t("cloud.planLimit.slotsFull")
+			: typeof limit === "number" && Number.isFinite(limit) && limit > 0
+				? appI18n.t("cloud.planLimit.slotsFullWithLimit", { plan: planName, limit })
+				: appI18n.t("cloud.planLimit.slotsFullOnPlan", { plan: planName });
+	const nextStep = appI18n.t(canUpgrade ? "cloud.planLimit.stopOrUpgrade" : "cloud.planLimit.stopOrContactAdmin");
+	return (
+		<ComposerErrorNotice
+			title={appI18n.t("cloud.planLimit.title")}
+			message={shared ? appI18n.t("cloud.planLimit.contactOwner") : <>{reason}<span className="block">{nextStep}</span></>}
+			onDismiss={onDismiss}
+			action={!shared && canUpgrade ? (
+				<Button
+					type="button"
+					variant="link"
+					className="mt-1"
+					onClick={() => {
+						useUiStore.getState().openGlobalSettings("billing");
+					}}
+				>
+					{appI18n.t("cloud.planLimit.upgrade")}
+				</Button>
+			) : undefined}
+		/>
+	);
+}
 /** A worker's turn_plan activity as the turn's plan, or undefined when it carries none. */
 function cloudPlan(detail: Record<string, unknown>): ConversationPlan | undefined {
 	const raw = detail.plan;
@@ -935,6 +1018,20 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// before the agent started on it from one that ran.
 	const promptedTurns = new Set<string>();
 	const startedTurns = new Set<string>();
+	// Which turns an agent has taken: the worker reports a turn's capabilities
+	// once its agent opened the turn, before the agent's first output. A worker
+	// can take a turn while it still checks out the project, so a start alone is
+	// not the agent working. capabilityTurns tells a worker that reports them
+	// from an older one that never does.
+	const agentTurns = new Set<string>();
+	const capabilityTurns = new Set<string>();
+	// Which worker (its epoch) took each turn, and the workers whose agent has
+	// opened a turn: a later turn on such a worker finds the project set up
+	// and the agent running, so it is the agent's from its start, as before.
+	// Only a worker's first turn (a new session, a restore, a wake) waits.
+	const turnEpochs = new Map<string, number>();
+	const agentEpochs = new Set<number>();
+	let currentEpoch: number | undefined;
 	// Queued messages the person deleted (turn_interrupted of reason deleted).
 	const withdrawnTurns = new Set<string>();
 	let usage: ConversationUsage | undefined;
@@ -992,16 +1089,41 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 					: { id: turnID, state: "queued", requestedAt: event.createdAt }),
 				...(promptAbove ? { anchorSequence: windowStart - 1 + (event.sequence - windowStart + 1) / windowSpan } : {}),
 			});
+			// Its start is above the loaded events, and so is whatever its agent did.
+			if (startedEarlier) agentTurns.add(turnID);
 		}
 		if (turnID && event.type === "chat.user_message") promptedTurns.add(turnID);
+		if (event.type === "worker.connected" || event.type === "worker.ready") {
+			const epoch = eventPayload(event).epoch;
+			if (typeof epoch === "number") currentEpoch = epoch;
+		}
 		if (turnID && event.type === "chat.turn_started") {
 			const turn = turns.get(turnID)!;
 			turn.state = "running";
 			turn.startedAt = event.createdAt;
 			startedTurns.add(turnID);
+			// A new attempt (a retry, a new worker) waits for its own agent.
+			agentTurns.delete(turnID);
+			const epoch = eventPayload(event).workerEpoch;
+			if (typeof epoch === "number") {
+				turnEpochs.set(turnID, epoch);
+				// The worker that took a turn is connected, unless a newer one
+				// connected since: a page that begins after the connection still
+				// knows the current worker.
+				if (currentEpoch === undefined || epoch > currentEpoch) currentEpoch = epoch;
+			} else turnEpochs.delete(turnID);
 		}
-		if (turnID && event.type === "chat.turn_capabilities" && eventPayload(event).steering === true) {
-			steerableTurns.add(turnID);
+		if (turnID && event.type === "chat.turn_capabilities") {
+			agentTurns.add(turnID);
+			const epoch = turnEpochs.get(turnID);
+			if (epoch !== undefined) agentEpochs.add(epoch);
+			capabilityTurns.add(turnID);
+			if (eventPayload(event).steering === true) steerableTurns.add(turnID);
+		}
+		if (turnID && (event.type === "chat.assistant_delta" || event.type === "chat.activity" || event.type === "chat.approval_requested")) {
+			agentTurns.add(turnID);
+			const epoch = turnEpochs.get(turnID);
+			if (epoch !== undefined) agentEpochs.add(epoch);
 		}
 		if (turnID && (event.type === "chat.turn_completed" || event.type === "chat.turn_interrupted" || event.type === "chat.turn_aborted")) {
 			const turn = turns.get(turnID)!;
@@ -1309,6 +1431,29 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			if (setupEnd && Date.parse(setupEnd) > Date.parse(next.requestedAt)) next.startedAt = setupEnd;
 		}
 	}
+	// A running turn no agent has taken yet (sent while the session starts, or
+	// taken by a worker still checking out) reads as getting ready. A worker
+	// that never reports capabilities finished a turn without them; its turns
+	// read as running from their start, as before. That goes by worker: a newer
+	// one that reports them still shows its own start. A turn whose worker is
+	// not known (one too old to say) goes by every such turn.
+	const silentEpochs = new Set<number>();
+	let silentUnknownWorker = false;
+	for (const turn of orderedTurns) {
+		if (turn.state !== "completed" || !startedTurns.has(turn.id) || capabilityTurns.has(turn.id)) continue;
+		const epoch = turnEpochs.get(turn.id);
+		if (epoch === undefined) silentUnknownWorker = true;
+		else silentEpochs.add(epoch);
+	}
+	for (const turn of orderedTurns) {
+		if (turn.state !== "running" || agentTurns.has(turn.id)) continue;
+		// A turn a worker took goes by that worker; one no worker has taken
+		// yet, by the connected worker, if any (a paused session's worker is
+		// gone, so its turn waits for the next one).
+		const epoch = turnEpochs.get(turn.id) ?? (session.runtimeConnected ? currentEpoch : undefined);
+		if (epoch === undefined ? silentUnknownWorker : silentEpochs.has(epoch) || agentEpochs.has(epoch)) continue;
+		turn.agentPending = true;
+	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
 	return {
@@ -1382,7 +1527,6 @@ export function CloudSessionChatSurface({
 	session,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	onOpenFiles,
 	onOpenFile,
 	onOpenArtifact,
@@ -1427,8 +1571,6 @@ export function CloudSessionChatSurface({
 	workspaceFileActive?: boolean;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	/** Keep the session tab's action showing at rest, while an interface switch is in flight. */
-	sessionTabActionPinned?: boolean;
 	/** The Cloud reviewer terminal, shown as its own tab beside the chat as in local sessions. */
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -1462,6 +1604,10 @@ export function CloudSessionChatSurface({
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser);
 	const { client, ready, userId, baseUrl } = useCloudCp();
+	const restoreSession = useRestoreSession();
+	// The archived session a sent message is restoring, so the composer shows the
+	// restore. Kept by id: this surface outlives the session it shows.
+	const [restoringId, setRestoringId] = useState<string>();
 	// A shared session's live state: who else has it open, who holds its
 	// composer (the lock on talking to the agent), and the model and settings
 	// its owner chose.
@@ -1602,6 +1748,10 @@ export function CloudSessionChatSurface({
 		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
 		enabled: Boolean(cloud && ready),
 		gcTime: CHAT_EVENTS_CACHE_MS,
+		// Each opening needs a history read, even within the cache's freshness
+		// window, to exclude refusals that happened while the chat was closed.
+		staleTime: 0,
+		refetchOnMount: "always",
 		// The event stream delivers events as they are committed; the poll only
 		// catches what a dropped or not-yet-open stream missed. An open stream
 		// counts from the moment it opens, so an idle chat slows down at once.
@@ -1609,6 +1759,14 @@ export function CloudSessionChatSurface({
 		// The newest page first, then only what came after the newest event held.
 		queryFn: async () => cloud ? loadCloudChatHistory(queryClient, client, cloud.orgId, session.id) : [] as CloudCpClientEvent[],
 	});
+	// An orchestrator still starting in place for the first time (no worker has
+	// ever connected, so it is not waking) has no history: it starts with no
+	// message. Decided as the session opens, so a worker that connects before
+	// the first read answers does not turn it into one being restored.
+	const opensNew = session.kind === "orchestrator" && cloudChatStartingInPlace(session) && !cloud?.workerEpoch;
+	const [opened, setOpened] = useState({ id: session.id, isNew: opensNew });
+	if (opened.id !== session.id) setOpened({ id: session.id, isNew: opensNew });
+	const openedNew = opened.id === session.id ? opened.isNew : opensNew;
 	// What the list holds of the history; older pages load on demand. Kept as
 	// long as the list is, so a kept list never reads as the whole history.
 	const historyKey = cloudChatHistoryKey(cloud?.orgId ?? "", session.id);
@@ -1775,13 +1933,24 @@ export function CloudSessionChatSurface({
 				name: attachment.name || "attachment", data: attachment.data,
 			}, { signal }))));
 	}, [attachmentSource, cloudAttachments, readOnly, session.isTerminated]);
+	// The newest accepted send's event per session, so a later send that fails
+	// cannot hide an earlier one still waiting for its turn. Sequences only grow,
+	// so a record stops mattering once the chat has read that far.
+	const [acceptedThrough, setAcceptedThrough] = useState<Readonly<Record<string, number>>>({});
 	const send = useMutation({
-		mutationFn: async ({ text, attachmentIds, clientMessageId, display, afterSwitch }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; afterSwitch?: boolean }) => {
-			if (!cloud) throw new Error("Cloud session context is unavailable.");
+		// `sessionId` and `orgId` name the session the send went to: this surface
+		// outlives it, and a send that first restored an archived session can run
+		// after another session was opened here.
+		mutationFn: async ({ text, attachmentIds, clientMessageId, display, afterSwitch, sessionId, orgId }: { text: string; attachmentIds?: string[]; clientMessageId?: string; display?: { text: string; content: ConversationContentSummary[] }; afterSwitch?: boolean; sessionId: string; orgId?: string }) => {
+			if (!cloud || !orgId) throw new Error("Cloud session context is unavailable.");
+			// The picks, mode and composer lease below are the shown session's. A
+			// message to a session no longer shown goes without them, and its worker
+			// derives them from that session.
+			const shown = sessionId === session.id && orgId === cloud.orgId;
 			// A message sent with an agent switch goes to the new agent, which
 			// starts on the model and effort the switch named: the old agent's
 			// picks are not its.
-			const selectedSettings: CloudTurnSettings = !afterSwitch && settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
+			const selectedSettings: CloudTurnSettings = shown && !afterSwitch && settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			// Without the user's pick the turn carries no approval mode: the
 			// worker derives it from the session's mode. A pick the turn's model
 			// cannot run is sent as the mode the composer shows in its place.
@@ -1789,9 +1958,9 @@ export function CloudSessionChatSurface({
 				? selectedSettings.approvalMode : undefined;
 			const turnModel = listedModels.find((model) => model.id === (selectedSettings.model ?? pendingModel)) ?? listedModels.find((model) => model.default);
 			const approvalMode = picked && (effectiveApprovalMode(session.provider, picked, modelApprovalModes(sessionApprovalModes, turnModel)) ?? picked);
-			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
+			const mode = !shown ? undefined : selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
-			const composerEpoch = leaseRef.current.epoch;
+			const composerEpoch = shown ? leaseRef.current.epoch : undefined;
 			const request = {
 				text,
 				...(attachmentIds?.length ? { attachmentIds } : {}),
@@ -1802,21 +1971,25 @@ export function CloudSessionChatSurface({
 				...(composerEpoch !== undefined ? { composerEpoch } : {}),
 			};
 			const message = cloudMessageBody(text, display);
-			if (!message.content) return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
+			if (!message.content) return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
 			try {
-				return await client.sendSessionMessage(cloud.orgId, session.id, { ...request, ...message }, { idempotencyKey: clientMessageId });
+				return await client.sendSessionMessage(orgId, sessionId, { ...request, ...message }, { idempotencyKey: clientMessageId });
 			} catch (error) {
 				// A control plane from before message displays refuses the fields,
 				// and one that finds the display text missing from the text refuses
 				// it (both 400). The text already carries the quotes and captures,
 				// so it goes as text alone, with the same key.
 				if (!(error instanceof CloudCpError) || error.status !== 400) throw error;
-				return client.sendSessionMessage(cloud.orgId, session.id, request, { idempotencyKey: clientMessageId });
+				return client.sendSessionMessage(orgId, sessionId, request, { idempotencyKey: clientMessageId });
 			}
 		},
-		onSuccess: () => {
+		onSuccess: (data, { sessionId }) => {
 			// The send released the lease to whoever is next in line.
-			leaseRef.current.sent();
+			if (sessionId === session.id) leaseRef.current.sent();
+			const sequence = data?.event?.sequence;
+			if (typeof sequence === "number") {
+				setAcceptedThrough((current) => (current[sessionId] ?? 0) >= sequence ? current : { ...current, [sessionId]: sequence });
+			}
 			void invalidate();
 		},
 	});
@@ -1968,6 +2141,50 @@ export function CloudSessionChatSurface({
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
 	}, [eventsQuery.data, history?.hasOlder, me, runningSwitch, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
+	// Refusals present when this chat opened are history; a new refusal while
+	// it is open explains the limit above the composer.
+	const refusalKey = `${cloud?.orgId ?? ""}:${session.id}`;
+	const refusalBaseline = useRef<{ key: string; openedAt: number; through: number; seen?: Set<string> }>(undefined);
+	const [planRefusal, setPlanRefusal] = useState<{ key: string; code: string }>();
+	useEffect(() => {
+		const key = refusalKey;
+		if (refusalBaseline.current?.key !== key) {
+			refusalBaseline.current = { key, openedAt: Date.now(), through: 0 };
+			setPlanRefusal(undefined);
+		}
+		const baseline = refusalBaseline.current;
+		// Events cached from an earlier opening are history too, until refetched.
+		if (eventsQuery.dataUpdatedAt < baseline.openedAt) return;
+		const refusals = snapshot.items.filter((item) => planRefusalCode(item));
+		if (!baseline.seen) {
+			// Stream writes also advance dataUpdatedAt. Wait for opening history
+			// to finish before deciding which failures were already present.
+			if (!eventsQuery.isSuccess || eventsQuery.fetchStatus !== "idle") return;
+			baseline.seen = new Set(refusals.map((item) => item.id));
+			baseline.through = eventsQuery.data?.at(-1)?.sequence ?? 0;
+			return;
+		}
+		// Older pages can add failed tools after opening. Only an activity
+		// updated beyond the last observed event can report a new refusal.
+		const updated = new Set<string>();
+		for (const event of eventsQuery.data ?? []) {
+			if (event.sequence <= baseline.through || event.type !== "chat.activity") continue;
+			const activity = eventPayload(event).activity;
+			if (activity && typeof activity === "object" && "id" in activity) updated.add(`cloud-activity-${eventTurnID(event)}:${activity.id}`);
+		}
+		baseline.through = Math.max(baseline.through, eventsQuery.data?.at(-1)?.sequence ?? 0);
+		let code: string | undefined;
+		for (const item of refusals) {
+			if (baseline.seen.has(item.id) || !updated.has(item.id)) continue;
+			const refusal = planRefusalCode(item);
+			if (!refusal) continue;
+			baseline.seen.add(item.id);
+			code ??= refusal;
+			if (!cloud?.shared) reportPlanRefusal(refusal, false, "chat");
+		}
+		if (!code) return;
+		setPlanRefusal({ key, code });
+	}, [cloud?.shared, eventsQuery.data, eventsQuery.dataUpdatedAt, eventsQuery.fetchStatus, eventsQuery.isSuccess, refusalKey, snapshot]);
 	// The brief this device started the session with: shown from the first frame,
 	// until the control plane's chat holds the session's first human message, and
 	// timed from when it was sent, so the start reads as one conversation.
@@ -2009,10 +2226,17 @@ export function CloudSessionChatSurface({
 		navigateToMessage({ id: target.id, text: target.text, messageId: reply?.id ?? target.messageId });
 	}, [navigateToMessage]);
 	useChatMessageFocus(sessionUiKey(session.id), undefined, eventsQuery.isSuccess, focusMessage);
+	// A message the control plane accepted whose event this chat has not read yet.
+	// Its turn is not in the snapshot until then, but a next message would wait
+	// behind it all the same. A refused send records nothing, and another
+	// session's send is not this chat's.
+	const acceptedSequence = acceptedThrough[session.id];
+	const sendAwaitingTurn = acceptedSequence !== undefined &&
+		(eventsQuery.data?.at(-1)?.sequence ?? 0) < acceptedSequence;
 	// A next-message suggestion once a turn settles, as a local chat offers, only
 	// while this person can send and the chat is in front.
 	const promptSuggestion = useCloudPromptSuggestion(session, snapshot,
-		chatInFront && !send.isPending && !activeTurn && !startStopped && !readOnly && !lease.locked && !newWorkDisabled && !controllerTransitioning);
+		chatInFront && !send.isPending && !sendAwaitingTurn && !activeTurn && !startStopped && !readOnly && !lease.locked && !newWorkDisabled && !controllerTransitioning);
 	const queuedTurnCount = snapshot.turns.filter((turn) => turn.state === "queued").length;
 	useEffect(() => {
 		onConversationWorkChange?.({
@@ -2232,11 +2456,16 @@ export function CloudSessionChatSurface({
 			snapshot={snapshot}
 			// Until the first read the chat's history is unknown, not empty: a Cloud
 			// session says nothing of its messages, so it opens as one that has some.
-			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError}
+			// A new orchestrator (openedNew) has none, so it opens as the new chat it
+			// is, not docked as one being restored for the moment the read takes. A
+			// worker may start with its task, and a woken session has history: both
+			// wait for the read.
+			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError && !openedNew}
 			hasOlder={history?.hasOlder}
 			loadingOlder={history?.loadingOlder}
 			onLoadOlder={onLoadOlder}
 			localEchos={openingEchos}
+			sendAwaitingTurn={sendAwaitingTurn}
 			openingStartedAt={opening?.createdAt}
 			onLinkOpen={openLinkInBrowser}
 			onSessionLinkOpen={openSessionLink}
@@ -2313,8 +2542,17 @@ export function CloudSessionChatSurface({
 					message={apiErrorMessage(switchError)}
 					onDismiss={() => setSwitchError(undefined)}
 				/>
-			) : live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
-			composerLockedPlaceholder={readOnly
+			) : planRefusal?.key === refusalKey || live ? (
+				<>
+					{planRefusal?.key === refusalKey && <PlanLimitNotice code={planRefusal.code} shared={cloud?.shared === true} onDismiss={() => setPlanRefusal(undefined)} />}
+					{live && <SharedComposerNotice live={live} lease={lease} userId={me} />}
+				</>
+			) : undefined}
+			// Only the sharer's organization can restore it, and a message to an archived
+			// session would wait unanswered, so a guest cannot send one whatever their role.
+			composerLockedPlaceholder={session.isTerminated === true && cloud?.shared
+				? appI18n.t("chat.shared.archived")
+				: readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
 				// The attached notice already names the writer and the place in line.
 				// An empty placeholder keeps the input locked without repeating it.
@@ -2362,6 +2600,8 @@ export function CloudSessionChatSurface({
 				const content = cloudAnnotationContent(excerpts, fileReferences);
 				const agentText = numbered ? message.text + formatNumberedAnnotations(excerpts ?? [], fileReferences) : excerpts?.length ? message.text + cloudExcerptText(excerpts, snapshot) : message.text;
 				const sendMessage = (afterSwitch?: boolean) => send.mutateAsync({
+					sessionId: session.id,
+					orgId: cloud?.orgId,
 					// A message of only files and captures or quotes starts with them.
 					text: message.displayText === "" ? agentText.replace(/^\s+/, "") : agentText,
 					attachmentIds: message.attachmentIds,
@@ -2371,37 +2611,50 @@ export function CloudSessionChatSurface({
 				});
 				// A new message replaces an earlier switch's failure.
 				setSwitchError(undefined);
-				if (!pendingSwitch) return sendMessage();
-				// The switch starts first; the message, sent while it runs, waits for
-				// the new agent. Nothing was sent if the switch is refused, so the
-				// draft stays and the pick is dropped.
-				return cloudSwitch.start(pendingSwitch).then(
-					() => {
-						setChosenSwitch(undefined);
-						if (cloud) {
-							const targetKey = `cloud-chat-settings:${cloud.orgId}:${session.id}:${pendingSwitch.harness}`;
-							rememberAgentSwitchPick(targetKey, pendingSwitch);
-							// Settings held from an earlier spell on that agent (a switch back) are
-							// stale now: drop them, so the agent's saved choice is read once it runs.
-							setSelected((current) => current.key === targetKey ? { key: "", settings: {} } : current);
-						}
-						return sendMessage(true);
-					},
-					(error: unknown) => {
-						setChosenSwitch(undefined);
-						setSwitchError(error);
-						throw Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
-					},
-				);
+				const deliver = () => {
+					if (!pendingSwitch) return sendMessage();
+					// The switch starts first; the message, sent while it runs, waits for
+					// the new agent. Nothing was sent if the switch is refused, so the
+					// draft stays and the pick is dropped.
+					return cloudSwitch.start(pendingSwitch).then(
+						() => {
+							setChosenSwitch(undefined);
+							if (cloud) {
+								const targetKey = `cloud-chat-settings:${cloud.orgId}:${session.id}:${pendingSwitch.harness}`;
+								rememberAgentSwitchPick(targetKey, pendingSwitch);
+								// Settings held from an earlier spell on that agent (a switch back) are
+								// stale now: drop them, so the agent's saved choice is read once it runs.
+								setSelected((current) => current.key === targetKey ? { key: "", settings: {} } : current);
+							}
+							return sendMessage(true);
+						},
+						(error: unknown) => {
+							setChosenSwitch(undefined);
+							setSwitchError(error);
+							throw Object.assign(apiErrorException(error), { code: AGENT_SWITCH_FAILED });
+						},
+					);
+				};
+				// An archived session is restored by sending to it, as a local one is: the
+				// message goes once the control plane took the restore, and none goes if it
+				// refused. One shared from another organization is the sharer's to restore.
+				if (session.isTerminated !== true || readOnly || cloud?.shared) return deliver();
+				const restoring = session.id;
+				setRestoringId(restoring);
+				return restoreSession(restoring).then((restored) => {
+					if (restored.status !== "success") {
+						throw Object.assign(new Error(restored.message), { code: "SESSION_RESTORE_FAILED" });
+					}
+					return deliver();
+				}).finally(() => setRestoringId((current) => current === restoring ? undefined : current));
 			}}
 			session={chatSession}
 			settingsReady={!startStopped}
 			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
-			resumingAgent={retryStart.isPending}
+			resumingAgent={retryStart.isPending || restoringId === session.id}
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
-			sessionTabActionPinned={sessionTabActionPinned}
 			sessionTitle={session.title}
 			// The chat tab renames the session as a local one does; the rename
 			// updates the cached session lists itself, and this catches up the rest.

@@ -23,6 +23,18 @@ export function stripMarkdownFrontmatter(content: string): string {
 
 const MARKDOWN_FILE = /\.(?:md|markdown)$/i;
 
+export function stripMarkdownPreviewAnchor(path: string): string {
+	if (MARKDOWN_FILE.test(path)) return path;
+	const withoutQuery = path.split("?", 1)[0] ?? "";
+	const hashIndex = withoutQuery.lastIndexOf("#");
+	if (hashIndex >= 0 && MARKDOWN_FILE.test(withoutQuery.slice(0, hashIndex))) {
+		return withoutQuery.slice(0, hashIndex);
+	}
+	const base = path.split(/[?#]/, 1)[0] ?? "";
+	if (MARKDOWN_FILE.test(base)) return base;
+	return path;
+}
+
 export function isMarkdownPreviewPath(path: string): boolean {
 	// A caller may already have decoded the target into a real filename, where
 	// a literal "#" or "?" is part of the name. Check the whole reference first

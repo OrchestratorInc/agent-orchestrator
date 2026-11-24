@@ -1,6 +1,22 @@
+import { forgetOnCloudAccountChange } from "./accountCaches";
 import type { CloudClient } from "./client";
 import { CloudError } from "./errors";
-import type { CloudChatModels } from "./types";
+import { cloudModelLabel } from "../../../shared/models/cloud-model-label";
+import type { CloudChatModel, CloudChatModels } from "./types";
+
+// Named as the desktop names them: one copy, in packages/shared.
+export { cloudModelLabel };
+
+/**
+ * A Cloud catalog's models named by cloudModelLabel ("Opus 5.5", not Claude's
+ * bare alias name "Opus"), for every picker that lists them.
+ */
+export function namedCloudModels(agent: string | undefined, models: readonly CloudChatModel[]): CloudChatModel[] {
+	return models.map((model) => {
+		const displayName = cloudModelLabel(agent ?? "", model);
+		return displayName === model.displayName ? model : { ...model, displayName };
+	});
+}
 
 // Where a cloud chat's model picker gets its models, as on the desktop
 // (CloudSessionChatSurface): the session's worker is the authority, but it has
@@ -12,9 +28,39 @@ import type { CloudChatModels } from "./types";
 
 const AGENT_CATALOG_FRESH_MS = 5 * 60_000;
 
+/**
+ * While Cloud only knows the CLI release's list (source "release") it is
+ * learning the account's own from a running session, so the list is read
+ * again until it arrives, as the desktop does (useCloudModelCatalog): after
+ * this long, then twice as long each time it is still the release list, up to
+ * MAX_UNVERIFIED_CATALOG_REFRESH_MS. A release list is also fresh only this
+ * long, so a picker opened later asks again rather than showing it from memory.
+ */
+export const UNVERIFIED_CATALOG_REFRESH_MS = 15_000;
+export const MAX_UNVERIFIED_CATALOG_REFRESH_MS = 5 * 60_000;
+
+/** Whether a catalog is still the release list, not the account's own. */
+export function isReleaseCatalog(catalog: Pick<CloudChatModels, "source"> | undefined): boolean {
+	return catalog?.source === "release";
+}
+
+/** How long until a release list is read again, after `reads` reads that each gave one. */
+export function releaseCatalogRefreshMs(reads: number): number {
+	return Math.min(UNVERIFIED_CATALOG_REFRESH_MS * 2 ** Math.max(0, reads - 1), MAX_UNVERIFIED_CATALOG_REFRESH_MS);
+}
+
 const sessionCatalogs = new Map<string, CloudChatModels>();
 const agentCatalogs = new Map<string, { at: number; catalog: CloudChatModels }>();
 const agentRequests = new Map<string, Promise<CloudChatModels>>();
+// Another account's lists are not this one's: forgotten on sign-out and an
+// account switch, and an answer to a request made before that is dropped.
+let accountGeneration = 0;
+forgetOnCloudAccountChange(() => {
+	accountGeneration += 1;
+	sessionCatalogs.clear();
+	agentCatalogs.clear();
+	agentRequests.clear();
+});
 
 /** A worker's answer belongs to that worker: a restart can bring another CLI. */
 export function sessionCatalogKey(orgId: string, sessionId: string, workerEpoch: number | undefined): string {
@@ -25,31 +71,43 @@ export function cachedSessionCatalog(key: string): CloudChatModels | undefined {
 	return sessionCatalogs.get(key);
 }
 
-export function rememberSessionCatalog(key: string, catalog: CloudChatModels): void {
+/** The account the lists in memory belong to, taken when a read starts and given back to rememberSessionCatalog. */
+export function catalogAccount(): number {
+	return accountGeneration;
+}
+
+/** Keeps a worker's answer, unless the account changed after `askedFor` (catalogAccount when it was asked). */
+export function rememberSessionCatalog(key: string, catalog: CloudChatModels, askedFor = accountGeneration): void {
+	if (askedFor !== accountGeneration) return;
 	sessionCatalogs.set(key, catalog);
 }
 
 export function cachedAgentCatalog(orgId: string, agent: string, now = Date.now()): CloudChatModels | undefined {
 	const entry = agentCatalogs.get(`${orgId}/${agent}`);
-	return entry && now - entry.at < AGENT_CATALOG_FRESH_MS ? entry.catalog : undefined;
+	const freshFor = isReleaseCatalog(entry?.catalog) ? UNVERIFIED_CATALOG_REFRESH_MS : AGENT_CATALOG_FRESH_MS;
+	return entry && now - entry.at < freshFor ? entry.catalog : undefined;
 }
 
 /**
  * The control plane's catalog for an agent, shared by the spawn sheet and an
  * open session: answered from memory while fresh, and one request at a time.
+ * `rereadRelease` asks again when what memory holds is still the release list
+ * (a scheduled re-read); the account's own list is still answered from memory.
  */
-export function agentModelCatalog(client: Pick<CloudClient, "listAgentModels">, orgId: string, agent: string): Promise<CloudChatModels> {
+export function agentModelCatalog(client: Pick<CloudClient, "listAgentModels">, orgId: string, agent: string, options: { rereadRelease?: boolean } = {}): Promise<CloudChatModels> {
 	const key = `${orgId}/${agent}`;
-	const cached = cachedAgentCatalog(orgId, agent);
+	const known = cachedAgentCatalog(orgId, agent);
+	const cached = options.rereadRelease && isReleaseCatalog(known) ? undefined : known;
 	if (cached) return Promise.resolve(cached);
 	const pending = agentRequests.get(key);
 	if (pending) return pending;
+	const generation = accountGeneration;
 	const request = client.listAgentModels(orgId, agent)
 		.then((catalog) => {
-			agentCatalogs.set(key, { at: Date.now(), catalog });
+			if (generation === accountGeneration) agentCatalogs.set(key, { at: Date.now(), catalog });
 			return catalog;
 		})
-		.finally(() => agentRequests.delete(key));
+		.finally(() => { if (agentRequests.get(key) === request) agentRequests.delete(key); });
 	agentRequests.set(key, request);
 	return request;
 }

@@ -1227,13 +1227,13 @@ describe("BrowserPanel", () => {
 		expect(firstTab).toHaveAttribute("aria-selected", "false");
 		expect(secondTab).toHaveAttribute("aria-selected", "true");
 		// The shared tab frame: the full title as the tab's native tooltip, and
-		// the ghost close button in the icon's slot.
+		// the ghost close button at the tab's right edge.
 		expect(firstTab).toHaveAttribute("title", "First app");
 		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toBeNull();
 		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toHaveAttribute("data-active");
 		expect(secondTab.closest("[data-terminal-tab-frame]")).toHaveAttribute("data-active");
 		expect(tabList).toHaveAttribute("data-tab-strip");
-		expect(screen.getByRole("button", { name: "Close tab First app" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Close tab First app" }).closest("[data-terminal-tab-action]")?.previousElementSibling).toBe(firstTab);
 		await userEvent.click(firstTab);
 		expect(hookState.selectTab).toHaveBeenCalledWith("t1");
 	});
@@ -1684,6 +1684,21 @@ describe("BrowserPanel", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Discard all comments" }));
 		expect(hookState.annotationAction).toHaveBeenCalledWith("discard-all");
+	});
+
+	it("renders the empty annotation placeholder text in the annotation context area", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/docs" };
+		hookState.annotationMode = true;
+		hookState.annotationState = { count: 0, screenshotCount: 0, hasDraft: false };
+
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const annotationToolbar = screen.getByTestId("browser-annotation-toolbar");
+		const hint = annotationToolbar.querySelector<HTMLElement>(".browser-panel__annotation-hint");
+		expect(hint).not.toBeNull();
+		expect(hint).toHaveTextContent("Point at something and say what to change");
+		const context = annotationToolbar.querySelector<HTMLElement>(".browser-panel__annotation-context");
+		expect(context).toContainElement(hint);
 	});
 
 	it("previews the original page while Enter or Space is held on the eye button", async () => {

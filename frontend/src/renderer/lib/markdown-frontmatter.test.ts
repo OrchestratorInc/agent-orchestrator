@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampPreviewText, isMarkdownPreviewPath, parseMarkdownFrontmatter, stripMarkdownFrontmatter } from "./markdown-frontmatter";
+import { clampPreviewText, isMarkdownPreviewPath, parseMarkdownFrontmatter, stripMarkdownFrontmatter, stripMarkdownPreviewAnchor } from "./markdown-frontmatter";
 
 const file = (body: string) => `---\n${body}\n---\n# Heading\n`;
 
@@ -72,5 +72,15 @@ describe("parseMarkdownFrontmatter", () => {
 		expect(isMarkdownPreviewPath("docs/a?b#c.md")).toBe(true);
 		expect(isMarkdownPreviewPath("docs/notes.txt")).toBe(false);
 		expect(isMarkdownPreviewPath("docs/page.html")).toBe(false);
+	});
+
+	it("strips anchors and query parameters from markdown preview paths", () => {
+		expect(stripMarkdownPreviewAnchor("docs/check.md")).toBe("docs/check.md");
+		expect(stripMarkdownPreviewAnchor("docs/a#b.md")).toBe("docs/a#b.md");
+		expect(stripMarkdownPreviewAnchor("docs/check?draft.md")).toBe("docs/check?draft.md");
+		expect(stripMarkdownPreviewAnchor("docs/check.md#usage")).toBe("docs/check.md");
+		expect(stripMarkdownPreviewAnchor("docs/check.md#L10-L20")).toBe("docs/check.md");
+		expect(stripMarkdownPreviewAnchor("docs/check.md?raw=true")).toBe("docs/check.md");
+		expect(stripMarkdownPreviewAnchor("docs/check.md?raw=true#usage")).toBe("docs/check.md");
 	});
 });

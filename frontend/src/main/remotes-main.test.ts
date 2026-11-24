@@ -1,9 +1,10 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import { describe, expect, it, vi } from "vitest";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
+import { LocalIdentityUnavailableError, computerName, registerRemotesIpc, remotesFilePath, type RemotesIpcDeps } from "./remotes-main";
 import { RemoteRegistry } from "./remote-registry";
 import { setPasswordCipher } from "./remotes-store";
 import { createLocalHostIdentity, type RemoteHealth } from "./remote-request";
@@ -106,6 +107,24 @@ describe("registerRemotesIpc", () => {
 		} finally { resetMainErrorCaptureForTests(); }
 	});
 
+	it("preserves the code on a remotes:list failure requested by the renderer", async () => {
+		resetMainErrorCaptureForTests();
+		try {
+			const ipc = fakeIpc();
+			const capture = vi.fn();
+			setMainErrorSink(capture);
+			const error = new AoError("REMOTES_READ_FAILED", "Could not read remote hosts");
+			registerRemotes(ipc.ipcMain, {
+				file: await tempFile(),
+				registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+				requireAccount: async () => { throw error; },
+			});
+			await expect(ipc.invoke("remotes:list", true)).resolves.toEqual({ code: error.code, message: error.toString() });
+			expect(capture).toHaveBeenCalledExactlyOnceWith({ category: "ipc", reason: "handler", error, detail: "channel:remotes:list" });
+			await expect(ipc.invoke("remotes:list")).rejects.toBe(error);
+		} finally { resetMainErrorCaptureForTests(); }
+	});
+
 	it("hides this installation without deleting its account record or original password", async () => {
 		const file = await tempFile();
 		const original = await readFile(file, "utf8");
@@ -156,7 +175,7 @@ describe("registerRemotesIpc", () => {
 		const identity = vi.fn(async () => "h_workbox");
 		const probe = vi.fn(async () => "online" as const);
 		let localHostId: string | null = null;
-		const start = vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: async () => {} }));
+		const start = vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url: string) => url, close: async () => {} }));
 		const ipc = fakeIpc();
 		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, identity, probe, localIdentity: async () => localHostId });
 		await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
@@ -193,7 +212,7 @@ describe("registerRemotesIpc", () => {
 		await writeFile(file, JSON.stringify({ remotes: [{ hostId: "h_workbox", label: "Other", url, password: "original", accountUserId: TEST_ACCOUNT }] }));
 		const original = await readFile(file, "utf8");
 		const probe = vi.fn(async () => "online" as const);
-		const start = vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: async () => {} }));
+		const start = vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url: string) => url, close: async () => {} }));
 		const ipc = fakeIpc();
 		registerRemotes(ipc.ipcMain, { file, registry: new RemoteRegistry(start), requireAccount: signedIn, identity: async () => "h_workbox", probe });
 		await expect(ipc.invoke("remotes:connect", url)).resolves.toMatchObject({ hostId: "h_workbox", url });
@@ -205,7 +224,7 @@ describe("registerRemotesIpc", () => {
 	it("retains an existing verified remote if local identity becomes unavailable during its probe", async () => {
 		const file = await tempFile();
 		const close = vi.fn(async () => {});
-		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close }));
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url: string) => url, close }));
 		await registry.connect({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "old" });
 		let localHostId: string | null = "h_this_mac";
 		const probe = vi.fn(async () => { localHostId = null; return "online" as const; });
@@ -393,7 +412,7 @@ describe("registerRemotesIpc", () => {
 			{ hostId: "h_b", label: "B", url, password: "b", accountUserId: TEST_ACCOUNT },
 		] }));
 		const closed = vi.fn().mockResolvedValue(undefined);
-		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: closed }));
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url: string) => url, close: closed }));
 		await registry.connect({ hostId: "h_b", label: "B", url, password: "b" });
 		const ipc = fakeIpc();
 		registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, identity: async () => "h_b", probe: async () => "online" });
@@ -447,7 +466,7 @@ describe("registerRemotesIpc", () => {
 	it("drops the proxy of a removed host", async () => {
 		const ipc = fakeIpc();
 		const closed = vi.fn().mockResolvedValue(undefined);
-		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: closed }));
+		const registry = new RemoteRegistry(async () => ({ base: "http://127.0.0.1:7654/token", previewUrl: (_sessionId, sourceUrl) => sourceUrl, resolvePreviewUrl: (_sessionId, viewedUrl) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url: string) => url, close: closed }));
 		await registry.connect({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", password: "old" });
 		registerRemotes(ipc.ipcMain, { file: await tempFile(), registry, requireAccount: signedIn });
 		await ipc.invoke("remotes:remove", "http://192.0.2.1:1");
@@ -627,7 +646,7 @@ describe("registerRemotesIpc", () => {
 
 	describe("device tokens", () => {
 		const token = "aod_" + "c".repeat(64);
-		const proxy = () => vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, externalUrl: (url: string) => url, close: async () => {} }));
+		const proxy = () => vi.fn(async () => ({ base: "http://127.0.0.1:5000/token", previewUrl: (_sessionId: string, sourceUrl: string) => sourceUrl, resolvePreviewUrl: (_sessionId: string, viewedUrl: string) => viewedUrl, agentBrowserUrl: async () => "", isAgentBrowserUrl: () => false, isRenderUrl: () => false, externalUrl: (url: string) => url, close: async () => {} }));
 		const saved = async (file: string) => (JSON.parse(await readFile(file, "utf8")) as { remotes: Array<Record<string, unknown>> }).remotes;
 		type Pair = NonNullable<RemotesIpcDeps["pair"]>;
 
@@ -788,4 +807,18 @@ describe("registerRemotesIpc", () => {
 			expect(pair).toHaveBeenCalledOnce();
 		});
 	});
+});
+
+it.each([
+	new ExpectedIpcError("Sign in to Orchestrator Cloud"),
+	new LocalIdentityUnavailableError(),
+])("marks expected remotes:list failures even when the subclass has its own code", async (error) => {
+	const ipc = fakeIpc();
+	registerRemotes(ipc.ipcMain, {
+		file: await tempFile(),
+		registry: new RemoteRegistry(async () => { throw new Error("must not connect"); }),
+		requireAccount: async () => { throw error; },
+	});
+	await expect(ipc.invoke("remotes:list", true)).resolves.toEqual({ code: error.code, message: error.toString(), expected: true });
+	await expect(ipc.invoke("remotes:list")).rejects.toBe(error);
 });

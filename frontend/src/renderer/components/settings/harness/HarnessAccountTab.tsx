@@ -169,13 +169,14 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 			{loginPanel}
 		</HarnessDetailGroup> : null}
 		{savedKeys}
-		{accountProvider ? <AgentAccountsPanel provider={accountProvider} hostId={hostId} cliLogin={{
+		{accountProvider ? <AgentAccountsPanel provider={accountProvider} hostId={hostId} loginMethods={authPlan?.methods} cliLogin={{
 			disabled: authBusy || authWorkflowActive || details.busy || !authPlan?.available || authPlan.action === "instructions",
 			canLogout: Boolean(authPlan?.logoutCommand),
 			onSignIn: onLogin,
 			onLogout,
 		}} /> : null}
 		{accountProvider && loginPanel ? <HarnessDetailGroup title={t("settings.harness.account")}>{loginPanel}</HarnessDetailGroup> : null}
+		{details.loginUnconfirmed && !authBusy ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.loginUnconfirmedHint")}</p> : null}
 		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="secondary" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
 		{rowAuthWorkflow ? <HarnessAuthTerminalPanel
 			workflow={rowAuthWorkflow}
@@ -197,7 +198,9 @@ export function HarnessAccountTab({ details, hostId, cloud, authWorkflowActive, 
 				{job?.expectedDestination ? <p className="break-all"><span className="font-medium text-settings-label">{t("settings.harness.expectedDestination")}:</span> {job.expectedDestination}</p> : null}
 				{job?.error ? <p className="mt-2 whitespace-pre-wrap text-error">{job.error}</p> : null}
 				{job?.output ? <pre className="settings-thin-scrollbar mt-2 max-h-40 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono">{job.output}</pre> : null}
-				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="secondary" onClick={() => job && onCopyDiagnostics(job)}><Copy aria-hidden="true" />{t("settings.harness.copyDiagnostics")}</Button>
+				<Button type="button" data-harness-copy-diagnostics="" className="mt-2" size="sm" variant="secondary" onClick={() => job && onCopyDiagnostics(job)}>
+					{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copied ? "settings.harness.copied" : "settings.harness.copyDiagnostics")}
+				</Button>
 			</div> : null}
 		</div> : null}
 	</div>;

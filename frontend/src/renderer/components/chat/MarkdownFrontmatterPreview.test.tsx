@@ -112,6 +112,13 @@ describe("MarkdownFrontmatterPreview", () => {
 		expect(getMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.anything());
 	});
 
+	it("rejects an absolute path the daemon resolves as an artifact", async () => {
+		getMock.mockResolvedValue({ data: { kind: "artifact", path: "report.md" }, error: undefined });
+		renderCard("/home/user/.ao/artifacts/sess-1/report.md", { kind: "workspace", sessionId: "sess-1" });
+		expect(await screen.findByText("Unable to load this file.")).toBeInTheDocument();
+		expect(getMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.anything());
+	});
+
 	it("reads a cloud sibling repository through a scoped client", async () => {
 		cloudGet.mockResolvedValue({ content: doc, binary: false, deleted: false });
 		renderCard("../second-repo/docs/check.md", { kind: "cloud", orgId: "org-1", sessionId: "sess-1" });
@@ -135,8 +142,10 @@ describe("MarkdownFrontmatterPreview", () => {
 
 	it("handles missing frontmatter", async () => {
 		getMock.mockResolvedValue(fileResponse("# plain\n"));
-		renderCard("docs/plain.md", { kind: "workspace", sessionId: "sess-1" });
-		expect(await screen.findByText("No name or description.")).toBeInTheDocument();
+		const { container } = renderCard("docs/plain.md", { kind: "workspace", sessionId: "sess-1" });
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		expect(screen.queryByText("No name or description.")).not.toBeInTheDocument();
+		expect(container.querySelector("[role='status']")).toBeNull();
 	});
 
 	it("handles malformed frontmatter", async () => {
@@ -290,5 +299,27 @@ describe("markdown link hover", () => {
 		fireEvent.pointerOver(screen.getByRole("link", { name: "Outside" }), { pointerType: "mouse" });
 		expect(await screen.findByText("Unable to load this file.")).toBeInTheDocument();
 		expect(getMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.anything());
+	});
+
+	it("does not show hover preview for a session artifact link", async () => {
+		const onFileOpen = vi.fn();
+		renderWithQuery(
+			<ChatLinkProvider sessionId="sess-1" markdownFileSource={{ kind: "workspace", sessionId: "sess-1" }} onFileOpen={onFileOpen}>
+				<ChatMarkdown text="[Report](/workspace/.ao/worker/artifacts/sess-1/report.md)" />
+			</ChatLinkProvider>,
+		);
+		fireEvent.pointerOver(screen.getByRole("link", { name: "Report" }), { pointerType: "mouse" });
+		await waitFor(() => expect(getMock).not.toHaveBeenCalled());
+		expect(screen.queryByText("Unable to load this file.")).not.toBeInTheDocument();
+	});
+
+	it("renders preview for a link with a heading anchor", async () => {
+		getMock.mockResolvedValue(fileResponse(doc));
+		renderLinks("[Usage](docs/check.md#usage)", { kind: "workspace", sessionId: "sess-1" });
+		fireEvent.pointerOver(screen.getByRole("link", { name: "Usage" }), { pointerType: "mouse" });
+		expect(await screen.findByText("Steps to verify a build before deployment.")).toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.objectContaining({
+			params: { path: { sessionId: "sess-1" }, query: { path: "docs/check.md" } },
+		}));
 	});
 });

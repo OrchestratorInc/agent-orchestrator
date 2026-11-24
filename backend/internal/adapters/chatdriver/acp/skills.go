@@ -31,6 +31,11 @@ func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableComma
 		if command.Name == "compact" {
 			hasCompact = true
 		}
+		// Hiding is presentation only, so it runs after the capability checks:
+		// an agent's compaction still works when its command stays off the menu.
+		if c.hideCommand != nil && c.hideCommand(command) {
+			continue
+		}
 		inputHint := ""
 		if command.Input != nil && command.Input.Unstructured != nil {
 			inputHint = command.Input.Unstructured.Hint
@@ -49,6 +54,7 @@ func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableComma
 	c.mu.Lock()
 	c.skills = skills
 	c.skillsKnown = true
+	c.compactAdvertised = hasCompact
 	if c.capabilities != nil {
 		c.capabilities[ports.ChatCapabilitySkills] = true
 		c.capabilities[ports.ChatCapabilityCompaction] = hasCompact
@@ -56,15 +62,23 @@ func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableComma
 	c.mu.Unlock()
 }
 
-func cloneSkills(skills []ports.ChatSkill) []ports.ChatSkill {
-	return append([]ports.ChatSkill(nil), skills...)
+// HideCommands returns a Config.HideCommand that hides the named built-ins.
+//
+// Matching is by name because ACP carries no command kind. That is safe only for
+// an agent whose built-ins win over a same-named user command (the user's copy
+// is unreachable anyway). An agent that lets a user command replace a built-in
+// needs a HideCommand that also checks the agent's own provenance metadata.
+func HideCommands(names ...string) func(acpsdk.AvailableCommand) bool {
+	hidden := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		hidden[name] = struct{}{}
+	}
+	return func(command acpsdk.AvailableCommand) bool {
+		_, ok := hidden[command.Name]
+		return ok
+	}
 }
 
-func hasCompactSkill(skills []ports.ChatSkill) bool {
-	for _, skill := range skills {
-		if skill.Name == "compact" {
-			return true
-		}
-	}
-	return false
+func cloneSkills(skills []ports.ChatSkill) []ports.ChatSkill {
+	return append([]ports.ChatSkill(nil), skills...)
 }

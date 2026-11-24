@@ -173,9 +173,11 @@ interface Call {
 	body?: string | Uint8Array;
 }
 
-function fakeControlPlane(partSize: number, options: { failPart?: number; finalizeError?: { status: number; code: string } } = {}) {
+function fakeControlPlane(partSize: number, options: { failPart?: number; finalizeError?: { status: number; code: string }; files?: boolean; failFile?: string; refuseVideos?: boolean; maxVideoBytes?: number } = {}) {
 	const calls: Call[] = [];
 	const stored = new Map<number, Uint8Array>();
+	// An included file's bytes, by the path it is served at.
+	const files = new Map<string, string>();
 	const api: CloudShareApi = {
 		getToken: async () => token.value,
 		fetch: vi.fn(async (url: string, init: RequestInit) => {
@@ -188,9 +190,31 @@ function fakeControlPlane(partSize: number, options: { failPart?: number; finali
 				const { size } = JSON.parse(body as string) as { size: number };
 				return json({ uploadToken: "tok", partSize, partCount: Math.max(1, Math.ceil(size / partSize)) }, 201);
 			}
+			// A control plane that predates included files has no such routes.
+			if (pathname.endsWith("/uploads/files") && options.files) {
+				const request = JSON.parse(body as string) as { uploadToken: string; path: string; size: number };
+				if (request.uploadToken !== "tok") return json({ code: "artifact_share_upload_invalid", message: "bad" }, 400);
+				if (request.path === "") return json({ code: "invalid_request", message: "path" }, 400);
+				if (options.refuseVideos && request.path.endsWith(".mp4")) return json({ code: "artifact_share_type_unsupported", message: "Videos can't be included in a shared page yet." }, 415);
+				if (options.maxVideoBytes !== undefined && request.path.endsWith(".mp4") && request.size > options.maxVideoBytes) {
+					return json({ code: "artifact_share_video_too_large", message: "Videos over 1 GiB can't be shared." }, 413);
+				}
+				return json({ uploadToken: `file:${request.path}`, partSize, partCount: Math.max(1, Math.ceil(request.size / partSize)) }, 201);
+			}
+			if (pathname.endsWith("/uploads/files/complete") && options.files) {
+				const { uploadToken } = JSON.parse(body as string) as { uploadToken: string };
+				return json({ fileToken: `ft:${uploadToken.slice("file:".length)}`, path: uploadToken.slice("file:".length), expiresAt: "2026-11-16T00:00:00Z" });
+			}
 			if (pathname.endsWith("/uploads/parts")) {
-				const { parts } = JSON.parse(body as string) as { parts: Array<{ partNumber: number }> };
-				return json({ parts: parts.map(({ partNumber }) => ({ partNumber, method: "PUT", url: `https://s3.test/part/${partNumber}`, headers: { "Content-Length": "4", Host: "s3.test", "X-Amz-Checksum-Sha256": "sig" }, size: 0 })) });
+				const { uploadToken, parts } = JSON.parse(body as string) as { uploadToken: string; parts: Array<{ partNumber: number }> };
+				const prefix = uploadToken === "tok" ? "" : `/file/${encodeURIComponent(uploadToken.slice("file:".length))}`;
+				return json({ parts: parts.map(({ partNumber }) => ({ partNumber, method: "PUT", url: `https://s3.test${prefix}/part/${partNumber}`, headers: { "Content-Length": "4", Host: "s3.test", "X-Amz-Checksum-Sha256": "sig" }, size: 0 })) });
+			}
+			if (pathname.startsWith("/file/")) {
+				const filePath = decodeURIComponent(pathname.split("/")[2]);
+				if (filePath === options.failFile) return new Response("", { status: 400 });
+				files.set(filePath, (files.get(filePath) ?? "") + Buffer.from(body as Uint8Array).toString());
+				return new Response("", { headers: { etag: `"file-etag"` } });
 			}
 			if (pathname.startsWith("/part/")) {
 				const number = Number(pathname.split("/").pop());
@@ -207,12 +231,12 @@ function fakeControlPlane(partSize: number, options: { failPart?: number; finali
 			return new Response("", { status: 404 });
 		}),
 	};
-	return { api, calls, stored };
+	return { api, calls, stored, files };
 }
 
-async function snapshotOf(content: string) {
-	await fs.writeFile(path.join(artifacts, "upload.txt"), content);
-	const file = await resolveShareFile(dataDir, "sess-1", "upload.txt");
+async function snapshotOf(content: string, name = "upload.txt") {
+	await fs.writeFile(path.join(artifacts, name), content);
+	const file = await resolveShareFile(dataDir, "sess-1", name);
 	return snapshotShareFile(file, path.join(dataDir, "snapshots"));
 }
 
@@ -330,6 +354,104 @@ describe("uploadShare", () => {
 		expect(failing.calls.slice(abort).filter((call) => call.url.startsWith("https://s3.test/"))).toEqual([]);
 		// Not every part was sent: the second worker stopped.
 		expect(failing.calls.filter((call) => call.url.startsWith("https://s3.test/")).length).toBeLessThan(5);
+	});
+
+	it("uploads a page's files under its upload first and lists them when finalizing", async () => {
+		const page = await snapshotOf("<img src=a.png>", "page.html");
+		const files = [
+			{ path: "images/a.png", snapshot: await snapshotOf("aaaaaa", "a.png") },
+			{ path: "b.svg", snapshot: await snapshotOf("bb", "b.svg") },
+		];
+		const control = fakeControlPlane(4, { files: true });
+		const progress: number[] = [];
+		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, (sent) => progress.push(sent));
+		expect(result.pageFiles).toEqual({ included: 2, unsupported: false, refusedVideos: [], tooLargeVideos: [] });
+		expect(Object.fromEntries(control.files)).toEqual({ "images/a.png": "aaaaaa", "b.svg": "bb" });
+		const starts = control.calls.filter((call) => call.url.endsWith("/uploads/files")).map((call) => JSON.parse(call.body as string));
+		expect(starts).toEqual([
+			{ uploadToken: "tok", path: "images/a.png", size: 6, sha256: sha("aaaaaa") },
+			{ uploadToken: "tok", path: "b.svg", size: 2, sha256: sha("bb") },
+		]);
+		const finalize = JSON.parse(control.calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
+		expect(finalize.files).toEqual([{ fileToken: "ft:images/a.png" }, { fileToken: "ft:b.svg" }]);
+		// Progress counts the files and the page together.
+		expect(progress.at(-1)).toBe(6 + 2 + 15);
+	});
+
+	it("leaves out a video the control plane refuses and publishes the page with the rest", async () => {
+		const page = await snapshotOf("<img src=a.png><video src=clip.mp4>", "page.html");
+		const files = [
+			{ path: "clip.mp4", snapshot: await snapshotOf("vvvv", "clip.mp4") },
+			{ path: "a.png", snapshot: await snapshotOf("aa", "a.png") },
+		];
+		const control = fakeControlPlane(4, { files: true, refuseVideos: true });
+		const progress: number[] = [];
+		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, (sent) => progress.push(sent));
+		expect(result.pageFiles).toEqual({ included: 1, unsupported: false, refusedVideos: ["clip.mp4"], tooLargeVideos: [] });
+		expect(Object.fromEntries(control.files)).toEqual({ "a.png": "aa" });
+		const finalize = JSON.parse(control.calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
+		expect(finalize.files).toEqual([{ fileToken: "ft:a.png" }]);
+		// The refused video still counts toward progress, so it reaches the total.
+		expect(progress.at(-1)).toBe(page.size + 4 + 2);
+	});
+
+	it("leaves out a page's video over the control plane's size limit and publishes the rest", async () => {
+		const page = await snapshotOf("<img src=a.png><video src=clip.mp4>", "page.html");
+		const files = [
+			{ path: "clip.mp4", snapshot: await snapshotOf("vvvvvvvv", "clip.mp4") },
+			{ path: "a.png", snapshot: await snapshotOf("aa", "a.png") },
+		];
+		const control = fakeControlPlane(4, { files: true, maxVideoBytes: 4 });
+		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, () => undefined);
+		expect(result.pageFiles).toEqual({ included: 1, unsupported: false, refusedVideos: [], tooLargeVideos: ["clip.mp4"] });
+		expect(Object.fromEntries(control.files)).toEqual({ "a.png": "aa" });
+	});
+
+	it("uploads a page's video when the control plane takes it", async () => {
+		const page = await snapshotOf("<video src=clip.mp4>", "page.html");
+		const files = [{ path: "clip.mp4", snapshot: await snapshotOf("vvvv", "clip.mp4") }];
+		const control = fakeControlPlane(4, { files: true });
+		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, () => undefined);
+		expect(result.pageFiles).toEqual({ included: 1, unsupported: false, refusedVideos: [], tooLargeVideos: [] });
+		expect(Object.fromEntries(control.files)).toEqual({ "clip.mp4": "vvvv" });
+	});
+
+	it("clears a page's files with an empty list, once the control plane serves them", async () => {
+		const page = await snapshotOf("<p>no images</p>", "page.html");
+		const control = fakeControlPlane(4, { files: true });
+		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files: [] } }, () => undefined);
+		expect(result.pageFiles).toEqual({ included: 0, unsupported: false, refusedVideos: [], tooLargeVideos: [] });
+		const finalize = JSON.parse(control.calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
+		expect(finalize.files).toEqual([]);
+	});
+
+	it("publishes a page alone, without a files list, to a control plane that predates them", async () => {
+		const page = await snapshotOf("<img src=a.png>", "page.html");
+		for (const files of [[], [{ path: "a.png", snapshot: await snapshotOf("aaaa", "a.png") }]]) {
+			const control = fakeControlPlane(4);
+			const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, () => undefined);
+			expect(result.pageFiles).toEqual({ included: 0, unsupported: true, refusedVideos: [], tooLargeVideos: [] });
+			const finalize = JSON.parse(control.calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
+			expect(finalize).not.toHaveProperty("files");
+		}
+	});
+
+	it("leaves the files out of a file that is not a page", async () => {
+		const snapshot = await snapshotOf("x");
+		const control = fakeControlPlane(4, { files: true });
+		const result = await uploadShare(control.api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "f" }, () => undefined);
+		expect(result).not.toHaveProperty("pageFiles");
+		expect(control.calls.some((call) => call.url.includes("/uploads/files"))).toBe(false);
+	});
+
+	it("aborts a page's file upload and the page's when a file fails", async () => {
+		const page = await snapshotOf("<img src=a.png>", "page.html");
+		const files = [{ path: "a.png", snapshot: await snapshotOf("aaaa", "a.png") }];
+		const control = fakeControlPlane(4, { files: true, failFile: "a.png" });
+		await expect(uploadShare(control.api, { baseUrl: "https://cp.test", snapshot: page, name: "page.html", project: "p", feature: "f", page: { files } }, () => undefined)).rejects.toThrow("part 1");
+		const aborted = control.calls.filter((call) => call.url.endsWith("/uploads/abort")).map((call) => JSON.parse(call.body as string).uploadToken);
+		expect(aborted).toEqual(["file:a.png", "tok"]);
+		expect(control.calls.some((call) => call.url.endsWith("/finalize"))).toBe(false);
 	});
 
 	it("needs a signed-in user and a safe control plane URL", async () => {
