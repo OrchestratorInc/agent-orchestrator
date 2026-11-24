@@ -10,6 +10,8 @@ import {
 	prCheckedOut,
 	prDiffSummary,
 	prHasNoChecks,
+	prMergeQueueDetail,
+	prMergeQueueEntry,
 	noChecksSettlesAt,
 	PR_NO_CHECKS_SETTLE_MS,
 	prSummaryBlockReason,
@@ -1267,5 +1269,51 @@ describe("a PR nothing checks", () => {
 		expect(view.readinessRows?.map((row) => row.label)).toContain("No checks reported");
 		expect(view.statusRows?.map((row) => row.label)).toEqual(["Review status"]);
 		expect(prCardPresentation(unchecked()).readiness?.label).toBe("Checking merge readiness");
+	});
+});
+
+describe("merge queue", () => {
+	const blocked = { state: "blocked" as const, reasons: ["blocked_by_provider"], prUrl: "", conflictFiles: [] };
+
+	it("doesn't call a queued PR blocked, and doesn't offer to merge it again", () => {
+		const queued = summary({ mergeQueueRequired: true, mergeability: blocked, mergeQueue: { state: "awaiting_checks", position: 2, estimatedSecondsToMerge: 540 } });
+		expect(prCanMerge(queued)).toBe(false);
+		const view = prCardPresentation(queued);
+		expect(view.primary).toMatchObject({ key: "merge", label: "In merge queue", tone: "neutral", detail: "Queue checks running · Position 2 · about 9 min" });
+		expect(view.readiness).toMatchObject({ label: "In merge queue", tone: "neutral" });
+		const merge = prSummaryParts(queued).find((part) => part.key === "merge");
+		expect(merge).toMatchObject({ status: "In merge queue", tone: "neutral", summary: "Queue checks running · Position 2 · about 9 min" });
+		expect(prStatusRows(queued).find((row) => row.key === "merge")?.value).toBe("In merge queue");
+	});
+
+	it("describes each queue state, with what the provider gives of position and estimate", () => {
+		const entry = (state: NonNullable<SessionPRSummary["mergeQueue"]>["state"], position = 1, estimatedSecondsToMerge?: number) => ({ state, position, estimatedSecondsToMerge });
+		expect(prMergeQueueDetail(entry("queued", 4))).toBe("Waiting in the queue · Position 4");
+		expect(prMergeQueueDetail(entry("mergeable"))).toBe("Ready to merge · Position 1");
+		expect(prMergeQueueDetail(entry("locked", 0))).toBe("Merging");
+		expect(prMergeQueueDetail(entry("unmergeable", 2))).toBe("Failed in the queue · Position 2");
+		// Under a minute still reads as a minute, not zero.
+		expect(prMergeQueueDetail(entry("awaiting_checks", 1, 20))).toBe("Queue checks running · Position 1 · about 1 min");
+		expect(prCardPresentation(summary({ mergeQueue: entry("unmergeable") })).primary.tone).toBe("warning");
+	});
+
+	it("holds a queue PR to the same readiness as any other", () => {
+		expect(prCanMerge(summary({ mergeQueueRequired: true }))).toBe(true);
+		expect(prCardPresentation(summary({ mergeQueueRequired: true })).primary.label).toBe("Ready to merge");
+		expect(prCanMerge(summary({ mergeQueueRequired: true, mergeability: blocked }))).toBe(false);
+		expect(prCanMerge(summary({ mergeQueueRequired: true, ci: { autoInjectCI: true, state: "failing", failingChecks: [], checks: [] } }))).toBe(false);
+	});
+
+	it("ignores a queue entry left on a PR that is no longer open", () => {
+		const entry = { state: "queued" as const, position: 1 };
+		expect(prMergeQueueEntry(summary({ state: "merged", mergeQueue: entry }))).toBeUndefined();
+		expect(prCardPresentation(summary({ state: "merged", mergeQueue: entry })).primary.label).toBe("Pull request merged");
+		expect(prMergeQueueEntry(summary({ mergeQueue: entry }))).toEqual(entry);
+	});
+
+	it("changes nothing for a PR whose base has no queue", () => {
+		expect(prCanMerge(summary())).toBe(true);
+		expect(prCardPresentation(summary()).primary.label).toBe("Ready to merge");
+		expect(prCardPresentation(summary({ mergeability: blocked })).primary.label).toBe("Merge unavailable");
 	});
 });

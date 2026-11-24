@@ -52,6 +52,10 @@ export function clearOptimisticProjectRemoval(projectId: string, hostId?: string
 	if (removedProjectIds.delete(projectKey(projectId, hostId, cloud))) notifyRemovalChange();
 }
 
+export function hasOptimisticProjectRemovals(): boolean {
+	return removedProjectIds.size > 0;
+}
+
 export function isOptimisticallyRemovedProject(projectId: string, hostId?: string, cloud = false): boolean {
 	return removedProjectIds.has(projectKey(projectId, hostId, cloud));
 }

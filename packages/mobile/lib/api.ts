@@ -163,9 +163,9 @@ export type ProjectInfo = {
 export type ProjectDetail = ProjectInfo & {
 	agent?: string;
 	config?: {
-		agentConfig?: { model?: string; permissions?: string };
-		worker?: { agent?: string; agentConfig?: { model?: string; permissions?: string } };
-		reviewers?: { harness?: string }[];
+		agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string };
+		worker?: { agent?: string; agentConfig?: { model?: string; mode?: string; effort?: string; permissions?: string } };
+		reviewers?: { harness?: string; agentConfig?: { model?: string; mode?: string; effort?: string } }[];
 	};
 };
 
@@ -420,6 +420,7 @@ export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 // server is unreachable" need very different advice. The message keeps the
 // `${status} ${statusText}` prefix that call sites already match on.
 export class ApiError extends Error {
+	readonly telemetryCode: string = "API_ERROR";
 	constructor(
 		readonly status: number,
 		message: string,
@@ -512,7 +513,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		}
 		// Server answered with an error: classify by status + daemon code, and tag
 		// the requestId so a mobile event pivots to the daemon's own capture.
-		captureMobileApiError(path, httpCategory(res.status), res.status, code, requestId);
+		captureMobileApiError(path, httpCategory(res.status), res.status, code, requestId, detail);
 		throw new ApiError(
 			res.status,
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,
@@ -650,6 +651,45 @@ export async function getArchivedSessions(
 	};
 }
 
+/** The PR states an ended session's pull requests are read back in. */
+export type ArchivedPRState = "merged" | "closed";
+
+/** Archived workers owning a pull request in one state, a page at a time. */
+export type PRStatePage = ArchivePage & {
+	/** How many archived workers match, across every page. */
+	total: number;
+	/** Names the whole filtered list; equal versions mean the same list. Null from a daemon that sends none. */
+	version: string | null;
+};
+
+/** Pages of archived workers by PR state are larger than the archive's: they are read to the end. */
+export const PR_STATE_PAGE_SIZE = 100;
+
+/**
+ * One page of a machine's archived workers that own a PR in `prState`, newest
+ * state change first. Null from a daemon that predates the filter: it ignores
+ * the parameter and so does not echo it, and its page is the plain archive.
+ */
+export async function getArchivedPRSessions(
+	cfg: ServerConfig,
+	options: { prState: ArchivedPRState; cursor?: string | null; projectId?: string },
+	init?: Pick<RequestInit, "signal">,
+): Promise<PRStatePage | null> {
+	const query = new URLSearchParams({ active: "false", kind: "worker", prState: options.prState, limit: String(PR_STATE_PAGE_SIZE) });
+	if (options.cursor) query.set("cursor", options.cursor);
+	if (options.projectId) query.set("project", options.projectId);
+	const res = await req(cfg, `${API}/sessions?${query}`, init);
+	const data = await res.json();
+	if (data?.prState !== options.prState) return null;
+	const raw: WireSession[] = Array.isArray(data?.sessions) ? data.sessions : [];
+	return {
+		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
+		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
+		total: typeof data?.total === "number" ? data.total : raw.length,
+		version: typeof data?.version === "string" && data.version ? data.version : null,
+	};
+}
+
 // ---- Preview (in-app browser) ----------------------------------------------
 
 // Load the session's selected app preview, never a discovered repository file.
@@ -773,6 +813,7 @@ export function artifactMarkdownImageSource(cfg: ServerConfig, sessionId: string
  */
 /** A text read stopped at its limit: the file is larger than the viewer loads. */
 export class ArtifactTextTooLargeError extends Error {
+	readonly code: string = "ARTIFACT_TEXT_TOO_LARGE_ERROR";
 	constructor() {
 		super("This file is too large to load as text.");
 		this.name = "ArtifactTextTooLargeError";

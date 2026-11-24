@@ -381,6 +381,11 @@ func TestACPReplayAcceptsUpdatesDuringDrain(t *testing.T) {
 	if err := conv.SessionUpdate(context.Background(), replayAgentChunk("session-1", "live", "after replay")); err != nil {
 		t.Fatal(err)
 	}
+	// Output with no AO turn is the agent's own cycle, which first reports the
+	// agent as working.
+	if event := <-conv.events; event.Kind != ports.ChatEventProviderState {
+		t.Fatalf("live event = %+v, want provider.state", event)
+	}
 	select {
 	case event := <-conv.events:
 		if event.Kind != ports.ChatEventMessageDelta || event.Delta != "after replay" {
@@ -512,5 +517,50 @@ func assertReplayHistoryEqual(t *testing.T, want, got []ports.ChatEvent) {
 	}
 	if !bytes.Equal(expected, actual) {
 		t.Fatal("replay history or event identities changed")
+	}
+}
+
+// A retry or limit notice is live status, settled with its turn when it ran.
+// Replayed on every agent restart it used to return as a new running row (a fresh
+// id per replay on direct connections) on a turn that had long ended.
+func TestACPReplayDropsLiveFailureNotices(t *testing.T) {
+	conv := replayConversation()
+	conv.beginHistoryReplay("session-1")
+	limit := acpsdk.SessionNotification{
+		SessionId: acpsdk.SessionId("session-1"),
+		Update: acpsdk.SessionUpdate{SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+			SessionUpdate: "session_info_update",
+			Meta: testPromptFailureMeta(map[string]any{
+				"id": "claude-turn:error", "category": "limit", "severity": "error",
+				"title": "You've hit your 5-hour limit · resets 4:50pm (Asia/Calcutta)",
+			}),
+		}},
+	}
+	for _, update := range []acpsdk.SessionNotification{
+		replayUserChunk("session-1", "u1", "hello"),
+		limit,
+		replayAgentChunk("session-1", "a1", "hi"),
+	} {
+		if err := conv.SessionUpdate(context.Background(), update); err != nil {
+			t.Fatalf("SessionUpdate: %v", err)
+		}
+	}
+	if err := conv.drainAndFinishReplay(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	history, err := conv.ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	for _, event := range history {
+		if event.Kind == ports.ChatEventActivityStarted || event.Kind == ports.ChatEventActivityCompleted {
+			t.Fatalf("replay produced an activity from a live failure notice: %+v", event)
+		}
+	}
+	conv.mu.Lock()
+	failure := conv.providerFailure
+	conv.mu.Unlock()
+	if failure != nil {
+		t.Fatalf("replay left a live failure episode open: %+v", failure)
 	}
 }

@@ -749,6 +749,9 @@ func (s *Service) sessionWorkspaceRecord(ctx context.Context, id domain.SessionI
 	if !ok {
 		return domain.SessionRecord{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
+	// Renewed before the path check: the page polls while the worktree is
+	// still being created, and that wait must not use up its lifetime.
+	s.renewTaskPreparation(rec)
 	if strings.TrimSpace(rec.Metadata.WorkspacePath) == "" {
 		return domain.SessionRecord{}, apierr.NotFound("SESSION_WORKSPACE_NOT_FOUND", "Session workspace not found")
 	}

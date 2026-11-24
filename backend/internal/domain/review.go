@@ -75,6 +75,8 @@ type ReviewRun struct {
 	// legacy/single-run delivery.
 	BatchID string          `json:"batchId"`
 	Harness ReviewerHarness `json:"harness"`
+	// RequesterSessionID is the agent to notify when this pass ends.
+	RequesterSessionID SessionID `json:"-"`
 	// TriggerSource records whether this pass was requested by a user, by an
 	// AO agent session through the CLI, or by the daemon auto-review coordinator.
 	TriggerSource ReviewTriggerSource `json:"triggerSource" enum:"manual,agent,auto"`
@@ -97,6 +99,19 @@ type ReviewRun struct {
 	// AutoInjectReview snapshots the session policy when this result is first
 	// recorded. Later toggle changes must not rewrite or deliver this run.
 	AutoInjectReview bool `json:"autoInjectReview"`
+	// ReviewerModel is the model the reviewer ran with for this pass; empty
+	// means the harness default.
+	ReviewerModel string `json:"-"`
+	// WorkerNotice tracks the one "review done" message owed to the requesting session
+	// once this pass is final. The store marks it pending on the final status
+	// write when the session receives review feedback.
+	WorkerNotice ReviewWorkerNotice `json:"workerNotice,omitempty" enum:",pending,sent,failed"`
+	// WorkerNoticeAttempts counts failed attempts to deliver the notice;
+	// WorkerNoticeError and WorkerNoticeAttemptedAt describe the latest one.
+	// A failed send keeps the notice pending and is retried with backoff.
+	WorkerNoticeAttempts    int        `json:"workerNoticeAttempts,omitempty"`
+	WorkerNoticeError       string     `json:"workerNoticeError,omitempty"`
+	WorkerNoticeAttemptedAt *time.Time `json:"workerNoticeAttemptedAt,omitempty"`
 	// FailureReason is set only on failed runs.
 	FailureReason ReviewFailureReason `json:"failureReason,omitempty" enum:"preflight_failed,launch_failed,never_started,exited_during_launch,turn_ended_without_submit,process_exited,timed_out,daemon_restarted,cancel_unconfirmed"`
 	// CancelledBy is set only on cancelled runs.
@@ -110,6 +125,41 @@ type ReviewRun struct {
 	CancelRequestedAt *time.Time `json:"cancelRequestedAt,omitempty"`
 	EndedAt           *time.Time `json:"endedAt,omitempty"`
 }
+
+// ReviewWorkerNotice is the delivery state of a pass's "review done" message.
+type ReviewWorkerNotice string
+
+// Review done notice states.
+const (
+	// ReviewWorkerNoticeNone marks a pass that owes no notice: still running,
+	// recorded before notices existed, or the session had feedback delivery off.
+	ReviewWorkerNoticeNone ReviewWorkerNotice = ""
+	// ReviewWorkerNoticePending marks a final pass whose notice is not yet sent.
+	ReviewWorkerNoticePending ReviewWorkerNotice = "pending"
+	// ReviewWorkerNoticeSent marks a pass whose notice reached the worker.
+	ReviewWorkerNoticeSent ReviewWorkerNotice = "sent"
+	// ReviewWorkerNoticeFailed marks a notice that gave up after
+	// ReviewWorkerNoticeMaxAttempts failed sends. It is derived on read from a
+	// pending notice and its attempt count; WorkerNoticeError keeps the last
+	// failure.
+	ReviewWorkerNoticeFailed ReviewWorkerNotice = "failed"
+)
+
+// ReviewWorkerNoticeMaxAttempts bounds failed sends of one notice. A failed
+// send can still have reached the worker (a partly written paste), so retries
+// are capped rather than repeated forever.
+const ReviewWorkerNoticeMaxAttempts = 5
+
+// Recorded reasons for review passes that end without a result. The "review
+// done" notice reads them to tell the worker whether another review is worth
+// requesting.
+const (
+	// ReviewRunSupersededReason marks a pass replaced by a trigger for a newer
+	// head commit; the newer pass is already running.
+	ReviewRunSupersededReason = "superseded by a review trigger for a newer commit"
+	// ReviewRunCancelledByUserReason marks a pass the user stopped on purpose.
+	ReviewRunCancelledByUserReason = "cancelled by user"
+)
 
 // ReviewTriggerSource identifies who initiated a review pass.
 type ReviewTriggerSource string
@@ -239,6 +289,7 @@ type ReviewRunPatch struct {
 	Body             *string
 	GithubReviewID   *string
 	AutoInjectReview *bool
+	ReviewerModel    *string
 	FailureReason    ReviewFailureReason
 	CancelledBy      ReviewCancelledBy
 	LaunchID         string
@@ -271,8 +322,11 @@ type CurrentHeadReviewRun struct {
 	PRURL     string
 	Status    ReviewRunStatus
 	Verdict   ReviewVerdict
-	ID        string
-	CreatedAt time.Time
+	// LastVerdictChangesRequested keeps a posted changes request effective while
+	// a later pass on the same head has not returned a verdict yet.
+	LastVerdictChangesRequested bool
+	ID                          string
+	CreatedAt                   time.Time
 	// FailedAutoRuns counts every failed auto review pass on this PR head.
 	FailedAutoRuns int
 	// AutoRetryBlocked reports a cancelled pass or a verdict on this PR head for

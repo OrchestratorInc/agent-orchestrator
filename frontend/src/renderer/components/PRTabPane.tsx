@@ -1,5 +1,6 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { CheckStateGlyph, type PRCheckState } from "@aoagents/product-ui";
-import { ArrowRight, ArrowUpRight, Circle, CircleAlert, FileText, MessageSquare } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Circle, CircleAlert, FileDiff, FileText, MessageSquare, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
@@ -7,13 +8,13 @@ import { usePRNoChecksClock } from "../hooks/usePRNoChecksClock";
 import { usePRStack } from "../hooks/usePRStack";
 import { useSessionScmSummary, type SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { formatTimeCompact } from "../lib/format-time";
-import { prBrowserUrl, prCanMerge, prChecksUrl, prHasNoChecks, prReviewers, prSummaryBlockReason, sessionPRDisplaySummaries, type PRReviewer } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prChecksUrl, prHasNoChecks, prMergeQueueEntry, prReviewers, prSummaryBlockReason, sessionPRDisplaySummaries, type PRReviewer } from "../lib/pr-display";
 import { stackBlocker, stackLayersToLand } from "../lib/pr-stack";
 import type { PRTabSection } from "../lib/pr-tabs";
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
 import { GitHubIcon } from "./GitHubIcon";
-import { blockReasonLabel, PRActionButton, PRStateMenu } from "./PRActions";
+import { blockReasonLabel, PRActionButton, PRStateMenu, stackBlockReasonLabel } from "./PRActions";
 import { AppLink } from "./AppLink";
 import { checkTone, sortedChecks } from "./PRCardDetails";
 import { PRAvatar, PRComments, prCommentCount } from "./PRComments";
@@ -74,24 +75,26 @@ const markClass = "size-icon-sm shrink-0";
 const sideRowClass = "flex min-h-6 min-w-0 max-w-full items-center gap-2 text-control text-foreground";
 const sideLinkClass = "min-w-0 truncate underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
-const reviewerMark: Record<PRReviewer["status"], { state?: PRCheckState; className?: string; label: "pr.review.approved" | "pr.review.changesRequested" | "pr.review.pending" | "pr.tab.reviewerCommented" }> = {
+const reviewerMark: Record<PRReviewer["status"], { state?: PRCheckState; icon?: LucideIcon; className?: string; label: "pr.review.approved" | "pr.review.changesRequested" | "pr.review.pending" | "pr.tab.reviewerCommented" }> = {
 	approved: { state: "passed", label: "pr.review.approved" },
-	changes_requested: { state: "failed", className: "text-status-in-review", label: "pr.review.changesRequested" },
+	// Changes requested reads as a diff to make, not a failure.
+	changes_requested: { icon: FileDiff, className: "text-error", label: "pr.review.changesRequested" },
 	commented: { className: "text-passive", label: "pr.tab.reviewerCommented" },
 	pending: { state: "pending", className: "text-warning", label: "pr.review.pending" },
 };
 
 /** What blocks the merge takes the mark its row has on the PR card; a reason with no row there keeps the alert. */
-const blockMark: Partial<Record<NonNullable<ReturnType<typeof prSummaryBlockReason>>, { state: PRCheckState; className?: string }>> = {
+const blockMark: Partial<Record<NonNullable<ReturnType<typeof prSummaryBlockReason>>, { state?: PRCheckState; icon?: LucideIcon; className?: string }>> = {
 	review: { state: "pending", className: "text-status-in-review" },
-	changes: { state: "failed", className: "text-status-in-review" },
+	changes: { icon: FileDiff, className: "text-error" },
 	checks: { state: "failed" },
 	checking: { state: "running" },
 	cancelled: { state: "skipped" },
 };
 
 /** A mark of the side column: the card's glyph for a state, a hollow ring where there is none. */
-function SideMark({ className, state }: { className?: string; state?: PRCheckState }) {
+function SideMark({ className, icon: Icon, state }: { className?: string; icon?: LucideIcon; state?: PRCheckState }) {
+	if (Icon) return <Icon aria-hidden="true" className={cn(markClass, className)} />;
 	return state
 		? <CheckStateGlyph className={className} size="sm" state={state} />
 		: <Circle aria-hidden="true" className={cn(markClass, className)} />;
@@ -149,10 +152,12 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 	const landing = stackLayersToLand(stack?.stack, pr.number);
 	const lowerBlock = landing ? stackBlocker(landing, pr.number) : undefined;
 	const blockReason = prSummaryBlockReason(pr);
-	const merge: { state?: PRCheckState; className?: string; label: string } | undefined = pr.state !== "open" && pr.state !== "draft" ? undefined
+	const merge: { state?: PRCheckState; icon?: LucideIcon; className?: string; label: string } | undefined = pr.state !== "open" && pr.state !== "draft" ? undefined
+		// Queued is on its way to merging, not blocked, whatever the provider says of a direct merge.
+		: prMergeQueueEntry(pr) ? { state: "pending", label: t("pr.queue.card") }
 		: pr.mergeability.state === "conflicting" ? { state: "failed", label: t("pr.card.mergeConflict") }
 			: pr.state === "draft" || pr.mergeability.state === "unknown" ? undefined
-				: lowerBlock ? { label: t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) }) }
+				: lowerBlock ? { ...(lowerBlock.reason === "rebase" ? undefined : blockMark[lowerBlock.reason]), label: t("pr.stack.blocked", { number: lowerBlock.number, reason: t(stackBlockReasonLabel[lowerBlock.reason]) }) }
 					: prCanMerge(pr, { noChecks: prHasNoChecks(pr) }) ? { state: "passed", label: t("pr.card.readyToMerge") }
 						: { ...(blockReason ? blockMark[blockReason] : undefined), label: blockReason === "checks" && failedChecks(checks) > 0 ? t("pr.blocker.checksFailing", { count: failedChecks(checks) }) : t(blockReason ? blockReasonLabel[blockReason] : "pr.card.mergeBlocked") };
 	const stackGroup = stackSection ? (
@@ -170,7 +175,7 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 							const mark = reviewerMark[reviewer.status];
 							return (
 								<li className={sideRowClass} key={reviewer.login} title={t(mark.label)}>
-									<SideMark className={mark.className} state={mark.state} />
+									<SideMark className={mark.className} icon={mark.icon} state={mark.state} />
 									<PRAvatar bot={reviewer.bot} name={reviewer.login} size="sm" />
 									<span className="min-w-0 truncate">{reviewer.login}</span>
 									<span className="sr-only">{t(mark.label)}</span>
@@ -204,7 +209,7 @@ function PRTabSide({ detailsFailed, hostId, pr, session }: { detailsFailed: bool
 			{merge ? (
 				<SideGroup>
 					<span className={sideRowClass}>
-						{merge.state ? <SideMark className={merge.className} state={merge.state} /> : <CircleAlert aria-hidden="true" className={cn(markClass, "text-warning")} />}
+						{merge.state || merge.icon ? <SideMark className={merge.className} icon={merge.icon} state={merge.state} /> : <CircleAlert aria-hidden="true" className={cn(markClass, "text-warning")} />}
 						<span className="min-w-0 truncate" title={merge.label}>{merge.label}</span>
 					</span>
 				</SideGroup>
@@ -239,7 +244,9 @@ function PRAuthor({ pr }: { pr: SessionPRSummary }) {
  * half-written comment survives a look at the description. Merge is here so the
  * tab works with the sidebar closed; labels and the branch's work stay on the card.
  */
-export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
+export function PRTabPane({ active = true, hostId, onViewInDiff, request, session, url }: {
+	/** Whether this PR is the tab on screen; others stay mounted behind it. */
+	active?: boolean;
 	hostId?: string;
 	/** Opens a file's diff at a line, for a review thread's "View in diff". */
 	onViewInDiff?: (target: { line?: number; path: string }) => void;
@@ -249,6 +256,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 	url: string;
 }) {
 	const { t } = useTranslation();
+	useTelemetrySurface("pr_tab", active);
 	const pr = useSessionPR(session, url, hostId);
 	const detailsFailed = usePRDetailsLoad(pr, session.id, hostId, !session.cloud);
 	usePRNoChecksClock([pr]);
@@ -306,7 +314,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 	const comments = prCommentCount(pr);
 
 	return (
-		<section aria-label={t("pr.tab.label", { number: pr.number })} className="@container h-full min-h-0 bg-background" data-testid="pr-tab-pane">
+		<section aria-label={t("pr.tab.label", { number: pr.number })} className="@container h-full min-h-0 bg-background" data-telemetry-surface="pr_tab" data-testid="pr-tab-pane">
 			<div className="h-full overflow-y-auto" ref={scrollerRef}>
 				<Tabs className="relative mx-auto w-full max-w-[1080px] min-w-0 px-6 @3xl:pr-[calc(1.5rem+252px)]" onValueChange={show} value={section}>
 					<header className="flex min-w-0 flex-col gap-2.5 pt-6 pb-3">

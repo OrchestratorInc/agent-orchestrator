@@ -6,7 +6,8 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactChangeError, artifactContext, artifactCount, artifactKey, NO_PROJECT_GROUP_ID, withKeptArtifacts, artifactLocation, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, findHostShareLink, groupArtifactsByProject, hostArtifactLocation, withHostShareLinks, withShareAccess } from "./artifacts";
+import type { CloudCpSharedArtifact } from "./cloud-cp/types";
+import { artifactChangeError, artifactContext, artifactCount, artifactKey, artifactLocationCounts, artifactOwner, sharedArtifactGroup, SHARED_WITH_ME_GROUP_ID, NO_PROJECT_GROUP_ID, withKeptArtifacts, artifactLocation, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, findHostShareLink, groupArtifactsByProject, hostArtifactLocation, withHostShareLinks, withShareAccess } from "./artifacts";
 import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
@@ -173,6 +174,48 @@ describe("groupArtifactsByProject", () => {
 
 });
 
+describe("sharedArtifactGroup", () => {
+	const item = (linkId: string, name: string, updatedAt: string, extra: Partial<CloudCpSharedArtifact> = {}): CloudCpSharedArtifact => ({
+		linkId, name, contentType: "text/html", size: 1, updatedAt, access: "anyone", via: "direct", teams: [], sharedAt: updatedAt, viewerUrl: `https://orchestrator.inc/artifact/${linkId}`, ...extra,
+	});
+
+	it("lists links shared with this person as one Cloud group, newest first", () => {
+		const group = sharedArtifactGroup([
+			item("old", "old.html", "2026-10-01T00:00:00Z"),
+			item("new", "notes.md", "2026-10-02T00:00:00Z", { contentType: "text/markdown; charset=utf-8", access: "restricted", via: "team", teams: [{ id: "t-1", name: "Design" }] }),
+		], "Shared with you");
+		expect(group).toMatchObject({ id: SHARED_WITH_ME_GROUP_ID, name: "Shared with you", cloud: true });
+		expect(group?.rows.map((row) => [row.name, row.kind, row.shared?.linkId])).toEqual([["notes.md", "markdown", "new"], ["old.html", "html", "old"]]);
+		const [privateLink, publicLink] = group!.rows;
+		expect(artifactOwner(privateLink!, "me")).toBe("shared");
+		expect(artifactLocation(privateLink!, group!)).toBe("cloud");
+		expect(artifactSharing(privateLink!)).toBe("shared");
+		expect(artifactSharing(publicLink!)).toBe("public");
+		expect(sharedArtifactGroup([], "Shared with you")).toBeUndefined();
+		expect(sharedArtifactGroup(undefined, "Shared with you")).toBeUndefined();
+	});
+
+	it("names the team or workspace a link came through, and nothing for one shared with their email", () => {
+		const group = sharedArtifactGroup([
+			item("a", "a.html", "2026-10-03T00:00:00Z", { via: "team", teams: [{ id: "t-1", name: "Design" }], workspaces: [{ id: "o-1", name: "Acme" }] }),
+			item("b", "b.html", "2026-10-02T00:00:00Z", { via: "workspace", workspaces: [{ id: "o-1", name: "Acme" }] }),
+			item("c", "c.html", "2026-10-01T00:00:00Z", { teams: [{ id: "t-1", name: "Design" }] }),
+		], "Shared with you");
+		expect(group?.rows.map((row) => row.sessionTitle)).toEqual(["Design", "Acme", ""]);
+	});
+});
+
+describe("artifactOwner", () => {
+	it("counts a cloud session started by someone else as shared, everything else as mine", () => {
+		expect(artifactOwner({}, "me")).toBe("mine");
+		expect(artifactOwner({ cloud: { orgId: "o", createdByUserId: "me" } }, "me")).toBe("mine");
+		expect(artifactOwner({ cloud: { orgId: "o", createdByUserId: "maya" } }, "me")).toBe("shared");
+		// Unknown until this person's ID is read, or with no creator on record.
+		expect(artifactOwner({ cloud: { orgId: "o", createdByUserId: "maya" } }, undefined)).toBe("mine");
+		expect(artifactOwner({ cloud: { orgId: "o" } }, "me")).toBe("mine");
+	});
+});
+
 describe("filterArtifactGroups", () => {
 	const groups = groupArtifactsByProject([
 		workspace("ao", "agent-orchestrator", [
@@ -209,6 +252,25 @@ describe("filterArtifactGroups", () => {
 		expect(names(filterArtifactGroups(withHost, { query: "", location: hostArtifactLocation("host-2") }))).toEqual(["vm.md"]);
 		expect(names(filterArtifactGroups(withHost, { query: "", location: "local" }))).toEqual(["local.md"]);
 		expect(names(filterArtifactGroups(withHost, { query: "", projectIds: ["remote:host-2:ao"] }))).toEqual(["vm.md"]);
+	});
+
+	it("keeps only my artifacts or only ones shared with me, and only pinned ones", () => {
+		const shared = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [session("ao-1", [artifact("local.md", "2026-10-09T10:00:00Z")])]),
+			workspace("cloud", "cloud-project", [
+				session("c-1", [artifact("mine.md", "2026-10-09T11:00:00Z")], { cloud: { orgId: "org-1", createdByUserId: "me" } }),
+				session("c-2", [artifact("theirs.md", "2026-10-09T12:00:00Z")], { cloud: { orgId: "org-1", createdByUserId: "maya" } }),
+			], { kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1" }),
+		]);
+		expect(names(filterArtifactGroups(shared, { query: "", owner: "shared", cloudUserId: "me" }))).toEqual(["theirs.md"]);
+		expect(names(filterArtifactGroups(shared, { query: "", owner: "mine", cloudUserId: "me" })).sort()).toEqual(["local.md", "mine.md"]);
+		const pinned = new Set([artifactKey({ sessionId: "ao-1", path: "local.md" })]);
+		expect(names(filterArtifactGroups(shared, { query: "", onlyKeys: pinned }))).toEqual(["local.md"]);
+	});
+
+	it("counts each location under the other filters, ignoring the chosen location", () => {
+		const counts = artifactLocationCounts(groups, { query: "", location: "local", types: ["document"] });
+		expect(Object.fromEntries(counts)).toEqual({ all: 4, local: 3, cloud: 1 });
 	});
 
 	it("keeps only the chosen file type, together with the other filters", () => {
@@ -398,11 +460,11 @@ describe("withKeptArtifacts", () => {
 		expect(withKeptArtifacts(groups, undefined, projects, "No project")).toEqual(groups);
 	});
 
-	it("names why a row is view only", () => {
-		const t = ((key: string) => ({ "artifacts.deletedSession": "Session deleted", "artifacts.removedProject": "Project removed", "artifacts.archivedSession": "Archived" })[key] ?? key) as never;
-		expect(artifactContext(t, { sessionTitle: "Report", archived: true, kept: "session-deleted" }, "ao")).toBe("ao · Report · Session deleted");
-		expect(artifactContext(t, { sessionTitle: "Report", archived: true, kept: "project-removed" }, "No project")).toBe("No project · Report · Project removed");
-		expect(artifactContext(t, { sessionTitle: "Report", archived: true }, "ao")).toBe("ao · Report · Archived");
-		expect(artifactContext(t, { sessionTitle: "Report" }, "ao")).toBe("ao · Report");
+	it("names the machine, whose it is, and why a row is view only", () => {
+		const t = ((key: string) => ({ "artifacts.deletedSession": "Session deleted", "artifacts.removedProject": "Project removed", "artifacts.archivedSession": "Archived", "artifacts.owner.mine": "Yours", "artifacts.owner.shared": "Shared with you" })[key] ?? key) as never;
+		expect(artifactContext(t, { archived: true, kept: "session-deleted" }, "On this machine", "mine")).toBe("On this machine · Yours · Session deleted");
+		expect(artifactContext(t, { archived: true, kept: "project-removed" }, "On this machine", "mine")).toBe("On this machine · Yours · Project removed");
+		expect(artifactContext(t, { archived: true }, "Cloud", "shared")).toBe("Cloud · Shared with you · Archived");
+		expect(artifactContext(t, {}, "build-vm", "mine")).toBe("build-vm · Yours");
 	});
 });

@@ -118,6 +118,35 @@ func TestEmbeddedSessionGuidanceDocumentsCanonicalInAppLinks(t *testing.T) {
 	}
 }
 
+func TestEmbeddedSetupGuidanceStartsOrchestratorAndHandsOffInApp(t *testing.T) {
+	catalog, err := files.ReadFile("using-ao/SKILL.md")
+	if err != nil {
+		t.Fatalf("read embedded skill catalog: %v", err)
+	}
+	if !strings.Contains(string(catalog), "commands/setup.md") {
+		t.Fatal("skill catalog does not point to the setup guidance")
+	}
+	body, err := files.ReadFile("using-ao/commands/setup.md")
+	if err != nil {
+		t.Fatalf("read embedded setup guidance: %v", err)
+	}
+	text := strings.Join(strings.Fields(string(body)), " ")
+	for _, required := range []string{
+		"PATH_ALREADY_REGISTERED",
+		"ao project set-config <id> --worker-agent <agent> --orchestrator-agent <agent>",
+		"ao spawn --project <project-id> --kind orchestrator",
+		"Resume one marked `[exited]`",
+		"ao project set-config <project-id> --default-branch <branch>",
+		"ao session resume-agent <id>",
+		"do not give them `ao` commands to run",
+		"ao://sessions/{project-id}/{session-id}",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("setup guidance missing %q:\n%s", required, body)
+		}
+	}
+}
+
 func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
 	body, err := files.ReadFile("using-ao/commands/spawn.md")
 	if err != nil {

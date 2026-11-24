@@ -81,6 +81,76 @@ The daemon starts with Chat hibernation disabled; the desktop synchronizes its D
 
 ---
 
+### Session background work
+
+Background task reads cover the Chat registry, with unsupported providers reported
+as unavailable. The board
+uses one batch read; a Chat panel reads only its current controller. Reads never
+wake a hibernated session. OS processes remain separate, optional Diagnostics.
+
+| Chat transport | Source | Coverage |
+| --- | --- | --- |
+| Claude Code | Patched ACP bridge, native full background-task snapshots | Complete when the installed CLI emits snapshots; otherwise reported events |
+| Codex | Paginated `thread/backgroundTerminals/list`, launch/turn completion, idle reconnect snapshots and collaboration events | Always partial: shells need launch-lifecycle evidence, and event-derived subagents may predate attachment |
+| Unreal Agent | No background mode in the pinned harness | Unavailable; Bash operations are foreground tool calls |
+| All other ACP bindings | Explicitly backgrounded tool metadata and provider-reported lifecycle events | Reported jobs; complete native inventory is not available in ACP v1 |
+
+The shared ACP path includes Cursor, OpenCode v1/v2, Droid, Kimi, Kimchi, Pi,
+OMP, Qwen, Copilot, Agy, Command Code, and DeepSeek Harness. An adapter that
+emits no background metadata or async-task events cannot expose hidden native
+jobs through ACP; a partial empty reading means no jobs **reported**, not none
+running. Partial readings may miss completions as well as starts. Do not infer
+jobs from foreground tool duration, an idle turn, output prose, or process trees.
+Advertising the Air `asyncTasks` capability is binding-specific and enabled only
+for the verified Claude binding. Other bindings can still report explicit
+background tool metadata. Session IDs are not task handles; native task handles
+and the launching tool-call identity distinguish executions. An unambiguous
+session reference can settle an already observed agent, but never creates a job.
+
+Codex command-start events establish elapsed time. A terminal whose launch ended
+but whose start event was missed has no start timestamp, so elapsed time is hidden.
+The native terminal list also contains foreground commands. A shell is reported
+and stoppable only when a read begun after its launching call or turn completed
+still lists it. Unconfirmed calls and their failures stay out of the reading.
+An overlapping read cannot use a completion that arrived after it began. Settled
+history can recover matching launch evidence after attachment. On live host
+reconnect, background reads also recover terminals whose runtime item IDs or exit
+codes do not match replayed history, or whose commands are absent from history.
+For these unmatched terminals, `thread/read` must show an idle thread both before
+and after the complete terminal inventory, with unchanged turn IDs. A foreground
+turn starting during the read, even if it finishes before the second snapshot,
+invalidates that bracket. Unsettled or malformed reads remain retryable; recovery
+stops fetching history after a stable idle bracket. These reads do not replay the
+transcript or resume a turn. Unknown start timestamps remain hidden. Short-lived
+jobs may end before a qualifying read. Confirmed shells retain outcomes even if a later list omits them
+before completion arrives. Unconfirmed command metadata is bounded to 256
+sanitized labels per conversation.
+Provider labels are one line, capped at 240 characters, and redact obvious
+credential assignments, credential flags with arbitrary prefixes,
+authorization values, and URL userinfo (including token-only userinfo). Query and
+fragment email addresses stay readable. `--sort-key` and `--primary-key` are exempt
+in space and `=` forms. Plain `-u` arguments stay readable; colon-separated
+`-u`/`--user` pairs remain conservatively redacted, including numeric UID:GID
+values, since these can also be credentials. This is not general secret detection.
+A task's command keeps its line breaks and length but gets the same redaction.
+
+Claude stop acknowledgments do not establish completion. After an SDK rejection,
+wait up to one second for native reconciliation. An observed completion maps to
+not-stoppable; a task still live returns a visible retryable error, never a success
+or the UI's silent not-stoppable response. Native notifications or snapshots
+settle task state, and Stop remains retryable if it stays live. Closed-session
+failures still propagate. A notification arriving after the bounded wait can
+still settle the reading, but cannot retroactively turn a failed request into
+success.
+
+`GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
+`ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with
+termination/generation checks after provider I/O. Provider reads run outside the
+cache mutex; deferred cleanup releases waiting readers even if a provider panics,
+without caching a sample from that call. Real completion outcomes remain
+visible for 30 seconds. Event-derived running jobs defer ACP hibernation; native
+snapshots remain authoritative where a provider supports them.
+
 ## System overview
 
 ```mermaid
@@ -465,6 +535,40 @@ that flag, while new provider boundaries use scoped IDs.
 When Codex proves fork ancestry, replay omits copied prefixes only if their stable
 item IDs and complete content match retained ancestor rows. Those rows stay in
 their original scope. Unknown ancestry or changed content is retained in full.
+
+Side-chat tabs are launch-scoped drafts until their first accepted Send. Draft
+creation reads conversation metadata only: it does not wake the parent, read its
+full transcript, or create a provider. Separate creation keys never merge unused
+drafts through empty anchors. The daemon serializes each side's submissions and
+atomically accepts the opening turn with its frozen latest completed parent
+context, model, effort, and launch configuration. Later parent work cannot move
+that cutoff. Opening-turn IDs and timestamps travel with the side's recovery
+state; the shared chat timeline shows that opening question and its lattice
+loader while later questions remain in the queue dock.
+
+The renderer loads each saved side draft before freezing a Send or copying a
+replacement. Typing alone does not mark that draft as loaded, and autosaves wait
+for the read so they cannot erase saved files or delivery receipts. Edits made
+after Send remain in the next draft. Known opening failures are saved with the
+receipt and restore their Retry or Recreate action without automatic dispatch;
+accepted daemon turns take precedence over older local failures. Definitively
+rejected follow-ups remove their temporary bubbles, while uncertain delivery
+keeps its original identity until reconciliation.
+
+Queued follow-ups appear in the shared queue dock before daemon acknowledgement,
+then reconcile by client message ID without duplicating or remounting their row.
+A matching daemon turn also settles a recovered delivery receipt without another
+submission, preserving handoff ownership and newer draft edits. Late HTTP replies
+cannot undo that acknowledgement or release a newer send's ownership.
+
+Unused drafts restore without provider work, including JSON-null launch settings.
+A recovered pre-dispatch receipt or
+interrupted startup with unverified ownership requires visible recreation instead
+of silently capturing newer context or submitting again. Safe startup retries
+reuse the accepted turn and frozen configuration. Staged image bytes are loaded
+from daemon-owned attachment files after renderer remounts. Closing an unused
+draft requires no provider shutdown; an accepted startup retains the existing
+closing controller's cancellation, generation fencing, and cleanup ownership.
 
 Current-context side forks fence source dispatch only during copying. The
 start/stop gate is released before provider I/O; Stop cancels the copy and Kill

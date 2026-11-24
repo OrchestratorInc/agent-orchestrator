@@ -60,10 +60,13 @@ describe("palette registry", () => {
 	it("offers Developer Mode rows only in Developer Mode and Window translucency only on macOS", () => {
 		const regular = buildSettingsCommands(t, { developerMode: false, diagnostics: false }).map((item) => item.id);
 		const developerMac = buildSettingsCommands(t, { developerMode: true, diagnostics: false, mac: true }).map((item) => item.id);
-		for (const id of ["side-chats", "split-panes", "cli-link", "transparency"]) {
+		for (const id of ["split-panes", "cli-link", "transparency"]) {
 			expect(regular).not.toContain(`setting:${id}`);
 			expect(developerMac).toContain(`setting:${id}`);
 		}
+		// Side chats have no setting: they are always on.
+		expect(regular).not.toContain("setting:side-chats");
+		expect(developerMac).not.toContain("setting:side-chats");
 	});
 
 	it("lists only rows the settings pages still show", () => {
@@ -77,6 +80,7 @@ describe("palette registry", () => {
 	it("names a row's page beside it and keeps page keywords on the page row", () => {
 		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false });
 		const logins = items.find((item) => item.id === "setting:harness-logins");
+		expect(logins?.title).toBe("Agent logins");
 		expect(logins?.subtitle).toBe(t("settings.harness"));
 		expect(logins?.action).toEqual({ kind: "open-settings-section", section: "harness", focus: t("settings.harness.viewLabel") });
 		// Accounts live on the Harness page, so an accounts search lands there.

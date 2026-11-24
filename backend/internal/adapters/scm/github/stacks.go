@@ -253,3 +253,31 @@ func stackMergeError(status int, err error) error {
 		return err
 	}
 }
+
+// CommitsBehind reads GitHub's comparison of two commits. behind_by is what
+// base has that head doesn't: for a stack layer compared with the layer below,
+// the commits it still needs to be rebased onto.
+func (p *Provider) CommitsBehind(ctx context.Context, repo ports.SCMRepo, base, head string) (int, error) {
+	if p == nil || p.client == nil {
+		return 0, fmt.Errorf("github scm: stack provider is not configured")
+	}
+	if !mergeHeadSHAPattern.MatchString(base) || !mergeHeadSHAPattern.MatchString(head) {
+		return 0, fmt.Errorf("github scm: invalid commit sha")
+	}
+	// One commit is enough: only the counts are read.
+	resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "compare", base+"..."+head),
+		url.Values{"per_page": {"1"}}, nil)
+	if err != nil {
+		return 0, err
+	}
+	var compare struct {
+		BehindBy *int `json:"behind_by"`
+	}
+	if err := json.Unmarshal(resp.Body, &compare); err != nil {
+		return 0, fmt.Errorf("github scm: decode comparison: %w", err)
+	}
+	if compare.BehindBy == nil {
+		return 0, errors.New("github scm: comparison has no behind_by")
+	}
+	return *compare.BehindBy, nil
+}
