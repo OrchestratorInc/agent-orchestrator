@@ -3580,6 +3580,7 @@
 	"pr.fact.approvals": "批准",
 	"pr.fact.unresolved": "未解决 {{count}}",
 	"pr.fact.resolved": "已解决 {{count}}",
+	"pr.fact.changesShort": "需修改",
 	"pr.fact.conflicts": "冲突",
 	"pr.fact.none": "无",
 	"pr.fact.unknown": "未知",

@@ -787,18 +787,19 @@ function ReadinessStrip({
 			<div className="grid min-w-0 gap-3" style={{ gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))` }}>
 				{cells.map((cell) => {
 					const opens = panel(cell) !== null;
-					const note = cell.note ? <span className={cn("min-w-0 truncate text-micro tabular-nums", stripNoteClass[cell.noteTone ?? "neutral"])} data-note="">{cell.note}</span> : null;
+					// Three cells leave little room, so the note shortens but stays beside the title, as on GitHub.
+					const noteText = narrow ? cell.shortNote ?? cell.note : cell.note;
+					const note = noteText ? <span className={cn("min-w-0 truncate text-micro tabular-nums", stripNoteClass[cell.noteTone ?? "neutral"])} data-note="">{noteText}</span> : null;
 					const head = (
 						<>
 							<span className="flex min-w-0 items-baseline gap-1.5 text-xs leading-4">
 								<span className="shrink-0 font-medium text-foreground">{cell.title}</span>
-								{narrow ? null : note}
-								{opens ? <ChevronIcon aria-hidden="true" className="ml-auto size-icon-2xs shrink-0 self-center text-muted-foreground" direction={open === cell.key ? "up" : "down"} /> : null}
+								{note}
+								{/* Three cells need the room for the note; the whole cell still opens on a click. */}
+								{opens && !narrow ? <ChevronIcon aria-hidden="true" className="ml-auto size-icon-2xs shrink-0 self-center text-muted-foreground" direction={open === cell.key ? "up" : "down"} /> : null}
 							</span>
 							<span className="sr-only">, {cell.summary}</span>
 							<StripBar cell={cell} />
-							{/* Three cells leave no room beside the title, so the note goes under the bar and the bars stay level. */}
-							{narrow && note ? <span className="mt-1 flex min-w-0">{note}</span> : null}
 						</>
 					);
 					return opens ? (

@@ -1688,6 +1688,7 @@
 	"pr.fact.approvals": "Одобрения",
 	"pr.fact.unresolved": "не решено: {{count}}",
 	"pr.fact.resolved": "решено: {{count}}",
+	"pr.fact.changesShort": "Правки",
 	"pr.fact.conflicts": "Конфликты",
 	"pr.fact.none": "Нет",
 	"pr.fact.unknown": "Неизвестно",

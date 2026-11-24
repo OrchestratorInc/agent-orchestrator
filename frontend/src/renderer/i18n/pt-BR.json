@@ -3688,6 +3688,7 @@
 	"pr.fact.approvals": "Aprovações",
 	"pr.fact.unresolved": "não resolvidos: {{count}}",
 	"pr.fact.resolved": "resolvidos: {{count}}",
+	"pr.fact.changesShort": "Alterações",
 	"pr.fact.conflicts": "Conflitos",
 	"pr.fact.none": "Nenhum",
 	"pr.fact.unknown": "Desconhecido",

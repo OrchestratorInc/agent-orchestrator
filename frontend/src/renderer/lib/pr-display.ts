@@ -423,6 +423,7 @@ export function readinessStrip(pr: SessionPRSummary, rows: PRCardStatus[]): PRSt
 			key: "comments",
 			title: appI18n.t("pr.tab.comments"),
 			note: unresolved > 0 ? unresolvedLabel : undefined,
+			shortNote: unresolved > 0 ? String(unresolved) : undefined,
 			noteTone: "neutral",
 			segments: [
 				{ tone: "success", count: resolved, label: resolvedLabel },
@@ -445,6 +446,7 @@ export function readinessStrip(pr: SessionPRSummary, rows: PRCardStatus[]): PRSt
 				key: "approvals",
 				title: appI18n.t("pr.fact.approvals"),
 				note,
+				shortNote: appI18n.t("pr.fact.changesShort"),
 				noteTone: "error",
 				segments: [approved, { tone: "error", count: Math.max(1, changesRequestedBy.length), label: note }],
 				summary: [note, approvedLine].filter(Boolean).join(" · "),

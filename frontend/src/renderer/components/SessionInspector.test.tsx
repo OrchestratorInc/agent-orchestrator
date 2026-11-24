@@ -7624,10 +7624,12 @@ describe("SessionInspector branch summary", () => {
     const strip = await screen.findByTestId("pr-readiness-strip");
     expect([...strip.querySelectorAll("[data-cell]")].map((cell) => cell.getAttribute("data-cell"))).toEqual(["ci", "comments", "approvals"]);
     const comments = strip.querySelector("[data-cell='comments']") as HTMLElement;
-    // Three cells: each note sits under its bar so the bars stay level and nothing is cut off.
+    // Three cells: the note stays beside the title, as on GitHub, in a shorter form that fits;
+    // screen readers still hear it in full.
     const note = comments.querySelector("[data-note]") as HTMLElement;
-    expect(note).toHaveTextContent("2 unresolved");
-    expect(screen.getByTestId("pr-strip-bar-comments").compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note).toHaveTextContent(/^2$/);
+    expect(note.compareDocumentPosition(screen.getByTestId("pr-strip-bar-comments")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(comments).toHaveTextContent("2 unresolved");
     expect([...screen.getByTestId("pr-strip-bar-comments").children].map((segment) => [segment.getAttribute("data-tone"), (segment as HTMLElement).style.flexGrow])).toEqual([["success", "3"], ["warning", "2"]]);
     const approvals = strip.querySelector("[data-cell='approvals']") as HTMLElement;
     expect(approvals.querySelector("[data-note]")).toHaveTextContent("Required");

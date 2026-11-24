@@ -3598,6 +3598,7 @@
 	"pr.fact.approvals": "承認",
 	"pr.fact.unresolved": "未解決 {{count}}",
 	"pr.fact.resolved": "解決済み {{count}}",
+	"pr.fact.changesShort": "要修正",
 	"pr.fact.conflicts": "コンフリクト",
 	"pr.fact.none": "なし",
 	"pr.fact.unknown": "不明",

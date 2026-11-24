@@ -85,6 +85,8 @@ export type PRStripCell = {
 	title: string;
 	/** What still needs a look ("2 failing", "1 unresolved"); left out when nothing does. */
 	note?: string;
+	/** A shorter note for when three cells share the row, so it still fits beside the title ("1" for "1 unresolved"). */
+	shortNote?: string;
 	noteTone?: "error" | "warning" | "neutral";
 	/** Left to right; an empty list draws an empty, hatched bar. */
 	segments: { tone: PRStripTone; count: number; label: string }[];

@@ -1645,6 +1645,7 @@
 	"pr.fact.approvals": "Approvals",
 	"pr.fact.unresolved": "{{count}} unresolved",
 	"pr.fact.resolved": "{{count}} resolved",
+	"pr.fact.changesShort": "Changes",
 	"pr.fact.conflicts": "Conflicts",
 	"pr.fact.none": "None",
 	"pr.fact.unknown": "Unknown",

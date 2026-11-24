@@ -1645,6 +1645,7 @@
 	"pr.fact.approvals": "Onaylar",
 	"pr.fact.unresolved": "{{count}} çözülmemiş",
 	"pr.fact.resolved": "{{count}} çözüldü",
+	"pr.fact.changesShort": "Değişiklik",
 	"pr.fact.conflicts": "Çakışmalar",
 	"pr.fact.none": "Yok",
 	"pr.fact.unknown": "Bilinmiyor",
