@@ -15,9 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -25,6 +23,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentversion"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -372,8 +371,6 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	return options
 }
 
-var versionPattern = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$`)
-
 func validateInitialize(init acpsdk.InitializeResponse) error {
 	if init.AgentInfo == nil || init.AgentInfo.Name != distributionName {
 		got := "missing agentInfo"
@@ -382,42 +379,15 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 		}
 		return fmt.Errorf("unsupported Pi ACP distribution %q; install %s", got, distributionName)
 	}
-	installed, ok := parseVersion(init.AgentInfo.Version)
-	minimum, _ := parseVersion(minimumVersion)
+	installed, ok := agentversion.Parse(init.AgentInfo.Version)
+	minimum := agentversion.MustParse(minimumVersion)
 	if !ok {
 		return fmt.Errorf("unrecognized %s version %q", distributionName, init.AgentInfo.Version)
 	}
-	if installed.less(minimum) {
+	if installed.Less(minimum) {
 		return fmt.Errorf("%s %s is older than Orchestrator's tested minimum %s", distributionName, init.AgentInfo.Version, minimumVersion)
 	}
 	return nil
-}
-
-type version [3]int
-
-func parseVersion(value string) (version, bool) {
-	match := versionPattern.FindStringSubmatch(strings.TrimSpace(value))
-	if len(match) != 4 {
-		return version{}, false
-	}
-	var out version
-	for i := range out {
-		n, err := strconv.Atoi(match[i+1])
-		if err != nil {
-			return version{}, false
-		}
-		out[i] = n
-	}
-	return out, true
-}
-
-func (v version) less(other version) bool {
-	for i := range v {
-		if v[i] != other[i] {
-			return v[i] < other[i]
-		}
-	}
-	return false
 }
 
 var piACPBinarySpec = binaryutil.BinarySpec{

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentversion"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -79,7 +80,7 @@ func (r resolver) target(ctx context.Context) (launchTarget, error) {
 	if strings.TrimSpace(r.getenv(serverPathEnvVar)) == "" && r.agyCLI != nil && r.cliVersion != nil {
 		if cli, err := r.agyCLI(ctx); err == nil && cli != "" {
 			if raw, err := r.cliVersion(ctx, cli); err == nil {
-				if installed, ok := parseVersion(raw); ok && !installed.less(mustVersion(minimumCLIACPVersion)) {
+				if installed, ok := agentversion.Parse(raw); ok && !installed.Less(agentversion.MustParse(minimumCLIACPVersion)) {
 					return launchTarget{path: cli, cli: true}, nil
 				}
 			}

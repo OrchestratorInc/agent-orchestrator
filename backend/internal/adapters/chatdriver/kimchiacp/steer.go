@@ -9,6 +9,8 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentversion"
 )
 
 // Kimchi steers a running turn with its own vendor method rather than ACP's
@@ -39,12 +41,12 @@ func steeringTakesImages(init acpsdk.InitializeResponse) bool {
 	if init.AgentInfo == nil {
 		return false
 	}
-	installed, ok := parseSemver(init.AgentInfo.Version)
+	installed, ok := agentversion.Find(init.AgentInfo.Version)
 	if !ok {
 		return false
 	}
-	minimum, _ := parseSemver(minimumSteerImagesVersion)
-	return !installed.less(minimum)
+	minimum := agentversion.MustParse(minimumSteerImagesVersion)
+	return !installed.Less(minimum)
 }
 
 // steeringAdvertised reads `agentCapabilities._meta["kimchi.dev"].steering`.

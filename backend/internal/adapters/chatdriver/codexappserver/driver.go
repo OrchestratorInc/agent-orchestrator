@@ -10,15 +10,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentversion"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -200,13 +199,13 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	if versionErr != nil {
 		return nil, fmt.Errorf("%w: read Codex version: %w", ports.ErrChatDriverIncompatible, versionErr)
 	}
-	installed, ok := parseCodexVersion(versionOutput)
+	installed, ok := agentversion.Find(versionOutput)
 	if !ok {
 		return nil, fmt.Errorf("%w: unrecognized Codex version %q (Orchestrator requires %s or newer)",
 			ports.ErrChatDriverIncompatible, strings.TrimSpace(versionOutput), minimumCodexVersion)
 	}
-	minimum, _ := parseCodexVersion(minimumCodexVersion)
-	if installed.less(minimum) {
+	minimum := agentversion.MustParse(minimumCodexVersion)
+	if installed.Less(minimum) {
 		return nil, fmt.Errorf("%w: Codex %s is older than Orchestrator's tested minimum %s",
 			ports.ErrChatDriverIncompatible, installed, minimumCodexVersion)
 	}
@@ -345,39 +344,6 @@ func (d *Driver) DiscoverModels(ctx context.Context, workdir string, env map[str
 	}
 	defer func() { _ = conv.Close() }()
 	return listModels(ctx, conv.conn)
-}
-
-type codexVersion [3]int
-
-var codexVersionPattern = regexp.MustCompile(`\b(\d+)\.(\d+)\.(\d+)\b`)
-
-func parseCodexVersion(output string) (codexVersion, bool) {
-	match := codexVersionPattern.FindStringSubmatch(output)
-	if len(match) != 4 {
-		return codexVersion{}, false
-	}
-	var version codexVersion
-	for i := range version {
-		value, err := strconv.Atoi(match[i+1])
-		if err != nil {
-			return codexVersion{}, false
-		}
-		version[i] = value
-	}
-	return version, true
-}
-
-func (v codexVersion) less(other codexVersion) bool {
-	for i := range v {
-		if v[i] != other[i] {
-			return v[i] < other[i]
-		}
-	}
-	return false
-}
-
-func (v codexVersion) String() string {
-	return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2])
 }
 
 func installedCodexVersion(ctx context.Context, bin string) (string, error) {

@@ -2,13 +2,13 @@ package hermesacp
 
 import (
 	"errors"
-	"regexp"
-	"strconv"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentversion"
 )
 
 // hermesAgentName is the agentInfo.name Hermes' ACP server reports.
@@ -49,12 +49,11 @@ func steeringSupported(init acpsdk.InitializeResponse) bool {
 	if init.AgentInfo == nil || init.AgentInfo.Name != hermesAgentName {
 		return false
 	}
-	installed, ok := parseVersion(init.AgentInfo.Version)
-	if !ok || installed == (version{}) {
+	installed, ok := agentversion.Parse(init.AgentInfo.Version)
+	if !ok || installed == agentversion.MustParse("0.0.0") {
 		return true
 	}
-	minimum, _ := parseVersion(minimumSteerVersion)
-	return !installed.less(minimum)
+	return !installed.Less(agentversion.MustParse(minimumSteerVersion))
 }
 
 // steerCommand turns the guidance into `/steer <text>`. The command is text, so
@@ -93,33 +92,4 @@ func steerAcknowledgement(text string) (bool, error) {
 	default:
 		return false, nil
 	}
-}
-
-var versionPattern = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)`)
-
-type version [3]int
-
-func parseVersion(raw string) (version, bool) {
-	match := versionPattern.FindStringSubmatch(strings.TrimPrefix(strings.TrimSpace(raw), "v"))
-	if len(match) != 4 {
-		return version{}, false
-	}
-	var parsed version
-	for i := range parsed {
-		value, err := strconv.Atoi(match[i+1])
-		if err != nil {
-			return version{}, false
-		}
-		parsed[i] = value
-	}
-	return parsed, true
-}
-
-func (v version) less(other version) bool {
-	for i := range v {
-		if v[i] != other[i] {
-			return v[i] < other[i]
-		}
-	}
-	return false
 }
