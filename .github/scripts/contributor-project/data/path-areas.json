@@ -195,7 +195,6 @@
   {"glob": "scripts/create-migration*", "area": "api-data-contracts"},
   {"glob": "contracts/cloud/*", "area": "cloud-control-plane"},
   {"glob": "packages/cloud-client/*", "area": "cloud-control-plane"},
-  {"glob": "private/ao-cloud", "area": "cloud-control-plane"},
   {"glob": "frontend/src/main/agent-browser*", "area": "browser-preview"},
   {"glob": "frontend/src/main/browser*", "area": "browser-preview"},
   {"glob": "frontend/src/main/preview-*", "area": "browser-preview"},
