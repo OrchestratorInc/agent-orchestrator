@@ -91,6 +91,10 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const toast = useToast();
 	const showNotice = toast.show;
 	const client = useRef<BrowserStreamSupervisor | null>(null);
+	// Where this session's stream last opened. After the app moves to another
+	// of the host's addresses, that address saying "sharing is off" is not the
+	// host's answer: the stream keeps retrying until the primary is back.
+	const openedOn = useRef<{ sessionID: string; endpoint: string } | null>(null);
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState<BrowserStatus>("connecting");
 	// The frame on screen may be out of date: the stream went quiet, or it is
@@ -141,14 +145,19 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		setStatus("connecting");
 		setError(undefined);
 		setStale(false);
+		const endpoint = localConfig ? `${localConfig.host}:${localConfig.httpPort}` : "transport";
+		const resumed = openedOn.current?.sessionID === sessionID;
 		const supervisor = new BrowserStreamSupervisor({
 			create: () => transport ? transport() : new LocalBrowserTransport(localConfig!, sessionID),
 			subscribeAppState,
 			subscribeNetwork,
+			resumed,
+			disabledIsFinal: !resumed || openedOn.current?.endpoint === endpoint,
 		}, {
 			onStatus: (next, message) => {
 				if (disposed) return;
 				setStatus(next);
+				if (next === "open") openedOn.current = { sessionID, endpoint };
 				// A new connection's frame is the only one a tap may land on: the
 				// image on screen came from the last one, and the page may have moved.
 				if (next === "connecting" || next === "reconnecting") setFrameIsLive(false);

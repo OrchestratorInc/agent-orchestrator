@@ -14,7 +14,7 @@ class FakeTransport implements BrowserTransport {
 	alive(heartbeat = true) { this.handlers?.onAlive?.({ heartbeat }); }
 }
 
-function setup() {
+function setup(extra: { disabledIsFinal?: boolean; resumed?: boolean } = {}) {
 	const made: FakeTransport[] = [];
 	let appState: ((state: string) => void) | null = null;
 	let network: ((connected: boolean) => void) | null = null;
@@ -23,6 +23,7 @@ function setup() {
 		create: () => { const t = new FakeTransport(); made.push(t); return t; },
 		subscribeAppState: (listener) => { appState = listener; return () => { appState = null; }; },
 		subscribeNetwork: (listener) => { network = listener; return () => { network = null; }; },
+		...extra,
 	}, events);
 	return { supervisor, made, events, background: () => appState?.("background"), foreground: () => appState?.("active"), network: (connected: boolean) => network?.(connected), last: () => made[made.length - 1] };
 }
@@ -153,6 +154,17 @@ describe("network and app state", () => {
 		vi.advanceTimersByTime(1_000);
 		expect(s.made).toHaveLength(2);
 		vi.advanceTimersByTime(60_000);
+		expect(s.made).toHaveLength(2);
+	});
+
+	it("on a failover address, 'sharing is off' is a failure to retry, read as reconnecting", () => {
+		const s = setup({ disabledIsFinal: false, resumed: true });
+		s.supervisor.start();
+		expect(s.events.onStatus).toHaveBeenLastCalledWith("reconnecting");
+		s.last().handlers?.onDisabled?.();
+		expect(s.events.onDisabled).not.toHaveBeenCalled();
+		expect(s.events.onStatus).toHaveBeenLastCalledWith("reconnecting", "Reconnecting to this machine…");
+		vi.advanceTimersByTime(1_000);
 		expect(s.made).toHaveLength(2);
 	});
 

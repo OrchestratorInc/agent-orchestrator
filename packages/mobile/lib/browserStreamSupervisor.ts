@@ -32,6 +32,15 @@ export type SupervisorDeps = {
 	subscribeAppState?(listener: (state: string) => void): () => void;
 	/** Whether the phone has a network, on every change. */
 	subscribeNetwork?(listener: (connected: boolean) => void): () => void;
+	/**
+	 * Whether "sharing is off" from this stream ends it for good (the default).
+	 * False when the stream runs through another of the host's addresses than
+	 * the one it last opened on: that address may not serve the browser, so its
+	 * answer is a failure to retry, not the host's choice.
+	 */
+	disabledIsFinal?: boolean;
+	/** The stream was open before (on another address): failures read as reconnecting. */
+	resumed?: boolean;
 };
 
 /**
@@ -62,7 +71,9 @@ export class BrowserStreamSupervisor {
 	private unsubscribes: Array<() => void> = [];
 	private retired = new Map<BrowserTransport, ReturnType<typeof setTimeout>>();
 
-	constructor(private readonly deps: SupervisorDeps, private readonly events: SupervisorEvents) {}
+	constructor(private readonly deps: SupervisorDeps, private readonly events: SupervisorEvents) {
+		this.everOpen = deps.resumed === true;
+	}
 
 	start(): void {
 		if (this.running) return;
@@ -172,6 +183,10 @@ export class BrowserStreamSupervisor {
 			// even from a connection a retry has replaced.
 			onDisabled: () => {
 				if (!this.running || this.away || this.disabled) return;
+				if (this.deps.disabledIsFinal === false) {
+					this.fail("Reconnecting to this machine…");
+					return;
+				}
 				this.disabled = true;
 				this.drop();
 				this.closeRetired();

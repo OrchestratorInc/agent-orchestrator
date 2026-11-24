@@ -568,6 +568,51 @@ describe("transport contract", () => {
 		}
 	});
 
+	it("a failover address saying sharing is off doesn't end the stream: it reconnects and resumes on the primary", async () => {
+		vi.useFakeTimers();
+		try {
+			const onDisabled = vi.fn();
+			const primary = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test" };
+			const failover = { host: "10.0.0.9", httpPort: "61498", muxPort: "61498", password: "test" };
+			const view = () => <BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} onDisabled={onDisabled} />;
+			fixtures.config = primary;
+			await act(async () => { screen = create(view()); });
+			await open();
+			await showFrame();
+			// The primary drops; the app moves to the host's other address.
+			fixtures.config = failover;
+			await act(async () => { screen.update(view()); });
+			const onFailover = client();
+			await act(async () => { onFailover.handlers.onStatus("error"); onFailover.handlers.onDisabled?.(); });
+			expect(onDisabled).not.toHaveBeenCalled();
+			expect(nodes("Image")).toHaveLength(1);
+			expect(nodes("Text").map((node) => node.props.children)).toContain("Reconnecting…");
+			// It keeps trying with backoff rather than stopping.
+			const before = fixtures.clients.length;
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(fixtures.clients.length).toBe(before + 1);
+			// The primary is back: the stream resumes there.
+			fixtures.config = primary;
+			await act(async () => { screen.update(view()); });
+			await open();
+			await showFrame();
+			expect(nodes("Text").map((node) => node.props.children)).not.toContain("Reconnecting…");
+			expect(gesture("tap").enabled).toBe(true);
+			expect(onDisabled).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("the primary itself saying sharing is off still stops for good", async () => {
+		const onDisabled = vi.fn();
+		await act(async () => { screen = create(<BrowserLivePane sessionID="session-1" onTitle={onTitle} headerItem={headerItem} onDisabled={onDisabled} />); });
+		await open();
+		await showFrame();
+		await act(async () => { client().handlers.onStatus("error"); client().handlers.onDisabled?.(); });
+		expect(onDisabled).toHaveBeenCalledTimes(1);
+	});
+
 	it("closes the stream in the background and reconnects on return", async () => {
 		await render();
 		await open();
