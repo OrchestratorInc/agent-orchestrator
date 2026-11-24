@@ -2556,7 +2556,13 @@ function SessionReorderList({
 	const onDragEnd = useCallback(({ active, over }: DragEndEvent) => {
 		const sessionId = String(active.id);
 		dragClickGuard.markDragEnded(sessionId);
-		if (!over) {
+		const pinnedById = (id: string) => {
+			const session = sessions.find((candidate) => candidate.id === id);
+			return session ? isPinnedWorker(session) : false;
+		};
+		// Pins lead their group, so a drop across the pin boundary would land and
+		// then jump back. Treat it as a cancel and let the row glide home.
+		if (!over || pinnedById(sessionId) !== pinnedById(String(over.id))) {
 			setListDragging(false);
 			setDropTransitionDisabledId(null);
 			return;
@@ -2573,7 +2579,7 @@ function SessionReorderList({
 			setDropTransitionDisabledId(sessionId);
 		});
 		requestAnimationFrame(() => setDropTransitionDisabledId(null));
-	}, [dragClickGuard, onReorder, sessionIds]);
+	}, [dragClickGuard, onReorder, sessionIds, sessions]);
 
 	const onDragCancel = useCallback(() => {
 		setListDragging(false);

@@ -5216,6 +5216,22 @@ describe("Sidebar pins in their home group", () => {
 		}
 	});
 
+	it("ignores a drop across the pin boundary and still commits one within the unpinned rows", () => {
+		mount([project("alpha", "Alpha", [
+			worker("a-1", "alpha recent", 8),
+			worker("a-2", "alpha pin", 2, 1),
+			worker("a-3", "alpha older", 4),
+		])], ["alpha"]);
+		const drop = (active: string, over: string) => act(() => dragEnds.get("sidebar-sessions-alpha")?.({ active: { id: active }, over: { id: over } }));
+
+		drop("a-3", "a-2");
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha recent", "alpha older"]);
+		drop("a-2", "a-3");
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha recent", "alpha older"]);
+		drop("a-3", "a-1");
+		expect(titlesIn("session-list-alpha")).toEqual(["alpha pin", "alpha older", "alpha recent"]);
+	});
+
 	it("keeps every pin listed past the session cutoff and counts only the rest behind Show more", () => {
 		const pins = Array.from({ length: 8 }, (_, index) => worker(`p-${index}`, `pin ${index}`, index, index));
 		const rest = Array.from({ length: 3 }, (_, index) => worker(`r-${index}`, `rest ${index}`, 30 + index));
