@@ -55,7 +55,9 @@ func importBinaryVersion(ctx context.Context, binary string) (string, error) {
 var _ ports.AgentImportVersionChecker = (*Plugin)(nil)
 
 // CheckImportVersion refuses new imports on an unverified dsh version.
-func (p *Plugin) CheckImportVersion(ctx context.Context) error { return p.checkImportVersion(ctx) }
+func (p *Plugin) CheckImportVersion(ctx context.Context) error {
+	return p.checkImportVersion(ctx)
+}
 
 func (p *Plugin) checkImportVersion(ctx context.Context) error {
 	var version string

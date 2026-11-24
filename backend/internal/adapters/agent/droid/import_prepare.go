@@ -411,7 +411,9 @@ func (p *Plugin) verifyImportProfile(ctx context.Context, config string, env map
 var _ ports.AgentImportVersionChecker = (*Plugin)(nil)
 
 // CheckImportVersion refuses new imports on an unverified Droid version.
-func (p *Plugin) CheckImportVersion(ctx context.Context) error { return p.verifyImportVersion(ctx, nil) }
+func (p *Plugin) CheckImportVersion(ctx context.Context) error {
+	return p.verifyImportVersion(ctx, nil)
+}
 
 func (p *Plugin) verifyImportVersion(ctx context.Context, env map[string]string) error {
 	binary, err := p.droidBinary(ctx)
