@@ -3151,6 +3151,8 @@
 	"settings.diagnosticsToggleHint": "在会话卡片和看板上显示内存和 CPU 使用情况，并显示诊断页面。",
 	"settings.splitPanes": "分屏",
 	"settings.splitPanesHint": "将标签页拖到中间面板的边缘，即可与当前标签页并排显示。应你的要求，会话中的智能体也可以拆分窗格并在终端中运行命令。",
+	"settings.newDesktopUi": "新桌面界面",
+	"settings.newDesktopUiHint": "更深的中间面板、扁平的标签页和下拉菜单、带边框的输入框，以及即时的悬停和菜单。",
 	"settings.prView": "PR 视图",
 	"settings.prViewHint": "在单独的标签页中打开拉取请求，查看其描述、评论、检查和堆栈。",
 	"settings.chromeAgents.label": "在我的 Chrome 中使用智能体",

@@ -3145,6 +3145,8 @@
 	"settings.diagnosticsToggleHint": "Afficher l’utilisation de la mémoire et du processeur sur les cartes de session et le tableau, ainsi que la page Diagnostic.",
 	"settings.splitPanes": "Volets partagés",
 	"settings.splitPanesHint": "Faites glisser un onglet sur un bord du volet central pour l’afficher à côté de l’onglet actuel. Lorsque vous le demandez, les agents de vos sessions peuvent aussi diviser les volets et exécuter des commandes dans des terminaux.",
+	"settings.newDesktopUi": "Nouvelle interface de bureau",
+	"settings.newDesktopUiHint": "Un panneau central plus sombre, des onglets et menus déroulants plats, un compositeur bordé, et des survols et menus instantanés.",
 	"settings.prView": "Vue PR",
 	"settings.prViewHint": "Ouvrir une pull request dans son propre onglet, avec sa description, ses commentaires, ses vérifications et sa pile.",
 	"settings.chromeAgents.label": "Utiliser les agents dans mon Chrome",

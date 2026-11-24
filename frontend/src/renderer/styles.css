@@ -7188,3 +7188,155 @@ body.is-pane-dragging webview {
 		transition: none;
 	}
 }
+
+/* ---------------------------------------------------------------------------
+ * New desktop UI (Developer mode preview, on by default there; Settings >
+ * General). Every rule below is scoped under html[data-new-desktop-ui], which
+ * `lib/new-desktop-ui.ts` sets before first paint, so with the flag off the
+ * app is exactly the UI above. It sits last so it wins ties without
+ * !important, except where a hammer has to beat explicit utility durations.
+ * ------------------------------------------------------------------------- */
+
+/* Centre panel edge: a whisper, 30% of the strong hairline; 15% with the
+ * sidebar closed. */
+html[data-new-desktop-ui] .center-panel-surface {
+	--center-panel-edge: color-mix(in srgb, var(--color-border-strong) 30%, transparent);
+	border-color: var(--center-panel-edge);
+}
+
+html[data-new-desktop-ui] .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	border-color: var(--center-panel-edge);
+}
+
+html[data-new-desktop-ui] .sidebar-hidden .center-panel-shell--mac:not(.center-panel-shell--fullscreen) > .center-panel-surface,
+html[data-new-desktop-ui] .sidebar-hidden .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	border-color: color-mix(in srgb, var(--color-border-strong) 15%, transparent);
+}
+
+/* Selected tabs are flat: a plain fill, no edge or bevel. Tabs are places,
+ * not buttons. */
+html[data-new-desktop-ui] .session-inspector__tab-button[aria-selected="true"],
+html[data-new-desktop-ui] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
+	border-color: transparent;
+	box-shadow: none;
+}
+
+/* Dropdown triggers (selects, option menus, any button that opens a menu) are
+ * flat: no bevel and a very slight edge. The face paints under the border, so
+ * the edge is a bare 2% tint of the text colour, not a mix with the face.
+ * Hover and press still deepen the face. */
+html[data-new-desktop-ui] .button-raised:is(.settings-option-trigger, [data-slot="select-trigger"], [aria-haspopup="menu"], [aria-haspopup="listbox"], [role="combobox"]) {
+	border-color: color-mix(in oklch, var(--color-text-primary) 2%, transparent);
+	box-shadow: none;
+}
+
+/* Dark composer: its fill plus one faint, even hairline (a ring, so it takes
+ * no layout space and follows the corners). Light keeps its own ring and
+ * shadow. */
+html[data-new-desktop-ui]:not([data-theme="light"]) .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+	transition: none;
+}
+
+/* Sidebar row actions (project and session rows, section "+") get no hover,
+ * press or open-menu fill: only the icon brightens. The pill still shows for
+ * keyboard focus, its only focus indicator. */
+html[data-new-desktop-ui] .sidebar-icon-action:not(:focus-visible)::before {
+	opacity: 0 !important;
+}
+
+/* Translucent window: the one shell tint is 80% (70% above, 72% light). */
+html[data-new-desktop-ui]:root[data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 80%, transparent);
+	/* Dark centre panel: one step darker than the shell, so the frame around
+	 * it reads as the lighter surface. */
+	--ao-center-plate: color-mix(in srgb, black 15%, transparent);
+}
+
+html[data-new-desktop-ui]:root[data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 80%, transparent);
+}
+
+html[data-new-desktop-ui]:root[data-style-theme][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--background) 80%, transparent);
+}
+
+html[data-new-desktop-ui]:root[data-style-theme][data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 80%, transparent);
+}
+
+html[data-new-desktop-ui][data-window-translucent="true"] .first-run-onboarding {
+	background-color: color-mix(in srgb, var(--sidebar) 80%, transparent);
+}
+
+/* Dark: the centre panel is darker than the sidebar and frame around it.
+ * Translucent, only the panel's own plate paints the shade (the floating
+ * bar's ::before on macOS, the surface elsewhere), never the clear surfaces
+ * inside it, so it cannot stack; it clears over a live browser page. */
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]):not([data-browser-native-live]) .center-panel-surface {
+	background-color: var(--ao-center-plate);
+}
+
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]):not([data-browser-native-live]) .center-panel-shell--floating-topbar > .center-panel-surface {
+	background-color: transparent;
+}
+
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]):not([data-browser-native-live]) .center-panel-shell--floating-topbar > .center-panel-surface::before {
+	background-color: var(--ao-center-plate);
+}
+
+/* Opaque, the frame keeps the sidebar colour and the panel is that colour
+ * 15% darker. The page-background tokens are re-pointed inside the panel, so
+ * everything in it that paints the page background takes the darker shade.
+ * Portaled popovers are outside and keep theirs. */
+html[data-new-desktop-ui]:not([data-window-translucent="true"]):not([data-theme="light"]) .center-panel-surface {
+	--ao-center-plate-solid: color-mix(in srgb, var(--color-bg-sidebar), black 15%);
+	--color-bg-primary: var(--ao-center-plate-solid);
+	--background: var(--ao-center-plate-solid);
+}
+
+/* Motion: hovers are instant and nothing fades. Dialogs, backdrops, tooltips
+ * and hover cards open and close with no animation. A menu or popover opening
+ * only grows from its trigger side, fully opaque from the first frame, on an
+ * expo ease-out; closing is instant. Content motion (streaming, toasts,
+ * loaders, panel slides) is untouched. */
+@keyframes new-ui-menu-in {
+	from {
+		scale: 0.96;
+	}
+	to {
+		scale: 1;
+	}
+}
+
+html[data-new-desktop-ui] [class*="animate-popover-in"]:not([data-state="closed"]) {
+	animation: new-ui-menu-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html[data-new-desktop-ui] :is([class*="animate-popover-out"], [class*="animate-overlay-out"], [class*="animate-modal-out"])[data-state="closed"],
+html[data-new-desktop-ui] :is([class*="animate-overlay-in"], [class*="animate-modal-in"]),
+html[data-new-desktop-ui] :is([data-slot="tooltip-content"], [data-slot="hover-card-content"]) {
+	animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	html[data-new-desktop-ui] [class*="animate-popover-in"] {
+		animation: none;
+	}
+}
+
+/* Hover, focus and pressed changes land on the same frame. The selector
+ * covers the controls and anything styled with a hover: utility, and their
+ * pseudo-elements (the quiet Button's pill, resize grips). Icons keep
+ * theirs: a disclosure chevron's turn is a state change, not a hover. */
+html[data-new-desktop-ui] :is(button, a, input, select, textarea, [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [role="tab"], [class*="hover:"], [class*="group-hover"]):not(svg),
+html[data-new-desktop-ui] :is(button, a, [role="menuitem"], [role="option"], [role="tab"], [class*="hover:"], [class*="group-hover"])::before,
+html[data-new-desktop-ui] :is(button, a, [role="menuitem"], [role="option"], [role="tab"], [class*="hover:"], [class*="group-hover"])::after,
+html[data-new-desktop-ui] :is(.session-inspector__resize-handle, .pane-split-junction, .pane-split-divider)::after {
+	transition-duration: 0s !important;
+}
+
+/* The quiet Button's pill rests at full size, so a hover only shows it. */
+html[data-new-desktop-ui] [class*="before:bg-interactive-hover"]::before {
+	inset: 0;
+}

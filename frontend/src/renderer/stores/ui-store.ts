@@ -2,6 +2,7 @@ import { uiUsage } from "../lib/ui-usage-telemetry";
 import { create } from "zustand";
 import { aoBridge } from "../lib/bridge";
 import { developerModeStorageKey, readStoredWindowTranslucency, windowTranslucencyStorageKey } from "../lib/window-translucency";
+import { newDesktopUiStorageKey } from "../lib/new-desktop-ui";
 import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
@@ -243,6 +244,8 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
+	/** The new desktop UI (shell, surfaces, motion). Only takes effect in Developer mode. Default on. */
+	newDesktopUi: boolean;
 	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
 	prView: boolean;
 	/** Developer Mode, macOS only: blur the desktop behind a translucent window. */
@@ -334,6 +337,7 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSplitPanes: (enabled: boolean) => void;
+	setNewDesktopUi: (enabled: boolean) => void;
 	setPRView: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
@@ -573,6 +577,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
+	newDesktopUi: getLocalStorage()?.getItem(newDesktopUiStorageKey) !== "false",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
@@ -705,6 +710,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSplitPanes: (splitPanes) => {
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
 		set({ splitPanes });
+	},
+	setNewDesktopUi: (newDesktopUi) => {
+		getLocalStorage()?.setItem(newDesktopUiStorageKey, String(newDesktopUi));
+		set({ newDesktopUi });
 	},
 	setPRView: (prView) => {
 		getLocalStorage()?.setItem(prViewStorageKey, String(prView));
