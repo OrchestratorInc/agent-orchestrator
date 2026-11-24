@@ -271,17 +271,18 @@ func Run(buildVersion string) (retErr error) {
 	//
 	// A desktop takeover spawns this daemon as soon as the old one's /healthz
 	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout
-	// and I = installerShutdownTimeout, capped shutdown takes at most 8T+I+18s:
-	//   - the HTTP drain and six stages capped at T each: failure dispatcher,
-	//     background workers, agent-switch workers, Codex account-switch workers,
-	//     chat StopAll, LAN listener; the harness installer gets I;
+	// and I = installerShutdownTimeout, capped shutdown takes at most 9T+I+18s:
+	//   - the HTTP drain and seven stages capped at T each: failure dispatcher,
+	//     computer use, background workers, agent-switch workers, Codex
+	//     account-switch workers, chat StopAll, LAN listener; the harness
+	//     installer gets I;
 	//   - one shared budget of T for the goroutine joins with no timeout of
 	//     their own: usage-limit resume, startup reconcile, preview poller,
 	//     usage pipeline, pricing, lifecycle stack and store sweeps;
 	//   - fixed caps: 5s agent-switch fault enqueue, 3s `tailscale serve off`,
 	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake), and
 	//     a 2s Sentry flush.
-	// Wait 9T+I+18s (392s by default), one stage of margin. Managed preview
+	// Wait 10T+I+18s (402s by default), one stage of margin. Managed preview
 	// server and chat side stops are still uncapped: a predecessor stuck in one
 	// past the wait still makes this daemon exit 75.
 	installerShutdownTimeout := max(cfg.ShutdownTimeout, cmp.Or(cfg.InstallerShutdownTimeout, systeminstall.DefaultShutdownTimeout()))
@@ -1990,7 +1991,7 @@ func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
 // budget, plus one ordinary stage of margin. Installer draining can outlast an
 // ordinary shutdown stage.
 func dataDirTakeoverWait(shutdownTimeout, installerShutdownTimeout time.Duration) time.Duration {
-	return 9*shutdownTimeout + max(shutdownTimeout, installerShutdownTimeout) + 18*time.Second
+	return 10*shutdownTimeout + max(shutdownTimeout, installerShutdownTimeout) + 18*time.Second
 }
 
 // lockDataDir takes the data-dir lock. When another AO process holds it, as a
