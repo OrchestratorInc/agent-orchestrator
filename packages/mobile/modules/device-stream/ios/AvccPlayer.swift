@@ -187,12 +187,11 @@ final class AvccPlayer: NSObject, URLSessionDataDelegate {
     decodeQueue.async { [weak self] in
       guard let image = UIImage(data: jpeg)?.preparingForDisplay() else { return }
       DispatchQueue.main.async {
+        // Only a decoded video sample reports playback (see show): a stream
+        // that sent its opening JPEG but never starts H.264 must still fall
+        // back to MJPEG rather than sit on this still picture.
         guard let self, !self.stopped else { return }
         self.placeholder?.image = image
-        if !self.shownFirst {
-          self.shownFirst = true
-          self.onFrame()
-        }
       }
     }
   }

@@ -16,6 +16,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * The phone's live view of a simulator or emulator: a WebSocket to the daemon's
@@ -35,22 +36,32 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     holder = { if (surfaceReady) surfaceView.holder else null },
     onSize = { w, h -> main.post { onSize(mapOf("width" to w, "height" to h)) } },
     onFrame = { gotFrame = true; failures = 0; emitState("streaming") },
-    onEnded = { main.post { lost() } },
+    onEnded = { connection -> lostFrom(connection) },
   )
   private val decoder = H264Decoder(
     onSize = { w, h -> main.post { onSize(mapOf("width" to w, "height" to h)) } },
     needKeyFrame = { requestKeyFrame() },
+    onOutput = { presentationUs -> decoded(presentationUs) },
   )
   private val avcc = AvccPlayer(
     client = CLIENT,
     decoder = decoder,
-    onFrame = { gotFrame = true; failures = 0; emitState("streaming") },
-    onEnded = { main.post { lost() } },
+    onEnded = { connection -> lostFrom(connection) },
   )
+
+  /**
+   * The H.264 connection waiting for its first picture, and the presentation
+   * time its own frames start at: playback is reported when the decoder shows
+   * one of them, not when bytes arrive (a decoder that never started would
+   * otherwise read as streaming while the screen stayed blank).
+   */
+  private data class PictureWait(val connection: Int, val fromPresentationUs: Long)
+  private val pictureWait = AtomicReference<PictureWait?>(null)
 
   @Volatile private var surfaceReady = false
   private var socket: WebSocket? = null
-  private var generation = 0
+  /** The live connection's number: callbacks from an older one are ignored. */
+  @Volatile private var generation = 0
   private var lastKeyRequestMs = 0L
   private var lastAvccReconnectMs = 0L
   private var firstFrame = true
@@ -76,6 +87,9 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
   // frame, only a much longer silence counts, and the reconnect keeps the
   // picture up instead of showing the spinner.
   private var silentReports = 0
+  // Reports in a row where H.264 data arrived but the decoder showed nothing:
+  // as dead as silence, so it is dropped and opened again the same way.
+  private var blankReports = 0
   @Volatile private var gotFrame = false
   /** Connections lost in a row without a frame; each waits longer before retrying. */
   @Volatile private var failures = 0
@@ -86,7 +100,15 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
         "avcc" -> avcc.takeStats()
         else -> takeStats()
       }
-      silentReports = if (((stats["kbps"] as? Double) ?: 0.0) > 0.0) 0 else silentReports + 1
+      val receiving = ((stats["kbps"] as? Double) ?: 0.0) > 0.0
+      silentReports = if (receiving) 0 else silentReports + 1
+      blankReports = if (receiving && mode != "mjpeg" && !gotFrame) blankReports + 1 else 0
+      if (blankReports >= SILENT_REPORTS) {
+        blankReports = 0
+        disconnect()
+        lost()
+        return
+      }
       val still = mode != "h264" && gotFrame
       if (silentReports >= (if (still) STILL_SILENT_REPORTS else SILENT_REPORTS)) {
         silentReports = 0
@@ -169,12 +191,14 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
   private fun connect(quiet: Boolean = false) {
     disconnect()
     silentReports = 0
+    blankReports = 0
     gotFrame = false
     // An empty url is the screen saying "no stream for now" (a device that is off).
     val target = url?.takeIf { it.isNotBlank() } ?: return
     if (!surfaceReady) return
     val mine = ++generation
     firstFrame = true
+    pictureWait.set(if (mode == "mjpeg") null else PictureWait(mine, decoder.nextPtsUs()))
     if (!quiet) emitState("connecting")
     when (mode) { // start the first window now
       "mjpeg" -> mjpeg.takeStats()
@@ -184,12 +208,12 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     main.removeCallbacks(statsTick)
     main.postDelayed(statsTick, STATS_MS)
     if (mode == "mjpeg") {
-      mjpeg.start(target, headers)
+      mjpeg.start(target, headers, mine)
       return
     }
     decoder.setSurface(surfaceView.holder.surface)
     if (mode == "avcc") {
-      avcc.start(target, headers)
+      avcc.start(target, headers, mine)
       return
     }
     val request = Request.Builder().url(target).apply { headers.forEach { (name, value) -> addHeader(name, value) } }.build()
@@ -199,11 +223,11 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
       }
 
       override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-        if (mine == generation) lost()
+        lostFrom(mine)
       }
 
       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-        if (mine == generation) lost()
+        lostFrom(mine)
       }
     })
   }
@@ -216,6 +240,28 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     generation++
     socket?.cancel()
     socket = null
+  }
+
+  /**
+   * A connection's end, from whichever thread saw it. Whether it is still the
+   * live one is decided on the main thread, where connections are replaced: one
+   * replaced in between must not close or retry its successor.
+   */
+  private fun lostFrom(connection: Int) {
+    main.post { if (connection == generation) lost() }
+  }
+
+  /** Drain thread: the first picture of the waiting connection reports playback. */
+  private fun decoded(presentationUs: Long) {
+    val wait = pictureWait.get() ?: return
+    if (presentationUs < wait.fromPresentationUs || !pictureWait.compareAndSet(wait, null)) return
+    main.post {
+      if (wait.connection != generation || !firstFrame) return@post
+      firstFrame = false
+      gotFrame = true
+      failures = 0
+      emitState("streaming")
+    }
   }
 
   /**
@@ -235,8 +281,10 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     // The hub's SEMU header (v1 is 16 bytes, v2 is 24) in front of the access unit.
     val arrivalMs = System.nanoTime() / 1e6
     synchronized(statsLock) { statsBytes += data.size }
-    if (data.size > 24 && data[0].toInt() == 0x53 && data[1].toInt() == 0x45 && data[2].toInt() == 0x4d && data[3].toInt() == 0x55) {
+    if (data.size >= 8 && data[0].toInt() == 0x53 && data[1].toInt() == 0x45 && data[2].toInt() == 0x4d && data[3].toInt() == 0x55) {
       offset = if (data[4].toInt() == 1) 16 else 24
+      // Stripped by its own header length: a message no longer than that carries no video.
+      if (data.size <= offset) return
       // Bytes 8-15: the capture time in microseconds, big-endian.
       var captureUs = 0L
       for (i in 8 until 16) captureUs = (captureUs shl 8) or (data[i].toLong() and 0xff)
@@ -255,12 +303,6 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
       }
     }
     decoder.queue(data, offset, data.size - offset)
-    if (firstFrame) {
-      firstFrame = false
-      gotFrame = true
-      failures = 0
-      emitState("streaming")
-    }
   }
 
   /**

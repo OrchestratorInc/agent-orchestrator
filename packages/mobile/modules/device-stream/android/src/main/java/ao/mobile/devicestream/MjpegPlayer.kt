@@ -21,7 +21,8 @@ class MjpegPlayer(
   private val holder: () -> SurfaceHolder?,
   private val onSize: (Int, Int) -> Unit,
   private val onFrame: () -> Unit,
-  private val onEnded: () -> Unit,
+  /** The live connection ended on its own; [connection] is the number its start was given. */
+  private val onEnded: (connection: Int) -> Unit,
 ) {
   private val lock = Object()
   /** Held while drawing; [releaseSurface] takes it so no draw outlives the surface. */
@@ -47,13 +48,13 @@ class MjpegPlayer(
   private var width = 0
   private var height = 0
 
-  fun start(url: String, headers: Map<String, String>) {
+  fun start(url: String, headers: Map<String, String>, connection: Int) {
     stop()
     val gen = synchronized(lock) { ++generation }
     val request = Request.Builder().url(url).apply { headers.forEach { (name, value) -> addHeader(name, value) } }.build()
     val live = client.newCall(request)
     call = live
-    reader = Thread({ read(live, gen) }, "device-mjpeg-read").also { it.isDaemon = true; it.start() }
+    reader = Thread({ read(live, gen, connection) }, "device-mjpeg-read").also { it.isDaemon = true; it.start() }
     decoder = Thread({ decode(gen) }, "device-mjpeg-decode").also { it.isDaemon = true; it.start() }
   }
 
@@ -79,7 +80,7 @@ class MjpegPlayer(
 
   private fun current(gen: Long) = generation == gen
 
-  private fun read(live: Call, gen: Long) {
+  private fun read(live: Call, gen: Long, connection: Int) {
     try {
       live.execute().use { response ->
         if (!response.isSuccessful) throw IOException("stream ${response.code}")
@@ -126,7 +127,7 @@ class MjpegPlayer(
           false
         }
       }
-      if (ended) onEnded()
+      if (ended) onEnded(connection)
     }
   }
 

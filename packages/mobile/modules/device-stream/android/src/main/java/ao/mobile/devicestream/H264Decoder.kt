@@ -16,6 +16,8 @@ import java.nio.ByteBuffer
 class H264Decoder(
   private val onSize: (Int, Int) -> Unit,
   private val needKeyFrame: () -> Unit,
+  /** A picture reached the surface; called on the drain thread with its presentation time. */
+  private val onOutput: (presentationUs: Long) -> Unit,
 ) {
   private val lock = Any()
   private var surface: Surface? = null
@@ -50,6 +52,9 @@ class H264Decoder(
       c?.let { runCatching { it.release() } }
     }
   }
+
+  /** The presentation time the next queued access unit gets: outputs from here on are newer. */
+  fun nextPtsUs(): Long = synchronized(lock) { ptsUs }
 
   /**
    * Decodes one Annex-B access unit. [waitUs] is how long to wait for a free
@@ -154,8 +159,16 @@ class H264Decoder(
       while (running) {
         try {
           val index = c.dequeueOutputBuffer(info, OUTPUT_TIMEOUT_US)
-          if (index >= 0) c.releaseOutputBuffer(index, true)
+          if (index >= 0) {
+            c.releaseOutputBuffer(index, true)
+            onOutput(info.presentationTimeUs)
+          }
         } catch (_: Exception) {
+          // Left installed, a codec whose output broke would take input until its
+          // buffers filled and then freeze the picture while frames kept coming.
+          // Recover off this thread (release joins it). A drain ended by release
+          // sees running cleared, and failed() leaves a replacement codec alone.
+          if (running) Thread({ failed(c) }, "device-stream-recover").also { it.isDaemon = true; it.start() }
           break
         }
       }

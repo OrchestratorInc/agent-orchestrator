@@ -4,6 +4,7 @@ import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Plays a simulator's H.264 stream (the hub's stream.avcc) through the hardware
@@ -15,15 +16,20 @@ import java.io.IOException
  * turned into the Annex-B access units [H264Decoder] takes (a key frame carries
  * the SPS and PPS, as on the emulator's stream). Type 4, a JPEG of the screen
  * sent first, is skipped: the decoder owns the surface and starts within a frame.
+ * Playback is reported by the decoder's first picture, not by data arriving.
  */
 class AvccPlayer(
   private val client: OkHttpClient,
   private val decoder: H264Decoder,
-  private val onFrame: () -> Unit,
-  private val onEnded: () -> Unit,
+  /** The live connection ended on its own; [connection] is the number its start was given. */
+  private val onEnded: (connection: Int) -> Unit,
 ) {
-  /** The live connection; a reader whose call is no longer this one has been replaced or stopped. */
-  @Volatile private var call: Call? = null
+  /**
+   * The live connection; a reader whose call is no longer this one has been
+   * replaced or stopped. Installing, stopping and a reader's end all swap it
+   * atomically, so a finishing reader can never clear its replacement's call.
+   */
+  private val call = AtomicReference<Call?>(null)
 
   private val statsLock = Any()
   private var statsBytes = 0L
@@ -31,18 +37,15 @@ class AvccPlayer(
   private var statsBusyNs = 0L
   private var statsSinceNs = System.nanoTime()
 
-  fun start(url: String, headers: Map<String, String>) {
-    stop()
+  fun start(url: String, headers: Map<String, String>, connection: Int) {
     val request = Request.Builder().url(url).apply { headers.forEach { (name, value) -> addHeader(name, value) } }.build()
     val live = client.newCall(request)
-    call = live
-    Thread({ read(live) }, "device-avcc-read").also { it.isDaemon = true; it.start() }
+    call.getAndSet(live)?.cancel()
+    Thread({ read(live, connection) }, "device-avcc-read").also { it.isDaemon = true; it.start() }
   }
 
   fun stop() {
-    val live = call
-    call = null
-    live?.cancel()
+    call.getAndSet(null)?.cancel()
   }
 
   /**
@@ -66,14 +69,13 @@ class AvccPlayer(
     stats
   }
 
-  private fun read(live: Call) {
+  private fun read(live: Call, connection: Int) {
     try {
       live.execute().use { response ->
         if (!response.isSuccessful) throw IOException("stream ${response.code}")
         val source = response.body?.source() ?: throw IOException("empty stream")
         var parameterSets: ByteArray? = null
-        var first = true
-        while (call === live) {
+        while (call.get() === live) {
           val length = source.readInt()
           if (length < 1 || length > MAX_PACKET) throw IOException("bad packet length $length")
           val started = System.nanoTime()
@@ -93,10 +95,6 @@ class AvccPlayer(
               // lost; dropping to a key frame would cost a reconnect.
               decoder.queue(unit, 0, unit.size, DECODER_WAIT_US)
               synchronized(statsLock) { statsFrames++ }
-              if (first) {
-                first = false
-                onFrame()
-              }
             }
           }
         }
@@ -104,10 +102,8 @@ class AvccPlayer(
     } catch (_: Exception) {
       // Closed by stop() or lost: either way the view decides what happens next.
     } finally {
-      if (call === live) {
-        call = null
-        onEnded()
-      }
+      // Only the reader that still owns the call reports its end.
+      if (call.compareAndSet(live, null)) onEnded(connection)
     }
   }
 
