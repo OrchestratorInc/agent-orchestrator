@@ -10,8 +10,8 @@ func TestGithubOwner(t *testing.T) {
 		want   string
 	}{
 		{"scp-style", "git@github.com:aoagents/agent-orchestrator.git", "aoagents"},
-		{"https", "https://github.com/OrchestratorInc/agent-orchestrator.git", "aoagents"},
-		{"https-no-suffix", "https://github.com/OrchestratorInc/agent-orchestrator", "aoagents"},
+		{"https", "https://github.com/aoagents/agent-orchestrator.git", "aoagents"},
+		{"https-no-suffix", "https://github.com/aoagents/agent-orchestrator", "aoagents"},
 		{"http", "http://github.com/octocat/hello", "octocat"},
 		{"ssh-url", "ssh://git@github.com/octocat/hello.git", "octocat"},
 		{"git-proto", "git://github.com/octocat/hello.git", "octocat"},
@@ -42,7 +42,7 @@ func TestScmProvider(t *testing.T) {
 		{"empty", "", ""},
 		{"whitespace-only", "   ", ""},
 		{"github-scp", "git@github.com:aoagents/agent-orchestrator.git", "github"},
-		{"github-https", "https://github.com/OrchestratorInc/agent-orchestrator.git", "github"},
+		{"github-https", "https://github.com/aoagents/agent-orchestrator.git", "github"},
 		{"github-ssh-url", "ssh://git@github.com/octocat/hello.git", "github"},
 		{"github-git-proto", "git://github.com/octocat/hello.git", "github"},
 		{"github-whitespace", "  https://github.com/aoagents/x.git  ", "github"},
