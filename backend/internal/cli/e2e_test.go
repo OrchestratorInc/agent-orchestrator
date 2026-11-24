@@ -306,7 +306,7 @@ func TestE2E_SecondDaemonOnSameDataDir(t *testing.T) {
 	second.dataDir = first.dataDir
 	const shutdownTimeout = 100 * time.Millisecond
 	const installerTimeout = shutdownTimeout
-	wait := 10*shutdownTimeout + installerTimeout + 18*time.Second
+	wait := 10*shutdownTimeout + installerTimeout + 33*time.Second
 	// A regressed lock would let this daemon serve forever, so bound the run.
 	ctx, cancel := context.WithTimeout(context.Background(), wait+15*time.Second)
 	defer cancel()

@@ -49,6 +49,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/hostupdate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
@@ -271,7 +272,7 @@ func Run(buildVersion string) (retErr error) {
 	//
 	// A desktop takeover spawns this daemon as soon as the old one's /healthz
 	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout
-	// and I = installerShutdownTimeout, capped shutdown takes at most 9T+I+18s:
+	// and I = installerShutdownTimeout, capped shutdown takes at most 9T+I+33s:
 	//   - the HTTP drain and seven stages capped at T each: failure dispatcher,
 	//     computer use, background workers, agent-switch workers, Codex
 	//     account-switch workers, chat StopAll, LAN listener; the harness
@@ -280,9 +281,10 @@ func Run(buildVersion string) (retErr error) {
 	//     their own: usage-limit resume, startup reconcile, preview poller,
 	//     usage pipeline, pricing, lifecycle stack and store sweeps;
 	//   - fixed caps: 5s agent-switch fault enqueue, 3s `tailscale serve off`,
-	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake), and
-	//     a 2s Sentry flush.
-	// Wait 10T+I+18s (402s by default), one stage of margin. Managed preview
+	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake),
+	//     15s device support (10s agent-device stop plus 5s hub exit), and a
+	//     2s Sentry flush.
+	// Wait 10T+I+33s (417s by default), one stage of margin. Managed preview
 	// server and chat side stops are still uncapped: a predecessor stuck in one
 	// past the wait still makes this daemon exit 75.
 	installerShutdownTimeout := max(cfg.ShutdownTimeout, cmp.Or(cfg.InstallerShutdownTimeout, systeminstall.DefaultShutdownTimeout()))
@@ -835,6 +837,10 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetTerminalInputGate(termMgr)
 	sessionImportSvc := sessionimport.New(store, cfg.DataDir, chatDrivers.SupportsChat)
 	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
+	// The Orchestrator attribution beta credits Orchestrator on new sessions'
+	// commits and PRs. Wired before tracker intake starts, so a session its
+	// first poll spawns already sees the setting.
+	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
 	// Lifecycle reactions deliberately do not hold Session Manager's input
@@ -1315,6 +1321,10 @@ func Run(buildVersion string) (retErr error) {
 	if usageHookQueue != nil {
 		usageHooks = usageHookQueue
 	}
+	deviceSvc := newDeviceService(cfg.DataDir, sessionSvc, log)
+	// Devices are a Developer mode preview: the desktop turns them on through
+	// PUT /devices/availability, and only then do new sessions hear of them.
+	sessMgr.SetDevicesOffered(deviceSvc.Offered)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
@@ -1322,6 +1332,7 @@ func Run(buildVersion string) (retErr error) {
 		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,
+		HostUpdate:         hostupdate.New(cfg.Telemetry.AppVersion, cfg.DataDir, browserBroker),
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
 		AgentAccounts:      freshAccountUsage{agentAccountSvc, usagePipeline},
@@ -1392,11 +1403,15 @@ func Run(buildVersion string) (retErr error) {
 		PRPreview:                prPreview,
 		SessionSearch:            sessionSearchSvc,
 		PreviewServer:            managedPreview,
+		Devices:                  deviceSvc,
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
 	})
 	if err != nil {
 		stop()
+		if devErr := deviceSvc.Shutdown(); devErr != nil {
+			log.Error("device support shutdown", "err", devErr)
+		}
 		lcStack.Stop()
 		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
 			log.Error("cdc pipeline shutdown", "err", cdcErr)
@@ -1709,6 +1724,9 @@ func Run(buildVersion string) (retErr error) {
 	}
 	codexSwitchCancel()
 	managedPreview.Close()
+	if err := deviceSvc.Shutdown(); err != nil {
+		log.Error("device support shutdown", "err", err)
+	}
 	drain.wait("preview poller", previewDone)
 	// Daemon replacement detaches providers. Desktop exit stops processes
 	// while keeping the sessions and worktrees available for resume.
@@ -1991,7 +2009,7 @@ func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
 // budget, plus one ordinary stage of margin. Installer draining can outlast an
 // ordinary shutdown stage.
 func dataDirTakeoverWait(shutdownTimeout, installerShutdownTimeout time.Duration) time.Duration {
-	return 10*shutdownTimeout + max(shutdownTimeout, installerShutdownTimeout) + 18*time.Second
+	return 10*shutdownTimeout + max(shutdownTimeout, installerShutdownTimeout) + 33*time.Second
 }
 
 // lockDataDir takes the data-dir lock. When another AO process holds it, as a
