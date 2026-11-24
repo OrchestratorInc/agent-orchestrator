@@ -15,9 +15,27 @@ export type StreamStatsSnapshot = {
 };
 
 const WINDOW_MS = 1_000;
-// Enough for a second at 60 fps, and for the medians below.
-const MAX_FRAMES = 96;
+// The rate window is kept as counts per BUCKET_MS, so it holds every frame of
+// the last second however many arrive, in a bounded number of buckets.
+const BUCKET_MS = 100;
+const MAX_BUCKETS = WINDOW_MS / BUCKET_MS + 1;
+// Enough for the medians below.
 const MAX_SAMPLES = 32;
+
+type Bucket = { start: number; frames: number; bytes: number };
+
+// Adds to the bucket for `now`, starting one when time has moved on.
+function count(buckets: Bucket[], now: number, bytes: number): void {
+	const start = Math.floor(now / BUCKET_MS) * BUCKET_MS;
+	let last = buckets[buckets.length - 1];
+	if (!last || last.start !== start) {
+		last = { start, frames: 0, bytes: 0 };
+		buckets.push(last);
+		if (buckets.length > MAX_BUCKETS) buckets.splice(0, buckets.length - MAX_BUCKETS);
+	}
+	last.frames++;
+	last.bytes += bytes;
+}
 
 function median(values: number[]): number | null {
 	if (!values.length) return null;
@@ -34,8 +52,8 @@ function push<T>(list: T[], value: T, max: number): void {
 export class StreamStats {
 	private connectedAt: number | null = null;
 	private firstFrameMs: number | null = null;
-	private arrivals: Array<{ at: number; bytes: number }> = [];
-	private shownAt: number[] = [];
+	private arrivals: Bucket[] = [];
+	private shownAt: Bucket[] = [];
 	private decodes: number[] = [];
 	private latencies: number[] = [];
 	// The earliest input no frame has answered yet.
@@ -55,14 +73,14 @@ export class StreamStats {
 
 	/** A frame that arrived at `now`, shown or not: its size in bytes. */
 	received(now: number, bytes: number): void {
-		push(this.arrivals, { at: now, bytes }, MAX_FRAMES);
+		count(this.arrivals, now, bytes);
 	}
 
 	/** A frame shown at `now`, decodeMs after it arrived. */
 	shown(now: number, decodeMs: number): void {
 		this.frames++;
 		if (this.firstFrameMs === null && this.connectedAt !== null) this.firstFrameMs = now - this.connectedAt;
-		push(this.shownAt, now, MAX_FRAMES);
+		count(this.shownAt, now, 0);
 		push(this.decodes, decodeMs, MAX_SAMPLES);
 		if (this.pendingInput !== null) {
 			push(this.latencies, now - this.pendingInput, MAX_SAMPLES);
@@ -71,11 +89,13 @@ export class StreamStats {
 	}
 
 	snapshot(now: number): StreamStatsSnapshot {
+		// Buckets that started within the last second (to BUCKET_MS).
 		const since = now - WINDOW_MS;
+		const recent = (buckets: Bucket[]) => buckets.filter((b) => b.start >= since);
 		return {
 			firstFrameMs: this.firstFrameMs,
-			fps: this.shownAt.filter((at) => at >= since).length,
-			kbps: Math.round(this.arrivals.reduce((sum, f) => (f.at >= since ? sum + f.bytes : sum), 0) / 1024),
+			fps: recent(this.shownAt).reduce((sum, b) => sum + b.frames, 0),
+			kbps: Math.round(recent(this.arrivals).reduce((sum, b) => sum + b.bytes, 0) / 1024),
 			decodeMs: median(this.decodes),
 			inputToFrameMs: median(this.latencies),
 			frames: this.frames,

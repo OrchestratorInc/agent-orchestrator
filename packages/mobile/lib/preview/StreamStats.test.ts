@@ -54,6 +54,19 @@ describe("StreamStats", () => {
 		expect(s.decodeMs).toBe(30);
 	});
 
+	it("counts every frame in the last second, however many there are", () => {
+		const stats = new StreamStats();
+		stats.connecting(0);
+		// 120 frames of 1 KB within one second.
+		for (let i = 0; i < 120; i++) {
+			stats.received(1_000 + i * 8, 1_024);
+			stats.shown(1_000 + i * 8, 1);
+		}
+		const s = stats.snapshot(1_999);
+		expect(s.kbps).toBe(120);
+		expect(s.fps).toBe(120);
+	});
+
 	it("reports the median decode time of recent frames", () => {
 		const stats = new StreamStats();
 		stats.connecting(0);
