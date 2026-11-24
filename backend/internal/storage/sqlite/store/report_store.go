@@ -121,7 +121,8 @@ func (s *Store) ListPendingReportsOfDoneProjects(ctx context.Context) ([]domain.
 
 // ClaimPendingReportBatch atomically claims every pending report for a project.
 // A due, attention, or piggyback trigger therefore includes earlier batch work.
-func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time) ([]domain.ReportRecord, error) {
+// A claim used only to defer an unavailable recipient does not count as a delivery attempt.
+func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, countAttempt bool) ([]domain.ReportRecord, error) {
 	if projectID == "" || token == "" || at.IsZero() {
 		return nil, domain.ErrInvalidReport
 	}
@@ -144,8 +145,13 @@ func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.Pr
 				return err
 			}
 		}
+		var attemptIncrement int64
+		if countAttempt {
+			attemptIncrement = 1
+		}
 		rows, err = q.ClaimPendingReportsByBatch(ctx, gen.ClaimPendingReportsByBatchParams{
-			ProjectID: string(projectID), DeliveryBatchID: batchID,
+			AttemptIncrement: attemptIncrement,
+			ProjectID:        string(projectID), DeliveryBatchID: batchID,
 			ClaimToken: token, ClaimedAt: nullTime(at),
 		})
 		return err
