@@ -290,6 +290,7 @@ var shippedMigrations = map[int64]string{
 	20261119090000000: "20261119090000000_allow_mastra_code_harness.sql",
 	20261119200201916: "20261119200201916_session_pr_footer_choice.sql",
 	20261121120000000: "20261121120000000_pr_merge_queue.sql",
+	20261124173817272: "20261124173817272_review_run_github_review_id_index.sql",
 	20261124180709139: "20261124180709139_review_reviewer_handle_index.sql",
 }
 
