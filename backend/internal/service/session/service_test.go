@@ -838,12 +838,21 @@ func TestSessionSetTerminateOnPRMergePersistsPolicy(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
 
-	sess, err := (&Service{store: st}).SetTerminateOnPRMerge(context.Background(), "mer-1", true)
+	svc := &Service{store: st}
+	sess, err := svc.SetTerminateOnPRMerge(context.Background(), "mer-1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !sess.TerminateOnPRMerge || !st.sessions["mer-1"].TerminateOnPRMerge {
 		t.Fatalf("terminate-on-merge policy was not persisted: session=%+v stored=%+v", sess, st.sessions["mer-1"])
+	}
+
+	sess, err = svc.SetTerminateOnPRMerge(context.Background(), "mer-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.TerminateOnPRMerge || st.sessions["mer-1"].TerminateOnPRMerge {
+		t.Fatalf("terminate-on-merge policy was not toggled off: session=%+v stored=%+v", sess, st.sessions["mer-1"])
 	}
 }
 

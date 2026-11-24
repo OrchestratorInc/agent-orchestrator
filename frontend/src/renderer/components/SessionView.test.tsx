@@ -25,6 +25,8 @@ import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { seedCloudOpening } from "../lib/cloud-opening";
+import { noteCloudWorkerStarting, resetCloudWorkerStartingForTests } from "../lib/cloud-worker-starting";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
 import { forgetSharedSessions, rememberSharedSessions } from "../lib/shared-session-memory";
 
@@ -2129,6 +2131,44 @@ describe("SessionView", () => {
 		expect(checkout).not.toHaveBeenCalled();
 	});
 
+	it("retries a failed startup on open even while the session's reads wait out a starting answer", async () => {
+		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
+		const id = "sess-2";
+		const starting = new CloudCpError("The session is still starting. Try again shortly.", { status: 409, code: "WORKER_STARTING", retryAfterMs: 60_000 });
+		for (const [code, prepares] of [
+			// A failed restore or checkout waits for this request, so it is sent.
+			["conversation_restore_failed", true],
+			["repository_checkout_failed", true],
+			// A workspace still being prepared is already doing what it asks.
+			[undefined, false],
+		] as const) {
+			resetCloudWorkerStartingForTests();
+			noteCloudWorkerStarting("cloud-org", id, starting);
+			checkout.mockClear();
+			cloudResumeMock.mockClear();
+			const session = workerSession(id);
+			session.runtimeConnected = true;
+			session.cloud = {
+				orgId: "cloud-org",
+				sandboxProvider: "freestyle",
+				desiredState: "running",
+				observedState: "running",
+				startupError: code ? { code, message: "The conversation could not be restored.", at: "2026-11-23T20:30:00Z" } : undefined,
+			};
+			const view = render(<SessionView sessionId={id} />);
+			await waitFor(() => expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", id));
+			if (prepares) {
+				await waitFor(() => expect(checkout).toHaveBeenCalledWith("cloud-org", id));
+			} else {
+				// The checkout would follow the resume; let that chain settle first.
+				await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+				expect(checkout).not.toHaveBeenCalled();
+			}
+			view.unmount();
+		}
+		resetCloudWorkerStartingForTests();
+	});
+
 	it("asks the worker to prepare the workspace on open, but never re-runs a failed Setup just for viewing it", async () => {
 		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
 		const id = "sess-2";
@@ -2833,6 +2873,8 @@ describe("SessionView", () => {
 			// The topbar stays usable above the error state.
 			expect(screen.getByTestId("session-topbar-host").contains(errorState)).toBe(false);
 
+			// Retry waits while the resume that opening the session sent is in flight.
+			await waitFor(() => expect(within(errorState).getByRole("button", { name: "Retry" })).toBeEnabled());
 			fireEvent.click(within(errorState).getByRole("button", { name: "Retry" }));
 			await waitFor(() => expect(cloudRetryStartupMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
 			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-sessions"] }));

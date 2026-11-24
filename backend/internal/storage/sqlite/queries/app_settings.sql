@@ -13,6 +13,8 @@ UPDATE app_settings SET version_refresh = ?, updated_at = ? WHERE id = 1;
 -- name: SetComputerUse :exec
 UPDATE app_settings SET computer_use = ?, updated_at = ? WHERE id = 1;
 
+-- name: SetCommitAttribution :exec
+UPDATE app_settings SET commit_attribution = ?, updated_at = ? WHERE id = 1;
 -- name: SetLimitHistory :exec
 UPDATE app_settings SET limit_history = ?, updated_at = ? WHERE id = 1;
 

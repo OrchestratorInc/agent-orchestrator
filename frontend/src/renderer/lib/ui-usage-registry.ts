@@ -52,6 +52,7 @@ export const UI_CONTROLS = [
 	"inspector.tab_artifacts",
 	"inspector.tab_side_chat",
 	"inspector.tab_subagents",
+	"inspector.tab_background_tasks",
 	// Board
 	"board.card",
 	// Toasts and banners
@@ -102,6 +103,7 @@ export const UI_FEATURES = [
 	"inspector_files",
 	"inspector_artifacts",
 	"inspector_subagents",
+	"inspector_background_tasks",
 ] as const;
 
 export type UiFeature = (typeof UI_FEATURES)[number];
@@ -132,6 +134,7 @@ export const SURFACE_FEATURES: Partial<Record<UiSurface, UiFeature>> = {
 	inspector_files: "inspector_files",
 	inspector_artifacts: "inspector_artifacts",
 	inspector_subagents: "inspector_subagents",
+	inspector_background_tasks: "inspector_background_tasks",
 };
 
 /** How a surface came into view. */

@@ -84,6 +84,7 @@ import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
 import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
+import { FileChip } from "./ChatFileIcon";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
 
@@ -824,6 +825,8 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 		return path ? <ChatPathMenu path={path}>{code}</ChatPathMenu> : code;
 	}
 	const openFile = () => file.open(workspaceFileReferenceLine(text ?? ""));
+	// A file this chat can open gets its Files-tree icon on a faint brand wash,
+	// so it reads apart from code names, which keep the plain chip.
 	return (
 		<ChatPathMenu path={normalizeWorkspaceFileReference(text ?? "")} onFileOpen={openFile}>
 			<Pressable
@@ -831,9 +834,16 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 				data-excerpt-include=""
 				onClick={openFile}
 				aria-label={`Open ${file.filePath} in Files`}
-				className="inline rounded transition-colors hover:bg-interactive-hover"
+				className="group mx-0.5 inline rounded"
 			>
-				{code}
+				{/* The tint sits on the chip's inline span, sized like a plain code chip (a
+				    button's box follows the line height and would grow it). Its icon stays
+				    outside the code element, whose text alone carries the excerpt offsets. */}
+				<FileChip path={file.filePath}>
+					<code {...positions} data-excerpt-kind="inline-code" className="text-chat-file-foreground">
+						{children}
+					</code>
+				</FileChip>
 			</Pressable>
 		</ChatPathMenu>
 	);
