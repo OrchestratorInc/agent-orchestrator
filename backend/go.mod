@@ -23,6 +23,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggest/jsonschema-go v0.3.79
 	github.com/swaggest/openapi-go v0.2.61
+	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f
 	github.com/unixshells/vt-go v0.2.0
 	github.com/unreallabsai/unreal-agent v0.1.1
 	github.com/yuin/goldmark v1.8.2

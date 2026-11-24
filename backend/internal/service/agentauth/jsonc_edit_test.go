@@ -59,3 +59,37 @@ func TestSetJSONCEditsOnlyTheChangedValue(t *testing.T) {
 		t.Fatal("descended into a non-object")
 	}
 }
+
+func TestJSONCBlankMeansNoValue(t *testing.T) {
+	for _, tc := range []struct {
+		in    string
+		blank bool
+	}{
+		{"", true},
+		{" \n\t", true},
+		{"\ufeff", true},
+		{"// only a comment\n", true},
+		{"/* a */ // b", true},
+		{"{}", false},
+		{"// note\n{\"a\": 1,}", false},
+		{"null", false},
+		{"{", false},
+	} {
+		if got := jsoncBlank([]byte(tc.in)); got != tc.blank {
+			t.Errorf("jsoncBlank(%q) = %v, want %v", tc.in, got, tc.blank)
+		}
+	}
+}
+
+func TestSetJSONCStartsAFreshObjectInABlankFile(t *testing.T) {
+	got, err := setJSONC([]byte("// nothing yet\n"), []string{"a", "b"}, []byte(`"new"`))
+	if want := "{\n  \"a\": {\n    \"b\": \"new\"\n  }\n}\n"; err != nil || string(got) != want {
+		t.Fatalf("setJSONC = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestSetJSONCRejectsInvalidSettings(t *testing.T) {
+	if _, err := setJSONC([]byte(`{"a": }`), []string{"a"}, []byte(`"new"`)); err == nil {
+		t.Fatal("edited invalid settings")
+	}
+}

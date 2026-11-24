@@ -1,11 +1,13 @@
 package modelcatalog
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/tailscale/hujson"
 	"gopkg.in/yaml.v3"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -184,7 +186,7 @@ func parseJSONCModelKey(raw []byte) string {
 	var config struct {
 		Model string `json:"model"`
 	}
-	if json.Unmarshal(stripJSONC(raw), &config) != nil {
+	if unmarshalJSONC(raw, &config) != nil {
 		return ""
 	}
 	return config.Model
@@ -205,7 +207,7 @@ func parsePiDefaultModel(raw []byte) string {
 		DefaultProvider string `json:"defaultProvider"`
 		DefaultModel    string `json:"defaultModel"`
 	}
-	if json.Unmarshal(stripJSONC(raw), &settings) != nil {
+	if unmarshalJSONC(raw, &settings) != nil {
 		return ""
 	}
 	return joinProviderModel(settings.DefaultProvider, settings.DefaultModel)
@@ -220,7 +222,7 @@ func parseCrushDefaultModel(raw []byte) string {
 			} `json:"large"`
 		} `json:"models"`
 	}
-	if json.Unmarshal(stripJSONC(raw), &config) != nil {
+	if unmarshalJSONC(raw, &config) != nil {
 		return ""
 	}
 	return joinProviderModel(config.Models.Large.Provider, config.Models.Large.Model)
@@ -239,58 +241,14 @@ func joinProviderModel(provider, model string) string {
 	return provider + "/" + model
 }
 
-// stripJSONC removes // and /* */ comments and trailing commas so JSONC config
-// files (opencode.jsonc) decode with encoding/json. String contents are kept
-// verbatim, including sequences that look like comments inside URLs.
-func stripJSONC(raw []byte) []byte {
-	out := make([]byte, 0, len(raw))
-	inString, escaped := false, false
-	for i := 0; i < len(raw); i++ {
-		c := raw[i]
-		if inString {
-			out = append(out, c)
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			}
-			continue
-		}
-		switch {
-		case c == '"':
-			inString = true
-			out = append(out, c)
-		case c == '/' && i+1 < len(raw) && raw[i+1] == '/':
-			for i < len(raw) && raw[i] != '\n' {
-				i++
-			}
-			if i < len(raw) {
-				out = append(out, '\n')
-			}
-		case c == '/' && i+1 < len(raw) && raw[i+1] == '*':
-			i += 2
-			for i+1 < len(raw) && (raw[i] != '*' || raw[i+1] != '/') {
-				i++
-			}
-			i++
-		case c == ']' || c == '}':
-			// Drop a trailing comma left before this closer.
-			j := len(out) - 1
-			for j >= 0 && (out[j] == ' ' || out[j] == '\t' || out[j] == '\n' || out[j] == '\r') {
-				j--
-			}
-			if j >= 0 && out[j] == ',' {
-				out = append(out[:j], out[j+1:]...)
-			}
-			out = append(out, c)
-		default:
-			out = append(out, c)
-		}
+// unmarshalJSONC decodes a JSONC config file (opencode.jsonc, Pi and Crush
+// settings): JSON with comments and trailing commas.
+func unmarshalJSONC(raw []byte, v any) error {
+	plain, err := hujson.Standardize(bytes.Clone(raw))
+	if err != nil {
+		return err
 	}
-	return out
+	return json.Unmarshal(plain, v)
 }
 
 func xdgDir(home string, env map[string]string, key, fallback string) string {

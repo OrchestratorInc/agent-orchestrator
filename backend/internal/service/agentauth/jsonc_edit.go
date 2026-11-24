@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
+	"github.com/tailscale/hujson"
 )
 
 // Gemini CLI and Qwen Code read settings.json as JSON with comments, trailing
@@ -17,47 +17,38 @@ var utf8BOM = []byte("\ufeff")
 
 var errJSONCShape = errors.New("settings do not have the expected shape")
 
-// jsoncPlain returns data's JSON text with comments and trailing commas
-// blanked out, keeping every byte offset, and the length of a leading BOM.
-func jsoncPlain(data []byte) (plain []byte, bom int) {
+// jsoncStandard returns data's JSON text with comments and trailing commas
+// blanked out, keeping every byte offset (hujson.Standardize), and the length
+// of a leading BOM.
+func jsoncStandard(data []byte) (plain []byte, bom int, err error) {
 	if bytes.HasPrefix(data, utf8BOM) {
 		bom = len(utf8BOM)
 	}
-	plain = gemini.StripJSONComments(data[bom:])
-	blankTrailingCommas(plain)
-	return plain, bom
+	plain, err = hujson.Standardize(bytes.Clone(data[bom:]))
+	return plain, bom, err
+}
+
+// jsoncBlank reports whether data holds no value: only a BOM, whitespace and
+// comments. Such a file is one the harness treats as empty settings.
+func jsoncBlank(data []byte) bool {
+	body := bytes.TrimPrefix(data, utf8BOM)
+	// A blank document followed by a literal is just that literal; any value
+	// before it makes the text invalid.
+	v, err := hujson.Parse(append(bytes.Clone(body), "\nnull"...))
+	if err != nil {
+		return false
+	}
+	literal, ok := v.Value.(hujson.Literal)
+	return ok && string(literal) == "null"
 }
 
 // jsoncUnmarshal parses a settings file the way its harness does.
 func jsoncUnmarshal(data []byte, v any) error {
-	plain, _ := jsoncPlain(data)
-	return json.Unmarshal(plain, v)
-}
-
-func blankTrailingCommas(text []byte) {
-	inString, escaped := false, false
-	for i, c := range text {
-		switch {
-		case inString:
-			if escaped {
-				escaped = false
-			} else if c == '\\' {
-				escaped = true
-			} else if c == '"' {
-				inString = false
-			}
-		case c == '"':
-			inString = true
-		case c == ',':
-			j := i + 1
-			for j < len(text) && isJSONSpace(text[j]) {
-				j++
-			}
-			if j < len(text) && (text[j] == '}' || text[j] == ']') {
-				text[i] = ' '
-			}
-		}
+	plain, _, err := jsoncStandard(data)
+	if err != nil {
+		return err
 	}
+	return json.Unmarshal(plain, v)
 }
 
 func isJSONSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
@@ -66,13 +57,16 @@ func isJSONSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c =
 // raw, creating the objects on the way that are missing. Only the replaced
 // value, or the inserted member, changes in data.
 func setJSONC(data []byte, path []string, raw []byte) ([]byte, error) {
-	plain, bom := jsoncPlain(data)
-	if len(bytes.TrimSpace(plain)) == 0 {
+	if jsoncBlank(data) {
 		fresh, err := json.MarshalIndent(nestJSONMap(path, raw), "", "  ")
 		if err != nil {
 			return nil, err
 		}
 		return append(fresh, '\n'), nil
+	}
+	plain, bom, err := jsoncStandard(data)
+	if err != nil {
+		return nil, err
 	}
 	dec := json.NewDecoder(bytes.NewReader(plain))
 	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {

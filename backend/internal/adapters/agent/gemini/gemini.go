@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/tailscale/hujson"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
@@ -204,7 +206,12 @@ func geminiAPIKeySelected(path string) (bool, error) {
 			} `json:"auth"`
 		} `json:"security"`
 	}
-	if err := json.Unmarshal(stripGeminiJSONComments(data), &settings); err != nil {
+	// Gemini CLI accepts comments in settings.json.
+	plain, err := hujson.Standardize(data)
+	if err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(plain, &settings); err != nil {
 		return false, err
 	}
 	return settings.Security.Auth.SelectedType == "gemini-api-key", nil
@@ -238,50 +245,6 @@ func geminiLocalAuthStatus(ctx context.Context, home string) (ports.AgentAuthSta
 		}
 	}
 	return ports.AgentAuthStatusUnknown, nil
-}
-
-// StripJSONComments applies the comment handling Gemini CLI uses for
-// settings.json, for code outside this package that reads or edits it.
-func StripJSONComments(data []byte) []byte { return stripGeminiJSONComments(data) }
-
-// Gemini CLI accepts comments in settings.json. Replace them with whitespace
-// so quoted strings and the remaining JSON retain their original boundaries.
-func stripGeminiJSONComments(data []byte) []byte {
-	out := append([]byte(nil), data...)
-	inString, escaped := false, false
-	for i := 0; i < len(out); i++ {
-		switch {
-		case inString:
-			if escaped {
-				escaped = false
-			} else if out[i] == '\\' {
-				escaped = true
-			} else if out[i] == '"' {
-				inString = false
-			}
-		case out[i] == '"':
-			inString = true
-		case out[i] == '/' && i+1 < len(out) && out[i+1] == '/':
-			for i < len(out) && out[i] != '\n' && out[i] != '\r' {
-				out[i] = ' '
-				i++
-			}
-		case out[i] == '/' && i+1 < len(out) && out[i+1] == '*':
-			out[i], out[i+1] = ' ', ' '
-			i += 2
-			for i+1 < len(out) && (out[i] != '*' || out[i+1] != '/') {
-				if out[i] != '\n' && out[i] != '\r' {
-					out[i] = ' '
-				}
-				i++
-			}
-			if i+1 < len(out) {
-				out[i], out[i+1] = ' ', ' '
-				i++
-			}
-		}
-	}
-	return out
 }
 
 // ConfigHome is the directory Gemini CLI treats as home: GEMINI_CLI_HOME

@@ -1,7 +1,6 @@
 package agentauth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -198,7 +197,7 @@ func readQwenSettings(path string) (map[string]json.RawMessage, []byte, error) {
 	if readErr != nil || len(data) > 64*1024 {
 		return nil, nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Qwen's settings could not be read.")
 	}
-	if plain, _ := jsoncPlain(data); len(bytes.TrimSpace(plain)) == 0 {
+	if jsoncBlank(data) {
 		return map[string]json.RawMessage{}, data, nil
 	}
 	var root map[string]json.RawMessage
