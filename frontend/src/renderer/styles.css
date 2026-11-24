@@ -7344,7 +7344,7 @@ html[data-new-desktop-ui] :is([data-slot="tooltip-content"], [data-slot="hover-c
 }
 
 @media (prefers-reduced-motion: reduce) {
-	html[data-new-desktop-ui] [class*="animate-popover-in"] {
+	html[data-new-desktop-ui] [class*="animate-popover-in"]:not([data-state="closed"]) {
 		animation: none;
 	}
 }
