@@ -88,22 +88,31 @@ function Ask({ dialog, answer, pickers }: { dialog: BrowserDialog; answer: Answe
 					<Button label={copy.cancel} role="cancel" onPress={() => answer(null)} />
 				</Choices>
 			);
-		case "filechooser": {
-			const none = () => answer({ type: "files", payload: { files: [], folder: dialog.folder } });
-			return (
-				<Choices title={askTitle(dialog)} onDismiss={none}>
-					{fileSources(dialog).map((source) => (
-						<Button
-							key={source}
-							label={source === "photos" ? copy.photos : copy.files(dialog.multiple)}
-							onPress={() => void answerWithFiles(source, dialog, answer, pickers())}
-						/>
-					))}
-					<Button label={copy.cancel} role="cancel" onPress={none} />
-				</Choices>
-			);
-		}
+		case "filechooser":
+			return <FileSourceChoices dialog={dialog} answer={answer} pickers={pickers} />;
 	}
+}
+
+function FileSourceChoices({ dialog, answer, pickers }: { dialog: Extract<BrowserDialog, { kind: "filechooser" }>; answer: Answer; pickers: () => BrowserAskSheetProps["pickers"] }) {
+	// Choosing a source dismisses the dialog too, while its picker is still
+	// open: only a dismissal with no source chosen cancels the input.
+	const chosen = useRef(false);
+	const none = () => { if (!chosen.current) answer({ type: "files", payload: { files: [], folder: dialog.folder } }); };
+	return (
+		<Choices title={askTitle(dialog)} onDismiss={none}>
+			{fileSources(dialog).map((source) => (
+				<Button
+					key={source}
+					label={source === "photos" ? copy.photos : copy.files(dialog.multiple)}
+					onPress={() => {
+						chosen.current = true;
+						void answerWithFiles(source, dialog, answer, pickers());
+					}}
+				/>
+			))}
+			<Button label={copy.cancel} role="cancel" onPress={() => answer({ type: "files", payload: { files: [], folder: dialog.folder } })} />
+		</Choices>
+	);
 }
 
 /** Presented while mounted; dismissing it any other way is `onDismiss`. */

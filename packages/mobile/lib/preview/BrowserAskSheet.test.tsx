@@ -146,6 +146,30 @@ describe("BrowserAskSheet on iOS", () => {
 		expect(answers).toEqual([[chooser, { type: "files", payload: { folder: false, files: [{ uri: "file:///p.jpg", name: "p.jpg", type: "image/jpeg" }] } }]]);
 	});
 
+	it("keeps the picked files when choosing a source also dismisses its dialog", async () => {
+		let pick!: (result: { canceled: boolean; assets: Array<{ uri: string; fileName: string }> }) => void;
+		const pickers = {
+			launchImageLibraryAsync: vi.fn(() => new Promise<{ canceled: boolean; assets: Array<{ uri: string; fileName: string }> }>((resolve) => { pick = resolve; })),
+			getDocumentAsync: vi.fn(async () => ({ canceled: true, assets: null })),
+		};
+		const chooser: BrowserDialog = { kind: "filechooser", multiple: false, accept: "", folder: false };
+		ask(chooser, pickers);
+		const dialog = all("ConfirmationDialog")[0]!;
+		await press("Photo Library");
+		// SwiftUI dismisses the dialog for the tap, while the picker is still open.
+		await act(async () => dialog.props.onIsPresentedChange(false));
+		expect(answers).toEqual([]);
+		await act(async () => pick({ canceled: false, assets: [{ uri: "file:///p.jpg", fileName: "p.jpg" }] }));
+		expect(answers).toEqual([[chooser, { type: "files", payload: { folder: false, files: [{ uri: "file:///p.jpg", name: "p.jpg" }] } }]]);
+	});
+
+	it("cancels the chooser when its source dialog is dismissed without a choice", async () => {
+		const chooser: BrowserDialog = { kind: "filechooser", multiple: false, accept: "", folder: false };
+		ask(chooser);
+		await act(async () => all("ConfirmationDialog")[0]!.props.onIsPresentedChange(false));
+		expect(answers).toEqual([[chooser, { type: "files", payload: { files: [], folder: false } }]]);
+	});
+
 	it("offers only Files for an input that takes no images, and cancels with no files", async () => {
 		const chooser: BrowserDialog = { kind: "filechooser", multiple: true, accept: ".pdf", folder: false };
 		ask(chooser);
