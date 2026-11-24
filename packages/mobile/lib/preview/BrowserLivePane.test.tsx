@@ -590,6 +590,27 @@ describe("transport contract", () => {
 			expect(fake.record.sent).toHaveLength(1);
 		});
 
+		// Found on the Android emulator: the system file picker sends the app to
+		// the background, which drops the stream; the picked files must still go.
+		it("sends a file chooser's files after the stream reconnects for the picker", async () => {
+			const first = await asking();
+			const chooser = { kind: "filechooser", multiple: false, accept: "", folder: false } as const;
+			await act(async () => first.record.handlers!.onDialog!(chooser));
+			const answer = sheet().props.onAnswer as (dialog: unknown, command: unknown) => void;
+			// The app goes to the background for the picker, and comes back on a new stream.
+			const second = fakeTransport({ dialogs: true, auth: true, select: true, files: true, downloads: true });
+			await act(async () => { screen.update(<BrowserLivePane sessionID="cloud-1" transport={second.factory} />); });
+			const files = { type: "files", payload: { files: [{ uri: "file:///n.txt", name: "n.txt" }], folder: false } };
+			await act(async () => answer(chooser, files));
+			expect(second.record.sent).toEqual([]);
+			await act(async () => {
+				second.record.handlers!.onStatus("open");
+				second.record.handlers!.onState({ ...page, control: "human" } as never);
+			});
+			expect(second.record.sent).toEqual([files]);
+			expect(first.record.sent).toEqual([]);
+		});
+
 		it("sends no answer while the agent drives", async () => {
 			const fake = await asking("agent");
 			const auth = { kind: "auth", origin: "https://a.example", failed: false } as const;
