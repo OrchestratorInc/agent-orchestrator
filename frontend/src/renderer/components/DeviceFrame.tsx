@@ -71,19 +71,19 @@ const FRAMES: Record<DeviceFrameKind, FrameSpec> = {
 const BUTTON_DEPTH = 0.011;
 
 /**
- * Polished titanium, the same in both themes like the real hardware. A conic
+ * Graphite titanium (like Space Black), the same in both themes like the real hardware. A conic
  * sweep alternates light and dark around the rim the way a curved metal edge
  * reflects a room, so it reads as metal on the dark canvas and the light one.
  */
 const METAL_BAND =
-	"conic-gradient(from 25deg, #8a8d93, #eceef0 7%, #a3a6ab 15%, #d3d5d8 24%, #6c6f75 35%, #c9cbce 46%, #f3f4f5 52%, #8f9298 61%, #dfe1e3 71%, #74777d 82%, #c5c7cb 92%, #8a8d93)";
+	"conic-gradient(from 25deg, #2c2d30, #6f7176 7%, #36383c 15%, #585a5f 24%, #1e1f22 35%, #4b4d52 46%, #84868b 52%, #313337 61%, #606267 71%, #222326 82%, #47494e 92%, #2c2d30)";
 /**
  * The rim's profile: a dark machined outer edge, a bright line just inside it
  * where the curve catches the light, and a soft shadow under the device.
  */
 const METAL_BAND_SHADOW = [
 	"inset 0 0 0 0.75px rgb(0 0 0 / 0.6)",
-	"inset 0 0 0 1.75px rgb(255 255 255 / 0.45)",
+	"inset 0 0 0 1.75px rgb(255 255 255 / 0.28)",
 	"0 1px 2px rgb(0 0 0 / 0.25)",
 	"0 20px 44px -18px rgb(0 0 0 / 0.5)",
 ].join(", ");
@@ -91,7 +91,7 @@ const METAL_BAND_SHADOW = [
 const BEZEL_SHADOW = "0 0 0 1px rgb(0 0 0 / 0.75), 0 0 3px 1px rgb(0 0 0 / 0.35), inset 0 0 0 1px rgb(255 255 255 / 0.07)";
 /** Side buttons: rounded metal, lit along the middle. */
 const METAL_BUTTON = (direction: string) =>
-	`linear-gradient(${direction}, #4f5258 0%, #b9bcc0 30%, #f2f3f5 50%, #a2a5aa 70%, #4f5258 100%)`;
+	`linear-gradient(${direction}, #1c1d20 0%, #4c4e53 30%, #85878c 50%, #45474c 70%, #1c1d20 100%)`;
 
 /** Screen width ÷ height to assume until the first frame says otherwise. */
 const DEFAULT_SCREEN_ASPECT: Record<DeviceFrameKind, number> = {
