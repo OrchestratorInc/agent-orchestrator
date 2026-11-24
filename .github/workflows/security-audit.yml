@@ -78,7 +78,7 @@ jobs:
         with:
           node-version: 24
 
-      # Blocking: what the desktop app ships. That is the renderer's runtime
+      # Blocking: what the desktop app ships. Here, the renderer's runtime
       # dependencies plus Electron itself, which is a devDependency and so
       # invisible to `--omit=dev`.
       - name: Shipped desktop dependencies
@@ -94,6 +94,12 @@ jobs:
               process.exit(1);
             }
           ' "$RUNNER_TEMP/frontend-audit.json"
+
+      # Blocking: the pinned ACP adapters packaged into the app with their own
+      # Node runtime.
+      - name: Shipped ACP runtime dependencies
+        working-directory: frontend/acp-runtime
+        run: npm audit --omit=dev --audit-level=moderate
 
       # Report only, until the existing dev and build-tool backlog is cleared:
       # every lockfile, dev dependencies included, summarized on the run page.
