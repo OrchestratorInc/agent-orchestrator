@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 type schedulerMemoryStore struct {
@@ -121,6 +122,16 @@ func (f *schedulerMemoryStore) MarkAutomationRunRunning(_ context.Context, id do
 	return true, nil
 }
 
+func (f *schedulerMemoryStore) RecordAutomationRunOutcome(_ context.Context, id domain.AutomationRunID, failure string, now time.Time) (bool, error) {
+	run := f.runs[id]
+	if run.Status != domain.AutomationRunRunning {
+		return false, nil
+	}
+	run.ErrorMessage, run.UpdatedAt = failure, now
+	f.runs[id] = run
+	return true, nil
+}
+
 func (f *schedulerMemoryStore) CompleteAutomationRun(_ context.Context, id domain.AutomationRunID, now time.Time) (bool, error) {
 	run := f.runs[id]
 	if run.Status != domain.AutomationRunRunning {
@@ -149,6 +160,7 @@ type recordingSpawner struct {
 	store          *schedulerMemoryStore
 	calls          []ports.SpawnConfig
 	kills          []domain.SessionID
+	requested      []domain.SessionID
 	killErr        error
 	killFreed      bool
 	spawnErr       error
@@ -180,6 +192,13 @@ func (s *recordingSpawner) Kill(_ context.Context, id domain.SessionID) (bool, e
 		s.store.sessions[id] = rec
 	}
 	return s.killFreed, nil
+}
+
+// RequestKill records a close that leaves cleanup commands in the background.
+func (s *recordingSpawner) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	s.requested = append(s.requested, id)
+	freed, err := s.Kill(ctx, id)
+	return sessionmanager.KillResult{Freed: freed}, err
 }
 
 // Catch-up dispatches the newest due occurrence without replaying stale work.
@@ -284,8 +303,8 @@ func TestReconcileRollsBackIncompleteAutomationSession(t *testing.T) {
 	if err := svc.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(spawner.kills) != 1 || spawner.kills[0] != sessionID {
-		t.Fatalf("killed sessions = %v, want [%s]", spawner.kills, sessionID)
+	if len(spawner.requested) != 1 || spawner.requested[0] != sessionID {
+		t.Fatalf("closed sessions = %v, want [%s] without waiting for cleanup", spawner.requested, sessionID)
 	}
 	if got := store.runs[runID].Status; got != domain.AutomationRunFailed {
 		t.Fatalf("run status = %s, want failed", got)
@@ -484,7 +503,7 @@ func TestFinishedScheduledWorkerReleasesNextRun(t *testing.T) {
 				t.Fatalf("spawns=%d want=%d", len(spawner.calls), wantSpawns)
 			}
 			if tc.wantComplete {
-				if !store.sessions[sid].IsTerminated || len(spawner.kills) != 1 {
+				if !store.sessions[sid].IsTerminated || len(spawner.requested) != 1 {
 					t.Fatal("session not closed before releasing run")
 				}
 				if got := store.runs[*spawner.calls[0].AutomationRunID].ScheduledFor; !got.Equal(now) {
@@ -554,8 +573,59 @@ func TestUnfinishedRunReleasesAtNextOccurrence(t *testing.T) {
 			if got.Status != tc.wantRelease || (got.Status == domain.AutomationRunFailed) != (got.ErrorMessage == "Did not finish before the next scheduled run") {
 				t.Fatalf("run=%+v, want %s", got, tc.wantRelease)
 			}
-			if closed := store.sessions[sid].IsTerminated; closed != (tc.kind == domain.KindOrchestrator) {
-				t.Fatalf("session closed=%v kills=%v", closed, spawner.kills)
+			if closed := store.sessions[sid].IsTerminated; closed != (tc.kind == domain.KindOrchestrator) || len(spawner.requested) != len(spawner.kills) {
+				t.Fatalf("session closed=%v kills=%v requested=%v", closed, spawner.kills, spawner.requested)
+			}
+			if len(spawner.calls) != 1 || *spawner.calls[0].AutomationRunID != "today" {
+				t.Fatalf("spawns=%+v, want today's run", spawner.calls)
+			}
+		})
+	}
+}
+
+// A closed orchestrator is no longer idle, so its readiness is recorded before
+// the close. If the session ends but the close reports an error, the next pass
+// still fails an unfinished run instead of completing it.
+func TestInterruptedOrchestratorCloseKeepsRecordedOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ready bool
+		want  domain.AutomationRunStatus
+	}{
+		{name: "unfinished", want: domain.AutomationRunFailed},
+		{name: "finished", ready: true, want: domain.AutomationRunCompleted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 11, 8, 3, 30, 0, 0, time.UTC)
+			yesterday := now.Add(-24 * time.Hour)
+			store := newSchedulerStore()
+			store.ready = tc.ready
+			runID, sid := domain.AutomationRunID("yesterday"), domain.SessionID("orchestrator")
+			store.runs[runID] = domain.AutomationRun{ID: runID, AutomationID: "a", Status: domain.AutomationRunRunning, SessionID: &sid, ScheduledFor: yesterday}
+			store.runs["today"] = domain.AutomationRun{ID: "today", AutomationID: "a", Status: domain.AutomationRunPending, ScheduledFor: now}
+			store.automations["a"] = domain.Automation{ID: "a", Enabled: true, LastRunAt: &now, NextRunAt: now.Add(24 * time.Hour)}
+			store.sessions[sid] = domain.SessionRecord{ID: sid, Kind: domain.KindOrchestrator, Activity: domain.Activity{State: domain.ActivityIdle}, AutomationRunID: &runID}
+			spawner := &recordingSpawner{store: store, killErr: errors.New("cleanup marker write failed")}
+			svc := New(Deps{Store: store, Spawner: spawner, Clock: func() time.Time { return now }})
+
+			if err := svc.Tick(context.Background(), now); err == nil {
+				t.Fatal("Tick succeeded, want the close error")
+			}
+			if got := store.runs[runID]; got.Status != domain.AutomationRunRunning || len(spawner.calls) != 0 {
+				t.Fatalf("run=%+v spawns=%d, want held until the session ends", got, len(spawner.calls))
+			}
+			// The kill ended the session even though it reported an error.
+			session := store.sessions[sid]
+			session.IsTerminated, session.Activity.State = true, domain.ActivityExited
+			store.sessions[sid] = session
+			spawner.killErr = nil
+
+			if err := svc.Tick(context.Background(), now); err != nil {
+				t.Fatal(err)
+			}
+			got := store.runs[runID]
+			if got.Status != tc.want || (got.Status == domain.AutomationRunFailed) != (got.ErrorMessage == unfinishedRunMessage) {
+				t.Fatalf("run=%+v, want %s", got, tc.want)
 			}
 			if len(spawner.calls) != 1 || *spawner.calls[0].AutomationRunID != "today" {
 				t.Fatalf("spawns=%+v, want today's run", spawner.calls)

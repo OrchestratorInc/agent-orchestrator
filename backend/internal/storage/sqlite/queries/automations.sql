@@ -142,6 +142,13 @@ SET status = 'running', session_id = ?, started_at = ?,
     lease_expires_at = NULL, error_message = NULL, updated_at = ?
 WHERE id = ? AND status = 'spawning';
 
+-- Before a running session is closed, record the failure its run takes when
+-- that session ends. NULL means the run completes.
+-- name: RecordAutomationRunOutcome :execrows
+UPDATE automation_runs
+SET error_message = ?, updated_at = ?
+WHERE id = ? AND status = 'running';
+
 -- name: CompleteAutomationRun :execrows
 UPDATE automation_runs
 SET status = 'completed', finished_at = ?, claimed_at = NULL,

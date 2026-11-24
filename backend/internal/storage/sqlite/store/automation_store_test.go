@@ -392,6 +392,42 @@ func TestAutomationClaimSupersedesStalePendingWithoutOverlap(t *testing.T) {
 	}
 }
 
+// A running run keeps the outcome recorded before its session is closed, so a
+// later pass can end it correctly. Only a running run accepts one.
+func TestAutomationRunRecordsOutcomeWhileRunning(t *testing.T) {
+	store := newTestStore(t)
+	seedProject(t, store, "scheduled")
+	ctx := context.Background()
+	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
+	if _, err := store.CreateAutomation(ctx, domain.Automation{
+		ID: "automation-1", ProjectID: "scheduled", DisplayName: "Triage", Prompt: "Review",
+		Kind: domain.KindOrchestrator, RRuleText: "FREQ=DAILY", Timezone: "UTC", Enabled: true,
+		NextRunAt: base.Add(24 * time.Hour), CreatedAt: base, UpdatedAt: base,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i, status := range []domain.AutomationRunStatus{domain.AutomationRunRunning, domain.AutomationRunPending} {
+		if _, _, err := store.CreateAutomationRun(ctx, domain.AutomationRun{
+			ID: domain.AutomationRunID("run-" + string(status)), AutomationID: "automation-1",
+			ScheduledFor: base.Add(time.Duration(i) * time.Hour), Status: status, CreatedAt: base, UpdatedAt: base,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, failure := range []string{"Did not finish before the next scheduled run", ""} {
+		if ok, err := store.RecordAutomationRunOutcome(ctx, "run-running", failure, base); err != nil || !ok {
+			t.Fatalf("record %q: ok=%v err=%v", failure, ok, err)
+		}
+		run, _, err := store.GetAutomationRun(ctx, "run-running")
+		if err != nil || run.Status != domain.AutomationRunRunning || run.ErrorMessage != failure {
+			t.Fatalf("run=%+v err=%v, want running with %q", run, err, failure)
+		}
+	}
+	if ok, err := store.RecordAutomationRunOutcome(ctx, "run-pending", "unused", base); err != nil || ok {
+		t.Fatalf("record on pending run: ok=%v err=%v", ok, err)
+	}
+}
+
 // Deleting a definition removes history while preserving linked sessions and
 // clearing their origin link through ON DELETE SET NULL.
 func TestAutomationDeleteCascadesRunsButPreservesSession(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
 const (
@@ -17,12 +18,18 @@ const (
 	dispatchScanLimit = 100
 	spawnLease        = 2 * time.Minute
 	maxRunErrorBytes  = 512
+
+	unfinishedRunMessage = "Did not finish before the next scheduled run"
 )
 
 // SessionSpawner is the existing user-facing session launch boundary.
 type SessionSpawner interface {
 	Spawn(context.Context, ports.SpawnConfig) (domain.Session, int, int, error)
 	Kill(context.Context, domain.SessionID) (bool, error)
+	// RequestKill returns once the controller is closed and termination is
+	// durable. Untimed cleanup commands continue on background workers, which
+	// hold the session's operation guard, so Tick and Reconcile never wait on them.
+	RequestKill(context.Context, domain.SessionID) (sessionmanager.KillResult, error)
 }
 
 // schedulerStore is deliberately separate from CRUD Store so focused CRUD
@@ -36,6 +43,7 @@ type schedulerStore interface {
 	GetSessionByAutomationRunID(context.Context, domain.AutomationRunID) (domain.SessionRecord, bool, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	MarkAutomationRunRunning(context.Context, domain.AutomationRunID, domain.SessionID, time.Time) (bool, error)
+	RecordAutomationRunOutcome(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
 	CompleteAutomationRun(context.Context, domain.AutomationRunID, time.Time) (bool, error)
 	FailAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
 	ReleaseAutomationRun(context.Context, domain.AutomationRunID, string, time.Time) (bool, error)
@@ -264,7 +272,7 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 			if ready && s.spawner != nil {
 				// Keep the active run's non-overlap fence until its controller
 				// is closed. A failed kill must never release the next run.
-				if _, err := s.spawner.Kill(ctx, session.ID); err != nil {
+				if _, err := s.spawner.RequestKill(ctx, session.ID); err != nil {
 					problems = append(problems, fmt.Errorf("close finished automation session %s: %w", session.ID, err))
 					continue
 				}
@@ -272,7 +280,13 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 			}
 		}
 		if session.IsTerminated {
-			if _, err := store.CompleteAutomationRun(ctx, run.ID, now); err != nil {
+			// An outcome recorded before an interrupted close still decides the run.
+			if run.ErrorMessage != "" {
+				_, err = store.FailAutomationRun(ctx, run.ID, run.ErrorMessage, now)
+			} else {
+				_, err = store.CompleteAutomationRun(ctx, run.ID, now)
+			}
+			if err != nil {
 				problems = append(problems, err)
 			}
 			continue
@@ -298,7 +312,19 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 				problems = append(problems, err)
 				continue
 			}
-			if _, err := s.spawner.Kill(ctx, session.ID); err != nil {
+			// Readiness needs a live, idle session, so record it before closing.
+			// A later pass reads it if this one ends the session but not the run.
+			failure := ""
+			if !finished {
+				failure = unfinishedRunMessage
+			}
+			if recorded, err := store.RecordAutomationRunOutcome(ctx, run.ID, failure, now); err != nil || !recorded {
+				if err != nil {
+					problems = append(problems, err)
+				}
+				continue
+			}
+			if _, err := s.spawner.RequestKill(ctx, session.ID); err != nil {
 				problems = append(problems, fmt.Errorf("close automation orchestrator %s: %w", session.ID, err))
 				continue
 			}
@@ -309,7 +335,7 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 				continue
 			}
 		}
-		if _, err := store.FailAutomationRun(ctx, run.ID, "Did not finish before the next scheduled run", now); err != nil {
+		if _, err := store.FailAutomationRun(ctx, run.ID, unfinishedRunMessage, now); err != nil {
 			problems = append(problems, err)
 		}
 	}
@@ -320,7 +346,7 @@ func (s *Service) rollbackIncompleteLaunch(ctx context.Context, store schedulerS
 	if s.spawner == nil {
 		return fmt.Errorf("cannot roll back incomplete automation session %s: session spawner is unavailable", session.ID)
 	}
-	if _, err := s.spawner.Kill(ctx, session.ID); err != nil {
+	if _, err := s.spawner.RequestKill(ctx, session.ID); err != nil {
 		return fmt.Errorf("roll back incomplete automation session %s: %w", session.ID, err)
 	}
 	_, err := store.FailAutomationRun(ctx, run.ID, "Recovered incomplete session launch", now)

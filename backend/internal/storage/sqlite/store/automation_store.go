@@ -335,6 +335,18 @@ func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.Automati
 	return rows > 0, nil
 }
 
+// RecordAutomationRunOutcome stores, on a running run, the failure it takes
+// when its session ends. An empty failure means the run completes.
+func (s *Store) RecordAutomationRunOutcome(ctx context.Context, id domain.AutomationRunID, failure string, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.RecordAutomationRunOutcome(ctx, gen.RecordAutomationRunOutcomeParams{ErrorMessage: nullableString(failure), UpdatedAt: now, ID: id})
+	if err != nil {
+		return false, fmt.Errorf("record automation run %s outcome: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // CompleteAutomationRun projects durable session termination into run history.
 func (s *Store) CompleteAutomationRun(ctx context.Context, id domain.AutomationRunID, now time.Time) (bool, error) {
 	s.writeMu.Lock()
