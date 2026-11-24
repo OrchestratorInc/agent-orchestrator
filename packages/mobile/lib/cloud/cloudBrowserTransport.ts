@@ -30,7 +30,14 @@ export type CloudBrowserTransportOptions = {
 	subscribeAppState?(listener: (state: string) => void): () => void;
 	/** Sends one picked file's bytes to the host; defaults to a streamed HTTP POST of the file. */
 	upload?(url: string, headers: Record<string, string>, file: BrowserPickedFile): Promise<void>;
+	/** Random bytes for an upload's folder name; defaults to expo-crypto (Hermes has no Web Crypto). */
+	randomBytes?(count: number): Uint8Array;
 };
+
+async function nativeRandomBytes(count: number): Promise<Uint8Array> {
+	const Crypto = await import("expo-crypto");
+	return Crypto.getRandomBytes(count);
+}
 
 // Streamed from the file's own URI, so its size never sits in JS memory.
 async function uploadFile(url: string, headers: Record<string, string>, file: BrowserPickedFile): Promise<void> {
@@ -281,20 +288,23 @@ export class CloudBrowserTransport implements BrowserTransport {
 	private async sendFiles(files: BrowserPickedFile[], folder: boolean): Promise<void> {
 		if (!files.length) return;
 		const socket = this.socket;
-		const token = await this.options.getToken();
-		if (!token) return;
-		const dir = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(12)), (byte) => byte.toString(16).padStart(2, "0")).join("");
-		const base = cloudBrowserHTTPBase(this.options.baseUrl, this.options.orgId, this.options.sessionId);
-		const upload = this.options.upload ?? uploadFile;
-		for (const file of files) {
-			try {
+		// Every step, getting ready included, reports a failure: send() doesn't wait for this.
+		let current = files[0]!;
+		try {
+			const token = await this.options.getToken();
+			if (!token) throw new TypeError("Not signed in");
+			const bytes = this.options.randomBytes ? this.options.randomBytes(12) : await nativeRandomBytes(12);
+			const dir = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+			const base = cloudBrowserHTTPBase(this.options.baseUrl, this.options.orgId, this.options.sessionId);
+			const upload = this.options.upload ?? uploadFile;
+			for (const file of files) {
+				current = file;
 				await upload(`${base}/upload?dir=${dir}&name=${encodeURIComponent(file.name)}`, { Authorization: `Bearer ${token}` }, file);
-			} catch {
-				if (this.socket === socket) this.handlers.onStatus("open", `Couldn't send ${file.name} to the page.`);
-				return;
 			}
+			if (this.socket === socket && socket?.readyState === OPEN) socket.send(JSON.stringify({ t: "upload", dir, names: files.map((file) => file.name), folder }));
+		} catch {
+			if (this.socket === socket) this.handlers.onStatus("open", `Couldn't send ${current.name} to the page.`);
 		}
-		if (this.socket === socket && socket?.readyState === OPEN) socket.send(JSON.stringify({ t: "upload", dir, names: files.map((file) => file.name), folder }));
 	}
 
 	private encodeInput(payload: Record<string, unknown>): Record<string, unknown> | null {
