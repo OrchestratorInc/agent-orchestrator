@@ -94,11 +94,28 @@ function notify() {
 	for (const listener of listeners) listener();
 }
 
+/**
+ * Re-renders the readers when the session's window ends, so they ask again. A
+ * timer can fire before Date.now() reaches the window's end (a busy event loop
+ * schedules from a clock behind it), when readers would still see the wait and
+ * nothing would wake them again: then it waits out the rest.
+ */
+function endWindowAfter(key: string, waitMs: number): ReturnType<typeof setTimeout> {
+	return setTimeout(() => {
+		const entry = entries.get(key);
+		const left = entry ? entry.until - Date.now() : 0;
+		if (entry && left > 0) {
+			entry.timer = endWindowAfter(key, left);
+			return;
+		}
+		notify();
+	}, waitMs);
+}
+
 function setEntry(key: string, entry: Omit<StartingEntry, "until" | "timer">, waitMs: number, now: number) {
 	const previous = entries.get(key);
 	if (previous?.timer) clearTimeout(previous.timer);
-	// The window's end re-renders the readers, which then ask again.
-	const timer = waitMs > 0 ? setTimeout(notify, waitMs) : undefined;
+	const timer = waitMs > 0 ? endWindowAfter(key, waitMs) : undefined;
 	entries.set(key, { ...entry, until: waitMs > 0 ? now + waitMs : 0, timer });
 	notify();
 }

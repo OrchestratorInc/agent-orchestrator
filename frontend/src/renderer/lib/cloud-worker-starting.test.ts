@@ -10,6 +10,7 @@ import {
 	isCloudWorkerStarting,
 	MAX_STARTING_TIMEOUTS,
 	MAX_STARTING_WAIT_MS,
+	noteCloudWorkerStarting,
 	recordCloudWorkspaceStartupEvent,
 	resetCloudWorkerStartingForTests,
 	subscribeCloudWorkerStarting,
@@ -79,6 +80,22 @@ describe("the session's starting backoff", () => {
 		vi.advanceTimersByTime(10_000);
 		await expect(cloudWorkerRequest("org", "s", send)).resolves.toEqual({ ok: true });
 		expect(cloudWorkerStartingWait("org", "s")).toBe(false);
+		unsubscribe();
+	});
+
+	it("lets the readers go when a window's timer fires before the clock reaches the window's end", () => {
+		// A busy event loop schedules timers from a clock behind Date.now(), so the
+		// timer can fire while the window has a few milliseconds left.
+		const seen: boolean[] = [];
+		const unsubscribe = subscribeCloudWorkerStarting(() => seen.push(cloudWorkerStartingWait("org", "s")));
+		noteCloudWorkerStarting("org", "s", starting(1_000), Date.now() + 40);
+		seen.length = 0;
+		vi.advanceTimersByTime(1_000);
+		expect(cloudWorkerStartingWait("org", "s")).toBe(true);
+		vi.advanceTimersByTime(40);
+		expect(cloudWorkerStartingWait("org", "s")).toBe(false);
+		// The readers heard of it once the wait was over, so they ask again.
+		expect(seen.at(-1)).toBe(false);
 		unsubscribe();
 	});
 
