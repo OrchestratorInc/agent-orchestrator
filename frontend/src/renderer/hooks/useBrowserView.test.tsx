@@ -166,6 +166,7 @@ function setupBridge() {
 		completeAnnotation: vi.fn(async () => undefined),
 		discardAnnotations: vi.fn(async () => undefined),
 		annotationAction: vi.fn(async () => undefined),
+		setRegionSelectMode: vi.fn(async () => false),
 		onNavState: vi.fn((listener: Listener) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
@@ -192,6 +193,8 @@ function setupBridge() {
 		onProfileManage: vi.fn(() => () => undefined),
 		onAnnotationSubmit: vi.fn(() => () => undefined),
 		onAnnotationCancel: vi.fn(() => () => undefined),
+		onRegionSelectCaptured: vi.fn(() => () => undefined),
+		onRegionSelectCancel: vi.fn(() => () => undefined),
 		onAnnotationState: vi.fn((listener: AnnotationStateListener) => {
 			annotationStateListeners.add(listener);
 			return () => annotationStateListeners.delete(listener);

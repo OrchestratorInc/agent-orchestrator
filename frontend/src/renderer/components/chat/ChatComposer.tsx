@@ -134,7 +134,7 @@ import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
-import { subscribeChatComposerReferences, subscribeChatComposerText, takeComposerHandoff, type ComposerHandoff } from "../../lib/chat-context-bus";
+import { subscribeChatComposerImages, subscribeChatComposerReferences, subscribeChatComposerText, takeComposerHandoff, type ComposerHandoff } from "../../lib/chat-context-bus";
 
 /**
  * AO's own `/model`: it opens the composer's agent and model menu instead of
@@ -2487,6 +2487,25 @@ export const ChatComposer = memo(function ChatComposer({
 		uiUsage.attachmentAdded("paste");
 		attachFiles(files);
 	}
+
+	// An image from another panel (the Browser panel's region snip) joins the
+	// draft the way a pasted one does, under the same conditions.
+	const acceptImageRef = useRef<(file: File) => boolean>(() => false);
+	// Set at commit, so the listener never runs a callback from a discarded render.
+	useLayoutEffect(() => {
+		acceptImageRef.current = (file) => {
+			if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return false;
+			if (fileAttachments.attachments.length + fileAttachments.pendingAttachments.length >= MAX_ATTACHMENTS) return false;
+			attachFiles([file]);
+			// The Chat surface may only now be coming forward.
+			window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
+			return true;
+		};
+	});
+	useEffect(() => {
+		if (!draftSessionId || !canAttach) return;
+		return subscribeChatComposerImages(draftSessionId, (file) => acceptImageRef.current(file));
+	}, [canAttach, draftSessionId]);
 
 	function onDrop(event: DragEvent<HTMLFormElement>) {
 		setDragging(false);

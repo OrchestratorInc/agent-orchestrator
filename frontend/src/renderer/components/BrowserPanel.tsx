@@ -62,6 +62,7 @@ import {
 	RefreshCw,
 	Settings2,
 	Smartphone,
+	SquareDashedMousePointer,
 	Tablet,
 	Trash2,
 	UserRound,
@@ -73,6 +74,9 @@ import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
 import { useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
+import { regionSelectFileName, type BrowserRegionSelectCapturedPayload } from "../../shared/browser-region-select";
+import { sendImageToChat, useHasChatImageComposer } from "../lib/chat-context-bus";
+import { sessionUiKey } from "../lib/hosts";
 import type { BrowserProfile } from "../../shared/browser-profiles";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
@@ -482,6 +486,23 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// Not on an agent tab: its page is its viewer's picture of the agent's page.
 	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
 	const canAnnotate = Boolean(session && window.ao?.browser && viewId && navState.url && !onAgentTab);
+	// Region snip: the capture goes to this session's Chat composer, so the
+	// control needs one that can take an attachment. No session (a Settings
+	// login page) means no composer, so the control stays off.
+	const chatKey = session ? sessionUiKey(session.id, session.hostId) : "";
+	const chatTakesImages = useHasChatImageComposer(chatKey);
+	const canSelectArea = canAnnotate && chatTakesImages;
+	// Keyed by view so a session switch never inherits another view's snip.
+	const [regionSelectViewId, setRegionSelectViewId] = useState("");
+	const regionSelecting = Boolean(viewId) && regionSelectViewId === viewId;
+	// The view the panel shows right now, read after an async snip start.
+	const shownViewIdRef = useRef(viewId);
+	useEffect(() => {
+		shownViewIdRef.current = viewId;
+		return () => {
+			shownViewIdRef.current = "";
+		};
+	}, [viewId]);
 	// An agent tab's localhost page is the host's: opened here it would be this
 	// computer's own. Before the viewer's first report the tab shows the viewer
 	// itself, an ao-preview-….localhost address, so that is held back too.
@@ -734,6 +755,65 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		}
 	}, [showGlobalToast, t, viewId]);
 
+	const toggleRegionSelect = async () => {
+		const bridge = window.ao?.browser;
+		if (!bridge || !viewId) return;
+		if (regionSelecting) {
+			setRegionSelectViewId("");
+			await bridge.setRegionSelectMode({ viewId, enabled: false }).catch(() => false);
+			return;
+		}
+		if (!canSelectArea) return;
+		// One page tool at a time: the snip overlay would sit over Annotate's.
+		if (annotationMode || status === "picking") {
+			await setAnnotationMode(false).catch(() => undefined);
+			cancelPicking();
+		}
+		try {
+			const started = await bridge.setRegionSelectMode({ viewId, enabled: true });
+			if (shownViewIdRef.current !== viewId) {
+				// The panel left this view (session switch, unmount) before main
+				// answered, so the leave cleanup never saw the snip. Take its
+				// overlay off here.
+				if (started) await bridge.setRegionSelectMode({ viewId, enabled: false }).catch(() => false);
+				return;
+			}
+			setRegionSelectViewId(started ? viewId : "");
+			if (!started) showGlobalToast(t("browser.selectAreaFailed"), undefined, "top-center");
+		} catch {
+			setRegionSelectViewId("");
+			showGlobalToast(t("browser.selectAreaFailed"), undefined, "top-center");
+		}
+	};
+
+	useEffect(() => {
+		const bridge = window.ao?.browser;
+		if (!bridge || !viewId) return;
+		const offCaptured = bridge.onRegionSelectCaptured((payload) => {
+			if (payload.viewId !== viewId) return;
+			setRegionSelectViewId("");
+			const added = sendImageToChat(chatKey, regionSelectFile(payload));
+			showGlobalToast(t(added ? "browser.selectAreaAdded" : "browser.selectAreaChatBusy"), undefined, "top-center");
+		});
+		const offCancel = bridge.onRegionSelectCancel((payload) => {
+			if (payload.viewId !== viewId) return;
+			setRegionSelectViewId("");
+			if (payload.reason === "failed") showGlobalToast(t("browser.selectAreaFailed"), undefined, "top-center");
+		});
+		return () => {
+			offCaptured();
+			offCancel();
+		};
+	}, [chatKey, showGlobalToast, t, viewId]);
+
+	// Leaving the view (session switch, unmount) takes the overlay off its page.
+	useEffect(() => {
+		if (!regionSelecting || !viewId) return;
+		return () => {
+			void window.ao?.browser.setRegionSelectMode({ viewId, enabled: false }).catch(() => false);
+		};
+	}, [regionSelecting, viewId]);
+
 	useEffect(() => {
 		setUrlInput(navState.url);
 		setUrlCopied(false);
@@ -916,6 +996,10 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			return;
 		}
 		const next = !(annotationMode || status === "picking");
+		if (next && regionSelecting) {
+			setRegionSelectViewId("");
+			void window.ao?.browser.setRegionSelectMode({ viewId, enabled: false }).catch(() => false);
+		}
 		try {
 			await setAnnotationMode(next);
 			if (next) {
@@ -1455,6 +1539,22 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 							</Button>
 					</span>
 				</BrowserControlTooltip>
+				<BrowserControlTooltip label={t(regionSelecting ? "browser.cancelSelectArea" : "browser.selectArea")}>
+					<span className="inline-flex">
+						<Button
+							aria-label={t(regionSelecting ? "browser.cancelSelectArea" : "browser.selectArea")}
+							aria-pressed={regionSelecting}
+							className="browser-panel__annotate-btn aria-pressed:before:opacity-0"
+							disabled={!regionSelecting && !canSelectArea}
+							onClick={() => void toggleRegionSelect()}
+							size="icon-sm"
+							type="button"
+							variant="quiet"
+						>
+							<SquareDashedMousePointer aria-hidden="true" className="size-icon-base" />
+						</Button>
+					</span>
+				</BrowserControlTooltip>
 				{browserDownloads.downloads.length > 0 ? (
 					<DropdownMenu
 						onOpenChange={(open) => {
@@ -1846,6 +1946,14 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		</div>
 	);
 });
+
+/** The snip's PNG as a file the composer can stage like a pasted image. */
+function regionSelectFile(payload: BrowserRegionSelectCapturedPayload): File {
+	const binary = atob(payload.image.data);
+	const bytes = new Uint8Array(binary.length);
+	for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+	return new File([bytes], regionSelectFileName(new Date()), { type: payload.image.mimeType });
+}
 
 function BrowserControlTooltip({
 	children,

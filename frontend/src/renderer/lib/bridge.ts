@@ -372,6 +372,7 @@ export const aoBridge: AoBridge =
 			completeAnnotation: async () => undefined,
 			discardAnnotations: async () => undefined,
 			annotationAction: async () => undefined,
+			setRegionSelectMode: async () => false,
 			onNavState: () => () => undefined,
 			onFindState: () => () => undefined,
 			onPageFocus: () => () => undefined,
@@ -383,6 +384,8 @@ export const aoBridge: AoBridge =
 			onProfileManage: () => () => undefined,
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
+			onRegionSelectCaptured: () => () => undefined,
+			onRegionSelectCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,
 		},
 		browserProfiles: {

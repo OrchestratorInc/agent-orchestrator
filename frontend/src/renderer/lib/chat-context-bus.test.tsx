@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { FileCodeReference } from "../../shared/file-annotations";
-import { sendReferenceToChat, subscribeChatComposerReferences, subscribeChatReveal, useAskInChat } from "./chat-context-bus";
+import { sendImageToChat, sendReferenceToChat, subscribeChatComposerImages, subscribeChatComposerReferences, subscribeChatReveal, useAskInChat, useHasChatImageComposer } from "./chat-context-bus";
 import { captureFileReference } from "../../shared/chat-file-reference";
 import { sessionUiKey } from "./hosts";
 
@@ -76,5 +76,47 @@ describe("useAskInChat", () => {
 		act(() => result.current?.(range));
 		expect(received).toHaveBeenCalledWith(expect.objectContaining({ path: "src/retry.ts", sessionId: "sess-remote", hostId: "box-2" }));
 		act(() => unsubscribe());
+	});
+});
+
+describe("sendImageToChat", () => {
+	const image = () => new File([new Uint8Array([1])], "browser-selection.png", { type: "image/png" });
+
+	it("is unavailable until a composer that can attach registers", () => {
+		const { result } = renderHook(() => useHasChatImageComposer("image-availability"));
+		expect(result.current).toBe(false);
+		expect(sendImageToChat("image-availability", image())).toBe(false);
+		let stop = () => {};
+		act(() => {
+			stop = subscribeChatComposerImages("image-availability", () => true);
+		});
+		expect(result.current).toBe(true);
+		act(() => stop());
+		expect(result.current).toBe(false);
+	});
+
+	it("hands the image to one composer and reveals the chat", () => {
+		const first = vi.fn(() => true);
+		const second = vi.fn(() => true);
+		const reveal = vi.fn();
+		const stops = [
+			subscribeChatComposerImages("image-once", first),
+			subscribeChatComposerImages("image-once", second),
+			subscribeChatReveal("image-once", reveal),
+		];
+		const file = image();
+		expect(sendImageToChat("image-once", file)).toBe(true);
+		expect(first).toHaveBeenCalledWith(file);
+		expect(second).not.toHaveBeenCalled();
+		expect(reveal).toHaveBeenCalledTimes(1);
+		for (const stop of stops) stop();
+	});
+
+	it("does not reveal the chat when the composer refuses the image", () => {
+		const reveal = vi.fn();
+		const stops = [subscribeChatComposerImages("image-busy", () => false), subscribeChatReveal("image-busy", reveal)];
+		expect(sendImageToChat("image-busy", image())).toBe(false);
+		expect(reveal).not.toHaveBeenCalled();
+		for (const stop of stops) stop();
 	});
 });

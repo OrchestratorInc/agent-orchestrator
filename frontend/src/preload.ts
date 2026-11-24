@@ -99,6 +99,11 @@ import type {
 	BrowserAnnotationSubmitPayload,
 } from "./shared/browser-annotations";
 import type {
+	BrowserRegionSelectCanceledPayload,
+	BrowserRegionSelectCapturedPayload,
+	BrowserRegionSelectModeInput,
+} from "./shared/browser-region-select";
+import type {
 	BrowserProfile,
 	BrowserProfileListState,
 	BrowserProfileUsageResult,
@@ -777,6 +782,9 @@ const api = {
 			ipcRenderer.invoke("browser:annotation:discard", input) as Promise<void>,
 		annotationAction: (input: BrowserAnnotationActionInput) =>
 			ipcRenderer.invoke("browser:annotation:action", input) as Promise<void>,
+		/** Resolves true when the snip overlay is up on the active tab. */
+		setRegionSelectMode: (input: BrowserRegionSelectModeInput) =>
+			ipcRenderer.invoke("browser:regionSelect:setMode", input) as Promise<boolean>,
 		onNavState: (listener: (state: BrowserNavState) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, state: BrowserNavState) => listener(state);
 			ipcRenderer.on("browser:navState", wrapped);
@@ -854,6 +862,20 @@ const api = {
 			ipcRenderer.on("browser:annotation:canceled", wrapped);
 			return () => {
 				ipcRenderer.off("browser:annotation:canceled", wrapped);
+			};
+		},
+		onRegionSelectCaptured: (listener: (payload: BrowserRegionSelectCapturedPayload) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: BrowserRegionSelectCapturedPayload) => listener(payload);
+			ipcRenderer.on("browser:regionSelect:captured", wrapped);
+			return () => {
+				ipcRenderer.off("browser:regionSelect:captured", wrapped);
+			};
+		},
+		onRegionSelectCancel: (listener: (payload: BrowserRegionSelectCanceledPayload) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, payload: BrowserRegionSelectCanceledPayload) => listener(payload);
+			ipcRenderer.on("browser:regionSelect:canceled", wrapped);
+			return () => {
+				ipcRenderer.off("browser:regionSelect:canceled", wrapped);
 			};
 		},
 		onAnnotationState: (listener: (payload: BrowserAnnotationStatePayload) => void) => {
