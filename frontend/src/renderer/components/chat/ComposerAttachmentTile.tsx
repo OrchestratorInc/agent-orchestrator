@@ -4,10 +4,10 @@ import { Play, X } from "@/components/app-icons";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
 import { artifactFileIcon } from "../artifact-file-icon";
-import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
 import { ChatImageDialog } from "./ChatImage";
+import { readTextPrefix, TEXT_PREVIEW_BYTES } from "./AttachmentFilePreview";
 import { attachmentPreviewKind, attachmentTypeLabel, formatAttachmentSize } from "./messageAttachments";
 
 const PdfPreview = lazy(() => import("../PdfPreview").then((module) => ({ default: module.PdfPreview })));
@@ -16,14 +16,14 @@ const PdfPreview = lazy(() => import("../PdfPreview").then((module) => ({ defaul
 const TILE_CLASS = "relative h-14 shrink-0 rounded-lg border border-border bg-interactive-hover";
 const SQUARE_CLASS = "size-14 overflow-hidden rounded-[inherit]";
 
-/** A tile's corner remove control: a small raised circle that overlaps the edge. */
+/**
+ * A tile's corner remove control: a solid disc ringed in the composer's color,
+ * so it reads over any picture. Its look lives in `.composer-tile-remove`:
+ * the `secondary` button fill turns clear in a translucent window.
+ */
 export function ComposerTileRemove({ label, disabled, onRemove }: { label: string; disabled?: boolean; onRemove: () => void }) {
 	return (
-		<Button
-			type="button"
-			variant="secondary"
-			size="none"
-			shape="pill"
+		<Pressable
 			disabled={disabled}
 			aria-label={label}
 			// Keep focus in the editor: removing a tile shouldn't move the caret.
@@ -31,10 +31,10 @@ export function ComposerTileRemove({ label, disabled, onRemove }: { label: strin
 				if (event.button === 0) event.preventDefault();
 			}}
 			onClick={onRemove}
-			className="absolute -right-1.5 -top-1.5 z-10 size-5 [&_svg]:size-3"
+			className="composer-tile-remove absolute -right-1.5 -top-1.5 z-10 flex size-5 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
 		>
-			<X aria-hidden="true" />
-		</Button>
+			<X aria-hidden="true" className="size-3" strokeWidth={2.25} />
+		</Pressable>
 	);
 }
 
@@ -82,7 +82,7 @@ export function ComposerAttachmentTile({
 	imageSrc?: string;
 	/** The picked file, previewed from disk while it is in memory. */
 	file?: File;
-	/** The staged copy's URL, used when the picked file is gone. */
+	/** The staged copy's URL (videos, PDFs and text files), used when the picked file is gone. */
 	mediaUrl?: string;
 	removeLabel: string;
 	removeDisabled?: boolean;
@@ -94,7 +94,13 @@ export function ComposerAttachmentTile({
 	const src = localUrl ?? mediaUrl;
 	if (imageSrc) return <ImageTile src={imageSrc} name={name}>{remove}</ImageTile>;
 	if (previewKind === "video" && src) return <VideoTile src={src} name={name}>{remove}</VideoTile>;
-	return <FileCard name={name} bytes={bytes} pdfSrc={previewKind === "pdf" ? src : undefined}>{remove}</FileCard>;
+	return (
+		<FileCard name={name} bytes={bytes}>
+			{previewKind === "pdf" && src ? <PdfThumbnail src={src} name={name} /> : null}
+			{previewKind === "text" ? <TextThumbnail file={file} url={mediaUrl} /> : null}
+			{remove}
+		</FileCard>
+	);
 }
 
 function ImageTile({ src, name, children }: { src: string; name: string; children: ReactNode }) {
@@ -166,22 +172,21 @@ function VideoTile({ src, name, children }: { src: string; name: string; childre
 	);
 }
 
-function FileCard({ name, bytes, pdfSrc, children }: { name: string; bytes?: number; pdfSrc?: string; children: ReactNode }) {
-	const [pdfFailed, setPdfFailed] = useState(false);
+/** The inset square a file card shows its preview in: a small page with rounded corners. */
+const THUMB_CLASS = "relative flex size-11 shrink-0 items-center justify-center overflow-hidden rounded-md";
+
+/**
+ * A file card: its thumbnail, then the name and its type and size. The
+ * thumbnail is the first child that draws one, else the file type's icon.
+ */
+function FileCard({ name, bytes, children }: { name: string; bytes?: number; children: ReactNode }) {
 	const Icon = artifactFileIcon({ kind: "file", path: name });
 	const details = [attachmentTypeLabel(name), bytes === undefined ? undefined : formatAttachmentSize(bytes)].filter(Boolean).join(" · ");
 	return (
-		<li title={name} className={cn(TILE_CLASS, "flex max-w-60 items-center gap-2.5 pr-3")}>
-			<span aria-hidden="true" className={cn(SQUARE_CLASS, "relative flex shrink-0 items-center justify-center rounded-r-none")}>
-				{pdfSrc && !pdfFailed ? (
-					<span inert className="pointer-events-none absolute inset-0 flex flex-col overflow-hidden bg-white">
-						<Suspense fallback={null}>
-							<PdfPreview cover onError={() => setPdfFailed(true)} path={name} src={pdfSrc} />
-						</Suspense>
-					</span>
-				) : (
-					<Icon className="size-5 text-muted-foreground" />
-				)}
+		<li title={name} className={cn(TILE_CLASS, "flex max-w-64 items-center gap-3 p-1.5 pr-4")}>
+			{/* The icon shows until a preview paints over it, or when there is none. */}
+			<span aria-hidden="true" className={THUMB_CLASS}>
+				<Icon className="size-5 text-muted-foreground" />
 			</span>
 			<span className="flex min-w-0 flex-col gap-0.5 leading-tight">
 				<span className="truncate text-sm text-foreground">{name}</span>
@@ -192,11 +197,68 @@ function FileCard({ name, bytes, pdfSrc, children }: { name: string; bytes?: num
 	);
 }
 
+/** Lays a preview over the card's icon square. */
+function ThumbnailPage({ children }: { children: ReactNode }) {
+	return (
+		<span aria-hidden="true" inert className={cn(THUMB_CLASS, "pointer-events-none absolute left-1.5 top-1.5 block bg-white")}>
+			{children}
+		</span>
+	);
+}
+
+/** A PDF's first page, cropped to the card's square. */
+function PdfThumbnail({ src, name }: { src: string; name: string }) {
+	const [failed, setFailed] = useState(false);
+	if (failed) return null;
+	return (
+		<ThumbnailPage>
+			<span className="absolute inset-0 flex flex-col">
+				<Suspense fallback={null}>
+					<PdfPreview cover onError={() => setFailed(true)} path={name} src={src} />
+				</Suspense>
+			</span>
+		</ThumbnailPage>
+	);
+}
+
+/** The start of a text file, as a tiny page of monospace lines. */
+function TextThumbnail({ file, url }: { file?: File; url?: string }) {
+	const [text, setText] = useState<string>();
+	useEffect(() => {
+		setText(undefined);
+		const controller = new AbortController();
+		const read = file
+			? file.slice(0, TEXT_PREVIEW_BYTES).text()
+			: url
+				? fetch(`${url}${url.includes("?") ? "&" : "?"}raw=true`, {
+					signal: controller.signal,
+					headers: { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` },
+				}).then((response) => {
+					if (!response.ok) throw new Error(`Preview failed: ${response.status}`);
+					return readTextPrefix(response);
+				})
+				: undefined;
+		void read?.then((value) => {
+			if (!controller.signal.aborted) setText(value);
+		}).catch(() => undefined);
+		return () => controller.abort();
+	}, [file, url]);
+	if (!text?.trim()) return null;
+	return (
+		<ThumbnailPage>
+			{/* Drawn at a readable size and scaled down, so it reads as a page in miniature. */}
+			<pre className="absolute left-0 top-0 m-0 w-[275%] origin-top-left scale-[0.364] overflow-hidden whitespace-pre-wrap break-all p-2.5 font-mono text-micro leading-snug text-black/75">
+				{text}
+			</pre>
+		</ThumbnailPage>
+	);
+}
+
 /** A file still being read or staged: a card-shaped placeholder that can be cancelled. */
 export function ComposerPendingTile({ name, statusLabel, cancelLabel, onCancel }: { name: string; statusLabel: string; cancelLabel: string; onCancel: () => void }) {
 	return (
-		<li role="status" aria-label={statusLabel} className={cn(TILE_CLASS, "flex w-44 items-center gap-2.5 pr-3")}>
-			<span aria-hidden="true" className={cn(SQUARE_CLASS, "shrink-0 bg-surface motion-safe:animate-pulse")} />
+		<li role="status" aria-label={statusLabel} className={cn(TILE_CLASS, "flex w-44 items-center gap-3 p-1.5 pr-4")}>
+			<span aria-hidden="true" className={cn(THUMB_CLASS, "bg-surface motion-safe:animate-pulse")} />
 			<span aria-hidden="true" className="flex min-w-0 flex-1 flex-col gap-1.5">
 				<span className="relative truncate text-sm motion-safe:animate-pulse">
 					<span className="invisible">{name}</span>

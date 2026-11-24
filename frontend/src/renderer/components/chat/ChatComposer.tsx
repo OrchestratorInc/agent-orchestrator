@@ -974,9 +974,8 @@ export const ChatComposer = memo(function ChatComposer({
 		// while they are in memory, else as a file.
 		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
-		// Videos and PDFs preview from the staged copy once the picked file is gone.
-		const mediaKind = path ? attachmentPreviewKind(path) : undefined;
-		const mediaUrl = path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && (mediaKind === "video" || mediaKind === "pdf")
+		// Videos, PDFs and text files preview from the staged copy once the picked file is gone.
+		const mediaUrl = path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && attachmentPreviewKind(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined;
 		return { file, path, preview, mediaUrl };
 	});

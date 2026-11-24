@@ -17,14 +17,14 @@ import {
 const PdfPreview = lazy(() => import("../PdfPreview").then((module) => ({ default: module.PdfPreview })));
 
 /** Enough of a text file to fill a tile. */
-const TEXT_PREVIEW_BYTES = 2048;
+export const TEXT_PREVIEW_BYTES = 2048;
 
 /**
  * The first TEXT_PREVIEW_BYTES of a response, then the read is cancelled. A
  * file just sent is read from its local copy, which takes no Range, and it may
  * be gigabytes: reading it whole for a tile would stream all of it.
  */
-async function readTextPrefix(response: Response): Promise<string> {
+export async function readTextPrefix(response: Response): Promise<string> {
 	const reader = response.body?.getReader();
 	if (!reader) return (await response.text()).slice(0, TEXT_PREVIEW_BYTES);
 	const chunks: Uint8Array[] = [];
