@@ -90,7 +90,9 @@ export function EffortSlider({
 				event.stopPropagation();
 				commit(Math.min(Math.max(index + (event.key === "ArrowRight" ? 1 : -1), 0), choices.length - 1));
 			}}
-			className="flex-col items-stretch gap-1 text-xs text-foreground"
+			// No hover or highlight fill like the other rows: the slider is not picked by clicking the row.
+			// A keyboard visit rings the thumb instead.
+			className="group/effort flex-col items-stretch gap-1 text-xs text-foreground focus:before:bg-transparent data-highlighted:before:bg-transparent"
 		>
 			<span className="flex items-baseline justify-between gap-3">
 				<span>{label}</span>
@@ -134,7 +136,7 @@ export function EffortSlider({
 				))}
 				<span
 					className={cn(
-						"absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[3px] border border-(--color-border-strong) bg-card shadow-[0_1px_2px_rgb(0_0_0/0.12)]",
+						"absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-[3px] border border-(--color-border-strong) bg-card shadow-[0_1px_2px_rgb(0_0_0/0.12)] group-focus-visible/effort:ring-2 group-focus-visible/effort:ring-ring/60",
 						drag === undefined && "motion-safe:transition-[left] motion-safe:duration-150",
 						chosen < 0 && drag === undefined && sent === undefined && "opacity-70",
 					)}
