@@ -4367,6 +4367,20 @@ describe("useTaskLaunch agent choices", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
 			.toEqual(["agy: Not installed", "claude-code"]));
 	});
+
+	it("offers any agent the host has a Chat driver for, not installed, dimmed for setup", async () => {
+		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code", "agy"] } }
+			: { data: { status: "ok", project: { agent: "claude-code", config: {} } } });
+		h.agentCatalog = { agents: [
+			agentReadiness("claude-code", "Claude Code"),
+			agentReadiness("agy", "Antigravity", { installation: "not_installed" }),
+			agentReadiness("aider", "Aider", { installation: "not_installed" }),
+		] };
+		render(<Wrap><Choices /></Wrap>);
+		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort())
+			.toEqual(["agy: Not installed", "claude-code"]));
+	});
 });
 
 describe("useTaskLaunch Cloud start on send", () => {

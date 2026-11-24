@@ -16,7 +16,7 @@ import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useSettings } from "../../hooks/useSettings";
 import { agentModelDisplayLabel, mergeSameNamedModels, offeredCatalogModels, recordedModelName, splitClaudeModels } from "../../lib/agent-model-choices";
 import { agentLabel } from "../../lib/agent-options";
-import { CHAT_SWITCH_TARGETS, TERMINAL_ONE_SHOT_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
+import { chatSwitchTargets, TERMINAL_ONE_SHOT_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
 import { clientForSessionHost } from "../../lib/host-clients";
 import { rememberLastModel, useLastModels } from "../../lib/last-models";
 import {
@@ -264,13 +264,16 @@ export function AgentModelPicker({
 	// The agents to offer before a session exists, in place of the chat switch targets.
 	const choices = agentSwitch.agents;
 	const readiness = useAgentReadinessQuery(true, hostId).data?.agents;
+	const { settings: hostSettings } = useSettings(hostId);
+	// A Chat session can switch to any agent the host has a Chat driver for.
+	const chatTargets = useMemo(() => chatSwitchTargets(hostSettings?.chatHarnesses), [hostSettings?.chatHarnesses]);
 	// An agent can be ready in a terminal and still miss the adapter its chat
 	// needs (Pi's pi-acp). The daemon checks that without starting anything.
 	const chatUnavailable = useQuery({
-		queryKey: ["chat-unavailable-agents", hostId ?? ""],
+		queryKey: ["chat-unavailable-agents", hostId ?? "", chatTargets.join(",")],
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/chat/unavailable", {
-				params: { query: { agents: CHAT_SWITCH_TARGETS.join(",") } },
+				params: { query: { agents: chatTargets.join(",") } },
 			});
 			if (error) throw error;
 			return new Set(data.agents.map((entry) => entry.agent));
@@ -285,7 +288,7 @@ export function AgentModelPicker({
 	const railAgents = useMemo<RailAgent[]>(() => {
 		const listed: RailAgent[] = choices
 			? choices.map((agent) => (agent.id === currentHarness ? { id: agent.id, label: agent.label } : agent))
-			: (terminal ? TERMINAL_SWITCH_TARGETS : CHAT_SWITCH_TARGETS).map((id) => {
+			: (terminal ? TERMINAL_SWITCH_TARGETS : chatTargets).map((id) => {
 				const agent = readiness?.find((candidate) => candidate.id === id);
 				const label = agentLabel(id) !== id ? agentLabel(id) : agent?.label ?? id;
 				if (id === currentHarness) return { id: id as string, label };
@@ -299,7 +302,7 @@ export function AgentModelPicker({
 		return ordered.some((agent) => agent.id === currentHarness)
 			? ordered
 			: [{ id: currentHarness, label: agentLabel(currentHarness) }, ...ordered];
-	}, [chatUnavailable, choices, currentHarness, readiness, t, terminal]);
+	}, [chatTargets, chatUnavailable, choices, currentHarness, readiness, t, terminal]);
 	// Only agents that can be used are on the rail: one that is not installed, not signed in or has
 	// no chat here is left out rather than dimmed. The running agent and a pending one stay, so the
 	// rail never loses its selection: a pending agent that stops being usable (its readiness arrives
@@ -319,7 +322,6 @@ export function AgentModelPicker({
 		? variantSource(current.models, current.modelId, current.modelLabel, current.onPickModel && ((variant) => current.onPickModel?.(variant.id)), t)
 		: listsModelVariants(currentHarness) ? { ...current, models: groupModelsByVendor(current.models) }
 		: nameSharedModels(current);
-	const { settings: hostSettings } = useSettings(hostId);
 	// The agent's list is shared by every session, so it names the saved model at once.
 	// No saved model means the agent's own default, which Claude Code leaves unset.
 	const savedCatalog = useQuery({ ...catalogOptions(currentHarness), enabled: Boolean(loadingModels) }).data;

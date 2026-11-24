@@ -13,7 +13,8 @@ const unavailableGet = vi.hoisted(() => vi.fn());
 const readiness = vi.hoisted(() => ({ agents: [] as unknown[] }));
 vi.mock("../../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: unavailableGet }) }));
 vi.mock("../../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: readiness.agents } }) }));
-vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: undefined }) }));
+const hostSettings = vi.hoisted(() => ({ value: undefined as { chatHarnesses: string[] } | undefined }));
+vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: hostSettings.value }) }));
 const cloudModels = vi.hoisted(() => vi.fn());
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test", userId: "user-1", client: { listUserAgentModels: cloudModels } }),
@@ -75,6 +76,7 @@ describe("AgentModelPicker", () => {
 		useUiStore.setState({ developerMode: false });
 		unavailableGet.mockReset().mockResolvedValue({ data: { agents: [] }, error: undefined });
 		readiness.agents = [];
+		hostSettings.value = undefined;
 		window.localStorage.clear();
 		forgetLastModels();
 	});
@@ -491,6 +493,19 @@ describe("AgentModelPicker", () => {
 		await user.click(screen.getByRole("button", { name: "Agent running in this terminal" }));
 		const names = within(screen.getByRole("radiogroup", { name: "Agents" })).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"));
 		expect(names.filter((name) => name === "AGY")).toHaveLength(1);
+	});
+
+	it("offers every agent the host has a Chat driver for, and checks each one's chat adapter", async () => {
+		hostSettings.value = { chatHarnesses: ["claude-code", "codex", "grok", "agy", "hermes"] };
+		unavailableGet.mockResolvedValue({ data: { agents: [{ agent: "hermes", reason: "hermes-acp is not installed" }] }, error: undefined });
+		const user = userEvent.setup();
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(unavailableGet).toHaveBeenCalledWith("/api/v1/agents/chat/unavailable", { params: { query: { agents: "claude-code,codex,grok,agy,hermes" } } });
+		const rail = within(screen.getByRole("radiogroup", { name: "Agents" }));
+		await vi.waitFor(() => expect(rail.queryByRole("radio", { name: /^Hermes/ })).not.toBeInTheDocument());
+		expect(rail.getAllByRole("radio").map((radio) => radio.getAttribute("aria-label") ?? radio.textContent))
+			.toEqual(["Claude Code", "Codex", "Grok", "AGY"]);
 	});
 
 	it("hides agents that are not installed or signed in", async () => {
