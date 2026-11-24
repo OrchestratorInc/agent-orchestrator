@@ -29,11 +29,11 @@ func ResolvedPath(rootPath, assetPath string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	real, err := filepath.EvalSymlinks(filepath.Join(realRoot, filepath.FromSlash(clean)))
+	target, err := filepath.EvalSymlinks(filepath.Join(realRoot, filepath.FromSlash(clean)))
 	if err != nil {
 		return "", false
 	}
-	rel, err := filepath.Rel(realRoot, real)
+	rel, err := filepath.Rel(realRoot, target)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return "", false
 	}
