@@ -1127,6 +1127,7 @@ export const CommandPalette = memo(function CommandPalette() {
 					// After the palette has closed, so the action sees the screen
 					// it was asked about, not the palette.
 					const shortcut = action.shortcut;
+					uiUsage.shortcutUsed(shortcut, "cmdk");
 					window.setTimeout(() => runAppShortcut({ id: shortcut }), 0);
 					break;
 				}

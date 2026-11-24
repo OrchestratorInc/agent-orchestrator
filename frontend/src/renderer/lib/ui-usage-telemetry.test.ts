@@ -338,15 +338,51 @@ describe("UiUsageRuntime", () => {
 		});
 	});
 
-	it("counts key chords as shortcuts, except editing keys in a text field", async () => {
+	it("does not count a key chord on the page as a shortcut", async () => {
 		const input = document.getElementById("input")!;
+		// App shortcuts are claimed by main and reported by id; a chord the page sees is editing or the OS.
+		runtime.keyDown({ key: "Backspace", metaKey: true, ctrlKey: false, altKey: false, target: input, repeat: false });
 		runtime.keyDown({ key: "k", metaKey: true, ctrlKey: false, altKey: false, target: document.body, repeat: false });
-		runtime.keyDown({ key: "k", metaKey: true, ctrlKey: false, altKey: false, target: document.body, repeat: true });
-		runtime.keyDown({ key: "v", metaKey: true, ctrlKey: false, altKey: false, target: input, repeat: false });
-		runtime.keyDown({ key: "Meta", metaKey: true, ctrlKey: false, altKey: false, target: input, repeat: false });
-		runtime.keyDown({ key: "a", metaKey: false, ctrlKey: false, altKey: false, target: input, repeat: false });
 		now += 2_000;
-		expect((await summary()).shortcut_count).toBe(1);
+		expect((await summary()).shortcut_count).toBeUndefined();
+	});
+
+	it("counts each app shortcut by id, on its control too, and by Cmd+K apart from its keys", async () => {
+		runtime.shortcutUsed("toggle-inspector", "key");
+		runtime.shortcutUsed("toggle-inspector", "key");
+		runtime.shortcutUsed("toggle-inspector", "cmdk");
+		runtime.shortcutUsed("find-in-chat", "key");
+		// Not a shortcut AO has: dropped.
+		runtime.shortcutUsed("format-disk", "key");
+		const properties = (await summary()) as Awaited<ReturnType<typeof summary>> & { shortcuts: Array<Record<string, unknown>> };
+		expect(properties.shortcut_count).toBe(3);
+		expect(properties.shortcuts).toEqual([
+			{ shortcut_id: "toggle-inspector", key_count: 2, cmdk_count: 1 },
+			{ shortcut_id: "find-in-chat", key_count: 1 },
+		]);
+		// Its chord shows beside the button's clicks; Cmd+K does not.
+		expect(controlRow(properties, "topbar.inspector")).toEqual({ control_id: "topbar.inspector", shortcut_count: 2 });
+		expect(properties.measurement_schema_version).toBe(2);
+	});
+
+	it("names a shortcut as what switched the session", async () => {
+		runtime.sessionViewed("host|a");
+		runtime.shortcutUsed("next-session", "key");
+		runtime.sessionViewed("host|b");
+		const properties = await summary();
+		expect(properties.switch_from_shortcut_count).toBe(1);
+		expect(controlRow(properties, "sidebar.session_row")).toMatchObject({ shortcut_count: 1 });
+	});
+
+	it("keeps shortcut counts saved before a restart, and drops unknown ones", async () => {
+		runtime.shortcutUsed("toggle-sidebar", "key");
+		runtime.checkpoint();
+		const saved = JSON.parse(localStorage.getItem("ao.telemetry.uiUsage.v1")!) as { shortcuts: Record<string, unknown> };
+		saved.shortcuts["format-disk"] = { key_count: 9 };
+		localStorage.setItem("ao.telemetry.uiUsage.v1", JSON.stringify(saved));
+		runtime = make();
+		const properties = (await summary()) as Awaited<ReturnType<typeof summary>> & { shortcuts: Array<Record<string, unknown>> };
+		expect(properties.shortcuts).toEqual([{ shortcut_id: "toggle-sidebar", key_count: 1 }]);
 	});
 
 	it("counts sends, attachments, discarded drafts, model changes and errors", async () => {
