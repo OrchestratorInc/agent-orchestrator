@@ -1242,8 +1242,12 @@ func TestReplacementOrchestratorDoesNotInheritTheQueueHold(t *testing.T) {
 	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || !held {
 		t.Fatalf("queue held = %v, %v after the usage limit", held, err)
 	}
-	if _, err := s.CreateConversation(ctx, "unused-same-owner", domain.ConversationScopeProject,
-		"project-held", first.ID, histClock.Add(2*time.Second)); err != nil {
+	if _, err := s.CreateProjectConversationWithContextReset(ctx, "unused-same-owner", "project-held", first.ID,
+		domain.ConversationActivity{
+			ID: "same-owner-reset", Kind: domain.ActivityKindSystem, Status: domain.ActivityStatusCompleted,
+			Summary:        "Agent context reset.",
+			ProviderItemID: domain.ConversationContextResetProviderItemID(first.ID),
+		}, histClock.Add(2*time.Second)); err != nil {
 		t.Fatalf("rebind to the same orchestrator: %v", err)
 	}
 	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || !held {
