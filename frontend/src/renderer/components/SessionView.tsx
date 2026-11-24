@@ -928,8 +928,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (!session?.cloud) return;
 		await resumeCloudSession(cloudCpClient, session.cloud.orgId, session.id);
 		// A worker that just said it is still preparing the workspace is already
-		// doing what this asks; the request would only wait on it.
-		if (prepareWorkspace && !cloudWorkerStartingWait(session.cloud.orgId, session.id)) {
+		// doing what this asks; the request would only wait on it. A recorded
+		// startup failure (a checkout or conversation restore) is not being
+		// prepared: it waits for this request, so it is always sent.
+		const startupFailed = cloudStartupProblem(session)?.phase === "failed";
+		if (prepareWorkspace && (startupFailed || !cloudWorkerStartingWait(session.cloud.orgId, session.id))) {
 			await requestCloudWorkspaceCheckout(cloudCpClient, session.cloud.orgId, session.id);
 		}
 		await refreshWorkspaces();

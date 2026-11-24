@@ -33,6 +33,8 @@ const cloudMocks = vi.hoisted(() => ({
 	steerQueuedMessage: vi.fn(),
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
+	getWorkspaceReviewTree: vi.fn(),
+	searchWorkspaceReview: vi.fn(),
 	listUserAgentModels: vi.fn(),
 	resumeSession: vi.fn(),
 	requestWorkspaceCheckout: vi.fn(),
@@ -119,6 +121,8 @@ function capturedCloudExcerpt(): ChatDraftExcerptReference {
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
+		// A session's starting backoff is module state: one test's must not hold the next one's reads.
+		resetCloudWorkerStartingForTests();
 		vi.mocked(reportPlanRefusal).mockClear();
 		vi.mocked(reportUpgradeViewed).mockClear();
 		billing.offering = { selfServeBilling: true, canManageBilling: true };
@@ -278,6 +282,23 @@ describe("CloudSessionChatSurface", () => {
 			expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
 			// Its Retry-After passed: the catalog is asked for.
 			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+		});
+
+		it("is not asked for its files for @ until it is ready, and a still-starting answer is asked again rather than shown", async () => {
+			const tree = { path: "", truncated: false, entries: [{ name: "README.md", path: "README.md", type: "file", status: "unmodified", size: 5 }] };
+			cloudMocks.getWorkspaceReviewTree.mockReset().mockRejectedValueOnce(starting()).mockResolvedValue(tree);
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+			// A models read was answered, so the workspace is ready; then it says it is starting again.
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalled());
+			act(() => { cloudMocks.chatProps.mock.lastCall?.[0].onFileQuery(""); });
+			await waitFor(() => expect(cloudMocks.getWorkspaceReviewTree).toHaveBeenCalledTimes(1));
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(cloudMocks.getWorkspaceReviewTree).toHaveBeenCalledTimes(1);
+			expect(queryClient.getQueryState(["cloud-composer-files", "org-1", session.id, ""])?.status).not.toBe("error");
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].filePaths).toEqual(["README.md"]), { timeout: 3_000 });
+			expect(cloudMocks.getWorkspaceReviewTree).toHaveBeenCalledTimes(2);
 		});
 
 		it("asks again after its Retry-After when it answers that it is still starting, instead of showing an error", async () => {

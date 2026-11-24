@@ -4,8 +4,8 @@ import { cloudWorkerStartingWait, forgetCloudWorkerStarting, subscribeCloudWorke
 import type { WorkspaceSession } from "../types/workspace";
 
 /**
- * Whether a Cloud session's workspace reads (review, Chat models, prompt
- * suggestions) may be sent: its worker is connected and running, and it has
+ * Whether a Cloud session's workspace reads (review, files, Chat models and
+ * @ file lookups, prompt suggestions) may be sent: its worker is connected and running, and it has
  * not just said it is still preparing the workspace (cloud-worker-starting).
  * Until then the callers show their loading state and send nothing.
  */

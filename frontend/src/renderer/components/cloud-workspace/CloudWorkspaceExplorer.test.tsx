@@ -151,6 +151,46 @@ describe("CloudWorkspaceExplorer", () => {
 		expect(getWorkspaceReview).toHaveBeenCalledTimes(2);
 	});
 
+	it("keeps loading the file tree while the worker answers that it is still starting, and asks again after its Retry-After", async () => {
+		resetCloudWorkerStartingForTests();
+		getWorkspaceReview.mockReset().mockResolvedValue(mixedReview());
+		getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
+		getWorkspaceReviewTree.mockRejectedValueOnce(startingAnswer())
+			.mockResolvedValue({ path: "", truncated: false, entries: [{ name: "notes.txt", path: "notes.txt", type: "file", status: "untracked", size: 5 }] });
+		renderExplorer();
+		await userEvent.click(await screen.findByRole("tab", { name: "Files" }));
+		await waitFor(() => expect(getWorkspaceReviewTree).toHaveBeenCalledTimes(1));
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		// Still starting is not an error: no 409 message, no Retry.
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(screen.queryByText("The session's workspace is still starting.")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+		expect(getWorkspaceReviewTree).toHaveBeenCalledTimes(1);
+		expect(await screen.findByRole("treeitem", { name: /notes\.txt/ }, { timeout: 3_000 })).toBeInTheDocument();
+		expect(getWorkspaceReviewTree).toHaveBeenCalledTimes(2);
+		resetCloudWorkerStartingForTests();
+	});
+
+	it("keeps the file tree read before on screen while the session's reads wait, and reads it again once they may", async () => {
+		resetCloudWorkerStartingForTests();
+		getWorkspaceReview.mockReset().mockResolvedValue(mixedReview());
+		getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
+		getWorkspaceReviewTree.mockResolvedValue({ path: "", truncated: false, entries: [{ name: "notes.txt", path: "notes.txt", type: "file", status: "untracked", size: 5 }] });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderExplorer(session, queryClient);
+		await userEvent.click(await screen.findByRole("tab", { name: "Files" }));
+		expect(await screen.findByRole("treeitem", { name: /notes\.txt/ })).toBeInTheDocument();
+		const calls = getWorkspaceReviewTree.mock.calls.length;
+		act(() => { noteCloudWorkerStarting("org-1", session.id, startingAnswer()); });
+		await act(async () => { await queryClient.invalidateQueries({ queryKey: cloudWorkspaceReviewQueryKey("https://cloud.test", "org-1", session.id) }); });
+		// The worker is not asked meanwhile, and what it answered before stays.
+		expect(screen.getByRole("treeitem", { name: /notes\.txt/ })).toBeInTheDocument();
+		expect(getWorkspaceReviewTree).toHaveBeenCalledTimes(calls);
+		await waitFor(() => expect(getWorkspaceReviewTree.mock.calls.length).toBeGreaterThan(calls), { timeout: 3_000 });
+		expect(screen.getByRole("treeitem", { name: /notes\.txt/ })).toBeInTheDocument();
+		resetCloudWorkerStartingForTests();
+	});
+
 	it("sends one resume for a double Retry while it is in flight", async () => {
 		let answer: (value: unknown) => void = () => undefined;
 		resumeSession.mockReset().mockImplementation(() => new Promise((resolve) => { answer = resolve; }));

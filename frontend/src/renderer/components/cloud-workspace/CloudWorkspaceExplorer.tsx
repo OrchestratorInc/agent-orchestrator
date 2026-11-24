@@ -139,8 +139,8 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 			{!enabled || (summaryQuery.isPending && !workerGone) ? <PanelMessage>{t("files.loading")}</PanelMessage> : summaryQuery.isPending ? (
 				<PanelMessage action={session.isTerminated ? undefined : <RetryButton disabled={restarting} onClick={restart} />}>{restartError ?? startupProblem?.message ?? t("inspector.filesUnavailable")}</PanelMessage>
 			) : summaryQuery.isError ? <PanelMessage action={<RetryButton onClick={() => void summaryQuery.refetch()} />}>{summaryQuery.error.message}</PanelMessage> : showChanges ? (
-				<CloudWorkspaceReviewPane annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} data={summaryQuery.data} filter={filter} key={activeRepository} onBrowseAll={() => setShowChanges(false)} onOpenFile={open} orgId={orgId!} repository={activeRepository || undefined} sessionId={session.id} split={split} />
-			) : <CloudFileTree baseUrl={baseUrl} client={scopedClient} filterText={filter} key={activeRepository} onOpenFile={(path) => open(path, { mode: "file" })} orgId={orgId!} selectedPath={selectedInRepository} sessionId={session.id} />}
+				<CloudWorkspaceReviewPane annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} data={summaryQuery.data} filter={filter} key={activeRepository} onBrowseAll={() => setShowChanges(false)} onOpenFile={open} orgId={orgId!} ready={workspaceReady} repository={activeRepository || undefined} sessionId={session.id} split={split} />
+			) : <CloudFileTree baseUrl={baseUrl} client={scopedClient} filterText={filter} key={activeRepository} onOpenFile={(path) => open(path, { mode: "file" })} orgId={orgId!} ready={workspaceReady} selectedPath={selectedInRepository} sessionId={session.id} />}
 		</section>
 	);
 }

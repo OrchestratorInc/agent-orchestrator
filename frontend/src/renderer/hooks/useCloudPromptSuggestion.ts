@@ -2,7 +2,7 @@ import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useCloudCp } from "./useCloudCp";
 import { promptSuggestionBusy, promptSuggestionStale, usePromptSuggestion } from "./useConversationPromptSuggestion";
 import { useCloudWorkspaceReady } from "./useCloudWorkspaceReady";
-import { cloudWorkerRequest, isCloudWorkerStarting } from "../lib/cloud-worker-starting";
+import { cloudWorkerRequest, cloudWorkerStartingWaits } from "../lib/cloud-worker-starting";
 import type { ConversationSnapshot } from "../types/conversation";
 import type { WorkspaceSession } from "../types/workspace";
 
@@ -50,8 +50,9 @@ export function useCloudPromptSuggestion(
 				// shortly, as the local daemon's busy answer is.
 				if (error instanceof CloudCpError && error.code === "CHAT_PROMPT_SUGGESTION_BUSY") throw promptSuggestionBusy;
 				// A worker still starting is asked again once its backoff ends,
-				// rather than caching no suggestion for the turn.
-				if (isCloudWorkerStarting(error)) throw promptSuggestionStale;
+				// rather than caching no suggestion for the turn, while the
+				// session's starting budget lasts (cloud-worker-starting).
+				if (cloudWorkerStartingWaits(error)) throw promptSuggestionStale;
 				throw error;
 			}
 		},

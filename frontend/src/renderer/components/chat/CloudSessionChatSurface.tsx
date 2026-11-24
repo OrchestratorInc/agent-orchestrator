@@ -10,7 +10,7 @@ import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useRestoreSession } from "../../hooks/useRestoreSession";
 import { useCloudSessionStartRequestInFlight, useCloudWorkspaceReady } from "../../hooks/useCloudWorkspaceReady";
-import { WORKER_STARTING_CODE, cloudWorkerRequest, cloudWorkerStartingDelay, cloudWorkerStartingRemaining, recordCloudWorkspaceStartupEvent } from "../../lib/cloud-worker-starting";
+import { WORKER_STARTING_CODE, cloudWorkerReadRetry, cloudWorkerRequest, cloudWorkerStartingRetryDelay, cloudWorkerStartingWaits, recordCloudWorkspaceStartupEvent } from "../../lib/cloud-worker-starting";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
 import { sessionUiKey } from "../../lib/hosts";
@@ -1741,13 +1741,16 @@ export function CloudSessionChatSurface({
 		// a timed-out request is asked again a few times before it shows.
 		// A worker still preparing its workspace (WORKER_STARTING, or a timeout
 		// from a control plane that predates it) is asked again after the
-		// session's shared backoff, as long as it stays connected.
+		// session's shared backoff, as long as it stays connected and the
+		// session's starting budget lasts (cloud-worker-starting).
 		retry: (failures, error) => liveRef.current.connected && !liveRef.current.terminated &&
-			(isWorkerUnavailable(error) || isWorkerStarting(error) || (isTransportTimeout(error) && failures < 3) ||
+			(isWorkerUnavailable(error) || cloudWorkerStartingWaits(error) || (isTransportTimeout(error) && failures < 3) ||
 				(isWorkerOperationFailed(error) && failures < MODELS_FAILED_RETRIES) ||
 				(isAgentSettingUp(error) && failures < AGENT_SETUP_RETRIES)),
-		retryDelay: (failures, error) => isWorkerStarting(error)
-			? cloudWorkerStartingRemaining(cloud?.orgId ?? "", session.id) || cloudWorkerStartingDelay(failures + 1, error)
+		// WORKER_STARTING is asked again after its Retry-After; a timeout or an
+		// absent worker keeps the catalog's own quicker retry.
+		retryDelay: (failures, error) => isWorkerStarting(error) && cloudWorkerStartingWaits(error)
+			? cloudWorkerStartingRetryDelay(cloud?.orgId ?? "", session.id, failures, error)
 			: modelsRetryDelay(failures, error),
 		queryFn: async ({ signal }) => {
 			const selectionVersionAtFetch = catalogSyncRef.current.version;
@@ -2433,16 +2436,19 @@ export function CloudSessionChatSurface({
 	}, [fileQuery]);
 	const filesQuery = useQuery<{ paths: string[]; truncated: boolean }>({
 		queryKey: ["cloud-composer-files", cloud?.orgId ?? "", session.id, debouncedFileQuery ?? ""],
-		enabled: Boolean(cloud && ready && workerConnected && session.isTerminated !== true && debouncedFileQuery !== undefined),
+		// A worker still preparing its workspace is not asked (useCloudWorkspaceReady),
+		// and a "still starting" answer is asked again after the session's
+		// backoff, so the list shows what it had rather than an error.
+		enabled: Boolean(cloud && ready && workspaceReady && session.isTerminated !== true && debouncedFileQuery !== undefined),
 		staleTime: 30_000,
-		retry: false,
+		...cloudWorkerReadRetry(cloud?.orgId ?? "", session.id, () => false),
 		placeholderData: (previous) => previous,
 		queryFn: async ({ signal }) => {
 			if (!debouncedFileQuery) {
-				const tree = await client.getWorkspaceReviewTree(cloud!.orgId, session.id, undefined, { signal });
+				const tree = await cloudWorkerRequest(cloud!.orgId, session.id, () => client.getWorkspaceReviewTree(cloud!.orgId, session.id, undefined, { signal }));
 				return { paths: tree.entries.filter((entry) => entry.type === "file").map((entry) => entry.path), truncated: true };
 			}
-			const found = await client.searchWorkspaceReview(cloud!.orgId, session.id, { query: debouncedFileQuery, limit: 100 }, { signal });
+			const found = await cloudWorkerRequest(cloud!.orgId, session.id, () => client.searchWorkspaceReview(cloud!.orgId, session.id, { query: debouncedFileQuery, limit: 100 }, { signal }));
 			return { paths: found.results.filter((result) => !result.binary).map((result) => result.path), truncated: found.truncated || Boolean(found.nextCursor) };
 		},
 	});

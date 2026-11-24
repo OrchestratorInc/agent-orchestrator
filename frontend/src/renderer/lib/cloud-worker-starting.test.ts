@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CloudCpError } from "./cloud-cp/errors";
 import {
+	cloudWorkerReadRetry,
 	cloudWorkerRequest,
 	cloudWorkerStartingDelay,
 	cloudWorkerStartingRemaining,
 	cloudWorkerStartingWait,
+	cloudWorkerStartingWaits,
 	isCloudWorkerStarting,
+	MAX_STARTING_TIMEOUTS,
+	MAX_STARTING_WAIT_MS,
 	recordCloudWorkspaceStartupEvent,
 	resetCloudWorkerStartingForTests,
 	subscribeCloudWorkerStarting,
@@ -100,5 +104,79 @@ describe("the session's starting backoff", () => {
 		// Another session's events are not this one's.
 		recordCloudWorkspaceStartupEvent("org", "s", { ...event("worker.ready"), sessionId: "other" });
 		expect(cloudWorkerStartingWait("org", "s")).toBe(false);
+	});
+});
+
+describe("the session's starting budget", () => {
+	const startingAnswer = () => new CloudCpError("The session is still starting. Try again shortly.", { status: 409, code: WORKER_STARTING_CODE, retryAfterMs: 5_000 });
+	const timeouts = [
+		() => new CloudCpError("The worker did not complete the request in time.", { status: 504, code: "WORKER_TIMEOUT" }),
+		() => new CloudCpError("gateway", { status: 504 }),
+		() => new CloudCpError("queued", { status: 504, code: "TRANSPORT_TIMEOUT" }),
+	];
+	const ask = (error: unknown) => cloudWorkerRequest("org", "s", () => Promise.reject(error)).catch((thrown: unknown) => thrown);
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-23T10:00:00Z"));
+		resetCloudWorkerStartingForTests();
+	});
+	afterEach(() => {
+		resetCloudWorkerStartingForTests();
+		vi.useRealTimers();
+	});
+
+	it("waits out WORKER_STARTING at its Retry-After for 30 minutes from the first answer, then lets the read fail", async () => {
+		expect(cloudWorkerStartingWaits(await ask(startingAnswer()))).toBe(true);
+		expect(cloudWorkerStartingRemaining("org", "s")).toBe(5_000);
+		for (let elapsed = 5_000; elapsed < MAX_STARTING_WAIT_MS; elapsed += 5_000) {
+			vi.advanceTimersByTime(5_000);
+			expect(cloudWorkerStartingWaits(await ask(startingAnswer()))).toBe(true);
+			expect(cloudWorkerStartingRemaining("org", "s")).toBe(5_000);
+		}
+		vi.advanceTimersByTime(5_000);
+		const late = await ask(startingAnswer());
+		expect(cloudWorkerStartingWaits(late)).toBe(false);
+		// Past the budget the session's other reads are not held back either.
+		expect(cloudWorkerStartingWait("org", "s")).toBe(false);
+	});
+
+	it("reads timeouts as a starting worker only three times in a row, then they fail as before", async () => {
+		for (let answer = 1; answer <= MAX_STARTING_TIMEOUTS; answer++) {
+			expect(cloudWorkerStartingWaits(await ask(timeouts[answer - 1]()))).toBe(true);
+			vi.advanceTimersByTime(cloudWorkerStartingRemaining("org", "s"));
+		}
+		const fourth = await ask(timeouts[0]());
+		expect(cloudWorkerStartingWaits(fourth)).toBe(false);
+		expect(cloudWorkerStartingWait("org", "s")).toBe(false);
+		// The control plane saying the worker is starting is still waited out.
+		expect(cloudWorkerStartingWaits(await ask(startingAnswer()))).toBe(true);
+		// An answer starts the count again.
+		vi.advanceTimersByTime(cloudWorkerStartingRemaining("org", "s"));
+		await cloudWorkerRequest("org", "s", () => Promise.resolve({ ok: true }));
+		expect(cloudWorkerStartingWaits(await ask(timeouts[1]()))).toBe(true);
+	});
+
+	it("starts a new wait for a starting answer long after the last one", async () => {
+		expect(cloudWorkerStartingWaits(await ask(startingAnswer()))).toBe(true);
+		vi.advanceTimersByTime(MAX_STARTING_WAIT_MS - 60_000);
+		// Nothing was asked for 29 minutes, so this answer starts a new wait...
+		expect(cloudWorkerStartingWaits(await ask(startingAnswer()))).toBe(true);
+		vi.advanceTimersByTime(4 * 60_000);
+		// ...and 33 minutes after the first answer it is still waited out.
+		expect(cloudWorkerStartingWaits(await ask(startingAnswer()))).toBe(true);
+	});
+
+	it("gives a read retry options that wait out a starting answer and leave other errors to the read's own rule", async () => {
+		const ownRetry = vi.fn((failureCount: number) => failureCount < 1);
+		const options = cloudWorkerReadRetry("org", "s", ownRetry);
+		const waiting = await ask(startingAnswer());
+		expect(options.retry(40, waiting as Error)).toBe(true);
+		expect(options.retryDelay(40, waiting as Error)).toBe(5_000);
+		expect(ownRetry).not.toHaveBeenCalled();
+		const failure = new CloudCpError("bad", { status: 400 });
+		expect(options.retry(0, failure)).toBe(true);
+		expect(options.retry(1, failure)).toBe(false);
+		expect(options.retryDelay(1, failure)).toBe(2_000);
 	});
 });
