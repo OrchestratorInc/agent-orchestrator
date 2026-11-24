@@ -63,6 +63,8 @@ export interface BrowserTransport {
 	connect(handlers: BrowserTransportHandlers): void;
 	send(command: BrowserCommand): void;
 	close(): void;
+	/** Where to fetch a download the host listed, with whatever sign-in it needs. */
+	downloadRequest?(id: string): Promise<{ url: string; headers: Record<string, string> }>;
 }
 
 const CONTROLS = new Set<BrowserControl>(["agent", "human", "none"]);
