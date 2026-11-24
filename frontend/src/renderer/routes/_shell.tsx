@@ -40,6 +40,7 @@ import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
+import { useHostUpdatePolling } from "../hooks/useHostUpdates";
 import { useSettingsPolling } from "../hooks/useSettings";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
@@ -376,6 +377,7 @@ function ShellLayout() {
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
+	useHostUpdatePolling(remoteHosts);
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows

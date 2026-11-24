@@ -95,8 +95,9 @@ type APIDeps struct {
 	HostID string
 	// Endpoints reports how this daemon can currently be reached, for the
 	// phone's endpoint-refresh route.
-	Endpoints controllers.EndpointSource
-	Installer controllers.Installer
+	Endpoints  controllers.EndpointSource
+	HostUpdate controllers.HostUpdater
+	Installer  controllers.Installer
 	// ComputerUse is the Cua Driver integration behind Settings and the computer-use tools.
 	ComputerUse controllers.ComputerUse
 	AgentAuth   controllers.AgentAuthService
@@ -187,6 +188,7 @@ type API struct {
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
+	hostUpdate    *controllers.HostUpdateController
 	telemetryID   *controllers.TelemetryIdentityController
 	systemInstall *controllers.SystemInstallController
 	computerUse   *controllers.ComputerUseController
@@ -258,6 +260,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
+		hostUpdate:    &controllers.HostUpdateController{Updater: deps.HostUpdate},
 		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
@@ -412,6 +415,7 @@ func (a *API) Register(root chi.Router) {
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)
+			a.hostUpdate.Register(r)
 			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
 			a.computerUse.Register(r)
