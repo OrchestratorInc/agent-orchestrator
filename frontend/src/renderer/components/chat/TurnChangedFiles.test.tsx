@@ -568,18 +568,18 @@ describe("ActivityRow command labels", () => {
 		expect(screen.queryByText(/sed -n/)).not.toBeInTheDocument();
 	});
 
-	it("describes execution compactly, then reveals the exact command", async () => {
+	it("titles a command that is not a file step with the command itself, and opens onto its output", async () => {
 		const user = userEvent.setup();
-		render(
+		const { container } = render(
 			<ActivityRow
-				activity={commandActivity({ command: "go test ./...", output: "ok" }, "completed")}
+				activity={commandActivity({ command: "/bin/zsh -lc 'go test ./...'", output: "ok" }, "completed")}
 			/>,
 		);
-		expect(screen.getByText("Ran tests")).toBeInTheDocument();
-		expect(screen.queryByText("go test ./...")).not.toBeInTheDocument();
+		// The login-shell wrapper goes; no "Ran tests" stands in for what ran.
+		expect(container.querySelector("[data-command-title]")).toHaveTextContent(/^go test \.\/\.\.\.$/);
+		expect(screen.queryByText("Ran tests")).not.toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: /Ran tests/ }));
-		expect(screen.getByText("go test ./...")).toBeInTheDocument();
+		await user.click(container.querySelector(".activity-row-toggle")!);
 		expect(screen.getByText("ok")).toBeInTheDocument();
 	});
 
@@ -591,12 +591,12 @@ describe("ActivityRow command labels", () => {
 			/>,
 		);
 
-		const row = screen.getByRole("button", { name: /Ran printf/ });
+		const row = screen.getByRole("button", { name: /printf "%s" "hello world"/ });
 		expect(row).toBeEnabled();
-		expect(screen.queryByText(`printf "%s" "hello world"`)).not.toBeInTheDocument();
 
 		await user.click(row);
-		expect(screen.getByText(`printf "%s" "hello world"`)).toBeInTheDocument();
+		expect(row).toHaveAttribute("aria-expanded", "true");
+		expect(document.querySelector("[data-command-line]")).toHaveTextContent(`printf "%s" "hello world"`);
 	});
 
 	it("uses the same compact treatment as a grouped command summary", () => {
@@ -610,30 +610,25 @@ describe("ActivityRow command labels", () => {
 		);
 		const row = screen.getByRole("button");
 		expect(row).toHaveClass("py-0.5", "gap-2", "select-none");
-		expect(screen.getByText("Checked git status")).toHaveClass(
-			"text-control",
-			"font-normal",
-			"text-muted-foreground",
-		);
+		expect(screen.getByText("git status --short")).toHaveClass("font-mono", "truncate", "text-muted-foreground");
 		expect(screen.getByText("exit 1")).toHaveClass("text-muted-foreground/70");
 		expect(screen.getByText("exit 1")).not.toHaveClass("text-destructive");
-		// One small mark for what the step did, not the bordered rows' icon column.
-		expect(container.querySelector(".icon-git-branch")).toHaveClass("size-3.5", "text-muted-foreground/70");
-		expect(container.querySelector(".icon-square-terminal")).toBeNull();
+		// One small terminal mark, not the bordered rows' icon column.
+		expect(container.querySelector(".icon-square-terminal")).toHaveClass("size-3.5", "text-muted-foreground/70");
 		expect(row.querySelector(".flex-1")).toBeNull();
-		expect(row.textContent).toMatch(/^Checked git statusexit 1/);
+		expect(row.textContent).toMatch(/^git status --shortexit 1/);
 	});
 
 	it("does not claim the result of a step that failed", () => {
 		const { unmount } = render(
 			<ActivityRow activity={commandActivity({ command: "git push", output: "rejected", exitCode: 1 }, "failed")} />,
 		);
-		expect(screen.getByRole("button").textContent).toMatch(/^Pushing changesexit 1/);
+		// The command and its exit say what happened; no "Pushed" or "Pushing" claim.
+		expect(screen.getByRole("button").textContent).toMatch(/^git pushexit 1/);
 		unmount();
 
-		// A test run that fails did run.
 		render(<ActivityRow activity={commandActivity({ command: "npm test", output: "1 failed", exitCode: 1 }, "failed")} />);
-		expect(screen.getByRole("button").textContent).toMatch(/^Ran testsexit 1/);
+		expect(screen.getByRole("button").textContent).toMatch(/^npm testexit 1/);
 	});
 
 	it("keeps command failures without exit metadata destructive", () => {

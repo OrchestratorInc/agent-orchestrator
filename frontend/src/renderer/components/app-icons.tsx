@@ -158,6 +158,11 @@ import {
 } from "@mynaui/icons-react";
 import {
 	ArrowDownUp as LucideArrowDownUp,
+	FileText as LucideFileText,
+	Globe as LucideGlobe,
+	Search as LucideSearch,
+	SquareTerminal as LucideSquareTerminal,
+	Wrench as LucideWrench,
 	Bot as LucideBot,
 	Brain as LucideBrain,
 	CalendarClock as LucideCalendarClock,
@@ -382,6 +387,15 @@ export const Heading3 = fromMyna(MynaHeading3, "heading-3");
 export const Heading4 = fromMyna(MynaHeading4, "heading-4");
 export const Heading5 = fromMyna(MynaHeading5, "heading-5");
 export const Hammer = fromLucide(LucideHammer, "hammer");
+
+// The mark on a chat run's header, by the kind of step it holds most of. Lucide,
+// like the header's file-edit mark, so the set reads as one family.
+export const RunKindEdit = fromLucide(LucideFilePen, "run-kind-edit");
+export const RunKindExecute = fromLucide(LucideSquareTerminal, "run-kind-execute");
+export const RunKindFetch = fromLucide(LucideGlobe, "run-kind-fetch");
+export const RunKindOther = fromLucide(LucideWrench, "run-kind-other");
+export const RunKindRead = fromLucide(LucideFileText, "run-kind-read");
+export const RunKindSearch = fromLucide(LucideSearch, "run-kind-search");
 export const History = fromLucide(LucideHistory, "history");
 export const Hourglass = fromLucide(LucideHourglass, "hourglass");
 export const House = fromMyna(MynaHome, "house");

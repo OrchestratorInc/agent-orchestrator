@@ -16,7 +16,7 @@
 
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ChevronRight, Loader2 } from "@/components/app-icons";
+import { ChevronRight, Loader2, RunKindEdit, RunKindExecute, RunKindFetch, RunKindOther, RunKindRead, RunKindSearch } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import { ActivityRail, ActivityRow, ActivityTransition, RevealedChatActivity } from "./ChatTimelineItems";
@@ -103,6 +103,7 @@ export function ActivityRun({
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
+				<RunMark activities={activities} />
 				<span className="activity-summary-label text-control text-muted-foreground">
 					<ActivityTransition value={summary} inline enter={entering}>{summary}</ActivityTransition>
 				</span>
@@ -244,7 +245,8 @@ function renderActivityRows(
 function repeatableLabel(activity: ConversationActivity): string | undefined {
 	if (activity.activityKind !== "command" || activity.status !== "completed") return undefined;
 	const step = activityCommandStep(activity);
-	return [step.done, step.target].filter(Boolean).join(" ");
+	// A row that shows its command folds only with the same command.
+	return step.command ?? [step.done, step.target].filter(Boolean).join(" ");
 }
 
 type ActivitySubgroupData = { key: string; activities: ConversationActivity[] };
@@ -324,6 +326,7 @@ function ActivitySubgroup({
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
+				<RunMark activities={activities} />
 				<span className="activity-summary-label text-control text-muted-foreground">
 					<ActivityTransition value={summary} inline enter={entering}>
 						{summary}
@@ -530,6 +533,57 @@ function nodeActivities(node: ActivityNode): ConversationActivity[] {
 
 function nodeRunning(node: ActivityNode): boolean {
 	return node.activity.status === "running" || node.children.some(nodeRunning);
+}
+
+type RunKind = "edit" | "execute" | "read" | "search" | "fetch" | "other";
+
+/** Ties go to the kind that changed or ran something before the kinds that looked. */
+const RUN_KIND_ORDER: RunKind[] = ["edit", "execute", "read", "search", "fetch", "other"];
+const RUN_KIND_ICON = {
+	edit: RunKindEdit,
+	execute: RunKindExecute,
+	read: RunKindRead,
+	search: RunKindSearch,
+	fetch: RunKindFetch,
+	other: RunKindOther,
+} as const;
+
+/** What a step did, for its run's mark: a command that shows itself counts as one run. */
+function runKind(activity: ConversationActivity): RunKind | undefined {
+	if (activity.activityKind === "file_change") return "edit";
+	if (activity.activityKind === "plan" || activity.activityKind === "reasoning") return undefined;
+	const step = activity.activityKind === "command"
+		? activityCommandStep(activity)
+		: activity.activityKind === "mcp_tool" ? activityToolStep(activity) : undefined;
+	if (!step) return "other";
+	if (activity.activityKind === "command" && step.command) return "execute";
+	switch (step.icon) {
+		case "read": return "read";
+		case "search": case "find": case "list": return "search";
+		case "write": case "file-new": return "edit";
+		case "web": return "fetch";
+		default: return activity.activityKind === "command" ? "execute" : "other";
+	}
+}
+
+/** The mark for a run: the kind of step it holds most of. */
+function RunMark({ activities }: { activities: readonly ConversationActivity[] }) {
+	const counts = new Map<RunKind, number>();
+	for (const activity of activities) {
+		const kind = runKind(activity);
+		if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+	}
+	let best: RunKind = "other";
+	let most = 0;
+	for (const kind of RUN_KIND_ORDER) {
+		const count = counts.get(kind) ?? 0;
+		if (count > most) {
+			best = kind;
+			most = count;
+		}
+	}
+	const Icon = RUN_KIND_ICON[best];
+	return <Icon aria-hidden="true" data-run-kind={best} className="size-3.5 shrink-0 text-muted-foreground/70" />;
 }
 
 function summarize(activities: ConversationActivity[]): string {

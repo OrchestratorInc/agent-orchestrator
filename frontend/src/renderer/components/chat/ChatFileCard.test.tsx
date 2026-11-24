@@ -203,4 +203,28 @@ describe("file cards in the timeline", () => {
 		fireEvent.click(container.querySelector(".activity-row-toggle")!);
 		expect(container.querySelector("[data-activity-rail] [data-command-line]")).not.toBeNull();
 	});
+
+	it("marks a run with the kind of step it holds most of", () => {
+		const { container, unmount } = render(
+			<ActivityRun
+				activities={[
+					activity({ id: "a", sequence: 1, summary: "node", detail: { command: "node --version", output: "v22", exitCode: 0 } }),
+					activity({ id: "b", sequence: 2, summary: "uname", detail: { command: "uname -a", output: "Darwin", exitCode: 0 } }),
+					activity({ id: "c", sequence: 3, summary: "cat", detail: { command: "cat a.ts", output: "x", exitCode: 0 } }),
+				]}
+			/>,
+		);
+		expect(container.querySelector("[data-run-kind]")).toHaveAttribute("data-run-kind", "execute");
+		unmount();
+
+		const reads = render(
+			<ActivityRun
+				activities={[
+					activity({ id: "d", sequence: 4, summary: "cat", detail: { command: "cat a.ts", output: "x", exitCode: 0 } }),
+					activity({ id: "e", sequence: 5, summary: "cat", detail: { command: "cat b.ts", output: "y", exitCode: 0 } }),
+				]}
+			/>,
+		);
+		expect(reads.container.querySelector("[data-run-kind]")).toHaveAttribute("data-run-kind", "read");
+	});
 });

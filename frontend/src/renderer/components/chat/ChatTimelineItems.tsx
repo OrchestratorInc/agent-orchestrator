@@ -2015,8 +2015,9 @@ function GenericActivityRow({
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
 	const files = fileChangeFiles(activity);
 	const hasBody = genericActivityHasBody(activity);
-	const { label, path, pathTitle, icon: stepIconName } = splitSummary(activity);
-	const StepMark = stepIcon[stepIconName ?? "run"];
+	const { label, path, pathTitle, icon: stepIconName, command: commandTitle } = splitSummary(activity);
+	// A command that is not a file step reads as itself, with the terminal mark.
+	const StepMark = stepIcon[commandTitle ? "run" : stepIconName ?? "run"];
 	// Commands and file edits share the explore-style summary line: a small mark for
 	// what the step did, muted label, always-visible chevron. Everything else keeps
 	// the denser bordered activity row.
@@ -2089,6 +2090,14 @@ function GenericActivityRow({
 								&minus;{singleEdit.deletions}
 							</span>
 						) : null}
+					</span>
+				) : compactSummary && commandTitle ? (
+					<span
+						data-command-title=""
+						className="activity-row-label min-w-0 truncate font-mono text-xs text-muted-foreground group-hover/activity:text-foreground"
+						title={commandTitle}
+					>
+						{commandTitle}
 					</span>
 				) : compactSummary && path ? (
 					// Verb and target sit as close together as a file edit's verb and name.
@@ -2538,10 +2547,10 @@ function commandOutputText(raw: unknown): string {
  * A step still in progress says it in the present tense ("Reading"). Anything
  * without a natural split keeps its whole label.
  */
-function splitSummary(activity: ConversationActivity): { label: string; path?: string; pathTitle?: string; icon?: StepIcon } {
+function splitSummary(activity: ConversationActivity): { label: string; path?: string; pathTitle?: string; icon?: StepIcon; command?: string } {
 	if (activity.activityKind === "command") {
 		const step = activityCommandStep(activity);
-		return { label: step[stepTense(activity, step)], path: step.target, pathTitle: step.targetTitle ?? step.target, icon: step.icon };
+		return { label: step[stepTense(activity, step)], path: step.target, pathTitle: step.targetTitle ?? step.target, icon: step.icon, command: step.command };
 	}
 	const tense = stepTense(activity);
 	const files = fileChangeFiles(activity);
