@@ -68,13 +68,9 @@ func discoverMemcodeProject(ctx context.Context, project string) ([]sourceFiles,
 		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > 16<<20 {
 			continue
 		}
+		// Content is validated by the shared reader, after Scan's recency
+		// filter and cache, so stale and unchanged histories are never parsed.
 		path := filepath.Join(project, rel)
-		if _, err := readMemcodeTranscript(ctx, project, path); err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			continue
-		}
 		out = append(out, sourceFiles{harness: domain.HarnessMemcode, root: project, key: entry.Name(), paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].modTime.After(out[j].modTime) })

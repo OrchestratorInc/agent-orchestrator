@@ -164,7 +164,7 @@ func writeImportAssets(stage, mode string, assets map[string]importAsset) error 
 }
 
 func validatePreparedImportAssets(ctx context.Context, ref ports.NativeSessionRef, proof agyImportProof) error {
-	_, rel, err := importPath(ref.ConfigDir, ref.TranscriptPath)
+	_, rel, err := preparedImportPath(ref.ConfigDir, ref.TranscriptPath)
 	if err != nil {
 		return err
 	}

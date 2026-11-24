@@ -107,71 +107,104 @@ func (p *Plugin) prepareKiloImport(ctx context.Context, r ports.ImportedSessionR
 	}
 	defer func() { _ = reservations.Close() }()
 	name := kiloReservationName(r.ConfigDir, r.NativeSessionID, cwd, r.SourceFingerprint)
-	reservation, err := readKiloReservation(ctx, reservations, name)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return ports.NativeSessionRef{}, err
-	}
-	if errors.Is(err, os.ErrNotExist) {
+	unlock := lockKiloReservation(filepath.Join(reservationDir, name))
+	defer unlock()
+	// reserve snapshots the current source into a write-once reservation. If
+	// another attempt won that name, its graph is used rather than ours.
+	reserve := func(name string) (kiloImportReservation, error) {
 		exported, err := run(ctx, cwd, r.ConfigDir, "export", r.NativeSessionID)
 		if err != nil {
-			return ports.NativeSessionRef{}, fmt.Errorf("export kilo history: %w", err)
+			return kiloImportReservation{}, fmt.Errorf("export kilo history: %w", err)
 		}
 		after, err := kiloSourceDigest(ctx, db, r.NativeSessionID)
 		if err != nil || before != after {
-			return ports.NativeSessionRef{}, errors.New("kilo source session rows changed during native export")
+			return kiloImportReservation{}, errors.New("kilo source session rows changed during native export")
 		}
 		if err := os.WriteFile(filepath.Join(temp, "original.json"), exported, 0o600); err != nil {
-			return ports.NativeSessionRef{}, err
+			return kiloImportReservation{}, err
 		}
 		now := time.Now().UnixMilli()
 		if now < 0 {
-			return ports.NativeSessionRef{}, errors.New("kilo import timestamp is before the provider epoch")
+			return kiloImportReservation{}, errors.New("kilo import timestamp is before the provider epoch")
 		}
 		gen := kiloImportID{timestamp: uint64(now), random: rand.Reader}
 		remapped, nativeID, err := remapKiloExport(exported, r.NativeSessionID, cwd, gen.next, func(id string) (bool, error) {
 			return kiloImportIDExists(ctx, db, id)
 		})
 		if err != nil {
-			return ports.NativeSessionRef{}, err
+			return kiloImportReservation{}, err
 		}
-		reservation = kiloImportReservation{SourceID: r.NativeSessionID, ConfigDir: r.ConfigDir, CWD: cwd, SourceFingerprint: r.SourceFingerprint, SourceDigest: before, NativeID: nativeID, Export: remapped}
+		reservation := kiloImportReservation{SourceID: r.NativeSessionID, ConfigDir: r.ConfigDir, CWD: cwd, SourceFingerprint: r.SourceFingerprint, SourceDigest: before, NativeID: nativeID, Export: remapped}
 		body, err := json.Marshal(reservation)
 		if err != nil {
-			return ports.NativeSessionRef{}, err
+			return kiloImportReservation{}, err
 		}
 		if len(body) > kiloReservationLimit || len(reservation.Export) > 64<<20 {
-			return ports.NativeSessionRef{}, errors.New("kilo import reservation exceeds private history limit")
+			return kiloImportReservation{}, errors.New("kilo import reservation exceeds private history limit")
 		}
-		// Publish ownership and ALL generated IDs before the native import. If
-		// another attempt won the reservation, use its graph rather than ours.
+		// Publish ownership and ALL generated IDs before the native import.
 		if err := importcopy.WriteOnce(ctx, reservations, name, body); errors.Is(err, os.ErrExist) {
-			reservation, err = readKiloReservation(ctx, reservations, name)
-			if err != nil {
-				return ports.NativeSessionRef{}, err
-			}
+			return readKiloReservation(ctx, reservations, name)
 		} else if err != nil {
-			return ports.NativeSessionRef{}, err
+			return kiloImportReservation{}, err
 		}
+		return reservation, nil
 	}
-	if reservation.SourceID != r.NativeSessionID || reservation.ConfigDir != r.ConfigDir || reservation.CWD != cwd || reservation.SourceFingerprint != r.SourceFingerprint {
-		return ports.NativeSessionRef{}, errors.New("kilo import reservation does not match the selected source and worktree")
+	reservation, err := readKiloReservation(ctx, reservations, name)
+	if errors.Is(err, os.ErrNotExist) {
+		reservation, err = reserve(name)
 	}
-	expected, ids, err := reservation.history()
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}
-	nativeID := reservation.NativeID
+	var expected kiloImportHistory
+	var ids []string
+	var nativeID string
 	var published bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT id FROM session WHERE id = ?)`, nativeID).Scan(&published); err != nil {
-		return ports.NativeSessionRef{}, err
+	for generation := 0; ; generation++ {
+		if reservation.SourceID != r.NativeSessionID || reservation.ConfigDir != r.ConfigDir || reservation.CWD != cwd || reservation.SourceFingerprint != r.SourceFingerprint {
+			return ports.NativeSessionRef{}, errors.New("kilo import reservation does not match the selected source and worktree")
+		}
+		expected, ids, err = reservation.history()
+		if err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+		nativeID = reservation.NativeID
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT id FROM session WHERE id = ?)`, nativeID).Scan(&published); err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+		if published || reservation.SourceDigest == before {
+			break
+		}
+		// The source gained turns after a failed or cancelled publication.
+		// Rebuild only once none of the reserved IDs exist natively; the
+		// stale reservation is kept, and its write-once successor holds the
+		// new graph so a retry resolves the same identity.
+		for _, id := range ids {
+			present, err := kiloImportIDExists(ctx, db, id)
+			if err != nil {
+				return ports.NativeSessionRef{}, err
+			}
+			if present {
+				return ports.NativeSessionRef{}, errors.New("kilo reservation was partially published before the source changed")
+			}
+		}
+		if generation >= kiloReservationGenerations {
+			return ports.NativeSessionRef{}, errors.New("kilo import reservation was rebuilt too many times")
+		}
+		successor := kiloSuccessorReservationName(name, reservation.NativeID)
+		reservation, err = readKiloReservation(ctx, reservations, successor)
+		if errors.Is(err, os.ErrNotExist) {
+			reservation, err = reserve(successor)
+		}
+		if err != nil {
+			return ports.NativeSessionRef{}, err
+		}
 	}
 	if !published {
-		// An unpublished snapshot still requires the unchanged source. Once
-		// published, only the reserved graph below may be adopted: later source
-		// turns cannot invalidate or replace that independent native identity.
-		if reservation.SourceDigest != before {
-			return ports.NativeSessionRef{}, errors.New("kilo source session rows changed before native import")
-		}
+		// The loop above leaves an unpublished snapshot only when it matches
+		// the unchanged source. Once published, only the reserved graph below
+		// may be adopted: later source turns cannot replace that identity.
 		// A reserved but unpublished graph keeps its IDs. Partial publication
 		// or a collision is refused; never overwrite or generate another copy.
 		for _, id := range ids {

@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
 // Reserve the private export before the native CLI can publish its IDs. This
@@ -59,6 +61,27 @@ type kiloImportHistory struct {
 func kiloReservationName(config, source, cwd, fingerprint string) string {
 	binding, _ := json.Marshal([]string{config, source, cwd, fingerprint})
 	return fmt.Sprintf("%x.json", sha256.Sum256(binding))
+}
+
+// kiloReservationGenerations bounds stale-reservation rebuilds in one attempt.
+const kiloReservationGenerations = 16
+
+// kiloSuccessorReservationName names the write-once reservation that replaces
+// an unpublished one whose source advanced. It is keyed by the stale native ID
+// under the original binding, so every retry follows the same chain.
+func kiloSuccessorReservationName(base, staleNativeID string) string {
+	return strings.TrimSuffix(base, ".json") + "." + staleNativeID + ".json"
+}
+
+var kiloReservationLocks sync.Map
+
+// lockKiloReservation serializes preparation of one binding in this daemon so
+// a rebuild never races another attempt's native import of the stale graph.
+func lockKiloReservation(path string) func() {
+	value, _ := kiloReservationLocks.LoadOrStore(path, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 func readKiloReservation(ctx context.Context, root *os.Root, name string) (kiloImportReservation, error) {

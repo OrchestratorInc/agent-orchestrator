@@ -341,3 +341,40 @@ func TestPreparedRecoveryAfterUpgradeStillValidatesReceiptAndPrivateAssets(t *te
 		})
 	}
 }
+
+func TestPreparedImportReopensAfterGrowingPastSourceBudget(t *testing.T) {
+	p, r, _ := assetImportFixture(t, CLIStorageDir, true)
+	ref, err := p.PrepareImportedSession(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(ref.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The private DB has now grown past the admission budget, as new turns do.
+	source, err := os.Stat(r.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := maxImportDB
+	maxImportDB = min(info.Size(), source.Size()) - 1
+	t.Cleanup(func() { maxImportDB = previous })
+	if err := ValidateImportedACP(context.Background(), ref.ConfigDir, ref.NativeSessionID, r.LaunchCWD, "agy"); err != nil {
+		t.Fatalf("grown prepared ACP reopen: %v", err)
+	}
+	if path, found, err := p.LocateTranscript(context.Background(), ref); err != nil || !found || path != ref.TranscriptPath {
+		t.Fatalf("grown prepared terminal lookup = %q, %v, %v", path, found, err)
+	}
+	if again, err := p.PrepareImportedSession(context.Background(), r); err != nil || again != ref {
+		t.Fatalf("grown prepared recovery = %+v, %v", again, err)
+	}
+	// Source admission keeps the budget.
+	if _, err := ImportFingerprint(context.Background(), r.ConfigDir, r.TranscriptPath); err == nil {
+		t.Fatal("source admission lost its size budget")
+	}
+	r.DataDir = t.TempDir()
+	if _, err := p.PrepareImportedSession(context.Background(), r); err == nil {
+		t.Fatal("new preparation admitted an oversized source")
+	}
+}

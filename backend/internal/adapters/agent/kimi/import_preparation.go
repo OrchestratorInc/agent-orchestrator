@@ -52,18 +52,23 @@ func (p *Plugin) CheckImportVersion(ctx context.Context) error {
 }
 
 // PrepareImportedSession proves and stages the exact selected native history.
+// The installed version gates only a NEW copy: an already-published private
+// home is recovered from its proof even after a later Kimi update.
 func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
-	if err := p.CheckImportVersion(ctx); err != nil {
-		return ports.NativeSessionRef{}, err
-	}
-	return prepareKimiImport(ctx, r, "2.4.1")
+	return prepareKimiImportChecked(ctx, r, p.CheckImportVersion)
 }
 
 func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, version string) (ports.NativeSessionRef, error) {
+	return prepareKimiImportChecked(ctx, r, func(context.Context) error {
+		if version != "2.4.1" {
+			return errors.New("kimi: native import requires Kimi Code 2.4.1")
+		}
+		return nil
+	})
+}
+
+func prepareKimiImportChecked(ctx context.Context, r ports.ImportedSessionRelocation, checkVersion func(context.Context) error) (ports.NativeSessionRef, error) {
 	var zero ports.NativeSessionRef
-	if version != "2.4.1" {
-		return zero, errors.New("kimi: native import requires Kimi Code 2.4.1")
-	}
 	if !r.Chat || !kimiNativeSessionID.MatchString(r.NativeSessionID) || !filepath.IsAbs(r.ConfigDir) || !filepath.IsAbs(r.DataDir) || !filepath.IsAbs(r.LaunchCWD) {
 		return zero, errors.New("kimi: imported conversations require Chat and absolute native/workspace/data paths")
 	}
@@ -136,6 +141,9 @@ func prepareKimiImport(ctx context.Context, r ports.ImportedSessionRelocation, v
 			return reuse(legacyKey)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
+		return zero, err
+	}
+	if err := checkVersion(ctx); err != nil {
 		return zero, err
 	}
 	original, err := ReadImportedSession(ctx, source, r.NativeSessionID)

@@ -77,7 +77,7 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 					t.Fatalf("unexpected native command: %v", args)
 				}
 				if strings.Contains(mode, "changes source") && mode != "export changes source" {
-					if _, err := db.Exec(`INSERT INTO session_message VALUES ('canonical-change', ?)`, sourceID); err != nil {
+					if _, err := db.Exec(`INSERT OR IGNORE INTO session_message VALUES ('canonical-change', ?)`, sourceID); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -128,6 +128,13 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 					t.Fatalf("reservation is not private: %v, %v", reservationInfo, err)
 				}
 				var reservation kiloImportReservation
+				if json.Unmarshal(proof, &reservation) == nil && reservation.NativeID != transformed.Info.ID {
+					// A rebuilt graph lives in the stale reservation's successor.
+					proof, err = os.ReadFile(filepath.Join(filepath.Dir(reservationPath), kiloSuccessorReservationName(filepath.Base(reservationPath), reservation.NativeID)))
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
 				if json.Unmarshal(proof, &reservation) != nil || reservation.NativeID != transformed.Info.ID || string(reservation.Export) != string(data) {
 					t.Fatal("native import ran before its exact identity graph was reserved")
 				}
@@ -202,23 +209,63 @@ func TestKiloNativeImportPreparation(t *testing.T) {
 					t.Fatalf("retry forked native history: copies=%d, %v", copies, err)
 				}
 			}
+			if mode == "retry pending changes source" {
+				// The failed publication left only a reservation, then the source
+				// gained a turn. Retry rebuilds once from the current source
+				// under a write-once successor, and later retries adopt it.
+				base := filepath.Join(dataRoot, "native-imports", "kilo", kiloReservationName(root, sourceID, cwd, ""))
+				body, err := os.ReadFile(base)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var stale kiloImportReservation
+				if err := json.Unmarshal(body, &stale); err != nil {
+					t.Fatal(err)
+				}
+				again, err := New().prepareKiloImport(context.Background(), request, run)
+				if err != nil || again.NativeSessionID == "" || again.NativeSessionID == stale.NativeID || again.NativeSessionID == sourceID {
+					t.Fatalf("rebuild after source turn = %#v, %v", again, err)
+				}
+				if after, err := os.ReadFile(base); err != nil || string(after) != string(body) {
+					t.Fatal("rebuild replaced the stale write-once reservation")
+				}
+				successor, err := os.ReadFile(filepath.Join(filepath.Dir(base), kiloSuccessorReservationName(filepath.Base(base), stale.NativeID)))
+				var rebuilt kiloImportReservation
+				if err != nil || json.Unmarshal(successor, &rebuilt) != nil || rebuilt.NativeID != again.NativeSessionID {
+					t.Fatalf("rebuilt reservation = %s, %v", successor, err)
+				}
+				if present, err := kiloImportIDExists(context.Background(), db, stale.NativeID); err != nil || present {
+					t.Fatalf("stale reserved identity was published: %v, %v", present, err)
+				}
+				adopted, err := New().prepareKiloImport(context.Background(), request, run)
+				if err != nil || adopted != again {
+					t.Fatalf("retry after rebuild = %#v, %v", adopted, err)
+				}
+				var copies int
+				if err := db.QueryRow(`SELECT COUNT(*) FROM session WHERE id != ?`, sourceID).Scan(&copies); err != nil || copies != 1 {
+					t.Fatalf("rebuild forked native history: copies=%d, %v", copies, err)
+				}
+			}
 			if mode == "tampered reservation" {
 				path := filepath.Join(dataRoot, "native-imports", "kilo", kiloReservationName(root, sourceID, cwd, ""))
 				if err := os.WriteFile(path, []byte(`{}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if mode == "missing history" || strings.HasPrefix(mode, "wrong directory") || mode == "foreign history changes source" || mode == "wrong workspace changes source" || mode == "retry pending changes source" || mode == "tampered reservation" {
+			if mode == "missing history" || strings.HasPrefix(mode, "wrong directory") || mode == "foreign history changes source" || mode == "wrong workspace changes source" || mode == "tampered reservation" {
 				if again, err := New().prepareKiloImport(context.Background(), request, run); err == nil || again.NativeSessionID != "" {
 					t.Fatalf("retry accepted rejected publication: %#v, %v", again, err)
 				}
 			}
 			wantCalls := 3
-			if mode == "native import" || strings.HasPrefix(mode, "lost acknowledgement") || mode == "missing history" || strings.HasPrefix(mode, "wrong directory") || mode == "foreign history changes source" || mode == "wrong workspace changes source" || mode == "retry pending changes source" || mode == "import changes source" || mode == "tampered reservation" {
+			if mode == "native import" || strings.HasPrefix(mode, "lost acknowledgement") || mode == "missing history" || strings.HasPrefix(mode, "wrong directory") || mode == "foreign history changes source" || mode == "wrong workspace changes source" || mode == "import changes source" || mode == "tampered reservation" {
 				wantCalls = 4 // retry checks version but never exports/imports again
 			}
 			if mode == "retry pending" {
 				wantCalls = 5 // version plus import reuses the unpublished reservation
+			}
+			if mode == "retry pending changes source" {
+				wantCalls = 7 // failed import, then version/export/import rebuild, then version-only adoption
 			}
 			if mode == "unknown version" {
 				wantCalls = 1

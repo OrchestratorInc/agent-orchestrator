@@ -692,3 +692,56 @@ func TestImportAdmissionPreservesHumanTranscriptWhenSourceEndsAfterCompaction(t 
 		}
 	}
 }
+
+// A parallel scan of several compressed journals must queue on one shared
+// byte budget instead of holding every per-file worst case at once.
+func TestConcurrentCompressedReadsShareOneByteBudget(t *testing.T) {
+	type candidate struct{ root, path string }
+	var candidates []candidate
+	var largest int64
+	for i := range 8 {
+		root, path, _ := importFixtureWithID(t, true, fmt.Sprintf("00000000-0000-4000-8000-%012d", 600+i))
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		largest = max(largest, info.Size())
+		candidates = append(candidates, candidate{root, path})
+	}
+	// Room for exactly one worst-case compressed read.
+	one := largest + maxImportVisible + maxImportDecoded
+	previous := importReads
+	importReads = newImportReadBudget(one)
+	t.Cleanup(func() { importReads = previous })
+	errs := make(chan error, len(candidates))
+	for _, c := range candidates {
+		go func() {
+			a, err := ReadImportArchive(context.Background(), c.root, c.path)
+			if err == nil && len(a.Messages) != 2 {
+				err = fmt.Errorf("archive=%+v", a)
+			}
+			errs <- err
+		}()
+	}
+	for range candidates {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if peak := importReads.peak.Load(); peak <= 0 || peak > one {
+		t.Fatalf("concurrent reads held %d bytes; budget %d", peak, one)
+	}
+	if held := importReads.held.Load(); held != 0 {
+		t.Fatalf("read budget leaked %d bytes", held)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	release, err := importReads.acquire(ctx, largest, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if _, err := ReadImportArchive(ctx, candidates[0].root, candidates[0].path); err == nil {
+		t.Fatal("cancelled read bypassed an exhausted budget")
+	}
+	release()
+}

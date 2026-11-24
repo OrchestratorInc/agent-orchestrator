@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -666,5 +667,29 @@ func TestKimiRuntimeAcceptsWorkspaceAlias(t *testing.T) {
 	}
 	if _, _, err := ImportedRuntimeEnv(t.Context(), ref.ConfigDir, r.DataDir, r.NativeSessionID, alias, "", nil); err != nil {
 		t.Fatalf("workspace alias refused: %v", err)
+	}
+}
+
+// Publishing the private home can succeed while saving ResumeNativeID fails.
+// A Kimi update before the next open must not block recovering that home.
+func TestKimiPreparedRecoverySurvivesCLIUpdate(t *testing.T) {
+	r := kimiImportFixture(t)
+	before, err := ReadImportedSession(t.Context(), r.ConfigDir, r.NativeSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.SourceFingerprint = before.Fingerprint
+	ref, err := prepareKimiImport(t.Context(), r, "2.4.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := func(context.Context) error { return errors.New("kimi: native import requires Kimi Code 2.4.1") }
+	again, err := prepareKimiImportChecked(t.Context(), r, updated)
+	if err != nil || again != ref {
+		t.Fatalf("prepared recovery after CLI update = %#v, %v", again, err)
+	}
+	r.DataDir = t.TempDir()
+	if fresh, err := prepareKimiImportChecked(t.Context(), r, updated); err == nil || fresh.NativeSessionID != "" {
+		t.Fatalf("new preparation bypassed version gate: %#v, %v", fresh, err)
 	}
 }

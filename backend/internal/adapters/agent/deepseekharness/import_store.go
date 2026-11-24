@@ -15,10 +15,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf16"
 
 	"github.com/klauspost/compress/zstd"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -26,6 +28,48 @@ import (
 const maxImportFile = 64 << 20
 const maxImportDecoded = 256 << 20
 const maxImportVisible = 32 << 20
+
+// maxImportReadBytes bounds the raw payloads held by concurrent full-snapshot
+// reads across one process, so a parallel scan of several large journals
+// queues instead of multiplying the per-file budgets. It fits two worst-case
+// compressed reads (stored, decoded and visible projection) at once.
+const maxImportReadBytes = 2 * (maxImportFile + maxImportDecoded + maxImportVisible)
+
+type importReadBudget struct {
+	sem        *semaphore.Weighted
+	size       int64
+	held, peak atomic.Int64
+}
+
+func newImportReadBudget(size int64) *importReadBudget {
+	return &importReadBudget{sem: semaphore.NewWeighted(size), size: size}
+}
+
+var importReads = newImportReadBudget(maxImportReadBytes)
+
+// acquire reserves the worst case for one stat-bounded read. A compressed
+// file reserves the full decoded budget because its frames may expand to it.
+func (b *importReadBudget) acquire(ctx context.Context, stored int64, compressed bool) (func(), error) {
+	weight := stored + maxImportVisible
+	if compressed {
+		weight += maxImportDecoded
+	}
+	weight = min(weight, b.size)
+	if err := b.sem.Acquire(ctx, weight); err != nil {
+		return nil, err
+	}
+	held := b.held.Add(weight)
+	for {
+		peak := b.peak.Load()
+		if held <= peak || b.peak.CompareAndSwap(peak, held) {
+			break
+		}
+	}
+	return func() {
+		b.held.Add(-weight)
+		b.sem.Release(weight)
+	}, nil
+}
 
 var importID = regexp.MustCompile(`^(?:session-)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var historicalImportFile = regexp.MustCompile(`^session(?:\.v[123])?\.jsonl(?:\.zstd)?$`)
@@ -170,12 +214,20 @@ func ReadImportArchive(ctx context.Context, root, path string) (ImportArchive, e
 	if info.Size() > limit {
 		return a, errors.New("deepseek: native log exceeds import budget")
 	}
-	stored, err := io.ReadAll(io.LimitReader(importReader{ctx, f}, limit+1))
+	// Hold the shared budget until projection finishes and the raw payloads
+	// become unreachable; callers retain only the bounded visible messages.
+	release, err := importReads.acquire(ctx, info.Size(), strings.HasSuffix(rel, ".zstd"))
 	if err != nil {
 		return a, err
 	}
-	if int64(len(stored)) > limit {
-		return a, errors.New("deepseek: native log exceeds import budget")
+	defer release()
+	stored, err := io.ReadAll(io.LimitReader(importReader{ctx, f}, info.Size()+1))
+	if err != nil {
+		return a, err
+	}
+	if int64(len(stored)) > info.Size() {
+		// Bytes beyond the reserved size mean the journal grew mid-read.
+		return a, errors.New("deepseek: native log changed while reading; scan again")
 	}
 	hash := sha256.Sum256(stored)
 	fingerprint := hex.EncodeToString(hash[:])

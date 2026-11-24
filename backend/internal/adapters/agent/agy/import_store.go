@@ -22,7 +22,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-const maxImportDB = 256 << 20
+// maxImportDB bounds source admission only. A prepared private DB is AO-owned
+// live state that keeps growing as the user continues the conversation.
+var maxImportDB int64 = 256 << 20
 const maxImportText = 32 << 20
 
 var importID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -37,6 +39,16 @@ type ImportArchive struct {
 }
 
 func importPath(root, path string) (string, string, error) {
+	return importPathWithin(root, path, maxImportDB)
+}
+
+// preparedImportPath checks a prepared private DB's identity and confinement
+// without the source-size budget, so reopening survives normal growth.
+func preparedImportPath(root, path string) (string, string, error) {
+	return importPathWithin(root, path, -1)
+}
+
+func importPathWithin(root, path string, limit int64) (string, string, error) {
 	base, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", "", err
@@ -81,7 +93,7 @@ func importPath(root, path string) (string, string, error) {
 		if err != nil {
 			return "", "", err
 		}
-		if !info.Mode().IsRegular() || info.Size() > maxImportDB {
+		if !info.Mode().IsRegular() || (limit >= 0 && info.Size() > limit) {
 			return "", "", errors.New("agy: native input is not a bounded regular file")
 		}
 	}
@@ -160,7 +172,11 @@ func ReadImportArchive(ctx context.Context, root, path string) (ImportArchive, e
 
 func readImportArchive(ctx context.Context, root, path string, immutable bool) (ImportArchive, error) {
 	a := ImportArchive{}
-	root, rel, err := importPath(root, path)
+	resolve := preparedImportPath
+	if immutable {
+		resolve = importPath
+	}
+	root, rel, err := resolve(root, path)
 	if err != nil {
 		return a, err
 	}

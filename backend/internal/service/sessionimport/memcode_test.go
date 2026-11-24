@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -120,9 +122,12 @@ func TestMemcodeDiscoveryRefusesUndecodableHiddenBlocks(t *testing.T) {
 		if _, err := readMemcodeTranscript(context.Background(), project, path); err == nil {
 			t.Fatalf("preview accepted native-incompatible hidden block %s", block)
 		}
-		groups, err := discoverMemcodeProject(context.Background(), project)
-		if err != nil || len(groups) != 0 {
-			t.Fatal("discovery offered a native-incompatible conversation", groups, err)
+		st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
+		svc := New(st, "", chatSupported)
+		svc.roots = map[domain.AgentHarness]string{}
+		preview, err := svc.Scan(context.Background())
+		if err != nil || len(preview.Candidates) != 0 {
+			t.Fatal("scan offered a native-incompatible conversation", preview, err)
 		}
 		got, err := os.ReadFile(path)
 		if err != nil || string(got) != body {
@@ -148,5 +153,45 @@ func TestMemcodeImportConfinesRepositoryHistory(t *testing.T) {
 	groups, err := discoverMemcodeProject(context.Background(), project)
 	if err != nil || len(groups) != 0 {
 		t.Fatalf("offered escaping transcript: %+v, %v", groups, err)
+	}
+}
+
+// Discovery returns metadata only; Scan's recency filter and cache decide
+// which histories are parsed, so stale and unchanged files are never read.
+func TestMemcodeRescanSkipsOldAndUnchangedHistories(t *testing.T) {
+	project := t.TempDir()
+	writeFile(t, filepath.Join(project, ".memcode", "sessions", "sess_01234567", "messages.json"), memcodeImportFixture)
+	old := writeFile(t, filepath.Join(project, ".memcode", "sessions", "sess_89abcdef", "messages.json"),
+		strings.Replace(strings.Replace(memcodeImportFixture, "sess_01234567", "sess_89abcdef", 1), "2026-11-01", "2026-08-01", 1))
+	stale := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(old, stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	previous := harnessImporters[domain.HarnessMemcode]
+	t.Cleanup(func() { harnessImporters[domain.HarnessMemcode] = previous })
+	var mu sync.Mutex
+	var reads []string
+	counting := previous
+	counting.read = func(ctx context.Context, root string, paths ...string) (transcript, error) {
+		mu.Lock()
+		reads = append(reads, filepath.Base(filepath.Dir(paths[0])))
+		mu.Unlock()
+		return previous.read(ctx, root, paths...)
+	}
+	harnessImporters[domain.HarnessMemcode] = counting
+	st := &importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}
+	svc := New(st, "", chatSupported)
+	svc.roots = map[domain.AgentHarness]string{}
+	svc.now = func() time.Time { return time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC) }
+	for range 2 {
+		preview, err := svc.Scan(context.Background())
+		if err != nil || len(preview.Candidates) != 1 {
+			t.Fatalf("scan = %+v, %v", preview, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reads) != 1 || reads[0] != "sess_01234567" {
+		t.Fatalf("memcode histories parsed = %v; want only the recent one, once", reads)
 	}
 }
