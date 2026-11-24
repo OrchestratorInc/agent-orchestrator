@@ -90,10 +90,12 @@ func readInvocations(path string) ([]invocation, error) {
 	var invs []invocation
 	for _, run := range runScripts(&doc) {
 		script := strings.ReplaceAll(run.Value, "\\\n", " ")
-		for _, cmd := range strings.Split(script, "\n") {
-			if inv, ok := parseInvocation(cmd); ok {
-				inv.source = fmt.Sprintf("%s:%d", path, run.Line)
-				invs = append(invs, inv)
+		for _, line := range strings.Split(script, "\n") {
+			for _, cmd := range splitCommands(line) {
+				if inv, ok := parseInvocation(cmd); ok {
+					inv.source = fmt.Sprintf("%s:%d", path, run.Line)
+					invs = append(invs, inv)
+				}
 			}
 		}
 	}
@@ -114,6 +116,31 @@ func runScripts(n *yaml.Node) []*yaml.Node {
 		out = append(out, runScripts(child)...)
 	}
 	return out
+}
+
+// splitCommands splits a shell line at ;, & and | outside quotes, so each
+// command's -run pattern is checked against its own packages only.
+func splitCommands(line string) []string {
+	var cmds []string
+	var quote byte
+	last := 0
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '\\':
+			i++
+		case c == ';' || c == '&' || c == '|':
+			cmds = append(cmds, line[last:i])
+			last = i + 1
+		}
+	}
+	return append(cmds, line[last:])
 }
 
 func parseInvocation(cmd string) (invocation, bool) {
@@ -345,6 +372,13 @@ func classEnd(pattern string, i int) int {
 		switch pattern[j] {
 		case '\\':
 			j++
+		case '[':
+			// A POSIX class such as [:alpha:] has its own closing bracket.
+			if j+1 < len(pattern) && pattern[j+1] == ':' {
+				if k := strings.Index(pattern[j+2:], ":]"); k >= 0 {
+					j += k + 3
+				}
+			}
 		case ']':
 			return j
 		}

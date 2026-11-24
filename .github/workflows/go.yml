@@ -113,11 +113,12 @@ jobs:
             echo
             echo "<details><summary>Lowest-covered packages</summary>"
             echo
-            echo '| Package | Mean function coverage |'
+            echo '| Package | Statement coverage |'
             echo '| --- | --- |'
-            # Average function coverage per package, lowest first.
-            awk '$1 != "total:" { sub(/\/[^\/]*:[0-9]+:$/, "", $1); gsub(/%/, "", $NF); sum[$1] += $NF; n[$1]++ }
-              END { for (p in sum) printf "%.1f %s\n", sum[p] / n[p], p }' coverage.txt \
+            # Statement coverage per package from the profile's blocks
+            # (file:range statements count), lowest first.
+            awk 'NR > 1 { pkg = $1; sub(/\/[^\/]*$/, "", pkg); total[pkg] += $2; if ($3 > 0) covered[pkg] += $2 }
+              END { for (p in total) if (total[p] > 0) printf "%.1f %s\n", 100 * covered[p] / total[p], p }' coverage.out \
               | sort -n | head -n 25 | awk '{ printf "| `%s` | %s%% |\n", $2, $1 }'
             echo
             echo "</details>"
