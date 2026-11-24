@@ -1917,6 +1917,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.authored_by_user,
        conversation_messages.continuation,
        conversation_messages.delivery_content_json,
        conversation_turns.provider_input_text,
@@ -1988,6 +1989,23 @@ WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id)
   AND state = 'failed' AND rolled_back_at IS NULL
   AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= sqlc.arg(now);
 
+-- name: SelectSupersededArmedEventTurn :one
+SELECT armed.id, armed.usage_limit_resets_at FROM conversation_turns AS armed
+JOIN conversation_turns AS newer ON newer.id = sqlc.arg(newer_id)
+WHERE armed.id = (
+    SELECT previous.id FROM conversation_turns AS previous
+    WHERE previous.conversation_id = newer.conversation_id AND previous.branch_id = newer.branch_id
+      AND previous.id <> newer.id AND previous.state NOT IN ('queued', 'cancelled')
+      AND previous.promoted_to_turn_id IS NULL AND previous.rolled_back_at IS NULL
+    ORDER BY previous.requested_at DESC, previous.rowid DESC LIMIT 1)
+  AND (armed.requested_at < newer.requested_at OR (armed.requested_at = newer.requested_at AND armed.rowid < newer.rowid))
+  AND armed.usage_limit_auto_resume = 1 AND armed.state = 'failed'
+  AND armed.handled_by_session_id = newer.handled_by_session_id
+  AND EXISTS (SELECT 1 FROM conversation_messages AS m
+      WHERE m.turn_id = armed.id AND m.role = 'user' AND m.origin = 'automation' AND m.authored_by_user = 0)
+  AND EXISTS (SELECT 1 FROM conversation_messages AS m
+      WHERE m.turn_id = newer.id AND m.role = 'user' AND m.origin = 'automation' AND m.authored_by_user = 0);
+
 -- name: SelectAutoResumeConversationTurns :many
 SELECT * FROM conversation_turns
 WHERE usage_limit_auto_resume = 1
@@ -2001,11 +2019,11 @@ WHERE conversation_id = sqlc.arg(conversation_id)
   AND retry_of_turn_id IS NOT NULL;
 
 -- Prompt eligibility must survive the original message falling outside a page.
--- name: SelectConversationHumanPromptTurnIDs :many
-SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id
+-- name: SelectConversationPromptOrigins :many
+SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id, origin
 FROM conversation_messages
 WHERE conversation_id = sqlc.arg(conversation_id)
-  AND turn_id IS NOT NULL AND role = 'user' AND origin = 'human';
+  AND turn_id IS NOT NULL AND role = 'user' AND origin IN ('human', 'automation');
 
 -- Earliest prompt of the named turns. A page that ends among interleaved turns
 -- (a prompt queued while another turn runs) reaches back to it, so a turn is not

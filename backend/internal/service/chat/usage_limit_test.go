@@ -651,3 +651,538 @@ func TestUsageLimitManualAndScheduledRetryCannotDuplicate(t *testing.T) {
 		t.Fatalf("provider sends = %d, want original plus one retry", len(h.conv.sentMessages()))
 	}
 }
+
+func failUsageLimitedEvent(t *testing.T, h *harness, text, message string) domain.ConversationTurn {
+	t.Helper()
+	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: text, ClientMessageID: uuid.NewString(), Origin: domain.MessageOriginAutomation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(message)})
+	failed, _ := turnByID(failedTurnSnapshot(t, h, turn.ID), turn.ID)
+	return failed
+}
+
+func assertContinuedEvent(t *testing.T, sent ports.ChatUserMessage, event string) {
+	t.Helper()
+	if !strings.HasPrefix(sent.Text, "Continue from where you stopped.") || !sent.Continuation || sent.Origin != domain.MessageOriginAutomation {
+		t.Fatalf("sent = %+v, want a continue message", sent)
+	}
+	if !strings.Contains(sent.Text, `{"originalRequest":"`+event+`"}`) {
+		t.Fatalf("sent = %q, want it to quote %q", sent.Text, event)
+	}
+}
+
+func TestUsageLimitAutoResumeContinuesAnEventTurn(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	source := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, source.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Minute)
+	for range 2 {
+		if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 2 {
+		t.Fatalf("provider received %d messages, want the event and one continue", len(sent))
+	}
+	assertContinuedEvent(t, sent[1], "CI is failing on PR 12")
+	after, err := h.st.TurnByID(ctx, source.ID)
+	if err != nil || after.UsageLimit.AutoResume || after.UsageLimit.ResumeError != "" {
+		t.Fatalf("source = %+v, %v, want consumed consent", after.UsageLimit, err)
+	}
+}
+
+func TestUsageLimitContinueRefusedAgainResumesAgain(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	source := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	first, err := h.svc.RetryTurn(ctx, testSession, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: first.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, first.ID)
+	if _, err := h.svc.RetryTurn(ctx, testSession, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 3 {
+		t.Fatalf("provider received %d messages, want three", len(sent))
+	}
+	assertContinuedEvent(t, sent[1], "CI is failing on PR 12")
+	assertContinuedEvent(t, sent[2], "CI is failing on PR 12")
+}
+
+func TestRetryContinuesFromTheLatestUsageLimitedEvent(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	older := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	newer := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
+	if _, err := h.svc.RetryTurn(ctx, testSession, older.ID); !errors.Is(err, chatsvc.ErrTurnNotRetryable) {
+		t.Fatalf("retry an older event = %v, want ErrTurnNotRetryable", err)
+	}
+	if _, err := h.svc.RetryTurn(ctx, testSession, newer.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertContinuedEvent(t, h.conv.sentMessages()[2], `CI is failing on PR 12\n\nCI is failing on PR 13`)
+}
+
+func TestRetryRefusesAnEventTurnThatFailedForAnotherReason(t *testing.T) {
+	h := newHarness(t)
+	source := failUsageLimitedEvent(t, h, "CI is failing on PR 12", "connection lost")
+	if _, err := h.svc.RetryTurn(context.Background(), testSession, source.ID); !errors.Is(err, chatsvc.ErrTurnNotRetryable) {
+		t.Fatalf("retry = %v, want ErrTurnNotRetryable", err)
+	}
+}
+
+func TestUsageLimitContinueQuotesEveryBatchedMessage(t *testing.T) {
+	for name, authoredByUser := range map[string]bool{"events": false, "led by a message the user relayed": true} {
+		t.Run(name, func(t *testing.T) { testContinueQuotesBatch(t, authoredByUser) })
+	}
+}
+
+func testContinueQuotesBatch(t *testing.T, authoredByUser bool) {
+	h := newHarness(t)
+	ctx := context.Background()
+	busy, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "work", ClientMessageID: "busy", Origin: domain.MessageOriginHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lead domain.ConversationTurn
+	for i, text := range []string{"CI is failing on PR 12", "CI is failing on PR 13"} {
+		queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: text, ClientMessageID: uuid.NewString(), Origin: domain.MessageOriginAutomation,
+			AuthoredByUser: authoredByUser && i == 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			lead = queued
+		}
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: busy.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	running, _ := turnByID(h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		turn, found := turnByID(s, lead.ID)
+		return found && turn.State == domain.TurnStateRunning && turn.ProviderTurnID != ""
+	}), lead.ID)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, lead.ID)
+	if _, err := h.svc.RetryTurn(ctx, testSession, lead.ID); err != nil {
+		t.Fatal(err)
+	}
+	sent := h.conv.sentMessages()
+	last := sent[len(sent)-1]
+	for _, want := range []string{"Continue from where you stopped.", "CI is failing on PR 12", "CI is failing on PR 13"} {
+		if !strings.Contains(last.Text, want) {
+			t.Fatalf("sent = %q, want it to contain %q", last.Text, want)
+		}
+	}
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, lead.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored := snapshot.Messages[len(snapshot.Messages)-1]; stored.Text != "Continue from where you stopped." || !stored.Continuation || stored.AuthoredByUser {
+		t.Fatalf("stored = %+v, want only a continue marker", stored)
+	}
+}
+
+func TestRetryResendsALimitedMessageTheUserRelayed(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "why this change?", ClientMessageID: "relayed", Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, turn.ID)
+	if _, err := h.svc.RetryTurn(ctx, testSession, turn.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sent := h.conv.sentMessages()[1]; sent.Text != "why this change?" || sent.Continuation {
+		t.Fatalf("sent = %+v, want the user's own message again", sent)
+	}
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, turn.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := snapshot.Messages[len(snapshot.Messages)-1]; !last.AuthoredByUser {
+		t.Fatalf("retried message = %+v, want it still credited to the user", last)
+	}
+}
+
+func TestUsageLimitAutoResumeWaitsForARunningEvent(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	older := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, older.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	newer, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "CI is failing on PR 13", ClientMessageID: "newer", Origin: domain.MessageOriginAutomation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Minute)
+	if err := h.svc.ResumeUsageLimitedTurns(ctx); !errors.Is(err, chatsvc.ErrTurnRunning) {
+		t.Fatal(err)
+	}
+	if after, err := h.st.TurnByID(ctx, older.ID); err != nil || !after.UsageLimit.AutoResume {
+		t.Fatalf("older limit = %+v, %v, want consent kept while the newer event runs", after.UsageLimit, err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: newer.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("You've hit your weekly limit · resets 5:31pm (Asia/Calcutta)")})
+	failed, _ := turnByID(failedTurnSnapshot(t, h, newer.ID), newer.ID)
+	if !failed.UsageLimit.AutoResume {
+		t.Fatalf("newer limit = %+v, want the armed consent", failed.UsageLimit)
+	}
+}
+
+func TestUsageLimitAutoResumeMovesFromARefusedContinue(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	source := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	resumed, err := h.svc.RetryTurn(ctx, testSession, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: resumed.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, resumed.ID)
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, resumed.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if newer := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit); !newer.UsageLimit.AutoResume {
+		t.Fatalf("newer limit = %+v, want the armed consent", newer.UsageLimit)
+	}
+}
+
+func TestUsageLimitAutoResumeDoesNotMoveFromAnUndoneEvent(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	older := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, older.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.RollbackTurns(ctx, older.ConversationID, older.ID, h.now()); err != nil {
+		t.Fatal(err)
+	}
+	if newer := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit); newer.UsageLimit.AutoResume {
+		t.Fatal("an undone event armed a newer one")
+	}
+}
+
+func TestUsageLimitAutoResumeMovesToANewerRefusedEvent(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	older := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, older.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	newer := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
+	if newer.UsageLimit == nil || !newer.UsageLimit.AutoResume || newer.UsageLimit.ResetsAt == nil {
+		t.Fatalf("newer limit = %+v, want the armed consent", newer.UsageLimit)
+	}
+	after, err := h.st.TurnByID(ctx, older.ID)
+	if err != nil || after.UsageLimit.AutoResume || after.UsageLimit.ResumeError != "" {
+		t.Fatalf("older limit = %+v, %v, want consent moved without an error", after.UsageLimit, err)
+	}
+	h.advance(time.Minute)
+	if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 3 {
+		t.Fatalf("provider received %d messages, want both events and one continue", len(sent))
+	}
+	assertContinuedEvent(t, sent[2], `CI is failing on PR 12\n\nCI is failing on PR 13`)
+}
+
+func TestUsageLimitAutoResumeDoesNotMovePastTheUsersMessage(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	older := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, older.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	human, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "carry on", ClientMessageID: "human", Origin: domain.MessageOriginHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: human.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		turn, found := turnByID(s, human.ID)
+		return found && turn.State == domain.TurnStateCompleted
+	})
+	if newer := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit); newer.UsageLimit.AutoResume {
+		t.Fatal("consent the user's own message superseded armed a newer event")
+	}
+}
+
+func TestUsageLimitAutoResumeKeepsTheKnownResetForANewerEvent(t *testing.T) {
+	h := newHarness(t)
+	older := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	if err := h.svc.SetTurnAutoResume(context.Background(), testSession, older.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	newer := failUsageLimitedEvent(t, h, "CI is failing on PR 13", "You've hit your session limit")
+	if !newer.UsageLimit.AutoResume || newer.UsageLimit.ResetsAt == nil || !newer.UsageLimit.ResetsAt.Equal(*older.UsageLimit.ResetsAt) {
+		t.Fatalf("newer limit = %+v, want it armed for %v", newer.UsageLimit, older.UsageLimit.ResetsAt)
+	}
+}
+
+func TestUsageLimitAutoResumeStaysOnTheLatestTurn(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	running, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "CI is failing on PR 12", ClientMessageID: "running", Origin: domain.MessageOriginAutomation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "CI is failing on PR 13", ClientMessageID: "held", Origin: domain.MessageOriginAutomation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: running.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, running.ID)
+	resumed, err := h.svc.RetryTurn(ctx, testSession, running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: resumed.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, resumed.ID)
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, resumed.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "CI is failing on PR 14", ClientMessageID: "later", Origin: domain.MessageOriginAutomation}); err != nil {
+		t.Fatal(err)
+	}
+	drained, _ := turnByID(h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		turn, found := turnByID(s, held.ID)
+		return found && turn.State == domain.TurnStateRunning && turn.ProviderTurnID != ""
+	}), held.ID)
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: drained.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, held.ID)
+	h.advance(time.Minute)
+	sent := len(h.conv.sentMessages())
+	if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.conv.sentMessages(); len(got) != sent+1 {
+		t.Fatalf("provider received %d messages, want the armed continue", len(got)-sent)
+	}
+}
+
+func TestUsageLimitContinueQuotesTheUsersRefusedMessage(t *testing.T) {
+	h := newHarness(t)
+	human := failUsageLimitedTurn(t, h, timedUsageLimit)
+	event := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
+	if _, err := h.svc.RetryTurn(context.Background(), testSession, event.ID); err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := h.st.RetryPrompt(context.Background(), human.ConversationID, human.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContinuedEvent(t, h.conv.sentMessages()[2], prompt.Text+`\n\nCI is failing on PR 13`)
+}
+
+func TestUsageLimitContinueKeepsEarlierAttachments(t *testing.T) {
+	h := newHarness(t)
+	caps := ports.ChatCapabilities{}
+	caps[ports.ChatCapabilityImages] = true
+	h.conv.setCapabilities(caps)
+	ctx := context.Background()
+	human, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "match this mockup", ClientMessageID: "mockup", Origin: domain.MessageOriginHuman,
+		Content: []ports.ChatContent{{Type: "image", Data: "aW1hZ2U=", MIMEType: "image/png"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: human.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, human.ID)
+	event := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
+	if _, err := h.svc.RetryTurn(ctx, testSession, event.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sent := h.conv.sentMessages()[2]; len(sent.Content) != 1 || sent.Content[0].Data != "aW1hZ2U=" {
+		t.Fatalf("sent content = %+v, want the user's image", sent.Content)
+	}
+}
+
+func TestUsageLimitContinueQuotesTheUsersRefusedContinue(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	task, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "refactor the auth module", ClientMessageID: "task", Origin: domain.MessageOriginHuman})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settleContinuationTestTurn(t, h, task, "", domain.TurnStateInterrupted)
+	continued, err := h.svc.Send(ctx, testSession, continuationMessage("continue"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: continued.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	failedTurnSnapshot(t, h, continued.ID)
+	event := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
+	if _, err := h.svc.RetryTurn(ctx, testSession, event.ID); err != nil {
+		t.Fatal(err)
+	}
+	sent := h.conv.sentMessages()
+	last := sent[len(sent)-1].Text
+	for _, want := range []string{"refactor the auth module", "CI is failing on PR 13"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("sent = %q, want it to contain %q", last, want)
+		}
+	}
+}
+
+func TestUsageLimitContinueQuotesEarlierProgress(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	older, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "CI is failing on PR 12", ClientMessageID: "older", Origin: domain.MessageOriginAutomation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: older.ProviderTurnID, ProviderItemID: "progress", Text: "steps 1-2 done"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: older.ProviderTurnID, TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)},
+	)
+	failedTurnSnapshot(t, h, older.ID)
+	newer := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
+	if _, err := h.svc.RetryTurn(ctx, testSession, newer.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sent := h.conv.sentMessages()[2].Text; !strings.Contains(sent, `CI is failing on PR 13","partialResponseTail":"steps 1-2 done"}`) {
+		t.Fatalf("sent = %q, want the earlier event's progress", sent)
+	}
+}
+
+func TestUsageLimitContinueBoundsAndDeduplicatesEvents(t *testing.T) {
+	h := newHarness(t)
+	failUsageLimitedEvent(t, h, "OLDEST", timedUsageLimit)
+	failUsageLimitedEvent(t, h, strings.Repeat("a", 30*1024), timedUsageLimit)
+	failUsageLimitedEvent(t, h, "OLDER", timedUsageLimit)
+	var latest domain.ConversationTurn
+	event := "CI is failing on PR 12" + strings.Repeat("b", 10*1024)
+	for range 4 {
+		latest = failUsageLimitedEvent(t, h, event, timedUsageLimit)
+	}
+	if _, err := h.svc.RetryTurn(context.Background(), testSession, latest.ID); err != nil {
+		t.Fatal(err)
+	}
+	sent := h.conv.sentMessages()
+	last := sent[len(sent)-1].Text
+	if strings.Contains(last, "OLDEST") || !strings.Contains(last, "OLDER") || strings.Count(last, "CI is failing on PR 12") != 1 {
+		t.Fatalf("sent %d bytes, want the newest events once each", len(last))
+	}
+}
+
+func TestUsageLimitContinueQuotesALongEventInFull(t *testing.T) {
+	h := newHarness(t)
+	event := strings.Repeat("a", 20*1024) + "MIDDLE" + strings.Repeat("b", 20*1024)
+	source := failUsageLimitedEvent(t, h, event, timedUsageLimit)
+	if _, err := h.svc.RetryTurn(context.Background(), testSession, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertContinuedEvent(t, h.conv.sentMessages()[1], event)
+}
+
+func TestUsageLimitContinueQuotesTheLatestProgress(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	source := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	first, err := h.svc.RetryTurn(ctx, testSession, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: first.ProviderTurnID, ProviderItemID: "progress", Text: "step 2 done"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: first.ProviderTurnID, TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)},
+	)
+	failedTurnSnapshot(t, h, first.ID)
+	if _, err := h.svc.RetryTurn(ctx, testSession, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if last := h.conv.sentMessages()[2].Text; !strings.Contains(last, `{"originalRequest":"CI is failing on PR 12","partialResponseTail":"step 2 done"}`) ||
+		strings.Count(last, "Continue from where you stopped.") != 1 {
+		t.Fatalf("sent = %q, want the event and the progress since", last)
+	}
+}
+
+func TestUsageLimitAutoResumeConsentDoesNotSpread(t *testing.T) {
+	for name, tc := range map[string]struct {
+		arm, human bool
+		message    string
+	}{
+		"nothing armed":       {message: timedUsageLimit},
+		"another failure":     {arm: true, message: "connection lost"},
+		"armed human message": {arm: true, human: true, message: timedUsageLimit},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			var older domain.ConversationTurn
+			if tc.human {
+				older = failUsageLimitedTurn(t, h, timedUsageLimit)
+			} else {
+				older = failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+			}
+			if tc.arm {
+				if err := h.svc.SetTurnAutoResume(ctx, testSession, older.ID, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			newer := failUsageLimitedEvent(t, h, "CI is failing on PR 13", tc.message)
+			if newer.UsageLimit != nil && newer.UsageLimit.AutoResume {
+				t.Fatal("newer event was armed")
+			}
+			if after, err := h.st.TurnByID(ctx, older.ID); err != nil || after.UsageLimit.AutoResume != tc.arm {
+				t.Fatalf("older limit = %+v, %v, want armed %v", after.UsageLimit, err, tc.arm)
+			}
+		})
+	}
+}
+
+func TestUsageLimitAutoResumeDoesNotMoveToAHumanMessage(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	older := failUsageLimitedEvent(t, h, "CI is failing on PR 12", timedUsageLimit)
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, older.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if newer := failUsageLimitedTurn(t, h, timedUsageLimit); newer.UsageLimit.AutoResume {
+		t.Fatal("the user's own message was armed without consent")
+	}
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, older.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	event := failUsageLimitedEvent(t, h, "CI is failing on PR 13", timedUsageLimit)
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, event.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	relayed, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "why this change?", ClientMessageID: "relayed", Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: relayed.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(timedUsageLimit)})
+	if failed, _ := turnByID(failedTurnSnapshot(t, h, relayed.ID), relayed.ID); failed.UsageLimit.AutoResume {
+		t.Fatal("a message the user relayed was armed without consent")
+	}
+}
