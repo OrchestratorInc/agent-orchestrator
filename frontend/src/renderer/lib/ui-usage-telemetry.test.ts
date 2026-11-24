@@ -205,6 +205,36 @@ describe("UiUsageRuntime", () => {
 		expect((await summary()).rage_click_count).toBeUndefined();
 	});
 
+	it("counts a word selected from one of its styled parts as selecting text, not a selection elsewhere", async () => {
+		const blank = document.getElementById("blank")!;
+		const word = document.createElement("span");
+		word.innerHTML = "un<b>der</b>line";
+		blank.after(word);
+		const part = word.querySelector("b")!;
+		const range = document.createRange();
+		// The whole word: both ends lie outside the styled part that was clicked.
+		range.setStart(word.firstChild!, 0);
+		range.setEnd(word.lastChild!, 4);
+		for (const detail of [1, 2, 1, 2]) {
+			if (detail === 2) {
+				window.getSelection()?.removeAllRanges();
+				window.getSelection()?.addRange(range);
+			}
+			click(part, detail);
+			now += 100;
+		}
+		expect(runtime.summaryProperties().rage_click_count).toBeUndefined();
+		now += 5_000;
+		// A selection left on the word does not hide a burst on other plain text.
+		for (const detail of [1, 2, 3, 4]) {
+			click(blank, detail);
+			now += 100;
+		}
+		window.getSelection()?.removeAllRanges();
+		word.remove();
+		expect((await summary()).rage_click_count).toBe(1);
+	});
+
 	it("still calls a fast burst on a button a rage click, though the browser numbers it as a multi-click", async () => {
 		const home = document.getElementById("home")!;
 		for (const detail of [1, 2, 3, 4]) {
