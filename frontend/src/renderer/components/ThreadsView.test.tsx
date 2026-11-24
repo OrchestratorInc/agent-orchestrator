@@ -178,6 +178,19 @@ describe("opening a thread from the list", () => {
 		expect(document.querySelector("[data-thread-row='c-1']")).toHaveAttribute("aria-current", "true");
 	});
 
+	it("reads a new comment on the thread it shows, and keeps it read", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
+		const queryClient = renderView();
+		fireEvent.click(await findRow("c-1"));
+		await waitFor(() => expect(mocks.markSessionAsideRead).toHaveBeenCalledTimes(1));
+		const reads = mocks.getSessionAside.mock.calls.length;
+		// Someone comments while it is open: the list says so (unread, newer activity).
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { unread: true, lastActivityAt: "2026-11-24T11:00:00Z", aside: { ...row("c-1").aside, unread: true } })]));
+		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-comment-threads"] }));
+		await waitFor(() => expect(mocks.getSessionAside.mock.calls.length).toBeGreaterThan(reads));
+		await waitFor(() => expect(mocks.markSessionAsideRead).toHaveBeenCalledTimes(2));
+	});
+
 	it("opens its session at the message with Open in session", async () => {
 		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1")]));
 		renderView();

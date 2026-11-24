@@ -226,6 +226,7 @@ function ThreadPane({ thread, listed }: { thread: ThreadInView; listed?: CloudCp
 			canPrompt={canPrompt}
 			ended={ended}
 			focusKey={thread.focusKey}
+			freshAt={cachedRow?.lastActivityAt}
 			onClose={closeThreadInView}
 			onOpenInSession={projectId ? onOpenInSession : undefined}
 			orgId={thread.orgId}

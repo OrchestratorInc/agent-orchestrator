@@ -758,6 +758,7 @@ export function CloudAsidePane({
 	canPrompt = false,
 	anchorShown,
 	onOpenInSession,
+	freshAt,
 	onClose,
 }: {
 	orgId: string;
@@ -783,6 +784,11 @@ export function CloudAsidePane({
 	 * conversation on screen.
 	 */
 	onOpenInSession?: (sequence: number) => void;
+	/**
+	 * The threads view: when its list last saw the thread change. A newer
+	 * value (someone commented) reads the thread again and marks it read.
+	 */
+	freshAt?: string;
 	onClose: () => void;
 }) {
 	const { t } = useTranslation();
@@ -915,9 +921,17 @@ export function CloudAsidePane({
 		return "";
 	}, [asideId, events, userId]);
 	const markedKey = useRef("");
+	// Outside the session (the threads view) no comments stream in: the list's
+	// newer activity reads the thread again, and reads it as seen.
+	const seenFresh = useRef(freshAt);
+	useEffect(() => {
+		if (freshAt === seenFresh.current) return;
+		seenFresh.current = freshAt;
+		void queryClient.invalidateQueries({ queryKey: threadKey });
+	}, [freshAt, queryClient, threadKey]);
 	useEffect(() => {
 		if (!ready || !attentive) return;
-		const key = `${asideId}:${newestFromOthers}`;
+		const key = `${asideId}:${newestFromOthers}:${freshAt ?? ""}`;
 		if (markedKey.current === key) return;
 		markedKey.current = key;
 		patchCachedAside(queryClient, orgId, sessionId, asideId, { unread: false });
@@ -943,7 +957,7 @@ export function CloudAsidePane({
 				// Asked again when the next comment arrives or the pane opens again.
 				markedKey.current = "";
 			});
-	}, [asideId, attentive, baseUrl, client, newestFromOthers, orgId, queryClient, ready, sessionId, userId]);
+	}, [asideId, attentive, baseUrl, client, freshAt, newestFromOthers, orgId, queryClient, ready, sessionId, userId]);
 
 	// "Mark unread": unread again for this person until they open it next.
 	const onMarkUnread = useCallback(() => {
