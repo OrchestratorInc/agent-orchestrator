@@ -574,7 +574,8 @@ type ConversationSettings struct {
 	// It is separate from approval policy and restored before accepting turns.
 	OpenCodeMode string `json:"openCodeMode,omitempty"`
 	// AutoCompactWindow is where Claude Code compacts on its own: "200k" or
-	// "1m". Empty leaves it to Claude Code. It is read when the agent starts.
+	// "1m". "off" turns OpenCode's compaction off. Empty leaves it to the agent.
+	// It is read when the agent starts.
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
 }
 

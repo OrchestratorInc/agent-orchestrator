@@ -54,6 +54,7 @@ type AgentLaunchOptions struct {
 	// Ultracode starts Claude Code with Ultracode on.
 	Ultracode bool `json:"ultracode,omitempty"`
 	// AutoCompactWindow is where Claude Code compacts on its own: "200k" or "1m".
+	// "off" turns compaction off on agents that can (see CanTurnOffAutoCompact).
 	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
 	// HandoffNote is a terminal switch target's note, kept until the target has
 	// started. A relaunch that finds it follows a switch cut short by a daemon
@@ -63,6 +64,14 @@ type AgentLaunchOptions struct {
 
 // AutoCompactTokens is each compaction window choice as a token count.
 var AutoCompactTokens = map[string]int{"200k": 200_000, "1m": 1_000_000}
+
+// AutoCompactOff turns an agent's own compaction off, on agents that can (OpenCode).
+const AutoCompactOff = "off"
+
+// CanTurnOffAutoCompact reports whether AutoCompactOff reaches the harness when it starts.
+func CanTurnOffAutoCompact(harness AgentHarness) bool {
+	return harness == HarnessOpenCode || harness == HarnessOpenCodeV2
+}
 
 // IsZero reports whether the config carries no settings, so storage can persist
 // SQL NULL and resolution can skip an empty config.

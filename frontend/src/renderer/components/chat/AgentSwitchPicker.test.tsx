@@ -7,7 +7,7 @@ import codexLogo from "../../assets/agents/codex.svg";
 import { toggleModelFavorite } from "../../lib/model-favorites";
 import { useUiStore } from "../../stores/ui-store";
 import { agentReadiness, type AgentReadinessSnapshot } from "../../test/agent-readiness-fixtures";
-import { AgentModelPicker, type AccountChoice, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
+import { AgentModelPicker, autoCompactKind, type AccountChoice, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
 
 const unavailableGet = vi.hoisted(() => vi.fn());
 const readiness = vi.hoisted(() => ({ agents: [] as unknown[] }));
@@ -727,6 +727,44 @@ describe("AgentModelPicker", () => {
 		expect(compact.parentElement).toContainElement(screen.getByRole("switch", { name: "Fast mode" }));
 		await user.click(within(compact).getByRole("radio", { name: "1M" }));
 		expect(onChange).toHaveBeenCalledWith("1m");
+	});
+
+	it("keeps Fast mode and auto-compact in place, disabled, for an agent without them", async () => {
+		const user = userEvent.setup();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<AgentModelPicker
+					currentHarness="agy"
+					current={{ models: [{ id: "flash", label: "Flash" }], modelId: "flash", modelLabel: "Flash", onPickModel: vi.fn(), efforts: [{ value: "low", label: "Low" }, { value: "high", label: "High" }], effort: "high", onPickEffort: vi.fn() }}
+					agentSwitch={{ projectId: "p", onPendingChange: vi.fn() }}
+				/>
+			</QueryClientProvider>,
+		);
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const fast = screen.getByRole("switch", { name: "Fast mode" });
+		expect(fast).not.toBeChecked();
+		expect(fast.closest("[role='menuitem']")).toHaveAttribute("data-disabled");
+		const compact = screen.getByRole("radiogroup", { name: "Auto-compact" });
+		expect(compact).toHaveAttribute("aria-disabled", "true");
+		expect(within(compact).getAllByRole("radio").map((radio) => radio.textContent)).toEqual(["Auto"]);
+	});
+
+	it("offers OpenCode's auto-compact on or off on a chat switch to it", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open({ harness: "opencode-v2" }, false, "claude-code");
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const compact = screen.getByRole("radiogroup", { name: "Auto-compact" });
+		expect(within(compact).getAllByRole("radio").map((radio) => radio.textContent)).toEqual(["Auto", "Off"]);
+		await user.click(within(compact).getByRole("radio", { name: "Off" }));
+		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "opencode-v2", autoCompactWindow: "off" }));
+	});
+
+	it("sets auto-compact only where the agent reads it", () => {
+		expect(autoCompactKind("claude-code", "opus")).toBe("window");
+		expect(autoCompactKind("claude-code", "claude-haiku-4-5")).toBeUndefined();
+		expect(autoCompactKind("opencode-v2")).toBe("toggle");
+		expect(autoCompactKind("opencode", "", true)).toBeUndefined();
+		expect(autoCompactKind("agy")).toBeUndefined();
 	});
 
 	it("has no account switch, even with two accounts", async () => {

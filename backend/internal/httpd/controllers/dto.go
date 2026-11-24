@@ -3659,7 +3659,7 @@ type ProviderSwitchRequest struct {
 	Effort            string `json:"effort,omitempty" maxLength:"64"`
 	FastMode          bool   `json:"fastMode,omitempty"`
 	Ultracode         bool   `json:"ultracode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m,off"`
 	// PermissionMode is the mode picked for the new agent; empty keeps the chat's.
 	PermissionMode string `json:"permissionMode,omitempty" enum:"default,accept-edits,auto,bypass-permissions"`
 	Force          bool   `json:"force,omitempty"`
@@ -3927,7 +3927,7 @@ type ConversationTurnSettingsPayload struct {
 	// The rest are described on domain.ConversationSettings.
 	FastMode          bool   `json:"fastMode,omitempty"`
 	PlanMode          bool   `json:"planMode,omitempty"`
-	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m"`
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty" enum:"200k,1m,off"`
 }
 
 // InterruptConversationRequest is the optional body of a chat Stop. TurnID is

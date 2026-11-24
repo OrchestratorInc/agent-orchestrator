@@ -7472,7 +7472,7 @@ export interface components {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             /** @enum {string} */
-            autoCompactWindow?: "200k" | "1m";
+            autoCompactWindow?: "200k" | "1m" | "off";
             fastMode?: boolean;
             model?: string;
             planMode?: boolean;
@@ -8522,7 +8522,7 @@ export interface components {
         };
         ProviderSwitchRequest: {
             /** @enum {string} */
-            autoCompactWindow?: "200k" | "1m";
+            autoCompactWindow?: "200k" | "1m" | "off";
             effort?: string;
             fastMode?: boolean;
             force?: boolean;

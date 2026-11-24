@@ -39,7 +39,7 @@ import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
-import { AgentModelPicker, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
+import { AgentModelPicker, autoCompactKind, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { queryShown } from "../../lib/dom-selectors";
 import { providerQualifiedChoice } from "../../lib/model-variants";
@@ -371,7 +371,7 @@ export function TurnSettingsBar({
 		ultracode && harness === "claude-code" && onChangeConfigOption &&
 		acpEffortOption?.choices.some((choice) => choice.value === "xhigh"),
 	);
-	const offersAutoCompact = Boolean(autoCompact) && compactsEarly(harness, primaryModelOption?.currentValue);
+	const compactKind = autoCompact ? autoCompactKind(harness, primaryModelOption?.currentValue) : undefined;
 	// A model the installed CLI is too old for is shown, disabled, but never sent.
 	const nativeUnavailable = (id: string) => Boolean(displayModels.find((model) => model.id === id)?.unavailableReason);
 	const choiceUnavailable = (id: string) => Boolean(primaryModelOption?.choices.find((choice) => choice.value === id)?.unavailableReason);
@@ -471,8 +471,12 @@ export function TurnSettingsBar({
 	const hasPickerExtras = unified && Boolean(onChangeConfigOption) && (grouped.extra.length > 0 ||
 		(!nativeModelMenu && (grouped.model.length > 1 || grouped.effort.length > 1)));
 	// Handed to the picker on its own, so it can sit beside Fast mode.
-	const pickerAutoCompact = unified && onChangeConfigOption && offersAutoCompact && autoCompact
-		? { ...autoCompact, title: "When Claude Code compacts the conversation on its own. Changing it restarts the agent; the conversation is kept." }
+	const pickerAutoCompact = unified && onChangeConfigOption && compactKind && autoCompact
+		? {
+			...autoCompact,
+			kind: compactKind,
+			title: `${t(compactKind === "toggle" ? "agentSwitch.autoCompactHintToggle" : "agentSwitch.autoCompactHint", { agent: agentLabel(harness ?? "") })} ${t("agentSwitch.autoCompactRestarts")}`,
+		}
 		: undefined;
 	// Given the picker's pick, so a setting changed here is a choice, not an abandoned menu.
 	const pickerExtras = hasPickerExtras ? (markPick: () => void) => {
