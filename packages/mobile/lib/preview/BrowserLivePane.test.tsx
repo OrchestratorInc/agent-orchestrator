@@ -611,6 +611,40 @@ describe("transport contract", () => {
 			expect(first.record.sent).toEqual([]);
 		});
 
+		it.each([
+			["the host closes the ask", async (handlers: Handlers) => handlers.onDialogClosed!()],
+			["a newer ask replaces it", async (handlers: Handlers) => handlers.onDialog!({ kind: "filechooser", multiple: true, accept: "", folder: false })],
+		])("drops a held file answer when %s before the stream is ready", async (_name, interrupt) => {
+			const first = await asking();
+			const chooser = { kind: "filechooser", multiple: false, accept: "", folder: false } as const;
+			await act(async () => first.record.handlers!.onDialog!(chooser));
+			const answer = sheet().props.onAnswer as (dialog: unknown, command: unknown) => void;
+			const second = fakeTransport({ dialogs: true, auth: true, select: true, files: true, downloads: true });
+			await act(async () => { screen.update(<BrowserLivePane sessionID="cloud-1" transport={second.factory} />); });
+			await act(async () => answer(chooser, { type: "files", payload: { files: [{ uri: "file:///old.txt", name: "old.txt" }], folder: false } }));
+			await act(async () => {
+				second.record.handlers!.onStatus("open");
+				await interrupt(second.record.handlers!);
+				second.record.handlers!.onState({ ...page, control: "human" } as never);
+			});
+			expect(second.record.sent).toEqual([]);
+		});
+
+		it("drops a held file answer when the pane moves to another session", async () => {
+			const first = await asking();
+			const chooser = { kind: "filechooser", multiple: false, accept: "", folder: false } as const;
+			await act(async () => first.record.handlers!.onDialog!(chooser));
+			const answer = sheet().props.onAnswer as (dialog: unknown, command: unknown) => void;
+			const second = fakeTransport({ dialogs: true, auth: true, select: true, files: true, downloads: true });
+			await act(async () => { screen.update(<BrowserLivePane sessionID="cloud-2" transport={second.factory} />); });
+			await act(async () => answer(chooser, { type: "files", payload: { files: [{ uri: "file:///old.txt", name: "old.txt" }], folder: false } }));
+			await act(async () => {
+				second.record.handlers!.onStatus("open");
+				second.record.handlers!.onState({ ...page, control: "human" } as never);
+			});
+			expect(second.record.sent).toEqual([]);
+		});
+
 		it("sends no answer while the agent drives", async () => {
 			const fake = await asking("agent");
 			const auth = { kind: "auth", origin: "https://a.example", failed: false } as const;

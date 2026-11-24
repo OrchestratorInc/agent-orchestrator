@@ -118,9 +118,19 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	// to the background and so drops the stream: its answer still counts, and
 	// waits for the next stream.
 	const pickingRef = useRef<BrowserDialog | null>(null);
-	const pendingRef = useRef<{ command: BrowserCommand; until: number } | null>(null);
+	// Held only for this session and this ask: a closed or replaced ask, or
+	// another session, drops it (Cloud files name no chooser, so they would
+	// otherwise reach the newer input).
+	const pendingRef = useRef<{ command: BrowserCommand; until: number; sessionID: string } | null>(null);
 	// This stream is open and has said what its page is (and so what it takes).
 	const streamReady = useRef(false);
+	// The session the pane shows now; an ask answered for another is dropped.
+	const sessionRef = useRef(sessionID);
+	if (sessionRef.current !== sessionID) {
+		sessionRef.current = sessionID;
+		pickingRef.current = null;
+		pendingRef.current = null;
+	}
 	streamReady.current = status === "open" && page !== null;
 	const [downloads, setDownloads] = useState<BrowserDownload[]>([]);
 
@@ -168,12 +178,14 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			onDialog: (dialog) => {
 				if (disposed) return;
 				pickingRef.current = dialog.kind === "filechooser" ? dialog : null;
+				pendingRef.current = null;
 				setAsk(dialog);
 			},
 			// The page moved on (or the host answered it): the sheet goes, and a late tap on it sends nothing.
 			onDialogClosed: () => {
 				if (disposed) return;
 				pickingRef.current = null;
+				pendingRef.current = null;
 				setAsk(null);
 			},
 			onDownload: (download) => {
@@ -231,21 +243,21 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		// Read now, not when the sheet opened: the stream may have changed since.
 		const live = client.current;
 		if (streamReady.current && live && commandSupported(live.capabilities, command)) send(command);
-		else pendingRef.current = { command, until: Date.now() + PENDING_ANSWER_MS };
+		else pendingRef.current = { command, until: Date.now() + PENDING_ANSWER_MS, sessionID: sessionRef.current };
 	}, [control, send, showNotice]);
 	// An answer held over a reconnect goes once the new stream can carry it.
 	useEffect(() => {
 		const pending = pendingRef.current;
 		const live = client.current;
 		if (!pending || status !== "open" || !page || !live) return;
-		if (Date.now() > pending.until) {
+		if (Date.now() > pending.until || pending.sessionID !== sessionID) {
 			pendingRef.current = null;
 			return;
 		}
 		if (!commandSupported(live.capabilities, pending.command)) return;
 		pendingRef.current = null;
 		send(pending.command);
-	}, [page, send, status]);
+	}, [page, send, sessionID, status]);
 	const saveDownloadById = useCallback((id: string) => {
 		const live = client.current;
 		const download = downloads.find((item) => item.id === id);
