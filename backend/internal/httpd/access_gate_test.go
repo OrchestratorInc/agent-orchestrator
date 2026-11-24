@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,8 +19,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/access"
 	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 )
 
 type gateFixture struct {
@@ -87,7 +90,7 @@ func (f *gateFixture) token(name, level string, projects ...string) string {
 }
 
 type gateCall struct {
-	method, path, body, token, session string
+	method, path, body, token, session, authorization string
 }
 
 func (f *gateFixture) do(call gateCall) (status int, code, reason string) {
@@ -95,6 +98,9 @@ func (f *gateFixture) do(call gateCall) (status int, code, reason string) {
 	req := httptest.NewRequest(call.method, call.path, strings.NewReader(call.body))
 	if call.token != "" {
 		req.Header.Set("Authorization", "Bearer "+call.token)
+	}
+	if call.authorization != "" {
+		req.Header.Set("Authorization", call.authorization)
 	}
 	if call.session != "" {
 		req.Header.Set(caller.Header, call.session)
@@ -166,6 +172,8 @@ func TestGateHoldsATokenToItsGrant(t *testing.T) {
 		"limited: escaped slash in an id":        {gateCall{method: http.MethodGet, path: "/api/v1/projects/api%2Fcues", token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
 		"limited: an id that only looks escaped": {gateCall{method: http.MethodGet, path: "/api/v1/projects/%2541", token: operateA}, 403, "GRANT_REFUSED", access.ReasonProject},
 		"limited: a body that is not JSON":       {gateCall{method: http.MethodPost, path: "/api/v1/sessions", body: `{"projectId":"api"`, token: operateAPI}, 400, "GRANT_TARGET_UNREADABLE", ""},
+		"a lower-case scheme is still the token": {gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", authorization: "bearer " + read}, 403, "GRANT_REFUSED", access.ReasonLevel},
+		"spaces around the token":                {gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", authorization: "Bearer  " + read + " "}, 403, "GRANT_REFUSED", access.ReasonLevel},
 		"operate starts an orchestrator":         {gateCall{method: http.MethodPost, path: "/api/v1/orchestrators", body: spawn("api"), token: operateAPI}, 200, "", ""},
 		"orchestrator elsewhere":                 {gateCall{method: http.MethodPost, path: "/api/v1/orchestrators", body: spawn("web"), token: operateAPI}, 403, "GRANT_REFUSED", access.ReasonProject},
 		"a session's own hook":                   {gateCall{method: http.MethodPost, path: "/api/v1/sessions/api-1/activity", token: manage}, 403, "GRANT_REFUSED", access.ReasonCatalog},
@@ -195,6 +203,40 @@ func TestRevokedTokenIsRefusedAndASessionHasNoLimit(t *testing.T) {
 	}
 	if status, _, _ := f.do(gateCall{method: http.MethodDelete, path: "/api/v1/projects/api", session: "api-1"}); status != 200 {
 		t.Errorf("a session is a caller with no grant, whoever started it: status %d", status)
+	}
+}
+
+func TestTokenCannotReachAPreviewOrigin(t *testing.T) {
+	registry, err := access.LoadRegistry(access.TokensPath(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, _ := access.NewGrant(access.LevelManage, nil, time.Time{})
+	_, secret, err := registry.Create("bot", grant, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouterWithControl(config.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, APIDeps{Access: registry}, ControlDeps{})
+	for name, build := range map[string]func(string, domain.SessionID, string) (string, error){
+		"preview": previewutil.FileURL, "artifact": previewutil.ArtifactFileURL, "inline artifact": previewutil.InlineArtifactFileURL,
+	} {
+		raw, err := build("http://127.0.0.1:3001", "web-1", "index.html")
+		if err != nil {
+			t.Fatal(err)
+		}
+		origin, _ := url.Parse(raw)
+		for _, token := range []string{secret, ""} {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/access/whoami", http.NoBody)
+			req.Host = origin.Host
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if refused := strings.Contains(w.Body.String(), "GRANT_REFUSED"); refused != (token != "") {
+				t.Errorf("%s origin, token=%v: got %d %s; the origin serves a session's files by host, whatever the path, so a token must be refused there and a caller with no token must not be", name, token != "", w.Code, w.Body)
+			}
+		}
 	}
 }
 

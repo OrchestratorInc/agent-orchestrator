@@ -76,6 +76,11 @@ func (g *accessGate) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if isPreviewHost(r.Host) {
+			writeGrantRefused(w, r, &access.Refusal{Reason: access.ReasonCatalog,
+				Message: "a caller with a grant cannot reach a preview or artifact origin: it serves a session's files by host, whatever the path"})
+			return
+		}
 		rctx := chi.NewRouteContext()
 		if !g.routes.Match(rctx, r.Method, routePath(r)) {
 			notFoundJSON(w, r)
@@ -133,7 +138,7 @@ func (g *accessGate) resolve(w http.ResponseWriter, r *http.Request) (access.Cal
 		return tokenCaller(token), true
 	}
 	if !requestscope.IsLAN(r.Context()) {
-		if secret := bearerToken(r); strings.HasPrefix(secret, access.TokenPrefix) {
+		if secret := agentBearer(r); strings.HasPrefix(secret, access.TokenPrefix) {
 			token, ok := g.registry.Match(secret, now)
 			if !ok {
 				writeAgentTokenInvalid(w, r)
@@ -150,6 +155,14 @@ func (g *accessGate) resolve(w http.ResponseWriter, r *http.Request) (access.Cal
 		return access.Caller{Kind: access.CallerDevice, ID: credential.DeviceID, Name: string(credential.Kind)}, true
 	}
 	return access.Caller{Kind: access.CallerUser}, true
+}
+
+func agentBearer(r *http.Request) string {
+	scheme, value, _ := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
+	if !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 func writeAgentTokenInvalid(w http.ResponseWriter, r *http.Request) {

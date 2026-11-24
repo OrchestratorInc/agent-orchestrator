@@ -143,8 +143,8 @@ func parseTokenExpiry(value string, now time.Time) (*time.Time, error) {
 	if days, ok := strings.CutSuffix(value, "d"); ok {
 		var n int
 		n, err = strconv.Atoi(days)
-		if n > maxTokenExpiryDays {
-			err = errors.New("too far ahead")
+		if err == nil && (n <= 0 || n > maxTokenExpiryDays) {
+			err = errors.New("out of range")
 		}
 		span = time.Duration(n) * 24 * time.Hour
 	}

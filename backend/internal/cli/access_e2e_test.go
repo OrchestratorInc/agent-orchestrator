@@ -83,7 +83,7 @@ func TestTokenLifecycleAndGrantThroughTheRealDaemon(t *testing.T) {
 			t.Errorf("--project %q: exit %d, want 2: an empty project must not become every project", project, ExitCode(err))
 		}
 	}
-	for _, span := range []string{"soon", "0d", "-1h", "300000d"} {
+	for _, span := range []string{"soon", "0d", "-1h", "300000d", "-400000d"} {
 		if _, err = runAccess(t, "token", "create", "bad", "--expires", span); ExitCode(err) != 2 {
 			t.Errorf("--expires %s: exit %d, want 2", span, ExitCode(err))
 		}
@@ -171,7 +171,7 @@ func TestActionRequestSplitsInput(t *testing.T) {
 func TestSessionWaitExitCodes(t *testing.T) {
 	cfg := setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "")
-	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "api-4": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}, "stuck": {"idle"}, "failed-start": {"idle"}, "silent": {"idle"}, "no-record": {"active", "idle"}}
+	states := map[string][]string{"api-1": {"active", "active", "waiting_input"}, "api-2": {"active", "idle"}, "api-3": {"active"}, "api-4": {"active"}, "fresh": {"idle"}, "broken": {"idle"}, "recovering": {"idle"}, "gone": {"idle"}, "stuck": {"idle"}, "failed-start": {"idle"}, "silent": {"idle"}, "no-record": {"active", "idle"}, "flaky": {"active", "active", "idle"}}
 	polls := map[string]int{}
 	created := time.Date(2026, 11, 23, 11, 59, 50, 0, time.UTC)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +187,12 @@ func TestSessionWaitExitCodes(t *testing.T) {
 		sequence, ok := states[id]
 		if !ok {
 			http.NotFound(w, r)
+			return
+		}
+		if id == "flaky" && polls[id] == 1 {
+			polls[id]++
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"error":"unavailable","code":"DAEMON_STARTING","message":"the daemon is starting"}`)
 			return
 		}
 		state := sequence[min(polls[id], len(sequence)-1)]
@@ -261,6 +267,9 @@ func TestSessionWaitExitCodes(t *testing.T) {
 	}
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "no-record", "--json"); err != nil || json.Unmarshal([]byte(out), &result) != nil || result.State != "idle" || result.WaitedSeconds != 2 {
 		t.Errorf("a session the wait saw working settles when it goes idle, also when the daemon records no turns for its agent: %s %v", out, err)
+	}
+	if out, _, err = executeCLI(t, deps(), "session", "wait", "flaky"); err != nil || !strings.Contains(out, "flaky: idle") {
+		t.Errorf("one failed check in the middle of a wait, such as a daemon restart, must not end the wait: %q %v", out, err)
 	}
 	if out, _, err = executeCLI(t, deps(), "session", "wait", "failed-start"); ExitCode(err) != 1 || !strings.Contains(out, "failed-start: failed") {
 		t.Errorf("a failed start that the daemon also marked terminated: exit %d, out %q, want exit 1 and failed", ExitCode(err), out)

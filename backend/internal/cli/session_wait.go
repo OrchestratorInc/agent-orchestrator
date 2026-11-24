@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -97,7 +98,7 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 		ids[i] = id
 	}
 	started := c.deps.Now()
-	idleSince, worked := map[string]time.Time{}, map[string]bool{}
+	idleSince, worked, polled := map[string]time.Time{}, map[string]bool{}, map[string]bool{}
 	waitCtx, cancel := context.WithTimeout(cmd.Context(), opts.timeout)
 	defer cancel()
 	emit := func(result sessionWaitResult) error {
@@ -128,12 +129,21 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 		}
 		return err
 	}
+	passing := func(id string, err error) bool {
+		var down daemonUnavailableError
+		var failed apiResponseError
+		return polled[id] && (errors.As(err, &down) || errors.As(err, &failed) && failed.StatusCode >= http.StatusInternalServerError)
+	}
 	for {
 		for _, id := range ids {
 			var res sessionResponse
 			if err := get(id, "", &res); err != nil {
+				if passing(id, err) {
+					continue
+				}
 				return err
 			}
+			polled[id] = true
 			state := settledState(res.Session)
 			before, sent := opts.after[id]
 			moved := sent && res.Session.Activity.LastActivityAt.After(before)
@@ -146,6 +156,9 @@ func (c *commandContext) waitForSessions(cmd *cobra.Command, ids []string, opts 
 			if state == "idle" && !moved && !worked[id] && c.deps.Now().Sub(idleSince[id]) < startupGrace {
 				var history sessionHistoryResponse
 				if err := get(id, "/history?limit=1", &history); err != nil {
+					if passing(id, err) {
+						continue
+					}
 					return err
 				}
 				if history.Total == 0 {
