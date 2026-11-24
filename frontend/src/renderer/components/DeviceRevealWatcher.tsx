@@ -27,7 +27,13 @@ export function DeviceRevealWatcher({
 	// When this session was entered: a lease answer older than that is the
 	// cache from an earlier visit, not what the session holds now.
 	const enteredRef = useRef({ sessionId: "", at: 0 });
-	if (enteredRef.current.sessionId !== uiSessionId) enteredRef.current = { sessionId: uiSessionId, at: Date.now() };
+	// Entering a session starts over: the baseline kept from another session,
+	// or from an earlier visit here, would make a lease opened while away read
+	// as news when this session's (possibly stale) answer arrives.
+	if (enteredRef.current.sessionId !== uiSessionId) {
+		enteredRef.current = { sessionId: uiSessionId, at: Date.now() };
+		baselineRef.current = null;
+	}
 	const onRevealRef = useRef(onReveal);
 	onRevealRef.current = onReveal;
 	const updatedAt = lease.dataUpdatedAt;

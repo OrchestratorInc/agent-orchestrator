@@ -78,4 +78,36 @@ describe("DeviceRevealWatcher", () => {
 		await act(async () => {});
 		expect(getMock).not.toHaveBeenCalled();
 	});
+
+	it("does not reveal, on returning to a session, a device it acquired while away", async () => {
+		const leases: Record<string, unknown> = { "ao-a": null, "ao-b": null };
+		getMock.mockImplementation(async (path: string, init?: { params?: { path?: { sessionId?: string } } }) =>
+			path === "/api/v1/devices"
+				? { data: { enabled: true, state: "ready", platforms: [], devices: [], leases: [] } }
+				: { data: { lease: leases[init?.params?.path?.sessionId ?? ""] ?? null } },
+		);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const onReveal = vi.fn();
+		const watcher = (sessionId: string, enabled = true) => (
+			<QueryClientProvider client={client}>
+				<DeviceRevealWatcher enabled={enabled} onReveal={onReveal} sessionId={sessionId} terminated={false} uiSessionId={sessionId} />
+			</QueryClientProvider>
+		);
+		const leaseReads = (sessionId: string) =>
+			getMock.mock.calls.filter(([path, init]) => path === "/api/v1/sessions/{sessionId}/device" && init?.params?.path?.sessionId === sessionId).length;
+		const view = render(watcher("ao-a"));
+		await waitFor(() => expect(leaseReads("ao-a")).toBe(1));
+		await act(async () => {});
+
+		// Over to B, where nothing is watched (no fresh answer to set a baseline).
+		view.rerender(watcher("ao-b", false));
+		await act(async () => {});
+		// Meanwhile an agent opens a device for A.
+		leases["ao-a"] = lease;
+
+		view.rerender(watcher("ao-a"));
+		await waitFor(() => expect(leaseReads("ao-a")).toBe(2));
+		await act(async () => {});
+		expect(onReveal).not.toHaveBeenCalled();
+	});
 });
