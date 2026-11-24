@@ -7528,16 +7528,23 @@ describe("SessionInspector branch summary", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     const checks = await screen.findByTestId("pr-checks");
     const groups = [...checks.querySelectorAll("section")].map((group) => [group.getAttribute("data-state"), [...group.querySelectorAll("li")].map((item) => item.textContent)]);
+    // Like GitHub's list: each check's name, then its status in words.
     expect(groups).toEqual([
-      ["failed", ["lint failed", "typecheck skipped"]],
-      ["running", ["e2e running"]],
-      ["pending", ["deploy running"]],
-      ["passed", ["build passed", "test-a passed"]],
+      ["failed", ["lintFailing", "typecheckCancelled"]],
+      ["running", ["e2eIn progress"]],
+      ["pending", ["deployQueued"]],
+      ["passed", ["buildSuccessful", "test-aSuccessful"]],
       // Skipped checks fold behind their heading.
       ["skipped", []],
     ]);
+    // Each group is a foldable sentence heading, as on GitHub.
+    expect([...checks.querySelectorAll("section > button")].map((heading) => heading.textContent)).toEqual([
+      "2 failing checks", "1 running check", "1 pending check", "2 successful checks", "1 skipped check",
+    ]);
+    // The name is the link; there is no separate arrow.
+    expect(within(checks).getByRole("link", { name: "lint" }).querySelector("svg")).toBeNull();
     expect(within(checks).getByRole("link", { name: /lint/ })).toHaveAttribute("href", "https://github.com/acme/repo/runs/1");
-    await userEvent.click(within(checks).getByRole("button", { name: /Skipped/ }));
+    await userEvent.click(within(checks).getByRole("button", { name: /skipped check/ }));
     expect(within(checks).getByText("docs")).toBeInTheDocument();
   });
 
@@ -7562,7 +7569,7 @@ describe("SessionInspector branch summary", () => {
     expect(checks.getByRole("link", { name: /\+2 more/ })).toHaveAttribute("href", "https://github.com/acme/repo/pull/7/checks");
     // Four passes are more than three, so they wait behind their heading.
     expect(checks.queryByText("ok-0")).not.toBeInTheDocument();
-    await userEvent.click(checks.getByRole("button", { name: /Passed/ }));
+    await userEvent.click(checks.getByRole("button", { name: /successful checks/ }));
     expect(checks.getByText("ok-0")).toBeInTheDocument();
   });
 
@@ -7659,7 +7666,7 @@ describe("SessionInspector branch summary", () => {
     expect([...screen.getByTestId("pr-strip-bar-ci").children].map((segment) => segment.getAttribute("data-tone"))).toEqual(["success", "passive"]);
     await userEvent.click(screen.getByRole("button", { name: /^Checks/ }));
     const checks = within(screen.getByTestId("pr-checks"));
-    expect(checks.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["build passed"]);
+    expect(checks.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["buildSuccessful"]);
   });
 
   // The classic summary, shown while the PR view is off, hides Create PR once
