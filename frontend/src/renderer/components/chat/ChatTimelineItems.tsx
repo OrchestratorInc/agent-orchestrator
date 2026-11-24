@@ -2091,6 +2091,9 @@ function GenericActivityRow({
 						size={14}
 					/>
 				)}
+				{/* A compact row's label and its state ("exit 1", "failed") share a baseline:
+				    they are different sizes, and centring each sets the smaller one high. */}
+				<span className={compactSummary ? "flex min-w-0 items-baseline gap-2" : "contents"}>
 				{singleEdit ? (
 					<span className="flex min-w-0 items-center gap-1 text-control font-normal">
 						<span className="shrink-0 text-muted-foreground">
@@ -2168,6 +2171,7 @@ function GenericActivityRow({
 					inlineFileStats={Boolean(singleEdit)}
 					showDisclosure={!compactSummary}
 				/>
+				</span>
 				{compactSummary && hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
@@ -2920,6 +2924,8 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 				)}
 			>
 				{StepMark ? <StepMark aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" /> : null}
+				{/* Label and status share a baseline, as in a step row. */}
+				<span className="flex min-w-0 flex-1 items-baseline gap-2">
 				{step?.target ? (
 					// Laid out like a command step: verb, then what it acted on.
 					<span className="flex min-w-0 items-center gap-1 text-control font-normal">
@@ -2953,7 +2959,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 				{activity.status === "running" ? (
 					<Loader2
 						aria-label="running"
-						className="size-3 shrink-0 animate-spin text-muted-foreground/60"
+						className="size-3 shrink-0 animate-spin self-center text-muted-foreground/60"
 					/>
 				) : failed ? (
 					<span className="shrink-0 text-xs text-destructive">failed</span>
@@ -2964,9 +2970,10 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 				) : hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
-						className={cn("size-3 shrink-0 text-muted-foreground/40 transition-transform", open && "rotate-90")}
+						className={cn("size-3 shrink-0 self-center text-muted-foreground/40 transition-transform", open && "rotate-90")}
 					/>
 				) : null}
+				</span>
 			</Pressable>
 
 			<AnimatePresence initial={false}>

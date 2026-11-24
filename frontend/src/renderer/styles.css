@@ -2955,11 +2955,11 @@ html.sidebar-reordering * {
 	color: var(--color-text-primary);
 }
 
-.activity-summary-button:hover > .activity-summary-label {
+.activity-summary-button:hover .activity-summary-label {
 	color: var(--color-text-primary);
 }
 
-.activity-row-toggle:hover > .activity-row-label {
+.activity-row-toggle:hover .activity-row-label {
 	color: var(--color-text-primary);
 }
 

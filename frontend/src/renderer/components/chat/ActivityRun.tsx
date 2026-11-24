@@ -104,6 +104,9 @@ export function ActivityRun({
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
 				<RunMark activities={activities} />
+				{/* The summary and its notes ("2 failed", "+3 −1") share a baseline: they are
+				    different sizes, and centring each on its own sets the smaller one high. */}
+				<span className="flex min-w-0 items-baseline gap-2">
 				<span className="activity-summary-label text-control text-muted-foreground">
 					<ActivityTransition value={summary} inline enter={entering}>{summary}</ActivityTransition>
 				</span>
@@ -133,6 +136,7 @@ export function ActivityRun({
 						) : null}
 					</span>
 				) : null}
+				</span>
 				{running ? (
 					<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60" />
 				) : null}
