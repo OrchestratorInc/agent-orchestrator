@@ -53,6 +53,24 @@ class H264Decoder(
     }
   }
 
+  /**
+   * A new transport starts: its access units do not follow the last one's, so
+   * the codec is flushed (keeping its format and the picture on screen) and
+   * everything up to the next key frame is dropped. A codec that cannot flush
+   * is released; the next SPS and PPS start a new one.
+   */
+  fun newStream() {
+    synchronized(lock) {
+      waitingForKey = true
+      val c = codec ?: return
+      try {
+        c.flush()
+      } catch (_: Exception) {
+        release()
+      }
+    }
+  }
+
   /** The presentation time the next queued access unit gets: outputs from here on are newer. */
   fun nextPtsUs(): Long = synchronized(lock) { ptsUs }
 

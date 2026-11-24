@@ -3,6 +3,7 @@ package ao.mobile.devicestream
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
@@ -97,9 +98,11 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
   // frame, only a much longer silence counts, and the reconnect keeps the
   // picture up instead of showing the spinner.
   private var silentReports = 0
-  // Reports in a row where H.264 data arrived but the decoder showed nothing:
-  // as dead as silence, so it is dropped and opened again the same way.
-  private var blankReports = 0
+  // A connection that has not shown a picture within FIRST_PICTURE_MS of
+  // starting is dropped and opened again, whatever its bytes did meanwhile:
+  // data that comes and goes without ever becoming a picture must not keep
+  // postponing the retry. The silence rules apply once it has shown one.
+  private var connectedAtMs = 0L
   @Volatile private var gotFrame = false
   /** Connections lost in a row without a frame; each waits longer before retrying. */
   @Volatile private var failures = 0
@@ -112,23 +115,24 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
       }
       val receiving = ((stats["kbps"] as? Double) ?: 0.0) > 0.0
       silentReports = if (receiving) 0 else silentReports + 1
-      blankReports = if (receiving && mode != "mjpeg" && !gotFrame) blankReports + 1 else 0
-      if (blankReports >= SILENT_REPORTS) {
-        blankReports = 0
-        disconnect()
-        lost()
-        return
-      }
-      val still = mode != "h264" && gotFrame
-      if (silentReports >= (if (still) STILL_SILENT_REPORTS else SILENT_REPORTS)) {
-        silentReports = 0
-        if (still) {
-          connect(quiet = true)
-        } else {
+      if (!gotFrame) {
+        if (SystemClock.elapsedRealtime() - connectedAtMs >= FIRST_PICTURE_MS) {
           disconnect()
           lost()
+          return
         }
-        return
+      } else {
+        val still = mode != "h264"
+        if (silentReports >= (if (still) STILL_SILENT_REPORTS else SILENT_REPORTS)) {
+          silentReports = 0
+          if (still) {
+            connect(quiet = true)
+          } else {
+            disconnect()
+            lost()
+          }
+          return
+        }
       }
       onStats(stats + ("mode" to mode))
       main.postDelayed(this, STATS_MS)
@@ -201,8 +205,8 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
   private fun connect(quiet: Boolean = false) {
     disconnect()
     silentReports = 0
-    blankReports = 0
     gotFrame = false
+    connectedAtMs = SystemClock.elapsedRealtime()
     // An empty url is the screen saying "no stream for now" (a device that is off).
     val target = url?.takeIf { it.isNotBlank() } ?: return
     if (!surfaceReady) return
@@ -222,6 +226,9 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
       return
     }
     decoder.setSurface(surfaceView.holder.surface)
+    // A new transport's frames do not follow the last one's: the decoder starts
+    // over and drops everything until this transport's key frame.
+    decoder.newStream()
     if (mode == "avcc") {
       avcc.start(target, headers, mine)
       return
@@ -258,7 +265,13 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
    * replaced in between must not close or retry its successor.
    */
   private fun lostFrom(connection: Int) {
-    main.post { if (connection == generation) lost() }
+    main.post {
+      if (connection != generation) return@post
+      // Ended for good: its watchdog stops too, or it would count this loss
+      // again and push the retry back.
+      disconnect()
+      lost()
+    }
   }
 
   /** Drain thread: the first picture of the waiting connection reports playback. */
@@ -345,6 +358,8 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
   }
 
   private fun requestKeyFrame() {
+    // The connection asking: its reconnect must not replace a newer one.
+    val connection = generation
     val now = System.currentTimeMillis()
     if (now - lastKeyRequestMs < KEY_REQUEST_GAP_MS) return
     lastKeyRequestMs = now
@@ -353,7 +368,7 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
       // with a key frame. Reconnect at once: the last picture stays up meanwhile.
       if (now - lastAvccReconnectMs < AVCC_RECONNECT_GAP_MS) return
       lastAvccReconnectMs = now
-      main.post { connect() }
+      main.post { if (connection == generation) connect() }
       return
     }
     socket?.send("{\"type\":\"reset-video\"}")
@@ -369,6 +384,7 @@ class DeviceStreamView(context: Context, appContext: AppContext) : ExpoView(cont
     const val STATS_MS = 2_000L
     const val SILENT_REPORTS = 3
     const val STILL_SILENT_REPORTS = 30
+    const val FIRST_PICTURE_MS = SILENT_REPORTS * STATS_MS
     const val AVCC_RECONNECT_GAP_MS = 3_000L
     const val KEY_REQUEST_GAP_MS = 1_000L
     val CLIENT: OkHttpClient = OkHttpClient.Builder()

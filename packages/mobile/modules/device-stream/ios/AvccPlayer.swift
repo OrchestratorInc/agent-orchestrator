@@ -26,9 +26,17 @@ final class AvccPlayer: NSObject, URLSessionDataDelegate {
   private var buffer = Data()
   private var format: CMVideoFormatDescription?
   private var waitingForKey = true
-  private var stopped = false
+  /// Written on main (stop) and read on the URLSession delegate queue and main:
+  /// both lifecycle flags go through `lifecycle`.
+  private let lifecycle = NSLock()
+  private var stoppedFlag = false
   private var shownFirst = false
   private var endedOnce = false
+  private var isStopped: Bool {
+    lifecycle.lock()
+    defer { lifecycle.unlock() }
+    return stoppedFlag
+  }
   /// Main thread only.
   private let playout = Playout()
   private let decodeQueue = DispatchQueue(label: "ao.device-stream.avcc-placeholder")
@@ -65,7 +73,9 @@ final class AvccPlayer: NSObject, URLSessionDataDelegate {
   }
 
   func stop() {
-    stopped = true
+    lifecycle.lock()
+    stoppedFlag = true
+    lifecycle.unlock()
     session?.invalidateAndCancel()
     session = nil
     let layer = self.layer
@@ -99,7 +109,7 @@ final class AvccPlayer: NSObject, URLSessionDataDelegate {
   }
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-    if stopped { return }
+    if isStopped { return }
     let now = CACurrentMediaTime()
     statsLock.lock()
     statsBytes += data.count
@@ -128,13 +138,16 @@ final class AvccPlayer: NSObject, URLSessionDataDelegate {
   }
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-    if !stopped { end() }
+    if !isStopped { end() }
   }
 
   private func end() {
-    if endedOnce { return }
+    lifecycle.lock()
+    let first = !endedOnce
     endedOnce = true
-    onEnded()
+    lifecycle.unlock()
+    // Called outside the lock: the owner may stop this player from onEnded.
+    if first { onEnded() }
   }
 
   private func handle(type: UInt8, payload: Data, arrival: CFTimeInterval) {
@@ -157,7 +170,7 @@ final class AvccPlayer: NSObject, URLSessionDataDelegate {
       statsFrames += 1
       statsLock.unlock()
       DispatchQueue.main.async { [weak self] in
-        guard let self, !self.stopped else { return }
+        guard let self, !self.isStopped else { return }
         self.playout.push(arrival: arrival, interval: nil) { [weak self] in
           self?.show(sample, isKey: isKey)
         }
@@ -169,7 +182,7 @@ final class AvccPlayer: NSObject, URLSessionDataDelegate {
 
   /// Main thread.
   private func show(_ sample: CMSampleBuffer, isKey: Bool) {
-    guard let layer, !stopped else { return }
+    guard let layer, !isStopped else { return }
     // Lost its place (a failed decode, or frames it could not take): only a
     // new connection brings a key frame.
     if layer.status == .failed || (!isKey && !layer.isReadyForMoreMediaData) {
@@ -190,7 +203,7 @@ final class AvccPlayer: NSObject, URLSessionDataDelegate {
         // Only a decoded video sample reports playback (see show): a stream
         // that sent its opening JPEG but never starts H.264 must still fall
         // back to MJPEG rather than sit on this still picture.
-        guard let self, !self.stopped else { return }
+        guard let self, !self.isStopped else { return }
         self.placeholder?.image = image
       }
     }

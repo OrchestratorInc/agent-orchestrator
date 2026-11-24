@@ -183,34 +183,44 @@ class MjpegPlayer(
         height = bitmap.height
         onSize(connection, width, height)
       }
-      if (!draw(bitmap, gen)) return
-      if (first) {
-        first = false
-        onFrame(connection)
+      when (draw(bitmap, gen)) {
+        Drawn.STOPPED -> return
+        // Not on screen (no surface yet, or it went away mid-draw): the first
+        // picture is still to come, and the view's deadline still runs.
+        Drawn.DROPPED -> continue
+        Drawn.POSTED -> if (first) {
+          first = false
+          onFrame(connection)
+        }
       }
     }
   }
 
+  private enum class Drawn { POSTED, DROPPED, STOPPED }
+
   /**
-   * Draws a frame for the live connection; false once it is no longer live.
+   * Draws a frame for the live connection: posted to the surface, dropped, or
+   * stopped once the connection is no longer live.
    * Under [drawLock], so surfaceDestroyed waits for it. A surface that goes
    * away anyway (the lock and canvas calls throw then) drops the frame: an
    * uncaught throw on this thread would end the app.
    */
-  private fun draw(bitmap: Bitmap, gen: Long): Boolean = synchronized(drawLock) {
-    if (!current(gen)) return false
-    val surface = holder() ?: return true
+  private fun draw(bitmap: Bitmap, gen: Long): Drawn = synchronized(drawLock) {
+    if (!current(gen)) return Drawn.STOPPED
+    val surface = holder() ?: return Drawn.DROPPED
     try {
-      val canvas = surface.lockHardwareCanvas() ?: return true
+      val canvas = surface.lockHardwareCanvas() ?: return Drawn.DROPPED
       try {
         canvas.drawBitmap(bitmap, null, Rect(0, 0, canvas.width, canvas.height), paint)
       } finally {
         surface.unlockCanvasAndPost(canvas)
       }
     } catch (_: IllegalStateException) {
+      return Drawn.DROPPED
     } catch (_: IllegalArgumentException) {
+      return Drawn.DROPPED
     }
-    true
+    Drawn.POSTED
   }
 
   private companion object {
