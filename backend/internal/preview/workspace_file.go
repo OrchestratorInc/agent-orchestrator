@@ -2,12 +2,47 @@ package preview
 
 import (
 	"io/fs"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
 )
+
+// ResolvedPathHeader names, on an artifact file's response, the file's path
+// beneath the artifacts folder once its symlinks are followed (see
+// ResolvedPath), each segment URL-escaped. The desktop includes a shared
+// page's files only from the page's own folder, which the requested path
+// alone cannot tell when it goes through a symlink.
+const ResolvedPathHeader = "X-AO-Artifact-Path"
+
+// ResolvedPath returns the slash-separated path of the file at assetPath
+// beneath rootPath once every symlink is followed, with each segment
+// URL-escaped, or false when it does not resolve inside rootPath.
+func ResolvedPath(rootPath, assetPath string) (string, bool) {
+	clean, ok := CleanWorkspacePath(assetPath)
+	if !ok {
+		return "", false
+	}
+	realRoot, err := filepath.EvalSymlinks(rootPath)
+	if err != nil {
+		return "", false
+	}
+	real, err := filepath.EvalSymlinks(filepath.Join(realRoot, filepath.FromSlash(clean)))
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(realRoot, real)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	segments := strings.Split(filepath.ToSlash(rel), "/")
+	for index, segment := range segments {
+		segments[index] = url.PathEscape(segment)
+	}
+	return strings.Join(segments, "/"), true
+}
 
 // CleanWorkspacePath normalizes a browser/workspace path without discarding
 // meaningful whitespace from valid Unix filenames. The leading slash used by

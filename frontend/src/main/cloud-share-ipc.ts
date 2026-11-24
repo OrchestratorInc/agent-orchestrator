@@ -410,13 +410,17 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 	};
 
 	// A file a remote host's page uses, looked up on that host from its
-	// headers alone. One the host refuses to serve is left out, as one outside
-	// the page's folder is; a host that stopped answering fails the publish.
+	// headers alone, and named by the path the host resolves it to, so the
+	// page's folder check sees where a symlink leads, as a local page's does.
+	// One the host refuses to serve, or that a host too old to say where it
+	// resolves names, is left out, as one outside the page's folder is; a host
+	// that stopped answering fails the publish.
 	const hostPageFile = async (file: CloudHostShareFile, relative: string, signal: AbortSignal) => {
 		const located = hostFile({ ...file, path: relative });
 		try {
 			const info = await inspectHostShareFile(deps.fetchHost, located, signal);
-			return { ...located, size: info.size };
+			if (!info.resolvedPath) throw new CloudShareError("invalid_file", "The machine this file is on does not say where the file resolves.");
+			return { ...located, relativePath: info.resolvedPath, size: info.size };
 		} catch (error) {
 			if (error instanceof CloudShareError && error.code === "host_unavailable" && error.status >= 400 && error.status < 500) {
 				throw new CloudShareError("invalid_file", error.message, error.status);
@@ -480,6 +484,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 					try {
 						const copy = await snapshotHostShareFile(deps.fetchHost, used.file, deps.snapshotDir(), {
 							expectedSize: used.file.size,
+							expectedResolvedPath: used.file.relativePath,
 							signal: controller.signal,
 							onProgress: (bytes) => progress(before + bytes, total),
 						});
@@ -487,9 +492,16 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 						pageFiles.files.push({ path: used.path, snapshot: copy });
 						pageFiles.referenced.set(used.path, used.referencedPath);
 					} catch (error) {
-						// A file gone or rewritten on the host while it downloaded is left out, not the page.
-						if (!(error instanceof CloudShareError && (error.code === "file_missing" || error.code === "source_changed"))) throw error;
-						pageFiles.skipped.push({ reference: used.path, reason: "missing", relativePath: used.referencedPath });
+						if (!(error instanceof CloudShareError)) throw error;
+						if (error.code === "host_unavailable" && error.status >= 400 && error.status < 500) {
+							// One the host refuses to serve now is left out, as it is when it is looked up.
+							pageFiles.skipped.push({ reference: used.path, reason: "outside" });
+						} else if (error.code === "file_missing" || error.code === "source_changed") {
+							// A file gone or rewritten on the host while it downloaded is left out, not the page.
+							pageFiles.skipped.push({ reference: used.path, reason: "missing", relativePath: used.referencedPath });
+						} else {
+							throw error;
+						}
 					}
 					copied = before + used.file.size;
 				}

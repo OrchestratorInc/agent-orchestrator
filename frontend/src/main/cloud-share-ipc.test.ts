@@ -38,7 +38,7 @@ const HOST_ID = "https://h-vm.useao.dev";
 const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
 
 /** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
-type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void; status?: number };
+type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void; status?: number; resolvesTo?: string; sendsResolved?: false };
 
 function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean; refuseVideos?: boolean } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
@@ -63,7 +63,8 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			hostRequests.push(`${init.method ?? "GET"} ${parsed.pathname}${parsed.search}`);
 			const prefix = "/proxy-token/api/v1/sessions/";
 			const match = parsed.pathname.startsWith(prefix) ? /^([^/]+)\/preview\/files\/(.+)$/.exec(parsed.pathname.slice(prefix.length)) : null;
-			const artifact = match && parsed.searchParams.get("source") === "artifact" ? hostFiles.get(`${decodeURIComponent(match[1] ?? "")}/${match[2]?.split("/").map(decodeURIComponent).join("/")}`) : undefined;
+			const requested = match?.[2]?.split("/").map(decodeURIComponent).join("/") ?? "";
+			const artifact = match && parsed.searchParams.get("source") === "artifact" ? hostFiles.get(`${decodeURIComponent(match[1] ?? "")}/${requested}`) : undefined;
 			// The real route is GET-only: a HEAD is refused before the file is looked up.
 			if (init.method === "HEAD") return new Response('{"error":"method not allowed"}', { status: 405 });
 			if (!artifact) return new Response("", { status: 404 });
@@ -72,6 +73,8 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			const headers = new Headers(artifact.tag === false
 				? { "content-length": String(bytes.length), "last-modified": new Date(Number(artifact.mtimeNs / 1_000_000n)).toUTCString() }
 				: { etag: `"${bytes.length}-${artifact.mtimeNs}"` });
+			// The path the file resolves to once its symlinks are followed, as the daemon names it.
+			if (artifact.sendsResolved !== false) headers.set("x-ao-artifact-path", (artifact.resolvesTo ?? requested).split("/").map(encodeURIComponent).join("/"));
 			artifact.served?.();
 			return new Response(bytes.subarray(0, bytes.length - (artifact.shortBy ?? 0)), { headers });
 		}),
@@ -849,6 +852,45 @@ describe("cloudShare IPC for a remote host's file", () => {
 		const hostFiles = hostPage(`<img src="a.png"><img src="b.png">`, { "a.png": { body: "png" }, "b.png": { body: "png" } });
 		// Gone once it was looked up, before it is downloaded.
 		hostFiles.get("sess-1/docs/a.png")!.served = () => hostFiles.delete("sess-1/docs/a.png");
+		const { publish, hostFile, bodies } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:b.png" }] });
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("leaves out a host page's file that is a symlink to a file outside the page's folder", async () => {
+		const { publish, hostFile, bodies } = setup({
+			files: true,
+			hostFiles: hostPage(`<img src="a.png"><img src="link.png">`, { "a.png": { body: "png" }, "link.png": { body: "customer", resolvesTo: "private/customer.png" } }),
+		});
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:a.png" }] });
+	});
+
+	it("leaves out a host page's file whose symlink is pointed elsewhere between its lookup and its download", async () => {
+		const hostFiles = hostPage(`<img src="link.png">`, { "link.png": { body: "png" } });
+		const link = hostFiles.get("sess-1/docs/link.png")!;
+		link.served = () => { link.resolvesTo = "private/customer.png"; };
+		const { publish, hostFile, bodies } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [] });
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("leaves out a host page's files when the host is too old to say where they resolve", async () => {
+		const { publish, hostFile, bodies } = setup({
+			files: true,
+			hostFiles: hostPage(`<img src="a.png">`, { "a.png": { body: "png", sendsResolved: false } }),
+		});
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 1 } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [] });
+	});
+
+	it("leaves out a host page's file the host refuses once it is downloaded", async () => {
+		const hostFiles = hostPage(`<img src="a.png"><img src="b.png">`, { "a.png": { body: "png" }, "b.png": { body: "png" } });
+		const refused = hostFiles.get("sess-1/docs/a.png")!;
+		// Found, then refused (403) when it is downloaded.
+		refused.served = () => { refused.status = 403; };
 		const { publish, hostFile, bodies } = setup({ files: true, hostFiles });
 		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
 		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:b.png" }] });

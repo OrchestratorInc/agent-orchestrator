@@ -692,6 +692,11 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
 			return
 		}
+		// Which file the path names once symlinks are followed, for a shared
+		// page's files (see previewutil.ResolvedPathHeader).
+		if resolved, ok := previewutil.ResolvedPath(sess.Metadata.ArtifactDir, assetPath); ok {
+			w.Header().Set(previewutil.ResolvedPathHeader, resolved)
+		}
 		c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, assetPath)
 		return
 	}
