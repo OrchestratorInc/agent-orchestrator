@@ -1830,6 +1830,37 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
 	});
 
+	it("names a Cloud turn no agent has taken yet by how far its session got, in place of Thinking", () => {
+		const turnId = "cloud-turn-waiting";
+		const at = new Date().toISOString();
+		const prompt = {
+			kind: "message" as const, id: "prompt", turnId, sequence: 1, revision: 0,
+			role: "user" as const, origin: "human" as const, text: "Fix the build",
+			streaming: false, createdAt: at,
+		};
+		const snapshot = (agentPending: boolean): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 1,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at, ...(agentPending ? { agentPending } : {}) }],
+			items: [prompt],
+		});
+		const cloudSession = (runtimeConnected: boolean) => ({
+			...chatSession, kind: "worker" as const, mode: "chat" as const, runtimeConnected,
+			cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: runtimeConnected ? "running" : "bootstrapping" },
+		});
+		// Its worker is still connecting.
+		const view = render(<ChatWorkspace sessionRole="worker" snapshot={snapshot(true)} session={cloudSession(false)} />);
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Starting session$/);
+		// Connected, and still checking out the project and starting the agent.
+		view.rerender(<ChatWorkspace sessionRole="worker" snapshot={snapshot(true)} session={cloudSession(true)} />);
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Setting up project$/);
+		expect(screen.queryByText("Thinking")).toBeNull();
+		// The agent opened the turn.
+		view.rerender(<ChatWorkspace sessionRole="worker" snapshot={snapshot(false)} session={cloudSession(true)} />);
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Thinking$/);
+	});
+
 	it("keeps the live row's label mounted when a step it can open takes over from Thinking", () => {
 		const turnId = "live-turn-stable-row";
 		const at = "2026-08-11T10:01:00Z";
@@ -3457,6 +3488,24 @@ describe("ChatWorkspace timeline", () => {
 		expect(send).not.toHaveBeenCalled();
 	});
 
+	it("offers Retry update for a failed version switch, but not on an archived chat", () => {
+		const resume = vi.fn();
+		const view = (isTerminated: boolean) => (
+			<ChatWorkspace
+				snapshot={{ ...chatFixtureSettled, sessionId: "stale-archived", controller: { state: "stopped" } }}
+				session={{ ...chatSession, id: "stale-archived", isTerminated, staleBinary: { version: "2.1.0", since: "2026-11-23T11:00:00Z", switchFailedAt: "2026-11-23T12:00:00Z" } }}
+				onResumeAgent={resume}
+			/>
+		);
+		const { rerender } = render(view(false));
+		expect(screen.getByRole("button", { name: /Retry update/ })).toBeInTheDocument();
+
+		// Retrying would restore the archived session and start its agent.
+		rerender(view(true));
+		expect(screen.queryByRole("button", { name: /Retry update/ })).not.toBeInTheDocument();
+		expect(resume).not.toHaveBeenCalled();
+	});
+
 	it("sends from an archived chat once, and shows the restore in the composer while it runs", async () => {
 		const user = userEvent.setup();
 		const restore = vi.fn();
@@ -3859,7 +3908,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
 	});
 
-	it("says the sandbox is starting under the brief a Freestyle session was started with, until its worker connects", () => {
+	it("says the session is starting under the brief a Freestyle session was started with, until its worker connects", () => {
 		const startedAt = new Date().toISOString();
 		const cloudSession = (observedState: string, runtimeConnected = false, sandboxProvider = "freestyle") => ({
 			...chatSession, kind: "worker" as const, mode: "chat" as const, runtimeConnected,
@@ -3868,15 +3917,15 @@ describe("ChatWorkspace timeline", () => {
 		const echo = [{ clientMessageId: "req-1", text: "Fix the login bug", createdAt: startedAt, opening: true }];
 		const view = render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning")} localEchos={echo} openingStartedAt={startedAt} />);
 		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
-		expect(screen.getByText("Starting sandbox")).toBeInTheDocument();
+		expect(screen.getByText("Starting session")).toBeInTheDocument();
 		// Connected: the row under the brief goes back to timing the reply.
 		view.rerender(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("running", true)} localEchos={echo} openingStartedAt={startedAt} />);
-		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
+		expect(screen.queryByText("Starting session")).not.toBeInTheDocument();
 		expect(screen.getByText("Fix the login bug")).toBeInTheDocument();
 		view.unmount();
-		// A Coder session starts behind its own startup screen: the chat names no sandbox start.
+		// A Coder session starts behind its own startup screen: the chat names no session start.
 		render(<ChatWorkspace sessionRole="worker" snapshot={chatFixtureEmpty} session={cloudSession("provisioning", false, "coder")} localEchos={echo} openingStartedAt={startedAt} />);
-		expect(screen.queryByText("Starting sandbox")).not.toBeInTheDocument();
+		expect(screen.queryByText("Starting session")).not.toBeInTheDocument();
 	});
 
 	it("keeps one placeholder through every step of an orchestrator start", () => {

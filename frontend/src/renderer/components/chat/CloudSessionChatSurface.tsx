@@ -9,6 +9,8 @@ import { useCloudOffering } from "../../hooks/useCloudOffering";
 import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useRestoreSession } from "../../hooks/useRestoreSession";
+import { useCloudSessionStartRequestInFlight, useCloudWorkspaceReady } from "../../hooks/useCloudWorkspaceReady";
+import { WORKER_STARTING_CODE, cloudWorkerReadRetry, cloudWorkerRequest, cloudWorkerStartingRetryDelay, cloudWorkerStartingWaits, recordCloudWorkspaceStartupEvent } from "../../lib/cloud-worker-starting";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
 import { sessionUiKey } from "../../lib/hosts";
@@ -22,7 +24,7 @@ import { sessionArtifactPath } from "../../lib/session-links";
 import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
-import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
@@ -57,6 +59,10 @@ import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliver
 
 type EventPayload = {
 	attempt?: unknown;
+	/** chat.turn_started: the epoch of the worker that took the turn. */
+	workerEpoch?: unknown;
+	/** worker.connected and worker.ready: the epoch of the worker that connected. */
+	epoch?: unknown;
 	/**
 	 * chat.turn_interrupted: why a turn ended before it started (deleted,
 	 * interface_switch, steered); chat.turn_aborted: author_cannot_write for a message
@@ -442,6 +448,7 @@ export function ownMessageTurns(events: readonly CloudCpClientEvent[] | undefine
  * which leaves the queue with the steer.
  */
 export class AlreadyDeliveredError extends Error {
+	readonly code: string = "ALREADY_DELIVERED_ERROR";
 	constructor() {
 		super("Not deleted: the agent had already taken this message as a steer into its running turn, so it was delivered.");
 		this.name = "AlreadyDeliveredError";
@@ -1013,6 +1020,20 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 	// before the agent started on it from one that ran.
 	const promptedTurns = new Set<string>();
 	const startedTurns = new Set<string>();
+	// Which turns an agent has taken: the worker reports a turn's capabilities
+	// once its agent opened the turn, before the agent's first output. A worker
+	// can take a turn while it still checks out the project, so a start alone is
+	// not the agent working. capabilityTurns tells a worker that reports them
+	// from an older one that never does.
+	const agentTurns = new Set<string>();
+	const capabilityTurns = new Set<string>();
+	// Which worker (its epoch) took each turn, and the workers whose agent has
+	// opened a turn: a later turn on such a worker finds the project set up
+	// and the agent running, so it is the agent's from its start, as before.
+	// Only a worker's first turn (a new session, a restore, a wake) waits.
+	const turnEpochs = new Map<string, number>();
+	const agentEpochs = new Set<number>();
+	let currentEpoch: number | undefined;
 	// Queued messages the person deleted (turn_interrupted of reason deleted).
 	const withdrawnTurns = new Set<string>();
 	let usage: ConversationUsage | undefined;
@@ -1070,16 +1091,41 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 					: { id: turnID, state: "queued", requestedAt: event.createdAt }),
 				...(promptAbove ? { anchorSequence: windowStart - 1 + (event.sequence - windowStart + 1) / windowSpan } : {}),
 			});
+			// Its start is above the loaded events, and so is whatever its agent did.
+			if (startedEarlier) agentTurns.add(turnID);
 		}
 		if (turnID && event.type === "chat.user_message") promptedTurns.add(turnID);
+		if (event.type === "worker.connected" || event.type === "worker.ready") {
+			const epoch = eventPayload(event).epoch;
+			if (typeof epoch === "number") currentEpoch = epoch;
+		}
 		if (turnID && event.type === "chat.turn_started") {
 			const turn = turns.get(turnID)!;
 			turn.state = "running";
 			turn.startedAt = event.createdAt;
 			startedTurns.add(turnID);
+			// A new attempt (a retry, a new worker) waits for its own agent.
+			agentTurns.delete(turnID);
+			const epoch = eventPayload(event).workerEpoch;
+			if (typeof epoch === "number") {
+				turnEpochs.set(turnID, epoch);
+				// The worker that took a turn is connected, unless a newer one
+				// connected since: a page that begins after the connection still
+				// knows the current worker.
+				if (currentEpoch === undefined || epoch > currentEpoch) currentEpoch = epoch;
+			} else turnEpochs.delete(turnID);
 		}
-		if (turnID && event.type === "chat.turn_capabilities" && eventPayload(event).steering === true) {
-			steerableTurns.add(turnID);
+		if (turnID && event.type === "chat.turn_capabilities") {
+			agentTurns.add(turnID);
+			const epoch = turnEpochs.get(turnID);
+			if (epoch !== undefined) agentEpochs.add(epoch);
+			capabilityTurns.add(turnID);
+			if (eventPayload(event).steering === true) steerableTurns.add(turnID);
+		}
+		if (turnID && (event.type === "chat.assistant_delta" || event.type === "chat.activity" || event.type === "chat.approval_requested")) {
+			agentTurns.add(turnID);
+			const epoch = turnEpochs.get(turnID);
+			if (epoch !== undefined) agentEpochs.add(epoch);
 		}
 		if (turnID && (event.type === "chat.turn_completed" || event.type === "chat.turn_interrupted" || event.type === "chat.turn_aborted")) {
 			const turn = turns.get(turnID)!;
@@ -1387,6 +1433,29 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			if (setupEnd && Date.parse(setupEnd) > Date.parse(next.requestedAt)) next.startedAt = setupEnd;
 		}
 	}
+	// A running turn no agent has taken yet (sent while the session starts, or
+	// taken by a worker still checking out) reads as getting ready. A worker
+	// that never reports capabilities finished a turn without them; its turns
+	// read as running from their start, as before. That goes by worker: a newer
+	// one that reports them still shows its own start. A turn whose worker is
+	// not known (one too old to say) goes by every such turn.
+	const silentEpochs = new Set<number>();
+	let silentUnknownWorker = false;
+	for (const turn of orderedTurns) {
+		if (turn.state !== "completed" || !startedTurns.has(turn.id) || capabilityTurns.has(turn.id)) continue;
+		const epoch = turnEpochs.get(turn.id);
+		if (epoch === undefined) silentUnknownWorker = true;
+		else silentEpochs.add(epoch);
+	}
+	for (const turn of orderedTurns) {
+		if (turn.state !== "running" || agentTurns.has(turn.id)) continue;
+		// A turn a worker took goes by that worker; one no worker has taken
+		// yet, by the connected worker, if any (a paused session's worker is
+		// gone, so its turn waits for the next one).
+		const epoch = turnEpochs.get(turn.id) ?? (session.runtimeConnected ? currentEpoch : undefined);
+		if (epoch === undefined ? silentUnknownWorker : silentEpochs.has(epoch) || agentEpochs.has(epoch)) continue;
+		turn.agentPending = true;
+	}
 	const hasRunningTurn = orderedTurns.some((turn) => turn.state === "running");
 	const activeTurn = orderedTurns.find((turn) => turn.state === "running");
 	return {
@@ -1424,6 +1493,11 @@ export async function cloudWorkspaceFilePath(
 
 function isWorkerUnavailable(error: unknown): boolean {
 	return error instanceof CloudCpError && error.code === "WORKER_UNAVAILABLE";
+}
+
+// The control plane's answer for a worker still preparing its workspace.
+function isWorkerStarting(error: unknown): boolean {
+	return error instanceof CloudCpError && error.code === WORKER_STARTING_CODE;
 }
 
 // The control plane reports a worker that did not answer in time as
@@ -1561,6 +1635,8 @@ export function CloudSessionChatSurface({
 	// Ends a retry still waiting for an idle-paused workspace's worker when Chat goes away.
 	const retryAbort = useRef<AbortController | undefined>(undefined);
 	useEffect(() => () => retryAbort.current?.abort(), []);
+	// A resume or workspace retry of this session already in flight, from any view: Retry waits for it.
+	const startRequestInFlight = useCloudSessionStartRequestInFlight(cloud?.orgId, session.id);
 	const retryStart = useMutation({
 		mutationFn: () => {
 			retryAbort.current?.abort();
@@ -1628,6 +1704,10 @@ export function CloudSessionChatSurface({
 	// list reports the worker connected, however long that takes. The catalog is
 	// always stale, so a reconnect the session list sees refreshes it too.
 	const workerConnected = session.runtimeConnected === true;
+	// A worker that has just connected can still be preparing the workspace (a
+	// slow checkout takes minutes) and answers nothing until it is ready, so the
+	// catalog waits for that too (useCloudWorkspaceReady).
+	const workspaceReady = useCloudWorkspaceReady(session);
 	const liveRef = useRef({ connected: workerConnected, terminated: session.isTerminated === true });
 	liveRef.current = { connected: workerConnected, terminated: session.isTerminated === true };
 	// The owner opening a shared session whose settings were never set makes
@@ -1648,7 +1728,7 @@ export function CloudSessionChatSurface({
 		// instead of keeping an answer from a worker that is gone. An agent
 		// switch keeps the worker generation, so the agent keys it too.
 		queryKey: ["cloud-chat-models", cloud?.orgId ?? "", session.id, session.provider, session.terminalGeneration ?? ""],
-		enabled: Boolean(cloud && ready && workerConnected && session.isTerminated !== true &&
+		enabled: Boolean(cloud && ready && workspaceReady && session.isTerminated !== true &&
 			(session.provider === "codex" || session.provider === "claude-code")),
 		// The TUI may change its native model while Chat is unmounted.
 		staleTime: 0,
@@ -1659,14 +1739,22 @@ export function CloudSessionChatSurface({
 		// query waits for the next connection instead. A worker's first catalog
 		// read can outlast one request (it prepares the agent's tools first), so
 		// a timed-out request is asked again a few times before it shows.
+		// A worker still preparing its workspace (WORKER_STARTING, or a timeout
+		// from a control plane that predates it) is asked again after the
+		// session's shared backoff, as long as it stays connected and the
+		// session's starting budget lasts (cloud-worker-starting).
 		retry: (failures, error) => liveRef.current.connected && !liveRef.current.terminated &&
-			(isWorkerUnavailable(error) || (isTransportTimeout(error) && failures < 3) ||
+			(isWorkerUnavailable(error) || cloudWorkerStartingWaits(error) || (isTransportTimeout(error) && failures < 3) ||
 				(isWorkerOperationFailed(error) && failures < MODELS_FAILED_RETRIES) ||
 				(isAgentSettingUp(error) && failures < AGENT_SETUP_RETRIES)),
-		retryDelay: modelsRetryDelay,
+		// WORKER_STARTING is asked again after its Retry-After; a timeout or an
+		// absent worker keeps the catalog's own quicker retry.
+		retryDelay: (failures, error) => isWorkerStarting(error) && cloudWorkerStartingWaits(error)
+			? cloudWorkerStartingRetryDelay(cloud?.orgId ?? "", session.id, failures, error)
+			: modelsRetryDelay(failures, error),
 		queryFn: async ({ signal }) => {
 			const selectionVersionAtFetch = catalogSyncRef.current.version;
-			const catalog = await client.listChatModels(cloud!.orgId, session.id, { signal });
+			const catalog = await cloudWorkerRequest(cloud!.orgId, session.id, () => client.listChatModels(cloud!.orgId, session.id, { signal }));
 			// The worker listed the account's own models, which the control plane
 			// keeps as the account's Cloud list: every New Task and settings picker
 			// for this agent reads it again now rather than on its next refresh.
@@ -1692,6 +1780,14 @@ export function CloudSessionChatSurface({
 		// The newest page first, then only what came after the newest event held.
 		queryFn: async () => cloud ? loadCloudChatHistory(queryClient, client, cloud.orgId, session.id) : [] as CloudCpClientEvent[],
 	});
+	// An orchestrator still starting in place for the first time (no worker has
+	// ever connected, so it is not waking) has no history: it starts with no
+	// message. Decided as the session opens, so a worker that connects before
+	// the first read answers does not turn it into one being restored.
+	const opensNew = session.kind === "orchestrator" && cloudChatStartingInPlace(session) && !cloud?.workerEpoch;
+	const [opened, setOpened] = useState({ id: session.id, isNew: opensNew });
+	if (opened.id !== session.id) setOpened({ id: session.id, isNew: opensNew });
+	const openedNew = opened.id === session.id ? opened.isNew : opensNew;
 	// What the list holds of the history; older pages load on demand. Kept as
 	// long as the list is, so a kept list never reads as the whole history.
 	const historyKey = cloudChatHistoryKey(cloud?.orgId ?? "", session.id);
@@ -1824,11 +1920,16 @@ export function CloudSessionChatSurface({
 		if (!events?.length) return;
 		const seen = seenEventRef.current?.sessionId === session.id ? seenEventRef.current.sequence : undefined;
 		seenEventRef.current = { sessionId: session.id, sequence: events.at(-1)!.sequence };
+		// New events say when a worker connects (its workspace is being
+		// prepared) and when the workspace is ready, ahead of any request.
+		if (cloud) {
+			for (const event of events) if (seen === undefined || event.sequence > seen) recordCloudWorkspaceStartupEvent(cloud.orgId, session.id, event);
+		}
 		if (seen === undefined || session.runtimeConnected === true) return;
 		if (events.some((event) => event.sequence > seen && (event.type === "worker.connected" || event.type === "worker.ready"))) {
 			void refreshCloudSessionLifecycle(queryClient);
 		}
-	}, [eventsQuery.data, queryClient, session.id, session.runtimeConnected]);
+	}, [cloud?.orgId, eventsQuery.data, queryClient, session.id, session.runtimeConnected]);
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id] });
 	const myRole = live?.viewers.find((viewer) => viewer.userId === me)?.role;
@@ -2335,16 +2436,19 @@ export function CloudSessionChatSurface({
 	}, [fileQuery]);
 	const filesQuery = useQuery<{ paths: string[]; truncated: boolean }>({
 		queryKey: ["cloud-composer-files", cloud?.orgId ?? "", session.id, debouncedFileQuery ?? ""],
-		enabled: Boolean(cloud && ready && workerConnected && session.isTerminated !== true && debouncedFileQuery !== undefined),
+		// A worker still preparing its workspace is not asked (useCloudWorkspaceReady),
+		// and a "still starting" answer is asked again after the session's
+		// backoff, so the list shows what it had rather than an error.
+		enabled: Boolean(cloud && ready && workspaceReady && session.isTerminated !== true && debouncedFileQuery !== undefined),
 		staleTime: 30_000,
-		retry: false,
+		...cloudWorkerReadRetry(cloud?.orgId ?? "", session.id, () => false),
 		placeholderData: (previous) => previous,
 		queryFn: async ({ signal }) => {
 			if (!debouncedFileQuery) {
-				const tree = await client.getWorkspaceReviewTree(cloud!.orgId, session.id, undefined, { signal });
+				const tree = await cloudWorkerRequest(cloud!.orgId, session.id, () => client.getWorkspaceReviewTree(cloud!.orgId, session.id, undefined, { signal }));
 				return { paths: tree.entries.filter((entry) => entry.type === "file").map((entry) => entry.path), truncated: true };
 			}
-			const found = await client.searchWorkspaceReview(cloud!.orgId, session.id, { query: debouncedFileQuery, limit: 100 }, { signal });
+			const found = await cloudWorkerRequest(cloud!.orgId, session.id, () => client.searchWorkspaceReview(cloud!.orgId, session.id, { query: debouncedFileQuery, limit: 100 }, { signal }));
 			return { paths: found.results.filter((result) => !result.binary).map((result) => result.path), truncated: found.truncated || Boolean(found.nextCursor) };
 		},
 	});
@@ -2381,7 +2485,11 @@ export function CloudSessionChatSurface({
 			snapshot={snapshot}
 			// Until the first read the chat's history is unknown, not empty: a Cloud
 			// session says nothing of its messages, so it opens as one that has some.
-			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError}
+			// A new orchestrator (openedNew) has none, so it opens as the new chat it
+			// is, not docked as one being restored for the moment the read takes. A
+			// worker may start with its task, and a woken session has history: both
+			// wait for the read.
+			historyPending={Boolean(cloud && ready) && eventsQuery.data === undefined && !eventsQuery.isError && !openedNew}
 			hasOlder={history?.hasOlder}
 			loadingOlder={history?.loadingOlder}
 			onLoadOlder={onLoadOlder}
@@ -2571,8 +2679,8 @@ export function CloudSessionChatSurface({
 			}}
 			session={chatSession}
 			settingsReady={!startStopped}
-			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}
-			resumingAgent={retryStart.isPending || restoringId === session.id}
+			onResumeAgent={workspaceFailure ? () => { if (!retryStart.isPending && !startRequestInFlight) retryStart.mutate(); } : undefined}
+			resumingAgent={retryStart.isPending || startRequestInFlight || restoringId === session.id}
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}

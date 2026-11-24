@@ -96,8 +96,9 @@ type APIDeps struct {
 	HostID string
 	// Endpoints reports how this daemon can currently be reached, for the
 	// phone's endpoint-refresh route.
-	Endpoints controllers.EndpointSource
-	Installer controllers.Installer
+	Endpoints  controllers.EndpointSource
+	HostUpdate controllers.HostUpdater
+	Installer  controllers.Installer
 	// ComputerUse is the Cua Driver integration behind Settings and the computer-use tools.
 	ComputerUse controllers.ComputerUse
 	AgentAuth   controllers.AgentAuthService
@@ -106,6 +107,9 @@ type APIDeps struct {
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService
+	// PRPreview reads any GitHub pull request a chat links to; nil leaves
+	// the route answering 501.
+	PRPreview controllers.PRPreviewService
 	// SessionSearch answers the ranked search over past sessions. Nil leaves
 	// the route answering 501; the index itself is built by the daemon.
 	SessionSearch controllers.SessionSearchService
@@ -187,11 +191,13 @@ type API struct {
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
+	hostUpdate    *controllers.HostUpdateController
 	telemetryID   *controllers.TelemetryIdentityController
 	systemInstall *controllers.SystemInstallController
 	computerUse   *controllers.ComputerUseController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
+	prPreview     *controllers.PRPreviewController
 	sessionSearch *controllers.SessionSearchController
 	github        *controllers.GitHubController
 	access        *controllers.AccessController
@@ -259,11 +265,13 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
+		hostUpdate:    &controllers.HostUpdateController{Updater: deps.HostUpdate},
 		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity, LifetimeSessions: deps.LifetimeSessions},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
+		prPreview:     &controllers.PRPreviewController{Svc: deps.PRPreview},
 		sessionSearch: &controllers.SessionSearchController{Svc: deps.SessionSearch},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
 		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
@@ -412,11 +420,13 @@ func (a *API) Register(root chi.Router) {
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)
+			a.hostUpdate.Register(r)
 			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
 			a.computerUse.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
+			a.prPreview.Register(r)
 			a.sessionSearch.Register(r)
 			a.github.Register(r)
 			a.access.Register(r)

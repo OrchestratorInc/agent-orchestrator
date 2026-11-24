@@ -232,6 +232,11 @@ vi.mock("../hooks/useRemoteHosts", async (importOriginal) => {
 	};
 });
 
+vi.mock("../hooks/useHostUpdates", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useHostUpdates")>()),
+	useHostUpdatePolling: () => {},
+}));
+
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({
 		status: shellMocks.state.cloudSessionStatus,
@@ -298,7 +303,9 @@ vi.mock("../hooks/useAgentInventoryTelemetry", async (importOriginal) => ({
 }));
 
 vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null, NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
-vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
+vi.mock("../components/HarnessUpdateNotice", () => ({
+	HarnessUpdateNotice: ({ enabled }: { enabled: boolean }) => <div data-enabled={String(enabled)} data-testid="harness-update-notice" />,
+}));
 vi.mock("../components/SessionTopbarActions", () => ({ SessionTopbarActions: () => null }));
 vi.mock("../components/DaemonStartupLoader", () => ({
 	DaemonStartupLoader: () => <div data-testid="daemon-startup-loader" />,
@@ -617,6 +624,35 @@ describe("shell workspace startup", () => {
 		);
 
 		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
+	});
+
+	it("starts agent update checks once launch has settled, not with the app", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+			const view = await renderShell();
+			// Each check can hold a daemon connection for seconds on a fresh daemon.
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "false");
+			await act(async () => {
+				vi.advanceTimersByTime(15_000);
+			});
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "true");
+
+			// A new daemon that replaces it while still ready waits out its own launch.
+			shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
+			view.rerender(
+				<Suspense fallback={null}>
+					<ShellRoute />
+				</Suspense>,
+			);
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "false");
+			await act(async () => {
+				vi.advanceTimersByTime(15_000);
+			});
+			expect(screen.getByTestId("harness-update-notice")).toHaveAttribute("data-enabled", "true");
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("keeps chat hibernation disabled when Developer Mode is off", async () => {
@@ -1324,7 +1360,7 @@ describe("shell application shortcut subscriptions", () => {
 		});
 	});
 
-	it("lists pinned sessions first, once", async () => {
+	it("lists each project's pinned sessions first within that project, once", async () => {
 		setWorkspaces([
 			{
 				...workspaces[0],
@@ -1333,12 +1369,15 @@ describe("shell application shortcut subscriptions", () => {
 					{ id: "sess-3", workspaceId: "proj-1", status: "idle", isPinned: true, pinnedAt: "2026-10-10T00:00:00Z" },
 				],
 			},
-			workspaces[1],
+			{
+				...workspaces[1],
+				sessions: [{ id: "sess-cross", workspaceId: "proj-2", status: "working", isPinned: true, pinnedAt: "2026-10-11T00:00:00Z" }],
+			},
 		] as unknown as WorkspaceSummary[]);
 		shellMocks.state.routeParams = { sessionId: "sess-3" };
 		await renderShell();
 
-		// Pinned sess-3 is first; its project row would list it again at the end.
+		// Pinned sess-3 leads its own project; proj-2's newer pin stays in proj-2.
 		emitAppShortcut({ id: "jump-to-session", index: 0 });
 		expect(shellMocks.navigate).toHaveBeenLastCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",

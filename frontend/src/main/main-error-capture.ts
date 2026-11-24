@@ -42,7 +42,9 @@ type Sink = (capture: MainErrorCapture) => void;
 
 // User validation, connectivity and authentication states still reject over
 // IPC, but are not application faults. Unexpected throws remain reportable.
-export class ExpectedIpcError extends Error {}
+export class ExpectedIpcError extends Error {
+	readonly code: string = "EXPECTED_IPC_ERROR";
+}
 
 let sink: Sink | null = null;
 let pending: MainErrorCapture[] = [];

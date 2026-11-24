@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -2230,11 +2231,18 @@ func TestSessionsAPI_SpawnRejectsUnknownRequestedOutput(t *testing.T) {
 func TestSessionsAPI_PreviewServesSelectedStaticIndex(t *testing.T) {
 	svc := newFakeSessionService()
 	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte(`<link rel="stylesheet" href="styles.css"><script src="app.js"></script>`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "index.html"), []byte(`<link rel="stylesheet" href="styles.css"><script src="app.js"></script><a href="mailto:support@example.test">support@example.test</a>`), 0o644); err != nil {
 		t.Fatalf("write index: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "styles.css"), []byte(`body { color: red; }`), 0o644); err != nil {
 		t.Fatalf("write css: %v", err)
+	}
+	// No extension: ServeContent sniffs these, one as HTML and one as text.
+	if err := os.WriteFile(filepath.Join(workspace, "contact"), []byte(`<!doctype html><a href="mailto:support@example.test">support@example.test</a>`), 0o644); err != nil {
+		t.Fatalf("write extensionless html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "notes"), []byte("support@example.test\n"), 0o644); err != nil {
+		t.Fatalf("write extensionless text: %v", err)
 	}
 	s := svc.sessions["ao-1"]
 	s.Metadata = domain.SessionMetadata{WorkspacePath: workspace, PreviewURL: "index.html"}
@@ -2273,6 +2281,25 @@ func TestSessionsAPI_PreviewServesSelectedStaticIndex(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "styles.css") {
 		t.Fatalf("preview body did not serve index: %s", body)
+	}
+	if !strings.Contains(string(body), `mailto:support@example.test`) || headers.Get("Cache-Control") != "private, no-cache, no-transform" {
+		t.Fatalf("preview HTML changed or is transformable: body=%s Cache-Control=%q", body, headers.Get("Cache-Control"))
+	}
+	_, status, headers = doPreviewOriginRequest(t, srv, preview.PreviewURL, "/styles.css")
+	if status != http.StatusOK || headers.Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("preview CSS cache policy = status %d Cache-Control %q", status, headers.Get("Cache-Control"))
+	}
+	// HTML found by content sniffing is protected like declared HTML, and is
+	// served with the type the policy was decided on.
+	body, status, headers = doPreviewOriginRequest(t, srv, preview.PreviewURL, "/contact")
+	if status != http.StatusOK || !strings.HasPrefix(headers.Get("Content-Type"), "text/html") ||
+		headers.Get("Cache-Control") != "private, no-cache, no-transform" || !strings.Contains(string(body), `mailto:support@example.test`) {
+		t.Fatalf("sniffed HTML = status %d Content-Type %q Cache-Control %q body %s", status, headers.Get("Content-Type"), headers.Get("Cache-Control"), body)
+	}
+	body, status, headers = doPreviewOriginRequest(t, srv, preview.PreviewURL, "/notes")
+	if status != http.StatusOK || !strings.HasPrefix(headers.Get("Content-Type"), "text/plain") ||
+		headers.Get("Cache-Control") != "private, no-cache" || string(body) != "support@example.test\n" {
+		t.Fatalf("sniffed text = status %d Content-Type %q Cache-Control %q body %q", status, headers.Get("Content-Type"), headers.Get("Cache-Control"), body)
 	}
 }
 
@@ -2579,6 +2606,9 @@ func TestSessionsAPI_PreviewFileRawMarkdownBypassesHTMLRendering(t *testing.T) {
 	if !strings.Contains(headers.Get("Content-Type"), "text/html") || !bytes.Contains(body, []byte("<!doctype html>")) {
 		t.Fatalf("rendered markdown response content-type=%q body=%q, want HTML document", headers.Get("Content-Type"), body)
 	}
+	if got := headers.Get("Cache-Control"); got != "no-transform" {
+		t.Fatalf("rendered markdown Cache-Control = %q, want no-transform", got)
+	}
 
 	for _, raw := range []string{"1", "true"} {
 		body, status, headers = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/notes.md?raw="+raw, "")
@@ -2590,6 +2620,9 @@ func TestSessionsAPI_PreviewFileRawMarkdownBypassesHTMLRendering(t *testing.T) {
 		}
 		if strings.Contains(headers.Get("Content-Type"), "text/html") {
 			t.Fatalf("raw=%s markdown content type = %q, want non-HTML", raw, headers.Get("Content-Type"))
+		}
+		if got := headers.Get("Cache-Control"); got != "private, no-cache" {
+			t.Fatalf("raw=%s markdown Cache-Control = %q, want private, no-cache", raw, got)
 		}
 	}
 }
@@ -3808,6 +3841,100 @@ func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusConflict, "PREVIEW_MANAGED_REQUIRED")
 	if headers.Get("X-AO-Preview-Managed-Required") != "1" {
 		t.Fatal("missing managed-preview guidance marker")
+	}
+}
+
+func TestSessionsAPI_ManagedPreviewPreservesEmailHTML(t *testing.T) {
+	const page = `<p>support@example.test</p><a href="mailto:support@example.test">Email support</a>`
+	for _, tc := range []struct {
+		name, contentType, cacheControl, wantCacheControl string
+	}{
+		{"html without cache policy", "text/html; charset=utf-8", "", "no-transform"},
+		{"html with cache policy", "text/html", "private, max-age=60", "private, max-age=60, no-transform"},
+		{"html already protected", "application/xhtml+xml", "private, no-transform", "private, no-transform"},
+		{"html with a malformed parameter", "text/html; charset", "", "no-transform"},
+		{"html with a repeated parameter", "text/html; charset=UTF-8; charset=utf-8", "", "no-transform"},
+		{"quoted directive argument", "text/html", `no-cache="Set-Cookie, no-transform, ETag"`, `no-cache="Set-Cookie, no-transform, ETag", no-transform`},
+		{"non-html unchanged", "text/plain", "private, max-age=60", "private, max-age=60"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				if tc.cacheControl != "" {
+					w.Header().Set("Cache-Control", tc.cacheControl)
+				}
+				_, _ = io.WriteString(w, page)
+			}))
+			t.Cleanup(app.Close)
+			parsed, _ := url.Parse(app.URL)
+			port, _ := strconv.Atoi(parsed.Port())
+			svc := newFakeSessionService()
+			session := svc.sessions["ao-1"]
+			session.Metadata.PreviewURL = app.URL + "/"
+			svc.sessions["ao-1"] = session
+			managed := &fakeManagedPreviewServer{status: previewserver.Status{
+				State: previewserver.StateReady, TargetKind: previewserver.TargetApp,
+				URL: session.Metadata.PreviewURL, Port: port,
+			}}
+			srv := newSessionTestServerWithPreview(t, svc, managed)
+			body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/app/", "")
+			if status != http.StatusOK || string(body) != page {
+				t.Fatalf("proxied page = (%d) %q, want original %q", status, body, page)
+			}
+			if got := strings.Join(headers.Values("Cache-Control"), ", "); got != tc.wantCacheControl {
+				t.Errorf("Cache-Control = %q, want %q", got, tc.wantCacheControl)
+			}
+		})
+	}
+}
+
+// A dev server can answer with no Content-Type at all. The preview proxy's own
+// server then sniffs the body and can send it as text/html, after the response
+// hook ran, so the hook protects an untyped response too.
+func TestSessionsAPI_ManagedPreviewProtectsUntypedHTML(t *testing.T) {
+	const page = `<!doctype html><p>support@example.test</p><a href="mailto:support@example.test">Email support</a>`
+	// Written by hand: an http.Handler's own server would sniff and add a
+	// Content-Type, so the header would not really be missing on the wire.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer func() { _ = conn.Close() }()
+				if _, err := http.ReadRequest(bufio.NewReader(conn)); err != nil {
+					return
+				}
+				_, _ = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(page), page)
+			}(conn)
+		}
+	}()
+	port := listener.Addr().(*net.TCPAddr).Port
+	svc := newFakeSessionService()
+	session := svc.sessions["ao-1"]
+	session.Metadata.PreviewURL = fmt.Sprintf("http://127.0.0.1:%d/", port)
+	svc.sessions["ao-1"] = session
+	managed := &fakeManagedPreviewServer{status: previewserver.Status{
+		State: previewserver.StateReady, TargetKind: previewserver.TargetApp,
+		URL: session.Metadata.PreviewURL, Port: port,
+	}}
+	srv := newSessionTestServerWithPreview(t, svc, managed)
+	body, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/app/", "")
+	if status != http.StatusOK || string(body) != page {
+		t.Fatalf("proxied page = (%d) %q, want original %q", status, body, page)
+	}
+	// The proxy's server typed the page by sniffing: the case under test.
+	if !strings.HasPrefix(headers.Get("Content-Type"), "text/html") {
+		t.Fatalf("Content-Type = %q, want the sniffed text/html", headers.Get("Content-Type"))
+	}
+	if got := strings.Join(headers.Values("Cache-Control"), ", "); got != "no-transform" {
+		t.Fatalf("Cache-Control = %q, want no-transform", got)
 	}
 }
 

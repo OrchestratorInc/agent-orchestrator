@@ -33,6 +33,7 @@ import {
 	toSnapshot,
 } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { savedConversationQueryKey } from "../lib/local-chat-cache";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
 import { TooltipProvider } from "../components/ui/tooltip";
 
@@ -918,6 +919,25 @@ describe("config options read while the cached snapshot outlived the controller"
 });
 
 describe("useConversation snapshot mapping", () => {
+	it("shows a local chat's saved page only while its first read runs", async () => {
+		const read = deferred<{ data: typeof WIRE; error: undefined }>();
+		getMock.mockReturnValue(read.promise);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const saved = toSnapshot(WIRE as never);
+		queryClient.setQueryData(savedConversationQueryKey("ao-1"), saved);
+
+		const { result } = renderHook(() => useConversation("ao-1"), {
+			wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+		});
+		expect(result.current.savedSnapshot).toBe(saved);
+		expect(result.current.snapshot).toBeUndefined();
+		expect(queryClient.getQueryData(conversationQueryKey("ao-1"))).toBeUndefined();
+
+		await act(async () => read.resolve({ data: WIRE, error: undefined }));
+		await waitFor(() => expect(result.current.snapshot).toBeDefined());
+		expect(result.current.savedSnapshot).toBeUndefined();
+	});
+
 	it("passes a typed DeepSeek key failure from the API to the timeline snapshot", async () => {
 		getMock.mockResolvedValue({
 			data: {
