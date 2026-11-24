@@ -22,6 +22,12 @@ final class DeviceStreamView: ExpoView {
   private var gotFrame = false
   /// Connections lost in a row without a frame; each waits longer before retrying.
   private var failures = 0
+  /// The pending retry after a loss; a newer connection or target cancels it,
+  /// or it would tear down a healthy stream when it fires.
+  private var retry: DispatchWorkItem?
+  /// The live connection's number. stop() moves past it, so callbacks from an
+  /// older player cannot end or relabel the current one.
+  private var generation = 0
 
   /// "h264" (the emulator's WebSocket video), "avcc" (the simulator's H.264
   /// over HTTP) or "mjpeg" (the simulator's multipart stream).
@@ -38,6 +44,8 @@ final class DeviceStreamView: ExpoView {
   /// A new target starts the retry delay over.
   private func retarget() {
     failures = 0
+    retry?.cancel()
+    retry = nil
     scheduleConnect()
   }
 
@@ -84,18 +92,26 @@ final class DeviceStreamView: ExpoView {
     gotFrame = false
     guard window != nil, let raw = url, let target = URL(string: raw) else { return }
     if !quiet { emit(state: "connecting") }
+    let gen = generation
     let size: (Int, Int) -> Void = { [weak self] w, h in
-      DispatchQueue.main.async { self?.onSize(["width": w, "height": h]) }
+      DispatchQueue.main.async {
+        guard let self, self.generation == gen else { return }
+        self.onSize(["width": w, "height": h])
+      }
     }
     let streaming: () -> Void = { [weak self] in
       DispatchQueue.main.async {
-        self?.gotFrame = true
-        self?.failures = 0
-        self?.emit(state: "streaming")
+        guard let self, self.generation == gen else { return }
+        self.gotFrame = true
+        self.failures = 0
+        self.emit(state: "streaming")
       }
     }
     let lost: () -> Void = { [weak self] in
-      DispatchQueue.main.async { self?.lost() }
+      DispatchQueue.main.async {
+        guard let self, self.generation == gen else { return }
+        self.lost()
+      }
     }
     if mode == "mjpeg" {
       videoLayer.isHidden = true
@@ -180,6 +196,9 @@ final class DeviceStreamView: ExpoView {
   }
 
   private func stop() {
+    generation += 1
+    retry?.cancel()
+    retry = nil
     statsTimer?.invalidate()
     statsTimer = nil
     mjpeg?.stop()
@@ -198,9 +217,12 @@ final class DeviceStreamView: ExpoView {
     stop()
     let delay = min(1.5 * pow(2, Double(min(failures, 5))), 30)
     failures += 1
-    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+    let work = DispatchWorkItem { [weak self] in
+      self?.retry = nil
       self?.scheduleConnect()
     }
+    retry = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
 
   private func emit(state: String) {
