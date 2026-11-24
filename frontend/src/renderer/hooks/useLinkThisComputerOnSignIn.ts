@@ -161,7 +161,7 @@ export function useLinkThisComputerOnSignIn(): void {
 				}
 				// The connector asked AO Cloud when the link began, before the listing
 				// landed; asked again now, it moves at once instead of at its next try.
-				if (added) await apiClient.POST("/api/v1/mobile/remote-access");
+				if (added && !(await fetchMobileStatus()).noPublicTunnel) await apiClient.POST("/api/v1/mobile/remote-access");
 				await Promise.all([
 					queryClient.invalidateQueries({ queryKey: mobileStatusQueryKey }),
 					queryClient.invalidateQueries({ queryKey: ["account-remote-hosts", cloudBaseUrl] }),

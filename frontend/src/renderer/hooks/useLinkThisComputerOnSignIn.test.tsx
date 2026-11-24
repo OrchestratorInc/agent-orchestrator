@@ -96,6 +96,18 @@ test("a computer without remote access is not linked", async () => {
 	expect(linkThisComputer).not.toHaveBeenCalled();
 });
 
+test("Reach from anywhere turned off while linking keeps the tunnel off", async () => {
+	vi.mocked(linkThisComputer).mockImplementationOnce(async () => {
+		Object.assign(fake.status, { noPublicTunnel: true });
+		return { hostId: "h_this", added: true };
+	});
+	fake.signedIn = true;
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await waitFor(() => expect(linkThisComputer).toHaveBeenCalled());
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/mobile/remote-access");
+});
+
 test("a development build does not publish its temporary identity", async () => {
 	vi.stubEnv("MODE", "development");
 	fake.signedIn = true;
