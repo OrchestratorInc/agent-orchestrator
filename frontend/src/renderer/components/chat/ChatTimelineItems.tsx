@@ -3189,6 +3189,11 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				<strong className="shrink-0 text-xs font-medium text-foreground" title={onYourBehalf}>
 					{denied ? "Auto-declined" : "Auto-approved"}
 				</strong>
+				{activity.summary ? (
+					<span className="min-w-0 truncate font-mono text-caption text-muted-foreground" title={activity.summary}>
+						{shortenPaths(activity.summary)}
+					</span>
+				) : null}
 				{risk ? (
 					<span
 						className={cn(
@@ -3223,9 +3228,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 						<div className="flex min-w-0 flex-col gap-1 pb-1 pl-5">
 							<p className="sr-only">{onYourBehalf}</p>
 							{command ? (
-								<p className="truncate font-mono text-caption leading-relaxed text-muted-foreground" title={command}>
-									{command}
-								</p>
+								<p className="whitespace-pre-wrap break-all font-mono text-caption leading-relaxed text-muted-foreground">{command}</p>
 							) : null}
 							{detail?.rationale ? (
 								<p className="text-xs leading-relaxed text-muted-foreground">{detail.rationale}</p>

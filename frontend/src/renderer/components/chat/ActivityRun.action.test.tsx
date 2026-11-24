@@ -131,13 +131,14 @@ describe("a failed spawn", () => {
 	it("opens the approval onto the command it allowed, its chevron turned down", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={activities[0]!} />);
-		const row = screen.getByRole("button", { name: /Auto-approved\s*medium risk/ });
+		const row = screen.getByRole("button", { name: /Auto-approved.*medium risk/ });
 		expect(row).toHaveAttribute("aria-expanded", "false");
 		expect(row.querySelector("svg.icon-chevron-right")).not.toHaveClass("rotate-90");
-		expect(screen.queryByText("ao spawn --project market-place --name 'background config snapshot'")).not.toBeInTheDocument();
+		// Closed, only the row's one-line summary names it.
+		expect(screen.getAllByText("ao spawn --project market-place --name 'background config snapshot'")).toHaveLength(1);
 		await user.click(row);
 		expect(row).toHaveAttribute("aria-expanded", "true");
 		expect(row.querySelector("svg.icon-chevron-right")).toHaveClass("rotate-90");
-		expect(screen.getByTitle("ao spawn --project market-place --name 'background config snapshot'")).toBeInTheDocument();
+		expect(screen.getAllByText("ao spawn --project market-place --name 'background config snapshot'")).toHaveLength(2);
 	});
 });

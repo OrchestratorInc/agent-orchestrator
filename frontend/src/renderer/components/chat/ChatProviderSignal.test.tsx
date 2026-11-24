@@ -220,18 +220,32 @@ describe("auto review", () => {
 		expect(screen.getByTitle("Risk assessed as low")).toHaveTextContent("low risk");
 	});
 
+	it("names what it allowed while closed", () => {
+		render(<ActivityRow activity={review} />);
+		expect(screen.getByRole("button")).toHaveTextContent("curl -s https://proxy.golang.org/…");
+	});
+
 	it("opens onto the command it allowed", async () => {
 		render(<ActivityRow activity={review} />);
-		expect(screen.queryByTitle("curl -s https://proxy.golang.org/")).not.toBeInTheDocument();
+		expect(screen.queryByText("curl -s https://proxy.golang.org/")).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByTitle("curl -s https://proxy.golang.org/")).toBeInTheDocument();
+		expect(screen.getByText("curl -s https://proxy.golang.org/")).toBeInTheDocument();
 	});
 
 	it("shows the command it allowed as typed, not read as Markdown", async () => {
 		const command = "echo '**done**' > /Users/me/notes_v2_final.md";
 		render(<ActivityRow activity={activity({ activityKind: "auto_review", summary: command, detail: { status: "approved", command } })} />);
 		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByTitle(command).textContent).toBe(command);
+		expect(screen.getByText(command).textContent).toBe(command);
+	});
+
+	it("shows a long, multi-line command whole, wrapped rather than cut", async () => {
+		const command = "cd frontend\nnpm run build -- --mode production";
+		render(<ActivityRow activity={activity({ activityKind: "auto_review", summary: "cd frontend", detail: { status: "approved", command } })} />);
+		await userEvent.click(screen.getByRole("button"));
+		const body = screen.getByText((_, element) => element?.tagName === "P" && element.textContent === command);
+		expect(body).toHaveClass("whitespace-pre-wrap", "break-all");
+		expect(body).not.toHaveClass("truncate");
 	});
 
 	it("calls a denial a denial", () => {
