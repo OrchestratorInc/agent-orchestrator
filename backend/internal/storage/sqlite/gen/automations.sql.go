@@ -786,6 +786,8 @@ type RecordAutomationRunOutcomeParams struct {
 	ID           domain.AutomationRunID
 }
 
+// Before a running session is closed, record the failure its run takes when
+// that session ends. NULL means the run completes.
 func (q *Queries) RecordAutomationRunOutcome(ctx context.Context, arg RecordAutomationRunOutcomeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, recordAutomationRunOutcome, arg.ErrorMessage, arg.UpdatedAt, arg.ID)
 	if err != nil {
