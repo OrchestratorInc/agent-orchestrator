@@ -154,6 +154,24 @@ func TestStalledPrimaryTurnReleasesQueuedWork(t *testing.T) {
 	}
 }
 
+func TestStalledRetryReleasesTheUsageLimitHold(t *testing.T) {
+	h := newHarness(t)
+	source := failUsageLimitedTurnBehindQueue(t, h, "queued note")
+	assertTurnStaysQueued(t, h, "queued note")
+
+	retry, err := h.svc.RetryTurn(context.Background(), testSession, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: retry.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: fmt.Errorf("ACP session/prompt: %w", ports.ErrChatPromptStalled),
+	})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+	})
+}
+
 func TestUsageLimitHoldWaitsForTheUsersSend(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
