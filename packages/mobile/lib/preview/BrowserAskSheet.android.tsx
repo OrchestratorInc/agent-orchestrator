@@ -108,12 +108,21 @@ function PageDialog({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind:
 }
 
 function FileSourceDialog({ dialog, answer, pickers }: { dialog: Extract<BrowserDialog, { kind: "filechooser" }>; answer: Answer; pickers: () => BrowserAskSheetProps["pickers"] }) {
-	const none = () => answer({ type: "files", payload: { files: [], folder: dialog.folder } });
+	// Opening the system picker dismisses this dialog: once a source is
+	// chosen, the dialog goes and only the picker answers.
+	const chosen = useRef(false);
+	const [picking, setPicking] = useState(false);
+	const none = () => { if (!chosen.current) answer({ type: "files", payload: { files: [], folder: dialog.folder } }); };
+	if (picking) return null;
 	return (
 		<Frame title={askTitle(dialog)} onDismiss={none} dismiss={<Button label={copy.cancel} onClick={none} />}>
 			<LazyColumn modifiers={[fillMaxWidth()]}>
 				{fileSources(dialog).map((source) => (
-					<ListItem key={source} modifiers={[clickable(() => void answerWithFiles(source, dialog, answer, pickers()))]}>
+					<ListItem key={source} modifiers={[clickable(() => {
+						chosen.current = true;
+						setPicking(true);
+						void answerWithFiles(source, dialog, answer, pickers());
+					})]}>
 						<ListItem.HeadlineContent>
 							<NativeText style={{ typography: "bodyLarge", fontFamily: font.regular }}>{source === "photos" ? copy.photos : copy.files(dialog.multiple)}</NativeText>
 						</ListItem.HeadlineContent>
