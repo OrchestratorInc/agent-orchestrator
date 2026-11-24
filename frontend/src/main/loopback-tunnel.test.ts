@@ -65,7 +65,7 @@ function hosts(table: Record<string, Host>) {
 }
 
 function fakeSession() {
-	const state: { proxy?: Electron.ProxyConfig; closed: number; failProxy?: boolean; respond?: (url: string) => Promise<Electron.CallbackResponse> } = { closed: 0 };
+	const state: { proxy?: Electron.ProxyConfig; closed: number; failProxy?: boolean; urls?: string[]; respond?: (url: string) => Promise<Electron.CallbackResponse> } = { closed: 0 };
 	const session: RoutedSession = {
 		setProxy: async (config) => {
 			if (state.failProxy) throw new Error("proxy refused");
@@ -73,7 +73,8 @@ function fakeSession() {
 		},
 		closeAllConnections: async () => { state.closed++; },
 		webRequest: {
-			onBeforeRequest: (_filter, listener) => {
+			onBeforeRequest: (filter, listener) => {
+				state.urls = filter.urls;
 				state.respond = (url) => new Promise((resolve) => listener({ url }, resolve));
 			},
 		},
@@ -98,6 +99,8 @@ describe("loopback tunnels", () => {
 		expect(await state.respond?.("http://0.0.0.0:5173/a?b#c")).toEqual({ redirectURL: "http://localhost:5173/a?b#c" });
 		expect(await state.respond?.("http://[::]:5173/")).toEqual({ redirectURL: "http://localhost:5173/" });
 		expect(await state.respond?.("http://localhost:5173/")).toEqual({});
+		expect(state.urls).toEqual(expect.arrayContaining(["ws://0.0.0.0/*", "wss://[::]/*"]));
+		expect(await state.respond?.("ws://0.0.0.0:5173/hmr")).toEqual({ cancel: true });
 	});
 
 	it("keeps a partition it could not route away from this computer's localhost and retries on the next request", async () => {

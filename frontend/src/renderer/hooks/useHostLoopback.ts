@@ -9,11 +9,7 @@ const reachQuery = (hostId?: string) => ({
 });
 
 export function useLoopbackReach(hostId?: string): boolean | undefined {
-	return useQuery({
-		...reachQuery(hostId),
-		enabled: Boolean(hostId),
-		refetchInterval: (query) => (query.state.data === false ? 10_000 : false),
-	}).data;
+	return useQuery({ ...reachQuery(hostId), enabled: Boolean(hostId) }).data;
 }
 
 export const fetchLoopbackReach = (hostId: string): Promise<boolean> => queryClient.fetchQuery(reachQuery(hostId));

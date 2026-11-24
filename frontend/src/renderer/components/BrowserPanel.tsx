@@ -482,10 +482,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// Not on an agent tab: its page is its viewer's picture of the agent's page.
 	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
 	const canAnnotate = Boolean(session && window.ao?.browser && viewId && navState.url && !onAgentTab);
-	// A localhost page on an agent tab or in a remote session is the host's:
-	// opened here it would be this computer's own. Before the viewer's first
-	// report an agent tab shows the viewer itself, an ao-preview-….localhost
-	// address, so that is held back too.
+	// An agent tab's localhost page is the host's: opened here it would be this
+	// computer's own. Before the viewer's first report the tab shows the viewer
+	// itself, an ao-preview-….localhost address, so that is held back too.
 	const pageOnHost = onAgentTab ? isHostLocalWebLink(navState.url) : Boolean(session?.hostId && hostLoopbackUrl(navState.url));
 	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url, { onHost: onAgentTab || Boolean(session?.hostId) }) && !browserUnavailable;
 	const canRetryAnnotation = status === "error" && queuedCount > 0;

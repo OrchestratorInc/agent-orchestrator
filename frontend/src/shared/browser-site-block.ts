@@ -66,8 +66,8 @@ export function classifySiteResponse(input: { url: string; statusCode: number; h
 
 /**
  * Pages that can be handed to another browser: ordinary web pages only. An
- * agent tab, and every tab of a remote session, shows pages on another host,
- * so a loopback address there names that host, not this computer.
+ * agent tab shows a page on the agent's host, so a loopback address there
+ * names that host, not this computer.
  */
 export function canOpenInUserBrowser(rawUrl: string, options: { onHost?: boolean } = {}): boolean {
 	try {

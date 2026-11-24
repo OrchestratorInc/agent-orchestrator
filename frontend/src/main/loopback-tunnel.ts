@@ -20,7 +20,7 @@ export type RoutedSession = {
 
 const UNUSED_PORT = 1;
 const BYPASS_RULES = "*,<-loopback>,169.254.0.0/16,fe80::/10,ao-preview-*.localhost";
-const UNSPECIFIED_URLS = ["*://0.0.0.0/*", "*://[::]/*"];
+const UNSPECIFIED_URLS = ["0.0.0.0", "[::]"].flatMap((host) => ["*", "ws", "wss"].map((scheme) => `${scheme}://${host}/*`));
 const PREVIEW_HOST = /^ao-preview-.*\.localhost$/;
 
 export function isLoopbackName(host: string): boolean {
@@ -41,14 +41,15 @@ function hostLocalUrl(url: string): URL | undefined {
 	}
 }
 
-function unspecifiedToLocalhost(url: string): string | undefined {
+function unspecifiedResponse(url: string): Electron.CallbackResponse {
 	try {
 		const parsed = new URL(url);
-		if (parsed.hostname !== "0.0.0.0" && parsed.hostname !== "[::]") return undefined;
+		if (parsed.hostname !== "0.0.0.0" && parsed.hostname !== "[::]") return {};
+		if (parsed.protocol.startsWith("ws")) return { cancel: true };
 		parsed.hostname = "localhost";
-		return parsed.href;
+		return { redirectURL: parsed.href };
 	} catch {
-		return undefined;
+		return {};
 	}
 }
 
@@ -145,20 +146,14 @@ export function createLoopbackTunnels(openTunnel: OpenTunnel) {
 			ready = (async () => {
 				const port = await socksPort(hostId);
 				await session.setProxy({ mode: "fixed_servers", proxyRules: `socks5://127.0.0.1:${port}`, proxyBypassRules: BYPASS_RULES });
-				session.webRequest.onBeforeRequest({ urls: UNSPECIFIED_URLS }, (details, callback) => {
-					const redirectURL = unspecifiedToLocalhost(details.url);
-					callback(redirectURL ? { redirectURL } : {});
-				});
+				session.webRequest.onBeforeRequest({ urls: UNSPECIFIED_URLS }, (details, callback) => callback(unspecifiedResponse(details.url)));
 				await session.closeAllConnections();
 			})();
 			ready.catch(() => {
 				routed.delete(session);
 				session.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
 					if (!hostLocalUrl(details.url)) return callback({});
-					route(session, hostId).then(() => {
-						const redirectURL = unspecifiedToLocalhost(details.url);
-						callback(redirectURL ? { redirectURL } : {});
-					}, () => callback({ cancel: true }));
+					route(session, hostId).then(() => callback(unspecifiedResponse(details.url)), () => callback({ cancel: true }));
 				});
 			});
 			routed.set(session, ready);
