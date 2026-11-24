@@ -99,19 +99,22 @@ describe("the threads view's tabs and filter", () => {
 		fireEvent.click(within(tabs).getByRole("tab", { name: "Resolved" }));
 		await waitFor(() => expect(mocks.listMyCommentThreads).toHaveBeenCalledWith({ status: "resolved", limit: 50 }, expect.anything()));
 		expect(within(tabs).getByRole("tab", { name: "Resolved" })).toHaveAttribute("aria-selected", "true");
-		const unreadOnly = screen.getByRole("button", { name: "Unread only" });
-		expect(unreadOnly).toHaveAttribute("aria-pressed", "false");
-		fireEvent.click(unreadOnly);
-		expect(unreadOnly).toHaveAttribute("aria-pressed", "true");
+		// A switch with a visible label that names it.
+		const unreadOnly = screen.getByRole("switch", { name: "Unread only" });
+		expect(unreadOnly).toHaveAttribute("aria-checked", "false");
+		expect(unreadOnly).toHaveAttribute("data-threads-unread-only");
+		// Clicking the label turns it on too.
+		fireEvent.click(screen.getByText("Unread only"));
+		expect(unreadOnly).toHaveAttribute("aria-checked", "true");
 		await waitFor(() => expect(mocks.listMyCommentThreads).toHaveBeenCalledWith({ status: "resolved", unread: true, limit: 50 }, expect.anything()));
 	});
 
 	it("says what an empty list means on each tab", async () => {
 		renderView();
 		expect(await screen.findByText("No open threads. Comment on any message to start one.")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Unread only" }));
+		fireEvent.click(screen.getByRole("switch", { name: "Unread only" }));
 		expect(await screen.findByText("You're all caught up.")).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Unread only" }));
+		fireEvent.click(screen.getByRole("switch", { name: "Unread only" }));
 		fireEvent.click(screen.getByRole("tab", { name: "Resolved" }));
 		expect(await screen.findByText("No resolved threads yet.")).toBeInTheDocument();
 	});
@@ -123,6 +126,24 @@ describe("the threads view's tabs and filter", () => {
 		expect(await screen.findByRole("alert", undefined, { timeout: 4000 })).toHaveTextContent("Could not load threads.");
 		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(await screen.findByText("Session c-1")).toBeInTheDocument();
+	});
+});
+
+describe("the Unread only switch", () => {
+	it("says how many threads are unread, as the sidebar badge does", async () => {
+		mocks.countMyUnreadCommentThreads.mockResolvedValue({ count: 2 });
+		renderView();
+		await waitFor(() => expect(mocks.countMyUnreadCommentThreads).toHaveBeenCalled());
+		await waitFor(() => expect(document.querySelector("[data-threads-unread-count]")).not.toBeNull());
+		expect(screen.getByRole("switch", { name: "Unread only · 2" })).toBeInTheDocument();
+		expect(document.querySelector("[data-threads-unread-count]")).toHaveTextContent(/^2$/);
+	});
+
+	it("says no count when nothing is unread", async () => {
+		renderView();
+		await waitFor(() => expect(mocks.countMyUnreadCommentThreads).toHaveBeenCalled());
+		expect(screen.getByRole("switch", { name: "Unread only" })).toBeInTheDocument();
+		expect(document.querySelector("[data-threads-unread-count]")).toBeNull();
 	});
 });
 

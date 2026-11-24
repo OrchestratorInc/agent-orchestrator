@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { BellOff, Loader2, MessagesSquare } from "@/components/app-icons";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useCommentThreadList } from "../hooks/useCommentThreads";
+import { useCommentThreadList, useUnreadCommentThreads } from "../hooks/useCommentThreads";
 import { useWindowAttention } from "../hooks/useWindowAttention";
 import { closeThreadInView, cloudCommentThreadsRootKey, openThreadInView, useThreadInView, type ThreadInView } from "../lib/cloud-asides";
 import type { CloudCpCommentThread, CloudCpSession } from "../lib/cloud-cp/types";
@@ -15,6 +15,7 @@ import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { PersonAvatar } from "./teams/TeamVisuals";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
+import { Switch } from "./ui/switch";
 
 // The Threads page: every comment thread the person is in (they started it,
 // replied, or were mentioned), across their organizations and sessions, as
@@ -30,6 +31,9 @@ export function ThreadsView() {
 	const { t } = useTranslation();
 	const [status, setStatus] = useState<ThreadStatus>("open");
 	const [unreadOnly, setUnreadOnly] = useState(false);
+	const unreadOnlyId = useId();
+	// The same count as the sidebar's Threads badge.
+	const unreadCount = useUnreadCommentThreads().count;
 	const list = useCommentThreadList(status, unreadOnly);
 	const selected = useThreadInView();
 	// Leaving the page leaves no thread selected for the next visit.
@@ -61,17 +65,14 @@ export function ThreadsView() {
 								</Button>
 							))}
 						</div>
-						<Button
-							aria-pressed={unreadOnly}
-							className="ms-auto"
-							data-threads-unread-only=""
-							onClick={() => setUnreadOnly((value) => !value)}
-							size="sm"
-							type="button"
-							variant="ghost"
-						>
-							{t("threads.unreadOnly")}
-						</Button>
+						{/* A switch with its label, so its on and off states read as such (a pressed button looked like a label). */}
+						<div className="ms-auto flex items-center gap-2">
+							<label className="cursor-pointer text-control text-muted-foreground" htmlFor={unreadOnlyId}>
+								{t("threads.unreadOnly")}
+								{unreadCount > 0 ? <>{" · "}<span className="tabular-nums" data-threads-unread-count="">{unreadCount}</span></> : null}
+							</label>
+							<Switch checked={unreadOnly} data-threads-unread-only="" id={unreadOnlyId} onCheckedChange={setUnreadOnly} />
+						</div>
 					</div>
 					<div className="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-4">
 						{list.isPending ? (
