@@ -22,6 +22,10 @@ type reactionState struct {
 	mu       sync.Mutex
 	seen     map[string]string
 	attempts map[string]int
+	// relays records, per Chat review-feedback item, the client message id of
+	// the relay that carried it. Items sent together share one id; items sent
+	// in separate batches do not, even when their attempt counts are equal.
+	relays map[string]feedbackRelay
 	// loaded tracks PR URLs whose persisted dedup payload has been merged into
 	// seen/attempts during this process. Lazy: we only pay the DB read on the
 	// first reaction touching each PR after startup.
@@ -36,7 +40,7 @@ type reactionState struct {
 }
 
 func newReactionState() reactionState {
-	return reactionState{seen: map[string]string{}, attempts: map[string]int{}, loaded: map[string]bool{}, pendingRearm: map[string]bool{}}
+	return reactionState{seen: map[string]string{}, attempts: map[string]int{}, relays: map[string]feedbackRelay{}, loaded: map[string]bool{}, pendingRearm: map[string]bool{}}
 }
 
 // reactionPayload is the JSON document persisted in pr.last_nudge_signature.
@@ -45,6 +49,16 @@ func newReactionState() reactionState {
 type reactionPayload struct {
 	Seen     map[string]string `json:"seen,omitempty"`
 	Attempts map[string]int    `json:"attempts,omitempty"`
+	// Relays maps a Chat review-feedback item to the relay that carried its
+	// current signature, so a restart settles each relay on its own state.
+	Relays map[string]feedbackRelay `json:"relays,omitempty"`
+}
+
+// feedbackRelay names the Chat relay (its client message id) that carried one
+// signature of a review-feedback item.
+type feedbackRelay struct {
+	Sig string `json:"sig"`
+	ID  string `json:"id"`
 }
 
 // pendingNudge is one actionable PR nudge queued by ApplyPRObservation. Queuing
@@ -1349,6 +1363,11 @@ func (m *Manager) loadPRSignaturesLocked(ctx context.Context, prURL string) erro
 			m.react.attempts[k] = v
 		}
 	}
+	for k, v := range p.Relays {
+		if _, ok := m.react.relays[k]; !ok {
+			m.react.relays[k] = v
+		}
+	}
 	return nil
 }
 
@@ -1357,7 +1376,7 @@ func (m *Manager) loadPRSignaturesLocked(ctx context.Context, prURL string) erro
 // hold m.react.mu. A failed persist surfaces upward so the in-memory mutation
 // (which the messenger already acted on) is not silently divergent from disk.
 func (m *Manager) persistPRSignaturesLocked(ctx context.Context, prURL string) error {
-	payload := reactionPayload{Seen: map[string]string{}, Attempts: map[string]int{}}
+	payload := reactionPayload{Seen: map[string]string{}, Attempts: map[string]int{}, Relays: map[string]feedbackRelay{}}
 	for k, v := range m.react.seen {
 		if reactionKeyTargetsPR(k, prURL) {
 			payload.Seen[k] = v
@@ -1366,6 +1385,11 @@ func (m *Manager) persistPRSignaturesLocked(ctx context.Context, prURL string) e
 	for k, v := range m.react.attempts {
 		if reactionKeyTargetsPR(k, prURL) {
 			payload.Attempts[k] = v
+		}
+	}
+	for k, v := range m.react.relays {
+		if reactionKeyTargetsPR(k, prURL) {
+			payload.Relays[k] = v
 		}
 	}
 	raw, err := json.Marshal(payload)

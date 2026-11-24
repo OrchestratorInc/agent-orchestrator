@@ -511,6 +511,47 @@ func TestChatReviewFeedbackIsOneBatchedRelay(t *testing.T) {
 	}
 }
 
+// Two relays that were sent in separate batches can carry the same attempt
+// count. A started relay must settle only its own items: a sibling relay that
+// is still queued keeps its items pending, also after a restart.
+func TestChatReviewFeedbackSettlesEachRelayOnItsOwnState(t *testing.T) {
+	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateRunning)
+	st.runs = nil
+	itemA := nudgeItem{key: "comment:" + donePR + ":a", sig: "sig-a"}
+	itemB := nudgeItem{key: "comment:" + donePR + ":b", sig: "sig-b"}
+	items := []nudgeItem{itemA, itemB}
+	build := func([]bool) string { return "batch" }
+	m.react.loaded[donePR] = true
+	m.react.attempts[itemA.key], m.react.attempts[itemB.key] = 1, 1
+	m.react.relays[itemA.key] = feedbackRelay{Sig: itemA.sig, ID: "relay-a"}
+	m.react.relays[itemB.key] = feedbackRelay{Sig: itemB.sig, ID: "relay-b"}
+	st.turns["relay-a"], st.started["relay-a"] = domain.TurnStateRunning, true
+	st.turns["relay-b"] = domain.TurnStateQueued
+
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, items, build, reviewMaxNudge, false); err != nil {
+		t.Fatal(err)
+	}
+	if m.react.seen[itemA.key] != itemA.sig || m.react.seen[itemB.key] == itemB.sig || len(relay.ids) != 0 {
+		t.Fatalf("started relay A must settle only A and nothing is resent: seen=%v sends=%v", m.react.seen, relay.ids)
+	}
+
+	m = New(st, relay)
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, items, build, reviewMaxNudge, false); err != nil {
+		t.Fatal(err)
+	}
+	if m.react.seen[itemA.key] != itemA.sig || m.react.seen[itemB.key] == itemB.sig || len(relay.ids) != 0 {
+		t.Fatalf("after a restart B must stay pending while its relay is queued: seen=%v sends=%v", m.react.seen, relay.ids)
+	}
+
+	st.turns["relay-b"], st.started["relay-b"] = domain.TurnStateRunning, true
+	if _, err := m.sendBatchOnce(ctx, "w-1", donePR, items, build, reviewMaxNudge, false); err != nil {
+		t.Fatal(err)
+	}
+	if m.react.seen[itemB.key] != itemB.sig || len(relay.ids) != 0 {
+		t.Fatalf("B settles once its own relay starts: seen=%v sends=%v", m.react.seen, relay.ids)
+	}
+}
+
 func TestReviewDoneNotice_FailedFeedbackLeavesCompletionNotice(t *testing.T) {
 	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateFailed)
 	st.runs = nil
