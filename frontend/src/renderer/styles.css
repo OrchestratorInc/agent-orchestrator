@@ -7413,6 +7413,15 @@ html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light
 	--color-bg-elevated: var(--ao-float-fill);
 }
 
+/* Dropdown menus, selects and popovers are frosted: their fill at 50% with a
+ * blur of what is behind them. Tooltips stay solid (they carry one line of
+ * text and should read at a glance). */
+html[data-new-desktop-ui] :is([data-radix-popper-content-wrapper] > *, [role="menu"], [role="listbox"]):is(.bg-overlay, .bg-popover, .bg-settings-menu):not([data-slot="tooltip-content"]) {
+	background-color: color-mix(in oklab, var(--popover) 50%, transparent);
+	-webkit-backdrop-filter: blur(24px) saturate(1.4);
+	backdrop-filter: blur(24px) saturate(1.4);
+}
+
 /* Opaque, the frame and the panel swap colours: the frame (sidebar, top band)
  * takes the theme's page colour and the panel takes its sidebar colour, so the
  * contrast between them is the theme's own, just inverted. The theme's values
