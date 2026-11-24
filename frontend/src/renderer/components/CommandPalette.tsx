@@ -507,7 +507,6 @@ export const CommandPalette = memo(function CommandPalette() {
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
 				cloudReady,
-				developerMode,
 			}, t),
 			...buildShortcutCommands(t, {
 				splitPanes,
