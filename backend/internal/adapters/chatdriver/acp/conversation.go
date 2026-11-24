@@ -1543,6 +1543,13 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	err := c.conn.Cancel(ctx, acpsdk.CancelNotification{SessionId: acpsdk.SessionId(sessionID)})
 	c.mu.Lock()
 	attempt.err = err
+	// Take the stopped turn's parked interactions before close(attempt.done)
+	// lets the turn finish: after that a next turn can park its own requests,
+	// and those must not be cancelled on this turn's behalf.
+	var cancelled pendingInteractions
+	if err == nil {
+		cancelled = c.takePendingInteractionsLocked()
+	}
 	close(attempt.done)
 	if err != nil && c.interrupt == attempt {
 		// The notification never crossed the connection, so keep the local
@@ -1560,37 +1567,69 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	// ACP prompt-turn cancellation also requires the client to answer every
 	// pending session/request_permission with the cancelled outcome. Pending
 	// elicitations block the same cancelled turn, so they are cancelled too.
-	c.cancelPendingInteractions()
+	c.cancelInteractions(cancelled)
 	return nil
 }
 
-// cancelPendingInteractions answers every parked permission request with the
-// cancelled outcome and every parked input request with cancel, and reports
-// each one resolved so clients stop offering a decision for it.
-func (c *conversation) cancelPendingInteractions() {
-	c.mu.Lock()
-	permissions := c.pending
-	inputs := c.pendingInputs
+// pendingInteractions is a set of parked requests taken out of the
+// conversation's pending maps so they can be cancelled.
+type pendingInteractions struct {
+	permissions map[string]*parkedPermission
+	inputs      map[string]*parkedInput
+}
+
+// takePendingInteractionsLocked removes every parked request. c.mu is held.
+func (c *conversation) takePendingInteractionsLocked() pendingInteractions {
+	taken := pendingInteractions{permissions: c.pending, inputs: c.pendingInputs}
 	c.pending = make(map[string]*parkedPermission)
 	c.pendingInputs = make(map[string]*parkedInput)
-	c.mu.Unlock()
-	for _, id := range sortedKeys(permissions) {
-		request := permissions[id]
-		<-request.ready
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventApprovalResolved, RequestID: id})
-		select {
-		case request.result <- "":
-		default:
-		}
+	return taken
+}
+
+// cancelledByInterruptLocked reports whether a successful session/cancel is
+// winding the active turn down. A request whose decision could not be recorded
+// in that window is cancelled rather than parked again, since the drain that
+// cancelled the rest of the turn has already run. c.mu is held.
+func (c *conversation) cancelledByInterruptLocked() bool {
+	attempt := c.interrupt
+	if attempt == nil {
+		return false
 	}
-	for _, id := range sortedKeys(inputs) {
-		request := inputs[id]
-		<-request.ready
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: id})
-		select {
-		case request.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
-		default:
-		}
+	select {
+	case <-attempt.done:
+		return attempt.err == nil
+	default:
+		return false
+	}
+}
+
+// cancelInteractions answers each parked permission request with the
+// cancelled outcome and each parked input request with cancel, and reports
+// each one resolved so clients stop offering a decision for it.
+func (c *conversation) cancelInteractions(taken pendingInteractions) {
+	for _, id := range sortedKeys(taken.permissions) {
+		c.cancelPermission(id, taken.permissions[id])
+	}
+	for _, id := range sortedKeys(taken.inputs) {
+		c.cancelInput(id, taken.inputs[id])
+	}
+}
+
+func (c *conversation) cancelPermission(id string, request *parkedPermission) {
+	<-request.ready
+	c.emit(ports.ChatEvent{Kind: ports.ChatEventApprovalResolved, RequestID: id})
+	select {
+	case request.result <- "":
+	default:
+	}
+}
+
+func (c *conversation) cancelInput(id string, request *parkedInput) {
+	<-request.ready
+	c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: id})
+	select {
+	case request.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
+	default:
 	}
 }
 
@@ -1628,10 +1667,14 @@ func (c *conversation) ResolveRequest(
 	eventID, err := c.recordPersistentInteraction(ctx, command)
 	if err != nil {
 		c.mu.Lock()
-		if !c.closed {
+		cancel := !c.closed && c.cancelledByInterruptLocked()
+		if !c.closed && !cancel {
 			c.pending[requestID] = request
 		}
 		c.mu.Unlock()
+		if cancel {
+			c.cancelPermission(requestID, request)
+		}
 		return err
 	}
 	command.EventID = eventID

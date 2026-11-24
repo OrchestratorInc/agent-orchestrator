@@ -349,10 +349,14 @@ func (c *conversation) ResolveInput(
 	eventID, err := c.recordPersistentInteraction(ctx, command)
 	if err != nil {
 		c.mu.Lock()
-		if !c.closed {
+		cancel := !c.closed && c.cancelledByInterruptLocked()
+		if !c.closed && !cancel {
 			c.pendingInputs[requestID] = request
 		}
 		c.mu.Unlock()
+		if cancel {
+			c.cancelInput(requestID, request)
+		}
 		return err
 	}
 	command.EventID = eventID
