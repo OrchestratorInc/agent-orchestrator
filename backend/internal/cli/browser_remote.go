@@ -210,24 +210,44 @@ func remoteBrowserFilesDir() (string, error) {
 	return filepath.Join(stateDir, "browser-files"), nil
 }
 
+// remoteBrowserNamedPath returns the argument that names the reported path,
+// if the command named it (`screenshot /tmp/page.png`).
+func remoteBrowserNamedPath(args []string, reported string) (string, bool) {
+	if reported == "" {
+		return "", false
+	}
+	clean := filepath.Clean(reported)
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") || arg == "" {
+			continue
+		}
+		if filepath.Clean(arg) == clean {
+			return arg, true
+		}
+	}
+	return "", false
+}
+
+// remoteBrowserPathKey normalizes a destination so named and confined paths
+// that point at the same file compare equal.
+func remoteBrowserPathKey(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return filepath.Clean(path)
+}
+
 // remoteBrowserSavePath decides where a file the service returned is written.
 // The service chooses the reported path, so it is trusted only when the
-// command named that exact path as an argument (`screenshot /tmp/page.png`).
-// Any other file is saved under remoteBrowserFilesDir by its base name, so a
-// response can never write outside the paths the user asked for. taken holds
-// the confined paths already used by this response, so two returned files
-// with the same base name both survive.
+// command named that exact path as an argument. Any other file is saved under
+// remoteBrowserFilesDir by its base name, so a response can never write
+// outside the paths the user asked for. taken holds the destinations already
+// claimed by this response, including every named path, so no two returned
+// files share a destination.
 func remoteBrowserSavePath(args []string, reported string, taken map[string]bool) (string, bool, error) {
-	if reported != "" {
-		clean := filepath.Clean(reported)
-		for _, arg := range args {
-			if strings.HasPrefix(arg, "-") || arg == "" {
-				continue
-			}
-			if filepath.Clean(arg) == clean {
-				return arg, false, nil
-			}
-		}
+	if named, ok := remoteBrowserNamedPath(args, reported); ok {
+		taken[remoteBrowserPathKey(named)] = true
+		return named, false, nil
 	}
 	base := filepath.Base(filepath.Clean(reported))
 	if base == "." || base == ".." || base == string(filepath.Separator) || base == "" {
@@ -240,10 +260,10 @@ func remoteBrowserSavePath(args []string, reported string, taken map[string]bool
 	ext := filepath.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
 	path := filepath.Join(dir, base)
-	for n := 2; taken[path]; n++ {
+	for n := 2; taken[remoteBrowserPathKey(path)]; n++ {
 		path = filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, n, ext))
 	}
-	taken[path] = true
+	taken[remoteBrowserPathKey(path)] = true
 	return path, true, nil
 }
 
@@ -258,7 +278,14 @@ func writeRemoteBrowserFiles(errOut io.Writer, args []string, files map[string]s
 		reportedPaths = append(reportedPaths, reported)
 	}
 	sort.Strings(reportedPaths)
+	// Named destinations are reserved first, so a relocated file never
+	// overwrites a file the command asked for by path.
 	taken := make(map[string]bool, len(files))
+	for _, reported := range reportedPaths {
+		if named, ok := remoteBrowserNamedPath(args, reported); ok {
+			taken[remoteBrowserPathKey(named)] = true
+		}
+	}
 	for _, reported := range reportedPaths {
 		encoded := files[reported]
 		data, err := base64.StdEncoding.DecodeString(encoded)

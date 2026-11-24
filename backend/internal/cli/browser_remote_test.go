@@ -327,6 +327,27 @@ func TestBrowserRemoteKeepsReturnedFilesWithSameBaseName(t *testing.T) {
 	}
 }
 
+func TestBrowserRemoteKeepsNamedFileWhenRelocatedNameCollides(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	dir := filepath.Join(dataDir, "browser-files")
+	named := filepath.Join(dir, "page.png")
+	var errOut bytes.Buffer
+	files := map[string]string{
+		// Sorts before the named path, so it is relocated first.
+		"/job-a/page.png": base64.StdEncoding.EncodeToString([]byte("relocated")),
+		named:             base64.StdEncoding.EncodeToString([]byte("named")),
+	}
+	if err := writeRemoteBrowserFiles(&errOut, []string{"screenshot", named}, files); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{named: "named", filepath.Join(dir, "page-2.png"): "relocated"} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != want {
+			t.Fatalf("%s = %q err=%v, want %q", path, data, err, want)
+		}
+	}
+}
+
 func TestBrowserRemoteRefusesRedirectOffMachine(t *testing.T) {
 	var offMachineHit bool
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
