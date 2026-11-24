@@ -230,6 +230,7 @@ interface MobileStatus {
 	accountLinked?: boolean;
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
+	loopbackOnly?: boolean;
 	browserRemoteAccess?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
@@ -1057,7 +1058,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			>
 				<Switch
 					aria-label={t("mobile.publicTunnel.label", "Reach from anywhere")}
-					disabled={busy}
+					disabled={busy || status.loopbackOnly === true}
 					checked={status.noPublicTunnel !== true}
 					onCheckedChange={(next) => {
 						clearActionErrors();
