@@ -276,3 +276,77 @@ func TestBrowserRemoteConfinesUnnamedReturnedFiles(t *testing.T) {
 		t.Fatalf("stderr should say where the file went: %q", errOut)
 	}
 }
+
+func TestBrowserRemoteFindsUploadAfterGlobalFlags(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "in.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		upload bool
+	}{
+		{"no flags", []string{"upload", "@e1", file}, true},
+		{"value flag", []string{"--session", "work", "upload", "@e1", file}, true},
+		{"value flag with equals", []string{"--session=work", "upload", "@e1", file}, true},
+		{"bool flag", []string{"--json", "upload", "@e1", file}, true},
+		{"other command", []string{"fill", "@e1", file}, false},
+		{"other command after value flag", []string{"--session", "work", "fill", "@e1", file}, false},
+		{"upload as text", []string{"fill", "upload", file}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := remoteBrowserUploadArgs(tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := files[file] != ""; got != tc.upload {
+				t.Fatalf("uploaded=%v, want %v (files=%v)", got, tc.upload, files)
+			}
+		})
+	}
+}
+
+func TestBrowserRemoteKeepsReturnedFilesWithSameBaseName(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	var errOut bytes.Buffer
+	files := map[string]string{
+		"/job-a/page.png": base64.StdEncoding.EncodeToString([]byte("a")),
+		"/job-b/page.png": base64.StdEncoding.EncodeToString([]byte("b")),
+	}
+	if err := writeRemoteBrowserFiles(&errOut, []string{"screenshot"}, files); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(dataDir, "browser-files")
+	for name, want := range map[string]string{"page.png": "a", "page-2.png": "b"} {
+		if data, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(data) != want {
+			t.Fatalf("%s = %q err=%v, want %q", name, data, err, want)
+		}
+	}
+}
+
+func TestBrowserRemoteRefusesRedirectOffMachine(t *testing.T) {
+	var offMachineHit bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offMachineHit = true
+	}))
+	t.Cleanup(elsewhere.Close)
+	// httptest binds loopback, so rewrite the host to a non-loopback name
+	// that resolves nowhere: the policy must refuse before dialing it.
+	target := strings.Replace(elsewhere.URL, "127.0.0.1", "browser.example.invalid", 1)
+	srv := remoteBrowserServer(t, &remoteBrowserCapture{}, func(w http.ResponseWriter) {
+		w.Header().Set("Location", target+"/agent")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	})
+	t.Setenv(envAgentBrowserURL, srv.URL)
+	t.Setenv(envAgentBrowserToken, "remote-token")
+
+	_, _, err := executeCLIRoot(t, Deps{HTTPClient: srv.Client()}, "browser", "get", "url")
+	if err == nil || !strings.Contains(err.Error(), "redirected off this machine") {
+		t.Fatalf("err = %v, want redirect refusal", err)
+	}
+	if offMachineHit {
+		t.Fatal("request reached the redirect target")
+	}
+}

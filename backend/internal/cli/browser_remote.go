@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -139,31 +142,43 @@ func runRemoteBrowserCommand(ctx context.Context, deps Deps, cfg remoteBrowserCo
 // must never upload that file.
 var remoteBrowserFileInputCommands = map[string]bool{"upload": true}
 
-// remoteBrowserCommand returns the first non-flag argument: the command name.
-func remoteBrowserCommand(args []string) string {
-	for _, arg := range args {
-		if !strings.HasPrefix(arg, "-") {
-			return arg
+// remoteBrowserBoolFlags are agent-browser global flags that take no value,
+// so the token after one is the command rather than a flag value.
+var remoteBrowserBoolFlags = map[string]bool{
+	"--json": true, "--headed": true, "--debug": true, "--help": true, "-h": true, "--version": true, "-V": true,
+}
+
+// remoteBrowserCommandIndex returns the index of the command in args, or -1.
+// agent-browser puts global flags before the command, and a flag written as
+// "--flag value" consumes the next token, so a non-flag token right after a
+// value-taking flag is that flag's value unless it names a file-input
+// command (`--session work upload …` and `--json upload …` both find upload).
+func remoteBrowserCommandIndex(args []string) int {
+	expectValue := false
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			expectValue = !strings.Contains(arg, "=") && !remoteBrowserBoolFlags[arg]
+			continue
 		}
+		if expectValue && !remoteBrowserFileInputCommands[arg] {
+			expectValue = false
+			continue
+		}
+		return i
 	}
-	return ""
+	return -1
 }
 
 // remoteBrowserUploadArgs inlines the local files named by a file-input
 // command (see remoteBrowserFileInputCommands), mirroring the agent-browser
 // service client contract. Other commands upload nothing.
 func remoteBrowserUploadArgs(args []string) (map[string]string, error) {
-	command := remoteBrowserCommand(args)
-	if !remoteBrowserFileInputCommands[command] {
+	at := remoteBrowserCommandIndex(args)
+	if at < 0 || !remoteBrowserFileInputCommands[args[at]] {
 		return nil, nil
 	}
 	var files map[string]string
-	seenCommand := false
-	for _, arg := range args {
-		if !seenCommand {
-			seenCommand = arg == command
-			continue
-		}
+	for _, arg := range args[at+1:] {
 		if strings.HasPrefix(arg, "-") {
 			continue
 		}
@@ -197,8 +212,10 @@ func remoteBrowserFilesDir() (string, error) {
 // The service chooses the reported path, so it is trusted only when the
 // command named that exact path as an argument (`screenshot /tmp/page.png`).
 // Any other file is saved under remoteBrowserFilesDir by its base name, so a
-// response can never write outside the paths the user asked for.
-func remoteBrowserSavePath(args []string, reported string) (string, bool, error) {
+// response can never write outside the paths the user asked for. taken holds
+// the confined paths already used by this response, so two returned files
+// with the same base name both survive.
+func remoteBrowserSavePath(args []string, reported string, taken map[string]bool) (string, bool, error) {
 	if reported != "" {
 		clean := filepath.Clean(reported)
 		for _, arg := range args {
@@ -218,7 +235,14 @@ func remoteBrowserSavePath(args []string, reported string) (string, bool, error)
 	if err != nil {
 		return "", false, err
 	}
-	return filepath.Join(dir, base), true, nil
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	path := filepath.Join(dir, base)
+	for n := 2; taken[path]; n++ {
+		path = filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, n, ext))
+	}
+	taken[path] = true
+	return path, true, nil
 }
 
 // writeRemoteBrowserFiles saves the files the service wrote (screenshots,
@@ -226,12 +250,20 @@ func remoteBrowserSavePath(args []string, reported string) (string, bool, error)
 // that path; otherwise it is confined to remoteBrowserFilesDir and stderr says
 // where it went.
 func writeRemoteBrowserFiles(errOut io.Writer, args []string, files map[string]string) error {
-	for reported, encoded := range files {
+	// Sorted so collision suffixes do not depend on map iteration order.
+	reportedPaths := make([]string, 0, len(files))
+	for reported := range files {
+		reportedPaths = append(reportedPaths, reported)
+	}
+	sort.Strings(reportedPaths)
+	taken := make(map[string]bool, len(files))
+	for _, reported := range reportedPaths {
+		encoded := files[reported]
 		data, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			return fmt.Errorf("decode remote browser file %s: %w", reported, err)
 		}
-		path, moved, err := remoteBrowserSavePath(args, reported)
+		path, moved, err := remoteBrowserSavePath(args, reported, taken)
 		if err != nil {
 			return fmt.Errorf("choose where to save remote browser file %s: %w", reported, err)
 		}
@@ -259,13 +291,32 @@ func writeRemoteBrowserFiles(errOut io.Writer, args []string, files map[string]s
 // remoteBrowserTimeout. A client with no timeout is left alone, and a client
 // already allowing longer than remoteBrowserTimeout keeps its own budget.
 func remoteBrowserHTTPClient(in *http.Client) *http.Client {
-	if in == nil {
-		return &http.Client{Timeout: remoteBrowserTimeout}
+	client := http.Client{Timeout: remoteBrowserTimeout}
+	if in != nil {
+		client = *in
 	}
-	if in.Timeout == 0 || in.Timeout >= remoteBrowserTimeout {
-		return in
+	if client.Timeout != 0 && client.Timeout < remoteBrowserTimeout {
+		client.Timeout = remoteBrowserTimeout
 	}
-	raised := *in
-	raised.Timeout = remoteBrowserTimeout
-	return &raised
+	// A 307/308 replays the request body, uploaded files included. Follow a
+	// redirect only while it stays on a loopback host, so nothing the command
+	// sends can leave this machine.
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("remote browser service redirected too many times")
+		}
+		if !remoteBrowserLoopbackURL(req.URL) {
+			return fmt.Errorf("remote browser service redirected off this machine to %s; refusing to follow", req.URL.Host)
+		}
+		return nil
+	}
+	return &client
+}
+
+// remoteBrowserLoopbackURL reports whether u is a plain http URL on a
+// loopback host, the same rule config.ParseAgentBrowserURL applies.
+func remoteBrowserLoopbackURL(u *url.URL) bool {
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	return u.Scheme == "http" && u.User == nil && (strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback())
 }
