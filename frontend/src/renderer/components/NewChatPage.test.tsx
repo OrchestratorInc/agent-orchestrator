@@ -747,6 +747,25 @@ describe("New Chat model menu", () => {
 			["sonnet", "Sonnet 5.5"], ["fable", "Fable 5.2"], ["opus", "Opus 5.5"],
 		]);
 		expect(modelPicker.current?.modelId).toBe("sonnet");
+		// Cloud's chat does not keep Ultracode for later messages, so a Cloud task does not offer it.
+		expect(modelPicker.current?.onToggleUltracode).toBeUndefined();
+	});
+
+	it("asks for Ultracode in the opening message and keeps it on in the session's chat", async () => {
+		h.harness = "claude-code";
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		h.launch.mockResolvedValue("sess-1");
+		const queryClient = renderPage();
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		expect(modelPicker.current?.ultracode).toBe(false);
+		act(() => modelPicker.current?.onToggleUltracode?.(true));
+
+		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "cid-1"); });
+		expect(h.launch).toHaveBeenCalledWith("Ultracode:\nFix the build", expect.objectContaining({ clientRequestId: "cid-1" }));
+		// The brief shows what was typed; the session's chat starts with Ultracode on.
+		expect(h.workspace?.localEchos).toEqual([expect.objectContaining({ text: "Fix the build" })]);
+		expect(queryClient.getQueryData(["session-launch-settings", "sess-1"])).toEqual(expect.objectContaining({ ultracode: true }));
 	});
 
 	it("keeps the model this computer's agent defaults to in a local task's menu", () => {

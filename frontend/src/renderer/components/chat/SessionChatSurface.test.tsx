@@ -274,6 +274,7 @@ vi.mock("./ChatWorkspace", async () => {
 
 import { sessionUiKey } from "../../lib/hosts";
 import { SessionChatSurface } from "./SessionChatSurface";
+import { rememberLaunchSettings } from "./LaunchSettingsBar";
 import {
 	peekSessionSearchReveal,
 	requestSessionSearchReveal,
@@ -384,6 +385,26 @@ describe("SessionChatSurface recovery", () => {
 		};
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		expect(conversationCommandArgs.at(-1)).toEqual([session.id, undefined, false, true, "turn-1"]);
+	});
+});
+
+describe("SessionChatSurface Ultracode", () => {
+	it("stays on for a task started with it on the new chat page", async () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		const client = new QueryClient();
+		rememberLaunchSettings(client, session.id, undefined, { harness: "claude-code", projectId: "p", models: [], settings: {}, ultracode: true });
+		render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.ultracode?.on).toBe(true);
+		await act(async () => {
+			await sideMocks.workspaceSend?.("And the tests.", undefined, "next-message");
+		});
+		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({ text: "Ultracode:\nAnd the tests." }));
+	});
+
+	it("starts off otherwise", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.agentSwitch?.ultracode?.on).toBe(false);
 	});
 });
 
