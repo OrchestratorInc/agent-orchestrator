@@ -1,36 +1,33 @@
 package mcpserver
 
 import (
-	"bufio"
-	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
-	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // This is the stdio MCP server AO passes to every chat session (ao-mcp, or
 // `ao mcp` without it), so the agent sees html_preview and html_render in its
 // tool list, and the computer use tools when the session has computer use
-// (cua.go). The agent's
-// harness spawns it outside the shell sandbox, so it reaches the loopback
-// daemon even when the agent's own shell commands cannot. Hand-written, and
-// only what these tools need: newline-delimited JSON-RPC 2.0, one request at
-// a time, nothing on stdout but replies.
+// (cua.go). The agent's harness spawns it outside the shell sandbox, so it
+// reaches the loopback daemon even when the agent's own shell commands cannot.
+// The protocol (framing, version negotiation, lifecycle, errors) is the
+// official MCP Go SDK's; this package only defines the tools.
 
 const (
-	mcpDefaultProtocolVersion = "2025-06-18"
 	// maxMCPHTMLChars caps a tool's html argument.
 	maxMCPHTMLChars = 512_000
 )
-
-var mcpProtocolVersions = []string{mcpDefaultProtocolVersion, "2025-03-26", "2024-11-05"}
 
 // Version is the ao-mcp build's version, set at link time.
 var Version = "dev"
@@ -42,116 +39,46 @@ type Daemon interface {
 }
 
 type server struct {
-	daemon  Daemon
-	version string
+	daemon Daemon
+	mcp    *mcp.Server
+
+	// cuaMu guards the computer-use tools, which are added to mcp the first
+	// time the daemon can list them.
+	cuaMu     sync.Mutex
+	cuaLoaded bool
 }
 
 // Serve answers MCP messages from in on out until in ends.
 func Serve(ctx context.Context, in io.Reader, out io.Writer, daemon Daemon, version string) error {
-	return (&server{daemon: daemon, version: version}).serveMCP(ctx, in, out)
+	s := newServer(daemon, version)
+	transport := &mcp.IOTransport{Reader: io.NopCloser(in), Writer: nopWriteCloser{out}}
+	return s.mcp.Run(ctx, transport)
 }
 
-type mcpRequest struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
-}
-
-type mcpError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type mcpResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id"`
-	Result  any             `json:"result,omitempty"`
-	Error   *mcpError       `json:"error,omitempty"`
-}
-
-func (s *server) serveMCP(ctx context.Context, in io.Reader, out io.Writer) error {
-	reader := bufio.NewReader(in)
-	encoder := json.NewEncoder(out)
-	state := &mcpState{}
-	for {
-		line, readErr := reader.ReadBytes('\n')
-		if line = bytes.TrimSpace(line); len(line) > 0 {
-			if resp := s.handleMCP(ctx, state, line); resp != nil {
-				if err := encoder.Encode(resp); err != nil {
-					return err
-				}
+func newServer(daemon Daemon, version string) *server {
+	s := &server{daemon: daemon}
+	s.mcp = mcp.NewServer(&mcp.Implementation{Name: "ao", Version: version}, &mcp.ServerOptions{
+		// Tools only; the SDK's default would also advertise logging.
+		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}},
+	})
+	s.mcp.AddTool(htmlPreviewTool, s.callHTMLPreview)
+	s.mcp.AddTool(htmlRenderTool, s.callHTMLRender)
+	// Computer use tools come from the daemon, so they are listed lazily: each
+	// tools/list or tools/call tries again until the daemon can list them.
+	s.mcp.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "tools/list" || method == "tools/call" {
+				s.loadCuaTools(ctx)
 			}
+			return next(ctx, method, req)
 		}
-		if errors.Is(readErr, io.EOF) {
-			return nil
-		}
-		if readErr != nil {
-			return readErr
-		}
-	}
+	})
+	return s
 }
 
-// handleMCP answers one message; a notification gets no reply.
-func (s *server) handleMCP(ctx context.Context, state *mcpState, line []byte) *mcpResponse {
-	var req mcpRequest
-	if err := json.Unmarshal(line, &req); err != nil {
-		if !json.Valid(line) {
-			return &mcpResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &mcpError{Code: -32700, Message: "parse error: " + err.Error()}}
-		}
-		// Valid JSON of the wrong shape. Unmarshal still fills a readable id.
-		id := req.ID
-		if id == nil {
-			id = json.RawMessage("null")
-		}
-		return &mcpResponse{JSONRPC: "2.0", ID: id, Error: &mcpError{Code: -32600, Message: "invalid request: " + err.Error()}}
-	}
-	if req.ID == nil {
-		return nil
-	}
-	resp := &mcpResponse{JSONRPC: "2.0", ID: req.ID}
-	switch req.Method {
-	case "initialize":
-		var p struct {
-			ProtocolVersion string `json:"protocolVersion"`
-		}
-		_ = json.Unmarshal(req.Params, &p)
-		version := mcpDefaultProtocolVersion
-		if slices.Contains(mcpProtocolVersions, p.ProtocolVersion) {
-			version = p.ProtocolVersion
-		}
-		resp.Result = map[string]any{
-			"protocolVersion": version,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "ao", "version": s.version},
-		}
-	case "ping":
-		resp.Result = map[string]any{}
-	case "tools/list":
-		tools := append(append([]map[string]any{}, mcpTools...), s.cuaTools(ctx, state)...)
-		resp.Result = map[string]any{"tools": tools}
-	case "tools/call":
-		var p struct {
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
-		}
-		_ = json.Unmarshal(req.Params, &p)
-		switch p.Name {
-		case "html_preview":
-			resp.Result = s.callHTMLPreview(ctx, p.Arguments)
-		case "html_render":
-			resp.Result = s.callHTMLRender(ctx, p.Arguments)
-		default:
-			if s.cuaTools(ctx, state) != nil && state.cuaNames[p.Name] {
-				resp.Result = s.callCua(ctx, p.Name, p.Arguments)
-				break
-			}
-			resp.Error = &mcpError{Code: -32602, Message: fmt.Sprintf("unknown tool %q", p.Name)}
-		}
-	default:
-		resp.Error = &mcpError{Code: -32601, Message: fmt.Sprintf("method %q not found", req.Method)}
-	}
-	return resp
-}
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
 
 type mcpToolArgs struct {
 	HTML     string `json:"html"`
@@ -162,7 +89,8 @@ type mcpToolArgs struct {
 }
 
 // readMCPToolArgs decodes a call's arguments and returns the session it acts in.
-func readMCPToolArgs(raw json.RawMessage) (mcpToolArgs, string, error) {
+func readMCPToolArgs(req *mcp.CallToolRequest) (mcpToolArgs, string, error) {
+	raw := req.Params.Arguments
 	var args mcpToolArgs
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &args); err != nil {
@@ -209,25 +137,29 @@ func (s *server) postRenderCheck(ctx context.Context, sessionID, html string, wi
 
 // Every failure is a tool result the agent can read and act on, never a
 // protocol error.
-func mcpToolError(err error) map[string]any {
-	return map[string]any{"content": []any{mcpText(err.Error())}, "isError": true}
+func mcpToolError(err error) *mcp.CallToolResult {
+	return &mcp.CallToolResult{Content: []mcp.Content{mcpText(err.Error())}, IsError: true}
 }
 
-func mcpText(text string) map[string]any {
-	return map[string]any{"type": "text", "text": text}
+func mcpText(text string) *mcp.TextContent {
+	return &mcp.TextContent{Text: text}
 }
 
-func (s *server) callHTMLPreview(ctx context.Context, raw json.RawMessage) map[string]any {
-	args, sessionID, err := readMCPToolArgs(raw)
+func (s *server) callHTMLPreview(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, sessionID, err := readMCPToolArgs(req)
 	if err != nil {
-		return mcpToolError(err)
+		return mcpToolError(err), nil
 	}
 	if args.Width == 0 {
 		args.Width = DefaultRenderWidth
 	}
 	resp, missing, err := s.postRenderCheck(ctx, sessionID, args.HTML, args.Width)
 	if err != nil {
-		return mcpToolError(err)
+		return mcpToolError(err), nil
+	}
+	screenshot, err := base64.StdEncoding.DecodeString(resp.Screenshot.Data)
+	if err != nil {
+		return mcpToolError(fmt.Errorf("decode screenshot: %w", err)), nil
 	}
 	note := ""
 	if resp.Network == "none" {
@@ -241,31 +173,31 @@ func (s *server) callHTMLPreview(ctx context.Context, raw json.RawMessage) map[s
 		Note            string   `json:"note,omitempty"`
 	}{args.Width, resp.ContentHeight, resp.ConsoleMessages, missing, note})
 	if err != nil {
-		return mcpToolError(err)
+		return mcpToolError(err), nil
 	}
-	return map[string]any{"content": []any{
-		map[string]any{"type": "image", "mimeType": "image/png", "data": resp.Screenshot.Data},
+	return &mcp.CallToolResult{Content: []mcp.Content{
+		&mcp.ImageContent{MIMEType: "image/png", Data: screenshot},
 		mcpText(string(report)),
-	}}
+	}}, nil
 }
 
-func (s *server) callHTMLRender(ctx context.Context, raw json.RawMessage) map[string]any {
-	args, sessionID, err := readMCPToolArgs(raw)
+func (s *server) callHTMLRender(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args, sessionID, err := readMCPToolArgs(req)
 	if err != nil {
-		return mcpToolError(err)
+		return mcpToolError(err), nil
 	}
 	if args.Height == 0 {
 		args.Height = DefaultRenderHeight
 	}
 	resp, err := s.postRender(ctx, sessionID, args.HTML, args.Title, args.Height, args.Artifact)
 	if err != nil {
-		return mcpToolError(err)
+		return mcpToolError(err), nil
 	}
 	text := ShownText(resp.RenderID)
 	if line := ArtifactLine(resp); line != "" {
 		text += "\n" + line
 	}
-	return map[string]any{"content": []any{mcpText(text)}}
+	return &mcp.CallToolResult{Content: []mcp.Content{mcpText(text)}}, nil
 }
 
 // The tool text states the page rules in skillassets/using-ao/commands/render.md.
@@ -292,62 +224,63 @@ var mcpHTMLSchema = map[string]any{
 	"description": "The page's full HTML source.",
 }
 
-var mcpTools = []map[string]any{
-	{
-		"name":  "html_preview",
-		"title": "Preview HTML",
-		"description": "Opens the page in the Orchestrator desktop app exactly as readers will get it and returns a PNG screenshot, " +
-			"the page's contentHeight at that width in CSS pixels, and everything it wrote to the console. " +
-			"Use it before html_render: look at the screenshot and clear every console error. " +
-			"It only works while the desktop app is running; if it is not, skip the check and publish. " +
-			mcpPageRules + " Theme variables and layout are the ones html_render describes.",
-		"inputSchema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"html": mcpHTMLSchema,
-				"width": map[string]any{
-					"type": "integer", "minimum": 240, "maximum": 1600,
-					"description": "Width of the viewport in CSS pixels, from 240 to 1600. The default, 720, is the reply column; 390 shows a phone.",
-				},
+func boolPtr(v bool) *bool { return &v }
+
+var htmlPreviewTool = &mcp.Tool{
+	Name:  "html_preview",
+	Title: "Preview HTML",
+	Description: "Opens the page in the Orchestrator desktop app exactly as readers will get it and returns a PNG screenshot, " +
+		"the page's contentHeight at that width in CSS pixels, and everything it wrote to the console. " +
+		"Use it before html_render: look at the screenshot and clear every console error. " +
+		"It only works while the desktop app is running; if it is not, skip the check and publish. " +
+		mcpPageRules + " Theme variables and layout are the ones html_render describes.",
+	InputSchema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"html": mcpHTMLSchema,
+			"width": map[string]any{
+				"type": "integer", "minimum": 240, "maximum": 1600,
+				"description": "Width of the viewport in CSS pixels, from 240 to 1600. The default, 720, is the reply column; 390 shows a phone.",
 			},
-			"required": []string{"html"},
 		},
-		"annotations": map[string]any{
-			"title": "Preview HTML", "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true,
-		},
+		"required": []string{"html"},
 	},
-	{
-		"name":  "html_render",
-		"title": "Render HTML",
-		"description": "Puts a finished HTML page, such as a chart, table, diagram, image collage, or mockup, into this chat thread " +
-			"directly above your final reply. Check it with html_preview, then call this before writing the reply. " +
-			"Your reply sits under a page the reader can already see: do not point to it, introduce it, or repeat it; " +
-			"say only what it leaves out. Orchestrator shows pages from this tool only, not from built-in visualization skills. " +
-			mcpPageRules + " " + mcpLayoutGuide + " " + mcpThemeGuide,
-		"inputSchema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"html": mcpHTMLSchema,
-				"title": map[string]any{
-					"type": "string", "minLength": 1, "maxLength": 200, "description": "Title for the page, a few words.",
-				},
-				"height": map[string]any{
-					"type": "integer", "minimum": 80, "maximum": 2000,
-					"description": "Frame height in CSS pixels, 80-2000; defaults to 400. Orchestrator measures the page when " +
-						"you publish it, so this is used only when the desktop app is not running. The frame then fits the page.",
-				},
-				"artifact": map[string]any{
-					"type": "boolean",
-					"description": "Also keep the page as a session artifact, a deliverable the user keeps. " +
-						"Set it only when the user asks to keep the page, then run ao artifact add on the path this " +
-						"returns, or the page may not be listed as an artifact.",
-				},
+	Annotations: &mcp.ToolAnnotations{
+		Title: "Preview HTML", ReadOnlyHint: true, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(true),
+	},
+}
+
+var htmlRenderTool = &mcp.Tool{
+	Name:  "html_render",
+	Title: "Render HTML",
+	Description: "Puts a finished HTML page, such as a chart, table, diagram, image collage, or mockup, into this chat thread " +
+		"directly above your final reply. Check it with html_preview, then call this before writing the reply. " +
+		"Your reply sits under a page the reader can already see: do not point to it, introduce it, or repeat it; " +
+		"say only what it leaves out. Orchestrator shows pages from this tool only, not from built-in visualization skills. " +
+		mcpPageRules + " " + mcpLayoutGuide + " " + mcpThemeGuide,
+	InputSchema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"html": mcpHTMLSchema,
+			"title": map[string]any{
+				"type": "string", "minLength": 1, "maxLength": 200, "description": "Title for the page, a few words.",
 			},
-			"required": []string{"html", "title"},
+			"height": map[string]any{
+				"type": "integer", "minimum": 80, "maximum": 2000,
+				"description": "Frame height in CSS pixels, 80-2000; defaults to 400. Orchestrator measures the page when " +
+					"you publish it, so this is used only when the desktop app is not running. The frame then fits the page.",
+			},
+			"artifact": map[string]any{
+				"type": "boolean",
+				"description": "Also keep the page as a session artifact, a deliverable the user keeps. " +
+					"Set it only when the user asks to keep the page, then run ao artifact add on the path this " +
+					"returns, or the page may not be listed as an artifact.",
+			},
 		},
-		"annotations": map[string]any{
-			// Not read-only: with artifact it writes a file to the artifact directory.
-			"title": "Render HTML", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true,
-		},
+		"required": []string{"html", "title"},
+	},
+	// Not read-only: with artifact it writes a file to the artifact directory.
+	Annotations: &mcp.ToolAnnotations{
+		Title: "Render HTML", ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: false, OpenWorldHint: boolPtr(true),
 	},
 }

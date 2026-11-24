@@ -52,11 +52,13 @@ func TestMCPOffersComputerUseToolsWhenTheSessionHasIt(t *testing.T) {
 	for _, tool := range listed {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, " ") != "html_preview html_render get_window_state click" {
+	// The SDK lists tools sorted by name.
+	if strings.Join(names, " ") != "click get_window_state html_preview html_render" {
 		t.Fatalf("tools = %v", names)
 	}
-	if listed[2].InputSchema.Required[0] != "pid" || listed[2].Annotations["readOnlyHint"] != true || listed[3].Annotations["destructiveHint"] != true {
-		t.Fatalf("get_window_state = %+v, click = %+v", listed[2], listed[3])
+	click, window := listed[0], listed[1]
+	if window.InputSchema.Required[0] != "pid" || window.Annotations["readOnlyHint"] != true || click.Annotations["destructiveHint"] != true {
+		t.Fatalf("get_window_state = %+v, click = %+v", window, click)
 	}
 }
 
