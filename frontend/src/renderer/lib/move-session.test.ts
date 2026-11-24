@@ -169,6 +169,37 @@ describe("moveSession", () => {
 		expect(source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
 	});
 
+	// A remote host behind the app's proxy answers 502 instead of failing the fetch.
+	const offline = { error: { code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" } };
+
+	it("retries a receive the proxy could not deliver once, and leaves it pending after that", async () => {
+		let attempts = 0;
+		const first = hosts(undefined, () => (attempts++ ? received : offline));
+		expect((await moveSession(first.input)).sessionId).toBe("web-9");
+		expect(attempts).toBe(2);
+
+		const lost = hosts(undefined, () => offline);
+		const error = (await moveSession(lost.input).catch((e: unknown) => e)) as MoveError;
+		expect(error.code).toBe("RECEIVE_UNCONFIRMED");
+		expect(error.message).toBe("MacBook B is not reachable");
+		expect(lost.source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/transfer/cancel");
+		expect(lost.source.calls).not.toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	it("names the computer when the proxy answers for it during the preflight or the copy", async () => {
+		const before = hosts();
+		(before.target.client as unknown as { POST: () => Promise<unknown> }).POST = async () => offline;
+		const refused = (await moveSession(before.input).catch((e: unknown) => e)) as MoveError;
+		expect(refused.message).toBe("MacBook B is not reachable");
+		expect(before.source.calls).toEqual([]);
+
+		const during = hosts();
+		(during.target.client as unknown as { PUT: () => Promise<unknown> }).PUT = async () => offline;
+		const cut = (await moveSession(during.input).catch((e: unknown) => e)) as MoveError;
+		expect([cut.step, cut.message]).toEqual(["copy", "MacBook B is not reachable"]);
+		expect(during.source.calls).toContain("POST /api/v1/sessions/{sessionId}/resume-agent");
+	});
+
 	it("names the computer a copy cannot reach and resumes the source", async () => {
 		const { source, target, input } = hosts();
 		const targetClient = target.client as unknown as { PUT: () => Promise<unknown> };

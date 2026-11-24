@@ -2,7 +2,7 @@ import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "./api-client";
 import { apiErrorException } from "./api-error-exception";
 import type { clientForSessionHost } from "./host-clients";
-import { LOCAL_HOST } from "./hosts";
+import { HOST_UNREACHABLE_CODES, LOCAL_HOST } from "./hosts";
 
 type Client = ReturnType<typeof clientForSessionHost>;
 type Transfer = components["schemas"]["SessionTransfer"];
@@ -68,7 +68,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 	input.onStep?.("prepare");
 	await checkDestination(target);
 	try {
-		const prepared = await source.client.POST("/api/v1/sessions/{sessionId}/transfer/prepare", {
+		const prepared = await reach(source.label, source.client.POST("/api/v1/sessions/{sessionId}/transfer/prepare", {
 			params: { path: { sessionId: source.sessionId } },
 			// "This computer" means nothing on the destination; empty makes the source daemon use its hostname.
 			body: {
@@ -77,7 +77,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 				destination: { hostId: target.hostId, label: target.label, sessionId: "" },
 				...(input.stopTurn ? { stopTurn: true } : {}),
 			},
-		}).catch(unreachable(source.label));
+		}));
 		code = apiErrorCode(prepared.error);
 		if (prepared.error || !prepared.data) throw apiErrorException(prepared.error, "Could not prepare the move");
 		const transfer: Transfer = prepared.data.transfer;
@@ -90,7 +90,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		}
 		step = "receive";
 		input.onStep?.("receive");
-		({ sessionId, warnings, hostLabel, resumed } = await receive(target.client, target.projectId, transfer).catch(unreachable(target.label)));
+		({ sessionId, warnings, hostLabel, resumed } = await receive(target.client, target.projectId, transfer, target.label));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		// The destination may have started the session before it stopped answering.
@@ -108,7 +108,9 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 async function checkDestination(target: MoveInput["target"]): Promise<void> {
 	const res = await target.client.POST("/api/v1/sessions/transfer/receive", { body: {} as never }).catch(() => undefined);
 	if (apiErrorCode(res?.error) === "TRANSFER_INCOMPLETE") return;
-	const message = res ? `${target.label} runs an AO version that cannot receive sessions; update AO there first` : `${target.label} is not reachable`;
+	const message = res && !HOST_UNREACHABLE_CODES.has(apiErrorCode(res.error))
+		? `${target.label} runs an AO version that cannot receive sessions; update AO there first`
+		: `${target.label} is not reachable`;
 	throw new MoveError(message, "prepare", true);
 }
 
@@ -125,28 +127,33 @@ export async function cancelMove(source: MoveInput["source"], transferId: string
 
 class Unreachable extends Error {}
 
-/** fetch rejects with a TypeError when the other computer cannot be reached. */
-function unreachable(label: string) {
-	return (error: unknown): never => {
+/**
+ * The other computer did not answer: fetch rejects with a TypeError, and the app's
+ * own proxy to a remote host answers with one of HOST_UNREACHABLE_CODES instead.
+ */
+async function reach<T extends { error?: unknown }>(label: string, call: Promise<T>): Promise<T> {
+	const res = await call.catch((error: unknown): never => {
 		throw error instanceof TypeError ? new Unreachable(`${label} is not reachable`) : error;
-	};
+	});
+	if (HOST_UNREACHABLE_CODES.has(apiErrorCode(res.error))) throw new Unreachable(`${label} is not reachable`);
+	return res;
 }
 
 async function copyArchive(source: MoveInput["source"], target: MoveInput["target"], transferId: string, onProgress?: MoveInput["onProgress"]): Promise<void> {
-	const archive = await source.client.GET("/api/v1/sessions/{sessionId}/transfer/{transferId}/native", {
+	const archive = await reach(source.label, source.client.GET("/api/v1/sessions/{sessionId}/transfer/{transferId}/native", {
 		params: { path: { sessionId: source.sessionId, transferId } },
 		parseAs: "arrayBuffer",
-	}).catch(unreachable(source.label));
+	}));
 	if (archive.error || !archive.data) throw apiErrorException(archive.error, "Could not read the conversation");
 	const bytes = new Uint8Array(archive.data as ArrayBuffer);
 	for (let offset = 0, part = 0; offset < bytes.length; offset += MOVE_PART_BYTES, part++) {
-		const res = await target.client.PUT("/api/v1/sessions/transfer/{transferId}/native/{part}", {
+		const res = await reach(target.label, target.client.PUT("/api/v1/sessions/transfer/{transferId}/native/{part}", {
 			params: { path: { transferId, part } },
 			// A Blob reaches Electron's request hooks by reference; a byte array is copied into the main process.
 			body: new Blob([bytes.subarray(offset, offset + MOVE_PART_BYTES)]) as never,
 			bodySerializer: (body: unknown) => body as BodyInit,
 			headers: { "Content-Type": "application/octet-stream" },
-		}).catch(unreachable(target.label));
+		}));
 		if (res.error) throw apiErrorException(res.error, "Could not copy the conversation");
 		onProgress?.(Math.min(offset + MOVE_PART_BYTES, bytes.length), bytes.length);
 	}
@@ -154,14 +161,14 @@ async function copyArchive(source: MoveInput["source"], target: MoveInput["targe
 
 /** Receive is idempotent per transfer, so a dropped response is retried once
  *  before the source is resumed; otherwise both computers could run it. */
-async function receive(target: Client, projectId: string, transfer: Transfer): Promise<{ sessionId: string; warnings: string[]; hostLabel: string; resumed: boolean }> {
+async function receive(target: Client, projectId: string, transfer: Transfer, label: string): Promise<{ sessionId: string; warnings: string[]; hostLabel: string; resumed: boolean }> {
 	for (let attempt = 0; ; attempt++) {
 		try {
-			const res = await target.POST("/api/v1/sessions/transfer/receive", { body: { projectId, transfer } });
+			const res = await reach(label, target.POST("/api/v1/sessions/transfer/receive", { body: { projectId, transfer } }));
 			if (res.error || !res.data) throw apiErrorException(res.error, "The other computer could not start the session");
 			return { sessionId: res.data.session.id, warnings: res.data.warnings ?? [], hostLabel: res.data.hostLabel ?? "", resumed: res.data.resumed ?? false };
 		} catch (error) {
-			if (attempt >= 1 || !(error instanceof TypeError)) throw error;
+			if (attempt >= 1 || !(error instanceof Unreachable)) throw error;
 		}
 	}
 }

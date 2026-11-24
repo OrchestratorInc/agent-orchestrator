@@ -47,12 +47,8 @@ export function useMoveSession(session: WorkspaceSession | undefined) {
 	const key = moveKey(session.hostId, session.id);
 	const sourceHost: HostId = session.hostId ?? LOCAL_HOST;
 	// Clients are made only when a move runs: an offline host's client throws.
-	const source = () => ({
-		client: clientForSessionHost(session.hostId),
-		hostId: sourceHost,
-		sessionId: session.id,
-		label: sourceHost === LOCAL_HOST ? t("remote.thisComputer") : labelForHost(sourceHost) ?? sourceHost,
-	});
+	const sourceLabel = sourceHost === LOCAL_HOST ? t("remote.thisComputer") : labelForHost(sourceHost) ?? sourceHost;
+	const source = () => ({ client: clientForSessionHost(session.hostId), hostId: sourceHost, sessionId: session.id, label: sourceLabel });
 	const destination = (target: MoveTarget) => ({
 		client: clientForSessionHost(target.hostId === LOCAL_HOST ? undefined : target.hostId),
 		hostId: target.hostId,
@@ -66,8 +62,21 @@ export function useMoveSession(session: WorkspaceSession | undefined) {
 	};
 	const open = (target: MoveTarget, sessionId: string) => void navigate(sessionNavigateTarget(target.projectId, sessionId, target.hostId));
 
+	/** An offline host has no client, so the click says so instead of doing nothing. */
+	const connected = <T>(label: string, make: () => T): T | undefined => {
+		try {
+			return make();
+		} catch {
+			showGlobalToast(t("moveSession.toastFailed", { title: session.title }), `${label} is not reachable`, "error");
+			return undefined;
+		}
+	};
+
 	const start = (target: MoveTarget, options: { afterTurn?: boolean; stopTurn?: boolean } = {}) => {
-		void runMove(key, { source: source(), target: destination(target) }, {
+		const from = connected(sourceLabel, source);
+		const to = from && connected(target.label, () => destination(target));
+		if (!from || !to) return;
+		void runMove(key, { source: from, target: to }, {
 			...options,
 			title: session.title,
 			onDone: (result: MoveResult) => {
@@ -78,7 +87,7 @@ export function useMoveSession(session: WorkspaceSession | undefined) {
 					return;
 				}
 				clearMove(key);
-				const title = t("moveSession.toastDone", { host: result.destinationLabel });
+				const title = t("moveSession.toastDone", { host: target.label });
 				const summary = result.resumed ? undefined : t("moveSession.summaryBody");
 				// Watching the session: follow it there. Elsewhere: a toast that can open it.
 				if (moveShown(key)) {
@@ -118,7 +127,9 @@ export function useMoveSession(session: WorkspaceSession | undefined) {
 			const picked = target();
 			const result = move?.result;
 			if (!picked || !result) return;
-			const commitError = await commitMove(source(), { hostId: picked.hostId, label: result.destinationLabel }, result.transferId, result.sessionId);
+			const from = connected(sourceLabel, source);
+			if (!from) return;
+			const commitError = await commitMove(from, { hostId: picked.hostId, label: result.destinationLabel }, result.transferId, result.sessionId);
 			if (commitError) {
 				useMoveStore.setState((state) => ({ moves: { ...state.moves, [key]: { ...state.moves[key], result: { ...result, commitError } } } }));
 				return;
@@ -129,7 +140,9 @@ export function useMoveSession(session: WorkspaceSession | undefined) {
 		},
 		/** Drops an unconfirmed move so the session runs here again. */
 		keepHere: async (transferId: string | undefined) => {
-			if (transferId) await cancelMove(source(), transferId);
+			const from = transferId ? connected(sourceLabel, source) : undefined;
+			if (transferId && !from) return;
+			if (transferId && from) await cancelMove(from, transferId);
 			clearMove(key);
 			refresh(target()?.hostId ?? LOCAL_HOST);
 		},
