@@ -569,7 +569,11 @@ func TestLiveLeaseReadsOffUntilTheBootReturns(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); done <- err }()
-	waitFor(t, func() bool { svc.mu.Lock(); defer svc.mu.Unlock(); return svc.booting["A"] })
+	waitFor(t, func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		return svc.booting[deviceKey(ports.DeviceInfo{ID: "A", Platform: ports.DevicePlatformIOS})]
+	})
 	p.setBooted("A", true) // the simulator says booted as soon as it starts
 	svc.mu.Lock()
 	svc.leases["s-1"] = Lease{SessionID: "s-1", Device: ports.DeviceInfo{ID: "A", Platform: ports.DevicePlatformIOS}}
@@ -589,7 +593,7 @@ func TestLiveLeaseReadsOffUntilTheBootReturns(t *testing.T) {
 	go func() { _, err := svc.Open(ctx, "s-1", OpenRequest{}); done <- err }()
 	time.Sleep(50 * time.Millisecond)
 	svc.mu.Lock()
-	marked := svc.booting["A"]
+	marked := svc.booting[deviceKey(ports.DeviceInfo{ID: "A", Platform: ports.DevicePlatformIOS})]
 	svc.mu.Unlock()
 	close(p.bootGate)
 	<-done
@@ -717,7 +721,7 @@ func TestPickDevicePrefersAPhoneOnTheNewestOS(t *testing.T) {
 		t.Fatalf("picked %q, %v; want the iPhone on iOS 26.5", got.ID, err)
 	}
 	// Taken: the next newest phone, still not the iPad.
-	got, _ = pickDevice(devices, ports.DevicePlatformIOS, "", map[string]domain.SessionID{"iphone-new": "other"}, nil, nil)
+	got, _ = pickDevice(devices, ports.DevicePlatformIOS, "", map[string]domain.SessionID{deviceKey(ios("iphone-new", "", false, false)): "other"}, nil, nil)
 	if got.ID != "iphone-mid" {
 		t.Fatalf("picked %q, want iphone-mid", got.ID)
 	}
@@ -728,7 +732,7 @@ func TestPickDevicePrefersAPhoneOnTheNewestOS(t *testing.T) {
 	}
 	// The ladder first: an old iPhone this service booted beats a newer one that is off.
 	withOwned := append([]ports.DeviceInfo{ios("iphone-ours", "iOS 17.0", false, true)}, devices...)
-	got, _ = pickDevice(withOwned, ports.DevicePlatformIOS, "", nil, map[string]bool{"iphone-ours": true}, nil)
+	got, _ = pickDevice(withOwned, ports.DevicePlatformIOS, "", nil, map[string]bool{deviceKey(ios("iphone-ours", "", false, true)): true}, nil)
 	if got.ID != "iphone-ours" {
 		t.Fatalf("picked %q, want the running simulator this service booted", got.ID)
 	}
@@ -792,22 +796,21 @@ func TestConcurrentOpensRespectTheCap(t *testing.T) {
 	results := make(chan error, 2)
 	go func() { _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); results <- err }()
 	go func() { _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "C"}); results <- err }()
-	<-p.bootEntered
-	<-p.bootEntered
-	close(p.bootGate)
-	var ok, full int
-	for range 2 {
-		switch err := <-results; {
-		case err == nil:
-			ok++
-		case apiCode(err) == "NO_DEVICE_AVAILABLE":
-			full++
-		default:
-			t.Fatalf("open = %v", err)
-		}
+	// One open reserves the only slot and boots; the other is refused before
+	// it starts a device it could never keep.
+	first := <-p.bootEntered
+	if err := <-results; apiCode(err) != "NO_DEVICE_AVAILABLE" {
+		t.Fatalf("the losing open = %v, want NO_DEVICE_AVAILABLE", err)
 	}
-	if ok != 1 || full != 1 || len(svc.Status(ctx).Leases) != 1 {
-		t.Fatalf("ok=%d full=%d leases=%d, want one lease under a cap of 1", ok, full, len(svc.Status(ctx).Leases))
+	close(p.bootGate)
+	if err := <-results; err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	booted, shutdowns := append([]string(nil), p.booted...), append([]string(nil), p.shutdowns...)
+	p.mu.Unlock()
+	if len(booted) != 1 || booted[0] != first || len(shutdowns) != 0 || len(svc.Status(ctx).Leases) != 1 {
+		t.Fatalf("booted=%v shutdowns=%v leases=%d, want only the winner's device started and leased", booted, shutdowns, len(svc.Status(ctx).Leases))
 	}
 }
 
@@ -1209,5 +1212,82 @@ func TestOpenKeepsALeaseWhenItsPlatformFailedToList(t *testing.T) {
 	}
 	if l, held := svc.Lease("s-1"); !held || l.Device.ID != "A" {
 		t.Fatalf("lease = %+v (held %v), want A kept", l, held)
+	}
+}
+
+// An emulator's serial is not its identity: a lease taken on emulator-5554
+// still holds that AVD after it stops (listed by name) and another emulator
+// takes the port, while the other emulator stays free to open.
+func TestAndroidLeasesFollowTheAVDNotTheSerial(t *testing.T) {
+	ctx := context.Background()
+	p := &fakeProvider{
+		platforms: []ports.DevicePlatformAvailability{{Platform: ports.DevicePlatformAndroid, Available: true}},
+		devices: []ports.DeviceInfo{
+			{ID: "emulator-5554", Name: "Pixel_9", Platform: ports.DevicePlatformAndroid, Booted: true},
+			{ID: "Other", Name: "Other", Platform: ports.DevicePlatformAndroid},
+		},
+	}
+	svc := newTestService(t, p, 3)
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "emulator-5554"}); err != nil {
+		t.Fatal(err)
+	}
+	// Pixel_9 stopped and is listed by its AVD name; Other now runs as emulator-5554.
+	p.mu.Lock()
+	p.devices = []ports.DeviceInfo{
+		{ID: "Pixel_9", Name: "Pixel_9", Platform: ports.DevicePlatformAndroid},
+		{ID: "emulator-5554", Name: "Other", Platform: ports.DevicePlatformAndroid, Booted: true},
+	}
+	p.mu.Unlock()
+
+	if _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "Pixel_9"}); apiCode(err) != "DEVICE_IN_USE" {
+		t.Fatalf("second session opening the leased AVD = %v, want DEVICE_IN_USE", err)
+	}
+	lease, err := svc.Open(ctx, "s-2", OpenRequest{Platform: ports.DevicePlatformAndroid})
+	if err != nil {
+		t.Fatalf("second session opening any Android device: %v", err)
+	}
+	if lease.Device.Name != "Other" {
+		t.Fatalf("second session got %+v, want the other AVD, never Pixel_9", lease.Device)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, id := range p.booted {
+		if id == "Pixel_9" {
+			t.Fatalf("booted %v: the leased AVD was booted for another session", p.booted)
+		}
+	}
+}
+
+// An open that fails after starting a device gives back its reservation and
+// shuts the device down, so it neither runs on for nobody nor blocks the next
+// open. A device that was already running is left alone.
+func TestAFailedOpenRollsBackTheDeviceItStarted(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	svc := newTestService(t, p, 3)
+	p.controlErr = errors.New("disk full")
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "A"}); apiCode(err) != "DEVICE_CONTROL_FAILED" {
+		t.Fatalf("open = %v, want DEVICE_CONTROL_FAILED", err)
+	}
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{DeviceID: "B"}); apiCode(err) != "DEVICE_CONTROL_FAILED" {
+		t.Fatalf("open of the running device = %v, want DEVICE_CONTROL_FAILED", err)
+	}
+	p.mu.Lock()
+	shutdowns := append([]string(nil), p.shutdowns...)
+	p.mu.Unlock()
+	if len(shutdowns) != 1 || shutdowns[0] != "A" {
+		t.Fatalf("shutdowns = %v, want only A, the device the failed open started", shutdowns)
+	}
+	svc.mu.Lock()
+	reserved, owned := len(svc.reserved), svc.owned[deviceKey(ports.DeviceInfo{ID: "A", Platform: ports.DevicePlatformIOS})]
+	svc.mu.Unlock()
+	if reserved != 0 || owned {
+		t.Fatalf("reserved=%d owned(A)=%v after a failed open, want nothing kept", reserved, owned)
+	}
+	p.mu.Lock()
+	p.controlErr = nil
+	p.mu.Unlock()
+	if _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "A"}); err != nil {
+		t.Fatalf("the next open of A: %v", err)
 	}
 }
