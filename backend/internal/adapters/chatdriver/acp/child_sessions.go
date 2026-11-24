@@ -210,8 +210,12 @@ func (c *conversation) findChildSession(session, launchID, item string) {
 	for {
 		for _, child := range c.childSessions.Children(c.childEnv, session) {
 			c.mu.Lock()
-			_, known := c.childStateLocked().launchOf[child]
+			filed, known := c.childStateLocked().launchOf[child]
 			c.mu.Unlock()
+			if known && filed == item {
+				// Adopted while it was looked for.
+				return
+			}
 			if known {
 				continue
 			}
@@ -221,16 +225,31 @@ func (c *conversation) findChildSession(session, launchID, item string) {
 			}
 			c.mu.Lock()
 			s := c.childStateLocked()
-			if _, adopted := s.launchOf[child]; adopted || s.adopting[child] > 0 {
+			if _, adopted := s.launchOf[child]; adopted {
 				// Found streaming while its launch was looked up, so its history
 				// was shown by the attachment that loaded it, and a replay would
 				// run into what it says live.
 				c.mu.Unlock()
 				return
 			}
+			if s.adopting[child] > 0 {
+				// An adoption is settling it: look again on the next tick, which
+				// finds it filed, or released if the adoption could not place it.
+				c.mu.Unlock()
+				continue
+			}
+			// A session refused as not ours has streamed here, so an earlier
+			// attachment loaded it: it is followed live, as an adopted child is,
+			// not loaded beside its live work.
+			_, streamed := s.notChild[child]
 			s.launchOf[child] = item
 			s.parentOf[child] = session
 			delete(s.notChild, child)
+			if streamed {
+				s.adopted[child] = struct{}{}
+				c.mu.Unlock()
+				return
+			}
 			c.mu.Unlock()
 			c.followChildSession(child)
 			return

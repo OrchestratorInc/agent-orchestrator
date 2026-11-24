@@ -489,12 +489,15 @@ func TestChildSessionAdoptionUnderWayIsNotLoadedByTheFinder(t *testing.T) {
 	sessions := records.sessions()
 	lookup := sessions.LaunchOf
 	var calls atomic.Int32
-	adopting, release := make(chan struct{}), make(chan struct{})
+	adopting, finderLooked, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	sessions.LaunchOf = func(env map[string]string, child string) (string, string, bool) {
-		if calls.Add(1) == 1 {
+		switch calls.Add(1) {
+		case 1:
 			// The adoption's lookup, held until the finder has looked too.
 			close(adopting)
 			<-release
+		case 2:
+			close(finderLooked)
 		}
 		return lookup(env, child)
 	}
@@ -506,17 +509,62 @@ func TestChildSessionAdoptionUnderWayIsNotLoadedByTheFinder(t *testing.T) {
 		defer close(found)
 		conv.findChildSession(childTestParent, "call-launch", "call-launch")
 	}()
-	time.Sleep(300 * time.Millisecond)
-	agent.mu.Lock()
-	loads := agent.loadCalls
-	agent.mu.Unlock()
+	<-finderLooked
 	close(release)
 	if said := nextChildActivity(t, conv); said.Text != "live" {
 		t.Fatalf("live message = %#v", said)
 	}
 	<-found
-	if loads != 0 {
-		t.Fatalf("the finder loaded the child %d times", loads)
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.loadCalls != 0 {
+		t.Fatalf("the finder loaded the child %d times", agent.loadCalls)
+	}
+}
+
+// An adoption can fail where the finder succeeds, for instance while the
+// agent's record of the launch cannot be read. The finder then files the
+// child, and follows it live, as it has streamed here.
+func TestChildSessionAdoptionThatFailsLeavesTheChildToTheFinder(t *testing.T) {
+	records := newChildSessionRecords()
+	records.record(childTestParent, "call-launch", "child-1")
+	sessions := records.sessions()
+	lookup := sessions.LaunchOf
+	var calls atomic.Int32
+	adopting, finderLooked, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	sessions.LaunchOf = func(env map[string]string, child string) (string, string, bool) {
+		switch calls.Add(1) {
+		case 1:
+			// The adoption's lookup, which finds no record.
+			close(adopting)
+			<-release
+			return "", "", false
+		case 2:
+			close(finderLooked)
+		}
+		return lookup(env, child)
+	}
+	agent, conv, _ := startWithChildSessions(t, sessions)
+	childSessionUpdate(t, agent, "child-1", childSays("lost"))
+	<-adopting
+	found := make(chan struct{})
+	go func() {
+		defer close(found)
+		conv.findChildSession(childTestParent, "call-launch", "call-launch")
+	}()
+	<-finderLooked
+	close(release)
+	<-found
+	childSessionUpdate(t, agent, "child-1", childRead("call-read"))
+	read := nextChildActivity(t, conv)
+	if read.ProviderItemID != conv.childItemID("child-1", "call-read") ||
+		childDetail(t, read)["parentProviderItemId"] != "call-launch" {
+		t.Fatalf("child step = %#v %s", read, read.Detail)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.loadCalls != 0 {
+		t.Fatalf("loaded a child that streams here %d times", agent.loadCalls)
 	}
 }
 
