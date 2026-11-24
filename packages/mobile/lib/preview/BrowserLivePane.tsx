@@ -149,6 +149,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			onStatus: (next, message) => {
 				if (disposed) return;
 				setStatus(next);
+				// A new connection's frame is the only one a tap may land on: the
+				// image on screen came from the last one, and the page may have moved.
+				if (next === "connecting" || next === "reconnecting") setFrameIsLive(false);
 				if (next === "open") {
 					setError(undefined);
 					// A refused command leaves the stream open: say why, and keep the page up.

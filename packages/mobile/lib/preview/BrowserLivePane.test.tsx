@@ -551,7 +551,12 @@ describe("transport contract", () => {
 			expect(gesture("tap").enabled).toBe(false);
 			await act(async () => { vi.advanceTimersByTime(1_000); });
 			expect(fixtures.clients).toHaveLength(2);
+			// The new stream is open and alive, but its first frame hasn't come:
+			// the image on screen is the old page, so a tap could hit anything.
 			await open();
+			await act(async () => { (client().handlers as { onAlive?(info: { heartbeat: boolean }): void }).onAlive?.({ heartbeat: true }); });
+			expect(gesture("tap").enabled).toBe(false);
+			expect(gesture("pan").enabled).toBe(false);
 			await showFrame();
 			expect(nodes("Text").map((node) => node.props.children)).not.toContain("Reconnecting…");
 			expect(gesture("tap").enabled).toBe(true);
