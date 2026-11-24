@@ -1556,7 +1556,42 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	// The provider owns the root Prompt until it returns a terminal result. Keep
 	// AO busy after accepting session/cancel so a restart cannot start a second
 	// root prompt while the first one is still executing downstream.
+	//
+	// ACP prompt-turn cancellation also requires the client to answer every
+	// pending session/request_permission with the cancelled outcome. Pending
+	// elicitations block the same cancelled turn, so they are cancelled too.
+	c.cancelPendingInteractions()
 	return nil
+}
+
+// cancelPendingInteractions answers every parked permission request with the
+// cancelled outcome and every parked input request with cancel, and reports
+// each one resolved so clients stop offering a decision for it.
+func (c *conversation) cancelPendingInteractions() {
+	c.mu.Lock()
+	permissions := c.pending
+	inputs := c.pendingInputs
+	c.pending = make(map[string]*parkedPermission)
+	c.pendingInputs = make(map[string]*parkedInput)
+	c.mu.Unlock()
+	for _, id := range sortedKeys(permissions) {
+		request := permissions[id]
+		<-request.ready
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventApprovalResolved, RequestID: id})
+		select {
+		case request.result <- "":
+		default:
+		}
+	}
+	for _, id := range sortedKeys(inputs) {
+		request := inputs[id]
+		<-request.ready
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: id})
+		select {
+		case request.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
+		default:
+		}
+	}
 }
 
 func (c *conversation) ResolveRequest(
