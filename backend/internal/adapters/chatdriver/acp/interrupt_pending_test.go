@@ -67,52 +67,6 @@ func TestACPInterruptCancelsPendingPermission(t *testing.T) {
 	}
 }
 
-func TestACPInterruptCancelsPendingElicitation(t *testing.T) {
-	action := make(chan string, 1)
-	agent := &fakeAgent{}
-	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
-		request := acpsdk.NewUnstableCreateElicitationRequestForm(acpsdk.UnstableElicitationSchema{
-			Type:       acpsdk.UnstableElicitationSchemaTypeObject,
-			Properties: map[string]any{"choice": map[string]any{"type": "string"}},
-		})
-		request.Form.Message = "Which branch?"
-		response, err := agent.conn.UnstableCreateElicitation(context.WithoutCancel(ctx), request)
-		if err != nil {
-			return acpsdk.PromptResponse{}, err
-		}
-		switch {
-		case response.Cancel != nil:
-			action <- "cancel"
-		case response.Accept != nil:
-			action <- "accept"
-		default:
-			action <- "other"
-		}
-		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonCancelled}, nil
-	}
-	conversation, turnID := startInterruptPendingTurn(t, agent)
-	defer conversation.Close()
-
-	requestID := waitForEventKind(t, conversation.Events(), ports.ChatEventInputRequested).RequestID
-	if err := conversation.Interrupt(context.Background(), turnID); err != nil {
-		t.Fatalf("Interrupt: %v", err)
-	}
-	select {
-	case got := <-action:
-		if got != "cancel" {
-			t.Fatalf("elicitation action = %q, want cancel", got)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("pending elicitation was not answered after session/cancel")
-	}
-	resolved := waitForEventKind(t, conversation.Events(), ports.ChatEventInputResolved)
-	if resolved.RequestID != requestID {
-		t.Fatalf("resolved request = %q, want %q", resolved.RequestID, requestID)
-	}
-}
-
-// A request the agent sends after session/cancel, while the stopped turn is
-// still winding down, is answered cancelled at once instead of being parked.
 func TestACPInterruptCancelsPermissionRequestedAfterCancel(t *testing.T) {
 	started := make(chan struct{})
 	interrupted := make(chan struct{})

@@ -133,19 +133,23 @@ func (c *conversation) requestApproval(
 	}
 
 	c.mu.Lock()
-	// After a successful session/cancel the turn is winding down: answer any
-	// further request with the cancelled outcome instead of parking it.
-	if c.closed || c.cancelledByInterruptLocked() {
+	if c.closed {
 		c.mu.Unlock()
 		return "", nil
 	}
 	accepted, hasAccepted := c.accepted[requestID]
+	turnID := c.activeTurn
+	request.turnID = turnID
 	if hasAccepted && accepted.Kind == persistentInteractionApproval {
 		delete(c.accepted, requestID)
+	} else if c.turnInterruptedLocked(turnID) {
+		// Stop already answered this turn's requests; one that arrives after
+		// session/cancel is cancelled too rather than parked.
+		c.mu.Unlock()
+		return "", nil
 	} else {
 		c.pending[requestID] = request
 	}
-	turnID := c.activeTurn
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{
 		Kind:           ports.ChatEventApprovalRequested,
@@ -259,17 +263,23 @@ func (c *conversation) requestInput(
 		request: request, result: make(chan ports.ChatInputResponse, 1), ready: make(chan struct{}),
 	}
 	c.mu.Lock()
-	if c.closed || c.cancelledByInterruptLocked() {
+	if c.closed {
 		c.mu.Unlock()
 		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	}
 	accepted, hasAccepted := c.accepted[requestID]
+	turnID := c.activeTurn
+	parked.turnID = turnID
 	if hasAccepted && accepted.Kind == persistentInteractionInput {
 		delete(c.accepted, requestID)
+	} else if c.turnInterruptedLocked(turnID) {
+		// Stop already closed this turn's questions; one that arrives after
+		// that scan would otherwise wait with no deadline.
+		c.mu.Unlock()
+		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	} else {
 		c.pendingInputs[requestID] = parked
 	}
-	turnID := c.activeTurn
 	c.mu.Unlock()
 
 	c.emit(ports.ChatEvent{
@@ -282,7 +292,10 @@ func (c *conversation) requestInput(
 		parked.result <- *accepted.Input
 	}
 
-	timer := timeAfter(approvalWait)
+	// Unlike an approval, a question has no deadline: it waits for an answer, the
+	// provider withdrawing it (Stop does this), or the conversation ending. An
+	// expired form reaches the agent as an empty one, which reads as the user
+	// having answered nothing.
 	select {
 	case response := <-parked.result:
 		return response, nil
@@ -291,10 +304,6 @@ func (c *conversation) requestInput(
 		if !c.providerDetaching() {
 			c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
 		}
-		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
-	case <-timer:
-		c.discardInput(requestID)
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
 		return ports.ChatInputResponse{Action: ports.ChatInputActionCancel}, nil
 	}
 }
@@ -351,13 +360,22 @@ func (c *conversation) ResolveInput(
 	eventID, err := c.recordPersistentInteraction(ctx, command)
 	if err != nil {
 		c.mu.Lock()
-		cancel := !c.closed && c.cancelledByInterruptLocked()
-		if !c.closed && !cancel {
+		// A question whose turn was stopped or has since ended is not put back:
+		// nothing would close it, since questions have no deadline.
+		stopped := !c.closed && (c.turnInterruptedLocked(request.turnID) ||
+			(request.turnID != "" && request.turnID != c.activeTurn))
+		if !c.closed && !stopped {
 			c.pendingInputs[requestID] = request
 		}
 		c.mu.Unlock()
-		if cancel {
-			c.cancelInput(requestID, request)
+		if stopped {
+			// Stop's scan, or the turn's end, came while the answer was being
+			// recorded and could not see this question, so close it as Stop would.
+			c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID})
+			select {
+			case request.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
+			default:
+			}
 		}
 		return err
 	}

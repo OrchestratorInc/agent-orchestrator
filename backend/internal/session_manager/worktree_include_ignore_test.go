@@ -33,7 +33,7 @@ func TestWorktreeIncludeRejectsSourceOnlyIgnore(t *testing.T) {
 	writeTestFile(t, filepath.Join(project, ".worktreeinclude"), ".env\n")
 	writeTestFile(t, filepath.Join(project, ".env"), "private configuration")
 	workspace, adapter := newIncludedWorktree(t, project)
-	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, workspace); err != nil {
+	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, "", workspace); err != nil {
 		t.Fatalf("skip a source-only ignored file: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(workspace, ".env")); !os.IsNotExist(err) {
@@ -49,7 +49,7 @@ func TestWorktreeIncludeTemporaryCopiesStayIgnored(t *testing.T) {
 	writeTestFile(t, filepath.Join(project, ".worktreeinclude"), ".env\n")
 	writeTestFile(t, filepath.Join(project, ".env"), "private configuration")
 	workspace, adapter := newIncludedWorktree(t, project)
-	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, workspace); err != nil {
+	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, "", workspace); err != nil {
 		t.Fatal(err)
 	}
 	// A stopped process cannot run deferred cleanup. Model the file it leaves.
@@ -69,7 +69,7 @@ func TestWorktreeIncludeRejectsUnignoredTemporaryCopy(t *testing.T) {
 	writeTestFile(t, filepath.Join(project, ".env"), "private configuration")
 	workspace, adapter := newIncludedWorktree(t, project)
 	writeTestFile(t, filepath.Join(workspace, ".gitignore"), ".env\n!.ao-include-*\n")
-	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, workspace); err == nil {
+	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, "", workspace); err == nil {
 		t.Error("copy succeeded when its temporary file would be visible to Git")
 	}
 	if _, err := os.Lstat(filepath.Join(workspace, ".env")); !os.IsNotExist(err) {
@@ -87,7 +87,7 @@ func TestWorktreeIncludeExclusionFailureStopsCopy(t *testing.T) {
 	workspace, _ := newIncludedWorktree(t, project)
 	failure := errors.New("cannot protect temporary copies")
 	m := &Manager{workspace: &fakeWorkspace{addExcludeErr: failure}}
-	if err := m.provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, workspace); !errors.Is(err, failure) {
+	if err := m.provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, "", workspace); !errors.Is(err, failure) {
 		t.Fatalf("copy error = %v, want exclusion error", err)
 	}
 	if _, err := os.Lstat(filepath.Join(workspace, ".env")); !os.IsNotExist(err) {
@@ -104,7 +104,7 @@ func TestWorktreeIncludeRoutesExclusionToProject(t *testing.T) {
 	writeTestFile(t, filepath.Join(project, ".env"), "private configuration")
 	workspace, adapter := newIncludedWorktree(t, project)
 	m := &Manager{workspace: workspacerouter.New(workspacerouter.Deps{Git: adapter, Scratch: &fakeWorkspace{}})}
-	if err := m.provisionWorkspace(context.Background(), domain.ProjectRecord{ID: "project", Path: project}, workspace); err != nil {
+	if err := m.provisionWorkspace(context.Background(), domain.ProjectRecord{ID: "project", Path: project}, "", workspace); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(workspace, ".env")); err != nil || string(got) != "private configuration" {

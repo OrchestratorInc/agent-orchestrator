@@ -29,6 +29,7 @@ import {
 	readableModelLabel,
 	type ModelVariant,
 } from "../../lib/model-variants";
+import { uiUsage, useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import { cn } from "../../lib/utils";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import type { ApprovalMode, TurnSettings } from "../../types/conversation";
@@ -239,8 +240,8 @@ export function AgentModelPicker({
 	title?: string;
 	/** A flag on the trigger, such as a substituted model. */
 	mark?: ReactNode;
-	/** The current agent's other settings, as menu rows under its effort. */
-	extras?: ReactNode;
+	/** The current agent's other settings, as menu rows under its effort. Given the picker's pick, called when one is changed. */
+	extras?: (markPick: () => void) => ReactNode;
 	onCloseAutoFocus?: (event: Event) => void;
 }) {
 	const { t } = useTranslation();
@@ -300,6 +301,8 @@ export function AgentModelPicker({
 	);
 	const management = useAgentManagementMenu(undefined, hostId, agentSwitch.harnessView);
 	const [open, setOpen] = useState(false);
+	// The composer's model menu; a terminal's agent menu is not counted as one.
+	const markModelPick = useTelemetrySurface("model_picker", open && !terminal, { choice: true });
 	const favorites = useModelFavorites();
 	const keepCurrent = () => { if (pending) onPendingChange(undefined); };
 	// Cursor's command-line ids fold settings into the model; a running Cursor chat reports its own, kept as is.
@@ -368,12 +371,21 @@ export function AgentModelPicker({
 	const shownUltra = isUltraEffort(pending ? pendingEffort : currentSource.effort);
 	const shownFast = pending ? pending.fast || pending.fastMode || source.fast : currentSource.fast;
 	const shownThinking = pending ? pending.thinking ?? source.thinking : currentSource.thinking;
+	// A row is named by its row id, a favourite by its row and the variant it sends; either names the current model.
+	// A terminal's agent menu is not the composer's model picker, so its picks are not counted.
+	const countModelPick = (harness: string, ids: Array<string | undefined>) => {
+		markModelPick();
+		const same = harness === currentHarness && ids.some((id) => id !== undefined && (id === currentSource.modelId || id === currentSource.sendId));
+		if (!terminal && !same) uiUsage.modelChanged();
+	};
 	const pickModel = (harness: string, id: string) => {
+		countModelPick(harness, [id]);
 		if (harness !== currentHarness) return otherSource(harness, pending?.harness === harness ? pending : undefined).onPickModel?.(id);
 		keepCurrent();
 		currentSource.onPickModel?.(id);
 	};
 	const pickSetup = (favorite: ModelFavorite) => {
+		countModelPick(favorite.harness, [favorite.row, favorite.model]);
 		if (favorite.harness === currentHarness) {
 			keepCurrent();
 			if (currentSource.onPickSetup) currentSource.onPickSetup(favorite);
@@ -427,6 +439,7 @@ export function AgentModelPicker({
 	pickRef.current = (event, harness, id) => { stayOpen(event); pickModel(harness, id); };
 	const pickFromSearch = useCallback((event: Event, harness: string, id: string) => pickRef.current(event, harness, id), []);
 	const pickAgent = (id: string) => {
+		markModelPick();
 		if (id === currentHarness) keepCurrent();
 		else if (id !== pending?.harness) onPendingChange({ harness: id });
 	};
@@ -440,6 +453,16 @@ export function AgentModelPicker({
 	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
 	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
 	const showAccount = Boolean(agentSwitch.account && !pending && agentSwitch.account.options.length > 1);
+	// A setting changed in the menu is a choice too, so closing after it is not an abandon.
+	// It is not a model change.
+	const withPick = (toggle: ((next: boolean) => void) | undefined) => toggle && ((next: boolean) => {
+		markModelPick();
+		toggle(next);
+	});
+	const pickAccount = (id: string) => {
+		markModelPick();
+		agentSwitch.account?.onPick(id);
+	};
 
 	// The chosen agent's settings, under its models and kept in view while they scroll.
 	const settingsRows = [
@@ -460,6 +483,7 @@ export function AgentModelPicker({
 							radio
 							disabled={!source.onPickEffort}
 							onSelect={() => {
+								markModelPick();
 								if (choice.value !== source.effort) source.onPickEffort?.(choice.value);
 							}}
 							className="text-xs text-foreground"
@@ -477,21 +501,25 @@ export function AgentModelPicker({
 			</OptionMenuSub>
 		) : null,
 		// One account has nothing to switch to, so the row is only for two or more.
-		showAccount && agentSwitch.account ? <AccountRows key="account" account={agentSwitch.account} /> : null,
+		showAccount && agentSwitch.account ? <AccountRows key="account" account={{ ...agentSwitch.account, onPick: pickAccount }} /> : null,
 	].filter(Boolean);
 	const settingsGroups = [
 		settingsRows.length > 0 ? settingsRows : null,
 		settable && !waiting && (source.fast !== undefined || source.thinking !== undefined) ? (
 			<>
-				<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={source.onToggleFast} />
-				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={source.onToggleThinking} />
+				<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={withPick(source.onToggleFast)} />
+				<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={withPick(source.onToggleThinking)} />
 			</>
 		) : null,
-		extras && !pending ? extras : null,
+		extras && !pending ? extras(markModelPick) : null,
 		offersAutoCompact ? (
 			<AutoCompactRow
 				value={pending?.autoCompactWindow}
-				onChange={(value) => pending && onPendingChange({ ...pending, autoCompactWindow: value })}
+				onChange={(value) => {
+					if (!pending) return;
+					markModelPick();
+					onPendingChange({ ...pending, autoCompactWindow: value });
+				}}
 				title={t("agentSwitch.autoCompactHint")}
 			/>
 		) : null,
@@ -513,6 +541,7 @@ export function AgentModelPicker({
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
 				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
+				data-telemetry-id={terminal ? undefined : "composer.model_picker"}
 			>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
 				{loadingModels && !savedLabel && !pending && !terminal ? (

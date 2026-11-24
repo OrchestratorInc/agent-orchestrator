@@ -117,7 +117,7 @@ func TestProvisionWorkspaceSymlinkWinsOverWorktreeInclude(t *testing.T) {
 	workspace := t.TempDir()
 
 	record := domain.ProjectRecord{Path: project, Config: domain.ProjectConfig{Symlinks: []string{".env"}}}
-	if err := (&Manager{}).provisionWorkspace(context.Background(), record, workspace); err != nil {
+	if err := (&Manager{}).provisionWorkspace(context.Background(), record, "", workspace); err != nil {
 		t.Fatalf("provisionWorkspace: %v", err)
 	}
 	info, err := os.Lstat(filepath.Join(workspace, ".env"))
