@@ -624,6 +624,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersSystemMemoryResponse":             "SystemMemoryResponse",
 	"ControllersAppMemoryResponse":                "AppMemoryResponse",
 	"ControllersMemoryPressureResponse":           "MemoryPressureResponse",
+	"ControllersListSessionDiskResponse":          "ListSessionDiskResponse",
+	"ControllersSessionDiskResponse":              "SessionDiskResponse",
 	"ControllersSessionActivityResponse":          "SessionActivityResponse",
 	"ControllersSessionStepResponse":              "SessionStepResponse",
 	"ControllersListCompactSessionUsageResponse":  "ListCompactSessionUsageResponse",
@@ -1411,6 +1413,16 @@ func usageOperations() []operation {
 			pathParams: []any{controllers.ListUsageSessionsQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ListSessionMemoryResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/usage/sessions/disk", id: "listSessionDisk", tag: "usage",
+			summary:    "List the cached disk size of each live session's worktree",
+			pathParams: []any{controllers.ListUsageSessionsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListSessionDiskResponse{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

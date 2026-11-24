@@ -66,6 +66,7 @@ describe("MemoryDiagnostics", () => {
 		useUiStore.setState({ developerMode: true, diagnostics: true });
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/usage/memory/pressure") return { data: system };
+			if (path === "/api/v1/usage/sessions/disk") return { data: { sessions: [], totalBytes: 0, measuring: 0 } };
 			return {
 				data: {
 					sessions: [{ sessionId: "s1", rssBytes: GIB, processCount: 1, cpuPercent: 1, sampledAt: "2026-09-18T00:00:00Z", processes: [] }],

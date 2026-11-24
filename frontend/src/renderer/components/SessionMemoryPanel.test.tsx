@@ -8,9 +8,10 @@ import type { SessionMemoryReading } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator } from "./SessionMemoryPanel";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { appMemoryMock, clipboardMock, memoryQueryMock, postMock, usageQueryMock, workspaceQueryMock } = vi.hoisted(() => ({
+const { appMemoryMock, clipboardMock, diskQueryMock, memoryQueryMock, postMock, usageQueryMock, workspaceQueryMock } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
 	clipboardMock: vi.fn(),
+	diskQueryMock: vi.fn(),
 	usageQueryMock: vi.fn(),
 	memoryQueryMock: vi.fn(),
 	postMock: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 		...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
 		useSessionMemory: memoryQueryMock,
 		useAppMemory: appMemoryMock,
+		useSessionDisk: diskQueryMock,
 		// The light's own poll, fed from the same mocked reading.
 		usePressureState: () => {
 			const system = appMemoryMock()?.data?.system;
@@ -130,6 +132,8 @@ beforeEach(() => {
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	clipboardMock.mockReset().mockResolvedValue(undefined);
 	usageQueryMock.mockReset().mockReturnValue({ data: undefined });
+	// No disk report unless a test gives one: the section is then absent.
+	diskQueryMock.mockReset().mockReturnValue({ isError: true });
 	const workspace: WorkspaceSummary = {
 		id: "p1",
 		name: "radic",
@@ -668,5 +672,103 @@ describe("AppMemoryIndicator", () => {
 		const rows = within(await screen.findByTestId("session-memory-table")).getAllByTestId("session-memory-row");
 		expect(within(rows[0]).getByTestId("session-memory-status")).toHaveTextContent("idle · 2h");
 		expect(screen.queryByText("Recent")).not.toBeInTheDocument();
+	});
+});
+
+describe("DiskSection", () => {
+	const measuredAt = "2026-11-12T09:30:00Z";
+	const MIB = 1024 ** 2;
+
+	function diskReport(measuring = 0) {
+		return {
+			isError: false,
+			data: {
+				sessions: [
+					{ sessionId: "s-small", sizeBytes: 100 * MIB, measuredAt },
+					{ sessionId: "s-big", sizeBytes: 1.5 * GIB, measuredAt },
+					// No memory reading in the table above: it holds disk with no live process.
+					{ sessionId: "s-none", sizeBytes: 4.5 * GIB, measuredAt },
+				],
+				totalBytes: 6 * GIB + 100 * MIB,
+				measuring,
+			},
+		};
+	}
+
+	async function openDisk() {
+		renderButton();
+		await userEvent.click(screen.getByTestId("app-memory-indicator"));
+		await screen.findByTestId("session-memory-table");
+		return screen.queryByTestId("session-disk");
+	}
+
+	it("lists every session's worktree largest first with the total, including one with no live process", async () => {
+		diskQueryMock.mockReturnValue(diskReport());
+		const disk = (await openDisk())!;
+		expect(within(disk).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Last active", "Size", "Share"]);
+		const rows = within(disk).getAllByTestId("session-disk-row");
+		expect(rows.map((row) => row.textContent)).toEqual([
+			expect.stringContaining("unsampled worker"),
+			expect.stringContaining("big worker"),
+			expect.stringContaining("small worker"),
+		]);
+		expect(within(rows[0]).getByText("4.5 GB")).toBeInTheDocument();
+		expect(within(rows[2]).getByText("100 MB")).toBeInTheDocument();
+		expect(within(disk).getByTestId("session-disk-total")).toHaveTextContent(/^6\.1 GB · measured \S/);
+		// The section only reports: its only buttons are the two sort headers.
+		expect(within(disk).getAllByRole("button").map((button) => button.textContent)).toEqual(["Last active", "Size"]);
+	});
+
+	it("sorts by last active to put the longest idle first, and reads a working session as now", async () => {
+		const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+		const workspace = {
+			id: "p1",
+			name: "radic",
+			sessions: [
+				session("s-small", "small worker", "idle", ago(4 * 24 * 60 * 60 * 1000)),
+				// Working: its last activity is minutes old, but it is not idle.
+				session("s-big", "big worker", "active", ago(3 * 60 * 1000)),
+				session("s-none", "unsampled worker"),
+			],
+		} as WorkspaceSummary;
+		workspaceQueryMock.mockReturnValue({ data: [workspace], isError: false, isSuccess: true });
+		diskQueryMock.mockReturnValue(diskReport());
+		const disk = (await openDisk())!;
+		const lastActive = () => within(disk).getAllByTestId("session-disk-last-active").map((cell) => cell.textContent);
+		const header = (name: string) => within(disk).getByRole("button", { name });
+		expect(header("Size").closest("th")).toHaveAttribute("aria-sort", "descending");
+		expect(lastActive()).toEqual(["2h", "now", "4d"]);
+
+		await userEvent.click(header("Last active"));
+		expect(header("Last active").closest("th")).toHaveAttribute("aria-sort", "descending");
+		expect(lastActive()).toEqual(["4d", "2h", "now"]);
+		await userEvent.click(header("Last active"));
+		expect(lastActive()).toEqual(["now", "2h", "4d"]);
+
+		await userEvent.click(header("Size"));
+		expect(lastActive()).toEqual(["2h", "now", "4d"]);
+	});
+
+	it("shows the sizes it has while the rest are still being measured", async () => {
+		diskQueryMock.mockReturnValue(diskReport(2));
+		const disk = (await openDisk())!;
+		expect(within(disk).getByTestId("session-disk-total")).toHaveTextContent(/^Measuring · 6\.1 GB$/);
+		expect(within(disk).getAllByTestId("session-disk-row")).toHaveLength(3);
+	});
+
+	it("says it is measuring before the first size arrives, never an empty card", async () => {
+		diskQueryMock.mockReturnValue({ isError: false, data: { sessions: [], totalBytes: 0, measuring: 3 } });
+		const disk = (await openDisk())!;
+		expect(disk).toHaveTextContent("Measuring");
+		expect(within(disk).queryByTestId("session-disk-table")).not.toBeInTheDocument();
+	});
+
+	it("says so when no session has a worktree on disk", async () => {
+		diskQueryMock.mockReturnValue({ isError: false, data: { sessions: [], totalBytes: 0, measuring: 0 } });
+		expect(await openDisk()).toHaveTextContent("No session worktrees on disk.");
+	});
+
+	it("is absent when the daemon cannot report disk", async () => {
+		expect(await openDisk()).not.toBeInTheDocument();
 	});
 });
