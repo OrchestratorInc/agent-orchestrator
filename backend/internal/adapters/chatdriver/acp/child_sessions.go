@@ -75,6 +75,10 @@ const (
 	childSessionFindTimeout = 30 * time.Second
 	childSessionFindEvery   = 250 * time.Millisecond
 	childSessionLoadTimeout = 30 * time.Second
+	// A child's load that fails is tried this many times in all, this far
+	// apart.
+	childSessionLoadAttempts   = 3
+	childSessionLoadRetryAfter = time.Second
 	// maxChildSessions caps the children one conversation follows.
 	maxChildSessions = 64
 )
@@ -91,6 +95,9 @@ type childSessionState struct {
 	parentOf map[string]string
 	// notChild holds sessions already looked up and found not to be ours.
 	notChild map[string]struct{}
+	// adopting counts the lookups under way for a session found streaming, so
+	// the finder leaves it to them instead of loading it beside its live work.
+	adopting map[string]int
 	// tools are each child's tool calls, by child, kept apart from the turn's
 	// own so the end of the parent's turn does not settle a child's work. A
 	// tool call id is unique only within its session.
@@ -116,6 +123,7 @@ func (c *conversation) childStateLocked() *childSessionState {
 			launchOf: map[string]string{},
 			parentOf: map[string]string{},
 			notChild: map[string]struct{}{},
+			adopting: map[string]int{},
 			tools:    map[string]map[string]*toolState{},
 			said:     map[string]*childSaying{},
 			messages: map[string]int{},
@@ -213,7 +221,7 @@ func (c *conversation) findChildSession(session, launchID, item string) {
 			}
 			c.mu.Lock()
 			s := c.childStateLocked()
-			if _, adopted := s.launchOf[child]; adopted {
+			if _, adopted := s.launchOf[child]; adopted || s.adopting[child] > 0 {
 				// Found streaming while its launch was looked up, so its history
 				// was shown by the attachment that loaded it, and a replay would
 				// run into what it says live.
@@ -224,7 +232,7 @@ func (c *conversation) findChildSession(session, launchID, item string) {
 			s.parentOf[child] = session
 			delete(s.notChild, child)
 			c.mu.Unlock()
-			c.loadChildSession(child)
+			c.followChildSession(child)
 			return
 		}
 		select {
@@ -240,9 +248,47 @@ func (c *conversation) findChildSession(session, launchID, item string) {
 	}
 }
 
+// followChildSession loads a child the conversation found, and tries again a
+// few times if the load fails. Each load replays the child from the start, so
+// its messages are counted afresh and keep the names they had. A child that
+// never loads is let go: if it streams after all, it is adopted.
+func (c *conversation) followChildSession(child string) {
+	forget := func(registered bool) {
+		c.mu.Lock()
+		s := c.childStateLocked()
+		delete(s.said, child)
+		delete(s.messages, child)
+		if !registered {
+			delete(s.launchOf, child)
+			delete(s.parentOf, child)
+		}
+		c.mu.Unlock()
+	}
+	for attempt := 1; ; attempt++ {
+		err := c.loadChildSession(child)
+		if err == nil {
+			return
+		}
+		if attempt == childSessionLoadAttempts {
+			c.log.Warn("could not follow subagent session", "child", child, "err", err)
+			forget(false)
+			return
+		}
+		c.log.Debug("subagent session did not load, trying again", "child", child, "err", err)
+		select {
+		case <-time.After(childSessionLoadRetryAfter):
+		case <-c.closing:
+			return
+		case <-c.conn.Done():
+			return
+		}
+		forget(true)
+	}
+}
+
 // loadChildSession opens the child's session beside the conversation's. The
 // agent then replays what the child did and streams the rest.
-func (c *conversation) loadChildSession(child string) {
+func (c *conversation) loadChildSession(child string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), childSessionLoadTimeout)
 	defer cancel()
 	go func() {
@@ -256,9 +302,7 @@ func (c *conversation) loadChildSession(child string) {
 		SessionId: acpsdk.SessionId(child), Cwd: c.childCwd, McpServers: []acpsdk.McpServer{},
 		Meta: map[string]any{persistenthost.ACPChildSessionMetaKey: true},
 	})
-	if err != nil {
-		c.log.Warn("could not follow subagent session", "child", child, "err", err)
-	}
+	return err
 }
 
 // routeChildUpdate files an update of a child session under its launch and
@@ -278,6 +322,10 @@ func (c *conversation) routeChildUpdate(params acpsdk.SessionNotification) bool 
 	s := c.childStateLocked()
 	launch, known := s.launchOf[child]
 	_, notChild := s.notChild[child]
+	if !known && !notChild {
+		// Reserved until adoptChild settles it, before its lookup starts.
+		s.adopting[child]++
+	}
 	c.mu.Unlock()
 	if !known {
 		if notChild {
@@ -317,6 +365,7 @@ func (c *conversation) adoptChild(child string) (string, bool) {
 				s.notChild[l.session] = struct{}{}
 			}
 			s.notChild[session] = struct{}{}
+			s.doneAdopting(child)
 			c.mu.Unlock()
 			return "", false
 		}
@@ -329,11 +378,19 @@ func (c *conversation) adoptChild(child string) (string, bool) {
 				delete(s.notChild, l.session)
 			}
 			launch := s.launchOf[child]
+			s.doneAdopting(child)
 			c.mu.Unlock()
 			return launch, true
 		}
 		c.mu.Unlock()
 		session = parent
+	}
+}
+
+func (s *childSessionState) doneAdopting(child string) {
+	s.adopting[child]--
+	if s.adopting[child] <= 0 {
+		delete(s.adopting, child)
 	}
 }
 

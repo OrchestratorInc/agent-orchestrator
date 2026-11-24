@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -477,5 +478,81 @@ func TestChildSessionFoundStreamingWhileItsLaunchIsLookedUpIsNotLoaded(t *testin
 	defer agent.mu.Unlock()
 	if agent.loadCalls != 0 {
 		t.Fatalf("loaded the child %d times", agent.loadCalls)
+	}
+}
+
+// The finder can also look the child up while an adoption of it is under
+// way, before the adoption files it: it leaves the child to the adoption.
+func TestChildSessionAdoptionUnderWayIsNotLoadedByTheFinder(t *testing.T) {
+	records := newChildSessionRecords()
+	records.record(childTestParent, "call-launch", "child-1")
+	sessions := records.sessions()
+	lookup := sessions.LaunchOf
+	var calls atomic.Int32
+	adopting, release := make(chan struct{}), make(chan struct{})
+	sessions.LaunchOf = func(env map[string]string, child string) (string, string, bool) {
+		if calls.Add(1) == 1 {
+			// The adoption's lookup, held until the finder has looked too.
+			close(adopting)
+			<-release
+		}
+		return lookup(env, child)
+	}
+	agent, conv, _ := startWithChildSessions(t, sessions)
+	childSessionUpdate(t, agent, "child-1", childSays("live"))
+	<-adopting
+	found := make(chan struct{})
+	go func() {
+		defer close(found)
+		conv.findChildSession(childTestParent, "call-launch", "call-launch")
+	}()
+	time.Sleep(300 * time.Millisecond)
+	agent.mu.Lock()
+	loads := agent.loadCalls
+	agent.mu.Unlock()
+	close(release)
+	if said := nextChildActivity(t, conv); said.Text != "live" {
+		t.Fatalf("live message = %#v", said)
+	}
+	<-found
+	if loads != 0 {
+		t.Fatalf("the finder loaded the child %d times", loads)
+	}
+}
+
+// A load that fails is tried again, and the replay names the child's messages
+// as a first load does.
+func TestChildSessionLoadThatFailsIsTriedAgain(t *testing.T) {
+	records := newChildSessionRecords()
+	records.record(childTestParent, "call-launch", "child-1")
+	agent, conv, _ := startWithChildSessions(t, records.sessions())
+	agent.mu.Lock()
+	agent.failLoadFrom, agent.failLoadErr = 1, errors.New("busy")
+	agent.loadUpdates = []acpsdk.SessionUpdate{childSays("one")}
+	agent.mu.Unlock()
+	childSessionUpdate(t, agent, childTestParent, invokeSubagentCall("call-launch", acpsdk.ToolCallStatusCompleted))
+	_ = nextChildActivity(t, conv)
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		agent.mu.Lock()
+		failed := agent.loadCalls >= 1
+		if failed {
+			agent.failLoadFrom = 0
+		}
+		agent.mu.Unlock()
+		if failed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the child was never loaded")
+		}
+	}
+	said := nextChildActivity(t, conv)
+	if said.Text != "one" || said.ProviderItemID != "subagent-message:child-1:1" {
+		t.Fatalf("replayed message = %#v", said)
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.loadCalls != 2 {
+		t.Fatalf("loaded %d times", agent.loadCalls)
 	}
 }
