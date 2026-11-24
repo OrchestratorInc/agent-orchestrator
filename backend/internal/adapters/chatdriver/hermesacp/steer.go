@@ -49,7 +49,7 @@ func steeringSupported(init acpsdk.InitializeResponse) bool {
 	if init.AgentInfo == nil || init.AgentInfo.Name != hermesAgentName {
 		return false
 	}
-	installed, ok := agentversion.Parse(init.AgentInfo.Version)
+	installed, ok := agentversion.ParsePrefix(init.AgentInfo.Version)
 	if !ok || installed == agentversion.MustParse("0.0.0") {
 		return true
 	}

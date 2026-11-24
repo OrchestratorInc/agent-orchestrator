@@ -31,7 +31,7 @@ const minimumCLIACPVersion = "1.5.4"
 // version: the separate server, which has no --version flag, or `agy acp`.
 func validateInitialize(init acpsdk.InitializeResponse) error {
 	if isCLIServer(init) {
-		installed, ok := agentversion.Parse(init.AgentInfo.Version)
+		installed, ok := agentversion.ParsePrefix(init.AgentInfo.Version)
 		if !ok || installed.Less(agentversion.MustParse(minimumCLIACPVersion)) {
 			return fmt.Errorf("agy acp %q is older than AO's tested minimum %s",
 				init.AgentInfo.Version, minimumCLIACPVersion)
@@ -45,7 +45,7 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 		}
 		return fmt.Errorf("expected the %s server or agy acp, got agent %q", serverAgentName, name)
 	}
-	installed, ok := agentversion.Parse(init.AgentInfo.Version)
+	installed, ok := agentversion.ParsePrefix(init.AgentInfo.Version)
 	if !ok {
 		return fmt.Errorf("unrecognized %s version %q (Orchestrator requires %s or newer)",
 			serverAgentName, init.AgentInfo.Version, minimumServerVersion)
@@ -68,6 +68,6 @@ func cliSteers(init acpsdk.InitializeResponse) bool {
 	if !isCLIServer(init) {
 		return false
 	}
-	installed, ok := agentversion.Parse(init.AgentInfo.Version)
+	installed, ok := agentversion.ParsePrefix(init.AgentInfo.Version)
 	return ok && !installed.Less(agentversion.MustParse(minimumCLIACPVersion))
 }

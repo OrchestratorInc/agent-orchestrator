@@ -45,6 +45,25 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestParsePrefix(t *testing.T) {
+	for input, want := range map[string]string{
+		"0.22.3.1":     "0.22.3",
+		"v1.6.0.2":     "1.6.0",
+		"1.2.3-beta.1": "1.2.3",
+		" 1.2.34x ":    "1.2.34",
+	} {
+		got, ok := ParsePrefix(input)
+		if !ok || got.String() != want {
+			t.Errorf("ParsePrefix(%q) = %q, %v; want %q", input, got, ok, want)
+		}
+	}
+	for _, input := range []string{"", "1.2", "version 1.2.3", "x1.2.3"} {
+		if got, ok := ParsePrefix(input); ok {
+			t.Errorf("ParsePrefix(%q) = %q, want no version", input, got)
+		}
+	}
+}
+
 func TestLess(t *testing.T) {
 	for _, tc := range []struct {
 		a, b string

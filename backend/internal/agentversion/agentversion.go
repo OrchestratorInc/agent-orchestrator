@@ -27,6 +27,10 @@ var findPattern = regexp.MustCompile(`\b(\d+)\.(\d+)\.(\d+)\b`)
 // "-rc1", "+build" or " (abc)").
 var parsePattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:$|[^\d.])`)
 
+// prefixPattern matches a leading major.minor.patch whatever follows it, so
+// "0.22.3.1" reads as 0.22.3.
+var prefixPattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+
 // Find returns the first major.minor.patch anywhere in text, as printed by a
 // command's --version.
 func Find(text string) (Version, bool) {
@@ -37,6 +41,14 @@ func Find(text string) (Version, bool) {
 // as an agent reports in its ACP agentInfo. Surrounding space is ignored.
 func Parse(s string) (Version, bool) {
 	return fromMatch(parsePattern.FindStringSubmatch(strings.TrimSpace(s)))
+}
+
+// ParsePrefix reads the major.minor.patch a version string starts with and
+// ignores the rest, so a four-part build such as "0.22.3.1" reads as 0.22.3.
+// Use it where an unreadable version is treated permissively, so a build
+// below the minimum is still recognised as one.
+func ParsePrefix(s string) (Version, bool) {
+	return fromMatch(prefixPattern.FindStringSubmatch(strings.TrimSpace(s)))
 }
 
 // MustParse parses a version constant and panics if it is invalid.
