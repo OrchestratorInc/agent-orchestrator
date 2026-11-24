@@ -278,6 +278,19 @@ describe("cli link", () => {
 		expect(await lstat(path.join(protectedDirectory, "ao")).catch(() => null)).toBeNull();
 	});
 
+	it("selects the directory where a command already points at this app", async () => {
+		const { root, linkDirectory, dataDir, apps } = await layout();
+		const later = path.join(root, "later");
+		await mkdir(later);
+		const appCliPath = await executable(apps, "ao", "1.0.0");
+		await symlink(appCliPath, path.join(later, "ao"));
+		const shellPath = `${linkDirectory}:${later}`;
+		expect(await selectCliLinkDirectory(nodeCliLinkIo(), dataDir, shellPath, [linkDirectory, later], appCliPath)).toBe(later);
+		expect(await inspectCliLink(nodeCliLinkIo(), request({ appCliPath, linkDirectory: later, dataDir, shellPath })))
+			.toMatchObject({ ok: true, status: { current: { kind: "linked", managed: false } } });
+		expect(await selectCliLinkDirectory(nodeCliLinkIo(), dataDir, shellPath, [linkDirectory, later])).toBe(linkDirectory);
+	});
+
 	it("keeps an existing AO managed link in its original directory for repair and unlink", async () => {
 		const { root, linkDirectory, dataDir, apps } = await layout();
 		const alternative = path.join(root, "alternative");

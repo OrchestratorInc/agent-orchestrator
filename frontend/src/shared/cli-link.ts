@@ -158,6 +158,7 @@ export async function selectCliLinkDirectory(
 	dataDir: string,
 	shellPath: string | undefined,
 	candidates: string[],
+	appCliPath?: string,
 ): Promise<string> {
 	const allowed = new Set(candidates.map((directory) => io.resolve(directory)));
 	const marker = await readMarker(io, dataDir);
@@ -170,10 +171,15 @@ export async function selectCliLinkDirectory(
 			}
 		}
 	}
-	for (const entry of shellPath?.split(":") ?? []) {
-		if (!entry || !entry.startsWith("/")) continue;
-		const directory = io.resolve(entry);
-		if (!allowed.has(directory)) continue;
+	const onPath = (shellPath?.split(":") ?? [])
+		.filter((entry) => entry.startsWith("/"))
+		.map((entry) => io.resolve(entry))
+		.filter((directory) => allowed.has(directory));
+	const appReal = appCliPath ? await io.realpath(appCliPath) : null;
+	for (const directory of appReal ? onPath : []) {
+		if (await io.realpath(io.join(directory, CLI_LINK_NAME)) === appReal) return directory;
+	}
+	for (const directory of onPath) {
 		if (await io.canWrite(directory)) return directory;
 	}
 	return io.resolve(candidates[0] ?? CLI_LINK_DIRECTORY);

@@ -16,17 +16,18 @@ export function registerCliLinkIpc(input: {
 	const io = nodeCliLinkIo();
 	const request = async (confirmReplacement = false, expectedTarget?: string | null): Promise<CliLinkRequest> => {
 		const shellPath = input.shellPath();
+		const appCliPath = path.join(input.resourcesPath, "daemon", bundledDaemonBinaryName(process.platform));
 		return {
 			platform: process.platform,
 			isPackaged: input.isPackaged(),
 			appImage: input.appImage,
-			appCliPath: path.join(input.resourcesPath, "daemon", bundledDaemonBinaryName(process.platform)),
+			appCliPath,
 			linkDirectory: await selectCliLinkDirectory(io, input.dataDir, shellPath, [
 				CLI_LINK_DIRECTORY,
 				...(process.platform === "darwin" ? ["/opt/homebrew/bin"] : []),
 				path.join(homedir(), ".local", "bin"),
 				path.join(homedir(), "bin"),
-			]),
+			], appCliPath),
 			dataDir: input.dataDir,
 			appVersion: input.appVersion,
 			shellPath,
