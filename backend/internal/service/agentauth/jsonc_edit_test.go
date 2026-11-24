@@ -93,3 +93,26 @@ func TestSetJSONCRejectsInvalidSettings(t *testing.T) {
 		t.Fatal("edited invalid settings")
 	}
 }
+
+// Gemini CLI ends a // comment at a lone CR or at the end of the file, so a
+// save must keep the settings that follow such a comment.
+func TestSetJSONCKeepsSettingsAroundHarnessLineEndings(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{
+			in:   "// settings\r{\"theme\":\"dark\"}",
+			want: "// settings\r{\"theme\":\"dark\", \"security\":{\"auth\":{\"selectedType\":\"new\"}}}",
+		},
+		{
+			in:   "{\"theme\":\"dark\"} // note",
+			want: "{\"theme\":\"dark\", \"security\":{\"auth\":{\"selectedType\":\"new\"}}} // note",
+		},
+	} {
+		got, err := setJSONC([]byte(tc.in), []string{"security", "auth", "selectedType"}, []byte(`"new"`))
+		if err != nil {
+			t.Fatalf("setJSONC(%q): %v", tc.in, err)
+		}
+		if string(got) != tc.want {
+			t.Errorf("setJSONC(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

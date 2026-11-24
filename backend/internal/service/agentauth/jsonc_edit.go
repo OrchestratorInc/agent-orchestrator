@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/tailscale/hujson"
+	"github.com/aoagents/agent-orchestrator/backend/internal/jsonc"
 )
 
 // Gemini CLI and Qwen Code read settings.json as JSON with comments, trailing
@@ -18,28 +18,20 @@ var utf8BOM = []byte("\ufeff")
 var errJSONCShape = errors.New("settings do not have the expected shape")
 
 // jsoncStandard returns data's JSON text with comments and trailing commas
-// blanked out, keeping every byte offset (hujson.Standardize), and the length
+// blanked out, keeping every byte offset (jsonc.Standardize), and the length
 // of a leading BOM.
 func jsoncStandard(data []byte) (plain []byte, bom int, err error) {
 	if bytes.HasPrefix(data, utf8BOM) {
 		bom = len(utf8BOM)
 	}
-	plain, err = hujson.Standardize(bytes.Clone(data[bom:]))
+	plain, err = jsonc.Standardize(data[bom:])
 	return plain, bom, err
 }
 
 // jsoncBlank reports whether data holds no value: only a BOM, whitespace and
 // comments. Such a file is one the harness treats as empty settings.
 func jsoncBlank(data []byte) bool {
-	body := bytes.TrimPrefix(data, utf8BOM)
-	// A blank document followed by a literal is just that literal; any value
-	// before it makes the text invalid.
-	v, err := hujson.Parse(append(bytes.Clone(body), "\nnull"...))
-	if err != nil {
-		return false
-	}
-	literal, ok := v.Value.(hujson.Literal)
-	return ok && string(literal) == "null"
+	return jsonc.Blank(bytes.TrimPrefix(data, utf8BOM))
 }
 
 // jsoncUnmarshal parses a settings file the way its harness does.

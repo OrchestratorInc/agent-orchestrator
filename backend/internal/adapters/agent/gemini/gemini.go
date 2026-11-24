@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tailscale/hujson"
+	"github.com/aoagents/agent-orchestrator/backend/internal/jsonc"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
@@ -207,7 +207,7 @@ func geminiAPIKeySelected(path string) (bool, error) {
 		} `json:"security"`
 	}
 	// Gemini CLI accepts comments in settings.json.
-	plain, err := hujson.Standardize(data)
+	plain, err := jsonc.Standardize(data)
 	if err != nil {
 		return false, err
 	}

@@ -1,13 +1,12 @@
 package modelcatalog
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/tailscale/hujson"
+	"github.com/aoagents/agent-orchestrator/backend/internal/jsonc"
 	"gopkg.in/yaml.v3"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -244,7 +243,7 @@ func joinProviderModel(provider, model string) string {
 // unmarshalJSONC decodes a JSONC config file (opencode.jsonc, Pi and Crush
 // settings): JSON with comments and trailing commas.
 func unmarshalJSONC(raw []byte, v any) error {
-	plain, err := hujson.Standardize(bytes.Clone(raw))
+	plain, err := jsonc.Standardize(raw)
 	if err != nil {
 		return err
 	}
