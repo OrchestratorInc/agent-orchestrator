@@ -40,8 +40,9 @@ const DoneQuietPeriod = 30 * time.Second
 //
 // Only transitions out of observed live work produce a report. A session the
 // daemon never saw active since it started is left alone, and so is a killed
-// session. Work that resumes during the quiet period continues the same task,
-// so its idle gaps never produce extra done reports. While `ao report` still
+// session. Work that resumes during the quiet period, by event time and before
+// the done timer fires, continues the same task, so its idle gaps add no extra
+// done reports. While `ao report` still
 // exists, a report the agent filed itself during the same stretch of work
 // takes precedence and nothing is added.
 type WorkerReporter struct {
