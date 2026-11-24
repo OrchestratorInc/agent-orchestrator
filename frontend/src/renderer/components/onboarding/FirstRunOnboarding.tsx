@@ -1401,11 +1401,12 @@ function WorkDefaultsStep({ onNext }: { onNext: () => void }) {
 	const intakeAvailable = settings?.trackerIntakeEnabled === true;
 	const [choices, setChoices] = useState<ProjectDefaults>(() => readProjectDefaults() ?? INITIAL_PROJECT_DEFAULTS);
 	const change = (patch: Partial<ProjectDefaults>) => setChoices((current) => ({ ...current, ...patch }));
-	// Reviewers: the agents ready on this machine, the usual pick first.
+	// Reviewers: only the agents ready on this machine, the usual pick first
+	// when it is one of them (its fallback can be an agent that isn't).
 	const agents = readiness.data?.agents ?? [];
-	const ready = agents.filter((agent) => agent.effectiveReadiness === "ready");
-	const suggested = agents.length ? defaultProjectAgents(agents).reviewerAgent : undefined;
-	const reviewerIds = [...new Set([...(suggested ? [suggested] : []), ...ready.map((agent) => agent.id)])];
+	const readyIds = agents.filter((agent) => agent.effectiveReadiness === "ready").map((agent) => agent.id);
+	const suggested = readyIds.length ? defaultProjectAgents(agents).reviewerAgent : undefined;
+	const reviewerIds = suggested && readyIds.includes(suggested) ? [suggested, ...readyIds.filter((id) => id !== suggested)] : readyIds;
 	const reviewer = choices.reviewerAgent && reviewerIds.includes(choices.reviewerAgent) ? choices.reviewerAgent : reviewerIds[0];
 	const labelFor = (id: string) => agents.find((agent) => agent.id === id)?.label ?? id;
 	const finish = () => {
