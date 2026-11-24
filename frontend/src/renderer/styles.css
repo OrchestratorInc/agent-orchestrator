@@ -7285,14 +7285,23 @@ html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light
 	background-color: var(--ao-center-plate);
 }
 
-/* Opaque, the frame keeps the sidebar colour and the panel is that colour
- * 15% darker. The page-background tokens are re-pointed inside the panel, so
- * everything in it that paints the page background takes the darker shade.
- * Portaled popovers are outside and keep theirs. */
+/* Opaque, the frame and the panel swap colours: the frame (sidebar, top band)
+ * takes the theme's page colour and the panel takes its sidebar colour, so the
+ * contrast between them is the theme's own, just inverted. The theme's values
+ * are captured on the root, where it defines them, and swapped below it. */
+html[data-new-desktop-ui]:not([data-window-translucent="true"]):not([data-theme="light"]) {
+	--ao-opaque-frame: var(--background);
+	--ao-opaque-center: var(--sidebar);
+}
+
+html[data-new-desktop-ui]:not([data-window-translucent="true"]):not([data-theme="light"]) body {
+	--sidebar: var(--ao-opaque-frame);
+	--color-bg-sidebar: var(--ao-opaque-frame);
+}
+
 html[data-new-desktop-ui]:not([data-window-translucent="true"]):not([data-theme="light"]) .center-panel-surface {
-	--ao-center-plate-solid: color-mix(in srgb, var(--color-bg-sidebar), black 15%);
-	--color-bg-primary: var(--ao-center-plate-solid);
-	--background: var(--ao-center-plate-solid);
+	--background: var(--ao-opaque-center);
+	--color-bg-primary: var(--ao-opaque-center);
 }
 
 /* Motion: hovers are instant and nothing fades. Dialogs, backdrops, tooltips
