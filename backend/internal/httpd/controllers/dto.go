@@ -2518,6 +2518,11 @@ type BackgroundTaskOutputResponse struct {
 	Output       string           `json:"output" description:"The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed."`
 	Truncated    bool             `json:"truncated,omitempty" description:"True when older output was left out or is missing."`
 	Stale        bool             `json:"stale,omitempty" description:"True when the provider stopped sending this task's output, so anything it printed since is missing."`
+	// LogOutsideWorkspace explains an output without the task's log.
+	LogOutsideWorkspace bool `json:"logOutsideWorkspace,omitempty" description:"True when the task's command writes its output to a log file outside the session's workspace, which is not read."`
+	// LogOmitted marks output without the task's log, which can't be shown as this run's.
+	LogOmitted bool   `json:"logOmitted,omitempty" description:"True when the task's command writes a log that output leaves out because it can't be shown as this run's: a later run writes the same file, the file was written after the run ended, or the run's final log isn't kept yet and no earlier read of it was saved. Output then holds only what the task printed itself."`
+	RunID      string `json:"runId,omitempty" description:"The run this output belongs to, when the provider gives runs their own ID. Output for another run of a reused task ID is not the requested run's."`
 }
 
 // BackgroundTaskIDParam names one provider-owned background task.
