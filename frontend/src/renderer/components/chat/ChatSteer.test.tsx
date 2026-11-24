@@ -1006,7 +1006,6 @@ describe("ChatWorkspace steering", () => {
 				snapshot={{
 					...chatFixture,
 					latestSequence: 15,
-					// A Codex subagent's turn on a child thread is adopted as its own turn.
 					turns: [
 						{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) },
 						{ id: "child", state: "completed", providerTurnId: "provider-child", requestedAt: at(1), startedAt: at(1), completedAt: at(21) },
@@ -1065,7 +1064,6 @@ describe("ChatWorkspace steering", () => {
 				snapshot={{
 					...chatFixture,
 					latestSequence: 14,
-					// B and C were queued in that order while A ran; C was moved ahead of B.
 					turns: [
 						{ id: "a", state: "completed", providerTurnId: "provider-a", requestedAt: at(0), startedAt: at(0), completedAt: at(3) },
 						{ id: "c", state: "completed", providerTurnId: "provider-c", requestedAt: at(1), startedAt: at(3), completedAt: at(5) },
@@ -1098,7 +1096,6 @@ describe("ChatWorkspace steering", () => {
 					latestSequence: 13,
 					oldestSequence: 10,
 					hasMoreBefore: true,
-					// Both prompts are above the loaded page, so each turn sorts where it began.
 					turns: [
 						{ id: "x", state: "running", providerTurnId: "provider-x", requestedAt: at(0), startedAt: at(0), anchorSequence: 9.1 },
 						{ id: "y", state: "completed", providerTurnId: "provider-y", requestedAt: at(1), startedAt: at(1), completedAt: at(5), anchorSequence: 9.5 },
