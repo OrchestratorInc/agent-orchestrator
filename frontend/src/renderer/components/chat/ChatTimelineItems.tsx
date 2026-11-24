@@ -140,6 +140,8 @@ import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, S
 import { HighlightedCode } from "./HighlightedCode";
 import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
+import { FileDiffCard, FileReadCard, fileCardPath, readFileLines } from "./ChatFileCard";
+import { ChatFileIcon } from "./ChatFileIcon";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
@@ -2049,7 +2051,7 @@ function GenericActivityRow({
 								? liveFileChangeVerb(singleEdit.status ?? "modified")
 								: fileChangeVerb(singleEdit.status ?? "modified")}
 						</span>
-						<FileLocationLabel path={singleEdit.path} oldPath={singleEdit.oldPath} />
+						<FileLocationLabel path={singleEdit.path} oldPath={singleEdit.oldPath} chip />
 						{singleEdit.additions > 0 ? (
 							<span className="shrink-0 font-mono text-micro tabular-nums text-success">
 								+{singleEdit.additions}
@@ -2070,7 +2072,7 @@ function GenericActivityRow({
 							<ActivityTitle text={label} />
 						</strong>
 						{" "}
-						<StepTarget text={path} title={pathTitle} />
+						<StepTarget text={path} title={pathTitle} file={stepTargetFile(stepIconName, path, pathTitle)} />
 					</span>
 				) : (
 					<strong
@@ -2179,16 +2181,18 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 		activity.activityKind === "command" &&
 		(detail?.command || detail?.output || detail?.terminalInput)
 	) {
+		const read = commandFileRead(activity);
+		if (read) return <FileReadCard path={read.path} label={read.label} file={read.file} />;
 		return <CommandExploreBody activity={activity} />;
+	}
+	// One file: open straight onto its card, which names the file. Listing the same
+	// name again under "Edited name" is noise.
+	if (isFileChange && files.length === 1 && fileChangePatch(files[0])) {
+		return <FileChangePatchCard file={files[0]!} hints={{ cwd: detail?.cwd, summary: activity.summary }} />;
 	}
 	return (
 		<div className="flex flex-col gap-1.5 px-1 pb-1 pt-0.5">
-			{/* One file: open straight onto its patch. Listing the same
-			    basename again under "Edited name" is noise. */}
-			{files.length === 1 && fileChangePatch(files[0]) ? (
-				<Patch patch={fileChangePatch(files[0])!} truncated={files[0].patchTruncated} />
-			) : null}
-			{files.length > 1 ? <FileChangeList files={files} /> : null}
+			{files.length > 1 ? <FileChangeList files={files} cwd={detail?.cwd} /> : null}
 			{!isFileChange && detail?.command ? (
 				// Said explicitly rather than implied by the label: "Ran command"
 				// alone never tells the reader what ran, and the collapsed row
@@ -2211,6 +2215,56 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 			{!isFileChange && detail?.output ? <CommandOutput activity={activity} /> : null}
 		</div>
 	);
+}
+
+type FileRead = { path: string; label: string; file: NonNullable<ReturnType<typeof readFileLines>> };
+
+/**
+ * A finished command that printed one file and nothing else (`cat`, `cat -n`, `nl`,
+ * `head`, `sed -n 'A,Bp'`), as that file. Anything with a pipe, a redirect, a
+ * second command or a cut output keeps the command card: its output is not the file.
+ */
+function commandFileRead(activity: ConversationActivity): FileRead | undefined {
+	const detail = activity.detail;
+	if (activity.status !== "completed" || !detail?.command || typeof detail.output !== "string") return undefined;
+	if ((detail.exitCode ?? 0) !== 0 || detail.outputTruncated || detail.outputBytes !== undefined || detail.terminalInput) return undefined;
+	let command = detail.command.trim();
+	const wrapped = /^(?:\S*\/)?(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1$/.exec(command);
+	if (wrapped) command = wrapped[2]!.trim();
+	if (/[|;&<>$`\n]/.test(command)) return undefined;
+	const words = command.split(/\s+/).map((word) => word.replace(/^(['"])(.*)\1$/, "$2"));
+	const [binary, ...args] = words;
+	const file = args.at(-1);
+	// A quoted name with a space in it split above; it is not this word.
+	if (!file || file.startsWith("-") || /['"]/.test(file)) return undefined;
+	const flags = args.slice(0, -1).join(" ");
+	let start: number | undefined;
+	if (binary === "cat" && (flags === "" || flags === "-n")) start = 1;
+	// nl numbers its own lines, which readFileLines takes as given.
+	else if (binary === "nl" && /^(?:|-ba|-b a)$/.test(flags)) start = undefined;
+	else if (binary === "head" && /^(?:|-\d+|-n ?\d+)$/.test(flags)) start = 1;
+	else if (binary === "sed") {
+		const range = /^-n (\d+)(?:,\d+)?p$/.exec(flags);
+		if (!range) return undefined;
+		start = Number(range[1]);
+	} else return undefined;
+	const lines = readFileLines(detail.output, start);
+	if (!lines) return undefined;
+	return { path: file, label: fileCardPath(file, { cwd: detail.cwd }), file: lines };
+}
+
+/** Claude Code's Read tool, finished: the lines it returned, as the file. */
+function toolFileRead(activity: ConversationActivity): FileRead | undefined {
+	const detail = activity.detail;
+	if (activity.status !== "completed" || detail?.providerToolName !== "Read" || detail.error || detail.success === false) return undefined;
+	const input = detail.input && typeof detail.input === "object" ? (detail.input as Record<string, unknown>) : {};
+	const path = typeof input.file_path === "string" ? input.file_path : typeof input.path === "string" ? input.path : undefined;
+	if (!path) return undefined;
+	const raw = typeof detail.output === "string" && detail.output ? detail.output : normalizeToolCode(toolContentText(detail.content));
+	const lines = readFileLines(raw);
+	// Read numbers every line it returns; anything else (an image, a notice) keeps its card.
+	if (!lines || lines.lines.every((line) => line.no === undefined)) return undefined;
+	return { path, label: fileCardPath(path, { cwd: detail.cwd, summary: activity.summary }), file: lines };
 }
 
 /**
@@ -2569,18 +2623,18 @@ function ActivityState({
  * expanded edit reads the same as the turn-level changed-files list. Hovering the
  * basename shows the full location; a file that carries a patch can still open it.
  */
-export function FileChangeList({ files }: { files: FileChangeFile[] }) {
+export function FileChangeList({ files, cwd }: { files: FileChangeFile[]; cwd?: string }) {
 	if (!files.length) return null;
 	return (
 		<ul className="flex flex-col">
 			{files.map((file) => (
-				<FileChangeRow key={`${file.oldPath ?? ""}→${file.path}`} file={file} />
+				<FileChangeRow key={`${file.oldPath ?? ""}→${file.path}`} file={file} cwd={cwd} />
 			))}
 		</ul>
 	);
 }
 
-function FileChangeRow({ file }: { file: FileChangeFile }) {
+function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 	const [open, setOpen] = useState(false);
 	const status = diffStatusMark[file.status ?? "modified"] ?? diffStatusMark.modified;
 	const hasPatch = Boolean(file.patch);
@@ -2629,7 +2683,7 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 					)}
 				/>
 			</Pressable>
-			{open ? <Patch patch={file.patch!} truncated={file.patchTruncated} /> : null}
+			{open ? <FileChangePatchCard file={file} hints={{ cwd }} /> : null}
 		</li>
 	);
 }
@@ -2659,19 +2713,20 @@ function fileChangePatch(file: FileChangeFile | undefined): string | undefined {
 	].join("\n");
 }
 
-function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
+function FileChangePatchCard({ file, hints }: { file: FileChangeFile; hints: { cwd?: string; summary?: string } }) {
+	const patch = fileChangePatch(file);
+	if (!patch) return null;
 	return (
-		// `chat-code` is what the token colours are scoped to, so a patch without it
-		// tokenizes correctly and renders in one flat colour.
-			<div className="mb-1 mt-0.5 overflow-hidden bg-background">
-			<ToolDiffCode text={patch} />
-			{truncated ? (
-				<p className="border-t border-border px-2.5 py-1.5 text-xs leading-relaxed text-warning">
-					This patch is longer than Orchestrator stores, so it stops early. The whole change is in the
-					worktree and in the turn&rsquo;s diff.
-				</p>
-			) : null}
-		</div>
+		<FileDiffCard
+			path={file.path}
+			oldPath={file.oldPath}
+			label={fileCardPath(file.path, hints)}
+			patch={patch}
+			status={file.status}
+			additions={file.additions}
+			deletions={file.deletions}
+			truncated={file.patchTruncated}
+		/>
 	);
 }
 
@@ -2808,7 +2863,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 							{tool}
 						</strong>
 						{" "}
-						<StepTarget text={step.target} title={step.targetTitle} />
+						<StepTarget text={step.target} title={step.targetTitle} file={stepTargetFile(step.icon, step.target, step.targetTitle)} />
 					</span>
 				) : (
 					<strong
@@ -2877,6 +2932,14 @@ function mcpToolHasBody(activity: ConversationActivity): boolean {
 function McpToolBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
 	const args = mcpToolArguments(activity);
+	const read = toolFileRead(activity);
+	if (read) {
+		return (
+			<div className="pb-1.5">
+				<FileReadCard path={read.path} label={read.label} file={read.file} />
+			</div>
+		);
+	}
 	return (
 		<div className="flex flex-col gap-2 pb-2.5">
 			{detail?.error ? (
@@ -4352,10 +4415,13 @@ function FileLocationLabel({
 	locationPath,
 	locationOldPath,
 	showFullPath,
+	chip,
 	className,
 }: {
 	path: string;
 	oldPath?: string;
+	/** Drawn as a step's file chip, with the file's icon. */
+	chip?: boolean;
 	/** Absolute/worktree path for the tooltip when `path` is only a basename. */
 	locationPath?: string;
 	locationOldPath?: string;
@@ -4371,12 +4437,16 @@ function FileLocationLabel({
 				    worktree path tooltip below appears. */}
 				<span
 					className={cn(
-						showFullPath ? "flex min-w-0 text-xs outline-none" : "min-w-0 truncate text-xs text-foreground/65 outline-none",
+						chip
+							? STEP_FILE_CHIP_CLASS
+							: showFullPath ? "flex min-w-0 text-xs outline-none" : "min-w-0 truncate text-xs text-foreground/65 outline-none",
 						className,
 					)}
+					data-step-file-chip={chip ? "" : undefined}
 					title=""
 				>
-					{showFullPath ? <WorkspacePathSegments path={path} nameClassName="text-foreground/80" /> : fileBasename(path)}
+					{chip ? <ChatFileIcon path={path} /> : null}
+					{showFullPath ? <WorkspacePathSegments path={path} nameClassName="text-foreground/80" /> : chip ? <span className="min-w-0 truncate">{fileBasename(path)}</span> : fileBasename(path)}
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
@@ -4390,8 +4460,22 @@ function FileLocationLabel({
  * What a command step acted on, after its verb: a file, a pattern, a PR number.
  * Styled like a file edit's name. A shortened target keeps the whole one in a tooltip.
  */
-function StepTarget({ text, title }: { text: string; title?: string }) {
-	const label = <span className="min-w-0 truncate text-xs text-foreground/65 outline-none" title="">{text}</span>;
+/**
+ * A step's file target as a small neutral chip with its Files-panel icon. It takes the
+ * chat's file tint only while the row is hovered, so a list of reads stays quiet.
+ */
+const STEP_FILE_CHIP_CLASS =
+	"inline-flex min-w-0 items-center gap-[5px] rounded bg-surface py-[2px] pr-[5px] pl-1 text-xs text-foreground/65 outline-none transition-colors group-hover/run:bg-chat-file group-hover/run:text-chat-file-foreground";
+
+function StepTarget({ text, title, file }: { text: string; title?: string; /** Set when the target is one file: the path its icon comes from. */ file?: string }) {
+	const label = file ? (
+		<span data-step-file-chip="" className={STEP_FILE_CHIP_CLASS} title="">
+			<ChatFileIcon path={file} />
+			<span className="min-w-0 truncate">{text}</span>
+		</span>
+	) : (
+		<span className="min-w-0 truncate text-xs text-foreground/65 outline-none" title="">{text}</span>
+	);
 	// A short target that is shown whole needs no tooltip repeating it.
 	if ((!title || title === text) && text.length <= 48) return label;
 	return (
@@ -4402,6 +4486,12 @@ function StepTarget({ text, title }: { text: string; title?: string }) {
 			</TooltipContent>
 		</Tooltip>
 	);
+}
+
+/** The path a step's target names when it is exactly one file, for its chip. */
+function stepTargetFile(icon: StepIcon | undefined, target: string | undefined, title: string | undefined): string | undefined {
+	if ((icon !== "read" && icon !== "write") || !target || target.includes(", ")) return undefined;
+	return title ?? target;
 }
 
 function fileLocationLabel(path: string, oldPath?: string): string {

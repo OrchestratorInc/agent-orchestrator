@@ -678,7 +678,11 @@ describe("file changes", () => {
 		render(<ActivityRow activity={edit} />);
 		await userEvent.click(screen.getByRole("button", { name: /Edited 2 files/ }));
 		await userEvent.click(screen.getByRole("button", { name: /src\/a\.ts/ }));
-		expect(screen.getByText(/@@ -1 \+1,2 @@/)).toBeInTheDocument();
+		// The card numbers the lines from the hunk's range instead of printing it.
+		const card = document.querySelector('[data-chat-file-card="edit"]');
+		expect(card).toHaveTextContent("src/a.ts");
+		expect(card?.querySelectorAll("[data-tool-diff-row]").length).toBeGreaterThan(0);
+		expect(screen.queryByText(/@@ -1 \+1,2 @@/)).not.toBeInTheDocument();
 	});
 
 	it("opens a single-file edit straight onto its patch without listing the file again", async () => {
@@ -702,9 +706,12 @@ describe("file changes", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button", { name: /Edited/ }));
-		expect(screen.getByText(/@@ -1 \+1 @@/)).toBeInTheDocument();
-		// Header already shows the basename; do not repeat "Edited FAQ.tsx" in the body.
-		expect(screen.getAllByText("FAQ.tsx")).toHaveLength(1);
+		// Straight onto the file's card, not a one-item "Edited FAQ.tsx" list.
+		const card = document.querySelector('[data-chat-file-card="edit"]');
+		expect(card).toHaveTextContent("src/FAQ.tsx");
+		expect(card?.querySelector('[data-kind="del"]')).toHaveTextContent("1old");
+		expect(card?.querySelector('[data-kind="add"]')).toHaveTextContent("1new");
+		expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
 	});
 
 	// A file with no patch is not a button: a control that does nothing when pressed
