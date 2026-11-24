@@ -183,6 +183,43 @@ describe("useOrchestratorReplyState", () => {
 		expect(hook.result.current).toBe("unread");
 	});
 
+	it("keeps a Cloud chat orchestrator on its activity", async () => {
+		const cloud = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: undefined, cloud: { orgId: "org-1" } }) as unknown as WorkspaceSession;
+		const hook = setup(cloud("active", "2026-11-08T10:00:00Z"));
+		expect(hook.result.current).toBe("working");
+		hook.rerender({ orchestrator: cloud("idle", "2026-11-08T10:00:05Z"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBe("unread");
+		expect(fetchRecentConversation).not.toHaveBeenCalled();
+	});
+
+	it("leaves a queued annotation pending like a queued message", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({
+			...quiet,
+			turns: [...quiet.turns, { id: "t-note", state: "queued", requestedAt: "2026-11-08T10:05:00Z" }],
+			items: [...quiet.items, { kind: "message", id: "m-note", turnId: "t-note", sequence: 3, revision: 0, role: "user", origin: "automation", authoredByUser: true, streaming: false, createdAt: "2026-11-08T10:05:00Z", text: "Why this line?" }],
+		});
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, handledAt: { ":project-a": Date.parse("2026-11-08T09:59:00Z") } }));
+		const sent = (state: "active" | "idle", at: string) => ({ ...orchestrator(state, at), lastUserMessageAt: "2026-11-08T10:05:00Z" }) as WorkspaceSession;
+		const hook = setup(sent("active", "2026-11-08T10:05:03Z"));
+		hook.rerender({ orchestrator: sent("idle", "2026-11-08T10:05:30Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalled());
+		await act(async () => {});
+		hook.rerender({ orchestrator: sent("active", "2026-11-08T10:05:31Z"), viewing: false, projectId: "project-a" });
+		expect(hook.result.current).toBe("working");
+	});
+
+	it("counts a turn that settled within the second the work began", async () => {
+		const quiet = workerTurn("Noted.");
+		fetchRecentConversation.mockResolvedValue({ ...quiet, turns: quiet.turns.map((turn) => ({ ...turn, completedAt: "2026-11-08T10:05:00Z" })) });
+		act(() => useOrchestratorReplyStore.setState({ replyAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, seenAt: { ":project-a": Date.parse("2026-11-08T10:00:00Z") }, handledAt: { ":project-a": Date.parse("2026-11-08T09:59:00Z") } }));
+		const hook = setup(orchestrator("active", "2026-11-08T10:05:00.200Z"));
+		hook.rerender({ orchestrator: orchestrator("idle", "2026-11-08T10:05:00.800Z"), viewing: false, projectId: "project-a" });
+		await waitFor(() => expect(fetchRecentConversation).toHaveBeenCalled());
+		await act(async () => {});
+		expect(hook.result.current).toBeNull();
+	});
+
 	it("leaves a queued message pending when a button mounted after the work began", async () => {
 		const quiet = workerTurn("Noted.");
 		fetchRecentConversation.mockResolvedValue({ ...quiet, turns: [...quiet.turns, { id: "t-yours", state: "queued", hasHumanPrompt: true, requestedAt: "2026-11-08T10:05:00Z" }] });

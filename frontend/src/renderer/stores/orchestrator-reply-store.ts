@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { accountFailure, turnStanding } from "../components/chat/background-turns";
 import { indexWorkerUpdates, placeBatchedReports } from "../components/chat/WorkerUpdates";
 import { fetchRecentConversation } from "../hooks/useConversation";
+import { isUserQueuePrompt } from "../types/conversation";
 import type { WorkspaceSession } from "../types/workspace";
 
 const STORAGE_KEY = "ao.orchestrator.replies";
@@ -56,11 +57,13 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 	let check = checks.get(id);
 	if (!check) {
 		check = fetchRecentConversation(sessionId, hostId).then((snapshot): Check => {
-			const yoursWaiting = snapshot.turns.some((turn) => turn.hasHumanPrompt && (turn.state === "queued" || turn.state === "running"));
+			const prompted = new Set(snapshot.items.flatMap((item) => isUserQueuePrompt(item) && item.turnId ? [item.turnId] : []));
+			const yoursWaiting = snapshot.turns.some((turn) => (turn.hasHumanPrompt || prompted.has(turn.id)) && (turn.state === "queued" || turn.state === "running"));
 			if (snapshot.hasMoreBefore && !(Date.parse(snapshot.items[0]?.createdAt ?? "") <= since)) return { standsOut: true, yoursWaiting };
 			const index = indexWorkerUpdates(snapshot.items);
 			const { under } = placeBatchedReports(snapshot.batchedDeliveries ?? [], snapshot.items);
-			const settled = snapshot.turns.filter((turn) => turn.state !== "cancelled" && Date.parse(turn.completedAt ?? "") >= since);
+			const from = Math.floor(since / 1000) * 1000;
+			const settled = snapshot.turns.filter((turn) => turn.state !== "cancelled" && Date.parse(turn.completedAt ?? "") >= from);
 			const ids = new Set(settled.map((turn) => turn.id));
 			const drained = (snapshot.batchedDeliveries ?? []).filter((delivery) => ids.has(delivery.deliveredWithTurnId));
 			const standsOut = [...settled, ...drained.map((delivery) => ({ id: delivery.turnId, state: "completed", hasHumanPrompt: false }))].some((turn) => {
@@ -72,7 +75,7 @@ function settledTurnsStandOut(id: string, sessionId: string, hostId: string | un
 			});
 			const started = snapshot.turns.some((turn) => {
 				const began = Date.parse(turn.startedAt ?? turn.requestedAt);
-				return turn.state === "running" && began >= since && began <= until;
+				return turn.state === "running" && began >= from && began <= until;
 			});
 			return { standsOut: standsOut || ((settled.length === 0 || started) && "unsure"), yoursWaiting };
 		}).catch(() => ({ standsOut: true, yoursWaiting: true }));
@@ -104,7 +107,7 @@ export function useOrchestratorReplyState({ projectId, hostId, orchestrator, vie
 	const handledAt = useOrchestratorReplyStore((state) => state.handledAt[key] ?? 0);
 	const activityState = orchestrator?.activity?.state;
 	const lastActivityAt = orchestrator?.activity?.lastActivityAt;
-	const quiet = orchestrator?.mode === "chat";
+	const quiet = orchestrator?.mode === "chat" && !orchestrator.cloud;
 	const lastUserAt = Date.parse(orchestrator?.lastUserMessageAt ?? "") || 0;
 	const working = activityState === "active";
 	const previous = useRef<{ id?: string; working: boolean; since: number; observed: boolean } | null>(null);
