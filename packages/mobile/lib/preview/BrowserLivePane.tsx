@@ -135,6 +135,14 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		frames.current?.decoded();
 	}, [frameShown]);
 
+	// The last frame is kept only for the session that drew it.
+	const frameSession = useRef(sessionID);
+	useEffect(() => {
+		if (frameSession.current === sessionID) return;
+		frameSession.current = sessionID;
+		setFrameURI(undefined);
+	}, [sessionID]);
+
 	useEffect(() => {
 		setPage(null);
 		setFrameIsLive(false);
@@ -323,6 +331,11 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const markScale = useSharedValue(1);
 	const markOpacity = useSharedValue(0);
 	const interactive = status === "open" && Boolean(frameURI) && frameIsLive && !blank;
+	// Reconnecting with the last stream's frame on screen: it stays visible under
+	// a loading bar instead of being covered until the new stream draws (it takes
+	// no gestures meanwhile, see frameIsLive). The socket opens before that first
+	// frame, so the bar stays through "open" too.
+	const holdingFrame = (status === "connecting" || status === "open") && Boolean(frameURI) && !frameIsLive && !blank;
 	// Another session's page starts at its fitted size.
 	useEffect(() => {
 		zoomScale.value = 1;
@@ -426,9 +439,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 				<EmptyState icon="desktop" title="Nothing is open in the desktop browser yet" action={<Button title="Open URL…" icon="globe" onPress={controls.onOpenURL} />} />
 			</View> : null}
 			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title="Waiting for the desktop browser…" /></View> : null}
-			{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
+			{status !== "open" && !holdingFrame ? <BrowserState status={status} error={error} retry={retry} /> : null}
 			{statsLine ? <Text style={styles.statsHUD}>{statsLine}</Text> : null}
-			<LoadingBar loading={status === "open" && loading} accessibilityLabel="Loading page" />
+			<LoadingBar loading={(status === "open" && loading) || holdingFrame} accessibilityLabel={holdingFrame ? "Reconnecting to the browser" : "Loading page"} />
 		</View>
 		{bottomBar}
 		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} />
