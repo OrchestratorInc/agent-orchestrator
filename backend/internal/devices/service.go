@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -48,6 +49,9 @@ type Lease struct {
 
 // Status is the device picture shown in the Device tab.
 type Status struct {
+	// Available is false until the desktop app's Developer mode turns devices
+	// on; see SetAvailable.
+	Available bool
 	Enabled   bool
 	State     SetupState
 	Error     string
@@ -124,7 +128,13 @@ type Service struct {
 	watches map[domain.SessionID]leaseWatch
 	// stopReaper ends the loop that frees ended sessions' devices.
 	stopReaper context.CancelFunc
+	// available is the Developer mode gate, off on every daemon boot until the
+	// desktop app turns it on.
+	available atomic.Bool
 }
+
+// errUnavailable refuses device work while the desktop app's Developer mode is off.
+var errUnavailable = apierr.Conflict("DEVICES_UNAVAILABLE", "Devices are a Developer mode preview. Turn on Developer mode in Orchestrator's Settings > General to use them.", nil)
 
 // reapEvery is how often leases of ended sessions are freed when nothing else
 // asks about them. A variable for tests.
@@ -208,8 +218,7 @@ func (s *Service) finishRelease(ctx context.Context, device ports.DeviceInfo, sh
 	return s.cfg.Provider.Shutdown(ctx, device)
 }
 
-// New builds the service. When the user already opted in, the provider starts
-// in the background so the first open does not pay for it.
+// New builds the service. Nothing starts until SetAvailable turns devices on.
 func New(cfg Config) *Service {
 	if cfg.Log == nil {
 		cfg.Log = slog.Default()
@@ -222,9 +231,6 @@ func New(cfg Config) *Service {
 	}
 	leases, owned := loadLeases(cfg.DataDir)
 	s := &Service{cfg: cfg, log: cfg.Log, state: SetupOff, leases: leases, owned: owned}
-	if Enabled(cfg.DataDir) {
-		s.startLocked()
-	}
 	if cfg.Sessions != nil {
 		// A killed or archived session frees its device within half a minute
 		// even when nobody opens the Device tab or another device.
@@ -250,9 +256,40 @@ func (s *Service) reap(ctx context.Context, every time.Duration) {
 	}
 }
 
+// SetAvailable turns device support on or off for every client: the desktop
+// app sends its Developer mode here whenever it connects to the daemon. While
+// off, everything but reading status and releasing a device is refused, and
+// live streams end. Leases are kept, so turning it back on resumes them. When
+// the user already opted in, turning it on starts the provider in the
+// background so the first open does not pay for it.
+func (s *Service) SetAvailable(available bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.available.Store(available)
+	if !available {
+		for id := range s.watches {
+			s.stopWatchLocked(id)
+		}
+		return
+	}
+	if Enabled(s.cfg.DataDir) && s.state == SetupOff {
+		s.startLocked()
+	}
+}
+
+// Available reports whether device support is on (Developer mode).
+func (s *Service) Available() bool { return s.available.Load() }
+
+// Offered reports whether sessions should be told about the device tools:
+// devices are available and the user opted in.
+func (s *Service) Offered() bool { return s.Available() && Enabled(s.cfg.DataDir) }
+
 // Setup records the opt-in and starts the provider. It returns at once; the
 // Device tab polls Status while tools install.
 func (s *Service) Setup(ctx context.Context) (Status, error) {
+	if !s.Available() {
+		return Status{}, errUnavailable
+	}
 	if err := nothingRuns(s.cfg.Provider.Platforms(ctx)); err != nil {
 		return Status{}, err
 	}
@@ -338,7 +375,7 @@ func (s *Service) startLocked() {
 func (s *Service) Status(ctx context.Context) Status {
 	s.pruneEnded(ctx)
 	s.mu.Lock()
-	out := Status{Enabled: Enabled(s.cfg.DataDir), State: s.state, Error: s.setupErr, Leases: s.sortedLeasesLocked()}
+	out := Status{Available: s.Available(), Enabled: Enabled(s.cfg.DataDir), State: s.state, Error: s.setupErr, Leases: s.sortedLeasesLocked()}
 	s.mu.Unlock()
 	out.Platforms = s.cfg.Provider.Platforms(ctx)
 	if out.State == SetupReady {
@@ -409,6 +446,9 @@ func (s *Service) sortedLeasesLocked() []Lease {
 
 // awaitReady waits for an in-flight setup and reports its outcome.
 func (s *Service) awaitReady(ctx context.Context) error {
+	if !s.Available() {
+		return errUnavailable
+	}
 	if !Enabled(s.cfg.DataDir) {
 		return apierr.Conflict("DEVICES_DISABLED", "Device support is off. Turn it on in the Device tab or run `ao device setup`.", nil)
 	}
@@ -900,7 +940,12 @@ func (s *Service) listedDevice(ctx context.Context, device ports.DeviceInfo) (po
 	return ports.DeviceInfo{}, false
 }
 
+// requireLease returns the session's lease for device work, which needs
+// devices available.
 func (s *Service) requireLease(id domain.SessionID) (Lease, error) {
+	if !s.Available() {
+		return Lease{}, errUnavailable
+	}
 	l, ok := s.Lease(id)
 	if !ok {
 		return Lease{}, apierr.NotFound("NO_DEVICE_LEASE", "This session has no device. Run `ao device open` first.")

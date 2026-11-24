@@ -19,7 +19,7 @@ func TestLeasesSurviveADaemonRestart(t *testing.T) {
 		return SessionInfo{Terminated: ended[id]}, nil
 	}
 	start := func(p *fakeProvider) *Service {
-		svc := New(Config{DataDir: dir, Provider: p, Sessions: sessions, Now: func() time.Time { return time.Unix(1, 0) }})
+		svc := newAvailable(Config{DataDir: dir, Provider: p, Sessions: sessions, Now: func() time.Time { return time.Unix(1, 0) }})
 		if _, err := svc.Setup(ctx); err != nil {
 			t.Fatal(err)
 		}

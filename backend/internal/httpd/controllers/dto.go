@@ -5009,12 +5009,24 @@ type DeviceLease struct {
 
 // DeviceStatusResponse is the body of GET /api/v1/devices.
 type DeviceStatusResponse struct {
+	Available bool                   `json:"available" description:"Whether devices are available: the desktop app's Developer mode is on. While false, only status, a session's lease and releasing a device are served."`
 	Enabled   bool                   `json:"enabled" description:"Whether the user turned device support on."`
 	State     string                 `json:"state" enum:"off,installing,ready,error"`
 	Error     string                 `json:"error,omitempty"`
 	Platforms []DevicePlatformStatus `json:"platforms"`
 	Devices   []DeviceSummary        `json:"devices"`
 	Leases    []DeviceLease          `json:"leases"`
+}
+
+// DeviceAvailabilityRequest turns devices on or off; the desktop app sends its
+// Developer mode.
+type DeviceAvailabilityRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// DeviceAvailabilityResponse is whether devices are now available.
+type DeviceAvailabilityResponse struct {
+	Enabled bool `json:"enabled"`
 }
 
 // SessionDeviceResponse carries a session's lease, null when it has none.

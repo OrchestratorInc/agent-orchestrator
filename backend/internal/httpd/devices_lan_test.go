@@ -67,6 +67,7 @@ func TestDevicesReachablePairedPhoneOnly(t *testing.T) {
 	t.Cleanup(hub.Close)
 
 	svc := devices.New(devices.Config{DataDir: t.TempDir(), Provider: lanDeviceProvider{hub: hub.URL}})
+	svc.SetAvailable(true)
 	if _, err := svc.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}

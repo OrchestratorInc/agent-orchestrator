@@ -8,6 +8,7 @@ import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, Package, Smartphone } from "@/components/app-icons";
 import { DevicePanel } from "./DevicePanel";
+import { useDevicesEnabled } from "../lib/devices-enabled";
 import { AppLink } from "./AppLink";
 import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
 import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
@@ -239,6 +240,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
+	const devicesEnabled = useDevicesEnabled();
 	// Badge the Artifacts tab when an artifact was registered while Browser or Files was in use.
 	const artifactsUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
@@ -286,8 +288,9 @@ export const SessionInspector = memo(function SessionInspector({
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
 	// Simulators and emulators run on this machine: the Device tab serves
-	// local worker sessions only until remote and cloud providers exist.
-	const deviceAvailable = session !== undefined && !session.cloud && !hostId && !orchestrator;
+	// local worker sessions only until remote and cloud providers exist, and
+	// only with Developer mode on.
+	const deviceAvailable = devicesEnabled && session !== undefined && !session.cloud && !hostId && !orchestrator;
 	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"

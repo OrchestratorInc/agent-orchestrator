@@ -26,7 +26,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/devices"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -610,6 +609,10 @@ type Manager struct {
 	// computerUse reports the "Let agents use this computer" setting; nil is off.
 	computerUseMu sync.Mutex
 	computerUse   func(context.Context) bool
+	// devicesOffered reports whether devices are on (Developer mode) and the
+	// user opted in; nil is off.
+	devicesMu      sync.Mutex
+	devicesOffered func() bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -7043,6 +7046,21 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	return buildSystemPromptText(cfg), nil
 }
 
+// SetDevicesOffered supplies whether new sessions are told about `ao device`.
+// Sessions already running keep the prompt they started with.
+func (m *Manager) SetDevicesOffered(offered func() bool) {
+	m.devicesMu.Lock()
+	defer m.devicesMu.Unlock()
+	m.devicesOffered = offered
+}
+
+func (m *Manager) devicesAreOffered() bool {
+	m.devicesMu.Lock()
+	offered := m.devicesOffered
+	m.devicesMu.Unlock()
+	return offered != nil && offered()
+}
+
 // aoSkillPointer is appended to every agent system prompt. It points the agent
 // at the using-ao skill the daemon installs under the data dir, rather than
 // inlining the whole CLI catalog. The path is absolute so it resolves from any
@@ -7077,10 +7095,11 @@ func (m *Manager) aoSkillPointer(chat bool) string {
 	pointer := "\n\n" + "## Using the ao CLI\n\n" +
 		"When using `ao`, read `" + skillFile + "` and only the relevant file under `" + commandsGlob + "`. To report Orchestrator bugs, read `" + bugTriageFile + "`.\n\n" +
 		browserSection
-	// Device tools are described only once the user turned device support
-	// on: describing tools that answer DEVICES_DISABLED would steer the agent
-	// away from the simctl/adb it still has.
-	if devices.Enabled(m.dataDir) {
+	// Device tools are described only while devices are on (the desktop's
+	// Developer mode) and the user turned device support on: describing tools
+	// that refuse every call would steer the agent away from the simctl/adb it
+	// still has.
+	if m.devicesAreOffered() {
 		deviceFile := filepath.ToSlash(filepath.Join(dir, "commands", "device.md"))
 		pointer += "\n\n## AO Device panel\n\n" +
 			"For mobile app work, read `" + deviceFile + "` and use `ao device open` to get an iOS Simulator or Android Emulator for this session; the user watches and taps it in the Device tab. " +

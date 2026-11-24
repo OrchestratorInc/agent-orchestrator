@@ -1,5 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { DeviceRevealWatcher } from "./DeviceRevealWatcher";
+import { useDevicesEnabled } from "../lib/devices-enabled";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
@@ -1070,6 +1071,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Split panes are a Developer mode preview; off, no split is shown and
 	// turning it off mid-split puts every tab back in the strip.
 	const splitPanes = useSplitPanesEnabled();
+	// Devices are a Developer mode preview: off, no Device tab opens on its own.
+	const devicesEnabled = useDevicesEnabled();
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
@@ -1769,7 +1772,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// An agent's `ao device open` reveals the Device tab, as `ao preview` reveals
 	// Browser: a lease opened while this session is on screen opens the tab once;
 	// entering a session that already holds one does not.
-	const deviceAvailable = Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
+	const deviceAvailable = devicesEnabled && Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
 	const revealDevice = useCallback(() => {
 		transitionInspectorView("device");
 		setInspectorOpenForSession(uiSessionId, true);

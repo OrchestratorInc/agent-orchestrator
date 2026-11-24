@@ -608,6 +608,9 @@ describe("shell workspace startup", () => {
 		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
 			body: { enabled: true },
 		}));
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/devices/availability", {
+			body: { enabled: true },
+		}));
 
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
 		view.rerender(
@@ -619,7 +622,7 @@ describe("shell workspace startup", () => {
 		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
 	});
 
-	it("keeps chat hibernation disabled when Developer Mode is off", async () => {
+	it("keeps chat hibernation and devices disabled when Developer Mode is off", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
 		await renderShell();
 
@@ -627,6 +630,9 @@ describe("shell workspace startup", () => {
 			body: { enabled: false },
 		}));
 		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
+			body: { enabled: false },
+		}));
+		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/devices/availability", {
 			body: { enabled: false },
 		}));
 	});

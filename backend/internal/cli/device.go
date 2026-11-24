@@ -48,6 +48,7 @@ type deviceLeaseDTO struct {
 }
 
 type deviceStatusDTO struct {
+	Available bool                `json:"available"`
 	Enabled   bool                `json:"enabled"`
 	State     string              `json:"state"`
 	Error     string              `json:"error,omitempty"`
@@ -282,7 +283,10 @@ func writeDeviceStatus(w io.Writer, s deviceStatusDTO, jsonOutput bool) error {
 		return writeJSON(w, s)
 	}
 	state := s.State
-	if !s.Enabled {
+	switch {
+	case !s.Available:
+		state = "unavailable (devices are a Developer mode preview: turn on Developer mode in Orchestrator's Settings > General)"
+	case !s.Enabled:
 		state = "off (run `ao device setup` to turn it on)"
 	}
 	if _, err := fmt.Fprintf(w, "Device support: %s\n", state); err != nil {

@@ -22,6 +22,7 @@ import (
 // DeviceService is the device surface the controller drives.
 type DeviceService interface {
 	Status(ctx context.Context) devices.Status
+	SetAvailable(available bool)
 	Setup(ctx context.Context) (devices.Status, error)
 	Open(ctx context.Context, id domain.SessionID, req devices.OpenRequest) (devices.Lease, error)
 	Lease(id domain.SessionID) (devices.Lease, bool)
@@ -51,6 +52,7 @@ type DevicesController struct {
 // Register adds the device routes.
 func (c *DevicesController) Register(r chi.Router) {
 	r.Get("/devices", c.status)
+	r.Put("/devices/availability", c.setAvailability)
 	r.Post("/devices/setup", c.setup)
 	r.Get("/sessions/{sessionId}/device", c.get)
 	r.Post("/sessions/{sessionId}/device/open", c.open)
@@ -69,6 +71,26 @@ func (c *DevicesController) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, deviceStatusView(c.Svc.Status(r.Context())))
+}
+
+// setAvailability is how the desktop app's Developer mode turns devices on and
+// off. The daemon keeps it in memory, so devices are off after every restart
+// until the desktop connects again.
+func (c *DevicesController) setAvailability(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodPut, "/api/v1/devices/availability")
+		return
+	}
+	var req DeviceAvailabilityRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "DEVICE_AVAILABILITY_INVALID", "enabled must be true or false", nil)
+		return
+	}
+	c.Svc.SetAvailable(*req.Enabled)
+	envelope.WriteJSON(w, http.StatusOK, DeviceAvailabilityResponse{Enabled: *req.Enabled})
 }
 
 func (c *DevicesController) setup(w http.ResponseWriter, r *http.Request) {
@@ -370,6 +392,7 @@ func writeLease(w http.ResponseWriter, r *http.Request, lease devices.Lease, err
 
 func deviceStatusView(s devices.Status) DeviceStatusResponse {
 	out := DeviceStatusResponse{
+		Available: s.Available,
 		Enabled:   s.Enabled,
 		State:     string(s.State),
 		Error:     s.Error,

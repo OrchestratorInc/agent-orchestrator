@@ -149,10 +149,17 @@ func (f *fakeProvider) ReleaseControl(_ context.Context, d ports.DeviceInfo, kee
 }
 func (f *fakeProvider) Close() error { return nil }
 
+// newAvailable builds a service with devices available, as with Developer mode on.
+func newAvailable(cfg Config) *Service {
+	svc := New(cfg)
+	svc.SetAvailable(true)
+	return svc
+}
+
 func newTestService(t *testing.T, p *fakeProvider, maxLocal int) *Service {
 	t.Helper()
 	dir := t.TempDir()
-	svc := New(Config{DataDir: dir, Provider: p, MaxLocalLeases: maxLocal, Now: func() time.Time { return time.Unix(1, 0) }})
+	svc := newAvailable(Config{DataDir: dir, Provider: p, MaxLocalLeases: maxLocal, Now: func() time.Time { return time.Unix(1, 0) }})
 	if _, err := svc.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -233,13 +240,110 @@ func TestOpenExplainsUnsupportedPlatform(t *testing.T) {
 }
 
 func TestOpenRequiresOptIn(t *testing.T) {
-	svc := New(Config{DataDir: t.TempDir(), Provider: iosFleet()})
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: iosFleet()})
 	_, err := svc.Open(context.Background(), "s-1", OpenRequest{})
 	if apiCode(err) != "DEVICES_DISABLED" {
 		t.Fatalf("open before setup err = %v, want DEVICES_DISABLED", err)
 	}
 	if Enabled(svc.cfg.DataDir) {
 		t.Fatal("Enabled before setup")
+	}
+}
+
+// Devices are a Developer mode preview: until the desktop turns them on, and
+// again after it turns them off, every device action is refused, but status
+// reads and giving a device back still work and the lease survives.
+func TestDevicesNeedDeveloperMode(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	svc := New(Config{DataDir: t.TempDir(), Provider: p, MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) }})
+	if _, err := svc.Setup(ctx); apiCode(err) != "DEVICES_UNAVAILABLE" {
+		t.Fatalf("Setup while unavailable = %v, want DEVICES_UNAVAILABLE", err)
+	}
+	if Enabled(svc.cfg.DataDir) {
+		t.Fatal("the opt-in was recorded while devices were unavailable")
+	}
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{}); apiCode(err) != "DEVICES_UNAVAILABLE" {
+		t.Fatalf("Open while unavailable = %v, want DEVICES_UNAVAILABLE", err)
+	}
+	if st := svc.Status(ctx); st.Available || st.State != SetupOff {
+		t.Fatalf("status while unavailable = %+v, want unavailable and off", st)
+	}
+
+	svc.SetAvailable(true)
+	if _, err := svc.Setup(ctx); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if !svc.Offered() {
+		t.Fatal("not offered with devices available and opted in")
+	}
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	svc.SetAvailable(false)
+	if svc.Offered() {
+		t.Fatal("offered after Developer mode turned off")
+	}
+	if st := svc.Status(ctx); st.Available || len(st.Leases) != 1 {
+		t.Fatalf("status after turning off = %+v, want unavailable with the lease kept", st)
+	}
+	if _, err := svc.Screenshot(ctx, "s-1"); apiCode(err) != "DEVICES_UNAVAILABLE" {
+		t.Fatalf("Screenshot while unavailable = %v, want DEVICES_UNAVAILABLE", err)
+	}
+	if _, _, _, err := svc.HubTarget(ctx, "s-1"); apiCode(err) != "DEVICES_UNAVAILABLE" {
+		t.Fatalf("HubTarget while unavailable = %v, want DEVICES_UNAVAILABLE", err)
+	}
+
+	svc.SetAvailable(true)
+	if _, err := svc.Screenshot(ctx, "s-1"); err != nil {
+		t.Fatalf("Screenshot after turning back on: %v", err)
+	}
+	svc.SetAvailable(false)
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatalf("Close while unavailable: %v", err)
+	}
+	if _, ok := svc.Lease("s-1"); ok {
+		t.Fatal("lease kept after Close")
+	}
+}
+
+// Turning devices off ends a live stream: the hub connection's context is
+// cancelled, so a viewer cannot keep driving the device.
+func TestTurningDevicesOffEndsStreams(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, iosFleet(), 3)
+	if _, err := svc.Open(ctx, "s-1", OpenRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, watch, err := svc.HubTarget(ctx, "s-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAvailable(false)
+	select {
+	case <-watch.Done():
+	default:
+		t.Fatal("stream still open after devices turned off")
+	}
+}
+
+// The provider starts on boot only once devices are available: a machine with
+// Developer mode off never runs the device tools.
+func TestProviderStartsWhenAvailable(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	first := newAvailable(Config{DataDir: dir, Provider: iosFleet()})
+	if _, err := first.Setup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(Config{DataDir: dir, Provider: iosFleet()})
+	if st := svc.Status(ctx); st.State != SetupOff {
+		t.Fatalf("state on boot = %q, want off until devices are available", st.State)
+	}
+	svc.SetAvailable(true)
+	if st := svc.Status(ctx); st.State == SetupOff {
+		t.Fatal("provider did not start when devices became available")
 	}
 }
 
@@ -262,7 +366,7 @@ func TestEndedSessionsAndCloseFreeTheDevice(t *testing.T) {
 	p := iosFleet()
 	var mu sync.Mutex
 	terminated := map[domain.SessionID]bool{}
-	svc := New(Config{DataDir: t.TempDir(), Provider: p, Sessions: func(_ context.Context, id domain.SessionID) (SessionInfo, error) {
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, Sessions: func(_ context.Context, id domain.SessionID) (SessionInfo, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		return SessionInfo{Terminated: terminated[id]}, nil
@@ -358,7 +462,7 @@ func TestOpenCloseAndEndedSessionsReleaseAgentClaims(t *testing.T) {
 	ctx := context.Background()
 	p := iosFleet()
 	ended := false
-	svc := New(Config{DataDir: t.TempDir(), Provider: p, Sessions: func(_ context.Context, id domain.SessionID) (SessionInfo, error) {
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, Sessions: func(_ context.Context, id domain.SessionID) (SessionInfo, error) {
 		return SessionInfo{Terminated: id == "s-1" && ended}, nil
 	}})
 	if _, err := svc.Setup(ctx); err != nil {
@@ -426,7 +530,7 @@ func (p *pressingProvider) PressButton(_ context.Context, d ports.DeviceInfo, se
 
 func newServiceWith(t *testing.T, p ports.DeviceProvider) *Service {
 	t.Helper()
-	svc := New(Config{DataDir: t.TempDir(), Provider: p, MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) }})
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) }})
 	if _, err := svc.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +637,7 @@ func TestLiveLeaseReportsADeviceShutDownOutsideAO(t *testing.T) {
 	ctx := context.Background()
 	p := iosFleet()
 	now := time.Unix(100, 0)
-	svc := New(Config{DataDir: t.TempDir(), Provider: p, Now: func() time.Time { return now }})
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, Now: func() time.Time { return now }})
 	if _, err := svc.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +667,7 @@ func TestLiveLeaseReadsOffUntilTheBootReturns(t *testing.T) {
 	p := iosFleet()
 	gate := make(chan struct{})
 	p.bootGate = gate
-	svc := New(Config{DataDir: t.TempDir(), Provider: p})
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p})
 	if _, err := svc.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +726,7 @@ func TestStoppedEmulatorReadsOffAndReopensByName(t *testing.T) {
 		devices:   []ports.DeviceInfo{{ID: "emulator-5554", Name: "Pixel_9", Platform: ports.DevicePlatformAndroid, Booted: true}},
 	}
 	now := time.Unix(100, 0)
-	svc := New(Config{DataDir: t.TempDir(), Provider: p, Now: func() time.Time { return now }})
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, Now: func() time.Time { return now }})
 	if _, err := svc.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +755,7 @@ func TestLiveLeaseReleasesAnEndedSessionsDevice(t *testing.T) {
 	ctx := context.Background()
 	p := iosFleet()
 	ended := false
-	svc := New(Config{DataDir: t.TempDir(), Provider: p, Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) {
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) {
 		return SessionInfo{Terminated: ended}, nil
 	}})
 	if _, err := svc.Setup(ctx); err != nil {
@@ -681,7 +785,7 @@ func TestSetupRefusesWhenNothingCanRun(t *testing.T) {
 		{Platform: ports.DevicePlatformAndroid, Reason: "Install the Android SDK."},
 	}}
 	dir := t.TempDir()
-	svc := New(Config{DataDir: dir, Provider: p, MaxLocalLeases: 1, Now: func() time.Time { return time.Unix(1, 0) }})
+	svc := newAvailable(Config{DataDir: dir, Provider: p, MaxLocalLeases: 1, Now: func() time.Time { return time.Unix(1, 0) }})
 	_, err := svc.Setup(context.Background())
 	var apiErr *apierr.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != "NO_DEVICE_PLATFORM" {
@@ -855,7 +959,7 @@ func TestLeaseSurvivesAFailedSessionLookup(t *testing.T) {
 	ctx := context.Background()
 	p := iosFleet()
 	var lookupErr error
-	svc := New(Config{DataDir: t.TempDir(), Provider: p, MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: p, MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
 		Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) { return SessionInfo{}, lookupErr }})
 	if _, err := svc.Setup(ctx); err != nil {
 		t.Fatal(err)
@@ -999,7 +1103,7 @@ func TestEndingALeaseRevokesTheAgentCommand(t *testing.T) {
 func TestHubTargetRefusesAnEndedSession(t *testing.T) {
 	ctx := context.Background()
 	var terminated atomic.Bool
-	svc := New(Config{DataDir: t.TempDir(), Provider: iosFleet(), MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: iosFleet(), MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
 		Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) {
 			return SessionInfo{Terminated: terminated.Load()}, nil
 		}})
@@ -1026,7 +1130,7 @@ func TestEndedSessionsAreReapedInTheBackground(t *testing.T) {
 	t.Cleanup(func() { reapEvery = previous })
 	ctx := context.Background()
 	var terminated atomic.Bool
-	svc := New(Config{DataDir: t.TempDir(), Provider: iosFleet(), MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
+	svc := newAvailable(Config{DataDir: t.TempDir(), Provider: iosFleet(), MaxLocalLeases: 3, Now: func() time.Time { return time.Unix(1, 0) },
 		Sessions: func(context.Context, domain.SessionID) (SessionInfo, error) {
 			return SessionInfo{Terminated: terminated.Load()}, nil
 		}})
@@ -1089,7 +1193,7 @@ func TestOpenReplacesALeasedDeviceThatWasDeleted(t *testing.T) {
 	if got, _ := svc.Lease("s-1"); got.Device.ID != lease.Device.ID {
 		t.Fatalf("stored lease = %+v, want %s", got, lease.Device.ID)
 	}
-	if reloaded := New(Config{DataDir: svc.cfg.DataDir, Provider: p}); reloaded.leases["s-1"].Device.ID != lease.Device.ID {
+	if reloaded := newAvailable(Config{DataDir: svc.cfg.DataDir, Provider: p}); reloaded.leases["s-1"].Device.ID != lease.Device.ID {
 		t.Fatalf("saved lease = %+v, want %s", reloaded.leases["s-1"], lease.Device.ID)
 	}
 }
