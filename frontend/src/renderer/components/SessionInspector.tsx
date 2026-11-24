@@ -6,7 +6,9 @@ import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
-import { Chat, CheckWaves, Folder, List, Package, SquareTerminal } from "@/components/app-icons";
+import { Chat, CheckWaves, Folder, List, Package, Smartphone, SquareTerminal } from "@/components/app-icons";
+import { DevicePanel } from "./DevicePanel";
+import { useDevicesEnabled } from "../lib/devices-enabled";
 import { AppLink } from "./AppLink";
 import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
 import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
@@ -142,6 +144,7 @@ const INSPECTOR_SURFACES: Record<InspectorView, UiSurface> = {
 	summary: "inspector_summary",
 	reviews: "inspector_reviews",
 	browser: "inspector_browser",
+	device: "inspector_device",
 	sideChat: "inspector_side_chat",
 	subagents: "inspector_subagents",
 	files: "inspector_files",
@@ -157,13 +160,14 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title" | "backgroundTasks.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.device" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title" | "backgroundTasks.title";
 	icon: ReactNode;
 }[] = [
 	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
 	{ id: "files", labelKey: "inspector.files", icon: <Folder data-testid="files-viewer-icon" /> },
 	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
 	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
+	{ id: "device", labelKey: "inspector.device", icon: <Smartphone aria-hidden="true" /> },
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
 	{ id: "subagents", labelKey: "inspector.subagents", icon: <SubagentIcon aria-hidden="true" /> },
 	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
@@ -243,6 +247,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
+	const devicesEnabled = useDevicesEnabled();
 	// Badge the Artifacts tab when an artifact was registered while Browser or Files was in use.
 	const artifactsUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
@@ -311,6 +316,10 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
+	// Simulators and emulators run on this machine: the Device tab serves
+	// local worker sessions only until remote and cloud providers exist, and
+	// only with Developer mode on.
+	const deviceAvailable = devicesEnabled && session !== undefined && !session.cloud && !hostId && !orchestrator;
 	// The orchestrator's rail also offers its chat's Subagents panel while it lists
 	// any, and Background tasks once its composer strip has opened one.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
@@ -322,6 +331,7 @@ export const SessionInspector = memo(function SessionInspector({
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
 			&& (entry.id !== "subagents" || subagentsView !== undefined)
+			&& (entry.id !== "device" || deviceAvailable)
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)
@@ -379,6 +389,7 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 				browserPoppedOut={browserPoppedOut}
+				deviceView={session && deviceAvailable ? <DevicePanel isActive={isInspectorVisible} key={session.id} sessionId={session.id} /> : undefined}
 				browserView={
 					session && (!hostId || browserView) ? (
 						<BrowserView

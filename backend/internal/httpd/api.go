@@ -84,7 +84,9 @@ type APIDeps struct {
 	// Panes relays split-pane requests from agents to the desktop window.
 	Panes controllers.PaneService
 	// PaneTerminals lets an agent type into and read its session's shell terminals.
-	PaneTerminals            controllers.PaneTerminalService
+	PaneTerminals controllers.PaneTerminalService
+	// Devices serves simulators and emulators to sessions; nil answers 501.
+	Devices                  controllers.DeviceService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -183,6 +185,7 @@ type API struct {
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
+	devices       *controllers.DevicesController
 	browser       *controllers.BrowserController
 	panes         *controllers.PanesController
 	system        *controllers.SystemController
@@ -256,6 +259,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
+		devices:       &controllers.DevicesController{Svc: deps.Devices, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
 		panes:         &controllers.PanesController{Svc: deps.Panes, Terminals: deps.PaneTerminals, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
@@ -331,6 +335,7 @@ func (a *API) Register(root chi.Router) {
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				stackMerge := middleware.Timeout(max(timeout, 3*time.Minute))(next)
+				deviceCommand := middleware.Timeout(max(timeout, deviceCommandBudget))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
@@ -373,13 +378,22 @@ func (a *API) Register(root chi.Router) {
 						upload.ServeHTTP(w, req)
 						return
 					}
+					// Installing a large build, launching through a cold driver, or
+					// shutting a device down outlasts one REST request; cutting the
+					// request off would kill an install halfway.
+					if deviceCommandRoute(req) {
+						deviceCommand.ServeHTTP(w, req)
+						return
+					}
 					// A managed preview carries the dev server's HMR socket and event
 					// streams, and the agent browser its stream socket: both stay open
 					// as long as the page does. A file upload streams to disk for as
 					// long as its bytes keep coming; the handler ends one that stalls.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/sessions/{sessionId}/preview/app/*" ||
 						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" ||
-						pattern == "/api/v1/attachment-uploads" {
+						pattern == "/api/v1/attachment-uploads" ||
+						pattern == "/api/v1/sessions/{sessionId}/device/hub/*" ||
+						pattern == "/api/v1/sessions/{sessionId}/device/open" {
 						next.ServeHTTP(w, req)
 						return
 					}
@@ -411,6 +425,7 @@ func (a *API) Register(root chi.Router) {
 			a.settings.Register(r)
 			a.dev.Register(r)
 			a.browser.Register(r)
+			a.devices.Register(r)
 			a.panes.Register(r)
 			a.system.Register(r)
 			a.identity.Register(r)
@@ -518,4 +533,22 @@ func agentBrowserURL(raw string) *url.URL {
 func userMessageRecorder(sessions any) controllers.UserMessageRecorder {
 	recorder, _ := sessions.(controllers.UserMessageRecorder)
 	return recorder
+}
+
+// deviceCommandBudget covers the device provider's own limits: two minutes for
+// an install, a launch or a button press through the agent driver, and up to
+// three for a shutdown through the hub, after the lease's driver release.
+const deviceCommandBudget = 4 * time.Minute
+
+// deviceCommandRoute reports the device routes that run a provider command
+// inside the request.
+func deviceCommandRoute(req *http.Request) bool {
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions/{sessionId}/device/install",
+		"/api/v1/sessions/{sessionId}/device/launch",
+		"/api/v1/sessions/{sessionId}/device/close",
+		"/api/v1/sessions/{sessionId}/device/button":
+		return true
+	}
+	return false
 }

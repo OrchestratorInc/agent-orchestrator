@@ -13400,3 +13400,24 @@ func (f *fakeStore) SetSessionImportWorkspace(_ context.Context, id domain.Sessi
 	f.sessions[id] = rec
 	return true, nil
 }
+
+func TestAOSkillPointerNamesDeviceGuideOnlyWhenOffered(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{dataDir: dir}
+	if pointer := m.aoSkillPointer(false); strings.Contains(pointer, "AO Device panel") {
+		t.Fatalf("device section present with no devices gate:\n%s", pointer)
+	}
+	offered := false
+	m.SetDevicesOffered(func() bool { return offered })
+	if pointer := m.aoSkillPointer(false); strings.Contains(pointer, "AO Device panel") {
+		t.Fatalf("device section present while devices are not offered:\n%s", pointer)
+	}
+	offered = true
+	pointer := m.aoSkillPointer(false)
+	guide := filepath.ToSlash(filepath.Join(dir, "skills", "using-ao", "commands", "device.md"))
+	for _, want := range []string{"## AO Device panel", "`" + guide + "`", "ao device open"} {
+		if !strings.Contains(pointer, want) {
+			t.Fatalf("device section missing %q:\n%s", want, pointer)
+		}
+	}
+}

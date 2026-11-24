@@ -759,6 +759,15 @@ function ArtifactsViewMock({
 		{request?.feedback ? <span>{`feedback request ${request.key}`}</span> : null}
 	</div>;
 }
+const deviceRevealWatcherProps = vi.hoisted(() => ({
+	current: undefined as undefined | { enabled: boolean; onReveal: () => void; sessionId: string; terminated: boolean },
+}));
+vi.mock("./DeviceRevealWatcher", () => ({
+	DeviceRevealWatcher: (props: { enabled: boolean; onReveal: () => void; sessionId: string; terminated: boolean }) => {
+		deviceRevealWatcherProps.current = props;
+		return null;
+	},
+}));
 vi.mock("./SessionInspector", () => ({
 	SessionInspector: ({
 		artifactRequest,
@@ -1055,6 +1064,7 @@ describe("SessionView", () => {
 		workspaceQueryState.isStale = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
+			developerMode: false,
 			prView: false,
 			workspaceFileOpenRequest: null,
 			// Opening a session leaves the inspector closed (covered by the
@@ -5494,6 +5504,46 @@ describe("SessionView", () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
 
 		expect(chatSurfaceRenders).toHaveLength(rendersBeforeToggle);
+	});
+
+	it("keeps the device watcher off without Developer mode", () => {
+		useUiStore.setState({ developerMode: false });
+		render(<SessionView sessionId="sess-1" />);
+		expect(deviceRevealWatcherProps.current).toMatchObject({ enabled: false });
+	});
+
+	it("opens the Device tab when the device watcher reveals a device", () => {
+		useUiStore.setState({ developerMode: true });
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+		render(<SessionView sessionId="sess-1" />);
+		expect(deviceRevealWatcherProps.current).toMatchObject({ enabled: true, sessionId: "sess-1", terminated: false });
+		expect(inspectorOpen("sess-1")).toBe(false);
+
+		act(() => deviceRevealWatcherProps.current!.onReveal());
+
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("device");
+	});
+
+	it("dismisses maximized Files when an agent's device reveals the Device tab", () => {
+		useUiStore.setState({ developerMode: true });
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(within(screen.getByTestId("panel-inspector")).getByRole("button", { name: "files rail" }));
+		expect(document.querySelector(".files-popout-overlay")).toBeInTheDocument();
+
+		act(() => deviceRevealWatcherProps.current!.onReveal());
+
+		expect(document.querySelector(".files-popout-overlay")).not.toBeInTheDocument();
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("device");
+	});
+
+	it("keeps the device watcher off for cloud sessions", () => {
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		(worker as { cloud?: unknown }).cloud = { orgId: "cloud-org" };
+		useUiStore.setState({ developerMode: true });
+		render(<SessionView sessionId="sess-1" />);
+		expect(deviceRevealWatcherProps.current).toMatchObject({ enabled: false });
 	});
 
 	it("starts collapsing the resize handle with the inspector panel", () => {
