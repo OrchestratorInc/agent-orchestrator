@@ -56,15 +56,27 @@ type WorkerReporter struct {
 	activeSince map[domain.SessionID]time.Time
 	pendingDone map[domain.SessionID]pendingDone
 	nextGen     uint64
+	// own holds the IDs of reports this reporter wrote, so they are never
+	// mistaken for a report the agent filed itself. It goes away with
+	// `ao report`. It has its own lock because writes can run while mu is held.
+	ownMu sync.Mutex
+	own   map[string]struct{}
+}
+
+// Stretch is one stretch of observed work: from the event that made the
+// worker active to the event that ended it, in event (not delivery) time.
+type Stretch struct {
+	Since time.Time
+	Until time.Time
 }
 
 // Stopper cancels a scheduled function, as *time.Timer does.
 type Stopper interface{ Stop() bool }
 
 type pendingDone struct {
-	since time.Time
-	gen   uint64
-	timer Stopper
+	stretch Stretch
+	gen     uint64
+	timer   Stopper
 }
 
 // WorkerReporterDeps configures a WorkerReporter. Only Store and Reports are
@@ -101,15 +113,21 @@ func NewWorkerReporter(d WorkerReporterDeps) *WorkerReporter {
 		quiet: d.QuietPeriod, afterFunc: d.AfterFunc, spawn: d.Spawn,
 		activeSince: make(map[domain.SessionID]time.Time),
 		pendingDone: make(map[domain.SessionID]pendingDone),
+		own:         make(map[string]struct{}),
 	}
 }
 
-// Observe records one session activity change, in feed order. Decisions are
-// made under the lock; store reads and writes run off the caller's path.
-func (r *WorkerReporter) Observe(ctx context.Context, id domain.SessionID, activity domain.ActivityState, terminated bool) {
+// Observe records one session activity change, in feed order. at is when the
+// change happened; a zero at uses the current time. Decisions are made under
+// the lock; store reads and writes run off the caller's path.
+func (r *WorkerReporter) Observe(ctx context.Context, id domain.SessionID, activity domain.ActivityState, terminated bool, at time.Time) {
 	if r == nil || id == "" {
 		return
 	}
+	if at.IsZero() {
+		at = r.now()
+	}
+	at = at.UTC()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if terminated {
@@ -121,11 +139,11 @@ func (r *WorkerReporter) Observe(ctx context.Context, id domain.SessionID, activ
 	case domain.ActivityActive:
 		if pending, ok := r.cancelDoneLocked(id); ok {
 			// Resumed within the quiet period: still the same task.
-			r.activeSince[id] = pending.since
+			r.activeSince[id] = pending.stretch.Since
 			return
 		}
 		if _, ok := r.activeSince[id]; !ok {
-			r.activeSince[id] = r.now().UTC()
+			r.activeSince[id] = at
 		}
 	case domain.ActivityIdle:
 		since, ok := r.activeSince[id]
@@ -136,18 +154,19 @@ func (r *WorkerReporter) Observe(ctx context.Context, id domain.SessionID, activ
 		r.nextGen++
 		gen := r.nextGen
 		timer := r.afterFunc(r.quiet, func() { r.fireDone(ctx, id, gen) })
-		r.pendingDone[id] = pendingDone{since: since, gen: gen, timer: timer}
+		r.pendingDone[id] = pendingDone{stretch: Stretch{Since: since, Until: at}, gen: gen, timer: timer}
 	case domain.ActivityWaitingInput, domain.ActivityBlocked:
 		since, ok := r.activeSince[id]
 		if pending, wasDone := r.cancelDoneLocked(id); wasDone {
 			// A question right after finishing replaces the done report.
-			since, ok = pending.since, true
+			since, ok = pending.stretch.Since, true
 		}
 		if !ok {
 			return
 		}
 		delete(r.activeSince, id)
-		r.spawn(func() { r.Write(ctx, id, domain.ReportNeedsInput, since) })
+		stretch := Stretch{Since: since, Until: at}
+		r.spawn(func() { r.Write(ctx, id, domain.ReportNeedsInput, stretch) })
 	case domain.ActivityExited:
 		// An exit after a finished turn leaves its pending done in place.
 		since, ok := r.activeSince[id]
@@ -155,7 +174,8 @@ func (r *WorkerReporter) Observe(ctx context.Context, id domain.SessionID, activ
 			return
 		}
 		delete(r.activeSince, id)
-		r.spawn(func() { r.Write(ctx, id, domain.ReportStuck, since) })
+		stretch := Stretch{Since: since, Until: at}
+		r.spawn(func() { r.Write(ctx, id, domain.ReportStuck, stretch) })
 	}
 }
 
@@ -178,12 +198,12 @@ func (r *WorkerReporter) fireDone(ctx context.Context, id domain.SessionID, gen 
 	}
 	delete(r.pendingDone, id)
 	r.mu.Unlock()
-	r.Write(ctx, id, domain.ReportDone, pending.since)
+	r.Write(ctx, id, domain.ReportDone, pending.stretch)
 }
 
 // Write persists one report for a project worker. It is
 // best effort: failures are logged and never affect the session.
-func (r *WorkerReporter) Write(ctx context.Context, id domain.SessionID, state domain.ReportState, since time.Time) {
+func (r *WorkerReporter) Write(ctx context.Context, id domain.SessionID, state domain.ReportState, stretch Stretch) {
 	if r == nil || state == "" {
 		return
 	}
@@ -191,38 +211,51 @@ func (r *WorkerReporter) Write(ctx context.Context, id domain.SessionID, state d
 	if err != nil || !ok || session.Kind != domain.KindWorker || session.ProjectID == "" {
 		return
 	}
-	if r.agentReported(ctx, session, since) {
+	if r.agentReported(ctx, session, stretch) {
 		return
 	}
-	input := CreateInput{SessionID: id, State: state, Note: r.note(ctx, id, state, since)}
-	if _, err := r.reports.Create(ctx, input); err != nil {
+	input := CreateInput{SessionID: id, State: state, Note: r.note(ctx, id, state, stretch)}
+	created, err := r.reports.Create(ctx, input)
+	if err != nil {
 		r.log.Warn("worker report: create failed", "session", id, "state", state, "err", err)
+		return
+	}
+	if created.ID != "" {
+		r.ownMu.Lock()
+		r.own[created.ID] = struct{}{}
+		r.ownMu.Unlock()
 	}
 }
 
 // agentReported reports whether the worker filed its own report during this
 // stretch of work. It goes away with `ao report`.
-func (r *WorkerReporter) agentReported(ctx context.Context, session domain.SessionRecord, since time.Time) bool {
+func (r *WorkerReporter) agentReported(ctx context.Context, session domain.SessionRecord, stretch Stretch) bool {
 	reports, err := r.store.ListReportsByProject(ctx, session.ProjectID)
 	if err != nil {
 		return false
 	}
 	for _, report := range reports {
-		if report.SessionID == session.ID && !report.CreatedAt.Before(since) {
+		if report.SessionID != session.ID || report.CreatedAt.Before(stretch.Since) || report.CreatedAt.After(stretch.Until) {
+			continue
+		}
+		r.ownMu.Lock()
+		_, mine := r.own[report.ID]
+		r.ownMu.Unlock()
+		if !mine {
 			return true
 		}
 	}
 	return false
 }
 
-func (r *WorkerReporter) note(ctx context.Context, id domain.SessionID, state domain.ReportState, since time.Time) string {
+func (r *WorkerReporter) note(ctx context.Context, id domain.SessionID, state domain.ReportState, stretch Stretch) string {
 	switch state {
 	case domain.ReportNeedsInput:
 		return "Waiting for an approval or an answer in its session."
 	case domain.ReportStuck:
 		return "The agent process exited before finishing."
 	}
-	if text := r.finalMessage(ctx, id, since); text != "" {
+	if text := r.finalMessage(ctx, id, stretch); text != "" {
 		return text
 	}
 	return "Finished its turn. Read `ao session history " + string(id) + "` for the result."
@@ -230,7 +263,7 @@ func (r *WorkerReporter) note(ctx context.Context, id domain.SessionID, state do
 
 // finalMessage returns the worker's last assistant message from this stretch
 // of work, the subagent-style result. Terminal sessions have none.
-func (r *WorkerReporter) finalMessage(ctx context.Context, id domain.SessionID, since time.Time) string {
+func (r *WorkerReporter) finalMessage(ctx context.Context, id domain.SessionID, stretch Stretch) string {
 	conversation, err := r.store.ConversationForSession(ctx, id)
 	if err != nil || conversation.ID == "" {
 		return ""
@@ -241,7 +274,11 @@ func (r *WorkerReporter) finalMessage(ctx context.Context, id domain.SessionID, 
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
-		if msg.CreatedAt.Before(since) {
+		if msg.CreatedAt.After(stretch.Until) {
+			// A later turn's answer; this report covers only its own stretch.
+			continue
+		}
+		if msg.CreatedAt.Before(stretch.Since) {
 			break
 		}
 		if msg.Role != domain.MessageRoleAssistant {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -59,7 +60,7 @@ type workerReportRecorder struct {
 	activities []domain.ActivityState
 }
 
-func (r *workerReportRecorder) Observe(_ context.Context, id domain.SessionID, state domain.ActivityState, _ bool) {
+func (r *workerReportRecorder) Observe(_ context.Context, id domain.SessionID, state domain.ActivityState, _ bool, _ time.Time) {
 	r.ids = append(r.ids, id)
 	r.activities = append(r.activities, state)
 }

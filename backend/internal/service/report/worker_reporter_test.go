@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ type fakeCreator struct{ created []CreateInput }
 
 func (f *fakeCreator) Create(_ context.Context, in CreateInput) (domain.ReportRecord, error) {
 	f.created = append(f.created, in)
-	return domain.ReportRecord{}, nil
+	return domain.ReportRecord{ID: fmt.Sprintf("auto-%d", len(f.created)), SessionID: in.SessionID}, nil
 }
 
 type fakeTimer struct {
@@ -149,7 +150,7 @@ func TestWorkerReporterObserve(t *testing.T) {
 					clock.elapse()
 					continue
 				}
-				r.Observe(t.Context(), "w1", s.activity, s.terminated)
+				r.Observe(t.Context(), "w1", s.activity, s.terminated, time.Time{})
 			}
 			got := states(creator.created)
 			if len(got) != len(tc.want) {
@@ -179,11 +180,11 @@ func TestWorkerReporterResumedTaskKeepsItsStart(t *testing.T) {
 		Store: store, Reports: creator, Now: func() time.Time { return now },
 		AfterFunc: clock.AfterFunc, Spawn: func(f func()) { f() },
 	})
-	r.Observe(t.Context(), "w1", domain.ActivityActive, false)
+	r.Observe(t.Context(), "w1", domain.ActivityActive, false, time.Time{})
 	now = start.Add(time.Minute)
-	r.Observe(t.Context(), "w1", domain.ActivityIdle, false)
-	r.Observe(t.Context(), "w1", domain.ActivityActive, false)
-	r.Observe(t.Context(), "w1", domain.ActivityIdle, false)
+	r.Observe(t.Context(), "w1", domain.ActivityIdle, false, time.Time{})
+	r.Observe(t.Context(), "w1", domain.ActivityActive, false, time.Time{})
+	r.Observe(t.Context(), "w1", domain.ActivityIdle, false, time.Time{})
 	clock.elapse()
 	if len(creator.created) != 1 || creator.created[0].Note != "step one done" {
 		t.Fatalf("reports = %+v, want one done covering the whole task", creator.created)
@@ -200,7 +201,7 @@ func TestWorkerReporterWriteUsesFinalAssistantMessage(t *testing.T) {
 		{Role: domain.MessageRoleAssistant, Text: "  Opened PR 12; tests pass.  ", CreatedAt: since.Add(time.Minute)},
 	}
 	r, creator := newTestReporter(store, since)
-	r.Write(t.Context(), "w1", domain.ReportDone, since)
+	r.Write(t.Context(), "w1", domain.ReportDone, Stretch{Since: since, Until: since.Add(time.Hour)})
 	if len(creator.created) != 1 {
 		t.Fatalf("created %d reports, want 1", len(creator.created))
 	}
@@ -215,7 +216,7 @@ func TestWorkerReporterWriteUsesFinalAssistantMessage(t *testing.T) {
 
 func TestWorkerReporterWriteFallsBackToHistoryPointer(t *testing.T) {
 	r, creator := newTestReporter(workerStore(), time.Now())
-	r.Write(t.Context(), "w1", domain.ReportDone, time.Now())
+	r.Write(t.Context(), "w1", domain.ReportDone, Stretch{Since: time.Now(), Until: time.Now().Add(time.Hour)})
 	if len(creator.created) != 1 || !strings.Contains(creator.created[0].Note, "ao session history w1") {
 		t.Fatalf("reports = %+v", creator.created)
 	}
@@ -227,7 +228,7 @@ func TestWorkerReporterWriteTruncatesLongMessage(t *testing.T) {
 	store.conversation["w1"] = "c1"
 	store.messages["c1"] = []domain.ConversationMessage{{Role: domain.MessageRoleAssistant, Text: strings.Repeat("é", 5000), CreatedAt: since}}
 	r, creator := newTestReporter(store, since)
-	r.Write(t.Context(), "w1", domain.ReportDone, since)
+	r.Write(t.Context(), "w1", domain.ReportDone, Stretch{Since: since, Until: since.Add(time.Hour)})
 	if n := utf8.RuneCountInString(creator.created[0].Note); n != domain.MaxReportTextCharacters {
 		t.Fatalf("note has %d runes, want %d", n, domain.MaxReportTextCharacters)
 	}
@@ -250,7 +251,7 @@ func TestWorkerReporterWriteSkips(t *testing.T) {
 			store := workerStore()
 			store.reports = tc.reports
 			r, creator := newTestReporter(store, since)
-			r.Write(t.Context(), tc.session, domain.ReportDone, since)
+			r.Write(t.Context(), tc.session, domain.ReportDone, Stretch{Since: since, Until: since.Add(time.Hour)})
 			if len(creator.created) != 0 {
 				t.Fatalf("created %+v, want none", creator.created)
 			}
@@ -263,7 +264,7 @@ func TestWorkerReporterOlderAgentReportDoesNotSuppress(t *testing.T) {
 	store := workerStore()
 	store.reports = []domain.ReportRecord{{SessionID: "w1", CreatedAt: since.Add(-time.Minute)}}
 	r, creator := newTestReporter(store, since)
-	r.Write(t.Context(), "w1", domain.ReportNeedsInput, since)
+	r.Write(t.Context(), "w1", domain.ReportNeedsInput, Stretch{Since: since, Until: since.Add(time.Hour)})
 	if len(creator.created) != 1 || creator.created[0].State != domain.ReportNeedsInput {
 		t.Fatalf("reports = %+v", creator.created)
 	}
@@ -275,8 +276,8 @@ func TestWorkerReporterRealTimerWritesDone(t *testing.T) {
 		Store: workerStore(), Reports: creatorFunc(func(in CreateInput) { done <- in }),
 		QuietPeriod: 10 * time.Millisecond,
 	})
-	r.Observe(t.Context(), "w1", domain.ActivityActive, false)
-	r.Observe(t.Context(), "w1", domain.ActivityIdle, false)
+	r.Observe(t.Context(), "w1", domain.ActivityActive, false, time.Time{})
+	r.Observe(t.Context(), "w1", domain.ActivityIdle, false, time.Time{})
 	select {
 	case in := <-done:
 		if in.State != domain.ReportDone {
@@ -292,4 +293,61 @@ type creatorFunc func(CreateInput)
 func (f creatorFunc) Create(_ context.Context, in CreateInput) (domain.ReportRecord, error) {
 	f(in)
 	return domain.ReportRecord{}, nil
+}
+
+func TestWorkerReporterUsesEventTimeNotDeliveryTime(t *testing.T) {
+	start := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
+	store := workerStore()
+	store.conversation["w1"] = "c1"
+	store.messages["c1"] = []domain.ConversationMessage{
+		{Role: domain.MessageRoleAssistant, Text: "answer written before the active event arrived", CreatedAt: start.Add(time.Second)},
+	}
+	// The reporter's clock is well past the events, as when CDC delivers late.
+	r, creator, clock := newClockedReporter(store, start.Add(time.Hour))
+	r.Observe(t.Context(), "w1", domain.ActivityActive, false, start)
+	r.Observe(t.Context(), "w1", domain.ActivityIdle, false, start.Add(2*time.Second))
+	clock.elapse()
+	if len(creator.created) != 1 || creator.created[0].Note != "answer written before the active event arrived" {
+		t.Fatalf("reports = %+v", creator.created)
+	}
+}
+
+func TestWorkerReporterIgnoresALaterTurnsAnswer(t *testing.T) {
+	start := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
+	store := workerStore()
+	store.conversation["w1"] = "c1"
+	store.messages["c1"] = []domain.ConversationMessage{
+		{Role: domain.MessageRoleAssistant, Text: "first task result", CreatedAt: start.Add(time.Second)},
+		{Role: domain.MessageRoleAssistant, Text: "next turn's answer", CreatedAt: start.Add(time.Minute)},
+	}
+	r, creator := newTestReporter(store, start)
+	r.Write(t.Context(), "w1", domain.ReportDone, Stretch{Since: start, Until: start.Add(2 * time.Second)})
+	if len(creator.created) != 1 || creator.created[0].Note != "first task result" {
+		t.Fatalf("reports = %+v", creator.created)
+	}
+}
+
+func TestWorkerReporterOwnReportDoesNotSuppressTheNextStretch(t *testing.T) {
+	start := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
+	store := workerStore()
+	r, creator := newTestReporter(store, start)
+	first := Stretch{Since: start, Until: start.Add(time.Second)}
+	r.Write(t.Context(), "w1", domain.ReportNeedsInput, first)
+	// The automatic report persisted late, inside the next stretch.
+	store.reports = []domain.ReportRecord{{ID: "auto-1", SessionID: "w1", CreatedAt: start.Add(3 * time.Second)}}
+	r.Write(t.Context(), "w1", domain.ReportDone, Stretch{Since: start.Add(2 * time.Second), Until: start.Add(time.Minute)})
+	if got := states(creator.created); len(got) != 2 || got[1] != domain.ReportDone {
+		t.Fatalf("reports = %v, want [needs_input done]", got)
+	}
+}
+
+func TestWorkerReporterAgentReportOutsideStretchDoesNotSuppress(t *testing.T) {
+	start := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
+	store := workerStore()
+	store.reports = []domain.ReportRecord{{ID: "agent-1", SessionID: "w1", CreatedAt: start.Add(time.Hour)}}
+	r, creator := newTestReporter(store, start)
+	r.Write(t.Context(), "w1", domain.ReportDone, Stretch{Since: start, Until: start.Add(time.Minute)})
+	if len(creator.created) != 1 {
+		t.Fatalf("reports = %+v, want one", creator.created)
+	}
 }

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -43,7 +44,7 @@ func forwardReportActivity(observer reportActivityObserver) func(cdc.Event) {
 
 // workerReportObserver turns session activity changes into worker reports.
 type workerReportObserver interface {
-	Observe(context.Context, domain.SessionID, domain.ActivityState, bool)
+	Observe(context.Context, domain.SessionID, domain.ActivityState, bool, time.Time)
 }
 
 // startWorkerReporter subscribes the worker reporter to the CDC feed.
@@ -68,6 +69,6 @@ func forwardWorkerReports(ctx context.Context, reporter workerReportObserver) fu
 		if id == "" {
 			id = payload.ID
 		}
-		reporter.Observe(ctx, id, payload.Activity, payload.IsTerminated)
+		reporter.Observe(ctx, id, payload.Activity, payload.IsTerminated, e.CreatedAt)
 	}
 }
