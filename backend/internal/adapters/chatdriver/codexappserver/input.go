@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -137,19 +138,16 @@ func (c *conversation) requestUserInput(ctx context.Context, req serverRequest) 
 		ProviderTurnID: parked.params.TurnID, ActivityKind: domain.ActivityKindUserInput,
 		ActivityStatus: domain.ActivityStatusPending, Summary: input.Message, Input: &input,
 	})
-	wait := approvalWait
-	if ms := parked.params.AutoResolutionMs; ms != nil {
-		milliseconds := *ms
-		if milliseconds < uint64(approvalWait/time.Millisecond) {
-			wait = time.Duration(milliseconds) * time.Millisecond
-		}
+	var deadline <-chan time.Time
+	if wait, ok := inputDeadline(parked.params); ok {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		deadline = timer.C
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
 	select {
 	case result := <-parked.result:
 		return result.reply, result.err
-	case <-timer.C:
+	case <-deadline:
 		err = errors.New("input request timed out without an answer")
 	case <-ctx.Done():
 		err = ctx.Err()
@@ -164,6 +162,19 @@ func (c *conversation) requestUserInput(ctx context.Context, req serverRequest) 
 	c.mu.Unlock()
 	c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: requestID, Detail: []byte(`{"action":"cancel"}`)})
 	return nil, err
+}
+
+// inputDeadline is how long a question may stay open. Unlike an approval, it
+// has no deadline of AO's own: it waits for an answer, Codex withdrawing it
+// (Stop does this), or the conversation ending, as in Codex's own client. An
+// expired form reaches the agent as an empty one, which reads as the user having
+// answered nothing. Only a deadline Codex asks for is kept.
+func inputDeadline(params codexproto.ToolRequestUserInputParams) (time.Duration, bool) {
+	ms := params.AutoResolutionMs
+	if ms == nil || *ms > uint64(math.MaxInt64/int64(time.Millisecond)) {
+		return 0, false
+	}
+	return time.Duration(*ms) * time.Millisecond, true
 }
 
 // ResolveInput validates and answers one pending Codex question form.

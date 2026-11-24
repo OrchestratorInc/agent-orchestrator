@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"os"
 	"reflect"
 	"strings"
@@ -389,6 +390,29 @@ func TestUserInputLifecycle(t *testing.T) {
 			err = responder.ResolveInput(context.Background(), ev.RequestID, ports.ChatInputResponse{Action: ports.ChatInputActionCancel})
 			if !errors.Is(err, ports.ErrChatRequestNotPending) && !errors.Is(err, errConversationClosed) {
 				t.Fatalf("stale input resolved: %v", err)
+			}
+		})
+	}
+}
+
+// A question has no deadline of AO's own, unlike an approval: only one Codex asks
+// for closes it unanswered.
+func TestUserInputDeadlineIsOnlyTheOneCodexAsksFor(t *testing.T) {
+	ms := func(v uint64) *uint64 { return &v }
+	for name, tc := range map[string]struct {
+		autoResolutionMs *uint64
+		want             time.Duration
+		ok               bool
+	}{
+		"none":             {nil, 0, false},
+		"short":            {ms(20), 20 * time.Millisecond, true},
+		"beyond approvals": {ms(uint64(2 * approvalWait / time.Millisecond)), 2 * approvalWait, true},
+		"unrepresentable":  {ms(math.MaxUint64), 0, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, ok := inputDeadline(codexproto.ToolRequestUserInputParams{AutoResolutionMs: tc.autoResolutionMs})
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("inputDeadline = %v, %v; want %v, %v", got, ok, tc.want, tc.ok)
 			}
 		})
 	}

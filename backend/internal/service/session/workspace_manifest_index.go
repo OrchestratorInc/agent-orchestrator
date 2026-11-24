@@ -160,7 +160,20 @@ func (s *Service) GetWorkspaceManifest(ctx context.Context, id domain.SessionID)
 		}
 		return manifest, nil
 	}
-	return s.RefreshWorkspaceManifest(ctx, id)
+	// With no snapshot to serve, the reader waits for one computation, not for
+	// one no invalidation interrupted. The workspace stream reconciles as it
+	// connects, just when Files first reads, and steady file churn would keep a
+	// reader waiting for quiet. An interrupted snapshot is served stale while a
+	// daemon-owned refresh catches up.
+	manifest, fresh, err := s.refreshWorkspaceManifestOnce(ctx, id)
+	if err != nil {
+		return WorkspaceManifest{}, err
+	}
+	if !fresh {
+		manifest.Stale, manifest.Refreshing = true, true
+		s.refreshWorkspaceManifestInBackground(id)
+	}
+	return manifest, nil
 }
 
 // ReconcileWorkspaceManifest closes the gap between establishing a filesystem
@@ -185,34 +198,42 @@ func (s *Service) workspaceDiffManifest(ctx context.Context, id domain.SessionID
 	return s.RefreshWorkspaceManifest(ctx, id)
 }
 
-// RefreshWorkspaceManifest waits for one coalesced manifest computation and
-// publishes only its complete result.
+// RefreshWorkspaceManifest waits for a coalesced manifest computation that no
+// invalidation interrupted and returns its published result.
 func (s *Service) RefreshWorkspaceManifest(ctx context.Context, id domain.SessionID) (WorkspaceManifest, error) {
+	for {
+		manifest, fresh, err := s.refreshWorkspaceManifestOnce(ctx, id)
+		if err != nil || fresh {
+			return manifest, err
+		}
+	}
+}
+
+// refreshWorkspaceManifestOnce runs or joins one coalesced computation and
+// publishes its complete result. fresh is false when an invalidation arrived
+// while it ran.
+func (s *Service) refreshWorkspaceManifestOnce(ctx context.Context, id domain.SessionID) (WorkspaceManifest, bool, error) {
 	type refreshResult struct {
 		manifest WorkspaceManifest
 		fresh    bool
 	}
-	for {
-		v, err, _ := s.manifestGroup.Do(string(id), func() (any, error) {
-			generation := s.workspaceManifests.beginRefresh(id)
-			manifest, err := s.computeWorkspaceManifest(ctx, id)
-			if err != nil {
-				s.workspaceManifests.fail(id)
-				return refreshResult{}, err
-			}
-			return refreshResult{manifest: manifest, fresh: s.workspaceManifests.publish(id, manifest, generation)}, nil
-		})
+	v, err, _ := s.manifestGroup.Do(string(id), func() (any, error) {
+		generation := s.workspaceManifests.beginRefresh(id)
+		manifest, err := s.computeWorkspaceManifest(ctx, id)
 		if err != nil {
-			return WorkspaceManifest{}, err
+			s.workspaceManifests.fail(id)
+			return refreshResult{}, err
 		}
-		result, ok := v.(refreshResult)
-		if !ok {
-			return WorkspaceManifest{}, fmt.Errorf("refresh workspace manifest: unexpected singleflight result type %T", v)
-		}
-		if result.fresh {
-			return result.manifest, nil
-		}
+		return refreshResult{manifest: manifest, fresh: s.workspaceManifests.publish(id, manifest, generation)}, nil
+	})
+	if err != nil {
+		return WorkspaceManifest{}, false, err
 	}
+	result, ok := v.(refreshResult)
+	if !ok {
+		return WorkspaceManifest{}, false, fmt.Errorf("refresh workspace manifest: unexpected singleflight result type %T", v)
+	}
+	return result.manifest, result.fresh, nil
 }
 
 func (s *Service) refreshWorkspaceManifestInBackground(id domain.SessionID) {

@@ -3319,6 +3319,32 @@ type IdentityResponse struct {
 	APIVersion int    `json:"apiVersion"`
 }
 
+// RemoteHostUpdateResponse is the body of GET and POST /api/v1/remote-host/update.
+// Supported is false for a host that cannot be updated from another computer.
+// Method says how a supported host updates: its self-hosted service, or the
+// desktop app on it, which closes and relaunches. Version is empty for an
+// unversioned build.
+type RemoteHostUpdateResponse struct {
+	Version   string `json:"version"`
+	Supported bool   `json:"supported"`
+	Method    string `json:"method,omitempty" enum:"service,app"`
+	State     string `json:"state" enum:"idle,updating,failed"`
+	Error     string `json:"error,omitempty"`
+}
+
+// RemoteHostUpdateRequest is the optional body of POST /api/v1/remote-host/update.
+// Version is the release the caller confirmed. A host that runs the desktop
+// app installs only that version; a self-hosted host ignores it.
+type RemoteHostUpdateRequest struct {
+	Version string `json:"version,omitempty"`
+}
+
+// RemoteHostUpdateCheckResponse is the body of POST /api/v1/remote-host/update/check:
+// the version a host that runs the desktop app installs next.
+type RemoteHostUpdateCheckResponse struct {
+	Version string `json:"version"`
+}
+
 // TelemetryIdentityResponse is the body of GET /api/v1/telemetry/identity. A
 // phone paired to this desktop identifies only a signed-in AO Cloud user ID.
 // Without one, DistinctID is the desktop install ID and stays anonymous. The

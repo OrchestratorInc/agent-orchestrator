@@ -49,6 +49,7 @@ import (
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/daemon/supervisor"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/hostupdate"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/controllers"
@@ -1317,6 +1318,7 @@ func Run(buildVersion string) (retErr error) {
 		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,
+		HostUpdate:         hostupdate.New(cfg.Telemetry.AppVersion, cfg.DataDir, browserBroker),
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
 		AgentAccounts:      freshAccountUsage{agentAccountSvc, usagePipeline},
