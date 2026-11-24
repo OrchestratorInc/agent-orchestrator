@@ -277,7 +277,7 @@ export function FileDiffCard({
 				) : (
 					<span aria-hidden="true" className="w-3 shrink-0" />
 				)}
-				<span className="whitespace-pre pr-4 text-foreground/90">{renderRuns(runs, row.kind === "add")}</span>
+				<span className="whitespace-pre pr-4 text-foreground/90">{renderRuns(runs)}</span>
 			</div>,
 		);
 	});
@@ -303,15 +303,8 @@ export function FileDiffCard({
 	);
 }
 
-function renderRuns(runs: DiffRun[] | undefined, add: boolean): ReactNode {
+/** A row's code in its syntax colours. The whole line's tint and bar say it changed. */
+function renderRuns(runs: DiffRun[] | undefined): ReactNode {
 	if (!runs || runs.length === 0) return " ";
-	return runs.map((run, index) =>
-		run.changed ? (
-			<span key={index} className={cn(run.className, "rounded-sm", add ? "bg-success/25" : "bg-error/25")}>{run.text}</span>
-		) : run.className ? (
-			<span key={index} className={run.className}>{run.text}</span>
-		) : (
-			run.text
-		),
-	);
+	return runs.map((run, index) => (run.className ? <span key={index} className={run.className}>{run.text}</span> : run.text));
 }
