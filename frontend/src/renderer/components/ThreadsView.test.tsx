@@ -171,6 +171,14 @@ describe("a thread's row", () => {
 		expect(second.querySelector("[data-thread-sent]")).toBeNull();
 	});
 
+	it("says when its session has ended, which is why an unresolved thread lists under Resolved", async () => {
+		mocks.listMyCommentThreads.mockResolvedValue(page([row("c-1", { sessionTerminated: true }), row("c-2")]));
+		renderView();
+		const ended = await findRow("c-1");
+		expect(ended.querySelector("[data-thread-ended]")).toHaveTextContent("Session ended");
+		expect(document.querySelector("[data-thread-row='c-2'] [data-thread-ended]")).toBeNull();
+	});
+
 	it("reads the next 50 with Load more, each thread once", async () => {
 		mocks.listMyCommentThreads
 			.mockResolvedValueOnce(page([row("c-1"), row("c-2")], "cursor-2"))

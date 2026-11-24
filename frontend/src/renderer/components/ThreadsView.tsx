@@ -171,6 +171,8 @@ export function ThreadRow({ row, selected, onOpen }: { row: CloudCpCommentThread
 				</span>
 				<span className="tabular-nums">{t("comment.count", { count: row.commentCount })}</span>
 				{row.sentToAgentAt ? <span className="rounded-full bg-raised px-1.5 py-px text-foreground/80" data-thread-sent="">{t("threads.sentToAgent")}</span> : null}
+				{/* An ended session's threads are read-only and list under Resolved even when nobody resolved them. */}
+				{row.sessionTerminated ? <span className="rounded-full bg-raised px-1.5 py-px text-foreground/80" data-thread-ended="">{t("threads.sessionEnded")}</span> : null}
 				{row.muted ? (
 					<span className="inline-flex items-center gap-1" data-thread-muted="">
 						<BellOff aria-hidden="true" className="size-3" />

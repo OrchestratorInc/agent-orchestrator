@@ -5646,6 +5646,7 @@
 	"threads.retry": "Retry",
 	"threads.loadMore": "Load more",
 	"threads.sentToAgent": "Sent to agent",
+	"threads.sessionEnded": "Session ended",
 	"threads.unread": "Unread",
 	"threads.muted": "Muted",
 	"threads.list": "Your comment threads",
