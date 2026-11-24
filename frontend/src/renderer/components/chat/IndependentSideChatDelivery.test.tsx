@@ -624,9 +624,14 @@ describe("side panel navigation and recovery", () => {
 				return normalGet(path, options);
 			});
 		});
-		const renameFirstTab = (label: string) => {
-			fireEvent.doubleClick(screen.getByRole("tab", { name: "First question" }));
-			const input = screen.getByRole("textbox", { name: "Rename side chat" });
+		const renameFirstTab = async (label: string) => {
+			// A tab takes a rename once its close state has loaded, which can land
+			// after the tab shows; a double-click before then is ignored, so retry.
+			const input = await waitFor(() => {
+				fireEvent.doubleClick(screen.getByRole("tab", { name: "First question" }));
+				return screen.getByRole("textbox", { name: "Rename side chat" });
+			});
+			// Typing and Enter stay synchronous, so the first-frame check below is exact.
 			input.focus();
 			fireEvent.change(input, { target: { value: label } });
 			fireEvent.keyDown(input, { key: "Enter" });
@@ -641,7 +646,7 @@ describe("side panel navigation and recovery", () => {
 			render(<SidePanelHarness />);
 			await screen.findByRole("tab", { name: "First question" });
 
-			renameFirstTab("Pricing notes");
+			await renameFirstTab("Pricing notes");
 			// Same commit as the editor closing: no waiting.
 			expect(screen.queryByRole("textbox", { name: "Rename side chat" })).not.toBeInTheDocument();
 			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
@@ -665,12 +670,15 @@ describe("side panel navigation and recovery", () => {
 		});
 
 		it("rolls a failed rename back to the old label and says so", async () => {
-			patch.mockResolvedValue({ error: { message: "nope" } });
+			// The answer waits until the new label has been checked.
+			let answer!: (value: { error?: object }) => void;
+			patch.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
 			render(<SidePanelHarness />);
 			await screen.findByRole("tab", { name: "First question" });
 
-			renameFirstTab("Pricing notes");
+			await renameFirstTab("Pricing notes");
 			expect(screen.getByRole("tab", { name: "Pricing notes" })).toBeInTheDocument();
+			await act(async () => answer({ error: { message: "nope" } }));
 			expect(await screen.findByRole("tab", { name: "First question" })).toBeInTheDocument();
 			expect(screen.queryByRole("tab", { name: "Pricing notes" })).not.toBeInTheDocument();
 			// Said in a toast too, which shows even after the user moves to another side.
