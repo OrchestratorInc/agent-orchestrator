@@ -42,10 +42,10 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	browseKey?: string;
 	/**
 	 * Rows to show before the list scrolls, so a long catalog does not stretch the menu.
-	 * Unset takes the pane's own max height. The count includes any rows above the list, such as favourites.
+	 * Unset takes the pane's own max height. The count includes any rows above the list.
 	 */
 	rows?: number;
-	/** Of `rows`, the ones a search hides (favourites above the list), left out of a search's cap. */
+	/** Of `rows`, the ones a search hides (rows above the list), left out of a search's cap. */
 	searchHidesRows?: number;
 	/**
 	 * Controls between the search and the list, such as the agent rail. Up and Shift+Tab
@@ -113,7 +113,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const headerRef = useRef<HTMLDivElement>(null);
 	const footerRef = useRef<HTMLDivElement>(null);
 	// A search hides the header, and the list takes its room as one more row. Rows it hides above
-	// the list (favourites) leave its cap, so a long list of matches scrolls rather than growing.
+	// the list leave its cap, so a long list of matches scrolls rather than growing.
 	const showHeader = Boolean(header) && !normalizedQuery;
 	const listRows = rows === undefined ? undefined
 		: normalizedQuery ? Math.max(1, rows - searchHidesRows) + (header ? 1 : 0)
@@ -121,7 +121,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	// A row is the menu item's text line plus its py-1.5, with the surface's 1px gap between rows.
 	// The pane's basis is that height whatever it lists, so a search with no matches never shrinks the
 	// menu under the pointer. It grows into room the held height below leaves it, and shrinks only
-	// when the menu has no room for it (many favourites in a short window), scrolling as it does.
+	// when the menu has no room for it (many rows above the list in a short window), scrolling as it does.
 	// It keeps two rows even then: past that the menu scrolls as a whole, so the list never closes up.
 	const rowCap = listRows === undefined
 		? undefined

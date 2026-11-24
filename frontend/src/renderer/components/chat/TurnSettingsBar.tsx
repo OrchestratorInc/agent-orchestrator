@@ -394,15 +394,6 @@ export function TurnSettingsBar({
 			efforts: efforts.map((value) => ({ value, label: formatEffortLabel(value, t) })),
 			effort: effortLabel,
 			onPickEffort: (value) => onChange({ ...settings, reasoningEffort: value }),
-			onPickSetup: (setup) => {
-				if (nativeUnavailable(setup.model)) return;
-				onChange({
-					...settings,
-					model: setup.model,
-					reasoningEffort: setup.effort,
-					fastMode: (setup.fast && displayModels.find((model) => model.id === setup.model)?.supportsFast) || undefined,
-				});
-			},
 			...nativeFastControls,
 		}
 		: {
@@ -417,32 +408,6 @@ export function TurnSettingsBar({
 			modelLabel: primaryModelOption ? optionCurrentLabel(primaryModelOption) : agentLabel(harness ?? ""),
 			onPickModel: primaryModelOption && onChangeConfigOption
 				? (id) => { if (!choiceUnavailable(id)) applyOption(primaryModelOption.id, { value: id }); }
-				: undefined,
-			// The effort, Thinking and Fast are set after the model, because the agent offers them
-			// per model: each is read from the options the previous write returned, not the outgoing
-			// model's. Fast is set either way, so a saved setup without it turns a paid Fast off.
-			onPickSetup: primaryModelOption && onChangeConfigOption
-				? (setup) => {
-					if (choiceUnavailable(setup.model)) return;
-					ultracode?.onChange(false);
-					let catalog = configOptions ?? [];
-					const write = async (optionId: string, value: ChatConfigOptionValue) => {
-						const next = await onChangeConfigOption(optionId, value);
-						if (Array.isArray(next)) catalog = next as ChatConfigOption[];
-					};
-					const current = () => partitionConfigOptions(harness === "agy" ? agyComposerOptions(catalog) : catalog, harness !== "agy");
-					void (async () => {
-						await write(primaryModelOption.id, { value: setup.model });
-						const effortOption = current().effort.at(0);
-						if (setup.effort && effortOption?.choices.some((choice) => choice.value === setup.effort)) {
-							await write(effortOption.id, { value: setup.effort });
-						}
-						const thinking = current().toggles.find(isThinkingToggle);
-						if (thinking && setup.thinking !== undefined) await toggleConfigOption(thinking, setup.thinking, write);
-						const fast = current().toggles.find(isFastOption);
-						if (fast) await toggleConfigOption(fast, Boolean(setup.fast), write);
-					})().catch(() => {});
-				}
 				: undefined,
 			efforts: [
 				...(acpEffortOption?.choices ?? [])
@@ -707,7 +672,7 @@ function dedupeChoicesByName<T extends { value: string; name: string; group?: st
 			&& Boolean(other.unavailableReason) === Boolean(choice.unavailableReason));
 		const kept = twins.find((other) => other.value === current) ?? twins[0];
 		if (choice !== kept) return [];
-		// The values folded into this one, so a favourite starred on any of them still shows.
+		// The values folded into this one, so a model remembered under any of them is still found.
 		const aliases = twins.filter((other) => other !== choice).map((other) => other.value);
 		return [aliases.length ? { ...choice, aliases } : choice];
 	});
@@ -1449,17 +1414,6 @@ function setConfigToggle(
 }
 
 /** setConfigToggle for a write the caller waits on; a toggle already set is not written. */
-async function toggleConfigOption(
-	option: ChatConfigOption,
-	enabled: boolean,
-	write: (optionId: string, value: ChatConfigOptionValue) => Promise<void>,
-) {
-	if (optionIsEnabled(option) === enabled) return;
-	let pending: Promise<void> | undefined;
-	setConfigToggle(option, enabled, (optionId, value) => { pending = write(optionId, value); });
-	await pending;
-}
-
 /** Codex names its modes differently: its default has a free hand and its accept-edits asks first. */
 function permissionLook(harness: string | undefined, mode: ApprovalMode): ApprovalMode {
 	if (harness !== "codex") return mode;
@@ -1814,7 +1768,7 @@ function resolveImplicitChoice(option: ChatConfigOption): ChatConfigOption {
 	const followLabel = isModelOption(mapped) ? "Use agent model" : "Use agent setting";
 	if (concrete && mapped.currentValue !== concrete.value) {
 		const label = isDefaultPlaceholderLabel(concrete.name) ? concrete.value : concrete.name;
-		// The row stands for the hidden model too, so a favourite saved on it still shows as offered.
+		// The row stands for the hidden model too, so a model remembered under its id still finds it.
 		const aliases = [...((implicit as typeof implicit & { aliases?: string[] }).aliases ?? []), concrete.value];
 		return {
 			...mapped,

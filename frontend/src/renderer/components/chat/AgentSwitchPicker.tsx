@@ -1,12 +1,12 @@
 /**
- * One menu for who answers next: saved setups, Agent/Model/Effort rows, then toggles.
+ * One menu for who answers next: Agent/Model/Effort rows, then toggles.
  * The running agent's settings apply at once; another agent is only held as pending
  * until the next message (or Switch, in a terminal), so browsing never restarts anything.
  */
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { Brain, ChevronRight, Loader2, Settings2, Star, TriangleAlert, Zap } from "@/components/app-icons";
+import { Brain, ChevronRight, Loader2, Settings2, TriangleAlert, Zap } from "@/components/app-icons";
 import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -18,7 +18,7 @@ import { agentModelDisplayLabel, mergeSameNamedModels, offeredCatalogModels, rec
 import { agentLabel } from "../../lib/agent-options";
 import { CHAT_SWITCH_TARGETS, TERMINAL_ONE_SHOT_TARGETS, TERMINAL_SWITCH_TARGETS } from "../../lib/agent-switch-targets";
 import { clientForSessionHost } from "../../lib/host-clients";
-import { toggleModelFavorite, useModelFavorites, type ModelFavorite } from "../../lib/model-favorites";
+import { rememberLastModel, useLastModels } from "../../lib/last-models";
 import {
 	collapseModelVariants,
 	groupModelsByVendor,
@@ -137,7 +137,7 @@ export interface PickerModel {
 	hint?: string;
 	/** The id to select for this row, where it differs from the row's own id. */
 	sendId?: string;
-	/** Other ids the agent lists this same model under, whose favourites are this row's. */
+	/** Other ids the agent lists this same model under; a model remembered under one is this row. */
 	aliases?: string[];
 	/** Why the row cannot be picked now (the installed agent CLI is too old); shown under its name. */
 	unavailableReason?: string;
@@ -151,8 +151,6 @@ export interface PickerSource {
 	sendId?: string;
 	modelLabel: string;
 	onPickModel?: (id: string) => void;
-	/** Selects a model together with its settings in one step, for a favourite. */
-	onPickSetup?: (setup: ModelFavorite) => void;
 	efforts: Array<{ value: string; label: string }>;
 	effort?: string;
 	onPickEffort?: (value: string) => void;
@@ -194,10 +192,6 @@ function variantSource(
 		models: families.map((entry) => ({ id: entry.id, label: entry.label, group: entry.group, sendId: entry.defaultVariant.id })),
 		modelId: family?.id,
 		sendId: variant?.id,
-		onPickSetup: onPick && ((setup) => {
-			const found = findModelVariant(families, setup.model);
-			if (found) onPick(found.variant, found.family.label);
-		}),
 		modelLabel: family?.label ?? fallbackLabel,
 		onPickModel: onPick && ((id) => {
 			const next = families.find((entry) => entry.id === id);
@@ -312,7 +306,7 @@ export function AgentModelPicker({
 	const [open, setOpen] = useState(false);
 	// The composer's model menu; a terminal's agent menu is not counted as one.
 	const markModelPick = useTelemetrySurface("model_picker", open && !terminal, { choice: true });
-	const favorites = useModelFavorites();
+	const lastModels = useLastModels();
 	const keepCurrent = () => { if (pending) onPendingChange(undefined); };
 	// Cursor's command-line ids fold settings into the model; a running Cursor chat reports its own, kept as is.
 	const live = listsModelVariants(currentHarness) && current.efforts.length === 0 && current.thinking === undefined
@@ -334,7 +328,7 @@ export function AgentModelPicker({
 		)
 		: undefined;
 	const currentSource: PickerSource = disabled || starting
-		? { ...(starting ?? live), onPickModel: undefined, onPickSetup: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined }
+		? { ...(starting ?? live), onPickModel: undefined, onPickEffort: undefined, onToggleFast: undefined, onToggleThinking: undefined }
 		: live;
 	// The other agents' model lists load once the menu is open, so search reaches every model.
 	const others = agents.filter((agent) => agent.id !== currentHarness);
@@ -381,7 +375,7 @@ export function AgentModelPicker({
 	const shownUltra = isUltraEffort(pending ? pendingEffort : currentSource.effort);
 	const shownFast = pending ? pending.fast || pending.fastMode || source.fast : currentSource.fast;
 	const shownThinking = pending ? pending.thinking ?? source.thinking : currentSource.thinking;
-	// A row is named by its row id, a favourite by its row and the variant it sends; either names the current model.
+	// A row is named by its id or the variant it sends; either names the current model.
 	// A terminal's agent menu is not the composer's model picker, so its picks are not counted.
 	const countModelPick = (harness: string, ids: Array<string | undefined>) => {
 		markModelPick();
@@ -390,23 +384,11 @@ export function AgentModelPicker({
 	};
 	const pickModel = (harness: string, id: string) => {
 		countModelPick(harness, [id]);
+		// Remembered in every chat, so this agent's list starts with it next time.
+		rememberLastModel(harness, id);
 		if (harness !== currentHarness) return otherSource(harness, pending?.harness === harness ? pending : undefined).onPickModel?.(id);
 		keepCurrent();
 		currentSource.onPickModel?.(id);
-	};
-	const pickSetup = (favorite: ModelFavorite) => {
-		countModelPick(favorite.harness, [favorite.row, favorite.model]);
-		if (favorite.harness === currentHarness) {
-			keepCurrent();
-			if (currentSource.onPickSetup) currentSource.onPickSetup(favorite);
-			else currentSource.onPickModel?.(favorite.model);
-		} else {
-			onPendingChange({
-				harness: favorite.harness, model: favorite.model, modelLabel: favorite.label, shownEffort: favorite.effort, fast: favorite.fast,
-				// A variant id already carries its effort, thinking and speed.
-				...(listsModelVariants(favorite.harness) ? { thinking: favorite.thinking } : { effort: favorite.effort, fastMode: favorite.fast }),
-			});
-		}
 	};
 	// A terminal's running agent cannot be given another model from here.
 	const oneShot = (harness: string) => terminal && TERMINAL_ONE_SHOT_TARGETS.has(harness);
@@ -415,35 +397,8 @@ export function AgentModelPicker({
 	const pickable = (harness: string) => (harness === currentHarness
 		? !terminal && Boolean(currentSource.onPickModel)
 		: !agentSwitch.disabled && !oneShot(harness) && usable(harness));
-	// A favourite whose model the agent no longer lists cannot be sent. Until
-	// the agent's list loads, it is taken as offered.
-	const offered = (favorite: ModelFavorite) => {
-		const models = (favorite.harness === currentHarness ? currentSource.models : otherSource(favorite.harness).models).filter((model) => model.id);
-		const names = (model: (typeof models)[number]) => [model.id, ...(model.aliases ?? [])];
-		// The id a favourite sends decides: a row it was folded into may be runnable while it is not.
-		if (models.some((model) => model.unavailableReason && (model.sendId ?? model.id) === favorite.model)) return false;
-		return models.length === 0 || models.some((model) => !model.unavailableReason && (names(model).includes(favorite.row) || names(model).includes(favorite.model)));
-	};
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
-	// The list shows the chosen agent's favourites and models only; agents are picked on the rail.
-	const setups = settable ? favorites.filter((entry) => entry.harness === shownHarness) : [];
-	// The favourite a model row was starred as, under its id or one it was folded from.
-	const starredFor = (model: PickerModel) => model.id
-		? favorites.find((entry) => entry.harness === shownHarness && (entry.row === model.id || model.aliases?.includes(entry.row)))
-		: undefined;
-	// A starred model is listed once, first, as its favourite; the rows below are the rest. A favourite
-	// that cannot be sent (its id is not one the agent runs) does not take the place of a row that can.
-	const unstarred = <T extends { model: PickerModel }>(rows: T[]) => setups.length > 0
-		? rows.filter((row) => {
-			const favorite = starredFor(row.model);
-			return !favorite || !offered(favorite);
-		})
-		: rows;
-	// That favourite is checked when the model row it replaces is the chosen one, under its id or an alias.
-	const standsForChosen = (favorite: ModelFavorite) => source.models.some((model) =>
-		model.id === source.modelId && (model.id === favorite.row || Boolean(model.aliases?.includes(favorite.row))));
-	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
 	// Search reaches every agent on the rail, the chosen one first.
 	const searchRows = (open ? [...agents].sort((a, b) => Number(b.id === shownHarness) - Number(a.id === shownHarness)) : []).flatMap((agent) => {
 		const listed = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
@@ -456,8 +411,20 @@ export function AgentModelPicker({
 	// A match its agent cannot take now, or the agent cannot run, is listed dimmed and passed over by Enter.
 	const searchPickable = (row: { harness: string; model: PickerModel }) => pickable(row.harness) && !row.model.unavailableReason;
 	const shownModels = shownHarness === "claude-code" ? claudeOrder(mergeSameNamedModels(source.models, source.modelId)) : source.models;
+	// The list starts with the shown agent's model: the chat's own, the one picked for a switch, or
+	// else the one last picked for that agent in any chat. It is fixed for each agent while the menu
+	// stays open, so picking another model does not move the rows under the pointer.
+	const leadNow = (pending ? (pending.model ? source.modelId : undefined) : source.modelId) || lastModels[shownHarness];
+	const leads = useRef(new Map<string, string | undefined>());
+	if (!open) leads.current.clear();
+	else if (!leads.current.has(shownHarness)) leads.current.set(shownHarness, leadNow);
+	const leadId = leads.current.get(shownHarness);
+	const leadRow = leadId
+		? shownModels.find((model) => model.id && (model.id === leadId || model.sendId === leadId || Boolean(model.aliases?.includes(leadId))))
+		: undefined;
 	const browseRows = open && settable
-		? shownModels.map((model) => ({ id: `${shownHarness} ${model.id}`, label: model.label, harness: shownHarness, model }))
+		? (leadRow ? [leadRow, ...shownModels.filter((model) => model !== leadRow)] : shownModels)
+			.map((model) => ({ id: `${shownHarness} ${model.id}`, label: model.label, harness: shownHarness, model }))
 		: [];
 	// Rows are memoized, so a keystroke only renders the ones that appear or change.
 	const pickRef = useRef<(event: Event, harness: string, id: string) => void>(() => {});
@@ -620,7 +587,6 @@ export function AgentModelPicker({
 					selectedId={source.modelId === undefined ? undefined : `${shownHarness} ${source.modelId}`}
 					searchable
 					searchPlaceholder={t("agentSwitch.search")}
-					// Starred models lead the list in the same rows, so starring never makes the menu taller.
 					rows={VISIBLE_MODEL_ROWS}
 					className="max-h-none"
 					header={(
@@ -657,31 +623,17 @@ export function AgentModelPicker({
 						</Fragment>
 					)) : (
 						<>
-							{setups.map((favorite) => (
-								<OptionMenuItem
-									key={`${favorite.harness}:${favorite.row}`}
-									active={favorite.model === chosenModel || standsForChosen(favorite)}
-									radio
-									disabled={!pickable(favorite.harness) || !offered(favorite)}
-									onSelect={(event) => { stayOpen(event); pickSetup(favorite); }}
-									className="group/model text-xs text-foreground"
-								>
-									<span className="min-w-0 truncate">{favorite.label}</span>
-									{favorite.fast ? <Zap aria-label={t("agentSwitch.fastMode")} className="ml-1.5 size-3 shrink-0 fill-current" /> : null}
-									{favorite.thinking ? <Brain aria-label={t("agentSwitch.thinking")} className="ml-1.5 size-3 shrink-0" /> : null}
-									{favorite.effortLabel ? <span className="ml-1.5 shrink-0 text-muted-foreground">{favorite.effortLabel}</span> : null}
-									<FavoriteStar starred onToggle={() => toggleModelFavorite(favorite)} />
-								</OptionMenuItem>
-							))}
-							{unstarred(matches).length > 0 ? (
+							{matches.length > 0 ? (
 								<div>
-									{unstarred(matches).map((row, index, listed) => {
+									{matches.map((row, index, listed) => {
 										const model = row.model;
 										const active = model.id === source.modelId;
-										const starredAs = starredFor(model);
+										// The model listed first sits above the group headings; the rest keep theirs.
+										const previous = listed[index - 1];
+										const heading = model.group && model !== leadRow && (previous?.model === leadRow || model.group !== previous?.model.group);
 										return (
 											<Fragment key={row.id}>
-												{model.group && model.group !== listed[index - 1]?.model.group ? (
+												{heading ? (
 													<OptionMenuLabel>{model.group}</OptionMenuLabel>
 												) : null}
 												<OptionMenuItem
@@ -693,7 +645,7 @@ export function AgentModelPicker({
 														event.preventDefault();
 														if (!active) pickModel(shownHarness, model.id);
 													}}
-													className="group/model text-xs text-foreground"
+													className="text-xs text-foreground"
 												>
 													{model.unavailableReason ? (
 														<span className="min-w-0">
@@ -702,8 +654,6 @@ export function AgentModelPicker({
 														</span>
 													) : <span className="min-w-0 truncate">{model.label}</span>}
 													{model.hint ? <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">{model.hint === "default" ? t("agentSwitch.defaultModel") : model.hint}</span> : null}
-													{/* Unstarring removes the favourite as it was saved, under whichever id. */}
-													{model.id ? <FavoriteStar starred={Boolean(starredAs)} onToggle={() => toggleModelFavorite(starredAs ?? favoriteFor(shownHarness, model, active ? source : undefined))} /> : null}
 												</OptionMenuItem>
 											</Fragment>
 										);
@@ -1003,45 +953,6 @@ const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive,
 		</OptionMenuItem>
 	);
 });
-
-/** What starring a row saves: the chosen row with the settings it has now, any other row as the model on its own. */
-function favoriteFor(harness: string, model: PickerModel, chosen: PickerSource | undefined): ModelFavorite {
-	const plain = { harness, row: model.id, model: model.sendId ?? model.id, label: model.label };
-	// Ultracode is asked for per message or at launch; it is not a level to restore.
-	if (!chosen || isUltraEffort(chosen.effort) && harness === "claude-code") return plain;
-	return {
-		...plain,
-		model: chosen.sendId ?? model.id,
-		effort: chosen.effort,
-		effortLabel: chosen.efforts.find((entry) => entry.value === chosen.effort)?.label,
-		fast: chosen.fast || undefined,
-		thinking: chosen.thinking || undefined,
-	};
-}
-
-/** The star at the end of a model row. It shows on hover, and stays once starred. */
-function FavoriteStar({ starred, onToggle, className }: { starred: boolean; onToggle: () => void; className?: string }) {
-	const { t } = useTranslation();
-	return (
-		<span
-			role="button"
-			tabIndex={-1}
-			aria-label={starred ? t("agentSwitch.removeFavourite") : t("agentSwitch.addFavourite")}
-			title={starred ? t("agentSwitch.removeFavourite") : t("agentSwitch.addFavourite")}
-			// Starring must not also pick the model.
-			onPointerDown={(event) => event.stopPropagation()}
-			onPointerUp={(event) => event.stopPropagation()}
-			onClick={(event) => { event.preventDefault(); event.stopPropagation(); onToggle(); }}
-			className={cn(
-				"ml-auto flex size-5 shrink-0 items-center justify-center rounded hover:bg-interactive-active",
-				starred ? "text-warning" : "text-muted-foreground opacity-0 group-hover/model:opacity-100 group-data-highlighted/model:opacity-100",
-				className,
-			)}
-		>
-			<Star aria-hidden="true" className={cn("size-3.5", starred ? "fill-current" : undefined)} />
-		</span>
-	);
-}
 
 /** The top level some agents have past Max: Codex's "ultra", Claude Code's "ultracode". */
 function isUltraEffort(value: string | undefined): boolean {

@@ -289,8 +289,6 @@
 	"agentSwitch.notOffered": "이 모델에서는 사용할 수 없습니다",
 	"agentSwitch.checkingPermissionModes": "{{agent}}이(가) 실행되는 권한 모드를 확인하는 중입니다. 잠시 후 다시 보내세요.",
 	"agentSwitch.autoCompactHint": "Claude Code가 대화를 스스로 압축하는 시점입니다.",
-	"agentSwitch.addFavourite": "즐겨찾기에 추가",
-	"agentSwitch.removeFavourite": "즐겨찾기에서 삭제",
 	"agentSwitch.favoriteAgent": ", {{agent}}",
 	"agentSwitch.busy": "에이전트가 작업 중입니다. 대기 상태일 때 전환하세요.",
 	"agentSwitch.switchTerminalTo": "이 터미널을 {{target}}(으)로 전환",

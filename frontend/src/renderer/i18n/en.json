@@ -289,8 +289,6 @@
 	"agentSwitch.notOffered": "Not available for this model",
 	"agentSwitch.checkingPermissionModes": "Checking which permission modes {{agent}} runs in. Send again in a moment.",
 	"agentSwitch.autoCompactHint": "When Claude Code compacts the conversation on its own.",
-	"agentSwitch.addFavourite": "Add to favourites",
-	"agentSwitch.removeFavourite": "Remove from favourites",
 	"agentSwitch.favoriteAgent": ", {{agent}}",
 	"agentSwitch.busy": "The agent is working. Switch when it is idle.",
 	"agentSwitch.switchTerminalTo": "Switch this terminal to {{target}}",

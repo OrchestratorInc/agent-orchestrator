@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import claudeCodeLogo from "../../assets/agents/claude-code.svg";
 import codexLogo from "../../assets/agents/codex.svg";
-import { toggleModelFavorite } from "../../lib/model-favorites";
+import { forgetLastModels, rememberLastModel } from "../../lib/last-models";
 import { useUiStore } from "../../stores/ui-store";
 import { agentReadiness, type AgentReadinessSnapshot } from "../../test/agent-readiness-fixtures";
 import { AgentModelPicker, autoCompactKind, type AccountChoice, type PendingAgentSwitch, type PickerSource } from "./AgentSwitchPicker";
@@ -27,7 +27,7 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 			refreshError: "droid failed to start: Cannot find module 'tree-sitter'\n    at Module._resolveFilename",
 		} : ({
 			models: agent === "codex"
-				? [{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }]
+				? [{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }, { id: "gpt-y", label: "GPT Y", efforts: ["low", "high"], defaultEffort: "high" }]
 				: agent === "cursor"
 					? ["claude-opus-4-8-high", "claude-opus-4-8-thinking-high"].map((id) => ({ id, label: id }))
 					: agent === "opencode"
@@ -74,6 +74,7 @@ describe("AgentModelPicker", () => {
 		unavailableGet.mockReset().mockResolvedValue({ data: { agents: [] }, error: undefined });
 		readiness.agents = [];
 		window.localStorage.clear();
+		forgetLastModels();
 	});
 
 	it("lists the running agent's models under the agent rail, with its effort", async () => {
@@ -287,106 +288,56 @@ describe("AgentModelPicker", () => {
 		expect(current.onPickModel).not.toHaveBeenCalled();
 	});
 
-	it("lists a model starred under another id once, as its favourite", async () => {
+	it("lists the chat's model first, and keeps the rows still while the menu stays open", async () => {
 		const user = userEvent.setup();
-		const saved = { harness: "claude-code", row: "opus", model: "opus", label: "Opus" };
-		toggleModelFavorite(saved);
-		try {
-			open(undefined, false, "claude-code", { models: [{ id: "claude-opus-5-5", label: "Opus", aliases: ["opus"] }], modelId: "claude-opus-5-5" });
-			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			// The model row it folded into is the favourite, not a second row with a second star.
-			expect(await screen.findAllByRole("button", { name: "Remove from favourites" })).toHaveLength(1);
-			expect(screen.getAllByRole("menuitemradio", { name: /^Opus/ })).toHaveLength(1);
-			// And it is checked, as the model it stands for is the one running.
-			expect(screen.getByRole("menuitemradio", { name: /^Opus/ })).toHaveAttribute("aria-checked", "true");
-		} finally {
-			toggleModelFavorite(saved);
-		}
+		const { current } = open(undefined, false, "claude-code", { modelId: "sonnet", modelLabel: "Sonnet" });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const labels = () => screen.getAllByRole("menuitemradio").map((row) => row.textContent);
+		expect(labels()).toEqual([expect.stringContaining("Sonnet"), expect.stringContaining("Opus")]);
+		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Opus/ }));
+		expect(current.onPickModel).toHaveBeenCalledWith("opus");
+		// The pick moves to the top only the next time the menu opens.
+		expect(labels()).toEqual([expect.stringContaining("Sonnet"), expect.stringContaining("Opus")]);
 	});
 
-	it("keeps a runnable model's row when its star was saved under an id the agent cannot run", async () => {
+	it("has no favourite stars", async () => {
 		const user = userEvent.setup();
-		const saved = { harness: "claude-code", row: "claude-opus-5-5", model: "claude-opus-5-5", label: "Opus 5.5" };
-		toggleModelFavorite(saved);
-		try {
-			open(undefined, false, "claude-code", {
-				models: [
-					{ id: "opus", label: "Opus 5.5" },
-					{ id: "claude-opus-5-5", label: "Opus 5.5", unavailableReason: "Needs a newer Claude Code" },
-				],
-				modelId: "opus",
-			});
-			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			const rows = screen.getAllByRole("menuitemradio", { name: /^Opus 5\.5/ });
-			// The star, greyed out as it cannot be sent, and the runnable row it would otherwise hide.
-			expect(rows).toHaveLength(2);
-			expect(rows[0]).toHaveAttribute("aria-disabled", "true");
-			expect(rows[1]).not.toHaveAttribute("aria-disabled");
-			expect(rows[1]).toHaveAttribute("aria-checked", "true");
-		} finally {
-			act(() => toggleModelFavorite(saved));
-		}
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		expect(screen.queryByRole("button", { name: /favourites/i })).not.toBeInTheDocument();
 	});
 
-	it("moves a starred model to the top of the list instead of adding a row", async () => {
+	it("remembers a picked model for that agent in every chat", async () => {
 		const user = userEvent.setup();
-		const saved = { harness: "claude-code", row: "sonnet", model: "sonnet", label: "Sonnet" };
-		toggleModelFavorite(saved);
-		try {
-			open();
-			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			expect(screen.getAllByRole("menuitemradio").map((row) => row.textContent)).toEqual([expect.stringContaining("Sonnet"), expect.stringContaining("Opus")]);
-		} finally {
-			act(() => toggleModelFavorite(saved));
-		}
+		open();
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Sonnet/ }));
+		expect(JSON.parse(window.localStorage.getItem("ao.chat.lastModels") ?? "{}")).toEqual({ "claude-code": "sonnet" });
 	});
 
-	it("lists only the chosen agent's favourites, first in the list, without agent logos", async () => {
+	it("lists the model last picked for another agent first when it is picked on the rail", async () => {
 		const user = userEvent.setup();
-		const favorites = [
-			{ harness: "claude-code", row: "opus", model: "opus", label: "Opus" },
-			{ harness: "cursor", row: "claude-opus-4-8", model: "claude-opus-4-8-high", label: "Opus 4.8" },
-		];
-		favorites.forEach(toggleModelFavorite);
-		try {
-			open();
-			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			// The starred model leads the list, listed once, and the box keeps its height.
-			const rows = screen.getAllByRole("menuitemradio");
-			expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("Opus"), expect.stringContaining("Sonnet")]);
-			expect(rows[0].querySelector("img")).not.toBeInTheDocument();
-			expect(screen.queryByRole("menuitemradio", { name: /^Opus 4\.8/ })).not.toBeInTheDocument();
-		} finally {
-			act(() => favorites.forEach(toggleModelFavorite));
-		}
+		rememberLastModel("codex", "gpt-y");
+		open({ harness: "codex" });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await screen.findByRole("menuitemradio", { name: /^GPT Y/ });
+		expect(screen.getAllByRole("menuitemradio").map((row) => row.textContent)).toEqual([expect.stringContaining("GPT Y"), expect.stringContaining("GPT X")]);
 	});
 
-	it("shows the pending agent's favourites with their settings", async () => {
+	it("puts the first model above the group headings and keeps the others' headings", async () => {
 		const user = userEvent.setup();
-		const saved = { harness: "codex", row: "gpt-x", model: "gpt-x", label: "GPT X", effort: "high", effortLabel: "High", fast: true };
-		toggleModelFavorite(saved);
-		try {
-			open({ harness: "codex" });
-			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			expect((await screen.findAllByRole("menuitemradio", { name: /^GPT X.*Fast mode.*High/ }))).toHaveLength(1);
-		} finally {
-			act(() => toggleModelFavorite(saved));
-		}
-	});
-
-	it("greys out a favourite whose model the agent no longer lists", async () => {
-		const user = userEvent.setup();
-		const gone = { harness: "codex", row: "gpt-gone", model: "gpt-gone", label: "GPT Gone" };
-		toggleModelFavorite(gone);
-		try {
-			open({ harness: "codex" });
-			await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-			const row = await screen.findByRole("menuitemradio", { name: /GPT Gone/ });
-			// Codex's list loads with only gpt-x.
-			await vi.waitFor(() => expect(row).toHaveAttribute("aria-disabled", "true"));
-		} finally {
-			toggleModelFavorite(gone);
-		}
+		open(undefined, false, "opencode-v2", {
+			models: [{ id: "a/one", label: "One", group: "Alpha" }, { id: "a/two", label: "Two", group: "Alpha" }, { id: "b/three", label: "Three", group: "Beta" }],
+			modelId: "b/three",
+			modelLabel: "Three",
+		});
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const menu = screen.getAllByRole("menu")[0];
+		// Model rows and group headings, in the order they are drawn.
+		const order = [...menu.querySelectorAll("*")]
+			.filter((node) => node.getAttribute("role") === "menuitemradio" || (node.children.length === 0 && ["Alpha", "Beta"].includes(node.textContent ?? "")))
+			.map((node) => node.textContent?.trim().split(/\s/)[0]);
+		expect(order).toEqual(["Three", "Alpha", "One", "Two"]);
 	});
 
 	it("holds another agent as pending when its logo is picked, keeping the menu open", async () => {
