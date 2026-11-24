@@ -418,6 +418,7 @@
 	"cloud.startupError.workspaceSetupNotReadyTitle": "Die Einrichtung des Workspace wurde nicht abgeschlossen",
 	"cloud.startupError.projectSetupFailedTitle": "Das Setup-Skript des Projekts ist fehlgeschlagen",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "Der Checkout des Repositorys ist fehlgeschlagen",
+	"cloud.startupError.conversationRestoreFailedTitle": "Die Unterhaltung konnte nicht wiederhergestellt werden",
 	"cloud.startupError.workingDirectoryUnusableTitle": "Das Arbeitsverzeichnis kann nicht verwendet werden",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "Der Arbeitsordner wird bereits verwendet",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "Der Arbeitsordner bleibt bei Neustarts nicht erhalten",

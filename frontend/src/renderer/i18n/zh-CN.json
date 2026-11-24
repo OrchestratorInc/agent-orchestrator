@@ -418,6 +418,7 @@
 	"cloud.startupError.workspaceSetupNotReadyTitle": "工作区设置未完成",
 	"cloud.startupError.projectSetupFailedTitle": "项目的 Setup 脚本失败",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "代码仓库检出失败",
+	"cloud.startupError.conversationRestoreFailedTitle": "无法恢复对话",
 	"cloud.startupError.workingDirectoryUnusableTitle": "无法使用工作目录",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "工作文件夹已被占用",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "工作文件夹在重启后不会保留",

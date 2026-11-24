@@ -418,6 +418,7 @@
 	"cloud.startupError.workspaceSetupNotReadyTitle": "작업 공간 설정이 완료되지 않았습니다",
 	"cloud.startupError.projectSetupFailedTitle": "프로젝트 설정 스크립트가 실패했습니다",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "저장소 체크아웃에 실패했습니다",
+	"cloud.startupError.conversationRestoreFailedTitle": "대화를 복원하지 못했습니다",
 	"cloud.startupError.workingDirectoryUnusableTitle": "작업 디렉터리를 사용할 수 없습니다",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "작업 폴더가 이미 사용 중입니다",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "작업 폴더가 다시 시작 후에 유지되지 않습니다",

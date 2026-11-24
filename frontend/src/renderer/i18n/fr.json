@@ -419,6 +419,7 @@
 	"cloud.startupError.workspaceSetupNotReadyTitle": "La configuration de l'espace de travail ne s'est pas terminée",
 	"cloud.startupError.projectSetupFailedTitle": "Le script de configuration du projet a échoué",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "L'extraction du dépôt a échoué",
+	"cloud.startupError.conversationRestoreFailedTitle": "La conversation n'a pas pu être restaurée",
 	"cloud.startupError.workingDirectoryUnusableTitle": "Le répertoire de travail ne peut pas être utilisé",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "Le dossier de travail est déjà utilisé",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "Le dossier de travail n'est pas conservé lors des redémarrages",

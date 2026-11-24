@@ -374,6 +374,7 @@
 	"cloud.startupError.workspaceSetupNotReadyTitle": "Настройка рабочего пространства не завершена",
 	"cloud.startupError.projectSetupFailedTitle": "Ошибка скрипта подготовки проекта",
 	"cloud.startupError.repositoryCheckoutFailedTitle": "Не удалось получить рабочую копию репозитория",
+	"cloud.startupError.conversationRestoreFailedTitle": "Не удалось восстановить разговор",
 	"cloud.startupError.workingDirectoryUnusableTitle": "Рабочий каталог недоступен для использования",
 	"cloud.startupError.workingDirectoryOccupiedTitle": "Рабочая папка уже используется",
 	"cloud.startupError.workingDirectoryNotDurableTitle": "Рабочая папка не сохраняется при перезапуске",
