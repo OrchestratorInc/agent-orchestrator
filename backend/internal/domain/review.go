@@ -267,9 +267,11 @@ const (
 
 // AutoRetryable reports whether auto review may retry a head after a run
 // failed for this reason. A failed preflight needs a person to fix the
-// harness, and an unconfirmed cancel may still have a reviewer working.
+// harness, and an unconfirmed cancel may still have a reviewer working. A turn
+// that ended without a result has usually posted its review to the PR already,
+// so another automatic pass on the same head would only post a duplicate.
 func (r ReviewFailureReason) AutoRetryable() bool {
-	return r != ReviewFailurePreflightFailed && r != ReviewFailureCancelUnconfirmed
+	return r != ReviewFailurePreflightFailed && r != ReviewFailureCancelUnconfirmed && r != ReviewFailureTurnEndedWithoutSubmit
 }
 
 // ReviewCancelledBy records who stopped a cancelled run.

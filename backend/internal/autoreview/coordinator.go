@@ -203,7 +203,8 @@ func existingHeadReason(runs []domain.ReviewRun, prURL, targetSHA string) string
 		}
 		if run.Status == domain.ReviewRunFailed && !run.FailureReason.AutoRetryable() {
 			// A failed preflight needs a person; an unconfirmed cancel may still
-			// have a reviewer working. Neither is retried automatically.
+			// have a reviewer working; a turn that ended without a result has
+			// usually posted its review already. None is retried automatically.
 			return "failed_not_retryable"
 		}
 		if run.Status == domain.ReviewRunFailed && run.TriggerSource == domain.ReviewTriggerAuto {
