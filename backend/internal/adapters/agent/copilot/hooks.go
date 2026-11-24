@@ -20,8 +20,15 @@ const (
 	copilotHooksDir      = ".github/hooks"
 	copilotHooksFileName = "ao.json"
 
-	copilotAgentsDir           = ".github/agents"
-	copilotAgentExcludeHeader  = "# agent-orchestrator Copilot session files"
+	copilotAgentsDir          = ".github/agents"
+	copilotAgentExcludeHeader = "# agent-orchestrator Copilot session files"
+	// copilotAgentExcludePattern is one stable glob covering every per-session
+	// profile (copilotAgentName always yields "ao-<name>"), so .git/info/exclude
+	// stays a single line instead of growing by one entry per session.
+	// Trade-off: it also hides any user-authored, untracked
+	// .github/agents/ao-*.agent.md from `git status` and `git add .`. The "ao-"
+	// prefix is treated as reserved for AO; users who want their own profile
+	// tracked should pick a different name or `git add -f` it.
 	copilotAgentExcludePattern = "/.github/agents/ao-*.agent.md"
 	copilotAgentExcludePrefix  = "/.github/agents/ao-"
 	copilotAgentExcludeSuffix  = ".agent.md"
