@@ -107,6 +107,26 @@ describe("BrowserAskSheet on Android", () => {
 		expect(native.alert).not.toHaveBeenCalled();
 	});
 
+	// Found on the Android emulator: opening the system picker dismisses the
+	// dialog, which cancelled the chooser before the picked files came back.
+	it("keeps the picked files when the picker's opening dismisses the source dialog", async () => {
+		let pick!: (result: { canceled: boolean; assets: Array<{ uri: string; name: string }> }) => void;
+		const pickers = {
+			launchImageLibraryAsync: vi.fn(async () => ({ canceled: true, assets: null })),
+			getDocumentAsync: vi.fn(() => new Promise<{ canceled: boolean; assets: Array<{ uri: string; name: string }> }>((resolve) => { pick = resolve; })),
+		};
+		const chooser: BrowserDialog = { kind: "filechooser", multiple: false, accept: ".txt", folder: false };
+		const element = <BrowserAskSheet dialog={chooser} pickers={pickers} onAnswer={(asked: BrowserDialog, command: BrowserCommand | null) => answers.push([asked, command])} />;
+		act(() => { screen = create(element); });
+		const dismiss = all("AlertDialog")[0]!.props.onDismissRequest as () => void;
+		const row = all("ListItem")[0]!;
+		await act(async () => row.props.modifiers.find((modifier: { $type: string }) => modifier.$type === "clickable").args[0]());
+		await act(async () => dismiss());
+		expect(answers).toEqual([]);
+		await act(async () => pick({ canceled: false, assets: [{ uri: "file:///n.txt", name: "n.txt" }] }));
+		expect(answers).toEqual([[chooser, { type: "files", payload: { files: [{ uri: "file:///n.txt", name: "n.txt" }], folder: false } }]]);
+	});
+
 	it("goes away when the host closes the dialog or a newer one replaces it", () => {
 		ask({ kind: "confirm", message: "First?" });
 		expect(all("AlertDialog")).toHaveLength(1);
