@@ -12,7 +12,7 @@ import (
 
 // runCLIForError runs args through executeWithDeps, as the binary does, and
 // returns what the entrypoint would print for the error.
-func runCLIForError(t *testing.T, deps Deps, args ...string) (error, string) {
+func runCLIForError(t *testing.T, deps Deps, args ...string) (string, error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
 	deps.Out = &out
@@ -21,7 +21,7 @@ func runCLIForError(t *testing.T, deps Deps, args ...string) (error, string) {
 	err := executeWithDeps(deps, args)
 	var printed bytes.Buffer
 	PrintError(&printed, err)
-	return err, printed.String()
+	return printed.String(), err
 }
 
 func decodeErrorEnvelope(t *testing.T, printed string) cliErrorBody {
@@ -41,7 +41,7 @@ func TestJSONErrorCarriesDaemonEnvelope(t *testing.T) {
 	srv, _ := projectServer(t, http.StatusNotFound, `{"message":"project not found","code":"PROJECT_NOT_FOUND","requestId":"req-7"}`)
 	writeRunFileFor(t, cfg, srv)
 
-	err, printed := runCLIForError(t, Deps{ProcessAlive: func(int) bool { return true }}, "project", "get", "missing", "--json")
+	printed, err := runCLIForError(t, Deps{ProcessAlive: func(int) bool { return true }}, "project", "get", "missing", "--json")
 	if ExitCode(err) != 1 {
 		t.Fatalf("exit code = %d, want 1 (err=%v)", ExitCode(err), err)
 	}
@@ -54,7 +54,7 @@ func TestJSONErrorCarriesDaemonEnvelope(t *testing.T) {
 
 func TestJSONErrorForDaemonNotRunning(t *testing.T) {
 	setConfigEnv(t)
-	err, printed := runCLIForError(t, Deps{}, "project", "ls", "--json")
+	printed, err := runCLIForError(t, Deps{}, "project", "ls", "--json")
 	if !errors.Is(err, errDaemonUnavailable) {
 		t.Fatalf("err = %v, want daemon unavailable", err)
 	}
@@ -72,7 +72,7 @@ func TestJSONErrorForUsageMistakes(t *testing.T) {
 		"command without it": {"report", "--json", "hello"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err, printed := runCLIForError(t, Deps{}, args...)
+			printed, err := runCLIForError(t, Deps{}, args...)
 			if ExitCode(err) != 2 {
 				t.Fatalf("exit code = %d, want 2 (err=%v)", ExitCode(err), err)
 			}
@@ -86,7 +86,7 @@ func TestJSONErrorForUsageMistakes(t *testing.T) {
 func TestUnsupportedJSONIsRefusedBeforeRunning(t *testing.T) {
 	setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "proj-1")
-	err, _ := runCLIForError(t, Deps{}, "report", "--json", "hello")
+	_, err := runCLIForError(t, Deps{}, "report", "--json", "hello")
 	if err == nil || !strings.Contains(err.Error(), "ao report does not support --json yet") {
 		t.Fatalf("err = %v", err)
 	}
@@ -95,7 +95,7 @@ func TestUnsupportedJSONIsRefusedBeforeRunning(t *testing.T) {
 func TestErrorsStayPlainTextWithoutJSON(t *testing.T) {
 	setConfigEnv(t)
 	for _, args := range [][]string{{"project", "ls"}, {"project", "ls", "--json=false"}} {
-		_, printed := runCLIForError(t, Deps{}, args...)
+		printed, _ := runCLIForError(t, Deps{}, args...)
 		if strings.HasPrefix(printed, "{") || !strings.Contains(printed, "not running") {
 			t.Fatalf("%v: printed = %q, want plain text", args, printed)
 		}
