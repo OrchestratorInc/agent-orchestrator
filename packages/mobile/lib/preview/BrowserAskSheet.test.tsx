@@ -19,7 +19,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
 });
 vi.mock("@expo/ui/swift-ui/modifiers", async () => {
 	const { modifierDouble } = await import("../nativeFormTestDoubles");
-	return modifierDouble(["autocorrectionDisabled", "frame", "textInputAutocapitalization"]);
+	return modifierDouble(["autocorrectionDisabled", "frame", "textContentType", "textInputAutocapitalization"]);
 });
 vi.mock("@expo/ui", async () => {
 	const { createElement } = await import("react");
@@ -118,6 +118,8 @@ describe("BrowserAskSheet on iOS", () => {
 		const [username] = all("TextField");
 		const [password] = all("SecureField");
 		expect(password).toBeDefined();
+		// Found on the Simulator: iOS offered to save the page's password to the Keychain.
+		expect(password!.props.modifiers).toEqual([{ $type: "textContentType", args: ["oneTimeCode"] }]);
 		expect(username!.props.modifiers).toEqual(expect.arrayContaining([{ $type: "autocorrectionDisabled", args: [true] }, { $type: "textInputAutocapitalization", args: ["never"] }]));
 		act(() => { username!.props.onTextChange("ada"); password!.props.onTextChange("s3cret-pw"); });
 		await press("Sign in");

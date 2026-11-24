@@ -1,6 +1,6 @@
 import { Host } from "@expo/ui";
 import { Alert, Button, ConfirmationDialog, SecureField, Spacer, Text, TextField, useNativeState } from "@expo/ui/swift-ui";
-import { autocorrectionDisabled, frame, textInputAutocapitalization } from "@expo/ui/swift-ui/modifiers";
+import { autocorrectionDisabled, frame, textContentType, textInputAutocapitalization } from "@expo/ui/swift-ui/modifiers";
 import { useRef, useState, type ReactNode } from "react";
 import { StyleSheet } from "react-native";
 import { useThemeState } from "../ThemeProvider";
@@ -155,7 +155,9 @@ function AuthAlert({ dialog, answer }: { dialog: Extract<BrowserDialog, { kind: 
 	return (
 		<PageAlert title={askTitle(dialog)} message={authMessage(dialog)} onDismiss={() => answer(answerAuth(dialog, null))}>
 			<TextField text={usernameText} placeholder={copy.username} modifiers={[autocorrectionDisabled(true), textInputAutocapitalization("never")]} onTextChange={(next) => { typed.current.username = next; }} />
-			<SecureField text={passwordText} placeholder={copy.password} onTextChange={(next) => { typed.current.password = next; }} />
+			{/* Marked a one-time code, so iOS never offers to save the page's
+			    password to the person's Keychain (found live: it did). */}
+			<SecureField text={passwordText} placeholder={copy.password} modifiers={[textContentType("oneTimeCode")]} onTextChange={(next) => { typed.current.password = next; }} />
 			<Button label={copy.cancel} role="cancel" onPress={() => answer(answerAuth(dialog, null))} />
 			<Button label={copy.signIn} onPress={() => answer(answerAuth(dialog, typed.current))} />
 		</PageAlert>
