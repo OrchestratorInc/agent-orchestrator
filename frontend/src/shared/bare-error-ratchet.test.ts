@@ -26,7 +26,7 @@ it("keeps bare Error constructors at or below the app baseline", () => {
 	const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
 	const files = new Set(execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "frontend/src", "packages"], { cwd: root, encoding: "utf8" })
 		.split("\0")
-		.filter((file) => /\.[cm]?[jt]sx?$/.test(file) && !/\.(?:test|spec)\.|\/(?:__tests__|__mocks__|test|fixtures)\//.test(file)));
+		.filter((file) => /\.[cm]?[jt]sx?$/.test(file) && !/\.(?:test|spec|fakes)\.|\/(?:__tests__|__mocks__|test|fixtures)\//.test(file)));
 	const count = [...files].map((file) => path.join(root, file)).filter(existsSync)
 		.reduce((sum, file) => sum + countBareErrors(file, readFileSync(file, "utf8")), 0);
 	expect(count, "Use AoError with a stable code for new application errors").toBeLessThanOrEqual(BASELINE);

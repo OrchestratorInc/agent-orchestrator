@@ -3040,10 +3040,10 @@ func roleOverride(kind domain.SessionKind, cfg domain.ProjectConfig) domain.Role
 				AgentConfig: cfg.Reviewers[0].AgentConfig,
 			}
 		}
-		if harness, config := cfg.DefaultWorkerReviewer(); harness != "" {
+		if harness, reviewerConfig := cfg.DefaultWorkerReviewer(); harness != "" {
 			return domain.RoleOverride{
 				Harness:     domain.AgentHarness(harness),
-				AgentConfig: config,
+				AgentConfig: reviewerConfig,
 			}
 		}
 		if cfg.Worker.Harness != "" {
