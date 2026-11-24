@@ -529,7 +529,8 @@ export function AgentModelPicker({
 		extras && !pending ? extras(markModelPick) : null,
 	].filter(Boolean);
 	const settingsFooter = settingsGroups.length > 0
-		? settingsGroups.map((group, index) => <div key={index} className={DIVIDER}>{group}</div>)
+		// Each group's line runs through the menu's padding to both edges.
+		? settingsGroups.map((group, index) => <div key={index} className={cn(DIVIDER, "-mx-(--space-1) px-(--space-1)")}>{group}</div>)
 		: undefined;
 
 	return (
