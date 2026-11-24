@@ -21,6 +21,8 @@ vi.mock("./conversationEvents", () => ({
 	},
 }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
+// Saving the transcript for after a restart is not under test here.
+vi.mock("./savedConversations", () => ({ conversationSaver: { schedule: () => {}, flush: async () => {} }, loadSavedConversation: async () => null }));
 import { REFRESH_INTERVAL_MS, useMobileConversation, type MobileConversation } from "./useConversation";
 
 const lan = { hostId: "a", host: "192.168.1.20" } as ServerConfig;
@@ -114,6 +116,18 @@ it("on a slow link runs one read at a time and shows every answer", async () => 
 	expect(shown.at(-1)).toBe(`words ${reads}`);
 });
 
+it("keeps rows that did not change as the same objects, so their views skip a render", async () => {
+	answerAfter(30);
+	await act(async () => { renderer = create(<Harness id="identity" />); await vi.advanceTimersByTimeAsync(50); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+	expect(conversation.snapshot?.items).toHaveLength(2);
+	const settled = conversation.snapshot?.items[0];
+	const streaming = conversation.snapshot?.items[1];
+	await stream(500);
+	expect(conversation.snapshot?.items[0]).toBe(settled);
+	expect(conversation.snapshot?.items[1]).not.toBe(streaming);
+});
+
 // Switching away from a route that stopped answering leaves its read out until
 // it times out. The new route's changes must read without waiting for it.
 it("reads through the new connection while a read on the old one is still out", async () => {
@@ -137,4 +151,3 @@ it("reads through the new connection while a read on the old one is still out", 
 	expect(readsTo(lan.host)).toBe(stuck);
 	expect(shown.at(-1)).toBe(`words ${reads}`);
 });
-

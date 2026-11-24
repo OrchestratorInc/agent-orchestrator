@@ -695,7 +695,8 @@ heatmap and no session replay.
   (the transcript), `composer`, `new_chat`, `board`, `pr_tab`,
   `inspector_summary`, `inspector_reviews`, `inspector_browser`,
   `inspector_files`, `inspector_artifacts`, `inspector_side_chat`,
-  `inspector_subagents`, `cmdk`, `notifications_panel`, `archive_modal`,
+  `inspector_subagents`, `inspector_background_tasks`, `cmdk`,
+  `notifications_panel`, `archive_modal`,
   `model_picker`, `slash_menu`, `mention_menu`, `split_view`, `terminal`,
   `onboarding`, `toast`, or a settings page: `settings_general`,
   `settings_agents`, `settings_teams`, `settings_billing`, `settings_browser`,
@@ -713,7 +714,8 @@ heatmap and no session replay.
   `terminal_tab`, `side_chat`, `board`, `pin_session`, `archive_modal`,
   `dictation`, `swipe_navigation`, `notifications_panel`, `inspector_summary`,
   `inspector_reviews`, `inspector_browser`, `inspector_files`,
-  `inspector_artifacts`, or `inspector_subagents`. Opening a surface counts as
+  `inspector_artifacts`, `inspector_subagents`, or
+  `inspector_background_tasks`. Opening a surface counts as
   using its feature only when you opened it (`opened_by` is not `restore` or
   `auto`). The marker is kept in the app's local storage, so an install that
   used a feature before this release reports it again the first time it is
@@ -805,7 +807,8 @@ label:
 - Chat: `chat.retry`
 - Inspector tabs: `inspector.tab_summary`, `inspector.tab_reviews`,
   `inspector.tab_browser`, `inspector.tab_files`, `inspector.tab_artifacts`,
-  `inspector.tab_side_chat`, `inspector.tab_subagents`
+  `inspector.tab_side_chat`, `inspector.tab_subagents`,
+  `inspector.tab_background_tasks`
 - Board: `board.card`
 - Toasts and banners: `toast.action`, `toast.dismiss`, `daemon_banner.retry`
 

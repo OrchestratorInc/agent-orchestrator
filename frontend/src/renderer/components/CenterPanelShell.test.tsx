@@ -83,6 +83,8 @@ describe("CenterPanelShell platform classes", () => {
 		const { container } = render(<CenterPanelShell topbar={false}>x</CenterPanelShell>);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(false);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(true);
+		// A session arriving in this panel never draws its tabs as the flat strip.
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--tab-pills")).toBe(true);
 	});
 
 	it("keeps the band for a page without a top bar while the sidebar is closed", () => {

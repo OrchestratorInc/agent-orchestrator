@@ -45,6 +45,7 @@ import Image from "lucide-react-native/icons/image";
 import Layers from "lucide-react-native/icons/layers";
 import MessageSquare from "lucide-react-native/icons/message-square";
 import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";
+import Maximize2 from "lucide-react-native/icons/maximize-2";
 import Pause from "lucide-react-native/icons/pause";
 import Play from "lucide-react-native/icons/play";
 import ChartBar from "lucide-react-native/icons/chart-bar";
@@ -136,6 +137,7 @@ export const glyphs = {
 	"list-checks": ListChecks,
 	"list-tree": ListTree,
 	"message-circle": MessageCircle,
+	"maximize-2": Maximize2,
 	"message-square": MessageSquare,
 	"message-square-plus": MessageSquarePlus,
 	"minus-circle": CircleMinus,
