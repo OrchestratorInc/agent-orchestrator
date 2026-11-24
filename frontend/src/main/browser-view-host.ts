@@ -59,7 +59,7 @@ import { matchInstruction } from "./browser-act-matcher";
 import { trustPreviewCertificate } from "./preview-certificate";
 import { REMOTE_TAB_REPORT, parseRemoteTabReport, type RemoteTabReport } from "../shared/remote-tab";
 import type { ActCandidate } from "./browser-act-matcher";
-import { BrowserScreencast } from "./browser-screencast";
+import { BrowserScreencast, type BrowserStreamQuality } from "./browser-screencast";
 import { type BrowserSiteBlock, canOpenInUserBrowser, classifySiteResponse } from "../shared/browser-site-block";
 import type { UserBrowser } from "./user-browser";
 import type {
@@ -582,6 +582,10 @@ export type BrowserViewHost = {
 	handleRemoteInput: (sessionId: string, input: BrowserRemoteInput) => Promise<void>;
 	handleRemoteNavigation: (sessionId: string, input: BrowserRemoteNavigation) => Promise<void>;
 	handleRemoteTab: (sessionId: string, input: BrowserRemoteTabAction) => Promise<void>;
+	/** The phone's stream quality and frame-rate cap. */
+	handleRemoteQuality: (sessionId: string, input: Partial<BrowserStreamQuality>) => Promise<void>;
+	/** The daemon wrote frame `sequence` to the phone: the capture may ack its next frame. */
+	handleFrameWritten: (sessionId: string, input: { sequence?: unknown }) => void;
 	openLivePreview: (sessionId: string, url: string) => Promise<void>;
 };
 
@@ -716,6 +720,8 @@ type BrowserSessionEntry = {
 		screencast?: BrowserScreencast;
 		tabId?: string;
 		lastStateKey?: string;
+		// What the phone last asked for; a retargeted capture keeps it.
+		quality?: Partial<BrowserStreamQuality>;
 	};
   // Bounded browser diagnostics exposed only through an explicit errors query.
   signals: {
@@ -4189,6 +4195,9 @@ export function createBrowserViewHost(
 			}),
 			width: bounds.width,
 			height: bounds.height,
+			// The phone sends quality only to a desktop that says it takes it:
+			// an older daemon closes the stream on a command it does not know.
+			capabilities: { quality: true },
 		};
 	}
 
@@ -4237,6 +4246,7 @@ export function createBrowserViewHost(
 		live.screencast = cast;
 		live.tabId = entry.tabId;
 		await cast.start();
+		if (live.quality && session.live === live && live.screencast === cast) await cast.setQuality(live.quality);
 		if (session.live !== live || live.screencast !== cast) {
 			await cast.stop();
 			return;
@@ -4413,6 +4423,27 @@ export function createBrowserViewHost(
 			await navigateEntry(entry, normalizeAgentBrowserURL(target));
 			emitLiveState(session);
 		});
+	}
+
+	function liveSession(sessionId: string): BrowserSessionEntry | undefined {
+		const viewId = viewIdsBySessionId.get(sessionId);
+		const session = viewId ? entries.get(viewId) : undefined;
+		return session?.live ? session : undefined;
+	}
+
+	// Pacing, not control of the page: allowed while the agent drives it.
+	async function handleRemoteQuality(sessionId: string, input: Partial<BrowserStreamQuality>): Promise<void> {
+		const session = liveSession(sessionId);
+		if (!session?.live) throw browserError("BROWSER_REMOTE_NOT_VIEWED", "Remote browser stream is not active");
+		const quality = { quality: input?.quality, maxFps: input?.maxFps };
+		session.live.quality = quality;
+		await session.live.screencast?.setQuality(quality);
+	}
+
+	function handleFrameWritten(sessionId: string, input: { sequence?: unknown }): void {
+		const sequence = input?.sequence;
+		if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 0) return;
+		liveSession(sessionId)?.live?.screencast?.frameWritten(BigInt(sequence));
 	}
 
 	async function handleRemoteTab(sessionId: string, input: BrowserRemoteTabAction): Promise<void> {
@@ -5117,6 +5148,8 @@ export function createBrowserViewHost(
 		handleRemoteInput,
 		handleRemoteNavigation,
 		handleRemoteTab,
+		handleRemoteQuality,
+		handleFrameWritten,
 		openLivePreview,
     getLastFocusedPanelContents: () => {
       if (lastFocusedViewId === null) return null;

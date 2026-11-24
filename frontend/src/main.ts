@@ -2129,6 +2129,13 @@ async function handleBrowserStreamControl(control: BrowserStreamControl): Promis
 		case "tab":
 			await host.handleRemoteTab(sessionId, control.payload as BrowserRemoteTabAction);
 			return;
+		case "quality":
+			await host.handleRemoteQuality(sessionId, (control.payload ?? {}) as { quality?: number; maxFps?: number });
+			return;
+		// The daemon wrote a frame to the phone (backpressure).
+		case "frameWritten":
+			host.handleFrameWritten(sessionId, (control.payload ?? {}) as { sequence?: unknown });
+			return;
 		case "preview": {
 			const url = (control.payload as { url?: unknown } | undefined)?.url;
 			if (typeof url === "string") await host.openLivePreview(sessionId, url);

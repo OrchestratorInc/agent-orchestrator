@@ -18,6 +18,8 @@ export type BrowserLiveState = {
 	tabs: BrowserLiveTab[];
 	width: number;
 	height: number;
+	/** What this desktop takes from the phone beyond input, navigation and tabs. */
+	capabilities?: { quality?: boolean };
 };
 
 export type BrowserLiveSink = {
