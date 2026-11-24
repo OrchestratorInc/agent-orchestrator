@@ -205,8 +205,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				<div
 					// No inline padding: the field then shares the menu rows' silhouette,
 					// since their highlight spans the same content box.
-					// Its line runs through the menu's padding to both edges.
-					className={cn("relative shrink-0 pb-1", searchable ? "-mx-(--space-1) mb-1 border-b border-border px-(--space-1)" : undefined)}
+					// Flush with the menu's top, its line running through the menu's padding to both edges.
+					className={cn("relative shrink-0", searchable ? "-mx-(--space-1) -mt-(--space-1) border-b border-border px-(--space-1)" : "pb-1")}
 					onClick={(event) => event.stopPropagation()}
 					onKeyDown={(event) => {
 						if (event.nativeEvent.isComposing) {
