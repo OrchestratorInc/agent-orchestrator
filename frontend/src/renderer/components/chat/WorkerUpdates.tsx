@@ -799,23 +799,23 @@ export function terminatedBy(item: ConversationItem): string | undefined {
 }
 
 /**
- * The workers a turn started, under its reply: one reply-arrow row per worker
- * until it answers; its reports then say where it is. A row opens the worker's
- * session, and hovering it opens the card a session link shows.
+ * The workers a turn started that have not answered yet: those the daemon recorded
+ * it spawning, then any only `ao spawn` output names (a daemon too old to record the spawn).
  */
-export function SpawnedAgents({ spawns, commandSessionIds = [] }: {
-	/** Workers the daemon recorded the turn spawning. */
-	spawns: readonly SpawnedWorker[];
-	/** Workers only `ao spawn` output names: a daemon too old to record the spawn started them. */
-	commandSessionIds?: readonly string[];
-}) {
-	const index = useContext(WorkerUpdateIndexContext);
-	const unrecorded = commandSessionIds.filter((id) => !index?.spawnRecorded.has(id) && !spawns.some((spawn) => spawn.sessionId === id));
-	const waiting = [...spawns, ...unrecorded.map((sessionId) => ({ sessionId }))].filter((spawn) => !index?.latest.has(spawn.sessionId));
-	if (waiting.length === 0) return null;
+export function waitingSpawns(recorded: readonly SpawnedWorker[], commandSessionIds: readonly string[], index: WorkerUpdateIndex | null): SpawnedWorker[] {
+	const unrecorded = commandSessionIds.filter((id) => !index?.spawnRecorded.has(id) && !recorded.some((spawn) => spawn.sessionId === id));
+	return [...recorded, ...unrecorded.map((sessionId) => ({ sessionId }))].filter((spawn) => !index?.latest.has(spawn.sessionId));
+}
+
+/**
+ * The workers a turn started, under its reply: one reply-arrow row per worker
+ * until it answers (`waitingSpawns`); its reports then say where it is. A row opens
+ * the worker's session, and hovering it opens the card a session link shows.
+ */
+export function SpawnedAgents({ spawns }: { spawns: readonly SpawnedWorker[] }) {
 	return (
 		<ul data-testid="spawned-agents" className="m-0 flex min-w-0 max-w-full list-none flex-col items-start p-0">
-			{waiting.map((spawn) => (
+			{spawns.map((spawn) => (
 				<SpawnedAgentRow key={spawn.sessionId} spawn={spawn} />
 			))}
 		</ul>

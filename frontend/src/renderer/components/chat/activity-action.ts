@@ -206,23 +206,25 @@ export function isSpawnFailure(activity: ConversationActivity): boolean {
  * A spawn that failed reads as one step: its `ao spawn` call, carrying the reason
  * the daemon gave. The daemon's failed spawn record would repeat it as a row of
  * its own, and the call's exit code would count it again as "exited" beside the
- * "failed" record. Each failed record joins the nearest failed call; a record with
- * no call beside it keeps its own row.
+ * "failed" record. A call starts before the daemon records how it ended, so each
+ * failed record, in sequence order, joins the last failed call before it that no
+ * earlier record took, or the nearest one when none started before it. Two failed
+ * spawns in one run so keep their own reasons. A record with no call beside it keeps
+ * its own row.
  */
 export function mergeFailedSpawns(activities: ConversationActivity[]): ConversationActivity[] {
-	const records = activities.filter(isFailedSpawnRecord);
+	const records = activities.filter(isFailedSpawnRecord).sort(bySequence);
 	if (records.length === 0) return activities;
-	const calls = activities.filter(isFailedSpawnCommand);
+	const calls = activities.filter(isFailedSpawnCommand).sort(bySequence);
 	const reasons = new Map<string, string>();
 	const merged = new Set<string>();
 	for (const record of records) {
-		let nearest: ConversationActivity | undefined;
-		for (const call of calls) {
-			if (reasons.has(call.id)) continue;
-			if (!nearest || Math.abs(call.sequence - record.sequence) < Math.abs(nearest.sequence - record.sequence)) nearest = call;
-		}
-		if (!nearest) continue;
-		reasons.set(nearest.id, text(record.detail?.error));
+		const open = calls.filter((call) => !reasons.has(call.id));
+		const call = open.findLast((candidate) => candidate.sequence < record.sequence)
+			?? open.reduce<ConversationActivity | undefined>((nearest, candidate) =>
+				!nearest || Math.abs(candidate.sequence - record.sequence) < Math.abs(nearest.sequence - record.sequence) ? candidate : nearest, undefined);
+		if (!call) continue;
+		reasons.set(call.id, text(record.detail?.error));
 		merged.add(record.id);
 	}
 	if (merged.size === 0) return activities;
@@ -236,3 +238,5 @@ export function mergeFailedSpawns(activities: ConversationActivity[]): Conversat
 			return { ...activity, detail: { ...activity.detail, exitCode: undefined, error: reason || text(activity.detail?.error) || undefined } };
 		});
 }
+
+const bySequence = (a: ConversationActivity, b: ConversationActivity) => a.sequence - b.sequence;

@@ -233,6 +233,17 @@ describe("orchestrator worker updates", () => {
 		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
 	});
 
+	it("leaves no empty space under the reply once every worker has answered", () => {
+		renderOrchestrator([
+			automation("t1", 1, "Check current usage."), spawnCommand(), spawnRecord(), startedReply,
+			report("t2", 3, "[done] [Audit usage](ao://sessions/proj/proj-288)\nFound 9 issues across 6 files."),
+			reply("t2", 4, "Noted."),
+		], vi.fn(), worker());
+		// The `ao spawn` output still names the worker, but nothing is left to wait on.
+		expect(screen.queryByTestId("spawned-agents")).not.toBeInTheDocument();
+		expect(document.querySelector("div.mt-2\\.5:empty")).toBeNull();
+	});
+
 	it("drops the termination of a worker its row already shows", () => {
 		const terminated = { ...spawnRecord("proj-288", undefined, 20), id: "ao-action:session.terminated:proj-288", summary: "Terminated an agent", detail: { action: "session.terminated", operationId: "proj-288:generation:0", targetSessionId: "proj-288" } };
 		renderOrchestrator([automation("t1", 1, "Check usage."), spawnRecord(), startedReply, terminated], vi.fn(), worker({ status: "terminated", isTerminated: true }));

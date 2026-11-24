@@ -141,10 +141,16 @@ describe("mergeFailedSpawns", () => {
 		expect(isSpawnFailure(merged[0]!)).toBe(true);
 	});
 
-	it("pairs each record with the nearest failed call", () => {
+	it("pairs each record with the failed call before it, whatever order the records come in", () => {
 		const merged = mergeFailedSpawns([spawnCall("c1", 1), spawnCall("c2", 10), record("r2", 11), record("r1", 2)]);
 		expect(merged.map((each) => each.id)).toEqual(["c1", "c2"]);
 		expect(merged.every(isSpawnFailure)).toBe(true);
+	});
+
+	it("gives two failed spawns their own reasons when a record lands nearer the next call", () => {
+		const failed = (id: string, sequence: number, error: string) => ({ ...record(id, sequence), detail: { action: "session.spawned", operationId: `failed:${id}`, error } });
+		const merged = mergeFailedSpawns([spawnCall("c1", 1), failed("r1", 7, "first reason"), spawnCall("c2", 10), failed("r2", 11, "second reason")]);
+		expect(merged.map((each) => [each.id, each.detail?.error])).toEqual([["c1", "first reason"], ["c2", "second reason"]]);
 	});
 
 	it("keeps the call's own error when the record gives no reason", () => {

@@ -191,6 +191,7 @@ import {
 	TaskNamedLine,
 	terminatedBy,
 	useWorkerUpdateIndex,
+	waitingSpawns,
 	WorkerUpdateIndexContext,
 	BatchedReportsContext,
 	type BatchedReports,
@@ -6571,9 +6572,9 @@ const TurnGroup = memo(function TurnGroup({
 	// `ao spawn` output still names the workers a daemon too old to record the spawn started.
 	const recordedSpawns = workerUpdates ? group.items.flatMap((item) => spawnedWorker(item) ?? []) : [];
 	const commandSpawns = workerUpdates && outcome ? spawnedSessionIds(group.items) : [];
-	const spawnTree = recordedSpawns.length > 0 || commandSpawns.length > 0
-		? <SpawnedAgents key="spawned" spawns={recordedSpawns} commandSessionIds={commandSpawns} />
-		: null;
+	// The tree goes with its last waiting worker, so the reply keeps no empty space for it.
+	const waitingWorkers = waitingSpawns(recordedSpawns, commandSpawns, updateIndex);
+	const spawnTree = waitingWorkers.length > 0 ? <SpawnedAgents key="spawned" spawns={waitingWorkers} /> : null;
 	const hasFoldedWork = foldedRuns.length > 0;
 	const foldedWork = (): ReactNode[] => foldedRuns.flatMap(renderWorkerRun);
 	const showsWorked = Boolean(
