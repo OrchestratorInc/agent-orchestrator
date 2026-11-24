@@ -138,9 +138,15 @@ func (r *WorkerReporter) Observe(ctx context.Context, id domain.SessionID, activ
 	switch activity {
 	case domain.ActivityActive:
 		if pending, ok := r.cancelDoneLocked(id); ok {
-			// Resumed within the quiet period: still the same task.
-			r.activeSince[id] = pending.stretch.Since
-			return
+			if at.Sub(pending.stretch.Until) <= r.quiet {
+				// Resumed within the quiet period, in event time: same task.
+				r.activeSince[id] = pending.stretch.Since
+				return
+			}
+			// The timer was cancelled only because delivery lagged; in event
+			// time the worker was quiet long enough, so its task is done.
+			stretch := pending.stretch
+			r.spawn(func() { r.Write(ctx, id, domain.ReportDone, stretch) })
 		}
 		if _, ok := r.activeSince[id]; !ok {
 			r.activeSince[id] = at
@@ -208,7 +214,7 @@ func (r *WorkerReporter) Write(ctx context.Context, id domain.SessionID, state d
 		return
 	}
 	session, ok, err := r.store.GetSession(ctx, id)
-	if err != nil || !ok || session.Kind != domain.KindWorker || session.ProjectID == "" {
+	if err != nil || !ok || session.Kind != domain.KindWorker || session.ProjectID == "" || session.IsTerminated {
 		return
 	}
 	if r.agentReported(ctx, session, stretch) {

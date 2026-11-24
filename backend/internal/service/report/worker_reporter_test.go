@@ -355,3 +355,30 @@ func TestWorkerReporterAgentReportOutsideStretchDoesNotSuppress(t *testing.T) {
 		t.Fatalf("reports = %+v, want one", creator.created)
 	}
 }
+
+func TestWorkerReporterLateDeliveryKeepsSeparateTasks(t *testing.T) {
+	start := time.Date(2026, 11, 24, 5, 0, 0, 0, time.UTC)
+	r, creator, clock := newClockedReporter(workerStore(), start)
+	r.Observe(t.Context(), "w1", domain.ActivityActive, false, start)
+	r.Observe(t.Context(), "w1", domain.ActivityIdle, false, start.Add(time.Second))
+	// Delivered before the quiet timer fired, but a minute later in event time.
+	r.Observe(t.Context(), "w1", domain.ActivityActive, false, start.Add(time.Minute))
+	if got := states(creator.created); len(got) != 1 || got[0] != domain.ReportDone {
+		t.Fatalf("reports = %v, want the first task's done", got)
+	}
+	r.Observe(t.Context(), "w1", domain.ActivityIdle, false, start.Add(2*time.Minute))
+	clock.elapse()
+	if got := states(creator.created); len(got) != 2 {
+		t.Fatalf("reports = %v, want two dones", got)
+	}
+}
+
+func TestWorkerReporterSkipsTerminatedSession(t *testing.T) {
+	store := workerStore()
+	store.sessions["w1"] = domain.SessionRecord{ID: "w1", ProjectID: "p1", Kind: domain.KindWorker, IsTerminated: true}
+	r, creator := newTestReporter(store, time.Now())
+	r.Write(t.Context(), "w1", domain.ReportNeedsInput, Stretch{Since: time.Now(), Until: time.Now().Add(time.Minute)})
+	if len(creator.created) != 0 {
+		t.Fatalf("reports = %+v, want none for a killed worker", creator.created)
+	}
+}
