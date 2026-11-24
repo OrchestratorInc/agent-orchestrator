@@ -82,6 +82,7 @@ describe("moveSession", () => {
 
 		expect(error).toBeInstanceOf(MoveError);
 		expect((error as MoveError).step).toBe("receive");
+		expect((error as MoveError).code).toBe("TRANSFER_REPO_MISMATCH");
 		expect((error as MoveError).resumedSource).toBe(true);
 		expect(source.calls.slice(-2)).toEqual(["POST /api/v1/sessions/{sessionId}/transfer/cancel", "POST /api/v1/sessions/{sessionId}/resume-agent"]);
 		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/cancel"]).toEqual({ transferId: "tr1" });

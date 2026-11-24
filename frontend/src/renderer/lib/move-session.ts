@@ -64,7 +64,6 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 	let warnings: string[];
 	let hostLabel: string;
 	let resumed: boolean;
-	let code: string | undefined;
 	input.onStep?.("prepare");
 	await checkDestination(target);
 	try {
@@ -78,7 +77,6 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 				...(input.stopTurn ? { stopTurn: true } : {}),
 			},
 		}));
-		code = apiErrorCode(prepared.error);
 		if (prepared.error || !prepared.data) throw apiErrorException(prepared.error, "Could not prepare the move");
 		const transfer: Transfer = prepared.data.transfer;
 		// An unfinished earlier move to this host comes back instead of a new one.
@@ -93,6 +91,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		({ sessionId, warnings, hostLabel, resumed } = await receive(target.client, target.projectId, transfer, target.label));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		const code = error instanceof Error ? apiErrorCode(error.cause) : undefined;
 		// The destination may have started the session before it stopped answering.
 		// Leave the move pending so Retry finishes it instead of running it twice.
 		if (step === "receive" && error instanceof Unreachable) throw new MoveError(message, step, false, "RECEIVE_UNCONFIRMED", transferId);

@@ -205,22 +205,39 @@ func transferError(err error) error {
 	if err == nil {
 		return nil
 	}
-	msg := err.Error()
+	msg := strings.TrimPrefix(err.Error(), "session: ")
 	switch {
 	case errors.Is(err, sessionmanager.ErrNotFound):
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	case errors.Is(err, sessionmanager.ErrTransferAgentBusy):
 		return apierr.Conflict("TRANSFER_AGENT_BUSY", msg, nil)
 	case errors.Is(err, sessionmanager.ErrTransferRepoMismatch):
-		return apierr.Conflict("TRANSFER_REPO_MISMATCH", msg, nil)
+		return apierr.Conflict("TRANSFER_REPO_MISMATCH", "The project on that computer is a different repository.", nil)
 	case errors.Is(err, ports.ErrTransferBranchDiverged):
-		return apierr.Conflict("TRANSFER_BRANCH_DIVERGED", msg, nil)
+		return apierr.Conflict("TRANSFER_BRANCH_DIVERGED", fmt.Sprintf("Branch %s on that computer has commits this session does not. Push or delete it there, then move the session.", transferDetail(err, ports.ErrTransferBranchDiverged)), nil)
 	case errors.Is(err, sessionmanager.ErrTransferPreservedMismatch):
 		return apierr.Conflict("TRANSFER_PRESERVED_MISMATCH", msg, nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
-		return apierr.Conflict("TRANSFER_BRANCH_IN_USE", msg, nil)
+		return apierr.Conflict("TRANSFER_BRANCH_IN_USE", fmt.Sprintf("The branch is in use on that computer: %s. Close it there, then move the session.", transferDetail(err, ports.ErrWorkspaceBranchCheckedOutElsewhere)), nil)
+	case errors.Is(err, ports.ErrTransferGitBusy):
+		doing := transferDetail(err, ports.ErrTransferGitBusy)
+		text := "Git is in the middle of " + doing + " here. Finish or abort it, then move the session."
+		if doing == "unresolved conflicts" {
+			text = "Git has unresolved conflicts here. Resolve or undo them, then move the session."
+		}
+		return apierr.Conflict("TRANSFER_GIT_BUSY", text, nil)
+	case errors.Is(err, ports.ErrTransferNestedRepo):
+		return apierr.Conflict("TRANSFER_NESTED_REPO", fmt.Sprintf("The folder %s is its own git repository, which a move cannot carry. Move it out, or add it to .gitignore, then move the session.", transferDetail(err, ports.ErrTransferNestedRepo)), nil)
+	case errors.Is(err, ports.ErrTransferPush):
+		said := transferDetail(err, ports.ErrTransferPush)
+		if strings.Contains(said, "fetch first") || strings.Contains(said, "non-fast-forward") {
+			return apierr.Conflict("TRANSFER_PUSH_REJECTED", "Origin has commits on this branch that are not here, or the branch was rewritten. Push or rebase it, then move the session.", nil)
+		}
+		return apierr.Conflict("TRANSFER_PUSH_FAILED", "Could not push to origin: "+said, nil)
+	case errors.Is(err, ports.ErrTransferFetch):
+		return apierr.Conflict("TRANSFER_FETCH_FAILED", "Could not fetch from origin: "+transferDetail(err, ports.ErrTransferFetch), nil)
 	case errors.Is(err, ports.ErrDetachedHead):
-		return apierr.Conflict("TRANSFER_DETACHED_HEAD", msg, nil)
+		return apierr.Conflict("TRANSFER_DETACHED_HEAD", fmt.Sprintf("The session's folder is not on its branch %s. Switch back to it, then move the session.", transferDetail(err, ports.ErrDetachedHead)), nil)
 	case errors.Is(err, sessionmanager.ErrSessionMoved):
 		return apierr.Conflict("SESSION_MOVED", msg, nil)
 	case errors.Is(err, sessionmanager.ErrTransferPending):
@@ -235,7 +252,29 @@ func transferError(err error) error {
 		return apierr.Invalid("TRANSFER_UNSUPPORTED", msg, nil)
 	}
 	// Receive spawns a session, so spawn failures (missing tmux, agent binary) keep their codes.
-	return mapSessionError(err)
+	mapped := mapSessionError(err)
+	var apiErr *apierr.Error
+	if errors.As(mapped, &apiErr) {
+		return mapped
+	}
+	// Anything else is this computer's own problem, such as a file it cannot
+	// read, which the user can only fix when told.
+	return apierr.Internal("TRANSFER_FAILED", "The move failed: "+shortenTransferText(msg))
+}
+
+// shortenTransferText keeps the end of an error, where the cause is.
+func shortenTransferText(text string) string {
+	runes := []rune(strings.Join(strings.Fields(text), " "))
+	if len(runes) > 300 {
+		runes = append([]rune("..."), runes[len(runes)-297:]...)
+	}
+	return string(runes)
+}
+
+// transferDetail is what an error says after the sentinel it wraps.
+func transferDetail(err, sentinel error) string {
+	_, detail, _ := strings.Cut(err.Error(), sentinel.Error()+": ")
+	return detail
 }
 
 // MachineName is this computer's hostname without the ".local" suffix, used
