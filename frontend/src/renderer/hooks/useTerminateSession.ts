@@ -245,14 +245,18 @@ const CLEANUP_REPORT_WINDOW_MS = 30 * 60_000;
 const CLEANUP_NOTICE_MS = 10_000;
 
 function showWorkspaceCleanupNotice(session: WorkspaceSession, errorKey: WorkspaceCleanupErrorKey, t: TFunction) {
-	useUiStore.getState().showGlobalToast(t(errorKey), session.title, {
+	const standalone = session.workspaceId === STANDALONE_WORKSPACE_ID;
+	// A standalone session's folder has no git and no retry: it is kept only
+	// because it holds files the user or agent created there.
+	const title = standalone && errorKey === "shell.workspaceCleanupDirty" ? t("shell.workspaceCleanupDirtyStandalone") : t(errorKey);
+	useUiStore.getState().showGlobalToast(title, session.title, {
 		// A kept worktree protects the user's work; only a failed teardown is a failure.
 		tone: errorKey === "shell.workspaceCleanupFailed" ? "error" : "info",
 		dismissible: true,
 		durationMs: CLEANUP_NOTICE_MS,
 		dedupeKey: `workspace-cleanup:${sessionUiKey(session.id, session.hostId)}`,
 		// Cleanup sweeps by project, and the standalone workspace id is not one the daemon knows.
-		...(session.workspaceId !== STANDALONE_WORKSPACE_ID && {
+		...(!standalone && {
 			action: { label: t("settings.project.retryCleanup"), run: () => void retryWorkspaceCleanup(session, t) },
 		}),
 	});

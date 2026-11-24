@@ -2591,6 +2591,7 @@
 	"shell.workspaceCleanupPending": "Temizleme bekleniyor: {{title}}",
 	"shell.workspaceCleanupFailed": "Çalışma alanı temizlenemedi. Projenin Betikler ayarlarında temizlemeyi yeniden deneyin.",
 	"shell.workspaceCleanupDirty": "Çalışma ağacında commit oluşturulmamış değişiklikler var. Bunları kaydettikten sonra temizlemeyi yeniden deneyin.",
+	"shell.workspaceCleanupDirtyStandalone": "Oturum klasörü, içinde dosyalarınız olduğu için korundu.",
 	"shell.archivingNamed": "{{title}} arşivleniyor…",
 	"shell.archivingNamedAria": "{{title}} arşivleniyor",
 	"shell.archivingSession": "Oturum arşivleniyor",

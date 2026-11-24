@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -70,8 +73,9 @@ func (w *Workspace) Restore(_ context.Context, cfg ports.WorkspaceConfig) (ports
 	return ports.WorkspaceInfo{Path: path, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}, nil
 }
 
-// Destroy removes only an empty scratch directory. Non-empty directories are
-// treated as dirty user work and preserved.
+// Destroy removes a scratch directory that holds nothing but AO's own control
+// files (see scanScratchContents). Anything else is treated as dirty user work
+// and preserved.
 func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	_, err := w.destroy(ctx, info)
 	return err
@@ -97,17 +101,158 @@ func (w *Workspace) destroy(_ context.Context, info ports.WorkspaceInfo) (ports.
 	if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
 		reclaim = ports.WorkspaceReclaimAlreadyAbsent
 	}
-	nonEmpty, err := pathExistsNonEmpty(path)
+	contents, err := scanScratchContents(path)
 	if err != nil {
 		return reclaim, err
 	}
-	if nonEmpty {
+	if contents.userWork {
 		return reclaim, fmt.Errorf("scratch workspace: preserve non-empty %q: %w", path, ports.ErrWorkspaceDirty)
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return reclaim, fmt.Errorf("scratch workspace: remove empty %q: %w", path, err)
+	if err := contents.remove(path); err != nil {
+		return reclaim, err
 	}
 	return reclaim, nil
+}
+
+// scratchContents is what a scratch directory holds, split the way git splits
+// a project worktree: AO's own control files, which never block teardown, and
+// anything else, which is user work.
+type scratchContents struct {
+	userWork bool
+	// managed are AO-owned files and directories, removed before dirs.
+	managed []string
+	// dirs are the directories under the root, parents before children.
+	dirs []string
+}
+
+// scanScratchContents classifies everything under root. Agent adapters write
+// their hook config beside a self-ignoring .gitignore carrying AO's sentinel,
+// so a project worktree's git status never sees it. Scratch has no git index,
+// so the names such a .gitignore lists, and AO's Copilot profiles, are read
+// directly, as the session Files surfaces already do. Everything else, a
+// symlink or a folder the user ran git init in included, is user work.
+func scanScratchContents(root string) (scratchContents, error) {
+	var contents scratchContents
+	if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
+		return contents, nil
+	}
+	managedByDir := map[string]map[string]struct{}{}
+	err := filepath.WalkDir(root, func(fullPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if fullPath == root {
+			return nil
+		}
+		dir := filepath.Dir(fullPath)
+		managed, ok := managedByDir[dir]
+		if !ok {
+			managed = aoManagedNamesIn(dir)
+			managedByDir[dir] = managed
+		}
+		if _, ok := managed[entry.Name()]; ok {
+			contents.managed = append(contents.managed, fullPath)
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			contents.dirs = append(contents.dirs, fullPath)
+			return nil
+		}
+		if aoManagedCopilotProfile(root, fullPath, entry) {
+			contents.managed = append(contents.managed, fullPath)
+			return nil
+		}
+		contents.userWork = true
+		return filepath.SkipAll
+	})
+	if err != nil {
+		return scratchContents{}, fmt.Errorf("scratch workspace: inspect %q: %w", root, err)
+	}
+	return contents, nil
+}
+
+// remove deletes AO's files, then each directory only if it is empty. A file
+// that appeared after the scan leaves its directory non-empty, so it is kept
+// and reported as dirty rather than deleted.
+func (c scratchContents) remove(root string) error {
+	for _, managed := range c.managed {
+		if err := os.RemoveAll(managed); err != nil {
+			return fmt.Errorf("scratch workspace: remove AO file %q: %w", managed, err)
+		}
+	}
+	// Children before parents, the root last.
+	dirs := append([]string{root}, c.dirs...)
+	for i := len(dirs) - 1; i >= 0; i-- {
+		err := os.Remove(dirs[i])
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if nonEmpty, _ := pathExistsNonEmpty(dirs[i]); nonEmpty {
+			return fmt.Errorf("scratch workspace: preserve non-empty %q: %w", dirs[i], ports.ErrWorkspaceDirty)
+		}
+		return fmt.Errorf("scratch workspace: remove empty %q: %w", dirs[i], err)
+	}
+	return nil
+}
+
+// aoManagedNamesIn returns the names an AO-managed .gitignore in dir lists.
+// Adapters anchor each pattern to that directory. A missing, foreign or
+// unreadable marker claims nothing, so its neighbours count as user work.
+func aoManagedNamesIn(dir string) map[string]struct{} {
+	managed := map[string]struct{}{}
+	content, ok := readSmallRegularFile(filepath.Join(dir, ".gitignore"))
+	if !ok || !strings.Contains(content, hookutil.GitignoreSentinel) {
+		return managed
+	}
+	for _, rawLine := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if !strings.HasPrefix(line, "/") || strings.HasPrefix(line, "//") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(line, "/"), "/")
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+			continue
+		}
+		managed[name] = struct{}{}
+	}
+	return managed
+}
+
+// aoManagedCopilotProfile reports AO's Copilot agent profile, which a project
+// worktree hides through .git/info/exclude and which carries its own marker.
+func aoManagedCopilotProfile(root, fullPath string, entry fs.DirEntry) bool {
+	rel, err := filepath.Rel(root, filepath.Dir(fullPath))
+	if err != nil || filepath.ToSlash(rel) != ".github/agents" {
+		return false
+	}
+	name := entry.Name()
+	if !strings.HasPrefix(name, "ao-") || !strings.HasSuffix(name, ".agent.md") {
+		return false
+	}
+	content, ok := readSmallRegularFile(fullPath)
+	return ok && strings.Contains(content, hookutil.CopilotAgentProfileSentinel)
+}
+
+// readSmallRegularFile reads up to 64 KiB of a regular file, not following a
+// symlink, so a marker can only be trusted from a file in the workspace.
+func readSmallRegularFile(file string) (string, bool) {
+	info, err := os.Lstat(file)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	handle, err := os.Open(file) //nolint:gosec // path is under the validated managed root
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = handle.Close() }()
+	data, err := io.ReadAll(io.LimitReader(handle, 64*1024))
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
 }
 
 // ForceDestroy intentionally follows Destroy semantics for scratch. Normal AO

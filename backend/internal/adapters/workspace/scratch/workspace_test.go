@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/scratch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -184,5 +186,91 @@ func TestWorkspaceDestroyReclaimReportsAlreadyAbsentDirectory(t *testing.T) {
 	}
 	if reclaim != ports.WorkspaceReclaimAlreadyAbsent {
 		t.Fatalf("reclaim = %q, want %q", reclaim, ports.WorkspaceReclaimAlreadyAbsent)
+	}
+}
+
+func createStandaloneScratch(t *testing.T) (*scratch.Workspace, ports.WorkspaceInfo) {
+	t.Helper()
+	ws, err := scratch.New(scratch.Options{ManagedRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	info, err := ws.Create(context.Background(), ports.WorkspaceConfig{SessionID: "standalone-1", Kind: domain.KindWorker})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return ws, info
+}
+
+func writeScratchFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A standalone session's folder holds the hook config AO installed at launch
+// even when the agent wrote nothing. Archiving must not report that as dirty.
+func TestWorkspaceDestroyRemovesDirectoryHoldingOnlyAOFiles(t *testing.T) {
+	ws, info := createStandaloneScratch(t)
+	if err := (&claudecode.Plugin{}).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: info.Path}); err != nil {
+		t.Fatalf("install claude hooks: %v", err)
+	}
+	if err := hookutil.InstallBugTriageSkill(filepath.Join(info.Path, ".claude", "skills")); err != nil {
+		t.Fatalf("install bug-triage skill: %v", err)
+	}
+	writeScratchFile(t, filepath.Join(info.Path, ".github", "agents", "ao-worker.agent.md"), hookutil.CopilotAgentProfileSentinel+"\nprofile\n")
+	if err := os.MkdirAll(filepath.Join(info.Path, "empty", "nested"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Destroy(context.Background(), info); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("scratch dir holding only AO files still exists or stat failed differently: %v", err)
+	}
+}
+
+func TestWorkspaceDestroyKeepsEverythingWhenUserWorkSitsBesideAOFiles(t *testing.T) {
+	for name, userFile := range map[string]string{
+		"top level":           "notes.md",
+		"inside agent folder": filepath.Join(".claude", "notes.md"),
+		"copilot lookalike":   filepath.Join(".github", "agents", "ao-mine.agent.md"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ws, info := createStandaloneScratch(t)
+			if err := (&claudecode.Plugin{}).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: info.Path}); err != nil {
+				t.Fatalf("install claude hooks: %v", err)
+			}
+			writeScratchFile(t, filepath.Join(info.Path, userFile), "mine\n")
+
+			if err := ws.Destroy(context.Background(), info); !errors.Is(err, ports.ErrWorkspaceDirty) {
+				t.Fatalf("Destroy err = %v, want ErrWorkspaceDirty", err)
+			}
+			for _, kept := range []string{userFile, filepath.Join(".claude", "settings.local.json")} {
+				if _, err := os.Stat(filepath.Join(info.Path, kept)); err != nil {
+					t.Fatalf("%s was not preserved: %v", kept, err)
+				}
+			}
+		})
+	}
+}
+
+// Only a .gitignore carrying AO's sentinel can claim files; one the user wrote
+// does not make the files it names AO's to delete.
+func TestWorkspaceDestroyIgnoresForeignGitignore(t *testing.T) {
+	ws, info := createStandaloneScratch(t)
+	writeScratchFile(t, filepath.Join(info.Path, ".claude", ".gitignore"), "/.gitignore\n/settings.local.json\n")
+	writeScratchFile(t, filepath.Join(info.Path, ".claude", "settings.local.json"), "{}\n")
+
+	if err := ws.Destroy(context.Background(), info); !errors.Is(err, ports.ErrWorkspaceDirty) {
+		t.Fatalf("Destroy err = %v, want ErrWorkspaceDirty", err)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, ".claude", "settings.local.json")); err != nil {
+		t.Fatalf("file named by a foreign .gitignore was not preserved: %v", err)
 	}
 }

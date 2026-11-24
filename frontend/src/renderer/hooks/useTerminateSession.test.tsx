@@ -498,6 +498,18 @@ describe("durable workspace cleanup feedback", () => {
 		expect(toasts()[0].action).toBeUndefined();
 	});
 
+	it("says a kept standalone folder holds files, without worktree or retry wording", async () => {
+		const queryClient = newQueryClient();
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => { await result.current.mutateAsync({ ...session, workspaceId: STANDALONE_WORKSPACE_ID }); });
+
+		setCleanup(queryClient, "preserved_dirty");
+
+		await waitFor(() => expect(toasts()).toHaveLength(1));
+		expect(toasts()[0]).toMatchObject({ title: "Session folder kept because it has your files in it.", tone: "info" });
+		expect(toasts()[0].action).toBeUndefined();
+	});
+
 	it("raises nothing for a cleanup a sweep recorded", async () => {
 		const queryClient = new QueryClient();
 		const sweep = (workspaceCleanup: WorkspaceSession["workspaceCleanup"]) => queryClient.setQueryData(workspaceQueryKey, [{

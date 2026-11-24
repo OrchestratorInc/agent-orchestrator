@@ -2671,6 +2671,7 @@
 	"shell.workspaceCleanupPending": "Ожидание очистки: {{title}}",
 	"shell.workspaceCleanupFailed": "Не удалось очистить рабочую область. Повторите очистку в разделе «Скрипты» настроек проекта.",
 	"shell.workspaceCleanupDirty": "В worktree есть незакоммиченные изменения. Сохраните их и повторите очистку.",
+	"shell.workspaceCleanupDirtyStandalone": "Папка сессии сохранена, потому что в ней есть ваши файлы.",
 	"shell.archivingNamed": "Архивация {{title}}…",
 	"shell.archivingNamedAria": "Архивация {{title}}",
 	"shell.archivingSession": "Архивация сессии",
