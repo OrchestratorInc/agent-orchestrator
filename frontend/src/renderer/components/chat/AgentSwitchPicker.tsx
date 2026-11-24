@@ -689,7 +689,8 @@ interface RailAgent {
 }
 
 const RAIL_ITEM_CLASS = cn(
-	"flex size-7 shrink-0 items-center justify-center rounded-md",
+	// A larger mark in a snug pill: the logo carries the row, not the highlight around it.
+	"flex size-6.5 shrink-0 items-center justify-center rounded-md",
 	GHOST_PILL_CLASS,
 	// The chosen agent keeps the pressed pill: a quiet fill, no border.
 	"aria-checked:before:inset-0 aria-checked:before:opacity-100 aria-checked:before:bg-interactive-active",
@@ -787,7 +788,7 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 										}}
 										className={cn(RAIL_ITEM_CLASS, (agent.unavailable || blocked !== undefined) && "opacity-40")}
 									>
-										<ProviderMark provider={agent.id} className="size-4" />
+										<ProviderMark provider={agent.id} className="size-5" />
 									</Pressable>
 								</TooltipTrigger>
 								<TooltipContent side="bottom" sideOffset={4} hideArrow>{name}</TooltipContent>
