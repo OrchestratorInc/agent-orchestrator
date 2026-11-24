@@ -194,6 +194,20 @@ func TestPublicTunnelSwitchWhileRunningKeepsPassword(t *testing.T) {
 	}
 }
 
+func TestPublicTunnelOffRefusedOnTunnelOnlyHost(t *testing.T) {
+	tunnel := &fakeTunnel{}
+	bridge := lanOnlyBridge(t, tunnel)
+	if _, err := bridge.EnableTunnelOnly(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bridge.SetPublicTunnel(false); err == nil {
+		t.Fatal("turned off the only way into a tunnel-only host")
+	}
+	if tunnel.stops != 0 || loadLANOnlyState(t, bridge.ConfigPath).NoPublicTunnel {
+		t.Fatal("a refused switch stopped the tunnel or saved the choice")
+	}
+}
+
 func TestTunnelOnlyPersistsLoopbackAndAdvertisesOnlyTunnel(t *testing.T) {
 	tunnel := &fakeTunnel{endpoint: &mobilebridge.TunnelEndpoint{Ready: true, Hostname: "test.trycloudflare.com"}}
 	bridge := lanOnlyBridge(t, tunnel)

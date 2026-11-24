@@ -1435,18 +1435,21 @@ func (b *BridgeService) SetPublicTunnel(on bool) (MobileStatusResponse, error) {
 	if err != nil {
 		return MobileStatusResponse{}, err
 	}
+	if !on && st.Enabled && st.LoopbackOnly {
+		return MobileStatusResponse{}, errors.New("this computer is reached only through its tunnel; run `ao remote-host disable` before turning the tunnel off")
+	}
 	if on && st.Enabled && b.LAN.Running() {
 		return b.startRemoteAccessLocked()
-	}
-	if !on {
-		if t := b.tunnel(); t != nil {
-			t.Stop()
-		}
 	}
 	if st.NoPublicTunnel != !on {
 		st.NoPublicTunnel = !on
 		if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
 			return MobileStatusResponse{}, err
+		}
+	}
+	if !on {
+		if t := b.tunnel(); t != nil {
+			t.Stop()
 		}
 	}
 	return b.Status(), nil
