@@ -7415,11 +7415,30 @@ html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light
 
 /* Dropdown menus, selects and popovers are frosted: their fill at 50% with a
  * blur of what is behind them. Tooltips stay solid (they carry one line of
- * text and should read at a glance). */
+ * text and should read at a glance). The blur is a layer just under the
+ * menu's content (a negative z-index ::before), so it never sits over the
+ * menu's own items. */
 html[data-new-desktop-ui] :is([data-radix-popper-content-wrapper] > *, [role="menu"], [role="listbox"]):is(.bg-overlay, .bg-popover, .bg-settings-menu):not([data-slot="tooltip-content"]) {
+	position: relative;
 	background-color: color-mix(in oklab, var(--popover) 50%, transparent);
+}
+
+html[data-new-desktop-ui] :is([data-radix-popper-content-wrapper] > *, [role="menu"], [role="listbox"]):is(.bg-overlay, .bg-popover, .bg-settings-menu):not([data-slot="tooltip-content"])::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	border-radius: inherit;
 	-webkit-backdrop-filter: blur(24px) saturate(1.4);
 	backdrop-filter: blur(24px) saturate(1.4);
+	pointer-events: none;
+}
+
+/* Chromium draws no backdrop blur in a transparent (vibrant) window: the
+ * layer under a menu is only tinted, so text behind a 50% fill shows through
+ * sharp. With transparency on, the frosted surfaces fall back to a 90% fill. */
+html[data-new-desktop-ui][data-window-translucent="true"] :is([data-radix-popper-content-wrapper] > *, [role="menu"], [role="listbox"]):is(.bg-overlay, .bg-popover, .bg-settings-menu):not([data-slot="tooltip-content"]) {
+	background-color: color-mix(in oklab, var(--popover) 90%, transparent);
 }
 
 /* Opaque, the frame and the panel swap colours: the frame (sidebar, top band)
