@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampPreviewText, isMarkdownPreviewPath, parseMarkdownFrontmatter, stripMarkdownFrontmatter, stripMarkdownPreviewAnchor } from "./markdown-frontmatter";
+import { clampPreviewText, isMarkdownFilePath, isMarkdownPreviewPath, parseMarkdownFrontmatter, stripMarkdownFrontmatter, stripMarkdownPreviewAnchor } from "./markdown-frontmatter";
 
 const file = (body: string) => `---\n${body}\n---\n# Heading\n`;
 
@@ -74,13 +74,22 @@ describe("parseMarkdownFrontmatter", () => {
 		expect(isMarkdownPreviewPath("docs/page.html")).toBe(false);
 	});
 
-	it("strips anchors and query parameters from markdown preview paths", () => {
+	it("strips anchors from markdown preview paths while preserving resolved filenames", () => {
 		expect(stripMarkdownPreviewAnchor("docs/check.md")).toBe("docs/check.md");
 		expect(stripMarkdownPreviewAnchor("docs/a#b.md")).toBe("docs/a#b.md");
 		expect(stripMarkdownPreviewAnchor("docs/check?draft.md")).toBe("docs/check?draft.md");
 		expect(stripMarkdownPreviewAnchor("docs/check.md#usage")).toBe("docs/check.md");
 		expect(stripMarkdownPreviewAnchor("docs/check.md#L10-L20")).toBe("docs/check.md");
-		expect(stripMarkdownPreviewAnchor("docs/check.md?raw=true")).toBe("docs/check.md");
-		expect(stripMarkdownPreviewAnchor("docs/check.md?raw=true#usage")).toBe("docs/check.md");
+		expect(stripMarkdownPreviewAnchor("docs/a#b.md#usage")).toBe("docs/a#b.md");
+		expect(stripMarkdownPreviewAnchor("docs/check?draft.md#usage")).toBe("docs/check?draft.md");
+		expect(stripMarkdownPreviewAnchor("docs/guide.md?draft")).toBe("docs/guide.md?draft");
+	});
+
+	it("validates markdown file paths by extension", () => {
+		expect(isMarkdownFilePath("docs/check.md")).toBe(true);
+		expect(isMarkdownFilePath("docs/a#b.md")).toBe(true);
+		expect(isMarkdownFilePath("docs/check?draft.md")).toBe(true);
+		expect(isMarkdownFilePath("docs/guide.md?draft")).toBe(false);
+		expect(isMarkdownFilePath("docs/notes.txt")).toBe(false);
 	});
 });

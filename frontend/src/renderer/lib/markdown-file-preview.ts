@@ -2,7 +2,7 @@ import { resolveSessionWorkspacePath } from "../hooks/useSessionWorkspaceFiles";
 import type { CloudCpClient } from "./cloud-cp";
 import { splitWorkspaceRepositoryPath, withWorkspaceRepository } from "./cloud-cp";
 import { clientForSessionHost } from "./host-clients";
-import { isMarkdownPreviewPath, stripMarkdownPreviewAnchor } from "./markdown-frontmatter";
+import { isMarkdownFilePath, stripMarkdownPreviewAnchor } from "./markdown-frontmatter";
 import { isAbsoluteFileReference } from "./workspace-file-path";
 
 /** File identity already used to open a Markdown link. External URLs are not a source. */
@@ -24,8 +24,8 @@ export async function loadMarkdownPreviewText(
 	rawPath: string,
 	cloud?: { client: CloudCpClient; ready: boolean },
 ): Promise<string> {
-	if (!isMarkdownPreviewPath(rawPath)) throw new Error("Unable to load this file.");
 	const path = stripMarkdownPreviewAnchor(rawPath);
+	if (!isMarkdownFilePath(path)) throw new Error("Unable to load this file.");
 	if (source.kind === "cloud") {
 		if (!cloud?.ready) throw new Error("Unable to load this file.");
 		// A sibling repository is addressed as ../<repository>/<path>; the client

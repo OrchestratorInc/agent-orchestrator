@@ -322,4 +322,11 @@ describe("markdown link hover", () => {
 			params: { path: { sessionId: "sess-1" }, query: { path: "docs/check.md" } },
 		}));
 	});
+
+	it("does not render preview for a file whose resolved extension is not markdown", async () => {
+		renderLinks("[Catalog](docs/guide.md%3Fdraft)", { kind: "workspace", sessionId: "sess-1" });
+		fireEvent.pointerOver(screen.getByRole("link", { name: "Catalog" }), { pointerType: "mouse" });
+		await waitFor(() => expect(getMock).not.toHaveBeenCalled());
+		expect(screen.queryByText("Unable to load this file.")).not.toBeInTheDocument();
+	});
 });

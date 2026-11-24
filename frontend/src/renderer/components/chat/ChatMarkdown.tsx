@@ -66,7 +66,7 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
-import { isMarkdownPreviewPath } from "../../lib/markdown-frontmatter";
+import { isMarkdownFilePath } from "../../lib/markdown-frontmatter";
 import type { MarkdownFilePreviewSource } from "../../lib/markdown-file-preview";
 import { MarkdownFrontmatterPreview } from "./MarkdownFrontmatterPreview";
 import { LinkFavicon } from "../LinkPreviewCard";
@@ -566,8 +566,9 @@ function InlineLinkFavicon({ href }: { href: string }) {
 function MarkdownLinkTarget({ href, children, className, menuPath, node, labelText }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, markdownFileSource, workspacePaths, findFile } = useContext(OpenChatLink);
-	const filePath = href && onFileOpen
-		? workspaceFilePath(href, workspacePaths) ?? findFile(href) ?? explicitWorkspaceFilePath(href)
+	const hrefTarget = href ? href.split(/[?#]/, 1)[0]! : undefined;
+	const filePath = hrefTarget && onFileOpen
+		? workspaceFilePath(hrefTarget, workspacePaths) ?? findFile(hrefTarget) ?? explicitWorkspaceFilePath(hrefTarget)
 		: undefined;
 	const sessionLink = Boolean(href && isAoLink(href));
 	if (safeOriginContent && !sessionLink) return <>{children}</>;
@@ -576,9 +577,9 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 	// That file is named by the link's own path, never by a workspace file that
 	// shares its name, and the link's query or fragment is cut while the target
 	// is still encoded, so a name's own "#" or "?" (%23, %3F) stays.
-	const linkedFile = href && sessionId && onFileOpen ? explicitWorkspaceFilePath(href.split(/[?#]/, 1)[0]!) : undefined;
+	const linkedFile = hrefTarget && sessionId && onFileOpen ? explicitWorkspaceFilePath(hrefTarget) : undefined;
 	const ownArtifact = linkedFile && sessionId && sessionArtifactPath(linkedFile, sessionId) ? linkedFile : undefined;
-	const openInFiles = ownArtifact ?? (filePath && href && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(href, filePath) : undefined);
+	const openInFiles = ownArtifact ?? (filePath && hrefTarget && !/\.html?$/i.test(filePath) ? workspaceFileOpenTarget(hrefTarget, filePath) : undefined);
 	if (remoteHost && href && (isHostLocalWebLink(href) || (isPotentialWorkspaceFileLink(href) && !openInFiles))) {
 		const unavailable = <span className="text-muted-foreground" title={REMOTE_PREVIEW_UNAVAILABLE}>
 			{children}<span className="sr-only"> (remote preview unavailable)</span>
@@ -593,7 +594,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 	const pullRequest = href && !sessionLink && !linksImage(node) ? parsePullRequestLink(href) : undefined;
 	const text = labelText ?? hastLinkText(node);
 	const chip = pullRequest && href && text !== undefined ? pullRequestChipLabel(href, text) : undefined;
-	const markdownPreviewPath = !sessionLink && !ownArtifact && markdownFileSource && openInFiles && isMarkdownPreviewPath(openInFiles) ? openInFiles : undefined;
+	const markdownPreviewPath = !sessionLink && !ownArtifact && markdownFileSource && openInFiles && isMarkdownFilePath(openInFiles) ? openInFiles : undefined;
 	return (
 		<AppLink
 			href={href}

@@ -23,15 +23,16 @@ export function stripMarkdownFrontmatter(content: string): string {
 
 const MARKDOWN_FILE = /\.(?:md|markdown)$/i;
 
+export function isMarkdownFilePath(path: string): boolean {
+	return MARKDOWN_FILE.test(path);
+}
+
 export function stripMarkdownPreviewAnchor(path: string): string {
 	if (MARKDOWN_FILE.test(path)) return path;
-	const withoutQuery = path.split("?", 1)[0] ?? "";
-	const hashIndex = withoutQuery.lastIndexOf("#");
-	if (hashIndex >= 0 && MARKDOWN_FILE.test(withoutQuery.slice(0, hashIndex))) {
-		return withoutQuery.slice(0, hashIndex);
+	const hashIndex = path.lastIndexOf("#");
+	if (hashIndex >= 0 && MARKDOWN_FILE.test(path.slice(0, hashIndex))) {
+		return path.slice(0, hashIndex);
 	}
-	const base = path.split(/[?#]/, 1)[0] ?? "";
-	if (MARKDOWN_FILE.test(base)) return base;
 	return path;
 }
 
