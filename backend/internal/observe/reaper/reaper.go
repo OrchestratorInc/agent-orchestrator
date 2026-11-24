@@ -274,16 +274,24 @@ func (r *Reaper) observeReviewers(ctx context.Context, now time.Time) error {
 		r.reviewersMu.Unlock()
 		return nil
 	}
+	// Retry the boot settlement on the next cycle unless it completes. The
+	// reset is deferred so a panicking probe, which the loop recovers from,
+	// does not leave the boot pass marked done.
+	settled := false
+	if boot {
+		defer func() {
+			if !settled {
+				r.reviewersMu.Lock()
+				r.reviewersBooted = false
+				r.reviewersMu.Unlock()
+			}
+		}()
+	}
 	pass, err := r.probeReviewers(ctx, observer, now, boot)
 	if err == nil && (boot || len(pass.Observations) > 0) {
 		err = observer.ApplyReviewerObservations(ctx, pass)
 	}
-	if err != nil && boot {
-		// Retry the boot settlement on the next cycle.
-		r.reviewersMu.Lock()
-		r.reviewersBooted = false
-		r.reviewersMu.Unlock()
-	}
+	settled = err == nil
 	return err
 }
 

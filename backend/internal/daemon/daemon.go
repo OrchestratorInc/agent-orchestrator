@@ -1020,6 +1020,10 @@ func Run(buildVersion string) (retErr error) {
 		usageHookQueue *usagesvc.HookQueue
 		usagePipeline  *usagepipeline.Pipeline
 		usagePricing   *usagePricingRuntime
+		// pricingJoined is set once the shutdown drain has taken over the
+		// pricing join, so the deferred safety net does not wait on it again
+		// without a bound after that join timed out.
+		pricingJoined bool
 	)
 	if pricingRuntime, pricingErr := newUsagePricingRuntime(usagePricingRuntimeConfig{
 		DataDir: cfg.DataDir,
@@ -1034,7 +1038,9 @@ func Run(buildVersion string) (retErr error) {
 		}
 		defer func() {
 			stop()
-			usagePricing.Wait()
+			if !pricingJoined {
+				usagePricing.Wait()
+			}
 		}()
 	}
 	if roots, rootsErr := usagesvc.DefaultSourceRoots(ctx, cfg.DataDir); rootsErr != nil {
@@ -1723,6 +1729,7 @@ func Run(buildVersion string) (retErr error) {
 	chatCancel()
 	drain.wait("usage pipeline", usageDone)
 	if usagePricing != nil {
+		pricingJoined = true
 		drain.run("usage pricing", usagePricing.Wait)
 	}
 	drain.run("lifecycle stack", lcStack.Stop)
