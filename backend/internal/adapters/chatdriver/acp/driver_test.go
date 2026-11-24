@@ -5952,6 +5952,88 @@ func TestACPCompactionMessageDrivesTheRowInsteadOfTheReply(t *testing.T) {
 	}
 }
 
+// An agent that starts, then finds nothing to compact (Qwen's "noop"), records
+// no compaction: a row it opened says so, and with none open its words stay in
+// the reply.
+func TestACPSkippedCompactionRecordsNoCompaction(t *testing.T) {
+	for name, test := range map[string]struct {
+		texts     []string
+		wantRows  int
+		wantReply string
+	}{
+		"after progress": {texts: []string{"Compressing context...", "Nothing to compress."}, wantRows: 1},
+		"on its own":     {texts: []string{"Nothing to compress."}, wantReply: "Nothing to compress."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent := &fakeAgent{}
+			driver := New(Config{
+				Harness:      domain.HarnessQwen,
+				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+				Probe:        func(context.Context) error { return nil },
+				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				CompactionMessage: func(text string, _ map[string]any) (CompactionReport, bool) {
+					switch text {
+					case "Compressing context...":
+						return CompactionReport{Status: "started"}, true
+					case "Nothing to compress.":
+						return CompactionReport{Status: "skipped"}, true
+					}
+					return CompactionReport{}, false
+				},
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			t.Cleanup(func() { _ = opened.Close() })
+			_ = nextEvent(t, opened.Events()) // controller.ready
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				for _, text := range test.texts {
+					_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: params.SessionId, Update: acpsdk.SessionUpdate{
+						AgentMessageChunk: &acpsdk.SessionUpdateAgentMessageChunk{Content: acpsdk.TextBlock(text)},
+					}})
+				}
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "/compress"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			reply := ""
+			rows := map[string]domain.ActivityStatus{}
+			var last ports.ChatEvent
+			for {
+				ev := nextEvent(t, opened.Events())
+				if ev.Kind == ports.ChatEventMessageDelta {
+					reply += ev.Delta
+				}
+				if ev.Kind == ports.ChatEventCompacted {
+					rows[ev.ProviderItemID] = ev.ActivityStatus
+					last = ev
+				}
+				if ev.Kind == ports.ChatEventTurnCompleted {
+					break
+				}
+			}
+			if reply != test.wantReply {
+				t.Fatalf("reply = %q, want %q", reply, test.wantReply)
+			}
+			if len(rows) != test.wantRows {
+				t.Fatalf("compaction rows = %v, want %d", rows, test.wantRows)
+			}
+			if test.wantRows > 0 && (last.ActivityStatus != domain.ActivityStatusFailed || last.Summary != "Nothing to compact") {
+				t.Fatalf("row settled as %q %q, want failed with \"Nothing to compact\"", last.ActivityStatus, last.Summary)
+			}
+		})
+	}
+}
+
 // Claude (through AO's patched adapter) and OpenCode report a compaction they
 // start on their own as status. It gets one row that runs, then settles with
 // what the token reports either side of it show.
@@ -5964,11 +6046,16 @@ func TestACPProviderCompactionRunsThenSettlesOneRow(t *testing.T) {
 		// figures sends Claude's boundary report (a second "completed" with
 		// its own figures) between the bare "completed" and the usage.
 		figures bool
+		// figuresLast sends that report after the usage instead.
+		figuresLast bool
 	}{
 		"opencode":                {key: "opencode/compaction"},
 		"usage before completion": {key: "ao/compaction"},
 		"usage after completion":  {key: "opencode/compaction", usageLast: true},
 		"claude":                  {key: "ao/compaction", usageLast: true, figures: true},
+		// A usage report that lands between the bare "completed" and the
+		// boundary's figures settles the row; the figures still reach it.
+		"figures after usage": {key: "ao/compaction", usageLast: true, figuresLast: true},
 	} {
 		key := test.key
 		t.Run(name, func(t *testing.T) {
@@ -6002,6 +6089,9 @@ func TestACPProviderCompactionRunsThenSettlesOneRow(t *testing.T) {
 						usage(ctx, 24000)
 					} else {
 						usage(ctx, 24000)
+						if test.figuresLast {
+							statusWith(ctx, map[string]any{"status": "completed", "tokensBefore": 180000.0, "tokensAfter": 24000.0})
+						}
 					}
 				} else {
 					usage(ctx, 24000)

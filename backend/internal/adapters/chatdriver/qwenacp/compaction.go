@@ -41,8 +41,9 @@ func compactionMessage(text string, meta map[string]any) (acpdriver.CompactionRe
 				TokensAfter:  tokenCount(compression["newTokenCount"]),
 			}, true
 		case "noop":
-			// Nothing to strip: the history is as it was, with nothing to report.
-			return acpdriver.CompactionReport{Status: "completed"}, true
+			// Nothing to strip: the history is as it was, so nothing is
+			// recorded as compacted. A row Qwen's progress opened says so.
+			return acpdriver.CompactionReport{Status: "skipped"}, true
 		}
 		return acpdriver.CompactionReport{}, false
 	}

@@ -769,8 +769,8 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			break
 		}
 		if turnID != "" && c.compactionMessage != nil && parentToolUseID(update.AgentMessageChunk.Meta) == "" {
-			if report, ok := c.compactionMessage(contentText(update.AgentMessageChunk.Content), update.AgentMessageChunk.Meta); ok {
-				c.reportCompaction(turnID, report, emit)
+			if report, ok := c.compactionMessage(contentText(update.AgentMessageChunk.Content), update.AgentMessageChunk.Meta); ok &&
+				c.reportCompaction(turnID, report, emit) {
 				break
 			}
 		}

@@ -26,7 +26,7 @@ func TestCompactionMessageRecognizesQwenCompression(t *testing.T) {
 		},
 		"0.28 nothing to strip": {
 			meta: map[string]any{"contextCompression": map[string]any{"phase": "noop"}},
-			want: acpdriver.CompactionReport{Status: "completed"},
+			want: acpdriver.CompactionReport{Status: "skipped"},
 		},
 		"older progress": {text: "Compressing context...", want: acpdriver.CompactionReport{Status: "started"}},
 		"older done": {

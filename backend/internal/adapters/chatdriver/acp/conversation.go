@@ -1537,7 +1537,9 @@ type providerCompaction struct {
 
 // CompactionReport is one step of a compaction the agent reported.
 type CompactionReport struct {
-	// Status is "started", "completed" or "failed".
+	// Status is "started", "completed" or "failed", or "skipped" when the
+	// agent found nothing to compact: a row already under way says so, and
+	// with none under way there is nothing to report.
 	Status string
 	// TokensBefore and TokensAfter are the agent's own figures, when it gives
 	// them. Without them the row brackets the compaction from the token reports
@@ -1588,7 +1590,7 @@ func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any,
 // compaction with a normal end_turn, so the status is the only sign that the
 // history was left as it was. Inside any other turn the agent compacted on its
 // own, and the steps drive a row that runs and then settles in place.
-func (c *conversation) reportCompaction(turnID string, report CompactionReport, emit func(ports.ChatEvent)) {
+func (c *conversation) reportCompaction(turnID string, report CompactionReport, emit func(ports.ChatEvent)) bool {
 	failure := ""
 	if report.Status == "failed" {
 		if failure = strings.TrimSpace(report.Reason); failure == "" {
@@ -1604,12 +1606,12 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 			c.compactionReport = &report
 		}
 		c.mu.Unlock()
-		return
+		return true
 	}
 	if replaying {
 		// The live run already stored this compaction's row.
 		c.mu.Unlock()
-		return
+		return true
 	}
 	open := c.providerCompaction
 	if open != nil && open.turnID != turnID {
@@ -1620,7 +1622,7 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 		if open != nil {
 			// Claude repeats the status while it works.
 			c.mu.Unlock()
-			return
+			return true
 		}
 		c.providerCompactions++
 		open = &providerCompaction{
@@ -1639,8 +1641,27 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 			Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
 			ActivityStatus: domain.ActivityStatusRunning, Detail: compactionFigures(open.before, 0, window),
 		})
-		return
-	case report.Status == "completed" && !hasFigures && open != nil && !(c.contextTokens > 0 && c.contextTokens < open.before):
+		return true
+	case report.Status == "skipped":
+		if open == nil {
+			// Nothing was under way, so there is nothing to report: the
+			// agent's own words stay in the reply.
+			c.mu.Unlock()
+			return false
+		}
+		// The agent started, then found nothing to compact. The history did
+		// not change, so the row says so instead of claiming a compaction.
+		c.providerCompaction = nil
+		c.settledCompaction = nil
+		window := c.contextWindow
+		c.mu.Unlock()
+		emit(ports.ChatEvent{
+			Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
+			ActivityStatus: domain.ActivityStatusFailed, Summary: "Nothing to compact",
+			Detail: compactionFigures(open.before, 0, window),
+		})
+		return true
+	case report.Status == "completed" && !hasFigures && open != nil && !c.contextDroppedSince(open):
 		// Done, but the context figure has not dropped yet: wait for what it
 		// freed rather than settle "freed nothing". One that already dropped
 		// (the agent reported it first) settles below.
@@ -1652,7 +1673,7 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 			open.before = report.TokensBefore
 		}
 		c.mu.Unlock()
-		return
+		return true
 	}
 	c.providerCompaction = nil
 	if open == nil && hasFigures && c.settledCompaction != nil && c.settledCompaction.turnID == turnID {
@@ -1668,7 +1689,12 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 			itemID: c.providerItemID(fmt.Sprintf("compaction:%s:%d", turnID, c.providerCompactions)),
 		}
 	}
+	// A row settled without the agent's own figures stays known, so figures
+	// that arrive just after it still reach the same row.
 	c.settledCompaction = nil
+	if report.Status == "completed" && !hasFigures {
+		c.settledCompaction = open
+	}
 	before, after, window := open.before, c.contextTokens, c.contextWindow
 	if report.TokensBefore > 0 {
 		before = report.TokensBefore
@@ -1683,13 +1709,20 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 			ActivityStatus: domain.ActivityStatusFailed, Summary: failure,
 			Detail: compactionFigures(before, 0, window),
 		})
-		return
+		return true
 	}
 	emit(ports.ChatEvent{
 		Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
 		Summary: compactionSummary(before, after),
 		Detail:  compactionFigures(before, after, window),
 	})
+	return true
+}
+
+// contextDroppedSince reports whether the agent's context figure is already
+// below where the compaction started. c.mu must be held.
+func (c *conversation) contextDroppedSince(open *providerCompaction) bool {
+	return c.contextTokens > 0 && c.contextTokens < open.before
 }
 
 // settleFinishedCompaction settles a compaction that finished without saying
@@ -1703,11 +1736,13 @@ func (c *conversation) settleFinishedCompaction(emit func(ports.ChatEvent)) {
 		return
 	}
 	c.providerCompaction = nil
+	// Settled without the agent's own figures, whatever a usage report gave:
+	// figures that still follow reach this row instead of opening another.
+	c.settledCompaction = open
 	after, window := c.contextTokens, c.contextWindow
 	if c.usageReports == open.usageAtFinish {
 		// Nothing newer than the finish: the figure is from before it.
 		after = 0
-		c.settledCompaction = open
 	}
 	c.mu.Unlock()
 	emit(ports.ChatEvent{
