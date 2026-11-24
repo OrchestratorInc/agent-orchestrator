@@ -4,6 +4,7 @@ import { Image, StyleSheet, Text, View, type LayoutChangeEvent } from "react-nat
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { addNetworkStateListener, getNetworkStateAsync } from "expo-network";
 import { scheduleOnRN } from "react-native-worklets";
 import { BrowserLiveClient, type BrowserLiveCommand, type BrowserLiveFrame, type BrowserLiveState } from "../browserLive";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
@@ -21,6 +22,7 @@ import { FRAME_ZOOM_SNAP, pinchZoom, unzoomed, unzoomPoint, type FramePoint, typ
 import { LoadingBar } from "./LoadingBar";
 import { OpenURLPrompt } from "./OpenURLPrompt";
 import { FrameQueue } from "./frameQueue";
+import { adjustStreamQuality, initialStreamQuality, streamLink, type StreamLink } from "./streamQuality";
 import { StreamStats } from "./StreamStats";
 
 type BrowserStatus = "connecting" | "open" | "error";
@@ -32,6 +34,8 @@ const DRAG_SLOP = 7;
 const TAP_MAX_MS = 10_000;
 /** Debug builds measure the stream (StreamStats). */
 const MEASURE_STREAM = typeof __DEV__ !== "undefined" && __DEV__;
+/** How often the stream's quality follows the bandwidth it uses. */
+const QUALITY_INTERVAL_MS = 2_000;
 /** The mark a tap leaves on the frame: about a fingertip. */
 const TOUCH_MARK = 36;
 const ignoreActivation = () => {};
@@ -94,9 +98,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	const frameWidth = useRef(1);
 	frameWidth.current = frameSize.width;
 	const blank = page !== null && !page.url;
-	// Debug builds measure the stream (StreamStats): a HUD line, and a log line
-	// every 5 s for recording baselines. Release builds measure nothing.
-	const stats = useRef<StreamStats | null>(MEASURE_STREAM ? new StreamStats() : null);
+	// The stream is measured (StreamStats) to pick its quality. Debug builds
+	// also show a HUD line and log a line every 5 s for recording baselines.
+	const stats = useRef<StreamStats | null>(new StreamStats());
 	// When each recent frame source arrived, until its image loads: a newer
 	// frame can replace one before it shows.
 	const arrivedAt = useRef(new Map<string, number>());
@@ -211,6 +215,34 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			if (client.current === live) client.current = null;
 		};
 	}, [attempt, away, config, onDisabled, rejection, sessionID, showNotice]);
+
+	// The network the phone is on, for the stream's quality.
+	const [link, setLink] = useState<StreamLink>("unknown");
+	useEffect(() => {
+		let active = true;
+		void getNetworkStateAsync().then((state) => { if (active) setLink(streamLink(state.type)); }, () => undefined);
+		const subscription = addNetworkStateListener((state) => setLink(streamLink(state.type)));
+		return () => {
+			active = false;
+			subscription.remove();
+		};
+	}, []);
+	// Ask the desktop for a quality that fits the link, then follow the
+	// bandwidth the stream actually uses (only desktops that take it).
+	const takesQuality = status === "open" && page?.capabilities?.quality === true;
+	useEffect(() => {
+		if (!takesQuality) return;
+		let current = initialStreamQuality(link);
+		client.current?.send({ type: "quality", payload: current });
+		const timer = setInterval(() => {
+			const kbps = stats.current?.snapshot(performance.now()).kbps ?? 0;
+			const next = adjustStreamQuality(current, kbps, link);
+			if (next === current) return;
+			current = next;
+			client.current?.send({ type: "quality", payload: current });
+		}, QUALITY_INTERVAL_MS);
+		return () => clearInterval(timer);
+	}, [link, takesQuality, attempt]);
 
 	// The bar is titled with the desktop's page while one is showing.
 	const pageTitle = status === "open" && page?.url ? page.title.trim() || undefined : undefined;

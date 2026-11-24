@@ -19,6 +19,11 @@ const fixtures = vi.hoisted(() => ({
 	errorStatus: null as number | null,
 	platform: { OS: "android" },
 	clients: [] as Array<{ handlers: Handlers; sent: unknown[]; closed: boolean }>,
+	networkType: "WIFI",
+}));
+vi.mock("expo-network", () => ({
+	getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true, type: fixtures.networkType }),
+	addNetworkStateListener: () => ({ remove: () => undefined }),
 }));
 
 vi.mock("react-native", async () => {
@@ -184,6 +189,7 @@ beforeEach(() => {
 	fixtures.error = null;
 	fixtures.errorStatus = null;
 	fixtures.clients.length = 0;
+	fixtures.networkType = "WIFI";
 	onTitle.mockClear();
 });
 
@@ -450,6 +456,44 @@ describe("live browser gestures", () => {
 		await act(async () => gesture("tap").onEnd({ x: 195 + 97.5, y: 300 }, true));
 		expect(sent()[0]).toEqual({ type: "input", payload: { kind: "wheel", deltaX: 0, deltaY: -30 / (fitted * 2) } });
 		expect(sent()[1]).toEqual({ type: "input", payload: { kind: "pointer", phase: "down", x: 0.625, y: 0.5, button: "left" } });
+	});
+});
+
+describe("live browser quality", () => {
+	const qualities = () => sent().filter((command) => (command as { type: string }).type === "quality").map((command) => (command as { payload: unknown }).payload);
+
+	it("never sends quality to a desktop that does not say it takes it", async () => {
+		await render();
+		await open();
+		await act(async () => { await Promise.resolve(); });
+		expect(qualities()).toEqual([]);
+	});
+
+	it("asks a desktop that takes it for cellular's quality and frame rate", async () => {
+		fixtures.networkType = "CELLULAR";
+		await render();
+		await act(async () => { await Promise.resolve(); });
+		await open({ ...page, capabilities: { quality: true } });
+		expect(qualities()).toEqual([{ quality: 50, maxFps: 15 }]);
+	});
+
+	it("steps the quality down when the stream uses more than the link's budget", async () => {
+		vi.useFakeTimers();
+		try {
+			fixtures.networkType = "CELLULAR";
+			await render();
+			await act(async () => { await Promise.resolve(); });
+			await open({ ...page, capabilities: { quality: true } });
+			// 400 KB in the last second: over cellular's budget.
+			await act(async () => {
+				vi.advanceTimersByTime(1_500);
+				for (let i = 0; i < 4; i++) client().handlers.onFrame({ sequence: BigInt(i + 1), capturedAtMs: 1n, width: 1280, height: 800, jpeg: new Uint8Array(102_400).fill(i).buffer });
+				vi.advanceTimersByTime(500);
+			});
+			expect(qualities().at(-1)).toEqual({ quality: 40, maxFps: 15 });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 
