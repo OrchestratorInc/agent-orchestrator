@@ -61,6 +61,20 @@ export function splitGroupOrder(order: readonly string[], sessions: readonly Wor
 }
 
 /**
+ * Drops each listed session from the saved part it no longer belongs to, so a
+ * session that loses or regains its pin is new to its part and is not put back
+ * in its old slot. Sessions that kept their pin state keep their drag order.
+ * Returns `order` itself when nothing changed.
+ */
+export function pruneGroupOrder(order: GroupOrder, sessions: readonly WorkspaceSession[]): GroupOrder {
+	const listed = new Set(sessions.map((session) => session.id));
+	const pinnedNow = new Set(sessions.filter(isPinnedWorker).map((session) => session.id));
+	const pinned = order.pinned.filter((id) => !listed.has(id) || pinnedNow.has(id));
+	const rest = order.rest.filter((id) => !listed.has(id) || !pinnedNow.has(id));
+	return pinned.length === order.pinned.length && rest.length === order.rest.length ? order : { pinned, rest };
+}
+
+/**
  * One sidebar group's sessions (a project's, or the Sessions section's) in
  * the order the group lists them: its pinned workers on top, newest pin first,
  * then everything else. A drag order reorders each part within itself, so a

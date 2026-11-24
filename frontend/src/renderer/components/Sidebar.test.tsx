@@ -5246,6 +5246,19 @@ describe("Sidebar pins in their home group", () => {
 		expect(titlesIn("session-list-alpha")).toEqual(["alpha older", "alpha pin", "alpha recent"]);
 	});
 
+	it("sorts a session unpinned and pinned again after a drag by its new pin time", () => {
+		const plain = worker("r-1", "plain", 9);
+		const view = mount([project("alpha", "Alpha", [worker("p-a", "pin a", 1, 1), worker("p-b", "pin b", 2, 2), plain])], ["alpha"]);
+		// Drag "pin a" above "pin b": the saved pinned order is [a, b].
+		act(() => dragEnds.get("sidebar-sessions-alpha")?.({ active: { id: "p-a" }, over: { id: "p-b" } }));
+		expect(titlesIn("session-list-alpha")).toEqual(["pin a", "pin b", "plain"]);
+
+		view.rerender([project("alpha", "Alpha", [worker("p-a", "pin a", 1, 1), worker("p-b", "pin b", 2), plain])]);
+		expect(titlesIn("session-list-alpha")).toEqual(["pin a", "pin b", "plain"]);
+		view.rerender([project("alpha", "Alpha", [worker("p-a", "pin a", 1, 1), worker("p-b", "pin b", 2, 9), plain])]);
+		expect(titlesIn("session-list-alpha")).toEqual(["pin b", "pin a", "plain"]);
+	});
+
 	it("opens a collapsed remote project to reveal a session opened on that host", async () => {
 		const hosts: RemoteHost[] = [{ hostId: "box-a", label: "Host A", url: "http://box-a:3011", status: "connected" }];
 		const remoteProject = (): WorkspaceSummary => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { buildSidebarSessionOrder, EMPTY_GROUP_ORDER, orderGroupSessions, pinnedFirst, splitGroupOrder } from "./sidebar-order";
+import { buildSidebarSessionOrder, EMPTY_GROUP_ORDER, orderGroupSessions, pinnedFirst, pruneGroupOrder, splitGroupOrder } from "./sidebar-order";
 
 function row(id: string, pinnedAt?: string, kind: WorkspaceSession["kind"] = "worker"): WorkspaceSession {
 	return {
@@ -26,6 +26,18 @@ describe("orderGroupSessions", () => {
 		const saved = splitGroupOrder(["old-pin", "new-pin", "b", "a"], sessions);
 		const pinnedLater = sessions.map((s) => (s.id === "b" ? row("b", "2026-06-30T03:00:00Z") : s));
 		expect(orderGroupSessions(pinnedLater, saved).map((s) => s.id)).toEqual(["b", "old-pin", "new-pin", "a"]);
+	});
+
+	it("forgets a slot in the part a session left, so a repin sorts by pin time", () => {
+		const saved = splitGroupOrder(["old-pin", "new-pin", "b", "a"], sessions);
+		// "new-pin" is unpinned: it leaves the saved pinned part; the rest keep theirs.
+		const unpinned = sessions.map((s) => (s.id === "new-pin" ? row("new-pin") : s));
+		const pruned = pruneGroupOrder(saved, unpinned);
+		expect(pruned).toEqual({ pinned: ["old-pin"], rest: ["b", "a"] });
+		expect(pruneGroupOrder(pruned, unpinned)).toBe(pruned);
+		// Pinned again, newest: it leads instead of returning to its old slot.
+		const repinned = sessions.map((s) => (s.id === "new-pin" ? row("new-pin", "2026-06-30T04:00:00Z") : s));
+		expect(orderGroupSessions(repinned, pruneGroupOrder(pruned, repinned)).map((s) => s.id)).toEqual(["new-pin", "old-pin", "b", "a"]);
 	});
 
 	it("never treats a pinned orchestrator as a pinned row", () => {

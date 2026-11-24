@@ -155,7 +155,7 @@ import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { isSessionUnread, sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
-import { applyOrder, EMPTY_GROUP_ORDER, type GroupOrder, isPinnedWorker, orderGroupSessions, pinnedFirst, splitGroupOrder } from "../lib/sidebar-order";
+import { applyOrder, EMPTY_GROUP_ORDER, type GroupOrder, isPinnedWorker, orderGroupSessions, pinnedFirst, pruneGroupOrder, splitGroupOrder } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -394,6 +394,14 @@ const SECTION_SCROLLER_CLASS =
 function leadingPinnedCount(sessions: readonly WorkspaceSession[]): number {
 	const index = sessions.findIndex((session) => !isPinnedWorker(session));
 	return index === -1 ? sessions.length : index;
+}
+
+/** A group's saved drag order. When a listed session gains or loses its pin,
+ *  it leaves the saved part it was in, so a repin sorts by pin time again. */
+function useGroupOrder(visibleSessions: readonly WorkspaceSession[]) {
+	const [order, setOrder] = useState<GroupOrder>(EMPTY_GROUP_ORDER);
+	useEffect(() => setOrder((current) => pruneGroupOrder(current, visibleSessions)), [visibleSessions]);
+	return [order, setOrder] as const;
 }
 
 /** Caps a sidebar list at `limit` behind Show more/less. The cap lifts on its
@@ -1600,7 +1608,7 @@ const ProjectItem = memo(function ProjectItem({
 			? ("unread" as const)
 			: null;
 	}, [openSessionId, projectNeedsInput, readAt, readBaseline, visibleSessions]);
-	const [sessionOrder, setSessionOrder] = useState<GroupOrder>(EMPTY_GROUP_ORDER);
+	const [sessionOrder, setSessionOrder] = useGroupOrder(visibleSessions);
 	// Pinned sessions lead the project's own list; the rest float attention
 	// until the user drags an order of their own.
 	const sessions = useMemo(
@@ -2301,7 +2309,7 @@ function ScratchpadSection({
 		() => sortedWorkerSessions(workspace.sessions).filter(scratchpadListsSession),
 		[workspace.sessions],
 	);
-	const [sessionOrder, setSessionOrder] = useState<GroupOrder>(EMPTY_GROUP_ORDER);
+	const [sessionOrder, setSessionOrder] = useGroupOrder(visibleSessions);
 	// Projectless pinned sessions lead this list, as a project's lead its own.
 	const sessions = useMemo(() => orderGroupSessions(visibleSessions, sessionOrder), [sessionOrder, visibleSessions]);
 	const pinnedCount = leadingPinnedCount(sessions);
