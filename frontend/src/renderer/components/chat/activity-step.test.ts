@@ -447,8 +447,10 @@ describe("isFileStepCommand", () => {
 			"grep -rn \"TODO\" src --exclude-dir=node_modules",
 			"rg -n policy supabase",
 			"find src -name '*.test.ts'",
-			"ls -la",
-			"cd src && tree",
+			"ls -la src/components",
+			"cd src && tree app",
+			"tree -L 2 src",
+			"cat > notes.md <<'EOF'\nhello\nEOF",
 			"echo hi > notes.md",
 			"sed -i 's/a/b/' a.ts",
 			"/bin/zsh -lc 'cat a.ts'",
@@ -471,6 +473,11 @@ describe("isFileStepCommand", () => {
 			"for f in a.ts b.ts; do cat -n \"$f\"; done",
 			"cat $(git ls-files)",
 			"echo hi",
+			// A read or list naming no file or folder has nothing to name the row by.
+			"ls -la",
+			"ls",
+			"tree -L 2",
+			"cd src && ls",
 			"curl -s https://example.com > page.html",
 		]) {
 			expect(isFileStepCommand(command), command).toBe(false);

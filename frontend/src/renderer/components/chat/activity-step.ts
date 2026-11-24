@@ -113,7 +113,14 @@ export function unwrapShellCommand(command: string): string {
 /** Programs that only steer or narrate a file step: they neither make one nor stop one. */
 const FILE_STEP_NOISE = new Set(["cd", "pushd", "popd", "export", "set", "unset", "true", ":", "echo", "printf", "pwd", "wc", "sort", "uniq", "cut", "tr", "xargs", "sleep"]);
 const FILE_STEP_READERS = new Set(["cat", "bat", "batcat", "nl", "less", "more", "tac", "head", "tail"]);
-const FILE_STEP_SEARCHERS = new Set(["grep", "egrep", "fgrep", "rg", "ag", "fd"]);
+const FILE_STEP_SEARCHERS = new Set(["grep", "egrep", "fgrep", "rgrep", "rg", "ag", "ack", "fd", "fdfind"]);
+/** Flags whose next word is a value, not the file or folder a reader or lister names. */
+const FILE_STEP_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
+	head: new Set(["-n", "-c", "--lines", "--bytes"]),
+	tail: new Set(["-n", "-c", "--lines", "--bytes"]),
+	ls: new Set(["--ignore", "-I", "--hide"]),
+	tree: new Set(["-L", "-I", "-P", "--ignore"]),
+};
 const FILE_STEP_LISTERS = new Set(["ls", "tree"]);
 
 /**
@@ -142,7 +149,13 @@ export function isFileStepCommand(command: string): boolean {
 				if (segment.writeTarget) fileStep = true;
 				continue;
 			}
-			if (FILE_STEP_READERS.has(binary) || FILE_STEP_SEARCHERS.has(binary) || FILE_STEP_LISTERS.has(binary) || binary === "tee") {
+			// A read or list that names no file or folder (a bare `ls -la`) has nothing to
+			// name the row by: it is filler, like `echo`, and on its own stays a command.
+			if (FILE_STEP_READERS.has(binary) || FILE_STEP_LISTERS.has(binary)) {
+				if (segment.writeTarget || positionals(args, FILE_STEP_VALUE_FLAGS[binary] ?? EMPTY).length > 0) fileStep = true;
+				continue;
+			}
+			if (FILE_STEP_SEARCHERS.has(binary) || binary === "tee") {
 				fileStep = true;
 				continue;
 			}
