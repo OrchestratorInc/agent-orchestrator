@@ -67,7 +67,14 @@ func TestImportedKimiRestoreAfterBinaryUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeBinary("2.5.0")
-	if _, err := plugin.PrepareImportedSession(ctx, r); err == nil || !strings.Contains(err.Error(), "requires Kimi Code 2.4.1") {
+	// A lost checkpoint re-enters preparation; the published home is recovered
+	// from its proof, while a NEW copy still requires the verified version.
+	if again, err := plugin.PrepareImportedSession(ctx, r); err != nil || again != ref {
+		t.Fatalf("prepared home was not recovered after the update: %+v, %v", again, err)
+	}
+	fresh := r
+	fresh.DataDir = t.TempDir()
+	if _, err := plugin.PrepareImportedSession(ctx, fresh); err == nil || !strings.Contains(err.Error(), "requires Kimi Code 2.4.1") {
 		t.Fatalf("unverified version accepted for preparation: %v", err)
 	}
 	cfg := acpdriver.LaunchConfig{WorkspacePath: r.LaunchCWD, DataDir: r.DataDir, ProviderConversationID: id, Env: map[string]string{"KIMI_CODE_HOME": ref.ConfigDir}}

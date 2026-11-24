@@ -73,13 +73,21 @@ func kiloSuccessorReservationName(base, staleNativeID string) string {
 	return strings.TrimSuffix(base, ".json") + "." + staleNativeID + ".json"
 }
 
-var kiloReservationLocks sync.Map
+var (
+	kiloReservationLocksMu sync.Mutex
+	kiloReservationLocks   = map[string]*sync.Mutex{}
+)
 
 // lockKiloReservation serializes preparation of one binding in this daemon so
 // a rebuild never races another attempt's native import of the stale graph.
 func lockKiloReservation(path string) func() {
-	value, _ := kiloReservationLocks.LoadOrStore(path, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
+	kiloReservationLocksMu.Lock()
+	mu, ok := kiloReservationLocks[path]
+	if !ok {
+		mu = &sync.Mutex{}
+		kiloReservationLocks[path] = mu
+	}
+	kiloReservationLocksMu.Unlock()
 	mu.Lock()
 	return mu.Unlock
 }
