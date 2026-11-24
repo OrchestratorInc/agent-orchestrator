@@ -7309,6 +7309,19 @@ html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light
 	background-color: var(--ao-center-plate);
 }
 
+/* Translucent dark: the centre is darker than the theme's canvas, so a menu
+ * at the theme's popover colour sinks into it. Floating menus and popovers
+ * lift 6% toward white to stay a step above whatever they open over. The
+ * lifted fill is resolved on the root, where the theme declares --popover. */
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]) {
+	--ao-float-fill: color-mix(in oklab, var(--popover), white 6%);
+}
+
+html[data-new-desktop-ui][data-window-translucent="true"]:not([data-theme="light"]) :is([data-radix-popper-content-wrapper], [role="menu"], [role="listbox"]) {
+	--popover: var(--ao-float-fill);
+	--color-bg-elevated: var(--ao-float-fill);
+}
+
 /* Opaque, the frame and the panel swap colours: the frame (sidebar, top band)
  * takes the theme's page colour and the panel takes its sidebar colour, so the
  * contrast between them is the theme's own, just inverted. The theme's values
