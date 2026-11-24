@@ -832,7 +832,8 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			kind: update.ToolCall.Kind, status: update.ToolCall.Status,
 			locations: update.ToolCall.Locations, content: update.ToolCall.Content,
 			rawInput: update.ToolCall.RawInput, rawOutput: update.ToolCall.RawOutput,
-			meta: cloneMeta(update.ToolCall.Meta),
+			meta:      cloneMeta(update.ToolCall.Meta),
+			startedAt: time.Now(),
 		}
 		c.mu.Lock()
 		c.tools[tool.id] = tool
@@ -932,8 +933,11 @@ func (c *conversation) mergeToolUpdate(update *acpsdk.SessionToolCallUpdate) *to
 	defer c.mu.Unlock()
 	tool := c.tools[id]
 	if tool == nil {
-		tool = &toolState{id: id}
+		tool = &toolState{id: id, startedAt: time.Now()}
 		c.tools[id] = tool
+	}
+	if tool.startedAt.IsZero() {
+		tool.startedAt = time.Now()
 	}
 	if update.Title != nil {
 		tool.title = *update.Title

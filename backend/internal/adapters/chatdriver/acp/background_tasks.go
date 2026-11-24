@@ -25,6 +25,16 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 	if c.backgroundTasks != nil {
 		tasks, err := c.backgroundTasks(ctx, c.conn, acpsdk.SessionId(id))
 		if !errors.Is(err, ports.ErrBackgroundTasksUnsupported) {
+			if err == nil && c.backgroundObserved.Store != nil {
+				for i := range tasks {
+					if tasks[i].StartedAt == nil && tasks[i].ID != "" {
+						runID := tasks[i].RunID
+						if stored, ok := c.backgroundObserved.Store.GetStartedAt(c.backgroundObserved.SessionID, tasks[i].ID, runID); ok {
+							tasks[i].StartedAt = &stored
+						}
+					}
+				}
+			}
 			return tasks, err
 		}
 	}
@@ -134,7 +144,11 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 	if kind == "shell" {
 		command = stringField(input, "command", "cmd")
 	}
-	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, RunID: tool.id, Kind: kind, Description: description, Command: command, State: state, StartedAt: &now}, now)
+	startTime := tool.startedAt
+	if startTime.IsZero() {
+		startTime = now
+	}
+	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, RunID: tool.id, Kind: kind, Description: description, Command: command, State: state, StartedAt: &startTime}, now)
 	if kind == "agent" {
 		if session := stringField(output, "sessionId", "sessionID", "session_id"); session != "" {
 			c.mu.Lock()

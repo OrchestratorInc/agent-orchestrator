@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -677,6 +678,12 @@ func (d *Driver) connectSession(
 			}
 		}
 		conv, err := d.connect(ctx, workdir, env, providerScopeID)
+		if conv != nil {
+			conv.sessionID = sessionID
+			conv.dataDir = dataDir
+			conv.backgroundObserved.SessionID = string(sessionID)
+			conv.backgroundObserved.Store = backgroundtasks.NewFileStore(dataDir)
+		}
 		return conv, false, err
 	}
 	var bin string
@@ -735,6 +742,10 @@ func (d *Driver) connectSession(
 	}
 	conv := newConversation(proc, d.log, providerScopeID)
 	conv.codexHome = env["CODEX_HOME"]
+	conv.sessionID = sessionID
+	conv.dataDir = dataDir
+	conv.backgroundObserved.SessionID = string(sessionID)
+	conv.backgroundObserved.Store = backgroundtasks.NewFileStore(dataDir)
 	if transport.Reconnected {
 		// A daemon stopped mid-initialize leaves a host whose app-server never
 		// was, failing every call "Not initialized". An initialized one refuses

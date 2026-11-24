@@ -17,6 +17,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -957,6 +958,10 @@ func (d *Driver) initialize(
 	conv := newConversation(
 		proc, d.log, cfg.ProviderScopeID, d.cfg.ClientExtension, d.clientExtensionAliases(),
 	)
+	conv.aoSessionID = cfg.SessionID
+	conv.dataDir = cfg.DataDir
+	conv.backgroundObserved.SessionID = string(cfg.SessionID)
+	conv.backgroundObserved.Store = backgroundtasks.NewFileStore(cfg.DataDir)
 	conv.harness = d.cfg.Harness
 	conv.suppressSessionModes = d.cfg.SuppressSessionModes
 	conv.resetsConversation = d.cfg.ResetsConversation

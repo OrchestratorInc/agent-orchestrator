@@ -54,6 +54,8 @@ type conversation struct {
 	proc             *process
 	log              *slog.Logger
 
+	sessionID       domain.SessionID
+	dataDir         string
 	threadID        string
 	historyParentID string
 	providerScopeID string

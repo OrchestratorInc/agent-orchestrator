@@ -16,6 +16,9 @@ import (
 // Callers retain it across turns and reconstruct it from provider replay after
 // reconnect. A read of this tracker alone is always a partial inventory.
 type Tracker struct {
+	SessionID string
+	Store     Store
+
 	mu    sync.Mutex
 	tasks map[string]ports.ChatBackgroundTask
 	// Last explicit event per task, so a missed completion cannot hold the
@@ -57,6 +60,17 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 	sameRun := exists && (task.RunID == "" || old.RunID == "" || task.RunID == old.RunID)
 	if sameRun && old.StartedAt != nil && (task.StartedAt == nil || old.StartedAt.Before(*task.StartedAt)) {
 		task.StartedAt = old.StartedAt
+	}
+	if t.Store != nil && t.SessionID != "" {
+		if stored, ok := t.Store.GetStartedAt(t.SessionID, task.ID, runID); ok && !stored.IsZero() {
+			if task.StartedAt == nil || stored.Before(*task.StartedAt) {
+				task.StartedAt = &stored
+			} else if task.StartedAt != nil && task.StartedAt.Before(stored) {
+				_ = t.Store.SetStartedAt(t.SessionID, task.ID, runID, *task.StartedAt)
+			}
+		} else if task.StartedAt != nil && !task.StartedAt.IsZero() {
+			_ = t.Store.SetStartedAt(t.SessionID, task.ID, runID, *task.StartedAt)
+		}
 	}
 	if task.RunID == "" {
 		task.RunID = old.RunID

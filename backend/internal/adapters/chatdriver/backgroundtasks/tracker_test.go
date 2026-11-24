@@ -140,3 +140,109 @@ func TestInventoryDoesNotInventStartTime(t *testing.T) {
 		t.Fatal(tasks)
 	}
 }
+
+func TestPersistedStartedAtSurvivesTrackerRebuild(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+	sessionID := "ses-1"
+	t1 := Tracker{SessionID: sessionID, Store: store}
+
+	startTime := time.Now().Add(-10 * time.Minute).Truncate(time.Millisecond).UTC()
+	t1.Update(ports.ChatBackgroundTask{
+		ID:        "task-1",
+		RunID:     "run-1",
+		Kind:      "shell",
+		State:     "running",
+		StartedAt: &startTime,
+	}, startTime)
+
+	// Rebuild tracker simulating daemon restart or chat reconnect with fresh in-memory state.
+	t2 := Tracker{SessionID: sessionID, Store: NewFileStore(dir)}
+	// Later reading or replay with newer timestamp must keep the persisted start time.
+	now := time.Now().Truncate(time.Millisecond).UTC()
+	t2.Update(ports.ChatBackgroundTask{
+		ID:        "task-1",
+		RunID:     "run-1",
+		Kind:      "shell",
+		State:     "running",
+		StartedAt: &now,
+	}, now)
+
+	tasks := t2.Snapshot(now)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(startTime) {
+		t.Fatalf("StartedAt was not restored from store: got %v, want %v", tasks[0].StartedAt, startTime)
+	}
+
+	// Also verify ReconcileShells without a start time restores persisted start time.
+	t3 := Tracker{SessionID: sessionID, Store: NewFileStore(dir)}
+	t3.ReconcileShells([]ports.ChatBackgroundTask{{
+		ID:    "task-1",
+		RunID: "run-1",
+		Kind:  "shell",
+		State: "running",
+	}}, now)
+	tasks = t3.Snapshot(now)
+	if len(tasks) != 1 || tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(startTime) {
+		t.Fatalf("ReconcileShells did not restore persisted StartedAt: %+v", tasks)
+	}
+}
+
+func TestNewRunIDResetsElapsedTime(t *testing.T) {
+	store := NewMemoryStore()
+	sessionID := "ses-1"
+	tracker := Tracker{SessionID: sessionID, Store: store}
+
+	startTime1 := time.Now().Add(-5 * time.Minute).Truncate(time.Millisecond).UTC()
+	tracker.Update(ports.ChatBackgroundTask{
+		ID:        "task-1",
+		RunID:     "run-1",
+		Kind:      "shell",
+		State:     "running",
+		StartedAt: &startTime1,
+	}, startTime1)
+
+	tasks := tracker.Snapshot(startTime1)
+	if len(tasks) != 1 || tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(startTime1) {
+		t.Fatalf("run-1 start time incorrect: %+v", tasks)
+	}
+
+	// New run of the same task ID starts from zero (its own new start time).
+	startTime2 := time.Now().Truncate(time.Millisecond).UTC()
+	tracker.Update(ports.ChatBackgroundTask{
+		ID:        "task-1",
+		RunID:     "run-2",
+		Kind:      "shell",
+		State:     "running",
+		StartedAt: &startTime2,
+	}, startTime2)
+
+	tasks = tracker.Snapshot(startTime2)
+	if len(tasks) != 1 || tasks[0].StartedAt == nil || !tasks[0].StartedAt.Equal(startTime2) {
+		t.Fatalf("run-2 did not reset start time: got %v, want %v", tasks[0].StartedAt, startTime2)
+	}
+}
+
+func TestStartedAtStaysUnsetWhenNoStartTimeAvailable(t *testing.T) {
+	store := NewMemoryStore()
+	sessionID := "ses-1"
+	tracker := Tracker{SessionID: sessionID, Store: store}
+
+	now := time.Now()
+	tracker.Update(ports.ChatBackgroundTask{
+		ID:    "unknown-start",
+		RunID: "run-x",
+		Kind:  "shell",
+		State: "running",
+	}, now)
+
+	tasks := tracker.Snapshot(now)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].StartedAt != nil {
+		t.Fatalf("expected StartedAt to stay nil, got %v", tasks[0].StartedAt)
+	}
+}

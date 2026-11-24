@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -870,5 +871,88 @@ func TestBackgroundTaskOutputCodexMarksAMissedStart(t *testing.T) {
 	got, err := c.BackgroundTaskOutput(context.Background(), "9")
 	if err != nil || got.Text != "tick-9" || !got.Truncated {
 		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}
+
+func TestBackgroundTasksCodexRestoresStartTimeAcrossRestartAndReconnect(t *testing.T) {
+	dataDir := t.TempDir()
+	sessionID := "ses-reconnect-test"
+	store := backgroundtasks.NewFileStore(dataDir)
+
+	d, srv := newTestDriver(t)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"proc-1","itemId":"cmd-1","command":"python serve.py"}]}`)
+
+	opened, err := d.Start(t.Context(), ports.ChatStartConfig{
+		SessionID:     domain.SessionID(sessionID),
+		DataDir:       dataDir,
+		WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	c1 := opened.(*conversation)
+	c1.backgroundObserved.SessionID = sessionID
+	c1.backgroundObserved.Store = store
+
+	startMs := time.Now().Add(-15 * time.Minute).UnixMilli()
+	wantStart := time.UnixMilli(startMs).UTC()
+
+	c1.observeBackgroundNotification(notification{
+		Method: "item/started",
+		Params: []byte(fmt.Sprintf(`{"startedAtMs":%d,"item":{"id":"cmd-1","type":"commandExecution","command":"python serve.py"}}`, startMs)),
+	})
+	completeCodexBackgroundLaunch(c1, "cmd-1")
+
+	tasks1, err := c1.BackgroundTasks(t.Context())
+	if err != nil && !errors.Is(err, ports.ErrBackgroundTasksPartial) {
+		t.Fatal(err)
+	}
+	if len(tasks1) != 1 || tasks1[0].StartedAt == nil || !tasks1[0].StartedAt.Equal(wantStart) {
+		t.Fatalf("first conversation start time = %+v, err = %v, want %v", tasks1, err, wantStart)
+	}
+
+	// Simulate restart / reconnect: fresh driver and conversation attaching to same session & data dir.
+	d2, srv2 := newTestDriver(t)
+	srv2.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"proc-1","itemId":"cmd-1","command":"python serve.py"}]}`)
+
+	opened2, err := d2.Start(t.Context(), ports.ChatStartConfig{
+		SessionID:     domain.SessionID(sessionID),
+		DataDir:       dataDir,
+		WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened2.Close()
+	c2 := opened2.(*conversation)
+	c2.backgroundObserved.SessionID = sessionID
+	c2.backgroundObserved.Store = backgroundtasks.NewFileStore(dataDir)
+	completeCodexBackgroundLaunch(c2, "cmd-1")
+
+	tasks2, err := c2.BackgroundTasks(t.Context())
+	if err != nil && !errors.Is(err, ports.ErrBackgroundTasksPartial) {
+		t.Fatal(err)
+	}
+	if len(tasks2) != 1 || tasks2[0].StartedAt == nil || !tasks2[0].StartedAt.Equal(wantStart) {
+		t.Fatalf("reconnected conversation did not preserve start time: %+v, err = %v, want %v", tasks2, err, wantStart)
+	}
+
+	// A new run of the same process/task id with a new item ID resets elapsed time.
+	newStartMs := time.Now().UnixMilli()
+	wantNewStart := time.UnixMilli(newStartMs).UTC()
+	srv2.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"proc-1","itemId":"cmd-2","command":"python serve.py"}]}`)
+	c2.observeBackgroundNotification(notification{
+		Method: "item/started",
+		Params: []byte(fmt.Sprintf(`{"startedAtMs":%d,"item":{"id":"cmd-2","type":"commandExecution","command":"python serve.py"}}`, newStartMs)),
+	})
+	completeCodexBackgroundLaunch(c2, "cmd-2")
+
+	tasks3, err := c2.BackgroundTasks(t.Context())
+	if err != nil && !errors.Is(err, ports.ErrBackgroundTasksPartial) {
+		t.Fatal(err)
+	}
+	if len(tasks3) != 1 || tasks3[0].StartedAt == nil || !tasks3[0].StartedAt.Equal(wantNewStart) {
+		t.Fatalf("new run did not start from zero / its own start time: %+v, want %v", tasks3, wantNewStart)
 	}
 }

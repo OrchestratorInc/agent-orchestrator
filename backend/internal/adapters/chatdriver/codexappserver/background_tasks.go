@@ -139,6 +139,11 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 				if observed.StartedAt == nil && confirmed {
 					observed.StartedAt = previous.StartedAt
 				}
+				if observed.StartedAt == nil && c.backgroundObserved.Store != nil && c.backgroundObserved.SessionID != "" {
+					if stored, ok := c.backgroundObserved.Store.GetStartedAt(c.backgroundObserved.SessionID, task.ProcessID, task.ItemID); ok {
+						observed.StartedAt = &stored
+					}
+				}
 				if observed.CallCompletedAt.IsZero() {
 					observed.CallCompletedAt = time.Now()
 				}
@@ -380,9 +385,10 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 		return
 	}
 	var params struct {
-		ThreadID string `json:"threadId"`
-		TurnID   string `json:"turnId"`
-		Turn     struct {
+		ThreadID    string `json:"threadId"`
+		TurnID      string `json:"turnId"`
+		StartedAtMs int64  `json:"startedAtMs"`
+		Turn        struct {
 			ID string `json:"id"`
 		} `json:"turn"`
 		Item struct {
@@ -421,7 +427,12 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 		if n.Method == "item/started" {
 			observed := c.backgroundCommands[params.Item.ID]
 			if observed.StartedAt == nil {
-				observed.StartedAt = &now
+				if params.StartedAtMs > 0 {
+					t := time.UnixMilli(params.StartedAtMs).UTC()
+					observed.StartedAt = &t
+				} else {
+					observed.StartedAt = &now
+				}
 			}
 			if observed.Description == "" {
 				observed.Description = domain.SanitizeTaskDescription(params.Item.Command)
