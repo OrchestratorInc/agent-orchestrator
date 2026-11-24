@@ -74,7 +74,7 @@ func TestForkSetupRunsWithAOFork(t *testing.T) {
 	project := domain.ProjectRecord{ID: "mer", Path: t.TempDir()}
 	project.Config.PostCreate = []string{`printf '%s' "$AO_FORK" > fork-flag`}
 	m.markForkWorkspace(ws)
-	if err := m.provisionWorkspace(context.Background(), project, ws); err != nil {
+	if err := m.provisionWorkspace(context.Background(), project, "", ws); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(filepath.Join(ws, "fork-flag"))
@@ -82,7 +82,7 @@ func TestForkSetupRunsWithAOFork(t *testing.T) {
 		t.Fatalf("AO_FORK = %q", b)
 	}
 	plain := t.TempDir()
-	if err := m.provisionWorkspace(context.Background(), project, plain); err != nil {
+	if err := m.provisionWorkspace(context.Background(), project, "", plain); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(plain, "fork-flag")); strings.TrimSpace(string(b)) != "" {

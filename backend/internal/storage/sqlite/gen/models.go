@@ -191,6 +191,7 @@ type AppSetting struct {
 	SessionRetentionDays int64
 	AccountHandoff       bool
 	LimitHistory         bool
+	CommitAttribution    bool
 }
 
 type Automation struct {
@@ -885,6 +886,12 @@ type SessionCleanupFact struct {
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
 	ReportOnly           bool
+}
+
+type SessionCommitAttribution struct {
+	SessionID string
+	CoAuthor  string
+	PRFooter  sql.NullInt64
 }
 
 type SessionFork struct {

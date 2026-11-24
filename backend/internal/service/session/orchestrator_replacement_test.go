@@ -22,13 +22,14 @@ func TestVerifyOrchestratorReplacementBranch(t *testing.T) {
 		return sess
 	}
 
-	for _, branch := range []string{"", "ao/repro-orchestrator", "ao/repro-orchestrator-2", "ao/repro-orchestrator-13"} {
+	// New sessions get orchestrator/; ao/ from before the rename is still accepted.
+	for _, branch := range []string{"", "orchestrator/repro-orchestrator", "orchestrator/repro-orchestrator-2", "orchestrator/repro-orchestrator-13", "ao/repro-orchestrator", "ao/repro-orchestrator-2", "ao/repro-orchestrator-13"} {
 		if err := s.verifyOrchestratorReplacement(project, session(branch)); err != nil {
 			t.Errorf("branch %q: unexpected error: %v", branch, err)
 		}
 	}
 
-	for _, branch := range []string{"ao/repro-orchestrator-", "ao/repro-orchestrator-x", "ao/repro-orchestrator2", "ao/other-orchestrator", "main"} {
+	for _, branch := range []string{"ao/repro-orchestrator-", "ao/repro-orchestrator-x", "ao/repro-orchestrator2", "ao/other-orchestrator", "orchestrator/repro-orchestrator-", "orchestrator/other-orchestrator", "other/repro-orchestrator", "main"} {
 		err := s.verifyOrchestratorReplacement(project, session(branch))
 		var apiErr *apierr.Error
 		if !errors.As(err, &apiErr) || apiErr.Code != "ORCHESTRATOR_REPLACEMENT_UNVERIFIED" {

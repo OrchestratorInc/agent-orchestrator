@@ -21,6 +21,7 @@ type SettingsService interface {
 	SetChatHibernationEnabled(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetVersionRefresh(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetComputerUse(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
+	SetCommitAttribution(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetSessionRetentionDays(ctx context.Context, days int) (settingssvc.Snapshot, error)
 	SetAccountHandoff(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	ChatHarnesses(candidates []domain.AgentHarness) []domain.AgentHarness
@@ -43,6 +44,7 @@ func (c *SettingsController) Register(r chi.Router) {
 	r.Patch("/settings/chat-hibernation", c.setChatHibernation)
 	r.Patch("/settings/version-refresh", c.setVersionRefresh)
 	r.Patch("/settings/computer-use", c.setComputerUse)
+	r.Patch("/settings/commit-attribution", c.setCommitAttribution)
 	r.Patch("/settings/session-retention", c.setSessionRetention)
 	r.Patch("/settings/account-handoff", c.setAccountHandoff)
 	r.Patch("/settings/harness-defaults/{agent}", c.setHarnessDefault)
@@ -216,6 +218,7 @@ func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsRes
 		ChatHibernationEnabled: snapshot.ChatHibernationEnabled,
 		VersionRefresh:         snapshot.VersionRefresh,
 		ComputerUse:            snapshot.ComputerUse,
+		CommitAttribution:      snapshot.CommitAttribution,
 		SessionRetentionDays:   snapshot.SessionRetentionDays,
 		CloudEnabled:           offering.CloudEnabled(),
 		AccountHandoff:         snapshot.AccountHandoff,
@@ -247,6 +250,28 @@ func (c *SettingsController) setHarnessDefault(w http.ResponseWriter, r *http.Re
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "HARNESS_DEFAULT_INVALID", err.Error(), nil)
 		return
 	}
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
+}
+
+func (c *SettingsController) setCommitAttribution(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/commit-attribution")
+		return
+	}
+	var req UpdateCommitAttributionRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"COMMIT_ATTRIBUTION_INVALID", "enabled must be true or false", nil)
+		return
+	}
+	snapshot, err := c.Svc.SetCommitAttribution(r.Context(), *req.Enabled)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
