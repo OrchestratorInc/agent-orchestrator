@@ -498,6 +498,26 @@ describe("stream stats HUD", () => {
 		}
 	});
 
+	it("times decode from the first arrival of an image source still loading", async () => {
+		vi.stubGlobal("__DEV__", true);
+		vi.useFakeTimers();
+		vi.resetModules();
+		try {
+			const { BrowserLivePane: DebugPane } = await import("./BrowserLivePane");
+			await act(async () => { screen = create(<DebugPane sessionID="session-1" headerItem={headerItem} />); });
+			await open();
+			const same = () => client().handlers.onFrame({ sequence: 1n, capturedAtMs: 1n, width: 1280, height: 800, jpeg: Uint8Array.from([0xff, 0xd8, 0xff, 7]).buffer });
+			// The same JPEG twice before the image loads: one request, timed from the first.
+			await act(async () => { same(); });
+			await act(async () => { vi.advanceTimersByTime(20); same(); });
+			await act(async () => { vi.advanceTimersByTime(20); nodes("Image")[0].props.onLoad(); });
+			await act(async () => { vi.advanceTimersByTime(1_000); });
+			expect(nodes("Text").map((node) => node.props.children).join("")).toMatch(/ · decode 40ms · /);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not time a new connection's first frame from the last stream's image", async () => {
 		vi.stubGlobal("__DEV__", true);
 		vi.useFakeTimers();

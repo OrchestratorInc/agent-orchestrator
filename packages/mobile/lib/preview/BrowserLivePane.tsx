@@ -180,7 +180,9 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					setFrameSize({ width: frame.width, height: frame.height });
 					const uri = browserJPEGDataURI(frame.jpeg);
 					if (stats.current) {
-						arrivedAt.current.set(uri, arrived);
+						// The same source still loading is one image request: it keeps
+						// the time it first arrived (its bytes still count above).
+						if (!arrivedAt.current.has(uri)) arrivedAt.current.set(uri, arrived);
 						// Bounded: sources that never load are forgotten.
 						if (arrivedAt.current.size > 8) arrivedAt.current.delete(arrivedAt.current.keys().next().value!);
 					}
