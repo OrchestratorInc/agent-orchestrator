@@ -59,6 +59,15 @@ describe("CenterPanelShell platform classes", () => {
 		const { container } = render(<CenterPanelShell>x</CenterPanelShell>);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--floating-topbar")).toBe(true);
 		expect(container.firstElementChild!.classList.contains("center-panel-shell--bare")).toBe(false);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--tab-pills")).toBe(true);
+	});
+
+	it("keeps the windowed pill tabs in native fullscreen", () => {
+		mockIsMac.mockReturnValue(true);
+		mockIsFullScreen.mockReturnValue(true);
+		const { container } = render(<CenterPanelShell>x</CenterPanelShell>);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--fullscreen")).toBe(true);
+		expect(container.firstElementChild!.classList.contains("center-panel-shell--tab-pills")).toBe(true);
 	});
 
 	it("does not float the top bar in native fullscreen", () => {

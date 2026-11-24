@@ -17,7 +17,8 @@ import (
 // ownership of its cached login, model catalog, and native session history.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
-		Harness: domain.HarnessGrok,
+		Harness:     domain.HarnessGrok,
+		HideCommand: hiddenCommands,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityHistory: true,
 		},

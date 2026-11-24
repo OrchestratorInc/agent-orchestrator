@@ -16,6 +16,7 @@
  */
 
 import path from "node:path";
+import { isUnplayableShareVideo } from "../shared/cloud-share";
 import { CloudShareError, resolveShareFile, type ResolvedShareFile } from "./cloud-share";
 
 /** The most files a link serves beside its own (the control plane's limit). */
@@ -23,8 +24,12 @@ export const MAX_PAGE_FILES = 200;
 
 /** Why a file the page uses is not included. */
 export type PageFileSkipReason =
-	/** Video is not shared yet. */
+	/** A video the control plane refused: it does not serve videos yet. */
 	| "video"
+	/** A video in a format browsers do not play (isUnplayableShareVideo). */
+	| "video_format"
+	/** A video over the control plane's size limit. */
+	| "too_large"
 	/** Outside the page's folder, by "..", or an absolute path. */
 	| "outside"
 	/** Not a file in the session's artifacts. */
@@ -32,11 +37,22 @@ export type PageFileSkipReason =
 	/** A path the share host keeps for itself, or that it cannot serve. */
 	| "unservable"
 	/** Past MAX_PAGE_FILES. */
-	| "limit";
+	| "limit"
+	/**
+	 * An SVG <use> of another file's symbol: a shared page is sandboxed, so
+	 * its origin is opaque and the browser never loads another file's symbol
+	 * into it.
+	 */
+	| "svg_use";
 
 export interface PageFile {
 	/** Where the link serves it, relative to its root. */
 	path: string;
+	/**
+	 * The path the page names it by in the session's artifacts, before any
+	 * symlink is followed: file is what it resolves to now.
+	 */
+	referencedPath: string;
 	file: ResolvedShareFile;
 }
 
@@ -44,17 +60,19 @@ export interface PageFileSkip {
 	/** The reference as the page writes it. */
 	reference: string;
 	reason: PageFileSkipReason;
+	/** For a missing file, where it would be in the session's artifacts. */
+	relativePath?: string;
 }
 
-const VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv"]);
+/** A URL the page loads a file from, and whether an SVG <use> names it. */
+export interface PageReference {
+	url: string;
+	svgUse?: true;
+}
 
 /** Whether a file is shared as a page whose files go with it. */
 export function isSharePage(name: string): boolean {
 	return /\.html?$/i.test(name);
-}
-
-export function isShareVideo(name: string): boolean {
-	return VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase());
 }
 
 const ENTITIES: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
@@ -98,22 +116,23 @@ function cssURLs(css: string): string[] {
  * attributes. Scripts are not read, nor are URLs a script builds, nor what an
  * HTML comment holds.
  */
-export function pageFileReferences(html: string): string[] {
+export function pageFileReferences(html: string): PageReference[] {
 	const markup = html.replace(/<!--[\s\S]*?-->/g, "").replace(/<script\b[\s\S]*?<\/script\s*>/gi, "");
-	const found: string[] = [];
-	for (const style of markup.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi)) found.push(...cssURLs(style[1]));
+	const found: PageReference[] = [];
+	const push = (...urls: string[]) => found.push(...urls.map((url) => ({ url })));
+	for (const style of markup.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi)) push(...cssURLs(style[1]));
 	for (const match of markup.matchAll(/<([a-z][a-z0-9-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/gi)) {
 		const tag = match[1].toLowerCase();
 		const attrs = attributes(match[2]);
 		const add = (name: string) => {
 			const value = attrs.get(name);
-			if (value) found.push(value);
+			if (value) push(value);
 		};
 		switch (tag) {
 			case "img":
 			case "source":
 				add("src");
-				found.push(...srcsetURLs(attrs.get("srcset") ?? ""));
+				push(...srcsetURLs(attrs.get("srcset") ?? ""));
 				break;
 			case "video":
 				add("src");
@@ -125,9 +144,14 @@ export function pageFileReferences(html: string): string[] {
 				add("src");
 				break;
 			case "image":
-			case "use":
 				add("href");
 				add("xlink:href");
+				break;
+			case "use":
+				for (const name of ["href", "xlink:href"]) {
+					const value = attrs.get(name);
+					if (value) found.push({ url: value, svgUse: true });
+				}
 				break;
 			case "link":
 				if (/\bicon\b/i.test(attrs.get("rel") ?? "")) add("href");
@@ -135,7 +159,7 @@ export function pageFileReferences(html: string): string[] {
 		}
 		add("background");
 		const style = attrs.get("style");
-		if (style) found.push(...cssURLs(style));
+		if (style) push(...cssURLs(style));
 	}
 	return found;
 }
@@ -196,19 +220,25 @@ export async function collectPageFiles(
 	const files: PageFile[] = [];
 	const skipped: PageFileSkip[] = [];
 	const seen = new Set<string>();
-	for (const reference of pageFileReferences(html)) {
+	for (const { url: reference, svgUse } of pageFileReferences(html)) {
 		const result = servedPath(reference);
+		// A fragment alone names a symbol in the page itself, which works.
 		if (result === null) continue;
-		const key = "path" in result ? `path:${result.path}` : `ref:${reference}`;
+		const key = "path" in result ? `${svgUse ? "use" : "path"}:${result.path}` : `ref:${reference}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
 		if ("skip" in result) {
 			skipped.push({ reference, reason: result.skip });
 			continue;
 		}
+		if (svgUse) {
+			skipped.push({ reference, reason: "svg_use" });
+			continue;
+		}
 		const served = result.path;
-		if (isShareVideo(served)) {
-			skipped.push({ reference, reason: "video" });
+		// A playable video goes to the control plane, which may still refuse it.
+		if (isUnplayableShareVideo(served)) {
+			skipped.push({ reference, reason: "video_format" });
 			continue;
 		}
 		const relative = folder === "." ? served : `${folder}/${served}`;
@@ -218,7 +248,7 @@ export async function collectPageFiles(
 			file = await resolveShareFile(dataDir, sessionId, relative);
 		} catch (error) {
 			if (!(error instanceof CloudShareError)) throw error;
-			skipped.push({ reference, reason: error.code === "file_missing" ? "missing" : "outside" });
+			skipped.push(error.code === "file_missing" ? { reference, reason: "missing", relativePath: relative } : { reference, reason: "outside" });
 			continue;
 		}
 		// A symlink in the page's folder may lead out of it: only what is in it goes.
@@ -230,7 +260,7 @@ export async function collectPageFiles(
 			skipped.push({ reference, reason: "limit" });
 			continue;
 		}
-		files.push({ path: served, file });
+		files.push({ path: served, referencedPath: relative, file });
 	}
 	return { files, skipped };
 }

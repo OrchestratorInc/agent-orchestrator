@@ -1,7 +1,7 @@
 ---
 name: using-ao
-description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers importing existing agent sessions."
-trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
+description: "Use the Orchestrator `ao` CLI to manage workers, sessions, projects, Cues, messages, browser previews, and daemon control. Also covers first-time setup and importing existing agent sessions."
+trigger: "Using the `ao` CLI, setting up Orchestrator for a user, importing existing agent sessions, or managing Orchestrator sessions, projects, Cues, messages, and browser previews."
 ---
 
 # Orchestrator CLI Catalog
@@ -11,7 +11,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 | Command | What it does | When to use | Details |
 |---|---|---|---|
 | `spawn` | Spawn a project worker, orchestrator, or projectless standalone worker | Starting a new task or issue | [commands/spawn.md](commands/spawn.md) |
-| `session` | Manage agent sessions (list, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
+| `session` | Manage agent sessions (list, interrupt, kill, rename, restore, history, etc.) | Inspecting or controlling running/terminated sessions, or reading the full conversation after taking over from another agent | [commands/session.md](commands/session.md) |
 | `account` | List Claude Code and Codex subscription accounts, set the default, show or move a session's account | Starting work on a specific account, or moving a session off an account that hit its limit | [commands/account.md](commands/account.md) |
 | `agent` | Inspect installed harnesses and launch readiness | Choosing or diagnosing an agent harness | `ao agent ls --refresh` |
 | `pr` | Merge a PR or resolve its review threads | Completing a reviewed change | `ao pr merge` / `ao pr resolve-comments` |
@@ -40,6 +40,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 
 ## Conventions
 
+- When the user asks you to set up Orchestrator, add their first project, or get them started, read [commands/setup.md](commands/setup.md) first and follow it.
 - For importing existing agent conversations from outside Orchestrator, read [commands/import.md](commands/import.md). This includes Claude Code and Codex terminal sessions.
 - Most read commands accept `--json` for machine-readable output.
 - `-p / --project` scopes session subcommand lookups to one project.

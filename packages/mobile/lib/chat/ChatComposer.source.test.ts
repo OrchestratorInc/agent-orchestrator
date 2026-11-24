@@ -77,7 +77,7 @@ describe("chat composer pill", () => {
 	});
 
 	it("uses the latest native text when a pasted draft grows before React renders", () => {
-		expect(composer).toContain("onChangeText={(value) => { latestText.current = value; setText(value); }}");
+		expect(composer).toContain("onChangeText={(value) => { watchFieldBriefly(); latestText.current = value; setText(value); }}");
 		expect(composer).toContain('latestText.current = "";\n\t\t\tsetText("");');
 	});
 
@@ -128,7 +128,14 @@ describe("chat composer pill", () => {
 	// inset too low and then jumped into place at the end.
 	it("rides the keyboard's own progress instead of switching inset on a flag", () => {
 		expect(composer).toContain("useReanimatedKeyboardAnimation()");
-		expect(composer).toContain("(restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value)");
+		expect(composer).toContain("const inset = restingInset - KEYBOARD_DOCK_GAP;");
+		expect(composer).toContain("if (dockRiseOverride !== undefined) return { transform: [{ translateY: inset * dockRiseOverride }] };");
+		expect(composer).toContain("return { transform: [{ translateY: inset * keyboard.progress.value }] };");
+	});
+	// On Android the keyboard's last stretch passes behind the navigation bar;
+	// riding it there left the dock drifting down after the keys had gone.
+	it("rests on Android as soon as the keyboard passes behind the navigation bar", () => {
+		expect(composer).toContain('if (Platform.OS === "android") return { transform: [{ translateY: Math.min(-keyboard.height.value, inset) }] };');
 		expect(composer).toContain("{ paddingBottom: restingInset }");
 		expect(composer).not.toContain("dockInset(");
 	});

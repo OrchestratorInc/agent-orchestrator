@@ -16,6 +16,7 @@
  */
 
 import { memo, useEffect, useMemo, useState } from "react";
+import { escapeHtml } from "@pierre/words/html";
 
 type Katex = typeof import("katex").default;
 
@@ -42,10 +43,10 @@ function typeset(engine: Katex, tex: string, display: boolean): string | undefin
 	}
 }
 
-export const MathFormula = memo(function MathFormula({ tex, display = false }: { tex: string; display?: boolean }) {
+export function useKatex(enabled = true): Katex | undefined {
 	const [engine, setEngine] = useState(katex);
 	useEffect(() => {
-		if (engine) return;
+		if (engine || !enabled) return;
 		let live = true;
 		loadKatex().then(
 			(loaded) => live && setEngine(loaded),
@@ -54,7 +55,23 @@ export const MathFormula = memo(function MathFormula({ tex, display = false }: {
 		return () => {
 			live = false;
 		};
-	}, [engine]);
+	}, [engine, enabled]);
+	return engine;
+}
+
+export function formulaHtml(engine: Katex | undefined, tex: string, display: boolean): string {
+	const source = tex.trim();
+	const html = engine && typeset(engine, source, display);
+	const content = html
+		? `<span>${html}</span>`
+		: `<span class="whitespace-pre-wrap">${escapeHtml(display ? `$$\n${source}\n$$` : `$${source}$`)}</span>`;
+	return display
+		? `<div data-no-swipe-nav="" class="my-2.5 overflow-x-auto overflow-y-hidden py-1 [&_.katex-display]:m-0" data-math="display" data-tex="${escapeHtml(source)}">${content}</div>`
+		: `<span data-math="inline" data-tex="${escapeHtml(source)}">${content}</span>`;
+}
+
+export const MathFormula = memo(function MathFormula({ tex, display = false }: { tex: string; display?: boolean }) {
+	const engine = useKatex();
 
 	const source = tex.trim();
 	const html = useMemo(() => (engine ? typeset(engine, source, display) : undefined), [engine, source, display]);
@@ -70,7 +87,7 @@ export const MathFormula = memo(function MathFormula({ tex, display = false }: {
 	// scrollbar. Inline formulas stay inline: KaTeX breaks them at operators,
 	// and a scroll box would shift the baseline and add a scrollbar per formula.
 	return display ? (
-		<div className="my-2.5 overflow-x-auto overflow-y-hidden py-1 [&_.katex-display]:m-0" data-math="display" data-tex={source}>
+		<div data-no-swipe-nav="" className="my-2.5 overflow-x-auto overflow-y-hidden py-1 [&_.katex-display]:m-0" data-math="display" data-tex={source}>
 			{content}
 		</div>
 	) : (

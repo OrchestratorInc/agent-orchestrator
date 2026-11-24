@@ -2,8 +2,8 @@ import type { DashboardSession, OrchestratorLink, SessionMode } from "../api";
 import { cloudAgentLabel, cloudTaskTitle, defaultCloudAgent } from "./agents";
 import type { CloudClient } from "./client";
 import { CloudError, cloudErrorMessage } from "./errors";
-import { cloudOrchestratorLink, cloudSessionRow } from "./mapping";
-import type { CloudApprovalMode, CloudOrganization, CloudProject, CloudProviderConnection, CloudSession, CreateCloudSessionInput } from "./types";
+import { cloudOrchestratorLink, cloudSessionRow, cloudStandaloneAgentRow } from "./mapping";
+import type { CloudApprovalMode, CloudOrganization, CloudProject, CloudProviderConnection, CloudSession, CreateCloudSessionInput, CreateCloudStandaloneAgentInput } from "./types";
 
 // The store's board actions (spawn, archive, restore, launch an orchestrator…)
 // for rows that live in Orchestrator Cloud. The store calls these when an action's host
@@ -20,6 +20,10 @@ export type CloudActionContext = {
 	sessions?: readonly CloudSession[];
 	upsertSession(session: CloudSession): void;
 	refreshSessions(): Promise<void>;
+	/** Lists a standalone agent's own project at once, so its session reads as standalone from the first frame. */
+	upsertProject?(project: CloudProject): void;
+	/** The list writes for a request starting now, which drop an answer that lands after the account or organization changed. */
+	scoped?(): Pick<CloudActionContext, "upsertSession" | "upsertProject">;
 };
 
 /**
@@ -46,6 +50,8 @@ function orgOf(context: Pick<CloudActionContext, "org">): string {
 
 export type CloudSpawnRequest = {
 	projectId?: string;
+	/** A standalone agent: no project; the control plane makes one of its own. */
+	standalone?: boolean;
 	prompt?: string;
 	harness?: string;
 	model?: string;
@@ -70,15 +76,18 @@ export function spawnCloudWorker(context: CloudActionContext, request: CloudSpaw
 
 async function spawnWorker(context: CloudActionContext, request: CloudSpawnRequest): Promise<DashboardSession> {
 	const orgId = orgOf(context);
-	if (!request.projectId) throw new Error("Pick a cloud project first.");
+	// Taken before the create goes out: its answer is listed only while this
+	// account and organization are still the ones shown.
+	const writes = context.scoped?.() ?? context;
+	if (!request.standalone && !request.projectId) throw new Error("Pick a cloud project first.");
 	if (request.attachments?.length) throw new Error("Cloud tasks can't take attachments yet. Remove them, or describe the files in the prompt.");
-	const harness = request.harness || defaultCloudAgent(context.connections, context.projects.find((item) => item.id === request.projectId)?.config?.worker?.agent);
+	// A standalone agent has no project whose worker settings name an agent.
+	const projectAgent = request.standalone ? undefined : context.projects.find((item) => item.id === request.projectId)?.config?.worker?.agent;
+	const harness = request.harness || defaultCloudAgent(context.connections, projectAgent);
 	if (!harness) throw new Error("Connect a coding agent to Orchestrator Cloud first (Settings → Coding agents).");
 	const prompt = request.prompt?.trim() ?? "";
 	const wantsChat = (request.mode ?? "chat") === "chat" && context.chatHarnesses.includes(harness);
-	const input: CreateCloudSessionInput = {
-		projectId: request.projectId,
-		kind: "worker",
+	const body: CreateCloudStandaloneAgentInput = {
 		harness,
 		displayName: cloudTaskTitle(prompt, cloudAgentLabel(harness)),
 		prompt,
@@ -90,18 +99,39 @@ async function spawnWorker(context: CloudActionContext, request: CloudSpawnReque
 	};
 	// The sheet's request id makes a retried tap the same request; the client mints one otherwise.
 	const key = request.clientRequestId;
-	let created: { session: CloudSession };
-	try {
-		created = await context.client.createSession(orgId, input, key);
-	} catch (cause) {
-		// An older control plane refuses interfaceMode; it then starts the harness's default.
-		if (!(cause instanceof CloudError && cause.status === 400 && cause.code === "invalid_request")) throw cause;
-		const { interfaceMode: _omitted, ...legacy } = input;
-		created = await context.client.createSession(orgId, legacy, key ? `${key}:legacy` : undefined);
+	if (request.standalone) {
+		// The agent and its own project come back together; the project is
+		// listed now so the new session reads as standalone at once.
+		const created = await withInterfaceFallback(body, key, (input, idempotencyKey) => context.client.createStandaloneAgent(orgId, input, idempotencyKey));
+		writes.upsertProject?.(created.project);
+		writes.upsertSession(created.session);
+		void context.refreshSessions();
+		return cloudStandaloneAgentRow(created.session);
 	}
-	context.upsertSession(created.session);
+	const input: CreateCloudSessionInput = { projectId: request.projectId ?? "", kind: "worker", ...body };
+	const created = await withInterfaceFallback(input, key, (next, idempotencyKey) => context.client.createSession(orgId, next, idempotencyKey));
+	writes.upsertSession(created.session);
 	void context.refreshSessions();
 	return cloudSessionRow(created.session);
+}
+
+/**
+ * Sends a create; an older control plane refuses interfaceMode, and the
+ * create is sent again without it, so the harness's default starts. Nothing
+ * was created by the refusal, and the retry is its own request.
+ */
+async function withInterfaceFallback<I extends { interfaceMode?: unknown }, T>(
+	input: I,
+	key: string | undefined,
+	create: (input: I, idempotencyKey: string | undefined) => Promise<T>,
+): Promise<T> {
+	try {
+		return await create(input, key);
+	} catch (cause) {
+		if (!(cause instanceof CloudError && cause.status === 400 && cause.code === "invalid_request")) throw cause;
+		const { interfaceMode: _omitted, ...legacy } = input;
+		return create(legacy as I, key ? `${key}:legacy` : undefined);
+	}
 }
 
 /** Start a project's cloud orchestrator with its configured agent, else the first connected one. */

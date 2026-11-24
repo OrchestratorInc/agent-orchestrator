@@ -167,8 +167,8 @@ func (q *Queries) CancelSessionTurnAutoResume(ctx context.Context, arg CancelSes
 }
 
 const createAgentAccount = `-- name: CreateAgentAccount :exec
-INSERT INTO agent_accounts (id, provider, home, email, plan, created_at)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hint, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateAgentAccountParams struct {
@@ -177,6 +177,9 @@ type CreateAgentAccountParams struct {
 	Home      string
 	Email     string
 	Plan      string
+	Kind      string
+	Name      string
+	KeyHint   string
 	CreatedAt time.Time
 }
 
@@ -187,6 +190,9 @@ func (q *Queries) CreateAgentAccount(ctx context.Context, arg CreateAgentAccount
 		arg.Home,
 		arg.Email,
 		arg.Plan,
+		arg.Kind,
+		arg.Name,
+		arg.KeyHint,
 		arg.CreatedAt,
 	)
 	return err
@@ -280,10 +286,10 @@ func (q *Queries) GetSessionAgentAccount(ctx context.Context, arg GetSessionAgen
 
 const listAgentAccounts = `-- name: ListAgentAccounts :many
 
-SELECT id, provider, home, email, "plan", created_at FROM agent_accounts ORDER BY provider, created_at, id
+SELECT id, provider, home, email, "plan", created_at, kind, name, key_hint FROM agent_accounts ORDER BY provider, created_at, id
 `
 
-// Subscription accounts AO launches Claude Code and Codex with.
+// Subscription and API key accounts AO launches Claude Code and Codex with.
 func (q *Queries) ListAgentAccounts(ctx context.Context) ([]AgentAccount, error) {
 	rows, err := q.db.QueryContext(ctx, listAgentAccounts)
 	if err != nil {
@@ -300,6 +306,9 @@ func (q *Queries) ListAgentAccounts(ctx context.Context) ([]AgentAccount, error)
 			&i.Email,
 			&i.Plan,
 			&i.CreatedAt,
+			&i.Kind,
+			&i.Name,
+			&i.KeyHint,
 		); err != nil {
 			return nil, err
 		}
@@ -439,4 +448,21 @@ type SetAgentAccountDefaultParams struct {
 func (q *Queries) SetAgentAccountDefault(ctx context.Context, arg SetAgentAccountDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, setAgentAccountDefault, arg.Provider, arg.AccountID)
 	return err
+}
+
+const updateAgentAccountKeyHint = `-- name: UpdateAgentAccountKeyHint :execrows
+UPDATE agent_accounts SET key_hint = ? WHERE id = ? AND kind IN ('api_key', 'setup_token')
+`
+
+type UpdateAgentAccountKeyHintParams struct {
+	KeyHint string
+	ID      string
+}
+
+func (q *Queries) UpdateAgentAccountKeyHint(ctx context.Context, arg UpdateAgentAccountKeyHintParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateAgentAccountKeyHint, arg.KeyHint, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

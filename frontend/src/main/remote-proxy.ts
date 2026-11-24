@@ -69,7 +69,9 @@ type ProxyResponse = Writable & {
 
 // The HTTP/2 session could not carry this host's requests (no HTTP/2 on the
 // host or an intermediary, or the session failed); HTTP/1.1 takes over.
-class UpstreamHttp2Unavailable extends Error {}
+class UpstreamHttp2Unavailable extends Error {
+	readonly code: string = "UPSTREAM_HTTP2_UNAVAILABLE_ERROR";
+}
 
 // fetch found no host to ask who it is (no connection, or no answer in time),
 // which does not make it another host. Anything that did answer (a redirect, a

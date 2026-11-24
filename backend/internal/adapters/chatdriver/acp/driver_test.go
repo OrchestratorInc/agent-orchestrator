@@ -907,6 +907,10 @@ type legacyKimiAgent struct {
 	mode               string
 	modeCalls          int
 	configCalls        int
+	// acceptConfig makes session/set_config_option succeed and record the
+	// applied value in configs instead of answering method-not-found.
+	acceptConfig bool
+	configs      map[string]string
 }
 
 func fakeLegacyKimiSpawn(agent *legacyKimiAgent) spawnFunc {
@@ -1006,10 +1010,23 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 			agent.modeCalls++
 			agent.mu.Unlock()
 		case "session/set_config_option":
+			var params struct {
+				ConfigID string `json:"configId"`
+				Value    any    `json:"value"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
 			agent.mu.Lock()
 			agent.configCalls++
+			if agent.acceptConfig {
+				if agent.configs == nil {
+					agent.configs = make(map[string]string)
+				}
+				agent.configs[params.ConfigID] = fmt.Sprint(params.Value)
+				result = map[string]any{"configOptions": []any{}}
+			} else {
+				responseError = map[string]any{"code": -32601, "message": "Method not found"}
+			}
 			agent.mu.Unlock()
-			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		default:
 			responseError = map[string]any{"code": -32601, "message": "Method not found"}
 		}
@@ -1603,6 +1620,87 @@ waitForCompletion:
 			}
 			break
 		}
+	}
+}
+
+// Stop pressed again while the provider is still winding the turn down is the
+// same request. It used to fail with "session/cancel is already in progress",
+// which reached the user as a 500 although their first Stop was working.
+func TestACPRepeatedInterruptWhileCancellingIsIdempotent(t *testing.T) {
+	cancelReceived := make(chan struct{}, 1)
+	promptReceived := make(chan struct{}, 1)
+	completePrompt := make(chan struct{})
+	responseSent := make(chan error, 1)
+	driver := New(Config{
+		Harness: domain.HarnessOpenCode,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true,
+			ports.ChatCapabilityInterrupt: true,
+		},
+		Probe: func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(delayedCancelSpawn(promptReceived, cancelReceived, completePrompt, responseSent))
+
+	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conversation.Close()
+	_ = nextEvent(t, conversation.Events()) // controller.ready
+	ref, err := conversation.SendTurn(context.Background(), ports.ChatUserMessage{Text: "wait"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := conversation.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	select {
+	case <-promptReceived:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not receive ACP prompt request")
+	}
+	if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	select {
+	case <-cancelReceived:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not receive ACP cancel notification")
+	}
+
+	for range 3 {
+		if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); err != nil {
+			t.Fatalf("repeated Interrupt while cancelling = %v, want nil", err)
+		}
+	}
+	if err := conversation.Interrupt(context.Background(), ""); err != nil {
+		t.Fatalf("repeated untargeted Interrupt while cancelling = %v, want nil", err)
+	}
+
+	close(completePrompt)
+	if err := <-responseSent; err != nil {
+		t.Fatalf("provider prompt response: %v", err)
+	}
+	for {
+		event := nextEvent(t, conversation.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			if event.TurnState != domain.TurnStateInterrupted {
+				t.Fatalf("turn state = %q, want interrupted", event.TurnState)
+			}
+			break
+		}
+	}
+	select {
+	case <-cancelReceived:
+		t.Fatal("repeated Stop sent the provider a second session/cancel")
+	case <-time.After(100 * time.Millisecond):
+	}
+	// Once the turn has settled there is genuinely nothing to stop.
+	if err := conversation.Interrupt(context.Background(), ref.ProviderTurnID); !errors.Is(err, ports.ErrChatNoActiveTurn) {
+		t.Fatalf("Interrupt after settlement = %v, want ErrChatNoActiveTurn", err)
 	}
 }
 
@@ -2517,6 +2615,64 @@ func TestHistoricalUserContentDropsStandingInstructionsJoinedToTheFirstMessage(t
 	}
 	if got := historicalUserContent(acpsdk.TextBlock("Fix the failing test")); got != "Fix the failing test" {
 		t.Fatalf("ordinary message = %q", got)
+	}
+}
+
+func TestHistoricalUserContentDropsPlainStandingInstructionsJoinedToTheFirstMessage(t *testing.T) {
+	standing := PlainStandingInstructionsBlock("AO standing instructions")
+	// Antigravity replays the preamble and the first prompt as one message.
+	joined := acpsdk.TextBlock(standing.Text.Text + "\n\nFix the failing test")
+	if got := historicalUserContent(joined); got != "Fix the failing test" {
+		t.Fatalf("replayed first message = %q, want only what the user typed", got)
+	}
+	if got := historicalUserContent(standing); got != "" {
+		t.Fatalf("replayed preamble alone = %q, want empty", got)
+	}
+	quoted := acpsdk.TextBlock("Explain </ao_standing_instructions> in the docs")
+	if got := historicalUserContent(quoted); got != quoted.Text.Text {
+		t.Fatalf("message quoting the tag = %q, want it unchanged", got)
+	}
+}
+
+// Antigravity 1.5.14 replays the first prompt as two id-less user chunks: the
+// standing-instructions preamble, then what the user typed. The merged first
+// message must be only the user's text, or the ao_high_water checkpoint
+// never matches.
+func TestACPHistoryReplayDropsPlainStandingInstructionsChunkBeforeTheFirstPrompt(t *testing.T) {
+	agent := &fakeAgent{
+		capabilities: &acpsdk.AgentCapabilities{LoadSession: true},
+		loadUpdates: []acpsdk.SessionUpdate{
+			acpsdk.UpdateUserMessage(PlainStandingInstructionsBlock("AO standing instructions")),
+			acpsdk.UpdateUserMessageText("Fix the failing test"),
+			acpsdk.UpdateAgentMessageText("Fixed."),
+		},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		SessionID: "sess1", WorkspacePath: t.TempDir(), ProviderConversationID: "provider-session-1",
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	defer conv.Close()
+	events, err := conv.(ports.ChatHistoryReader).ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	var users []string
+	for _, event := range events {
+		if event.Kind == ports.ChatEventUserMessageCompleted {
+			users = append(users, event.Text)
+		}
+	}
+	if want := []string{"Fix the failing test"}; !reflect.DeepEqual(users, want) {
+		t.Fatalf("replayed user messages = %q, want %q", users, want)
 	}
 }
 
@@ -3749,12 +3905,8 @@ func TestACPDriverNormalizesClaudeRetryStatus(t *testing.T) {
 	air, _ := jetbrains["air"].(map[string]any)
 	version, versionOK := number(air["version"])
 	capabilities, _ := air["capabilities"].([]any)
-	capability := ""
-	if len(capabilities) == 1 {
-		capability, _ = capabilities[0].(string)
-	}
-	if !versionOK || version != 1 || capability != "sessionFailure" {
-		t.Fatalf("session failure capability = %#v", air)
+	if !versionOK || version != 1 || len(capabilities) != 1 || capabilities[0] != "sessionFailure" {
+		t.Fatalf("session failure and async-task capabilities = %#v", air)
 	}
 
 	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
@@ -4125,6 +4277,136 @@ func TestACPDriverResolvesCLIModelToAdvertisedParameterizedLegacyChoice(t *testi
 	agent.mu.Unlock()
 	if model != "composer-2.5[fast=false]" || calls != 1 {
 		t.Fatalf("legacy model setter = %q across %d calls, want advertised non-fast value", model, calls)
+	}
+}
+
+func TestACPDriverKeepsItsDefaultForAnOptionalModelItDoesNotOffer(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash-high",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash-high", Name: "Gemini"}},
+		rejectUnknownModel: true,
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "claude-opus-4-6-thinking",
+	})
+	if err != nil {
+		t.Fatalf("Start with a model the session lacks: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 {
+		t.Fatalf("session/set_model called %d times, want the default kept", agent.modelCalls)
+	}
+}
+
+func startLegacyVariant(t *testing.T, agent *legacyKimiAgent) {
+	t.Helper()
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+		SplitModelVariant: func(model string) (string, SessionOption, bool) {
+			return strings.TrimSuffix(model, "-medium"), SessionOption{ID: "thinking_level", Value: "medium", Optional: true}, true
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-medium",
+	})
+	if err != nil {
+		t.Fatalf("Start with a variant id: %v", err)
+	}
+	conv.Close()
+
+}
+
+func TestACPDriverSplitsAModelTheSessionOffersOnlyAsAVariant(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash", Name: "Gemini"}},
+		rejectUnknownModel: true,
+		acceptConfig:       true,
+	}
+	startLegacyVariant(t, agent)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 || agent.configCalls != 1 {
+		t.Fatalf("set_model calls = %d, config calls = %d, want the variant set as its own option", agent.modelCalls, agent.configCalls)
+	}
+	if got := agent.configs["thinking_level"]; got != "medium" {
+		t.Fatalf("thinking_level applied = %q, want medium (configs %v)", got, agent.configs)
+	}
+}
+
+func TestACPDriverToleratesAVariantSetterTheSessionLacks(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel:       "gemini-3.8-flash",
+		availableModels:    []legacyModelInfo{{ModelID: "gemini-3.8-flash", Name: "Gemini"}},
+		rejectUnknownModel: true,
+	}
+	startLegacyVariant(t, agent)
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.modelCalls != 0 || agent.configCalls != 1 {
+		t.Fatalf("set_model calls = %d, config calls = %d, want one tolerated config attempt", agent.modelCalls, agent.configCalls)
+	}
+	if len(agent.configs) != 0 {
+		t.Fatalf("configs = %v, want nothing applied", agent.configs)
+	}
+}
+
+func TestACPDriverSplitsAVariantOnTheModernModelSelector(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "model", "gemini-3.8-flash", "gemini-3.8-flash"),
+		selectConfigOption("thinking_level", "Thinking", "thought_level", "low", "low", "medium", "high"),
+	}}
+	driver := New(Config{
+		Harness:      domain.HarnessAgy,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			return []SessionOption{{ID: "model", Value: settings.Model, Optional: true}}
+		},
+		SplitModelVariant: func(model string) (string, SessionOption, bool) {
+			base, ok := strings.CutSuffix(model, "-medium")
+			return base, SessionOption{ID: "thinking_level", Value: "medium", Optional: true}, ok
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "gemini-3.8-flash-medium",
+	})
+	if err != nil {
+		t.Fatalf("Start with a variant id: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if agent.options["thinking_level"] != "medium" || agent.options["model"] != "" {
+		t.Fatalf("options set = %#v, want only thinking_level=medium on the offered base model", agent.options)
 	}
 }
 
@@ -5009,6 +5291,13 @@ func TestNormalizeMCPServersAllowsStdioWithoutCapabilities(t *testing.T) {
 		}
 		if len(servers) != 1 || servers[0].Stdio == nil {
 			t.Fatalf("servers = %#v, want one stdio server", servers)
+		}
+		encoded, err := json.Marshal(servers[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(encoded), `"args":[]`) {
+			t.Fatalf("server JSON = %s, want args [] (Claude Code skips args null)", encoded)
 		}
 	}
 }
@@ -6308,5 +6597,102 @@ func TestModelAliasAdmissionUsesTheBindingHarness(t *testing.T) {
 				t.Fatalf("Hermes selected %q, want auto:model", agent.model)
 			}
 		})
+	}
+}
+
+func TestACPDriverHidesCommandsTheBindingNames(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		HideCommand:  HideCommands("model", "compact"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+		SessionId: acpsdk.SessionId(conv.ProviderConversationID()),
+		Update: acpsdk.SessionUpdate{AvailableCommandsUpdate: &acpsdk.SessionAvailableCommandsUpdate{
+			AvailableCommands: []acpsdk.AvailableCommand{
+				{Name: "goal", Description: "Keep working until a condition is met"},
+				{Name: "model", Description: "Set the AI model"},
+				{Name: "compact", Description: "Summarize the conversation"},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
+	}
+
+	skills := awaitSkillCount(t, conv.(ports.ChatSkillLister), 1)
+	if skills[0].Name != "goal" {
+		t.Fatalf("skills = %#v, want only goal", skills)
+	}
+	// Hiding is presentation only: the agent's compaction stays usable.
+	if !conv.Capabilities().Has(ports.ChatCapabilityCompaction) {
+		t.Fatal("hiding compact from the menu also disabled compaction")
+	}
+}
+
+// Commands can arrive during session/new, before start() derives compaction.
+// Hiding compact from the menu must not turn compaction off on that path either.
+func TestACPEarlyHiddenCompactKeepsCompactionInStart(t *testing.T) {
+	agent := &fakeAgent{
+		newSessionUpdates: []acpsdk.SessionUpdate{{
+			AvailableCommandsUpdate: &acpsdk.SessionAvailableCommandsUpdate{
+				AvailableCommands: []acpsdk.AvailableCommand{
+					{Name: "compact", Description: "Compact history"},
+					{Name: "goal", Description: "Keep working until a condition is met"},
+				},
+			},
+		}},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		HideCommand:  HideCommands("compact"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+
+	if !opened.Capabilities().Has(ports.ChatCapabilityCompaction) {
+		t.Fatal("a compact hidden from the menu before start() disabled compaction")
+	}
+	skills := awaitSkillCount(t, opened.(ports.ChatSkillLister), 1)
+	if skills[0].Name != "goal" {
+		t.Fatalf("skills = %#v, want only goal", skills)
+	}
+}
+
+func TestACPAsyncTasksRequiresBindingOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		agent := &fakeAgent{}
+		driver := New(Config{Harness: domain.HarnessClaudeCode, AsyncTasks: enabled, Probe: func(context.Context) error { return nil }, Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		driver.useTestProcess(fakeSpawn(agent))
+		conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		agent.mu.Lock()
+		air := nestedMap(nestedMap(agent.initParams.ClientCapabilities.Meta, "jetbrains"), "air")
+		capabilities, _ := air["capabilities"].([]any)
+		agent.mu.Unlock()
+		if got := len(capabilities) == 2 && capabilities[1] == "asyncTasks"; got != enabled {
+			t.Fatalf("enabled=%v capabilities=%v", enabled, capabilities)
+		}
+		_ = conv.Close()
 	}
 }

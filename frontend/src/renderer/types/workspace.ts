@@ -298,6 +298,8 @@ export type WorkspaceSession = {
 		observedState?: string;
 		/** Sandbox runtime state; "terminated" means AO stopped retrying startup. */
 		runtimeState?: string;
+		/** The epoch of the session's latest worker connection; absent until a worker has ever connected. */
+		workerEpoch?: number;
 		runtimeError?: string;
 		/** Why the worker has not started; cleared once it connects. */
 		startupError?: { code: string; message: string; at: string; detail?: string };
