@@ -2468,12 +2468,17 @@ func (c *Controller) ArmHandoff(
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.handoff != want && c.handoff != controllerHandoffNone {
+	if c.handoff == want {
+		c.mu.Unlock()
+		return nil
+	}
+	if c.handoff != controllerHandoffNone {
+		c.mu.Unlock()
 		return ErrControllerHandoff
 	}
 	c.handoff = want
 	c.keepHeld = accountMove && policy == domain.SessionInterfaceTransitionDrain
+	c.mu.Unlock()
 	return nil
 }
 
