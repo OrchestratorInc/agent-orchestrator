@@ -45,6 +45,7 @@ import {
 	shareCloudSessionArtifact,
 	MAX_SCANNED_PAGE,
 	type PageFileSnapshot,
+	type PageFilesOutcome,
 	readShareFileText,
 	type ResolvedShareFile,
 	type ShareSnapshot,
@@ -56,7 +57,7 @@ import {
 	uploadShare,
 } from "./cloud-share";
 import { type ShareLinkRecordStore, artifactRecordKey, shareAccess, shareRecordKey } from "./cloud-share-links";
-import { collectPageFiles, isSharePage, type PageFileSkip } from "./cloud-share-page-files";
+import { collectPageFiles, findPageFiles, isSharePage, type PageFileSkip } from "./cloud-share-page-files";
 
 /** Filesystem errors that say a file is no longer there to open, or is no longer a plain file. */
 const SOURCE_GONE_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP"]);
@@ -98,6 +99,41 @@ async function pageFilesChanged(dataDir: string, sessionId: string, recorded: Re
 		if (now !== version) return true;
 	}
 	return false;
+}
+
+/** A page's files as they were copied for upload, and what it left out. */
+interface PageFilesTaken {
+	files: PageFileSnapshot[];
+	skipped: PageFileSkip[];
+	/** Which file the page names by each included path. */
+	referenced: Map<string, string>;
+}
+
+/**
+ * What publishing a page did with its files, for the popover to say. The
+ * videos the control plane refused are added to what the page left out, as a
+ * missing file is; onRefusedVideo gets each one refused for being a video,
+ * by its path in the session's artifacts.
+ */
+function pageFilesOutcome(page: PageFilesTaken, uploaded: PageFilesOutcome | undefined, onRefusedVideo?: (relativePath: string) => void): CloudSharePageFiles | undefined {
+	if (!uploaded) return undefined;
+	const left = [
+		...uploaded.refusedVideos.map((refused) => [refused, "video"] as const),
+		...uploaded.tooLargeVideos.map((refused) => [refused, "too_large"] as const),
+	];
+	for (const [refused, reason] of left) {
+		const relativePath = page.referenced.get(refused);
+		page.skipped.push({ reference: refused, reason, ...(relativePath ? { relativePath } : {}) });
+		if (relativePath && reason === "video") onRefusedVideo?.(relativePath);
+	}
+	// What was left out here is said whether or not the control plane takes files.
+	return {
+		included: uploaded.included,
+		skipped: page.skipped.length,
+		videos: page.skipped.filter((skip) => skip.reason === "video").length,
+		// Said only when the page had files to include.
+		unsupported: uploaded.unsupported && page.files.length > 0,
+	};
 }
 
 export interface CloudShareIpcDeps extends CloudShareApi {
@@ -373,9 +409,26 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		};
 	};
 
+	// A file a remote host's page uses, looked up on that host from its
+	// headers alone. One the host refuses to serve is left out, as one outside
+	// the page's folder is; a host that stopped answering fails the publish.
+	const hostPageFile = async (file: CloudHostShareFile, relative: string, signal: AbortSignal) => {
+		const located = hostFile({ ...file, path: relative });
+		try {
+			const info = await inspectHostShareFile(deps.fetchHost, located, signal);
+			return { ...located, size: info.size };
+		} catch (error) {
+			if (error instanceof CloudShareError && error.code === "host_unavailable" && error.status >= 400 && error.status < 500) {
+				throw new CloudShareError("invalid_file", error.message, error.status);
+			}
+			throw error;
+		}
+	};
+
 	// Downloaded into a private snapshot through the host's proxy, then
 	// uploaded as a local file is. Downloading is the first half of the
-	// progress, uploading the second.
+	// progress, uploading the second. An HTML page's files are downloaded
+	// through the proxy too and go with it, as a local page's do.
 	const publishHostFile = async (file: CloudHostShareFile, sender: IpcMainInvokeEvent["sender"], controller: AbortController): Promise<CloudSharePublishResult> => {
 		if (isUnplayableShareVideo(file.path)) return { status: "unsupported", message: UNPLAYABLE_VIDEO_MESSAGE };
 		if (!(await deps.getToken())) return { status: "signed_out" };
@@ -393,13 +446,17 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const expected = await inspectHostShareFile(deps.fetchHost, located, controller.signal);
 		// Publish only the file as the panel showed it: one rewritten since is offered again.
 		if (!file.fingerprint || !sameShareFingerprint(expected.fingerprint, file.fingerprint)) return await changed();
+		// A page's files are found in its downloaded copy, so the progress
+		// starts once they are, when it knows every byte.
+		const page = isSharePage(located.name) && expected.size <= MAX_SCANNED_PAGE;
 		let snapshot: ShareSnapshot | undefined;
+		const fileSnapshots: ShareSnapshot[] = [];
 		try {
 			try {
 				snapshot = await snapshotHostShareFile(deps.fetchHost, located, deps.snapshotDir(), {
 					expectedSize: expected.size,
 					signal: controller.signal,
-					onProgress: (copied) => progress(copied, expected.size * 2),
+					...(page ? {} : { onProgress: (copied: number) => progress(copied, expected.size * 2) }),
 				});
 			} catch (error) {
 				if (error instanceof CloudShareError && error.code === "source_changed") return await changed();
@@ -409,6 +466,34 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			// The download names its own version: one written between the check and the download is offered again.
 			if (!sameShareFingerprint(taken.fingerprint, file.fingerprint)) return await changed();
 			if (controller.signal.aborted) return { status: "cancelled" };
+			let copied = taken.size;
+			let total = taken.size * 2;
+			let pageFiles: PageFilesTaken | undefined;
+			if (page) {
+				const html = await fs.readFile(taken.path, "utf8");
+				const found = await findPageFiles(located.relativePath, html, (relative) => hostPageFile(file, relative, controller.signal));
+				total = (taken.size + found.files.reduce((sum, used) => sum + used.file.size, 0)) * 2;
+				pageFiles = { files: [], skipped: [...found.skipped], referenced: new Map() };
+				for (const used of found.files) {
+					if (controller.signal.aborted) return { status: "cancelled" };
+					const before = copied;
+					try {
+						const copy = await snapshotHostShareFile(deps.fetchHost, used.file, deps.snapshotDir(), {
+							expectedSize: used.file.size,
+							signal: controller.signal,
+							onProgress: (bytes) => progress(before + bytes, total),
+						});
+						fileSnapshots.push(copy);
+						pageFiles.files.push({ path: used.path, snapshot: copy });
+						pageFiles.referenced.set(used.path, used.referencedPath);
+					} catch (error) {
+						// A file gone or rewritten on the host while it downloaded is left out, not the page.
+						if (!(error instanceof CloudShareError && (error.code === "file_missing" || error.code === "source_changed"))) throw error;
+						pageFiles.skipped.push({ reference: used.path, reason: "missing", relativePath: used.referencedPath });
+					}
+					copied = before + used.file.size;
+				}
+			}
 			const folder = path.posix.dirname(located.relativePath);
 			const result = await uploadShare(deps, {
 				baseUrl: file.baseUrl,
@@ -419,11 +504,15 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				shareId: file.shareId,
 				access: file.access,
 				emails: file.emails,
-			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
+				...(pageFiles ? { page: { files: pageFiles.files } } : {}),
+			}, (sentBytes) => progress(copied + sentBytes, total), controller.signal);
+			const outcome = pageFiles ? pageFilesOutcome(pageFiles, result.pageFiles) : undefined;
 			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), shareAccess(result.share));
-			return { status: "published", share: result.share, replaced: result.replaced };
+			return { status: "published", share: result.share, replaced: result.replaced, ...(outcome ? { pageFiles: outcome } : {}) };
 		} finally {
-			if (snapshot) await fs.rm(snapshot.path, { force: true });
+			for (const copy of [snapshot, ...fileSnapshots]) {
+				if (copy) await fs.rm(copy.path, { force: true });
+			}
 		}
 	};
 
@@ -588,7 +677,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			if (!file.fingerprint || !sameShareFingerprint(taken.fingerprint, file.fingerprint)) return await changed();
 			if (controller.signal.aborted) return { status: "cancelled" };
 			let copied = taken.size;
-			let pageFiles: { files: PageFileSnapshot[]; skipped: PageFileSkip[]; fingerprints: Record<string, string>; referenced: Map<string, string> } | undefined;
+			let pageFiles: (PageFilesTaken & { fingerprints: Record<string, string> }) | undefined;
 			if (found) {
 				const files: PageFileSnapshot[] = [];
 				const skipped = [...found.skipped];
@@ -632,30 +721,11 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				emails: file.emails,
 				...(pageFiles ? { page: { files: pageFiles.files } } : {}),
 			}, (sentBytes) => progress(copied + sentBytes, total), controller.signal);
-			// A video the control plane refused was left out, as a missing file is.
-			if (pageFiles && result.pageFiles) {
-				const left = [
-					...result.pageFiles.refusedVideos.map((refused) => [refused, "video"] as const),
-					...result.pageFiles.tooLargeVideos.map((refused) => [refused, "too_large"] as const),
-				];
-				for (const [refused, reason] of left) {
-					const relativePath = pageFiles.referenced.get(refused);
-					pageFiles.skipped.push({ reference: refused, reason, ...(relativePath ? { relativePath } : {}) });
-					// A video refused now is offered again once the control plane takes it.
-					if (relativePath && reason === "video") pageFiles.fingerprints[relativePath] = "";
-				}
-			}
+			// A video refused now is offered again once the control plane takes it.
+			const outcome = pageFiles ? pageFilesOutcome(pageFiles, result.pageFiles, (relativePath) => { pageFiles.fingerprints[relativePath] = ""; }) : undefined;
 			// The link serves the page's files only when the control plane took them.
 			const served = pageFiles && result.pageFiles && !result.pageFiles.unsupported ? pageFiles.fingerprints : undefined;
 			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), shareAccess(result.share), served);
-			// What was left out here is said whether or not the control plane takes files.
-			const outcome: CloudSharePageFiles | undefined = pageFiles && result.pageFiles ? {
-				included: result.pageFiles.included,
-				skipped: pageFiles.skipped.length,
-				videos: pageFiles.skipped.filter((skip) => skip.reason === "video").length,
-				// Said only when the page had files to include.
-				unsupported: result.pageFiles.unsupported && pageFiles.files.length > 0,
-			} : undefined;
 			return { status: "published", share: result.share, replaced: result.replaced, ...(outcome ? { pageFiles: outcome } : {}) };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };

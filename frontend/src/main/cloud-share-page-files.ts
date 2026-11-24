@@ -45,7 +45,7 @@ export type PageFileSkipReason =
 	 */
 	| "svg_use";
 
-export interface PageFile {
+export interface PageFile<T = ResolvedShareFile> {
 	/** Where the link serves it, relative to its root. */
 	path: string;
 	/**
@@ -53,7 +53,7 @@ export interface PageFile {
 	 * symlink is followed: file is what it resolves to now.
 	 */
 	referencedPath: string;
-	file: ResolvedShareFile;
+	file: T;
 }
 
 export interface PageFileSkip {
@@ -216,9 +216,33 @@ export async function collectPageFiles(
 	pageRelativePath: string,
 	html: string,
 ): Promise<{ files: PageFile[]; skipped: PageFileSkip[] }> {
+	return findPageFiles(pageRelativePath, html, (relative) => resolveShareFile(dataDir, sessionId, relative));
+}
+
+/** How many of a page's files are looked up at once: a remote host's are each a round trip. */
+const RESOLVE_CONCURRENCY = 8;
+
+/**
+ * Why a page's file cannot be looked up, when that is about the file: it is
+ * left out. Any other failure, such as a remote host that stopped answering,
+ * fails the whole publish.
+ */
+const FILE_ERRORS: Record<string, PageFileSkipReason> = { file_missing: "missing", invalid_file: "outside" };
+
+/**
+ * collectPageFiles for files found by resolve, which names each by its path
+ * in the session's artifacts as relativePath (a local file once its symlinks
+ * are followed, a remote host's as asked for) and throws a CloudShareError
+ * file_missing or invalid_file for one it cannot include.
+ */
+export async function findPageFiles<T extends { relativePath: string }>(
+	pageRelativePath: string,
+	html: string,
+	resolve: (relative: string) => Promise<T>,
+): Promise<{ files: PageFile<T>[]; skipped: PageFileSkip[] }> {
 	const folder = path.posix.dirname(pageRelativePath);
-	const files: PageFile[] = [];
-	const skipped: PageFileSkip[] = [];
+	// In the page's order: what is skipped as written, and what is looked up.
+	const found: Array<{ skip: PageFileSkip } | { reference: string; served: string; relative: string }> = [];
 	const seen = new Set<string>();
 	for (const { url: reference, svgUse } of pageFileReferences(html)) {
 		const result = servedPath(reference);
@@ -228,27 +252,55 @@ export async function collectPageFiles(
 		if (seen.has(key)) continue;
 		seen.add(key);
 		if ("skip" in result) {
-			skipped.push({ reference, reason: result.skip });
+			found.push({ skip: { reference, reason: result.skip } });
 			continue;
 		}
 		if (svgUse) {
-			skipped.push({ reference, reason: "svg_use" });
+			found.push({ skip: { reference, reason: "svg_use" } });
 			continue;
 		}
 		const served = result.path;
 		// A playable video goes to the control plane, which may still refuse it.
 		if (isUnplayableShareVideo(served)) {
-			skipped.push({ reference, reason: "video_format" });
+			found.push({ skip: { reference, reason: "video_format" } });
 			continue;
 		}
 		const relative = folder === "." ? served : `${folder}/${served}`;
 		if (relative === pageRelativePath) continue;
-		let file: ResolvedShareFile;
-		try {
-			file = await resolveShareFile(dataDir, sessionId, relative);
-		} catch (error) {
-			if (!(error instanceof CloudShareError)) throw error;
-			skipped.push(error.code === "file_missing" ? { reference, reason: "missing", relativePath: relative } : { reference, reason: "outside" });
+		found.push({ reference, served, relative });
+	}
+	const lookups = found.filter((entry): entry is { reference: string; served: string; relative: string } => "relative" in entry);
+	const resolved = new Map<string, T | PageFileSkipReason>();
+	let next = 0;
+	let failed = false;
+	const worker = async () => {
+		while (!failed && next < lookups.length) {
+			const { relative } = lookups[next++];
+			try {
+				resolved.set(relative, await resolve(relative));
+			} catch (error) {
+				const reason = error instanceof CloudShareError ? FILE_ERRORS[error.code] : undefined;
+				if (!reason) {
+					failed = true;
+					throw error;
+				}
+				resolved.set(relative, reason);
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(RESOLVE_CONCURRENCY, lookups.length) }, worker));
+	const files: PageFile<T>[] = [];
+	const skipped: PageFileSkip[] = [];
+	for (const entry of found) {
+		if ("skip" in entry) {
+			skipped.push(entry.skip);
+			continue;
+		}
+		const { reference, served, relative } = entry;
+		const file = resolved.get(relative);
+		if (file === undefined) continue;
+		if (typeof file === "string") {
+			skipped.push(file === "missing" ? { reference, reason: "missing", relativePath: relative } : { reference, reason: file });
 			continue;
 		}
 		// A symlink in the page's folder may lead out of it: only what is in it goes.
