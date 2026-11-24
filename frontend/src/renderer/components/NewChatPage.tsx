@@ -572,6 +572,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 								},
 								account: accountChoice,
 								...(offersUltracode ? { ultracode: { on: ultracodeOn, onChange: setUltracodeOn } } : {}),
+								...(task.autoCompact ? { autoCompact: task.autoCompact } : {}),
 							}}
 							autoSelectEffortOnOpen
 						/>

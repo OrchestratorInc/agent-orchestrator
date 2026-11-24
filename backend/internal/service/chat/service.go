@@ -892,6 +892,16 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 				ports.ErrChatResumeFailed, activeBranch.ProviderConversationID, cfg.ProviderConversationID)
 		}
 	}
+	// A new conversation starts with the Fast mode and auto-compaction picked
+	// for it; the block below that records its first settings saves them.
+	if cfg.ProviderConversationID == "" && cfg.ProviderSwitch == nil {
+		if cfg.FastMode {
+			conversation.Settings.FastMode = true
+		}
+		if cfg.AutoCompactWindow != "" {
+			conversation.Settings.AutoCompactWindow = cfg.AutoCompactWindow
+		}
+	}
 	// A switch to Claude Code or OpenCode sets its auto-compaction, Auto (empty) included.
 	if cfg.ProviderSwitch != nil && (cfg.Harness == domain.HarnessClaudeCode || domain.CanTurnOffAutoCompact(cfg.Harness)) {
 		// The switch's config is the source's, which may still carry what AO set
@@ -1407,6 +1417,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	cfg.ProviderScopeID = ""
 	cfg.AwakeReconnectTarget = nil
 	cfg.HistoryMode = ports.ChatHistoryImport
+	// The starting Fast mode and auto-compaction are saved with the
+	// conversation now; a restart must not put them back over a later change.
+	cfg.FastMode, cfg.AutoCompactWindow = false, ""
 	s.startConfigs[owner] = cloneStartConfig(cfg)
 	delete(s.awakeInterrupted, owner)
 	controller.start()

@@ -435,7 +435,10 @@ export function TurnSettingsBar({
 		? {
 			...autoCompact,
 			kind: compactKind,
-			title: `${t(compactKind === "toggle" ? "agentSwitch.autoCompactHintToggle" : "agentSwitch.autoCompactHint", { agent: agentLabel(harness ?? "") })} ${t("agentSwitch.autoCompactRestarts")}`,
+			title: [
+				t(compactKind === "toggle" ? "agentSwitch.autoCompactHintToggle" : "agentSwitch.autoCompactHint", { agent: agentLabel(harness ?? "") }),
+				...(autoCompact.beforeStart ? [] : [t("agentSwitch.autoCompactRestarts")]),
+			].join(" "),
 		}
 		: undefined;
 	// Given the picker's pick, so a setting changed here is a choice, not an abandoned menu.

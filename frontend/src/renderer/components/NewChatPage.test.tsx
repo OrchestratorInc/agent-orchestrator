@@ -38,6 +38,7 @@ const h = vi.hoisted(() => ({
 	modelWarningRetries: true,
 	offering: { ready: false, loaded: false, org: undefined as { id: string } | undefined, features: [] as string[], maxAttachmentBytes: undefined as number | undefined },
 	workspaces: [] as Array<Record<string, unknown>>,
+	autoCompact: undefined as { value?: "200k" | "1m" | "off"; beforeStart?: boolean; onChange: (value?: "200k" | "1m" | "off") => void } | undefined,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -45,11 +46,12 @@ vi.mock("@tanstack/react-router", () => ({
 	useRouter: () => ({ preloadRoute: async () => undefined, history: { canGoBack: () => false, back: vi.fn() } }),
 }));
 // What the settings bar's agent and model picker is given; the picker is tested on its own.
-const modelPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
+const modelPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined, autoCompact: undefined as { kind?: string; value?: string; title?: string; onChange: (value?: "200k" | "1m" | "off") => void } | undefined }));
 vi.mock("./chat/AgentSwitchPicker", async (original) => ({
 	...await original<typeof import("./chat/AgentSwitchPicker")>(),
-	AgentModelPicker: ({ current }: { current: PickerSource }) => {
+	AgentModelPicker: ({ current, autoCompact }: { current: PickerSource; autoCompact?: typeof modelPicker.autoCompact }) => {
 		modelPicker.current = current;
+		modelPicker.autoCompact = autoCompact;
 		return null;
 	},
 }));
@@ -85,6 +87,7 @@ vi.mock("./TaskComposer", () => ({
 		turnSettings: { model: h.model, reasoningEffort: "high", approvalMode: h.approvalMode },
 		approvalModes: h.approvalModes,
 		chooseTurnSettings: h.chooseTurnSettings,
+		autoCompact: h.autoCompact,
 		agent: { value: h.harness },
 		model: {},
 		effort: {},
@@ -130,6 +133,8 @@ beforeEach(() => {
 	h.chatModels = [{ id: "gpt-6", displayName: "GPT-6", default: true }];
 	h.model = "gpt-6";
 	modelPicker.current = undefined;
+	modelPicker.autoCompact = undefined;
+	h.autoCompact = undefined;
 	h.approvalMode = "auto";
 	h.approvalModes = undefined;
 	h.modelWarning = undefined;
@@ -766,6 +771,21 @@ describe("New Chat model menu", () => {
 		// The brief shows what was typed; the session's chat starts with Ultracode on.
 		expect(h.workspace?.localEchos).toEqual([expect.objectContaining({ text: "Fix the build" })]);
 		expect(queryClient.getQueryData(["session-launch-settings", "sess-1"])).toEqual(expect.objectContaining({ ultracode: true }));
+	});
+
+	it("offers Claude Code's compaction window before the task starts", () => {
+		h.harness = "claude-code";
+		h.chatModels = catalog;
+		h.model = "sonnet";
+		const onChange = vi.fn();
+		h.autoCompact = { value: "1m", beforeStart: true, onChange };
+		const queryClient = renderPage();
+		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
+		expect(modelPicker.autoCompact).toEqual(expect.objectContaining({ kind: "window", value: "1m" }));
+		// Nothing is running yet, so the hint does not warn of a restart.
+		expect(modelPicker.autoCompact?.title).not.toContain("restarts the agent");
+		modelPicker.autoCompact?.onChange("200k");
+		expect(onChange).toHaveBeenCalledWith("200k");
 	});
 
 	it("keeps the model this computer's agent defaults to in a local task's menu", () => {

@@ -42,6 +42,9 @@ type DelegateTaskInput struct {
 	TaskPreparation   domain.TaskPreparationToken
 	ClientRequestID   string
 	ClientRequestHash string
+	// FastMode and AutoCompactWindow are a Chat worker's starting choices.
+	FastMode          bool
+	AutoCompactWindow string
 }
 
 // DelegateTaskOutcome identifies the spawned worker. OrchestratorID remains
@@ -121,8 +124,10 @@ func (s *Service) DelegateTask(ctx context.Context, in DelegateTaskInput) (Deleg
 		// This is the desktop's new-task path: there is a UI waiting to navigate
 		// to the session. A Chat worker answers as soon as it is addressable and
 		// finishes starting in the background.
-		Async:           true,
-		TaskPreparation: in.TaskPreparation,
+		Async:             true,
+		TaskPreparation:   in.TaskPreparation,
+		FastMode:          in.FastMode,
+		AutoCompactWindow: in.AutoCompactWindow,
 	}, project)
 	if err != nil {
 		return DelegateTaskOutcome{}, toSpawnAPIError(err)

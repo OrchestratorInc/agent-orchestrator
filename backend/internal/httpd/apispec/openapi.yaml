@@ -21963,6 +21963,12 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        autoCompactWindow:
+          enum:
+          - 200k
+          - 1m
+          - "off"
+          type: string
         baseBranch:
           maxLength: 255
           type: string
@@ -21980,6 +21986,8 @@ components:
           type:
           - "null"
           - string
+        fastMode:
+          type: boolean
         mode:
           enum:
           - tui
@@ -27431,6 +27439,12 @@ components:
           items:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
+        autoCompactWindow:
+          enum:
+          - 200k
+          - 1m
+          - "off"
+          type: string
         baseBranch:
           maxLength: 255
           type: string
@@ -27447,6 +27461,8 @@ components:
         effort:
           maxLength: 32
           type: string
+        fastMode:
+          type: boolean
         harness:
           enum:
           - claude-code

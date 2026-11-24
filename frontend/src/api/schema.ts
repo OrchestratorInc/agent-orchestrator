@@ -7578,11 +7578,14 @@ export interface components {
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
+            /** @enum {string} */
+            autoCompactWindow?: "200k" | "1m" | "off";
             baseBranch?: string;
             branch?: string;
             brief: string;
             clientRequestId?: string;
             effort?: null | string;
+            fastMode?: boolean;
             /** @enum {string} */
             mode?: "tui" | "chat";
             model?: string;
@@ -9720,12 +9723,15 @@ export interface components {
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             async?: boolean;
             attachments?: components["schemas"]["AttachmentInput"][];
+            /** @enum {string} */
+            autoCompactWindow?: "200k" | "1m" | "off";
             baseBranch?: string;
             branch?: string;
             clientRequestId?: string;
             displayName?: string;
             displayNameExplicit?: boolean;
             effort?: string;
+            fastMode?: boolean;
             /** @enum {string} */
             harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "mastra-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau";
             issueId?: string;
