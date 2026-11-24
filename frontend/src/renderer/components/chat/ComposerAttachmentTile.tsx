@@ -183,14 +183,14 @@ function FileCard({ name, bytes, children }: { name: string; bytes?: number; chi
 	const Icon = artifactFileIcon({ kind: "file", path: name });
 	const details = [attachmentTypeLabel(name), bytes === undefined ? undefined : formatAttachmentSize(bytes)].filter(Boolean).join(" · ");
 	return (
-		<li title={name} className={cn(TILE_CLASS, "flex max-w-64 items-center gap-3 p-1.5 pr-4")}>
+		<li title={name} className={cn(TILE_CLASS, "flex w-50 items-center gap-2.5 p-1.5 pr-4")}>
 			{/* The icon shows until a preview paints over it, or when there is none. */}
-			<span aria-hidden="true" className={THUMB_CLASS}>
+			<span aria-hidden="true" className={cn(THUMB_CLASS, "bg-interactive-hover")}>
 				<Icon className="size-5 text-muted-foreground" />
 			</span>
 			<span className="flex min-w-0 flex-col gap-0.5 leading-tight">
-				<span className="truncate text-sm text-foreground">{name}</span>
-				{details ? <span className="truncate text-xs text-muted-foreground tabular-nums">{details}</span> : null}
+				<span className="truncate text-control text-foreground">{name}</span>
+				{details ? <span className="truncate text-sm-md text-muted-foreground tabular-nums">{details}</span> : null}
 			</span>
 			{children}
 		</li>
@@ -257,7 +257,7 @@ function TextThumbnail({ file, url }: { file?: File; url?: string }) {
 /** A file still being read or staged: a card-shaped placeholder that can be cancelled. */
 export function ComposerPendingTile({ name, statusLabel, cancelLabel, onCancel }: { name: string; statusLabel: string; cancelLabel: string; onCancel: () => void }) {
 	return (
-		<li role="status" aria-label={statusLabel} className={cn(TILE_CLASS, "flex w-44 items-center gap-3 p-1.5 pr-4")}>
+		<li role="status" aria-label={statusLabel} className={cn(TILE_CLASS, "flex w-50 items-center gap-2.5 p-1.5 pr-4")}>
 			<span aria-hidden="true" className={cn(THUMB_CLASS, "bg-surface motion-safe:animate-pulse")} />
 			<span aria-hidden="true" className="flex min-w-0 flex-1 flex-col gap-1.5">
 				<span className="relative truncate text-sm motion-safe:animate-pulse">

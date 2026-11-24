@@ -68,18 +68,18 @@ export function ChatAnnotationSummary({
 
 	const trigger = appearance === "card" ? (
 		<div
-			className={cn("relative flex h-14 w-fit max-w-72 min-w-0 shrink-0 self-start rounded-lg border border-border bg-interactive-hover transition-colors", !disabled && "has-[>button:first-child:hover]:bg-interactive-active", className)}
+			className={cn("relative flex h-14 w-50 min-w-0 shrink-0 self-start rounded-lg border border-border bg-interactive-hover transition-colors", !disabled && "has-[>button:first-child:hover]:bg-interactive-active", className)}
 		>
 			<PopoverTrigger asChild>
 				<Pressable
 					ref={triggerRef}
 					disabled={disabled}
 					aria-label={label}
-					className="flex h-full min-w-0 select-none items-center rounded-[inherit] px-3.5 text-left leading-tight focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+					className="flex h-full w-full min-w-0 select-none items-center rounded-[inherit] px-3.5 text-left leading-tight focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					<span className="flex min-w-0 flex-col gap-1">
-						<span className="truncate text-sm text-foreground">{annotationQuote(annotations[0]!, t)}</span>
-						<span className="truncate text-xs text-muted-foreground">
+						<span className="truncate text-control text-foreground">{annotationQuote(annotations[0]!, t)}</span>
+						<span className="truncate text-sm-md text-muted-foreground">
 							{annotations.length > 1 ? t("browser.annotationCount", { count: annotations.length }) : annotationSource(annotations[0]!, t)}
 						</span>
 					</span>
