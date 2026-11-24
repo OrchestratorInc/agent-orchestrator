@@ -4,9 +4,8 @@ import { Play, X } from "@/components/app-icons";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
 import { artifactFileIcon } from "../artifact-file-icon";
-import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Pressable } from "../ui/pressable";
-import { ChatImageDialog } from "./ChatImage";
+import { AttachmentLightbox } from "./AttachmentLightbox";
 import { readTextPrefix, TEXT_PREVIEW_BYTES } from "./AttachmentFilePreview";
 import { attachmentPreviewKind, attachmentTypeLabel, formatAttachmentSize } from "./messageAttachments";
 
@@ -92,8 +91,9 @@ export function ComposerAttachmentTile({
 	const previewKind = attachmentPreviewKind(name);
 	const localUrl = useFileObjectUrl(!imageSrc && (previewKind === "video" || previewKind === "pdf") ? file : undefined);
 	const src = localUrl ?? mediaUrl;
-	if (imageSrc) return <ImageTile src={imageSrc} name={name}>{remove}</ImageTile>;
-	if (previewKind === "video" && src) return <VideoTile src={src} name={name}>{remove}</VideoTile>;
+	const details = [attachmentTypeLabel(name), bytes === undefined ? undefined : formatAttachmentSize(bytes)].filter(Boolean).join(" · ") || undefined;
+	if (imageSrc) return <ImageTile src={imageSrc} name={name} details={details}>{remove}</ImageTile>;
+	if (previewKind === "video" && src) return <VideoTile src={src} name={name} details={details}>{remove}</VideoTile>;
 	return (
 		<FileCard name={name} bytes={bytes}>
 			{previewKind === "pdf" && src ? <PdfThumbnail src={src} name={name} /> : null}
@@ -103,7 +103,7 @@ export function ComposerAttachmentTile({
 	);
 }
 
-function ImageTile({ src, name, children }: { src: string; name: string; children: ReactNode }) {
+function ImageTile({ src, name, details, children }: { src: string; name: string; details?: string; children: ReactNode }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	return (
@@ -115,13 +115,13 @@ function ImageTile({ src, name, children }: { src: string; name: string; childre
 			>
 				<img src={src} alt="" className="block size-full object-cover" />
 			</Pressable>
-			<ChatImageDialog open={open} onOpenChange={setOpen} url={src} label={name} />
+			<AttachmentLightbox open={open} onOpenChange={setOpen} kind="image" src={src} name={name} details={details} />
 			{children}
 		</li>
 	);
 }
 
-function VideoTile({ src, name, children }: { src: string; name: string; children: ReactNode }) {
+function VideoTile({ src, name, details, children }: { src: string; name: string; details?: string; children: ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const [duration, setDuration] = useState<number>();
 	const [failed, setFailed] = useState(false);
@@ -159,14 +159,7 @@ function VideoTile({ src, name, children }: { src: string; name: string; childre
 					</span>
 				)}
 			</Pressable>
-			{open ? (
-				<Dialog open onOpenChange={setOpen}>
-					<DialogContent aria-describedby={undefined} className="flex h-[85vh] max-w-4xl flex-col gap-2 p-3">
-						<DialogTitle className="truncate text-sm">{name}</DialogTitle>
-						<video crossOrigin={mediaCrossOrigin(src)} controls autoPlay playsInline src={src} className="size-full min-h-0 object-contain" />
-					</DialogContent>
-				</Dialog>
-			) : null}
+			<AttachmentLightbox open={open} onOpenChange={setOpen} kind="video" src={src} name={name} details={details} />
 			{children}
 		</li>
 	);
