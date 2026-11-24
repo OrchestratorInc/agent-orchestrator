@@ -426,7 +426,9 @@ describe("following the newest message", () => {
 	// text into view just as the keyboard began to close.
 	it("does not scroll to text a tap has focused", () => {
 		expect(source).toContain("scrollsChildToFocus={false}");
-		expect(source).toContain("onEditFocus={revealEdit}");
+		// Through the list's stable forwarders, so the memoized turn keeps its render.
+		expect(source).toContain("onEditFocus={rowHandlers.revealEdit}");
+		expect(source).toContain("rowHandlers = useStableFunctionProps({ onDecide, onResolveInput, onRollback, onFork, startEdit, cancelEdit, submitEdit, revealEdit, toggleWorked })");
 	});
 
 	// With focus scrolling off, a request form's field reveals itself when it
