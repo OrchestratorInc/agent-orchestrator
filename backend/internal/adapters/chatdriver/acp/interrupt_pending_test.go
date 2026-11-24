@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -61,7 +62,7 @@ func TestACPInterruptCancelsPendingPermission(t *testing.T) {
 	if completed.TurnState != domain.TurnStateInterrupted {
 		t.Fatalf("turn state = %q, want interrupted", completed.TurnState)
 	}
-	if err := conversation.ResolveRequest(context.Background(), requestID, ports.ChatDecision{ID: "allow"}); err != ports.ErrChatRequestNotPending {
+	if err := conversation.ResolveRequest(context.Background(), requestID, ports.ChatDecision{ID: "allow"}); !errors.Is(err, ports.ErrChatRequestNotPending) {
 		t.Fatalf("late ResolveRequest error = %v, want ErrChatRequestNotPending", err)
 	}
 }
