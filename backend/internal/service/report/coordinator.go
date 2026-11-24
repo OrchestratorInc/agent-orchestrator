@@ -24,6 +24,10 @@ const ReportInterruptWindow = 3 * time.Minute
 // waits before its next delivery attempt.
 const OrchestratorBusyRetry = 30 * time.Second
 
+// NoOrchestratorRetry is how long a due batch waits before its next attempt
+// when its project has no active orchestrator to receive it.
+const NoOrchestratorRetry = 30 * time.Second
+
 // DefaultMaxDeliveryAttempts is the upper bound on delivery attempts for a
 // report batch before transitioning it to a terminal failed state.
 const DefaultMaxDeliveryAttempts = 10
@@ -39,6 +43,10 @@ var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a se
 // take the batch right now — its composer holds the operator's unsent draft —
 // and should be retried later rather than immediately.
 var ErrOrchestratorBusy = errors.New("orchestrator cannot take reports right now")
+
+// ErrNoActiveOrchestrator marks a due batch whose project has no orchestrator
+// to deliver it to. The batch is deferred, not dropped.
+var ErrNoActiveOrchestrator = errors.New("no active orchestrator")
 
 // ErrUnacknowledgedDelivery reports a delivery where the prompt was submitted to
 // the agent runtime, but acceptance confirmation was not observed.
@@ -359,12 +367,21 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return fmt.Errorf("project %s has no active orchestrator", projectID)
-	}
 	batch, err := c.claim(ctx, projectID)
 	if err != nil || len(batch.Reports) == 0 {
 		return err
+	}
+	if !ok {
+		// Left pending and due, the batch would stay the earliest report in
+		// the schedule, and every pass would stop on it before any other
+		// project's reports. Back off like a busy orchestrator, so other
+		// projects keep receiving reports and the expiry backstop applies.
+		cause := fmt.Errorf("%w: project %s", ErrNoActiveOrchestrator, projectID)
+		if c.isExpired(batch) {
+			return c.fail(ctx, batch, cause)
+		}
+		_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(NoOrchestratorRetry), cause.Error())
+		return deferErr
 	}
 	// Terminal orchestrators queue typed input during a turn, and a Ctrl-C
 	// there cancels the running turn or a prompt that was just submitted, so

@@ -52,21 +52,66 @@ func TestCoordinatorRoutesAtAttemptAndLeavesPendingWithoutOrchestrator(t *testin
 	store.add(reportAt("need", "worker", now, now, "decision"))
 	delivery := &coordinatorDelivery{}
 	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, RetryDelay: time.Second})
-	if delay, err := c.RunDue(context.Background()); err == nil || delay != time.Second {
-		t.Fatalf("no orchestrator delay = %v, err = %v", delay, err)
+	if delay, err := c.RunDue(context.Background()); err != nil || delay != NoOrchestratorRetry {
+		t.Fatalf("no orchestrator delay = %v, err = %v, want %v", delay, err, NoOrchestratorRetry)
 	}
-	if store.reports[0].DeliveryState != domain.ReportPending {
-		t.Fatalf("state = %s, want pending", store.reports[0].DeliveryState)
+	if got := store.reports[0]; got.DeliveryState != domain.ReportPending || !got.AvailableAt.Equal(now.Add(NoOrchestratorRetry)) || !strings.Contains(got.LastError, "no active orchestrator") {
+		t.Fatalf("report = %s at %v (%q), want pending, deferred by %v", got.DeliveryState, got.AvailableAt, got.LastError, NoOrchestratorRetry)
+	}
+	if len(delivery.submissions) != 0 {
+		t.Fatalf("submissions = %#v, want none without an orchestrator", delivery.submissions)
 	}
 	store.sessions = []domain.SessionRecord{
 		{ID: "old", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, IsTerminated: true, CreatedAt: now},
 		{ID: "replacement", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat, CreatedAt: now.Add(time.Second)},
 	}
+	now = now.Add(NoOrchestratorRetry)
 	if _, err := c.RunDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(delivery.submissions) != 1 || delivery.submissions[0].target != "replacement" {
 		t.Fatalf("submissions = %#v", delivery.submissions)
+	}
+}
+
+func TestCoordinatorProjectWithoutOrchestratorDoesNotBlockOtherProjects(t *testing.T) {
+	now := time.Date(2026, 11, 24, 4, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "healthy", ProjectID: "q", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI}}
+	orphan := reportAt("orphan", "worker", now, now, "nobody is listening")
+	orphan.State = domain.ReportNeedsInput
+	ready := reportAt("ready", "other-worker", now.Add(time.Second), now.Add(time.Second), "finished")
+	ready.ProjectID = "q"
+	store.add(orphan, ready)
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	now = now.Add(time.Second)
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.submissions) != 1 || delivery.submissions[0].target != "healthy" {
+		t.Fatalf("submissions = %#v, want the healthy project's report in the same pass", delivery.submissions)
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending {
+		t.Fatalf("orphan state = %s, want pending until an orchestrator exists", store.reports[0].DeliveryState)
+	}
+}
+
+func TestCoordinatorReportWithoutOrchestratorExpires(t *testing.T) {
+	now := time.Date(2026, 11, 24, 4, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.add(reportAt("orphan", "worker", now, now, "nobody is listening"))
+	delivery := &coordinatorDelivery{}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, Expiry: 10 * time.Minute})
+	for i := 0; i < 30; i++ {
+		_, _ = c.RunDue(context.Background())
+		now = now.Add(NoOrchestratorRetry)
+	}
+	if got := store.reports[0]; got.DeliveryState != domain.ReportFailed || !strings.Contains(got.LastError, "no active orchestrator") {
+		t.Fatalf("report = %s (%q), want failed after expiry", got.DeliveryState, got.LastError)
+	}
+	if c.UndeliveredCount("p") != 1 {
+		t.Fatalf("undelivered = %d, want 1", c.UndeliveredCount("p"))
 	}
 }
 
