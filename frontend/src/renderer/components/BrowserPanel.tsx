@@ -792,8 +792,16 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		const offCaptured = bridge.onRegionSelectCaptured((payload) => {
 			if (payload.viewId !== viewId) return;
 			setRegionSelectViewId("");
-			const added = sendImageToChat(chatKey, regionSelectFile(payload));
-			showGlobalToast(t(added ? "browser.selectAreaAdded" : "browser.selectAreaChatBusy"), undefined, "top-center");
+			const attached = sendImageToChat(chatKey, regionSelectFile(payload));
+			if (attached === false) {
+				showGlobalToast(t("browser.selectAreaChatBusy"), undefined, "top-center");
+				return;
+			}
+			// Added only once it is staged. A failed upload says why under the
+			// composer, which the Chat surface has just brought forward.
+			void attached.then((added) => {
+				if (added) showGlobalToast(t("browser.selectAreaAdded"), undefined, "top-center");
+			});
 		});
 		const offCancel = bridge.onRegionSelectCancel((payload) => {
 			if (payload.viewId !== viewId) return;

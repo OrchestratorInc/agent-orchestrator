@@ -10,7 +10,9 @@ import { sessionUiKey } from "./hosts";
 // forward when something arrives.
 type ReferenceListener = (reference: ChatFileReference) => boolean | void;
 type TextListener = (text: string) => boolean | void;
-type ImageListener = (file: File) => boolean | void;
+// False refuses the image now. A taken image answers once it is attached:
+// true, or false when staging it failed (the composer says why).
+type ImageListener = (file: File) => Promise<boolean> | false;
 type RevealListener = () => void;
 
 const composers = new Map<string, Set<ReferenceListener>>();
@@ -131,20 +133,21 @@ export function hasChatImageComposer(sessionId: string): boolean {
 	return (imageComposers.get(sessionId)?.size ?? 0) > 0;
 }
 
-/** An image is accepted only when a listening composer takes it as an attachment. */
-export function sendImageToChat(sessionId: string, file: File): boolean {
+/**
+ * Hands an image to the session's Chat composer. False when no composer can
+ * take it now; otherwise a promise that resolves true once it is attached.
+ */
+export function sendImageToChat(sessionId: string, file: File): Promise<boolean> | false {
 	const listeners = imageComposers.get(sessionId);
 	if (!listeners?.size) return false;
-	let accepted = false;
 	// One attachment per image: stop at the first composer that takes it.
 	for (const listener of listeners) {
-		if (listener(file) !== false) {
-			accepted = true;
-			break;
-		}
+		const attached = listener(file);
+		if (attached === false) continue;
+		for (const reveal of revealers.get(sessionId) ?? []) reveal();
+		return attached;
 	}
-	if (accepted) for (const reveal of revealers.get(sessionId) ?? []) reveal();
-	return accepted;
+	return false;
 }
 
 function subscribeAvailability(listener: () => void): () => void {

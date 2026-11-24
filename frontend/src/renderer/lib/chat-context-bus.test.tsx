@@ -88,16 +88,16 @@ describe("sendImageToChat", () => {
 		expect(sendImageToChat("image-availability", image())).toBe(false);
 		let stop = () => {};
 		act(() => {
-			stop = subscribeChatComposerImages("image-availability", () => true);
+			stop = subscribeChatComposerImages("image-availability", async () => true);
 		});
 		expect(result.current).toBe(true);
 		act(() => stop());
 		expect(result.current).toBe(false);
 	});
 
-	it("hands the image to one composer and reveals the chat", () => {
-		const first = vi.fn(() => true);
-		const second = vi.fn(() => true);
+	it("hands the image to one composer, reveals the chat, and answers once it is attached", async () => {
+		const first = vi.fn(async () => true);
+		const second = vi.fn(async () => true);
 		const reveal = vi.fn();
 		const stops = [
 			subscribeChatComposerImages("image-once", first),
@@ -105,7 +105,7 @@ describe("sendImageToChat", () => {
 			subscribeChatReveal("image-once", reveal),
 		];
 		const file = image();
-		expect(sendImageToChat("image-once", file)).toBe(true);
+		await expect(sendImageToChat("image-once", file)).resolves.toBe(true);
 		expect(first).toHaveBeenCalledWith(file);
 		expect(second).not.toHaveBeenCalled();
 		expect(reveal).toHaveBeenCalledTimes(1);

@@ -653,6 +653,10 @@ type BrowserEntry = {
   annotationTheme?: BrowserAnnotationModeInput["theme"];
   // The region snip overlay is up on this tab, waiting for a drag.
   regionSelecting?: boolean;
+  // The capture of a finished drag, while capturePage() is still pending. A
+  // cancel, a new snip, a navigation or a tab switch clears it, and a capture
+  // that finds it replaced reports nothing.
+  regionCapture?: object;
   documentGeneration: number;
   navigationGeneration: number;
   blockedNavigationGeneration: number;
@@ -3579,15 +3583,9 @@ export function createBrowserViewHost(
     // An agent tab shows the agent's page as its viewer's picture: a pick
     // would land on the viewer's canvas and report the viewer's address.
     if (input.enabled && entry.agentTab !== undefined) return;
-    if (!input.enabled) {
-      // Drop the open composer when leaving annotation mode. Keep saved
-      // batch annotations/markers so they reappear on the next entry.
-      const stored = annotationSessionFor(entry);
-      if (stored?.draft) {
-        delete stored.draft;
-        pushAnnotationState(options, entry, stored);
-      }
-    }
+    // One page tool at a time: Annotate takes over from a snip on this tab.
+    if (input.enabled) cancelRegionSelect(options, entry, "cancel");
+    else dropAnnotationDraft(entry);
     entry.annotationEnabled = input.enabled;
     if (input.theme) entry.annotationTheme = input.theme;
     const annotationSession = annotationSessionFor(entry);
@@ -3597,6 +3595,15 @@ export function createBrowserViewHost(
       ...(entry.annotationTheme ? { theme: entry.annotationTheme } : {}),
     });
     if (input.enabled) entry.view.webContents.focus();
+  };
+
+  // Drop the open composer when leaving annotation mode. Keep saved batch
+  // annotations/markers so they reappear on the next entry.
+  const dropAnnotationDraft = (entry: BrowserEntry): void => {
+    const stored = annotationSessionFor(entry);
+    if (!stored?.draft) return;
+    delete stored.draft;
+    pushAnnotationState(options, entry, stored);
   };
 
   const updateAnnotationState = (
@@ -3699,6 +3706,8 @@ export function createBrowserViewHost(
     const browserSession = entries.get(input.viewId);
     if (!browserSession || !browserSession.tabs.size) return false;
     const entry = activeEntry(browserSession);
+    // A cancel or a new snip replaces a drag whose capture is still pending.
+    entry.regionCapture = undefined;
     if (!input.enabled) {
       if (entry.regionSelecting) {
         entry.regionSelecting = false;
@@ -3713,6 +3722,19 @@ export function createBrowserViewHost(
     // blank tab has nothing to snip.
     if (entry.agentTab !== undefined || isBlankBrowserEntry(entry))
       return false;
+    // One page tool at a time: the snip takes over from Annotate on this tab.
+    if (entry.annotationEnabled) {
+      dropAnnotationDraft(entry);
+      entry.annotationEnabled = false;
+      entry.view.webContents.send("browser:annotation:setMode", {
+        enabled: false,
+      });
+      const canceled: BrowserAnnotationCancelPayload = {
+        viewId: entry.state.viewId,
+        reason: "disabled",
+      };
+      shellWebContents.send("browser:annotation:canceled", canceled);
+    }
     entry.regionSelecting = true;
     entry.view.webContents.send("browser:regionSelect:setMode", {
       enabled: true,
@@ -3766,6 +3788,8 @@ export function createBrowserViewHost(
       sendRegionSelectCanceled(viewId, "failed");
       return;
     }
+    const capture = {};
+    entry.regionCapture = capture;
     let image: NativeImage | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -3780,6 +3804,10 @@ export function createBrowserViewHost(
     } finally {
       if (timer) clearTimeout(timer);
     }
+    // Canceled, restarted, navigated or switched away while capturing: that
+    // already told the panel, and this result belongs to no snip.
+    if (entry.regionCapture !== capture) return;
+    entry.regionCapture = undefined;
     if (!stillShown()) {
       sendRegionSelectCanceled(viewId, "tab");
       return;
@@ -6288,11 +6316,17 @@ function cancelRegionSelect(
   entry: BrowserEntry,
   reason: BrowserRegionSelectCancelReason,
 ): void {
-  if (!entry.regionSelecting) return;
-  entry.regionSelecting = false;
-  entry.view.webContents.send("browser:regionSelect:setMode", {
-    enabled: false,
-  });
+  // A drag whose capture is still pending ends here too, so its late result
+  // can't land on the page the person moved to.
+  const capturing = entry.regionCapture !== undefined;
+  entry.regionCapture = undefined;
+  if (!entry.regionSelecting && !capturing) return;
+  if (entry.regionSelecting) {
+    entry.regionSelecting = false;
+    entry.view.webContents.send("browser:regionSelect:setMode", {
+      enabled: false,
+    });
+  }
   shellContents(options).send("browser:regionSelect:canceled", {
     viewId: entry.state.viewId,
     reason,

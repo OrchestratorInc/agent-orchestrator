@@ -2675,11 +2675,29 @@ describe("attachments", () => {
 		const sessionId = "browser-snip-image";
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/browser-selection.png"]);
 		renderComposer({ draftSessionId: sessionId, onStageAttachments: stage });
+		let attached: Promise<boolean> | false = false;
 		act(() => {
-			expect(sendImageToChat(sessionId, png("browser-selection.png"))).toBe(true);
+			attached = sendImageToChat(sessionId, png("browser-selection.png"));
 		});
-		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
+		// It answers only once the image is staged.
+		await expect(attached).resolves.toBe(true);
+		expect(stage).toHaveBeenCalledOnce();
 		expect(await screen.findByLabelText("Remove browser-selection.png")).toBeTruthy();
+	});
+
+	it("answers false for a taken image whose staging fails", async () => {
+		const sessionId = "browser-snip-stage-fails";
+		const stage = vi.fn().mockRejectedValue(new Error("upload refused"));
+		renderComposer({ draftSessionId: sessionId, onStageAttachments: stage });
+		let attached: Promise<boolean> | false = false;
+		act(() => {
+			attached = sendImageToChat(sessionId, png("browser-selection.png"));
+		});
+		expect(attached).not.toBe(false);
+		await act(async () => {
+			await expect(attached).resolves.toBe(false);
+		});
+		expect(screen.queryByLabelText("Remove browser-selection.png")).toBeNull();
 	});
 
 	it("does not take an image when it cannot attach files", () => {
@@ -3446,6 +3464,35 @@ describe("unavailable states", () => {
 
 		expect(onSend).not.toHaveBeenCalled();
 		expect(field).toHaveTextContent("follow up and more");
+	});
+
+	it("does not send a held message with a snip that arrived before the previous one landed", async () => {
+		const sessionId = "composer-held-then-snip";
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const props = { onSend, willQueue: true, draftSessionId: sessionId, holdAttachments: true };
+		const view = render(<ChatComposer busy {...props} />);
+		const field = screen.getByLabelText("Message the agent");
+
+		// Ending in a space keeps the snip's spacer from touching the text: the held
+		// bytes get no inline chip, so the draft reads exactly as it was held.
+		await typeInComposer(field, "follow up ");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
+		let attached: Promise<boolean> | false = false;
+		act(() => {
+			attached = sendImageToChat(sessionId, png("browser-selection.png"));
+		});
+		await act(async () => {
+			await expect(attached).resolves.toBe(true);
+		});
+		expect(field.textContent).toBe("follow up ");
+
+		view.rerender(<ChatComposer {...props} />);
+		await act(async () => {});
+
+		expect(field.textContent).toBe("follow up ");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(screen.getByLabelText("Remove browser-selection.png")).toBeTruthy();
 	});
 });
 

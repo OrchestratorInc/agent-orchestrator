@@ -803,6 +803,74 @@ describe("region snip", () => {
 		expect(regionMessages(sent)).toEqual([{ channel: "browser:regionSelect:canceled", payload: { viewId, reason: "navigation" } }]);
 	});
 
+	const pngImage = (data: string) => ({
+		isEmpty: () => false,
+		toJPEG: () => Buffer.from(data),
+		toPNG: () => Buffer.from(data),
+		getSize: () => ({ width: 50, height: 50 }),
+		resize: vi.fn(),
+	});
+	type SnipWebContents = Awaited<ReturnType<typeof startSnip>>["webContents"];
+	type Capture = Awaited<ReturnType<SnipWebContents["capturePage"]>>;
+	const deferredCapture = (webContents: SnipWebContents) => {
+		let resolve: (image: Capture) => void = () => undefined;
+		webContents.capturePage.mockReturnValueOnce(new Promise<Capture>((done) => (resolve = done)));
+		return (image: ReturnType<typeof pngImage>) => resolve(image);
+	};
+	const flush = () => new Promise((done) => setTimeout(done, 0));
+
+	it("drops a capture that finishes after the snip was canceled and started again", async () => {
+		const { invoke, send, sent, viewId, webContents } = await startSnip();
+		const finishFirst = deferredCapture(webContents);
+		await invoke("browser:regionSelect:setMode", { viewId, enabled: true });
+		send("browser:regionSelect:select", 99, { rect: { x: 0, y: 0, width: 50, height: 50 } });
+		await vi.waitFor(() => expect(webContents.capturePage).toHaveBeenCalledOnce());
+
+		await invoke("browser:regionSelect:setMode", { viewId, enabled: false });
+		expect(await invoke("browser:regionSelect:setMode", { viewId, enabled: true })).toBe(true);
+		finishFirst(pngImage("canceled-snip"));
+		await flush();
+		expect(regionMessages(sent)).toEqual([]);
+
+		// The new snip still works and reports only its own capture.
+		webContents.capturePage.mockResolvedValueOnce(pngImage("new-snip"));
+		send("browser:regionSelect:select", 99, { rect: { x: 0, y: 0, width: 50, height: 50 } });
+		await vi.waitFor(() =>
+			expect(regionMessages(sent)).toEqual([
+				{
+					channel: "browser:regionSelect:captured",
+					payload: { viewId, image: { mimeType: "image/png", data: Buffer.from("new-snip").toString("base64") } },
+				},
+			]),
+		);
+	});
+
+	it("ends a pending capture when the page navigates, and drops its late result", async () => {
+		const { invoke, send, sent, viewId, webContents } = await startSnip();
+		const finish = deferredCapture(webContents);
+		await invoke("browser:regionSelect:setMode", { viewId, enabled: true });
+		send("browser:regionSelect:select", 99, { rect: { x: 0, y: 0, width: 50, height: 50 } });
+		await vi.waitFor(() => expect(webContents.capturePage).toHaveBeenCalledOnce());
+
+		await invoke("browser:navigate", { viewId, url: "https://other.test/" });
+		finish(pngImage("old-page"));
+		await flush();
+		expect(regionMessages(sent)).toEqual([{ channel: "browser:regionSelect:canceled", payload: { viewId, reason: "navigation" } }]);
+	});
+
+	it("keeps Snip and Annotate from being on together", async () => {
+		const { invoke, sent, viewId, webContents } = await startSnip();
+		await invoke("browser:annotation:setMode", { viewId, enabled: true });
+		expect(await invoke("browser:regionSelect:setMode", { viewId, enabled: true })).toBe(true);
+		expect(webContents.send).toHaveBeenCalledWith("browser:annotation:setMode", { enabled: false });
+		expect(sent).toContainEqual({ channel: "browser:annotation:canceled", payload: { viewId, reason: "disabled" } });
+
+		await invoke("browser:annotation:setMode", { viewId, enabled: true });
+		expect(webContents.send).toHaveBeenCalledWith("browser:regionSelect:setMode", { enabled: false });
+		expect(regionMessages(sent)).toEqual([{ channel: "browser:regionSelect:canceled", payload: { viewId, reason: "cancel" } }]);
+		expect(webContents.send).toHaveBeenLastCalledWith("browser:annotation:setMode", expect.objectContaining({ enabled: true }));
+	});
+
 	it("takes the overlay down when the shell turns it off", async () => {
 		const { invoke, sent, viewId, webContents } = await startSnip();
 		await invoke("browser:regionSelect:setMode", { viewId, enabled: true });

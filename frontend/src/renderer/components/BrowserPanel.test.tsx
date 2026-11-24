@@ -877,7 +877,7 @@ describe("BrowserPanel", () => {
 		expect(snip).toBeDisabled();
 		let stop = () => {};
 		act(() => {
-			stop = subscribeChatComposerImages("sess-1", () => true);
+			stop = subscribeChatComposerImages("sess-1", async () => true);
 		});
 		expect(snip).toBeEnabled();
 		act(() => stop());
@@ -896,7 +896,7 @@ describe("BrowserPanel", () => {
 				deliverCapture = undefined;
 			};
 		});
-		const received = vi.fn((_file: File) => true);
+		const received = vi.fn(async (_file: File) => true);
 		const stop = subscribeChatComposerImages("sess-1", received);
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
@@ -919,6 +919,33 @@ describe("BrowserPanel", () => {
 		stop();
 	});
 
+	it("says the snip was added only once the chat has staged it", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/" };
+		let deliverCapture: ((payload: BrowserRegionSelectCapturedPayload) => void) | undefined;
+		window.ao!.browser.setRegionSelectMode = vi.fn(async () => true);
+		window.ao!.browser.onRegionSelectCaptured = vi.fn((listener: (payload: BrowserRegionSelectCapturedPayload) => void) => {
+			deliverCapture = listener;
+			return () => {
+				deliverCapture = undefined;
+			};
+		});
+		let finishStaging: (added: boolean) => void = () => undefined;
+		const stop = subscribeChatComposerImages(
+			"sess-1",
+			() => new Promise<boolean>((resolve) => (finishStaging = resolve)),
+		);
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		await userEvent.click(screen.getByRole("button", { name: "Select an area to add to chat" }));
+		await screen.findByRole("button", { name: "Cancel area selection" });
+
+		act(() => deliverCapture?.({ viewId: "42:sess-1", image: { mimeType: "image/png", data: btoa("png-bytes") } }));
+		expect(useUiStore.getState().globalToast).toBeNull();
+		// The upload is refused: the composer says why, and the panel claims nothing.
+		await act(async () => finishStaging(false));
+		expect(useUiStore.getState().globalToast).toBeNull();
+		stop();
+	});
+
 	it("takes the snip overlay back off when the panel leaves before the start is answered", async () => {
 		hookState.navState = { ...hookState.navState, url: "https://example.test/" };
 		let answerStart: ((started: boolean) => void) | undefined;
@@ -930,7 +957,7 @@ describe("BrowserPanel", () => {
 				: Promise.resolve(false),
 		);
 		window.ao!.browser.setRegionSelectMode = setRegionSelectMode;
-		const stop = subscribeChatComposerImages("sess-1", () => true);
+		const stop = subscribeChatComposerImages("sess-1", async () => true);
 		const { unmount } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
 		await userEvent.click(screen.getByRole("button", { name: "Select an area to add to chat" }));

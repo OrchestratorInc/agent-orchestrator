@@ -2419,10 +2419,12 @@ export const ChatComposer = memo(function ChatComposer({
 			files.some((file) => file.type.startsWith("image/"))
 			? editor.current?.reserveImages()
 			: undefined;
-		void fileAttachments.addFiles(files).then((added) => {
-			if (!reservation) return;
-			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
-				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		return fileAttachments.addFiles(files).then((added) => {
+			if (reservation) {
+				editor.current?.fillImages(reservation, added.flatMap((attachment) =>
+					attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+			}
+			return added;
 		});
 	}
 
@@ -2435,21 +2437,27 @@ export const ChatComposer = memo(function ChatComposer({
 		// carrying both should still paste its text.
 		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
 		if (!hasText) event.preventDefault();
-		attachFiles(files);
+		void attachFiles(files);
 	}
 
 	// An image from another panel (the Browser panel's region snip) joins the
 	// draft the way a pasted one does, under the same conditions.
-	const acceptImageRef = useRef<(file: File) => boolean>(() => false);
+	const acceptImageRef = useRef<(file: File) => Promise<boolean> | false>(() => false);
 	// Set at commit, so the listener never runs a callback from a discarded render.
 	useLayoutEffect(() => {
 		acceptImageRef.current = (file) => {
 			if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return false;
 			if (fileAttachments.attachments.length + fileAttachments.pendingAttachments.length >= MAX_ATTACHMENTS) return false;
-			attachFiles([file]);
+			// A held send only compares text, so it would carry this image out
+			// unasked. The snip stays in the draft until the person sends it.
+			if (heldDuringSubmit.current || heldSubmitRef.current) {
+				heldDuringSubmit.current = null;
+				setHeldSubmit(null);
+			}
+			const attached = attachFiles([file]).then((added) => added.length > 0);
 			// The Chat surface may only now be coming forward.
 			window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
-			return true;
+			return attached;
 		};
 	});
 	useEffect(() => {
@@ -2464,7 +2472,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (files.length === 0) return;
 		event.preventDefault();
 		event.stopPropagation();
-		attachFiles(files);
+		void attachFiles(files);
 	}
 
 	// Only modifier transitions re-render: React bails out when the value is unchanged.
@@ -2811,7 +2819,7 @@ export const ChatComposer = memo(function ChatComposer({
 									disabled={controlsDisabled}
 									onChange={(event) => {
 										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
-											attachFiles(Array.from(event.target.files ?? []));
+											void attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
 										event.target.value = "";
