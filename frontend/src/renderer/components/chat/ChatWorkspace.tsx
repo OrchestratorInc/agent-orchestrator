@@ -1870,6 +1870,15 @@ function ChatWorkspaceContent({
 	const stableSettings = useStableValue(snapshot.settings);
 	// Claude Code compacts at the window picked for it, well before its model's full context.
 	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
+	// The meter's compact button: the same action and refusals as typing /compact.
+	const meterCompact = newWorkDisabled || snapshot.controller.state === "hibernated" || compactUnavailable === "This agent cannot compact its history"
+		? undefined
+		: onCompact;
+	const meterCompactBlocked = durableTurn
+		? "Stop the current turn before compacting."
+		: compacting
+			? "Conversation history is already being compacted."
+			: compactUnavailable;
 	const stableUsage = useStableValue(snapshot.usage);
 	const { t } = useTranslation();
 	// Near the account's usage limit, a warning sign sits right of the model; its tooltip says why.
@@ -1894,7 +1903,7 @@ function ChatWorkspaceContent({
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
-					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
+					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} onCompact={meterCompact} compactBlockedReason={meterCompactBlocked} /> : undefined}
 					afterPicker={quotaSign}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
@@ -1942,6 +1951,8 @@ function ChatWorkspaceContent({
 			models,
 			agentSwitch,
 			stableUsage,
+			meterCompact,
+			meterCompactBlocked,
 			nearQuota,
 			newWorkDisabled,
 			session?.provisionState,
@@ -2532,7 +2543,7 @@ function ChatWorkspaceContent({
 										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
-											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
+											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} onCompact={meterCompact} compactBlockedReason={meterCompactBlocked} />}
 											{/* Normally right of the model control; with no settings bar, beside the ring. */}
 											{composerSettings ? null : quotaSign}
 											<QuotaStatus quota={runningQuota} />
