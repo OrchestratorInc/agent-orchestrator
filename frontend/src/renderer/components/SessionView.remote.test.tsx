@@ -162,6 +162,33 @@ it("keeps a remote chat readable and open for typing while its host is away, and
 	expect(localPost).not.toHaveBeenCalled();
 });
 
+it("waits for the next list read before calling a session that just moved here missing", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	let release = () => {};
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const path = new URL((input instanceof Request ? input : new Request(input)).url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) {
+			await gate;
+			return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", mode: "chat", prs: [] }] });
+		}
+		if (path.endsWith("/conversation")) return Response.json(conversationBody());
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	queryClient.setQueryData(remoteWorkspaceQueryKey("box-a"), [], { updatedAt: 0 });
+	renderRemoteSession(queryClient);
+	await waitFor(() => expect(queryClient.isFetching({ queryKey: remoteWorkspaceQueryKey("box-a") })).toBe(1));
+	expect(screen.queryByTestId("session-missing")).not.toBeInTheDocument();
+	await act(async () => { release(); });
+	expect(await screen.findByTestId("session-detail")).toBeInTheDocument();
+	expect(screen.queryByTestId("session-missing")).not.toBeInTheDocument();
+});
+
 it.each(["disconnected", "upstream unavailable"])("pauses provider polling while the host is %s and resumes after reconnect", async (outage) => {
 	localGet.mockReset();
 	localPost.mockReset();

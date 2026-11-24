@@ -2901,7 +2901,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// row. Keep the session surface (and its switch control) mounted while the
 	// direct control-plane lookup is in flight; only show "not found" after
 	// both sources have settled.
-	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
+	// A session that just moved here is missing from the list read before it arrived; wait for the first read after that.
+	const remoteListSettled = !remoteSessionQuery.isFetching || remoteSessionQuery.isFetchedAfterMount;
+	if (!session && (hostId ? !remoteSessionQuery.isLoading && remoteListSettled : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
 		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
 			: hostUnreachable
