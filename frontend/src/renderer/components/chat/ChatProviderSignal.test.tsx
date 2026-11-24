@@ -217,7 +217,7 @@ describe("auto review", () => {
 
 	it("shows the risk the provider assessed", () => {
 		render(<ActivityRow activity={review} />);
-		expect(screen.getByTitle("Risk assessed as low")).toBeInTheDocument();
+		expect(screen.getByText("low")).toBeInTheDocument();
 	});
 
 	it("calls a denial a denial", () => {
@@ -769,11 +769,13 @@ describe("file changes", () => {
 		expect(screen.getByText("modified")).toBeInTheDocument();
 	});
 
-	it("shows the full path when hovering an edited basename", async () => {
+	it("keeps an edited file's chip free of a hover tooltip", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={edit} />);
 		await user.click(screen.getByRole("button", { name: /Edited 2 files/ }));
 		await user.hover(screen.getByText("a.ts"));
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("src/a.ts");
+		// A row is there to scan; its text opens no tooltip.
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		expect(screen.queryByRole("tooltip")).toBeNull();
 	});
 });

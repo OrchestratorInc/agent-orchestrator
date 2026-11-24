@@ -2102,7 +2102,7 @@ function GenericActivityRow({
 				<span className={compactSummary ? "flex min-w-0 items-baseline gap-2" : "contents"}>
 				{singleEdit ? (
 					<span className="flex min-w-0 items-center gap-1 text-control font-normal">
-						<span className="shrink-0 text-muted-foreground">
+						<span className="activity-row-label shrink-0 text-muted-foreground">
 							{stepTense(activity) === "live"
 								? liveFileChangeVerb(singleEdit.status ?? "modified")
 								: fileChangeVerb(singleEdit.status ?? "modified")}
@@ -2122,8 +2122,7 @@ function GenericActivityRow({
 				) : compactSummary && commandTitle ? (
 					<span
 						data-command-title=""
-						className="activity-row-label min-w-0 truncate font-mono text-xs text-muted-foreground group-hover/activity:text-foreground"
-						title={commandTitle}
+						className="activity-row-label min-w-0 truncate font-mono text-xs text-muted-foreground"
 					>
 						{commandTitle}
 					</span>
@@ -2136,7 +2135,7 @@ function GenericActivityRow({
 							<ActivityTitle text={label} />
 						</strong>
 						{" "}
-						<StepTarget text={path} title={pathTitle} file={stepTargetFile(stepIconName, path, pathTitle)} />
+						<StepTarget text={path} file={stepTargetFile(stepIconName, path, pathTitle)} />
 					</span>
 				) : (
 					<strong
@@ -2151,19 +2150,17 @@ function GenericActivityRow({
 										? "font-normal text-muted-foreground"
 										: "text-foreground"),
 						)}
-						title={compactSummary ? undefined : noticeLabel ?? label}
 					>
 						<ActivityTitle text={noticeLabel ?? label} />
 					</strong>
 				)}
 				{noticeDetail ? (
-					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70" title={noticeDetail}>
+					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70">
 						{noticeDetail}
 					</span>
 				) : path && !singleEdit && !compactSummary ? (
 					<span
 						className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground group-hover/activity:text-foreground"
-						title={path}
 					>
 						{path}
 					</span>
@@ -2419,7 +2416,7 @@ function CommandExploreBody({ activity, showCommand = true }: { activity: Conver
 
 			{command && showCommand ? (
 				<div data-command-line="" className="group/cmdline flex min-w-0 items-center">
-					<pre data-no-swipe-nav="" className="min-w-0 truncate font-mono text-xs leading-normal text-muted-foreground" title={command}>
+					<pre data-no-swipe-nav="" className="min-w-0 truncate font-mono text-xs leading-normal text-muted-foreground">
 						<span aria-hidden="true" className="select-none text-passive">$ </span>
 						{command}
 					</pre>
@@ -2989,7 +2986,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 							{tool}
 						</strong>
 						{" "}
-						<StepTarget text={step.target} title={step.targetTitle} file={stepTargetFile(step.icon, step.target, step.targetTitle)} />
+						<StepTarget text={step.target} file={stepTargetFile(step.icon, step.target, step.targetTitle)} />
 					</span>
 				) : (
 					<strong
@@ -2997,13 +2994,12 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 							"activity-row-label min-w-0 truncate text-control font-normal",
 							failed ? "text-destructive" : "text-muted-foreground",
 						)}
-						title={tool}
 					>
 						<span>{tool}</span>
 					</strong>
 				)}
 				{sourceLabel ? (
-					<span className="min-w-0 flex-1 truncate text-control text-muted-foreground group-hover/activity:text-foreground">
+					<span className="activity-row-target min-w-0 flex-1 truncate text-control text-muted-foreground">
 						{sourceLabel}
 					</span>
 				) : null}
@@ -3023,7 +3019,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 				{hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
-						className={cn("size-3 shrink-0 self-center text-muted-foreground/40 transition-transform", open && "rotate-90")}
+						className={cn("size-3 shrink-0 self-center text-muted-foreground/40 transition-transform group-hover/run:text-muted-foreground", open && "rotate-90")}
 					/>
 				) : null}
 				</span>
@@ -3129,7 +3125,6 @@ function AOToolRow({ view }: { view: AOToolView }) {
 						"activity-row-label min-w-0 truncate text-control font-normal",
 						failed ? "text-destructive" : "text-muted-foreground",
 					)}
-					title={view.label}
 				>
 					<span>{view.label}</span>
 				</strong>
@@ -3384,10 +3379,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				<strong className="shrink-0 font-medium text-foreground">
 					{denied ? "Auto-declined" : "Auto-approved"}
 				</strong>
-				<span
-					className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground"
-					title={activity.summary}
-				>
+				<span className="activity-row-label min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground">
 					<ActivityTitle text={shortenPaths(activity.summary)} />
 				</span>
 				{detail?.riskLevel ? (
@@ -3396,7 +3388,6 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 							"shrink-0 text-xs",
 							RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground",
 						)}
-						title={`Risk assessed as ${detail.riskLevel}`}
 					>
 						{detail.riskLevel}
 					</span>
@@ -4178,12 +4169,11 @@ function ResolvedApprovalRow({
 	const decision = typeof detail?.decision === "string" ? detail.decision : undefined;
 	const decisionKind = activity.decisions?.find((option) => option.id === decision)?.kind;
 	const outcome = resolvedApprovalOutcome(activity.status, decision, detail?.resolvedBy, decisionKind);
-	const title = detail?.cwd ? `${command}\n${detail.cwd}` : command;
 
 	return (
 		<div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md border border-border/80 bg-surface/45 px-2.5 py-1.5 text-xs text-muted-foreground">
 			<strong className="shrink-0 font-medium text-foreground">{outcome.label}</strong>
-			<span className="min-w-0 truncate text-right font-mono" title={title}>
+			<span className="min-w-0 truncate text-right font-mono">
 				{command}
 			</span>
 		</div>
@@ -4570,6 +4560,15 @@ function FileLocationLabel({
 	className?: string;
 }) {
 	const location = fileLocationLabel(locationPath ?? path, locationOldPath ?? oldPath);
+	// A row's chip is there to scan, so it gets no tooltip.
+	if (chip) {
+		return (
+			<span className={cn(STEP_FILE_CHIP_CLASS, className)} data-step-file-chip="" title="">
+				<ChatFileIcon path={path} />
+				<span className="min-w-0 truncate">{fileBasename(path)}</span>
+			</span>
+		);
+	}
 
 	return (
 		<Tooltip>
@@ -4607,27 +4606,19 @@ function FileLocationLabel({
  * tooltip holds the whole path.
  */
 const STEP_FILE_CHIP_CLASS =
-	"inline-flex min-w-0 items-center gap-[5px] rounded bg-surface py-[2px] pr-[5px] pl-1 text-xs text-foreground/65 outline-none";
+	"activity-row-target inline-flex min-w-0 items-center gap-[5px] rounded bg-surface py-[2px] pr-[5px] pl-1 text-xs text-foreground/65 outline-none";
 
-function StepTarget({ text, title, file }: { text: string; title?: string; /** Set when the target is one file: the path its icon comes from. */ file?: string }) {
+function StepTarget({ text, file }: { text: string; /** Set when the target is one file: the path its icon comes from. */ file?: string }) {
 	const label = file ? (
 		<span data-step-file-chip="" className={STEP_FILE_CHIP_CLASS} title="">
 			<ChatFileIcon path={file} />
 			<span className="min-w-0 truncate">{text}</span>
 		</span>
 	) : (
-		<span className="min-w-0 truncate text-control text-foreground/65 outline-none" title="">{text}</span>
+		<span className="activity-row-target min-w-0 truncate text-control text-foreground/65 outline-none" title="">{text}</span>
 	);
-	// A short target that is shown whole needs no tooltip repeating it.
-	if ((!title || title === text) && text.length <= 48) return label;
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>{label}</TooltipTrigger>
-			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
-				{shortenPaths(title ?? text)}
-			</TooltipContent>
-		</Tooltip>
-	);
+	// No tooltip: a row's text is there to scan, and copy has the whole of it.
+	return label;
 }
 
 /** The path a step's target names when it is exactly one file, for its chip. */

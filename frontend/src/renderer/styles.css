@@ -2958,7 +2958,10 @@ html.sidebar-reordering * {
 	color: var(--color-text-primary);
 }
 
-.activity-row-toggle:hover .activity-row-label {
+/* A row lights all its text from anywhere on its line: its label, what it acted on,
+   and, for a row titled with its command, past the command over copy and the chevron. */
+.activity-row-toggle:hover :is(.activity-row-label, .activity-row-target),
+.group\/cmdrow:hover :is(.activity-row-label, .activity-row-target) {
 	color: var(--color-text-primary);
 }
 
