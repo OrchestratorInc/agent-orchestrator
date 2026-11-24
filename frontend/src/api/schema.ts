@@ -6011,8 +6011,14 @@ export interface components {
              * @enum {string}
              */
             availability: "ready" | "unavailable";
+            /** @description True when the task's command writes a log that output leaves out because it can't be shown as this run's: a later run writes the same file, the file was written after the run ended, or the run's final log isn't kept yet and no earlier read of it was saved. Output then holds only what the task printed itself. */
+            logOmitted?: boolean;
+            /** @description True when the task's command writes its output to a log file outside the session's workspace, which is not read. */
+            logOutsideWorkspace?: boolean;
             /** @description The most recent output: at most the last 200 lines and 64 KB, with terminal escapes and control characters removed. */
             output: string;
+            /** @description The run this output belongs to, when the provider gives runs their own ID. Output for another run of a reused task ID is not the requested run's. */
+            runId?: string;
             sessionId: string;
             /** @description True when the provider stopped sending this task's output, so anything it printed since is missing. */
             stale?: boolean;
