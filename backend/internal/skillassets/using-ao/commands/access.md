@@ -90,6 +90,10 @@ ao token revoke <id-or-name>
   differ in what the agent can do by mistake.
 - A session that a token starts is a session like any other: it has no limit,
   and it keeps running when the token is revoked.
+- What a token sends (a message, a steer, the prompt of a session it starts)
+  is marked `[via <token name>]` by the daemon, so the app shows it under the
+  token's name and not as the user's own words. A token cannot name a session
+  as its sender or as the parent of a session it starts.
 - A name cannot start with `tok_`: that prefix marks a token id, and `revoke`
   takes either.
 - An empty `--project` value is refused: an empty limit would mean every project.

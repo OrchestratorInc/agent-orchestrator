@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,6 +39,32 @@ func grantResponse(grant access.Grant, now time.Time) AccessGrantResponse {
 		out.ExpiresAt, out.Ended = &expiresAt, !now.Before(expiresAt)
 	}
 	return out
+}
+
+var relayPrefix = regexp.MustCompile(`^\[via [^\]#\n]{1,60}?( #[^\]\n]*)?\]\s*`)
+
+// relayed marks text that an agent token sent as relayed through that token, in
+// the "[via <name>]" form the app draws under the tool's name. The second
+// result reports whether the caller is a token.
+func relayed(r *http.Request, text string) (string, bool) {
+	who := access.CallerFrom(r.Context())
+	if who.Kind != access.CallerToken {
+		return text, false
+	}
+	if strings.TrimSpace(text) == "" {
+		return text, true
+	}
+	name := []rune(strings.Map(func(c rune) rune {
+		if c == ']' || c == '#' {
+			return '-'
+		}
+		return c
+	}, who.Name))
+	tag := ""
+	if match := relayPrefix.FindStringSubmatch(text); match != nil {
+		tag, text = match[1], text[len(match[0]):]
+	}
+	return "[via " + string(name[:min(len(name), 60)]) + tag + "] " + text, true
 }
 
 func pathValue(r *http.Request, name string) string {

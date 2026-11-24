@@ -362,6 +362,9 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
+	if text, token := relayed(r, in.Prompt); token {
+		in.Prompt, in.ParentSessionID = text, ""
+	}
 	if !validClientRequestID(in.ClientRequestID) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "INVALID_CLIENT_REQUEST_ID", "clientRequestId must be 1-128 visible characters", nil)
 		return
@@ -2363,6 +2366,9 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
+	}
+	if text, token := relayed(r, in.Message); token {
+		in.Message, in.SenderSessionID = text, ""
 	}
 	if in.Message == "" {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MESSAGE_REQUIRED", "Message is required", nil)
