@@ -31,6 +31,7 @@ import type { DashboardPR } from "../../lib/api";
 import { hostedRowKey, type HostedSession } from "../../lib/hostedRows";
 import { useArchivedPRs, withArchivedPRSessions, type ArchivedPRSource } from "../../lib/archivedPRs";
 import type { ArchivedPRState } from "../../lib/api";
+import { useLastVerifiedConfigs } from "../../lib/useLastVerifiedConfig";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -160,6 +161,9 @@ function PRList() {
 		return config ? [{ config, sessionId: session.id }] : [];
 	}), [shownRows, summaryReach, archivedKeys, configForHost]);
 	const summaries = usePRSummaries(summaryTargets);
+	// Cards read their detail with the last verified connection of their machine,
+	// so it stays through an app switch. Fetches above use only the live one.
+	const summaryConfigFor = useLastVerifiedConfigs(configForHost);
 	// A cloud session's detail comes from Orchestrator Cloud, not a daemon,
 	// stamped with its pull requests' states: one merged or closed in Cloud
 	// reads afresh rather than keeping its open card until the reuse runs out.
@@ -238,7 +242,7 @@ function PRList() {
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
 				renderSectionHeader={({ section }) => <PRSectionHeader label={section.label} count={section.data.length} />}
 				renderItem={({ item: { pr, session }, index, section }) => {
-					const config = configForHost(session.hostId);
+					const config = summaryConfigFor(session.hostId);
 					return <PRCard
 						pr={pr}
 						session={session}

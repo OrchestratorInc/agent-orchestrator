@@ -149,6 +149,25 @@ it("redraws only the card whose rich summary has loaded", () => {
 	expect(fixture.cardRenders).toHaveLength(1);
 	expect(fixture.cardRenders[0]).toContain("Rich PR title");
 });
+// The app drops a machine's verified connection on every app switch, and the
+// cards read their detail through it: they fell back to their thin version
+// until the connection was verified again.
+it("keeps a card's rich summary while its machine's connection is away", () => {
+	fixture.summaries.set("mac", { number: 7, state: "open", title: "Rich PR title", changedFiles: 0, additions: 0, deletions: 0 } as SessionPRSummary);
+	act(() => { renderer = create(<PRsScreen />); });
+	expect(fixture.cardRenders.some((label) => label.includes("Rich PR title"))).toBe(true);
+	fixture.cardRenders = [];
+	const connected = fixture.configForHost.getMockImplementation()!;
+	try {
+		fixture.configForHost.mockImplementation(((hostId: string) => hostId === "mac" ? null : connected()) as never);
+		fixture.hostStates = fixture.hostStates.map((host) => host.hostId === "mac" ? { ...host, connection: "closed" } : host);
+		act(() => renderer!.update(<PRsScreen />));
+		expect(fixture.cardRenders.filter((label) => !label.includes("Rich PR title") && label.includes("Task on mac"))).toEqual([]);
+	} finally {
+		fixture.configForHost.mockImplementation(connected);
+	}
+});
+
 it("scopes PRs to the requested host and project", () => {
 	fixture.params = { hostId: "windows", projectId: "same-project" };
 	act(() => { renderer = create(<PRsScreen />); });
