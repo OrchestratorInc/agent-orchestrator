@@ -900,6 +900,11 @@ func (s *Service) LiveLease(ctx context.Context, id domain.SessionID) (Lease, bo
 	}
 	if listed, found := s.listedDevice(ctx, l.Device); found {
 		l.Device.Booted = listed.Booted
+		// Viewers poll this while they watch: a reboot outside AO is noticed
+		// within seconds, before anyone taps into a dead touch input.
+		if watcher, ok := s.cfg.Provider.(ports.DeviceBootWatcher); ok && listed.Booted {
+			watcher.NoteBooted(listed)
+		}
 	}
 	s.mu.Lock()
 	if s.booting[deviceKey(l.Device)] {

@@ -80,6 +80,15 @@ type Provider struct {
 	// in the hub, so a restarted hub would stream at full size (~90 Mbit/s for
 	// a simulator) until something asked again; they are put back instead.
 	tuned map[string]tunedStream
+	// bootIDs holds the boot each leased simulator was on when last seen
+	// running, and ownBoots the simulators this provider is booting, whose
+	// next boot is expected (see NoteBooted). replacingHub guards against a
+	// second replacement while one runs.
+	bootIDs      map[string]string
+	ownBoots     map[string]bool
+	replacingHub bool
+	// replaceHub stops the hub and starts a new one; a variable for tests.
+	replaceHub func()
 }
 
 type tunedStream struct {
@@ -107,7 +116,7 @@ func New(cfg Config) *Provider {
 		log = slog.Default()
 	}
 	life, stopLife := context.WithCancel(context.Background())
-	return &Provider{
+	p := &Provider{
 		cfg:      cfg,
 		log:      log,
 		life:     life,
@@ -118,6 +127,8 @@ func New(cfg Config) *Provider {
 			return process.CommandContext(ctx, name, args...).CombinedOutput()
 		},
 	}
+	p.replaceHub = p.restartHub
+	return p
 }
 
 // Name is the provider id shown to users.
@@ -649,9 +660,14 @@ func (p *Provider) listReport(ctx context.Context) ([]ports.DeviceInfo, map[port
 		}
 		out = append(out, ports.DeviceInfo{ID: d.ID, Name: d.Name, Platform: ports.DevicePlatform(d.Platform), Version: d.Version, Booted: d.Booted, Tablet: tabletModel(d.DeviceFrame)})
 	}
-	sims, simErr := p.unlistedSimulators(ctx, out)
+	sims, bootIDs, simErr := p.unlistedSimulators(ctx, out)
 	if simErr != nil {
 		fail(ports.DevicePlatformIOS, simErr.Error())
+	}
+	for i := range out {
+		if out[i].Platform == ports.DevicePlatformIOS {
+			out[i].BootID = bootIDs[out[i].ID]
+		}
 	}
 	emus, emuErr := p.unlistedEmulators(ctx, out)
 	if emuErr != nil {
@@ -667,16 +683,17 @@ func (p *Provider) listReport(ctx context.Context) ([]ports.DeviceInfo, map[port
 }
 
 // unlistedSimulators returns the iOS Simulators `simctl` knows and the hub
-// does not. The hub lists a simulator only once it has been booted, so on a
-// fresh Xcode install, or for one just created, its list is empty; the hub
-// still boots any simulator by id.
-func (p *Provider) unlistedSimulators(ctx context.Context, listed []ports.DeviceInfo) ([]ports.DeviceInfo, error) {
+// does not, and each simulator's boot (its lastUsedAt, which simctl moves on
+// every boot) by UDID. The hub lists a simulator only once it has been booted,
+// so on a fresh Xcode install, or for one just created, its list is empty; the
+// hub still boots any simulator by id.
+func (p *Provider) unlistedSimulators(ctx context.Context, listed []ports.DeviceInfo) ([]ports.DeviceInfo, map[string]string, error) {
 	if runtime.GOOS != "darwin" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	out, err := p.run(ctx, "xcrun", "simctl", "list", "devices", "available", "-j")
 	if err != nil {
-		return nil, fmt.Errorf("simctl list devices: %w", err)
+		return nil, nil, fmt.Errorf("simctl list devices: %w", err)
 	}
 	var parsed struct {
 		Devices map[string][]struct {
@@ -684,11 +701,13 @@ func (p *Provider) unlistedSimulators(ctx context.Context, listed []ports.Device
 			Name       string `json:"name"`
 			State      string `json:"state"`
 			DeviceType string `json:"deviceTypeIdentifier"`
+			LastUsedAt string `json:"lastUsedAt"`
 		} `json:"devices"`
 	}
 	if err := json.Unmarshal(out, &parsed); err != nil {
-		return nil, fmt.Errorf("simctl list devices: %w", err)
+		return nil, nil, fmt.Errorf("simctl list devices: %w", err)
 	}
+	bootIDs := map[string]string{}
 	known := make(map[string]bool, len(listed))
 	for _, d := range listed {
 		known[d.ID] = true
@@ -700,13 +719,14 @@ func (p *Provider) unlistedSimulators(ctx context.Context, listed []ports.Device
 			continue
 		}
 		for _, sim := range sims {
+			bootIDs[sim.UDID] = sim.LastUsedAt
 			if !known[sim.UDID] {
-				extra = append(extra, ports.DeviceInfo{ID: sim.UDID, Name: sim.Name, Platform: ports.DevicePlatformIOS, Version: version, Booted: sim.State == "Booted", Tablet: tabletModel(sim.DeviceType)})
+				extra = append(extra, ports.DeviceInfo{ID: sim.UDID, Name: sim.Name, Platform: ports.DevicePlatformIOS, Version: version, Booted: sim.State == "Booted", Tablet: tabletModel(sim.DeviceType), BootID: sim.LastUsedAt})
 			}
 		}
 	}
 	sort.Slice(extra, func(i, j int) bool { return extra[i].Name < extra[j].Name })
-	return extra, nil
+	return extra, bootIDs, nil
 }
 
 // unlistedEmulators returns the Android Virtual Devices the SDK knows and the
@@ -936,6 +956,16 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 		return device, nil
 	}
 	startedHere := !device.Booted
+	// A boot that does not finish leaves no expected boot behind, or a later
+	// boot outside AO would pass as this one.
+	expected, finished := false, false
+	defer func() {
+		if expected && !finished {
+			p.mu.Lock()
+			delete(p.ownBoots, device.ID)
+			p.mu.Unlock()
+		}
+	}()
 	if device.Platform == ports.DevicePlatformIOS && startedHere {
 		// The listed state can be seconds old: a simulator another open just
 		// booted, or one started from Xcode, must not be reset (the reset shuts
@@ -944,6 +974,10 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 			startedHere = false
 			device.Booted = true
 		} else {
+			// This boot gets a fresh helper below, so it must not count as one
+			// that happened behind AO's back (see NoteBooted).
+			p.expectBoot(device.ID)
+			expected = true
 			p.resetSimulatorHelper(ctx, device)
 		}
 	}
@@ -991,6 +1025,7 @@ func (p *Provider) Boot(ctx context.Context, device ports.DeviceInfo) (ports.Dev
 		p.awaitLiveStream(ctx, device)
 	}
 	p.restoreQuality(ctx, device)
+	finished = true
 	return device, nil
 }
 
@@ -1019,6 +1054,87 @@ func (p *Provider) simulatorBooted(ctx context.Context, udid string) (booted, kn
 		}
 	}
 	return false, false
+}
+
+// expectBoot marks a simulator this provider is about to boot.
+func (p *Provider) expectBoot(udid string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ownBoots == nil {
+		p.ownBoots = map[string]bool{}
+	}
+	p.ownBoots[udid] = true
+}
+
+// NoteBooted is told which boot a leased device is on each time the device
+// service looks at it. The hub's stream helper for a simulator outlives its
+// shutdown and keeps that boot's touch input; resetSimulatorHelper replaces it
+// for boots that go through Boot, but a simulator booted any other way (an
+// agent's `xcrun simctl boot` or `expo run:ios`, Xcode) got the old helper
+// back: video came, and every touch went nowhere until the hub restarted. So
+// a running simulator found on a boot this provider did not start gets the
+// hub replaced, which gives every simulator a fresh helper; viewers reconnect.
+// The first sighting of a simulator only records its boot.
+func (p *Provider) NoteBooted(device ports.DeviceInfo) {
+	if device.Platform != ports.DevicePlatformIOS || !device.Booted || device.BootID == "" {
+		return
+	}
+	p.mu.Lock()
+	if p.bootIDs == nil {
+		p.bootIDs = map[string]string{}
+	}
+	previous, seen := p.bootIDs[device.ID]
+	p.bootIDs[device.ID] = device.BootID
+	changed := seen && previous != device.BootID
+	own := p.ownBoots[device.ID]
+	if own && (changed || !seen) {
+		delete(p.ownBoots, device.ID)
+	}
+	replace := changed && !own && p.hub != nil && !p.closed && !p.replacingHub
+	if replace {
+		p.replacingHub = true
+	}
+	p.mu.Unlock()
+	if replace {
+		p.log.Info("simulator booted outside AO; restarting the device hub for fresh touch input", "device", device.ID)
+		go p.replaceHub() //nolint:gosec // G118: outlives the request that noticed the boot
+	}
+}
+
+// restartHub stops the running hub and starts a new one, whose stream helpers
+// are fresh. Each device's stream quality is put back by EnsureReady.
+func (p *Provider) restartHub() {
+	defer func() {
+		p.mu.Lock()
+		p.replacingHub = false
+		p.mu.Unlock()
+	}()
+	p.mu.Lock()
+	hub, closed := p.hub, p.closed
+	p.mu.Unlock()
+	if hub == nil || closed {
+		return
+	}
+	// Cancelled on purpose: the exit watcher does not revive it.
+	hub.cancel()
+	select {
+	case <-hub.done:
+	case <-time.After(5 * time.Second):
+	}
+	p.mu.Lock()
+	if p.hub == hub {
+		p.hub = nil
+	}
+	p.mu.Unlock()
+	ctx, cancel := context.WithTimeout(p.life, 2*time.Minute)
+	defer cancel()
+	if err := p.EnsureReady(ctx); err != nil {
+		if errors.Is(err, errProviderClosed) {
+			return
+		}
+		p.log.Warn("restart device hub after an outside boot", "err", err)
+		go p.reviveHub()
+	}
 }
 
 // resetSimulatorHelper drops the hub's stream helper for a simulator that is

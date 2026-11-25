@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -226,7 +227,7 @@ func TestUnlistedSimulatorsAddsWhatTheHubHides(t *testing.T) {
 "com.apple.CoreSimulator.SimRuntime.iOS-26-5":[{"udid":"SEEN","name":"Seen","state":"Shutdown"},{"udid":"NEW","name":"Fresh iPhone","state":"Shutdown"},{"udid":"UP","name":"Running","state":"Booted"}],
 "com.apple.CoreSimulator.SimRuntime.tvOS-26-0":[{"udid":"TV","name":"Apple TV","state":"Shutdown"}]}}`), nil
 	}
-	got, _ := p.unlistedSimulators(context.Background(), []ports.DeviceInfo{{ID: "SEEN"}})
+	got, _, _ := p.unlistedSimulators(context.Background(), []ports.DeviceInfo{{ID: "SEEN"}})
 	if len(got) != 2 || got[0].Name != "Fresh iPhone" || got[0].Version != "iOS 26.5" || got[1].Name != "Running" || !got[1].Booted {
 		t.Fatalf("got %+v, want the unlisted iOS simulators only", got)
 	}
@@ -840,5 +841,159 @@ func TestListPlatformFailsForAPlatformThatDidNotList(t *testing.T) {
 	}
 	if _, err := p.ListPlatform(ctx, ports.DevicePlatformIOS); err == nil || !strings.Contains(err.Error(), "simctl") {
 		t.Fatalf("ListPlatform(ios) err = %v, want the listing failure", err)
+	}
+}
+
+// replacementsSeen counts the hub replacements reported on replaced within a
+// short wait: NoteBooted starts them on a goroutine.
+func replacementsSeen(replaced <-chan struct{}) int {
+	n := 0
+	deadline := time.After(150 * time.Millisecond)
+	for {
+		select {
+		case <-replaced:
+			n++
+		case <-deadline:
+			return n
+		}
+	}
+}
+
+func fakeReplacements(p *Provider) <-chan struct{} {
+	replaced := make(chan struct{}, 8)
+	p.replaceHub = func() {
+		p.mu.Lock()
+		p.replacingHub = false
+		p.mu.Unlock()
+		replaced <- struct{}{}
+	}
+	return replaced
+}
+
+// A simulator booted outside AO (an agent's simctl boot, Xcode) keeps the
+// hub's stream helper from its last boot, whose touch input goes nowhere: the
+// hub is replaced once a leased simulator turns up on a boot AO did not start.
+// A first sighting, the same boot again, a device that is off and an emulator
+// are left alone.
+func TestNoteBootedReplacesTheHubForABootOutsideAO(t *testing.T) {
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{done: make(chan struct{})}
+	replaced := fakeReplacements(p)
+	sim := func(boot string, booted bool) ports.DeviceInfo {
+		return ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: booted, BootID: boot}
+	}
+	p.NoteBooted(sim("boot-1", true))
+	p.NoteBooted(sim("boot-1", true))
+	p.NoteBooted(sim("boot-2", false))
+	p.NoteBooted(ports.DeviceInfo{ID: "emulator-5554", Platform: ports.DevicePlatformAndroid, Booted: true, BootID: "x"})
+	p.NoteBooted(ports.DeviceInfo{ID: "emulator-5554", Platform: ports.DevicePlatformAndroid, Booted: true, BootID: "y"})
+	if n := replacementsSeen(replaced); n != 0 {
+		t.Fatalf("replaced %d times before any outside boot", n)
+	}
+	p.NoteBooted(sim("boot-2", true))
+	p.NoteBooted(sim("boot-2", true))
+	if n := replacementsSeen(replaced); n != 1 {
+		t.Fatalf("replaced %d times for one outside boot, want 1", n)
+	}
+}
+
+// A boot through Boot gets a fresh helper there, so it does not replace the
+// hub; the next unexpected boot still does.
+func TestNoteBootedAcceptsItsOwnBoot(t *testing.T) {
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{done: make(chan struct{})}
+	replaced := fakeReplacements(p)
+	sim := func(boot string) ports.DeviceInfo {
+		return ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: boot}
+	}
+	p.NoteBooted(sim("boot-1"))
+	p.expectBoot("UDID-1")
+	p.NoteBooted(sim("boot-2"))
+	if n := replacementsSeen(replaced); n != 0 {
+		t.Fatalf("AO's own boot replaced the hub %d times", n)
+	}
+	p.NoteBooted(sim("boot-3"))
+	if n := replacementsSeen(replaced); n != 1 {
+		t.Fatalf("the next outside boot replaced the hub %d times, want 1", n)
+	}
+}
+
+// Boots seen while a replacement runs do not start another one.
+func TestNoteBootedReplacesOneAtATime(t *testing.T) {
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{done: make(chan struct{})}
+	release := make(chan struct{})
+	var starts atomic.Int32
+	p.replaceHub = func() {
+		starts.Add(1)
+		<-release
+		p.mu.Lock()
+		p.replacingHub = false
+		p.mu.Unlock()
+	}
+	for _, boot := range []string{"boot-1", "boot-2", "boot-3", "boot-4"} {
+		p.NoteBooted(ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: boot})
+		time.Sleep(20 * time.Millisecond)
+	}
+	close(release)
+	if n := starts.Load(); n != 1 {
+		t.Fatalf("%d replacements started, want 1 while the first runs", n)
+	}
+}
+
+// A Boot that fails leaves no expected boot behind: a later boot outside AO
+// must not pass as this one.
+func TestBootThatFailsExpectsNoBoot(t *testing.T) {
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/devices/boot" {
+			http.Error(w, "no", http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(hub.Close)
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{origin: hub.URL, token: "tok", done: make(chan struct{})}
+	p.run = func(context.Context, string, ...string) ([]byte, error) { return []byte(`{"devices":{}}`), nil }
+	if _, err := p.Boot(context.Background(), ports.DeviceInfo{ID: "UDID-1", Name: "Lab", Platform: ports.DevicePlatformIOS}); err == nil {
+		t.Fatal("Boot succeeded against a failing hub")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ownBoots["UDID-1"] {
+		t.Fatal("a failed Boot left its boot expected")
+	}
+}
+
+// The listing carries each simulator's boot (simctl's lastUsedAt), for the
+// hub's simulators and simctl's extras alike.
+func TestListCarriesSimulatorBoots(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("simctl is macOS only")
+	}
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"simulators":[{"id":"LISTED","name":"Lab","platform":"ios","version":"iOS 26.5","booted":true}],"emulators":[]}`)
+	}))
+	t.Cleanup(hub.Close)
+	p := New(Config{DataDir: t.TempDir()})
+	p.hub = &hubProcess{origin: hub.URL, token: "tok", done: make(chan struct{})}
+	p.run = func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "xcrun" {
+			return []byte(`{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[
+{"udid":"LISTED","name":"Lab","state":"Booted","lastUsedAt":"2026-11-25T01:00:00Z"},
+{"udid":"EXTRA","name":"Spare","state":"Shutdown","lastUsedAt":"2026-11-20T09:00:00Z"}]}}`), nil
+		}
+		return nil, errors.New("not here")
+	}
+	devices, err := p.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	boots := map[string]string{}
+	for _, d := range devices {
+		boots[d.ID] = d.BootID
+	}
+	if boots["LISTED"] != "2026-11-25T01:00:00Z" || boots["EXTRA"] != "2026-11-20T09:00:00Z" {
+		t.Fatalf("boots = %v, want simctl's lastUsedAt for both", boots)
 	}
 }
