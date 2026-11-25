@@ -1647,6 +1647,13 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 	}
 	switch {
 	case report.Status == "started":
+		if open != nil && open.finished {
+			// A new compaction starts while the finished one still waits to hear
+			// what it freed. That one settles now, and this one gets its own row.
+			c.mu.Unlock()
+			c.settleFinishedCompaction(emit)
+			return c.reportCompaction(turnID, report, emit)
+		}
 		if open != nil {
 			// Claude repeats the status while it works.
 			c.mu.Unlock()

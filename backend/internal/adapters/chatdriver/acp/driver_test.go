@@ -6409,6 +6409,74 @@ func TestACPCompactionOutcomeOnlyWaitsForANewerFigure(t *testing.T) {
 	}
 }
 
+// A compaction that starts while a finished one still waits for its figure is a
+// second compaction: the first settles, and the second runs on its own row.
+func TestACPNextCompactionStartSettlesTheFinishedOne(t *testing.T) {
+	for name, first := range map[string][]string{
+		"outcome only":     {"completed"},
+		"started finished": {"started", "completed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent, opened := compactionFailureTestDriver(t)
+			session := acpsdk.SessionId(opened.ProviderConversationID())
+			status := func(ctx context.Context, value map[string]any) {
+				_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: session, Update: acpsdk.SessionUpdate{
+					SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{"opencode/compaction": value},
+					},
+				}})
+			}
+			agent.mu.Lock()
+			agent.customPrompt = func(ctx context.Context, _ acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
+				for _, value := range first {
+					status(ctx, map[string]any{"status": value})
+				}
+				status(ctx, map[string]any{"status": "started"})
+				status(ctx, map[string]any{"status": "completed", "tokensBefore": 120000.0, "tokensAfter": 30000.0})
+				return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
+			}
+			agent.mu.Unlock()
+			ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+			if err != nil {
+				t.Fatalf("SendTurn: %v", err)
+			}
+			if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+				t.Fatalf("StartDeferredTurn: %v", err)
+			}
+			var order []string
+			ran := map[string]bool{}
+			settled := map[string]ports.ChatEvent{}
+			for {
+				ev := nextEvent(t, opened.Events())
+				if ev.Kind == ports.ChatEventCompacted {
+					if _, seen := settled[ev.ProviderItemID]; !seen && !ran[ev.ProviderItemID] {
+						order = append(order, ev.ProviderItemID)
+					}
+					if ev.ActivityStatus == domain.ActivityStatusRunning {
+						ran[ev.ProviderItemID] = true
+					} else {
+						settled[ev.ProviderItemID] = ev
+					}
+				}
+				if ev.Kind == ports.ChatEventTurnCompleted {
+					break
+				}
+			}
+			if len(order) != 2 || len(settled) != 2 {
+				t.Fatalf("compaction rows = %v, settled %d; want two rows, both settled", order, len(settled))
+			}
+			firstRow, second := settled[order[0]], settled[order[1]]
+			if strings.Contains(string(firstRow.Detail), "tokensAfter") {
+				t.Fatalf("first row detail = %s, want no figure it never got", firstRow.Detail)
+			}
+			if !ran[order[1]] || !strings.Contains(string(second.Detail), `"tokensReclaimed":90000`) {
+				t.Fatalf("second row = ran %v, detail %s; want it to run, then settle on its own figures", ran[order[1]], second.Detail)
+			}
+		})
+	}
+}
+
 // Compactions are numbered per turn. An attachment that reconnects to a running
 // turn gets that turn's updates replayed, so it names the turn's compactions as
 // the attachment before it did, however many earlier turns had: a replayed one
