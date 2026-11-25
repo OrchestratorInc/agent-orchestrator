@@ -729,8 +729,26 @@ heatmap and no session replay.
   `EXITED`, `PORT_UNCONFIRMED`, `NOT_READY`, `IDENTITY_MISMATCH`,
   `DATADIR_UNWRITABLE`) or a chat turn failure (`AUTH_REQUIRED`,
   `PROVIDER_KEY_MISSING`, or `USAGE_LIMIT` when the agent's account hit its
-  usage limit). Any other code is dropped, and it is omitted when there is
-  none.
+  usage limit), or why a composer send failed. A composer failure is one of the
+  app's own reasons (`ANNOTATION_LIMIT`, `EXCERPT_TOO_LONG`, `MESSAGE_TOO_LONG`,
+  `FILE_REFERENCES_UNSUPPORTED`, `ATTACHMENTS_UNAVAILABLE`,
+  `ATTACHMENT_UNREADABLE`, `COMPACT_UNAVAILABLE`, `COMPACT_FAILED`,
+  `CONTINUE_FAILED`, `QUEUE_SAVE_FAILED`, `SEND_FAILED`, `SEND_REJECTED`,
+  `UNSENT_RETRY_FAILED`) or the API code that refused the send, in upper case
+  (`AGENT_SWITCH_FAILED`, `TASK_CREATE_FAILED`, `SESSION_RESTORE_FAILED`,
+  `CHAT_FILE_REFERENCE_INVALID`, `CHAT_ANNOTATION_LIMIT`,
+  `CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED`, `VALIDATION_ERROR`, `INVALID_BODY`,
+  `CHAT_MESSAGE_EMPTY`, `INVALID_RESOURCE`, `UNSUPPORTED_ATTACHMENT_TYPE`,
+  `INVALID_ATTACHMENT_DATA`, `ATTACHMENT_TOO_LARGE`, `TOO_MANY_ATTACHMENTS`,
+  `ATTACHMENTS_TOO_LARGE`, `SESSION_NOT_FOUND`, `SESSION_MODE_MISMATCH`,
+  `CHAT_CONTROLLER_NOT_READY`, `CHAT_RESUME_FAILED`,
+  `CHAT_INTERFACE_TRANSITION`, `CHAT_OPEN_ELSEWHERE`, `COMPOSER_LOCKED`,
+  `COMPOSER_LEASE_LOST`, `CHAT_EXCERPT_INVALID`, `CHAT_EXCERPT_STALE`,
+  `CHAT_SIDE_UNAVAILABLE`, `CHAT_SIDE_UNSUPPORTED`,
+  `CHAT_SIDE_ANCHOR_UNAVAILABLE`, `CHAT_SIDE_INVALID_REQUEST`,
+  `CHAT_SIDE_NOT_READY`, `CHAT_SIDE_RECREATE_REQUIRED`, `CHAT_SIDE_CLOSED`,
+  `CHAT_SIDE_IDEMPOTENCY_CONFLICT`). Any other code is dropped, and it is
+  omitted when there is none.
 - `surface` on `ao.ui.error_shown` is the surface that showed the error, or,
   for a toast, the surface you used in the 10 seconds before it. It is omitted
   when neither is known.

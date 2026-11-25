@@ -1,5 +1,6 @@
 import { APP_SHORTCUTS, type AppShortcutId } from "../../shared/shortcuts";
 import { isUiSurface, UI_SURFACES, type UiSurface } from "./ui-surfaces";
+import { COMPOSER_ERROR_CODES } from "./composer-send-failure";
 
 // Closed vocabularies for UI usage telemetry, imported by the call sites and by
 // the sanitizer so the two cannot drift. Only these ids, counts and durations
@@ -182,6 +183,8 @@ export const ERROR_CODES = [
 	"AUTH_REQUIRED",
 	"PROVIDER_KEY_MISSING",
 	"USAGE_LIMIT",
+	// Why a composer send failed: its own reasons, then the API's send refusals.
+	...COMPOSER_ERROR_CODES,
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
