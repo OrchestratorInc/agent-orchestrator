@@ -1493,7 +1493,7 @@ export function withUltracode(text: string): string {
 
 /**
  * The agent's on/off settings as add-menu rows: plan mode and any other switch it advertises.
- * Fast mode is not one of them: it is set in the agent picker, beside the effort slider.
+ * Fast mode is not one of them: it is set in the agent picker, under the effort.
  */
 export function ComposerModeItems({
 	configOptions,
