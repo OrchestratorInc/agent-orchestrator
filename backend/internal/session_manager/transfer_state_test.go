@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -114,6 +115,13 @@ func TestPrepareTransferReservesTheSessionBeforeItStops(t *testing.T) {
 	}
 	if again, err := m.PrepareTransfer(ctx, "mer-1", "trsecond0", toB, false); err != nil || again.TransferID != "trfirst00" {
 		t.Fatalf("second prepare = %q, %v; want the unfinished move", again.TransferID, err)
+	}
+	before := store.sessions["mer-1"]
+	if err := m.SwitchTUIProvider(ctx, "mer-1", domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex}); !errors.Is(err, ErrTransferPending) {
+		t.Fatalf("switch agent = %v, want ErrTransferPending", err)
+	}
+	if !reflect.DeepEqual(store.sessions["mer-1"], before) {
+		t.Fatalf("a refused switch changed the session: %+v", store.sessions["mer-1"])
 	}
 	other := toB
 	other.ProjectID = "web-2"

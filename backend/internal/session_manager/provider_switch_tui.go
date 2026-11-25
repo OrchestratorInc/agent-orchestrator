@@ -39,6 +39,9 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	if rec.IsTerminated {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "terminated sessions must be restored before switching"}
 	}
+	if err := m.refuseMoved(ctx, id); err != nil {
+		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: err.Error(), Cause: err}
+	}
 	sameAgent := rec.Harness == target
 	if sameAgent && !tuiSettingsChange(rec.Metadata, request) {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalAlreadyActive, Detail: "target provider is already active", Cause: domain.ErrProviderAlreadyActive}

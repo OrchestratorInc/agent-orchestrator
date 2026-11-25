@@ -50,6 +50,9 @@ func (m *Manager) StartAccountTransition(
 	if rec.IsTerminated {
 		return domain.SessionInterfaceTransition{}, ErrTerminated
 	}
+	if err := m.refuseMoved(ctx, id); err != nil {
+		return domain.SessionInterfaceTransition{}, err
+	}
 	if interfaceWorkspaceUnavailable(rec) {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("%w: session %s", ErrInterfaceWorkspaceUnavailable, id)
 	}
