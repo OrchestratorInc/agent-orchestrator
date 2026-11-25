@@ -574,15 +574,17 @@ function ForgeLink({ url, className, children }: { url?: string; className?: str
 
 const GITHUB_HTML = GITHUB_HTML_REHYPE_NO_IMAGES;
 
-// The same check twice in one report (the daemon can list a check run twice) is one row.
+// The same check twice in one report (the daemon can list a check run twice) is
+// one row, keeping a log tail when only a later copy carries one.
 function uniqueChecks(checks: readonly FailedCheck[]): FailedCheck[] {
-	const seen = new Set<string>();
-	return checks.filter((check) => {
+	const byKey = new Map<string, FailedCheck>();
+	for (const check of checks) {
 		const key = `${check.name}\n${check.url ?? ""}`;
-		if (seen.has(key)) return false;
-		seen.add(key);
-		return true;
-	});
+		const kept = byKey.get(key);
+		if (!kept) byKey.set(key, check);
+		else if (!kept.log && check.log) byKey.set(key, { ...kept, log: check.log });
+	}
+	return [...byKey.values()];
 }
 
 // Comments read file by file, in line order; general comments come last.

@@ -250,6 +250,16 @@ describe("drawing AO's automation messages", () => {
 		expect(within(event).getAllByText("lint")).toHaveLength(1);
 	});
 
+	it("keeps a log tail only the later copy of a repeated check carries", async () => {
+		draw(ciFailing.replace("Failed: lint (failed)\n", "Failed: lint (failed)\n\nFailed: lint (failed)\n\nLog tail (last 1 line):\n```\nlint broke\n```\n"));
+
+		const event = screen.getByTestId("pull-request-event");
+		await userEvent.click(within(event).getByRole("button", { name: /CI failing on #6974/ }));
+		expect(within(event).getAllByText("lint")).toHaveLength(1);
+		// renderer-smoke's log and lint's, which only its second listing had.
+		expect(within(event).getAllByRole("button", { name: "Show log" })).toHaveLength(2);
+	});
+
 	it("links only to the forge, so a look-alike message cannot send the user elsewhere", async () => {
 		draw(ciFailing.replace("https://github.com/o/r/actions/runs/1/job/2", "https://evil.example/login").replace(`PR: ${URL}`, "PR: https://evil.example/pr"));
 
