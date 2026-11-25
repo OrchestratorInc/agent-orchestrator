@@ -813,6 +813,9 @@ describe("registerRemotesIpc", () => {
 			expect(calls[0].init.method).toBe("PUT");
 			expect(JSON.parse(String(calls[0].init.body))).toEqual({ hostId: "h_workbox", label: "workbox", url: "http://192.0.2.1:1", credential: "old", callerName: "Test Mac" });
 			expect(JSON.stringify(result)).not.toContain("old");
+
+			await ipc.invoke("remotes:setComputerUseTarget", "h_workbox", "ao-7");
+			expect(JSON.parse(String(calls[1].init.body))).toMatchObject({ hostId: "h_workbox", sessionId: "ao-7" });
 		});
 
 		it("refuses a host whose address now answers as another machine, before the daemon gets the credential", async () => {

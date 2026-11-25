@@ -2604,6 +2604,12 @@ type UpdateComputerUseRemoteAllowRequest struct {
 // /api/v1/computer-use/remote/target.
 type SetComputerUseRemoteTargetRequest = computeruse.SetRemoteTargetRequest
 
+// ClearComputerUseRemoteTargetQuery names the session computer use was moved
+// back to this computer from, for DELETE /api/v1/computer-use/remote/target.
+type ClearComputerUseRemoteTargetQuery struct {
+	SessionID string `query:"sessionId,omitempty" description:"The AO session the change was made from. That session's calls run on this computer from now on, though it started with computer use elsewhere."`
+}
+
 // RemoteComputerUseOfferResponse is the body of GET
 // /api/v1/remote-computer-use/status.
 type RemoteComputerUseOfferResponse = computeruse.RemoteOffer

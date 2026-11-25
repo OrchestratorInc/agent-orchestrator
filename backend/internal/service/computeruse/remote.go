@@ -113,6 +113,9 @@ type SetRemoteTargetRequest struct {
 	URL        string `json:"url"`
 	Credential string `json:"credential" description:"The bearer credential this computer uses for the remote host. Stored with mode 0600 and never returned."`
 	CallerName string `json:"callerName,omitempty" description:"This computer's name, shown on the other computer while this computer's agents use it."`
+	// SessionID is the chat the user chose the computer from, which moves to
+	// it rather than being refused for having started elsewhere.
+	SessionID string `json:"sessionId,omitempty" description:"The AO session the computer was chosen from. That session's calls run on it from now on, though the session started with computer use elsewhere; other sessions that started elsewhere are refused."`
 }
 
 // RemoteOffer is whether this computer currently lets agents on the user's
@@ -161,6 +164,10 @@ type remoteState struct {
 	// CallerName is this computer's name, shown on the other computer while
 	// its agents use it.
 	CallerName string `json:"callerName,omitempty"`
+	// Adopted maps a session to the target the user moved it to from that
+	// session's own panel: "local" or a host ID. Only entries naming the
+	// current target are kept.
+	Adopted map[string]string `json:"adopted,omitempty"`
 }
 
 // remoteStore reads and writes remoteState. The Service's mutex guards it.
@@ -356,6 +363,10 @@ func (s *Service) SetRemoteTarget(_ context.Context, request SetRemoteTargetRequ
 		return RemoteSettings{}, err
 	}
 	credential := strings.TrimSpace(request.Credential)
+	sessionID, err := adoptingSession(request.SessionID)
+	if err != nil {
+		return RemoteSettings{}, err
+	}
 	return s.updateRemote(false, func(state *remoteState) error {
 		state.Target = &target
 		state.Credential = credential
@@ -365,18 +376,61 @@ func (s *Service) SetRemoteTarget(_ context.Context, request SetRemoteTargetRequ
 		if state.CallerID == "" {
 			state.CallerID = randomID()
 		}
+		state.adopt(target.HostID, sessionID)
 		return nil
 	})
 }
 
 // ClearRemoteTarget runs this computer's agents' computer use here again. It
-// also replaces a damaged settings file.
-func (s *Service) ClearRemoteTarget(context.Context) (RemoteSettings, error) {
+// also replaces a damaged settings file. A sessionID names the chat it was
+// chosen from, which moves here with it.
+func (s *Service) ClearRemoteTarget(_ context.Context, sessionID string) (RemoteSettings, error) {
+	sessionID, err := adoptingSession(sessionID)
+	if err != nil {
+		return RemoteSettings{}, err
+	}
 	return s.updateRemote(true, func(state *remoteState) error {
 		state.Target = nil
 		state.Credential = ""
+		state.adopt(LocalTarget, sessionID)
 		return nil
 	})
+}
+
+// maxAdoptedSessions bounds the sessions remembered as moved to the current
+// target.
+const maxAdoptedSessions = 256
+
+// adoptingSession checks the session a target was chosen from; "" is none.
+func adoptingSession(sessionID string) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID != "" && !scopePattern.MatchString(sessionID) {
+		return "", apierr.Invalid("COMPUTER_USE_INVALID_SESSION", "sessionId may contain only letters, digits, '.', '_' and '-'.", nil)
+	}
+	return sessionID, nil
+}
+
+// adopt records that computer use now runs on current: sessions moved to an
+// earlier target no longer match it, and sessionID, when set, moves to it.
+func (s *remoteState) adopt(current, sessionID string) {
+	for session, target := range s.Adopted {
+		if target != current {
+			delete(s.Adopted, session)
+		}
+	}
+	if sessionID == "" {
+		return
+	}
+	if s.Adopted == nil {
+		s.Adopted = map[string]string{}
+	}
+	if _, ok := s.Adopted[sessionID]; !ok && len(s.Adopted) >= maxAdoptedSessions {
+		for session := range s.Adopted {
+			delete(s.Adopted, session)
+			break
+		}
+	}
+	s.Adopted[sessionID] = current
 }
 
 // CurrentTarget names the other computer this computer's agents run computer
@@ -549,15 +603,23 @@ type forwarding struct {
 	credential string
 	caller     string
 	callerName string
+	// adopted is the target sessionID was moved to from its own panel, or "".
+	adopted string
 }
 
-func (s *Service) forwarding() (forwarding, error) {
+// forwarding reads where calls go now, and where sessionID was moved to.
+func (s *Service) forwarding(sessionID string) (forwarding, error) {
 	state, err := s.remoteState()
-	if err != nil || state.Target == nil {
+	if err != nil {
 		return forwarding{}, err
 	}
+	to := forwarding{adopted: state.Adopted[strings.TrimSpace(sessionID)]}
+	if state.Target == nil {
+		return to, nil
+	}
 	target := *state.Target
-	return forwarding{target: &target, credential: state.Credential, caller: state.CallerID, callerName: state.CallerName}, nil
+	to.target, to.credential, to.caller, to.callerName = &target, state.Credential, state.CallerID, state.CallerName
+	return to, nil
 }
 
 // remoteAgentTools reads the tools the other computer offers.

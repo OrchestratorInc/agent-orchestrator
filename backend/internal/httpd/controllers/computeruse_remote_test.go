@@ -35,7 +35,7 @@ func (s *remoteComputerUseService) SetRemoteTarget(_ context.Context, request co
 	return computeruse.RemoteSettings{Target: &computeruse.RemoteTarget{HostID: request.HostID, Label: request.Label, URL: request.URL}}, nil
 }
 
-func (s *remoteComputerUseService) ClearRemoteTarget(context.Context) (computeruse.RemoteSettings, error) {
+func (s *remoteComputerUseService) ClearRemoteTarget(context.Context, string) (computeruse.RemoteSettings, error) {
 	s.cleared = true
 	return computeruse.RemoteSettings{}, nil
 }

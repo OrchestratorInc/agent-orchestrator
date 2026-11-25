@@ -97,6 +97,9 @@ type CallResult struct {
 	Tool   string  `json:"tool"`
 	Result any     `json:"result" description:"The tool's JSON output. Inline images are replaced by *_file_path fields. After an action, observation holds AO's read of the window: the tree diff and a screenshot file."`
 	Images []Image `json:"images" description:"Screenshots this call saved. Open them with an image viewer."`
+	// Notice tells the agent the user moved its computer use to another
+	// computer than its instructions name.
+	Notice string `json:"notice,omitempty" description:"Set when the user moved this session's computer use to another computer than the one it started with: which computer the call ran on."`
 }
 
 const (
@@ -349,36 +352,51 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if !toolNamePattern.MatchString(tool) {
 		return CallResult{}, invalidTool(tool)
 	}
-	to, err := s.forwarding()
+	to, err := s.forwarding(request.SessionID)
 	if err != nil {
 		return CallResult{}, err
 	}
-	if err := checkTarget(request.Target, to.target); err != nil {
+	notice, err := checkTarget(request.Target, to.target, to.adopted)
+	if err != nil {
 		return CallResult{}, err
 	}
+	var result CallResult
 	if to.target != nil {
-		return s.callRemote(ctx, *to.target, to.credential, to.caller, to.callerName, request)
+		result, err = s.callRemote(ctx, *to.target, to.credential, to.caller, to.callerName, request)
+	} else {
+		result, err = s.callHere(ctx, request)
 	}
-	return s.callHere(ctx, request)
+	if err == nil {
+		result.Notice = notice
+	}
+	return result, err
 }
 
 // checkTarget refuses a call from a session that started with computer use on
 // another computer than the one chosen now: its instructions name that
-// computer, so its actions must not silently land elsewhere. An empty
-// expected target (a terminal, curl) is not checked.
-func checkTarget(expected string, target *RemoteTarget) error {
+// computer, so its actions must not silently land elsewhere. A session the
+// user moved to the current computer from its own panel (adopted) runs there,
+// and the returned notice tells its agent so. An empty expected target (a
+// terminal, curl) is not checked.
+func checkTarget(expected string, target *RemoteTarget, adopted string) (string, error) {
 	expected = strings.TrimSpace(expected)
 	if expected == "" {
-		return nil
+		return "", nil
 	}
 	current, label := LocalTarget, "this computer"
 	if target != nil {
 		current, label = target.HostID, target.Label
 	}
 	if expected == current {
-		return nil
+		return "", nil
 	}
-	return apierr.Conflict("COMPUTER_USE_TARGET_CHANGED", fmt.Sprintf("Computer use for this chat was set up on another computer; it now runs on %s. Start a new chat to use computer use there.", label), nil)
+	if adopted == current {
+		if target == nil {
+			return "The user moved computer use for this chat to the computer you run on. You are operating this computer's screen now, not the one your instructions name.", nil
+		}
+		return fmt.Sprintf("The user moved computer use for this chat to %s. You are operating %s's screen now, not the computer your instructions name.", label, label), nil
+	}
+	return "", apierr.Conflict("COMPUTER_USE_TARGET_CHANGED", fmt.Sprintf("Computer use for this chat was set up on another computer; it now runs on %s. Start a new chat to use computer use there, or the user can choose %s in this chat's Computer use panel.", label, label), nil)
 }
 
 // callHere runs one driver tool on this computer.

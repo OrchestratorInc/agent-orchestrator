@@ -8,7 +8,9 @@ import { formatTimeCompact } from "../lib/format-time";
 import { computerUseStep } from "../lib/mcp-tool";
 import { cn } from "../lib/utils";
 import { ChatImageDialog } from "./chat/ChatImage";
+import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Pressable } from "./ui/pressable";
+import { THIS_COMPUTER, useComputerUseTargets } from "../hooks/useComputerUseTargets";
 
 type Screenshot = { url: string; label: string };
 
@@ -59,10 +61,7 @@ export function ComputerUsePanel({ entries, sessionId }: { entries: ComputerUseT
 				) : null}
 			</div>
 
-			<div className="mx-3 mt-3 mb-2 flex min-h-8 items-center justify-between gap-2 text-sm">
-				<span className="text-muted-foreground">{t("computerUse.runsOn")}</span>
-				<span className="text-foreground">{entries.at(-1)?.ranOn || t("computerUse.thisMachine")}</span>
-			</div>
+			<RunsOnPicker sessionId={sessionId} />
 
 			<InspectorSection surface={false} title={t("computerUse.timeline")}>
 				<ol className="-mx-1.5 flex flex-col" aria-label={t("computerUse.timeline")}>
@@ -106,6 +105,35 @@ export function ComputerUsePanel({ entries, sessionId }: { entries: ComputerUseT
 
 			{opened ? (
 				<ChatImageDialog label={opened.label} onOpenChange={(open) => !open && setOpened(null)} open url={opened.url} />
+			) : null}
+		</div>
+	);
+}
+
+/**
+ * Where this chat's computer use runs, and the switch to move it: choosing a
+ * computer here moves computer use there for this chat too, though it started
+ * elsewhere.
+ */
+function RunsOnPicker({ sessionId }: { sessionId: string }) {
+	const { t } = useTranslation();
+	const targets = useComputerUseTargets();
+	const unavailable = targets.target && targets.targetChecked && !targets.targetAvailable;
+	return (
+		<div className="mx-3 mt-3 mb-2 flex flex-col gap-1">
+			<div className="flex min-h-8 items-center justify-between gap-2 text-sm">
+				<span className="text-muted-foreground">{t("computerUse.runsOn")}</span>
+				<SettingsOptionMenu
+					aria-label={t("computerUse.runsOn")}
+					value={targets.target?.hostId ?? THIS_COMPUTER}
+					options={targets.options}
+					onChange={(hostId) => void targets.choose(hostId, sessionId)}
+					disabled={!targets.remote.data || targets.choosing}
+				/>
+			</div>
+			{targets.error ? <p role="alert" className="text-xs text-error">{targets.error}</p> : null}
+			{!targets.error && unavailable ? (
+				<p className="text-xs text-error">{t("settings.computerUse.runOnUnavailable", { name: targets.targetLabel })}</p>
 			) : null}
 		</div>
 	);

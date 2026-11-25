@@ -24,7 +24,7 @@ type ComputerUse interface {
 	RemoteSettings(ctx context.Context) (computeruse.RemoteSettings, error)
 	SetAllowRemote(ctx context.Context, allow bool) (computeruse.RemoteSettings, error)
 	SetRemoteTarget(ctx context.Context, request computeruse.SetRemoteTargetRequest) (computeruse.RemoteSettings, error)
-	ClearRemoteTarget(ctx context.Context) (computeruse.RemoteSettings, error)
+	ClearRemoteTarget(ctx context.Context, sessionID string) (computeruse.RemoteSettings, error)
 	RemoteOffer(ctx context.Context) (computeruse.RemoteOffer, error)
 	RemoteAgentTools(ctx context.Context) ([]computeruse.AgentTool, error)
 	ServeRemoteCall(ctx context.Context, request computeruse.RemoteCallRequest) (computeruse.RemoteCallResult, error)
@@ -169,7 +169,7 @@ func (c *ComputerUseController) clearRemoteTarget(w http.ResponseWriter, r *http
 		apispec.NotImplemented(w, r, "DELETE", "/api/v1/computer-use/remote/target")
 		return
 	}
-	writeRemoteSettings(w, r)(c.Svc.ClearRemoteTarget(r.Context()))
+	writeRemoteSettings(w, r)(c.Svc.ClearRemoteTarget(r.Context(), r.URL.Query().Get("sessionId")))
 }
 
 func (c *ComputerUseController) remoteOffer(w http.ResponseWriter, r *http.Request) {

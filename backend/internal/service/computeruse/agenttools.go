@@ -73,7 +73,7 @@ const agentToolScanTimeout = 2 * time.Minute
 // its release. They are read once per driver version. With "Run computer use
 // on" set to another computer, they are that computer's tools.
 func (s *Service) AgentTools(ctx context.Context) ([]AgentTool, error) {
-	to, err := s.forwarding()
+	to, err := s.forwarding("")
 	if err != nil {
 		return nil, err
 	}

@@ -3536,6 +3536,16 @@ paths:
   /api/v1/computer-use/remote/target:
     delete:
       operationId: clearComputerUseRemoteTarget
+      parameters:
+      - description: The AO session the change was made from. That session's calls
+          run on this computer from now on, though it started with computer use elsewhere.
+        in: query
+        name: sessionId
+        schema:
+          description: The AO session the change was made from. That session's calls
+            run on this computer from now on, though it started with computer use
+            elsewhere.
+          type: string
       responses:
         "200":
           content:
@@ -3543,6 +3553,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ComputerUseRemoteSettings'
           description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
         "500":
           content:
             application/json:
@@ -18854,6 +18870,10 @@ components:
           items:
             $ref: '#/components/schemas/ComputerUseImage'
           type: array
+        notice:
+          description: 'Set when the user moved this session''s computer use to another
+            computer than the one it started with: which computer the call ran on.'
+          type: string
         result:
           description: 'The tool''s JSON output. Inline images are replaced by *_file_path
             fields. After an action, observation holds AO''s read of the window: the
@@ -25578,6 +25598,11 @@ components:
         hostId:
           type: string
         label:
+          type: string
+        sessionId:
+          description: The AO session the computer was chosen from. That session's
+            calls run on it from now on, though the session started with computer
+            use elsewhere; other sessions that started elsewhere are refused.
           type: string
         url:
           type: string

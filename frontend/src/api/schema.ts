@@ -6407,6 +6407,8 @@ export interface components {
         ComputerUseCallResult: {
             /** @description Screenshots this call saved. Open them with an image viewer. */
             images: components["schemas"]["ComputerUseImage"][];
+            /** @description Set when the user moved this session's computer use to another computer than the one it started with: which computer the call ran on. */
+            notice?: string;
             /** @description The tool's JSON output. Inline images are replaced by *_file_path fields. After an action, observation holds AO's read of the window: the tree diff and a screenshot file. */
             result: unknown;
             tool: string;
@@ -9039,6 +9041,8 @@ export interface components {
             credential: string;
             hostId: string;
             label: string;
+            /** @description The AO session the computer was chosen from. That session's calls run on it from now on, though the session started with computer use elsewhere; other sessions that started elsewhere are refused. */
+            sessionId?: string;
             url: string;
         };
         SetConversationConfigOptionRequest: {
@@ -14797,7 +14801,10 @@ export interface operations {
     };
     clearComputerUseRemoteTarget: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The AO session the change was made from. That session's calls run on this computer from now on, though it started with computer use elsewhere. */
+                sessionId?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -14811,6 +14818,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ComputerUseRemoteSettings"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

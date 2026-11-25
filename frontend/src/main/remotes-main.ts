@@ -367,8 +367,9 @@ export function registerRemotesIpc(
 	// "Run computer use on": the local daemon forwards this computer's
 	// computer-use calls to the chosen machine, so it needs the credential this
 	// desktop holds for it. It goes from here straight to the daemon's
-	// loopback-only route; the renderer only ever names the machine.
-	ipcMain.handle("remotes:setComputerUseTarget", async (_event, hostId: string) => ordered(async () => {
+	// loopback-only route; the renderer only ever names the machine. A session
+	// ID names the chat it was chosen from, which moves to it.
+	ipcMain.handle("remotes:setComputerUseTarget", async (_event, hostId: string, sessionId?: unknown) => ordered(async () => {
 		const account = await accountID();
 		const entry = (await owned()).find((saved) => saved.hostId === hostId);
 		if (!entry?.hostId) throw new ExpectedIpcError("That computer is not one of your remote hosts.");
@@ -389,7 +390,7 @@ export function registerRemotesIpc(
 			method: "PUT",
 			redirect: "error",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ hostId: entry.hostId, label: entry.label, url: entry.url, credential: entry.password, callerName: await deviceName() }),
+			body: JSON.stringify({ hostId: entry.hostId, label: entry.label, url: entry.url, credential: entry.password, callerName: await deviceName(), ...(typeof sessionId === "string" && sessionId ? { sessionId } : {}) }),
 			signal: AbortSignal.timeout(8_000),
 		});
 		const body = await response.json().catch(() => ({})) as { message?: string };

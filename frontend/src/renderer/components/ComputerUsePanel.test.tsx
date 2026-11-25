@@ -1,12 +1,32 @@
-import { render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render as renderUi, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const apiMocks = vi.hoisted(() => ({
+	target: undefined as { hostId: string; label: string; url: string } | undefined,
+	GET: vi.fn(),
+	DELETE: vi.fn(),
+}));
 
 vi.mock("../lib/api-client", () => ({
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	apiClient: { GET: apiMocks.GET, DELETE: apiMocks.DELETE },
 }));
 
 import { ComputerUsePanel } from "./ComputerUsePanel";
+
+function render(ui: ReactElement) {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return renderUi(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
+
+beforeEach(() => {
+	apiMocks.target = undefined;
+	apiMocks.GET.mockReset().mockImplementation(async () => ({ data: { allowRemote: false, target: apiMocks.target, activity: [] } }));
+	apiMocks.DELETE.mockReset().mockImplementation(async () => ({ data: { allowRemote: false, activity: [] } }));
+});
 import type { ComputerUseTimelineEntry } from "../hooks/useComputerUseTimeline";
 
 const shot = (name: string) => `http://127.0.0.1:3001/api/v1/computer-use/sessions/ao-1/screenshots/${name}`;
@@ -26,10 +46,21 @@ const entries: ComputerUseTimelineEntry[] = [
 ];
 
 describe("ComputerUsePanel", () => {
-	it("names the other computer the latest step ran on", () => {
-		render(<ComputerUsePanel entries={[...entries, { id: "4", at: "2026-11-16T09:01:00Z", tool: "list_windows", ok: true, ranOn: "Studio Mac", screenshots: [] }]} sessionId="ao-1" />);
-		expect(screen.getByText("Studio Mac")).toBeInTheDocument();
-		expect(screen.queryByText("This machine")).not.toBeInTheDocument();
+	it("names the computer computer use runs on", async () => {
+		apiMocks.target = { hostId: "h_mac", label: "Studio Mac", url: "http://192.0.2.1:1" };
+		render(<ComputerUsePanel entries={entries} sessionId="ao-1" />);
+		const picker = await screen.findByRole("button", { name: "Runs on" });
+		await waitFor(() => expect(picker).toHaveTextContent("Studio Mac"));
+	});
+
+	it("moves this chat's computer use back to this computer from the panel", async () => {
+		render(<ComputerUsePanel entries={entries} sessionId="ao-1" />);
+		const picker = await screen.findByRole("button", { name: "Runs on" });
+		await waitFor(() => expect(picker).toBeEnabled());
+		await userEvent.click(picker);
+		await userEvent.click(await screen.findByRole("menuitem", { name: /This computer/ }));
+		// Choosing the current computer still moves this chat onto it.
+		await waitFor(() => expect(apiMocks.DELETE).toHaveBeenCalledWith("/api/v1/computer-use/remote/target", { params: { query: { sessionId: "ao-1" } } }));
 	});
 
 	it("shows the latest screenshot and every step, newest first", () => {
@@ -38,7 +69,6 @@ describe("ComputerUsePanel", () => {
 		const hero = screen.getByRole("img", { name: 'Typed "hello"' });
 		expect(hero).toHaveAttribute("src", shot("two.png"));
 		expect(screen.getByText("Runs on")).toBeInTheDocument();
-		expect(screen.getByText("This machine")).toBeInTheDocument();
 
 		const steps = within(screen.getByRole("list", { name: "Timeline" })).getAllByRole("listitem");
 		expect(steps.map((step) => step.textContent)).toEqual([

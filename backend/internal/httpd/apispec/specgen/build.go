@@ -1212,8 +1212,9 @@ func computerUseOperations() []operation {
 		},
 		{
 			method: http.MethodDelete, path: "/api/v1/computer-use/remote/target", id: "clearComputerUseRemoteTarget", tag: "computer-use",
-			summary: "Run this computer's agents' computer use on this computer again",
-			resps:   remoteResps(),
+			summary:    "Run this computer's agents' computer use on this computer again",
+			pathParams: []any{controllers.ClearComputerUseRemoteTargetQuery{}},
+			resps:      remoteResps(http.StatusBadRequest),
 		},
 	}
 }

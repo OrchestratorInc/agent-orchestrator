@@ -39,6 +39,8 @@ type cuaCallResponse struct {
 	Tool   string     `json:"tool"`
 	Result any        `json:"result"`
 	Images []cuaImage `json:"images"`
+	// Notice says the user moved this chat's computer use to another computer.
+	Notice string `json:"notice,omitempty"`
 }
 
 type cuaAgentTool struct {
@@ -111,7 +113,11 @@ func (s *server) callCua(ctx context.Context, tool string, raw json.RawMessage) 
 		}
 		text = string(encoded)
 	}
-	content := []any{mcpText(strings.TrimRight(text, "\n"))}
+	text = strings.TrimRight(text, "\n")
+	if notice := strings.TrimSpace(response.Notice); notice != "" {
+		text = notice + "\n\n" + text
+	}
+	content := []any{mcpText(text)}
 	for _, image := range response.Images {
 		block, err := mcpImage(image)
 		if err != nil {

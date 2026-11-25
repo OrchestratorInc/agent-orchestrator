@@ -500,6 +500,9 @@ function CloudPausedStatus({ stage }: { stage: "paused" | "paused_by_coder" }) {
 	);
 }
 
+/** Quiet time after which the next computer-use step starts a new run, which opens the inspector. */
+const COMPUTER_USE_RUN_GAP_MS = 2 * 60_000;
+
 export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: SessionViewProps) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -2777,9 +2780,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}
 	}, [browserPoppedOut, hasInspector, inspectorView, isInspectorOpen, uiSessionId, setBrowserUnseen]);
 
-	// Computer use: the session's first call, made while this session is on
-	// screen, opens its tab. Later calls only badge it while it is not visible,
-	// so a user who closed the tab is not pulled back to it.
+	// Computer use: each run of calls that starts while this session is on
+	// screen (its first step, or one after COMPUTER_USE_RUN_GAP_MS of quiet)
+	// opens the inspector on its tab. Later steps of the same run only badge it
+	// while it is not visible, so a user who closed it mid-run stays closed.
 	const computerUseSessionId = session && !session.cloud && !hostId ? session.id : undefined;
 	const { settings: computerUseSettings } = useSettings(undefined, computerUseSessionId !== undefined);
 	const computerUseTimeline = useComputerUseTimeline(computerUseSessionId, {
@@ -2790,22 +2794,31 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// One visit to this session: steps made before it came on screen are
 	// history; steps made after are news, even when they land in the visit's
 	// first read. Reset on every session switch, before any read is checked.
-	const computerUseVisitRef = useRef<{ sessionId: string; enteredAt: number; seen: string | null; revealed: boolean } | null>(null);
+	const computerUseVisitRef = useRef<{ sessionId: string; enteredAt: number; seen: string | null } | null>(null);
 	useEffect(() => {
-		computerUseVisitRef.current = { sessionId: uiSessionId, enteredAt: Date.now(), seen: null, revealed: false };
+		computerUseVisitRef.current = { sessionId: uiSessionId, enteredAt: Date.now(), seen: null };
 	}, [uiSessionId]);
 	useEffect(() => {
 		if (!hasInspector || !computerUseTimeline.isSuccess) return;
 		const visit = computerUseVisitRef.current;
 		if (!visit || visit.sessionId !== uiSessionId || latestComputerUseStep === visit.seen) return;
+		const previousSeen = visit.seen;
 		visit.seen = latestComputerUseStep;
 		const entries = computerUseTimeline.data ?? [];
 		const latest = entries.at(-1);
 		if (!latest || Date.parse(latest.at) < visit.enteredAt || terminated) return;
-		// The session's first step ever, made while it is on screen, opens the tab.
-		const first = !visit.revealed && entries.every((entry) => Date.parse(entry.at) >= visit.enteredAt);
-		if (first) {
-			visit.revealed = true;
+		// The steps that are news: after the last one seen, made on this visit.
+		const seenIndex = previousSeen === null ? -1 : entries.findIndex((entry) => entry.id === previousSeen);
+		const fresh = entries
+			.map((entry, index) => ({ entry, index }))
+			.filter(({ entry, index }) => index > seenIndex && Date.parse(entry.at) >= visit.enteredAt);
+		// A run starts with a step that has no step before it, or only one
+		// longer ago than the gap.
+		const runStarted = fresh.some(({ entry, index }) => {
+			const before = entries[index - 1];
+			return !before || Date.parse(entry.at) - Date.parse(before.at) >= COMPUTER_USE_RUN_GAP_MS;
+		});
+		if (runStarted) {
 			setComputerUseUnseen(uiSessionId, false);
 			// A maximized Browser or Files would hide the tab it opens.
 			setBrowserPopOutState({ sessionId, phase: "docked" });

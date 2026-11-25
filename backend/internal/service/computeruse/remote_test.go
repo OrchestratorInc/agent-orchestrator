@@ -263,7 +263,7 @@ func TestRemoteSettingsPersistWithoutExposingTheCredential(t *testing.T) {
 	if _, label := reopened.CurrentTarget(ctx); label != "Studio Mac" {
 		t.Fatalf("RemoteTargetLabel() after restart = %q", label)
 	}
-	cleared, err := reopened.ClearRemoteTarget(ctx)
+	cleared, err := reopened.ClearRemoteTarget(ctx, "")
 	if err != nil || cleared.Target != nil {
 		t.Fatalf("ClearRemoteTarget() = %+v, %v", cleared, err)
 	}
@@ -541,6 +541,40 @@ func TestCallsAreBoundToTheSessionsTarget(t *testing.T) {
 	wantCode(t, err, "COMPUTER_USE_TARGET_CHANGED")
 }
 
+// Choosing a computer from a session's own panel moves that session there:
+// its calls run, and tell the agent where, while other sessions that started
+// elsewhere are still refused. Choosing again elsewhere forgets the move.
+func TestSessionMovedFromItsPanelRunsOnTheNewTarget(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(t, &fakeDriver{daemonUp: true}, "darwin")
+	setTarget(t, s, "http://127.0.0.1:1")
+	if _, err := s.ClearRemoteTarget(ctx, "ao-1"); err != nil {
+		t.Fatalf("ClearRemoteTarget() error = %v", err)
+	}
+	result, err := s.Call(ctx, CallRequest{Tool: "list_windows", SessionID: "ao-1", Target: "host-mac"})
+	if err != nil {
+		t.Fatalf("moved session's call error = %v", err)
+	}
+	if !strings.Contains(result.Notice, "moved computer use") {
+		t.Fatalf("notice = %q, want it to say computer use moved", result.Notice)
+	}
+	_, err = s.Call(ctx, CallRequest{Tool: "list_windows", SessionID: "ao-2", Target: "host-mac"})
+	wantCode(t, err, "COMPUTER_USE_TARGET_CHANGED")
+	if result, err := s.Call(ctx, CallRequest{Tool: "list_windows", SessionID: "ao-2", Target: LocalTarget}); err != nil || result.Notice != "" {
+		t.Fatalf("unmoved session's call = %q, %v; want no notice", result.Notice, err)
+	}
+
+	setTarget(t, s, "http://127.0.0.1:1")
+	if _, err := s.ClearRemoteTarget(ctx, ""); err != nil {
+		t.Fatalf("ClearRemoteTarget() error = %v", err)
+	}
+	_, err = s.Call(ctx, CallRequest{Tool: "list_windows", SessionID: "ao-1", Target: "host-mac"})
+	wantCode(t, err, "COMPUTER_USE_TARGET_CHANGED")
+
+	_, err = s.ClearRemoteTarget(ctx, "../escape")
+	wantCode(t, err, "COMPUTER_USE_INVALID_SESSION")
+}
+
 // Screenshots that would push one answer over the limit stay behind; the
 // result still goes back, and says which screenshot is missing.
 func TestRemoteResultStaysWithinTheResponseLimit(t *testing.T) {
@@ -580,7 +614,7 @@ func TestDamagedRemoteSettingsCanBeReset(t *testing.T) {
 	if _, err := s.SetAllowRemote(ctx, true); err == nil {
 		t.Fatal("SetAllowRemote(true) overwrote damaged settings")
 	}
-	settings, err := s.ClearRemoteTarget(ctx)
+	settings, err := s.ClearRemoteTarget(ctx, "")
 	if err != nil || settings.Target != nil || settings.AllowRemote {
 		t.Fatalf("ClearRemoteTarget() = %+v, %v", settings, err)
 	}
