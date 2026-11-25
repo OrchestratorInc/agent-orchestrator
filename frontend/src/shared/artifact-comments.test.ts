@@ -135,6 +135,35 @@ describe("comment bridge protocol", () => {
 		expect(parseBridgeToViewerMessage({ type: "ready", protocol: "1" })).toBeNull();
 	});
 
+	it("accepts the selection rectangle, and a cleared selection", () => {
+		expect(parseBridgeToViewerMessage({ type: "selection", path: "body>main:1>h1:1", top: 84.5, bottom: 132 })).toEqual({
+			type: "selection",
+			path: "body>main:1>h1:1",
+			top: 84.5,
+			bottom: 132,
+		});
+		expect(parseBridgeToViewerMessage({ type: "selection", path: null, top: 0, bottom: 0 })).toEqual({ type: "selection", path: null, top: 0, bottom: 0 });
+		// Above the viewport is still a real position.
+		expect(parseBridgeToViewerMessage({ type: "selection", path: "body>p:2", top: -40, bottom: -10 })).not.toBeNull();
+	});
+
+	it("drops a malformed selection", () => {
+		expect(parseBridgeToViewerMessage({ type: "selection", path: "body>p:1", top: NaN, bottom: 10 })).toBeNull();
+		expect(parseBridgeToViewerMessage({ type: "selection", path: "body>p:1", top: 0, bottom: Infinity })).toBeNull();
+		expect(parseBridgeToViewerMessage({ type: "selection", path: "body>p:1", top: "0", bottom: 10 })).toBeNull();
+		expect(parseBridgeToViewerMessage({ type: "selection", path: "<img onerror>", top: 0, bottom: 10 })).toBeNull();
+		expect(parseBridgeToViewerMessage({ type: "selection", top: 0, bottom: 10 })).toBeNull();
+		expect(parseBridgeToViewerMessage({ type: "selection", path: null, top: 0, bottom: 10, extra: "x" })).toEqual({ type: "selection", path: null, top: 0, bottom: 10 });
+	});
+
+	it("ignores message types it doesn't know, so a newer bridge can't break an older panel", () => {
+		for (const type of ["hover", "selection-v2", "future", ""]) {
+			expect(parseBridgeToViewerMessage({ type, path: "body>p:1", top: 1, bottom: 2 })).toBeNull();
+		}
+		expect(parseBridgeToViewerMessage({ path: "body>p:1" })).toBeNull();
+		expect(parseViewerToBridgeMessage({ type: "selection", path: "body>p:1", top: 1, bottom: 2 })).toBeNull();
+	});
+
 	it("strips extra fields so nothing else rides along", () => {
 		expect(parseBridgeToViewerMessage({ type: "escape", body: "x" })).toEqual({ type: "escape" });
 	});

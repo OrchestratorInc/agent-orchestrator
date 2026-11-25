@@ -41,6 +41,15 @@ export type BridgeAnchorMarker = { path: string; textHash: string; count: number
 /** `top` is in CSS px from the top of the document (not the viewport). */
 export type BridgeAnchorPosition = { path: string; top: number; found: boolean };
 
+/**
+ * Where the selected element sits in the frame's viewport, so the panel can
+ * place a popover beside it: its getBoundingClientRect() top and bottom in
+ * viewport CSS px, always finite. `path` is null after `clear`, or when the
+ * selected element isn't found; top and bottom then carry no position.
+ * Additive to protocol 1: a panel that doesn't know it drops it.
+ */
+export type BridgeSelection = { path: string | null; top: number; bottom: number };
+
 // Panel → bridge.
 export type ViewerToBridgeMessage =
 	| { type: "mode"; on: boolean; kind: ArtifactCommentsPickKind }
@@ -55,7 +64,8 @@ export type BridgeToViewerMessage =
 	| { type: "pick"; anchor: BridgePickedAnchor }
 	| { type: "marker"; path: string }
 	| { type: "positions"; positions: BridgeAnchorPosition[] }
-	| { type: "escape" };
+	| { type: "escape" }
+	| ({ type: "selection" } & BridgeSelection);
 
 const MAX_PATH_LENGTH = 2048;
 const MAX_ANCHORS = 2000;
@@ -118,6 +128,15 @@ export function parseBridgeToViewerMessage(data: unknown): BridgeToViewerMessage
 		}
 		case "escape":
 			return { type: "escape" };
+		case "selection": {
+			const { path, top, bottom } = message;
+			if (path !== null && !isPath(path)) return null;
+			if (typeof top !== "number" || !Number.isFinite(top)) return null;
+			if (typeof bottom !== "number" || !Number.isFinite(bottom)) return null;
+			return { type: "selection", path, top, bottom };
+		}
+		// Unknown types (from a newer bridge) are dropped, so adding a message
+		// never breaks an older panel.
 		default:
 			return null;
 	}
