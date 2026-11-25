@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -245,5 +246,94 @@ func TestEdit_SucceedsWhenTheLocalWriteFails(t *testing.T) {
 	writer.err = errors.New("disk full")
 	if got, err := svc.Edit(context.Background(), EditRequest{PRID: "42", PRURL: pr.URL, Title: ptr("New title"), BaseTitle: ptr("Old title")}); err != nil || got.Title != "New title" {
 		t.Fatalf("result = %#v, err %v", got, err)
+	}
+}
+
+// providerText is a provider that keeps what was last written to it, and holds
+// each write until let go, so saves can be made to overlap.
+type providerText struct {
+	mu      sync.Mutex
+	body    string
+	edits   int
+	reading chan struct{}
+	writing chan struct{}
+	release chan struct{}
+}
+
+func (p *providerText) PullRequestContent(context.Context, ports.SCMPRRef) (ports.SCMPRContent, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reading <- struct{}{}
+	return ports.SCMPRContent{Title: "Title", Body: p.body, CanEdit: true}, nil
+}
+
+func (p *providerText) EditPullRequest(_ context.Context, request ports.SCMPREditRequest) (ports.SCMPRContent, error) {
+	p.writing <- struct{}{}
+	<-p.release
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.edits++
+	p.body = *request.Body
+	return ports.SCMPRContent{Title: "Title", Body: p.body}, nil
+}
+
+func TestEdit_ASaveMadeAlongsideAnotherConflictsInsteadOfReplacingIt(t *testing.T) {
+	pr, _, _, _, _ := editFixture()
+	provider := &providerText{body: "base", reading: make(chan struct{}, 4), writing: make(chan struct{}, 4), release: make(chan struct{})}
+	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Editor: provider, EditWriter: &fakeEditWriter{}, Refresher: &fakeRefresher{}})
+	save := func(body string) chan error {
+		done := make(chan error, 1)
+		go func() {
+			_, err := svc.Edit(context.Background(), EditRequest{PRID: "42", PRURL: pr.URL, Body: ptr(body), BaseBody: ptr("base")})
+			done <- err
+		}()
+		return done
+	}
+
+	first := save("first")
+	<-provider.reading
+	<-provider.writing
+	second := save("second")
+	// The second save waits: it doesn't read the text the first is replacing.
+	select {
+	case <-provider.reading:
+		t.Fatal("the second save read the provider while the first was writing")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(provider.release)
+	if err := <-first; err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	if err := <-second; !errors.Is(err, ErrPREditConflict) {
+		t.Fatalf("second save error = %v, want a conflict", err)
+	}
+	if provider.body != "first" || provider.edits != 1 {
+		t.Fatalf("provider holds %q after %d edits, want the first save kept", provider.body, provider.edits)
+	}
+	if len(svc.editLocks.locks) != 0 {
+		t.Fatalf("locks left behind: %d", len(svc.editLocks.locks))
+	}
+}
+
+func TestEditLocks_WaitsPerPullRequestAndGivesUpWithTheCaller(t *testing.T) {
+	var locks editLocks
+	release, err := locks.acquire(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := locks.acquire(context.Background(), "b")
+	if err != nil {
+		t.Fatalf("another pull request waited: %v", err)
+	}
+	other()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := locks.acquire(ctx, "a"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want canceled", err)
+	}
+	release()
+	if len(locks.locks) != 0 {
+		t.Fatalf("locks left behind: %d", len(locks.locks))
 	}
 }

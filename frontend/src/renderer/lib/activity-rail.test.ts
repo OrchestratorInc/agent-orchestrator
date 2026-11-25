@@ -66,6 +66,59 @@ describe("buildActivityRail", () => {
 		expect(events[0]!.commits).toEqual([{ sha: "c3", subject: "subject c3", at: "2026-10-21T11:00:00Z" }, { sha: "c2", subject: "subject c2", at: "2026-10-21T10:00:00Z" }]);
 	});
 
+	it("folds one person's commits on one day around what someone else did in between", () => {
+		const events = buildActivityRail({
+			commits: [commit("c3", "2026-10-21T11:00:00Z"), commit("c2", "2026-10-21T10:00:00Z", "grace"), commit("c1", "2026-10-21T09:00:00Z")],
+			prs: [],
+		}, utcDay);
+		expect(events.map((event) => [event.author, event.count, event.at])).toEqual([["ada", 2, "2026-10-21T11:00:00Z"], ["grace", 1, "2026-10-21T10:00:00Z"]]);
+		expect(events[0]!.commits!.map((item) => item.sha)).toEqual(["c3", "c1"]);
+	});
+
+	it("folds a reviewer's notes around a comment, resolved only when every thread is, and not across PRs", () => {
+		const note = (id: string, path: string, at: string, resolved = true) => ({ id, path, resolved, comments: [{ id: `${id}-n`, author: "grace", isBot: false, body: "x", createdAt: at }] });
+		const other = "https://api.github.com/repos/acme/repo/pulls/8";
+		const events = buildActivityRail({
+			commits: [],
+			prs: [
+				pr({
+					conversation: [{ id: "c1", author: "ada", isBot: false, body: "Thanks", createdAt: "2026-10-21T10:00:00Z" }],
+					threads: [note("t1", "a.ts", "2026-10-21T09:00:00Z", false), note("t2", "b.ts", "2026-10-21T11:00:00Z")],
+				}),
+				pr({ url: other, number: 8, threads: [note("t3", "c.ts", "2026-10-21T10:30:00Z")] }),
+			],
+		}, utcDay);
+		expect(events.map((event) => [event.kind, event.count, event.detail, event.resolved, event.pr?.number])).toEqual([
+			["reviewNotes", 2, "b.ts · a.ts", false, 7],
+			["reviewNotes", 1, "c.ts", true, 8],
+			["comment", 1, "Thanks", undefined, 7],
+		]);
+	});
+
+	it("keeps a review its reviewer later followed with another", () => {
+		const latest = { reviewerId: "grace", verdict: "none" as const, submittedAt: "2026-10-21T12:00:00Z", autoInjectReview: false };
+		const history = [
+			{ id: "r1", reviewerId: "grace", verdict: "changes_requested" as const, body: "Needs tests", submittedAt: "2026-10-21T09:00:00Z" },
+			{ id: "r2", reviewerId: "grace", verdict: "approved" as const, submittedAt: "2026-10-21T11:00:00Z" },
+		];
+		const rail = (review: Partial<SessionPRSummary["review"]>) => buildActivityRail({
+			commits: [],
+			prs: [pr({ review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [latest], ...review } })],
+		}, utcDay);
+		expect(rail({ history }).map((event) => [event.key, event.kind])).toEqual([[`review:${pr().url}:r2`, "approved"], [`review:${pr().url}:r1`, "changes"]]);
+		// A host without the history still shows each reviewer's newest review.
+		expect(rail({}).map((event) => event.kind)).toEqual([]);
+		expect(rail({ reviews: [{ ...latest, verdict: "approved" }] }).map((event) => event.kind)).toEqual(["approved"]);
+	});
+
+	it("tells two PRs' approvals apart when the provider names both by who approved", () => {
+		const history = [{ id: "approval:grace", reviewerId: "grace", verdict: "approved" as const, submittedAt: "2026-10-21T11:00:00Z" }];
+		const review = { decision: "approved" as const, hasUnresolvedHumanComments: false, unresolvedBy: [], history };
+		const events = buildActivityRail({ commits: [], prs: [pr({ review }), pr({ url: "https://gitlab.com/acme/repo/-/merge_requests/8", number: 8, review })] }, utcDay);
+		expect(events).toHaveLength(2);
+		expect(new Set(events.map((event) => event.key)).size).toBe(2);
+	});
+
 	it("keeps only the newest 50 commits", () => {
 		const commits = Array.from({ length: 60 }, (_, index) => commit(`sha${String(index).padStart(5, "0")}`, new Date(Date.UTC(2026, 9, 1) + index * 86_400_000).toISOString()));
 		const events = buildActivityRail({ commits: [...commits].reverse(), prs: [] }, utcDay);
@@ -119,6 +172,12 @@ describe("buildActivityRail", () => {
 		}, utcDay);
 		expect(events.map((event) => [event.kind, event.author])).toEqual([["approved", "grace"], ["changes", "linus"], ["reviewed", "ada"]]);
 		expect(events[1]!.detail).toBe("Needs tests");
+	});
+});
+
+describe("commentExcerpt on a cut body", () => {
+	it("drops an HTML comment the cut left open", () => {
+		expect(commentExcerpt("Fine overall\n<!-- generated: abc")).toBe("Fine overall");
 	});
 });
 

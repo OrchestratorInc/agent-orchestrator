@@ -102,7 +102,8 @@ func (s *ActionService) EditContent(ctx context.Context, prID, prURL string) (Ed
 // Edit changes a tracked PR's title, description, or both. It reads the
 // provider's current text first and refuses when that is not what the editor
 // started from; on success the new text is stored at once and the observer is
-// asked to reconcile the rest.
+// asked to reconcile the rest. Saves to one PR go one at a time, so a save made
+// alongside another conflicts with it instead of replacing it.
 func (s *ActionService) Edit(ctx context.Context, request EditRequest) (EditResult, error) {
 	if request.Title == nil && request.Body == nil {
 		return EditResult{}, fmt.Errorf("%w: a title or a description is required", ErrInvalidEdit)
@@ -140,6 +141,12 @@ func (s *ActionService) Edit(ctx context.Context, request EditRequest) (EditResu
 	if tracked.Merged || tracked.Closed {
 		return EditResult{}, fmt.Errorf("%w: pull request is not open", ErrInvalidTransition)
 	}
+
+	release, err := s.editLocks.acquire(ctx, editLockKey(ref))
+	if err != nil {
+		return EditResult{}, fmt.Errorf("wait for another edit of the pull request: %w", err)
+	}
+	defer release()
 
 	current, err := s.editor.PullRequestContent(ctx, ref)
 	if err != nil {

@@ -150,6 +150,7 @@ type ActionService struct {
 	headChecks    ports.SCMHeadChecksReader
 	editor        ports.SCMPREditor
 	editWriter    EditWriter
+	editLocks     editLocks
 	queuer        ports.SCMMergeQueuer
 	queueWriter   MergeQueueWriter
 }

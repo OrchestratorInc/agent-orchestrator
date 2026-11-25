@@ -28,6 +28,9 @@ type PRReviewSummary = contract.PullRequestReviewSummary
 // verdict and the body they submitted with it.
 type PRReviewEntry = contract.PullRequestSubmittedReview
 
+// PRReviewEvent is one submitted review in a PR's history.
+type PRReviewEvent = contract.PullRequestReviewEvent
+
 // PRUnresolvedReviewer groups unresolved human comments by reviewer.
 type PRUnresolvedReviewer = contract.PullRequestUnresolvedReviewer
 
@@ -437,6 +440,7 @@ func summarizeReview(pr domain.PullRequest, comments []domain.PullRequestComment
 		})
 	}
 	sort.Slice(out.Reviews, func(i, j int) bool { return out.Reviews[i].Reviewer < out.Reviews[j].Reviewer })
+	out.History = reviewHistory(reviews)
 	if pr.Merged || pr.Closed {
 		return out
 	}
@@ -515,6 +519,46 @@ func summarizeReview(pr domain.PullRequest, comments []domain.PullRequestComment
 			break
 		}
 	}
+	return out
+}
+
+// reviewHistory lists every submitted review that gave a verdict or said
+// something, oldest first. A comment-only review without a body is left out: a
+// provider records a reply in a thread as one, and the thread already has it.
+// One stored under two of the PR's URLs is listed once.
+func reviewHistory(reviews []domain.PullRequestReview) []PRReviewEvent {
+	var out []PRReviewEvent
+	seen := map[string]bool{}
+	for _, review := range reviews {
+		decisive := review.State == domain.ReviewApproved || review.State == domain.ReviewChangesRequest
+		if review.State == domain.ReviewRequired || (!decisive && strings.TrimSpace(review.Body) == "") || seen[review.ID] {
+			continue
+		}
+		seen[review.ID] = true
+		reviewer := strings.TrimSpace(review.Author)
+		if reviewer == "" {
+			reviewer = "unknown"
+		}
+		body := review.Body
+		if runes := []rune(body); len(runes) > contract.MaxPullRequestReviewEventBody {
+			body = string(runes[:contract.MaxPullRequestReviewEventBody])
+		}
+		out = append(out, PRReviewEvent{
+			ID:          review.ID,
+			Reviewer:    reviewer,
+			Verdict:     reviewOrNone(review.State),
+			Body:        body,
+			URL:         review.URL,
+			SubmittedAt: review.SubmittedAt,
+			IsBot:       review.IsBot,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].SubmittedAt.Equal(out[j].SubmittedAt) {
+			return out[i].SubmittedAt.Before(out[j].SubmittedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 

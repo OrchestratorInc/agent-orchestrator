@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { InspectorSectionActionSlot } from "@aoagents/product-ui";
 import { Trans, useTranslation } from "react-i18next";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { filterRail, foldRail, localDay, railEvents, railWorkItems, NO_RAIL_FILTER, railFilterActive, railGroupCounts, type RailCommit, type RailEvent, type RailFilter, type RailKind, type RailSender, type RailTurn, type RailWork, type RailWorkItem } from "../lib/activity-rail";
+import { filterRail, foldRail, localDay, railEvents, railReviews, railWorkItems, NO_RAIL_FILTER, railFilterActive, railGroupCounts, type RailCommit, type RailEvent, type RailFilter, type RailKind, type RailSender, type RailTurn, type RailWork, type RailWorkItem } from "../lib/activity-rail";
 import { sessionUiKey } from "../lib/hosts";
 import { openPRTab } from "../lib/pr-tabs";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -64,7 +64,7 @@ function prLogins(prs: SessionPRSummary[]): Set<string> {
 		if (pr.author) logins.add(pr.author);
 		for (const comment of pr.conversation ?? []) logins.add(comment.author);
 		for (const thread of pr.threads ?? []) for (const comment of thread.comments) logins.add(comment.author);
-		for (const review of pr.review.reviews ?? []) logins.add(review.reviewerId);
+		for (const review of railReviews(pr)) logins.add(review.reviewerId);
 	}
 	return logins;
 }

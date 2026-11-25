@@ -14,6 +14,9 @@ import { TooltipProvider } from "./ui/tooltip";
 // The rail sits in the inspector's Activity section, whose header holds its filter.
 const render = (ui: ReactElement) => renderBare(<InspectorSection title="Activity">{ui}</InspectorSection>, { wrapper: TooltipProvider });
 
+// A time on this machine's clock, so a test's days are the same days in every time zone.
+const local = (time: string) => new Date(time).toISOString();
+
 const URL = "https://api.github.com/repos/acme/repo/pulls/7";
 
 const pr = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
@@ -35,7 +38,7 @@ const pr = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
 	ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
 	review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] },
 	mergeability: { state: "mergeable", reasons: [], prUrl: "https://github.com/acme/repo/pull/7", conflictFiles: [] },
-	updatedAt: "2026-10-22T00:00:00Z",
+	updatedAt: local("2026-10-22T00:00:00"),
 	...overrides,
 });
 
@@ -48,8 +51,8 @@ const session: WorkspaceSession = {
 	kind: "worker",
 	branch: "fix/dashboard",
 	status: "needs_input",
-	createdAt: "2026-10-20T08:00:00Z",
-	updatedAt: "2026-10-20T08:00:00Z",
+	createdAt: local("2026-10-20T08:00:00"),
+	updatedAt: local("2026-10-20T08:00:00"),
 	prs: [],
 };
 
@@ -64,10 +67,10 @@ describe("ActivityRail", () => {
 	it("puts people on the line under day dividers, newest first", () => {
 		render(
 			<ActivityRail
-				commits={[{ sha: "aaaaaaa1", subject: "Fix the chart", timestamp: "2026-10-20T09:00:00Z", author: "ada" }]}
+				commits={[{ sha: "aaaaaaa1", subject: "Fix the chart", timestamp: local("2026-10-20T09:00:00"), author: "ada" }]}
 				prs={[pr({
-					createdAt: "2026-10-20T10:00:00Z",
-					conversation: [{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: "2026-10-21T10:00:00Z" }],
+					createdAt: local("2026-10-20T10:00:00"),
+					conversation: [{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: local("2026-10-21T10:00:00") }],
 				})]}
 				session={session}
 				status={<span>Idle</span>}
@@ -87,7 +90,7 @@ describe("ActivityRail", () => {
 		expect(rows[3]).toContain("fix/dashboard");
 		// Each day its own list under its divider, after today's, which holds only
 		// the agent's state now. (Counted in this machine's time zone, as the rail does.)
-		const days = new Set(["2026-10-20T08:00:00Z", "2026-10-20T09:00:00Z", "2026-10-20T10:00:00Z", "2026-10-21T10:00:00Z"].map((at) => new Date(at).toDateString()));
+		const days = new Set([local("2026-10-20T08:00:00"), local("2026-10-20T09:00:00"), local("2026-10-20T10:00:00"), local("2026-10-21T10:00:00")].map((at) => new Date(at).toDateString()));
 		expect(within(rail).getAllByRole("list")).toHaveLength(days.size + 1);
 		expect(rail.textContent?.startsWith("Today")).toBe(true);
 		// The state is the first row, but not one of the list's events.
@@ -109,19 +112,19 @@ describe("ActivityRail", () => {
 		const review = (reviewerId: string, verdict: "approved" | "changes_requested", submittedAt: string) => ({ reviewerId, verdict, submittedAt, autoInjectReview: false, reviewUrl: `https://github.com/acme/repo/pull/7#${reviewerId}` });
 		render(
 			<ActivityRail
-				commits={[{ sha: "aaaaaaa1", subject: "Fix the chart", timestamp: "2026-10-20T09:00:00Z", author: "ada" }]}
+				commits={[{ sha: "aaaaaaa1", subject: "Fix the chart", timestamp: local("2026-10-20T09:00:00"), author: "ada" }]}
 				prs={[
 					pr({
 						state: "merged",
-						createdAt: "2026-10-20T10:00:00Z",
-						stateChangedAt: "2026-10-20T15:00:00Z",
-						conversation: [{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: "2026-10-20T11:00:00Z" }],
+						createdAt: local("2026-10-20T10:00:00"),
+						stateChangedAt: local("2026-10-20T15:00:00"),
+						conversation: [{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: local("2026-10-20T11:00:00") }],
 						review: {
 							decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [],
-							reviews: [review("linus", "changes_requested", "2026-10-20T12:00:00Z"), review("grace", "approved", "2026-10-20T13:00:00Z")],
+							reviews: [review("linus", "changes_requested", local("2026-10-20T12:00:00")), review("grace", "approved", local("2026-10-20T13:00:00"))],
 						},
 					}),
-					pr({ url: `${URL}8`, number: 8, state: "closed", createdAt: "2026-10-20T10:30:00Z", stateChangedAt: "2026-10-20T14:00:00Z" }),
+					pr({ url: `${URL}8`, number: 8, state: "closed", createdAt: local("2026-10-20T10:30:00"), stateChangedAt: local("2026-10-20T14:00:00") }),
 				]}
 				session={session}
 				status={<span>Idle</span>}
@@ -142,8 +145,8 @@ describe("ActivityRail", () => {
 	it("names a commit's author in words when they aren't anyone on the PR, with no face", () => {
 		render(
 			<ActivityRail
-				commits={[{ sha: "bbbbbbb1", subject: "Tidy", timestamp: "2026-10-20T09:00:00Z", author: "Ada Lovelace" }, { sha: "ccccccc1", subject: "More", timestamp: "2026-10-19T09:00:00Z", author: "torvalds" }]}
-				prs={[pr({ createdAt: "2026-10-20T10:00:00Z" })]}
+				commits={[{ sha: "bbbbbbb1", subject: "Tidy", timestamp: local("2026-10-20T09:00:00"), author: "Ada Lovelace" }, { sha: "ccccccc1", subject: "More", timestamp: local("2026-10-19T09:00:00"), author: "torvalds" }]}
+				prs={[pr({ createdAt: local("2026-10-20T10:00:00") })]}
 				session={session}
 				status={<span>Idle</span>}
 			/>,
@@ -159,8 +162,8 @@ describe("ActivityRail", () => {
 			<ActivityRail
 				commits={[
 					// Half an hour apart at an hour no time zone turns midnight in: one day everywhere.
-					{ sha: "bbbbbbb2", subject: "Second", timestamp: "2026-10-20T12:30:00Z", author: "ada" },
-					{ sha: "aaaaaaa1", subject: "First", timestamp: "2026-10-20T12:00:00Z", author: "ada" },
+					{ sha: "bbbbbbb2", subject: "Second", timestamp: local("2026-10-20T12:30:00"), author: "ada" },
+					{ sha: "aaaaaaa1", subject: "First", timestamp: local("2026-10-20T12:00:00"), author: "ada" },
 				]}
 				prs={[]}
 				session={session}
@@ -182,8 +185,8 @@ describe("ActivityRail", () => {
 				<ActivityRail
 					commits={[]}
 					prs={[pr({
-						createdAt: "2026-10-20T10:00:00Z",
-						conversation: [{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: "2026-10-21T10:00:00Z" }],
+						createdAt: local("2026-10-20T10:00:00"),
+						conversation: [{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: local("2026-10-21T10:00:00") }],
 					})]}
 					session={session}
 					status={null}
@@ -207,12 +210,12 @@ describe("ActivityRail", () => {
 	// A session keeps its filter while the app is open, so each test filters its own.
 	const filtered = (id: string) => (
 		<ActivityRail
-			commits={[{ sha: "aaaaaaa1", subject: "Fix the chart", timestamp: "2026-10-20T09:00:00Z", author: "ada" }]}
+			commits={[{ sha: "aaaaaaa1", subject: "Fix the chart", timestamp: local("2026-10-20T09:00:00"), author: "ada" }]}
 			prs={[pr({
-				createdAt: "2026-10-20T10:00:00Z",
+				createdAt: local("2026-10-20T10:00:00"),
 				conversation: [
-					{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: "2026-10-21T10:00:00Z" },
-					{ id: "c2", author: "review-bot", isBot: true, body: "Summary", createdAt: "2026-10-21T11:00:00Z" },
+					{ id: "c1", author: "grace", isBot: false, body: "Looks good", createdAt: local("2026-10-21T10:00:00") },
+					{ id: "c2", author: "review-bot", isBot: true, body: "Summary", createdAt: local("2026-10-21T11:00:00") },
 				],
 			})]}
 			session={{ ...session, id }}
@@ -286,11 +289,11 @@ describe("ActivityRail", () => {
 	describe("the agent's side", () => {
 		const work = {
 			turns: [
-				{ id: "t1", at: "2026-10-20T09:00:00Z", sender: "you" as const, text: "Fix the chart", turn: { state: "completed" as const, ms: 480_000, files: 2 } },
-				{ id: "t2", at: "2026-10-20T11:00:00Z", sender: "orchestrator" as const, text: "The lint check failed", turn: { state: "failed" as const, ms: 60_000, error: "Rate limited" } },
-				{ id: "t3", at: "2026-10-20T12:00:00Z", sender: "automation" as const, text: "Nightly tidy", turn: { state: "running" as const } },
+				{ id: "t1", at: local("2026-10-20T09:00:00"), sender: "you" as const, text: "Fix the chart", turn: { state: "completed" as const, ms: 480_000, files: 2 } },
+				{ id: "t2", at: local("2026-10-20T11:00:00"), sender: "orchestrator" as const, text: "The lint check failed", turn: { state: "failed" as const, ms: 60_000, error: "Rate limited" } },
+				{ id: "t3", at: local("2026-10-20T12:00:00"), sender: "automation" as const, text: "Nightly tidy", turn: { state: "running" as const } },
 			],
-			asks: [{ id: "a1", at: "2026-10-20T09:03:00Z", kind: "approval" as const, summary: "Run npm test", waiting: true }, { id: "a2", at: "2026-10-20T09:05:00Z", kind: "question" as const, summary: "Which branch?", waiting: false }],
+			asks: [{ id: "a1", at: local("2026-10-20T09:03:00"), kind: "approval" as const, summary: "Run npm test", waiting: true }, { id: "a2", at: local("2026-10-20T09:05:00"), kind: "question" as const, summary: "Which branch?", waiting: false }],
 		};
 
 		it("shows what was asked, who sent it and how the turn went", () => {
@@ -351,14 +354,14 @@ describe("ActivityRail", () => {
 			const user = userEvent.setup();
 			const sitting = {
 				turns: [
-					{ id: "t0", at: "2026-10-20T08:50:00Z", sender: "you" as const, text: "Sketch the chart", turn: { state: "completed" as const, ms: 120_000 } },
-					{ id: "t1", at: "2026-10-20T09:00:00Z", sender: "you" as const, text: "Add the chart", turn: { state: "completed" as const, ms: 300_000, files: 1, paths: ["chart.ts"] } },
-					{ id: "t2", at: "2026-10-20T09:10:00Z", sender: "you" as const, text: "Run the tests", turn: { state: "failed" as const, ms: 60_000, error: "Usage limit reached" } },
-					{ id: "t3", at: "2026-10-20T09:15:00Z", sender: "you" as const, text: "Push it", turn: { state: "completed" as const, ms: 120_000, files: 1, paths: ["chart.ts"] } },
+					{ id: "t0", at: local("2026-10-20T08:50:00"), sender: "you" as const, text: "Sketch the chart", turn: { state: "completed" as const, ms: 120_000 } },
+					{ id: "t1", at: local("2026-10-20T09:00:00"), sender: "you" as const, text: "Add the chart", turn: { state: "completed" as const, ms: 300_000, files: 1, paths: ["chart.ts"] } },
+					{ id: "t2", at: local("2026-10-20T09:10:00"), sender: "you" as const, text: "Run the tests", turn: { state: "failed" as const, ms: 60_000, error: "Usage limit reached" } },
+					{ id: "t3", at: local("2026-10-20T09:15:00"), sender: "you" as const, text: "Push it", turn: { state: "completed" as const, ms: 120_000, files: 1, paths: ["chart.ts"] } },
 				],
-				asks: [{ id: "a1", at: "2026-10-20T09:16:00Z", kind: "approval" as const, summary: "Run git push", waiting: false, turnId: "t3" }],
+				asks: [{ id: "a1", at: local("2026-10-20T09:16:00"), kind: "approval" as const, summary: "Run git push", waiting: false, turnId: "t3" }],
 			};
-			render(<ActivityRail commits={[{ sha: "aaaaaaa1", subject: "feat: chart", timestamp: "2026-10-20T09:04:00Z", author: "ada" }]} prs={[]} session={{ ...session, id: "sess-sitting" }} status={<span>Idle</span>} work={sitting} />);
+			render(<ActivityRail commits={[{ sha: "aaaaaaa1", subject: "feat: chart", timestamp: local("2026-10-20T09:04:00"), author: "ada" }]} prs={[]} session={{ ...session, id: "sess-sitting" }} status={<span>Idle</span>} work={sitting} />);
 			const rail = screen.getByTestId("activity-rail");
 			const rows = within(rail).getAllByRole("listitem");
 			// One row for the sitting, plus the session's creation.
@@ -393,8 +396,8 @@ describe("ActivityRail", () => {
 		it("shows a list one line past the preview whole, rather than hide one line behind a button", async () => {
 			const user = userEvent.setup();
 			const four = {
-				turns: ["09:00", "09:05", "09:10", "09:15"].map((time, index) => ({ id: `t${index}`, at: `2026-10-20T${time}:00Z`, sender: "you" as const, text: `Step ${index}`, turn: { state: "completed" as const, ms: 60_000 } })),
-				asks: [{ id: "a1", at: "2026-10-20T09:16:00Z", kind: "question" as const, summary: "Which one?", waiting: false, turnId: "t3" }],
+				turns: ["09:00", "09:05", "09:10", "09:15"].map((time, index) => ({ id: `t${index}`, at: local(`2026-10-20T${time}:00`), sender: "you" as const, text: `Step ${index}`, turn: { state: "completed" as const, ms: 60_000 } })),
+				asks: [{ id: "a1", at: local("2026-10-20T09:16:00"), kind: "question" as const, summary: "Which one?", waiting: false, turnId: "t3" }],
 			};
 			render(<ActivityRail commits={[]} prs={[]} session={{ ...session, id: "sess-four" }} status={<span>Idle</span>} work={four} />);
 			const rail = screen.getByTestId("activity-rail");
@@ -408,8 +411,8 @@ describe("ActivityRail", () => {
 
 		it("shows the two newest days and folds older ones behind a button that says how many rows", async () => {
 			const user = userEvent.setup();
-			const days = { turns: ["2026-10-18T09:00:00Z", "2026-10-19T09:00:00Z", "2026-10-20T09:00:00Z", "2026-10-21T09:00:00Z"].map((at, index) => ({ id: `t${index}`, at, sender: "orchestrator" as const, text: `Check ${index}`, turn: { state: "completed" as const, ms: 60_000 } })), asks: [] };
-			render(<ActivityRail commits={[]} prs={[]} session={{ ...session, id: "sess-days", createdAt: "2026-10-18T08:00:00Z" }} status={<span>Idle</span>} work={days} />);
+			const days = { turns: [local("2026-10-18T09:00:00"), local("2026-10-19T09:00:00"), local("2026-10-20T09:00:00"), local("2026-10-21T09:00:00")].map((at, index) => ({ id: `t${index}`, at, sender: "orchestrator" as const, text: `Check ${index}`, turn: { state: "completed" as const, ms: 60_000 } })), asks: [] };
+			render(<ActivityRail commits={[]} prs={[]} session={{ ...session, id: "sess-days", createdAt: local("2026-10-18T08:00:00") }} status={<span>Idle</span>} work={days} />);
 			const rail = screen.getByTestId("activity-rail");
 			expect(within(rail).getAllByRole("listitem")).toHaveLength(2);
 			const more = within(rail).getByTestId("activity-rail-earlier");

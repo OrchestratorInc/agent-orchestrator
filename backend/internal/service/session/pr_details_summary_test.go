@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,42 @@ func TestSummarizeReviewKeepsSubmittedReviewsForAFinishedPR(t *testing.T) {
 	open := summarizeReview(domain.PullRequest{URL: "u", Number: 1}, comments, reviews, nil, true)
 	if len(open.Reviews) != 2 || len(open.UnresolvedBy) == 0 {
 		t.Fatalf("open PR: reviews = %+v, unresolved = %+v, want both", open.Reviews, open.UnresolvedBy)
+	}
+}
+
+// A reviewer's later review doesn't erase their earlier ones from the history.
+func TestSummarizeReviewKeepsEveryReviewInItsHistory(t *testing.T) {
+	at := func(hour int) time.Time { return time.Date(2026, 10, 20, hour, 0, 0, 0, time.UTC) }
+	reviews := []domain.PullRequestReview{
+		{ID: "r4", Author: "amy", State: domain.ReviewNone, Body: "one more thought", SubmittedAt: at(12)},
+		{ID: "r1", Author: "amy", State: domain.ReviewChangesRequest, Body: strings.Repeat("é", contract.MaxPullRequestReviewEventBody+5), SubmittedAt: at(9)},
+		{ID: "r2", Author: "amy", State: domain.ReviewApproved, URL: "https://example.com/r2", SubmittedAt: at(10)},
+		// A thread reply, which the provider records as a review of its own.
+		{ID: "r3", Author: "amy", State: domain.ReviewNone, SubmittedAt: at(11)},
+		{ID: "r5", Author: "bot", State: domain.ReviewNone, Body: "summary", IsBot: true, SubmittedAt: at(12)},
+		// The same review, stored under the PR's other URL.
+		{ID: "r2", Author: "amy", State: domain.ReviewApproved, URL: "https://example.com/r2", SubmittedAt: at(10)},
+		{ID: "r6", Author: "amy", State: domain.ReviewRequired, Body: "not a submitted review", SubmittedAt: at(13)},
+	}
+	for name, pr := range map[string]domain.PullRequest{"open": {URL: "u", Number: 1}, "merged": {URL: "u", Number: 1, Merged: true}} {
+		got := summarizeReview(pr, nil, reviews, nil, true)
+		var ids []string
+		for _, event := range got.History {
+			ids = append(ids, event.ID)
+		}
+		if strings.Join(ids, " ") != "r1 r2 r4 r5" {
+			t.Fatalf("%s: history = %v, want r1 r2 r4 r5", name, ids)
+		}
+		if n := len([]rune(got.History[0].Body)); n != contract.MaxPullRequestReviewEventBody {
+			t.Errorf("%s: body = %d runes, want the cap", name, n)
+		}
+		if approved := got.History[1]; approved.Verdict != domain.ReviewApproved || approved.Reviewer != "amy" || approved.URL != "https://example.com/r2" {
+			t.Errorf("%s: approval = %+v", name, approved)
+		}
+		// The summary itself still has one review per reviewer.
+		if len(got.Reviews) != 2 {
+			t.Errorf("%s: reviews = %+v, want each reviewer's newest", name, got.Reviews)
+		}
 	}
 }
 

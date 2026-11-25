@@ -9176,10 +9176,22 @@ export interface components {
             /** @enum {string} */
             verdict: "none" | "approved" | "changes_requested" | "review_required";
         };
+        SessionPRReviewEvent: {
+            body?: string;
+            id: string;
+            isBot?: boolean;
+            reviewUrl?: string;
+            reviewerId: string;
+            /** Format: date-time */
+            submittedAt: string;
+            /** @enum {string} */
+            verdict: "none" | "approved" | "changes_requested" | "review_required";
+        };
         SessionPRReviewSummary: {
             /** @enum {string} */
             decision: "none" | "approved" | "changes_requested" | "review_required";
             hasUnresolvedHumanComments: boolean;
+            history?: components["schemas"]["SessionPRReviewEvent"][];
             resolvedBy?: components["schemas"]["SessionPRUnresolvedReviewer"][];
             reviews?: components["schemas"]["SessionPRReviewEntry"][];
             unresolvedBy: components["schemas"]["SessionPRUnresolvedReviewer"][];

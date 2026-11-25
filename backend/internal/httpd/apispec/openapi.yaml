@@ -26178,6 +26178,34 @@ components:
       - submittedAt
       - autoInjectReview
       type: object
+    SessionPRReviewEvent:
+      properties:
+        body:
+          type: string
+        id:
+          type: string
+        isBot:
+          type: boolean
+        reviewUrl:
+          type: string
+        reviewerId:
+          type: string
+        submittedAt:
+          format: date-time
+          type: string
+        verdict:
+          enum:
+          - none
+          - approved
+          - changes_requested
+          - review_required
+          type: string
+      required:
+      - id
+      - reviewerId
+      - verdict
+      - submittedAt
+      type: object
     SessionPRReviewSummary:
       properties:
         decision:
@@ -26189,6 +26217,10 @@ components:
           type: string
         hasUnresolvedHumanComments:
           type: boolean
+        history:
+          items:
+            $ref: '#/components/schemas/SessionPRReviewEvent'
+          type: array
         resolvedBy:
           items:
             $ref: '#/components/schemas/SessionPRUnresolvedReviewer'

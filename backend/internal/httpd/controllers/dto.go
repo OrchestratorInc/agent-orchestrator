@@ -1718,6 +1718,7 @@ type SessionPRReviewSummary struct {
 	UnresolvedBy               []SessionPRUnresolvedReviewer `json:"unresolvedBy"`
 	ResolvedBy                 []SessionPRUnresolvedReviewer `json:"resolvedBy,omitempty"`
 	Reviews                    []SessionPRReviewEntry        `json:"reviews,omitempty"`
+	History                    []SessionPRReviewEvent        `json:"history,omitempty"`
 }
 
 // SessionPRReviewEntry is one submitted provider review summary: a reviewer's
@@ -1730,6 +1731,18 @@ type SessionPRReviewEntry struct {
 	SubmittedAt      time.Time             `json:"submittedAt"`
 	IsBot            bool                  `json:"isBot,omitempty"`
 	AutoInjectReview bool                  `json:"autoInjectReview"`
+}
+
+// SessionPRReviewEvent is one submitted review in a PR's history: every review
+// that gave a verdict or said something, not only each reviewer's newest.
+type SessionPRReviewEvent struct {
+	ID          string                `json:"id"`
+	ReviewerID  string                `json:"reviewerId"`
+	Verdict     domain.ReviewDecision `json:"verdict" enum:"none,approved,changes_requested,review_required"`
+	Body        string                `json:"body,omitempty"`
+	ReviewURL   string                `json:"reviewUrl,omitempty"`
+	SubmittedAt time.Time             `json:"submittedAt"`
+	IsBot       bool                  `json:"isBot,omitempty"`
 }
 
 // SessionPRUnresolvedReviewer groups review comments by reviewer.
@@ -1942,6 +1955,18 @@ func newSessionPRReviewSummary(in sessionsvc.PRReviewSummary) SessionPRReviewSum
 			AutoInjectReview: review.AutoInjectReview,
 		})
 	}
+	history := make([]SessionPRReviewEvent, 0, len(in.History))
+	for _, review := range in.History {
+		history = append(history, SessionPRReviewEvent{
+			ID:          review.ID,
+			ReviewerID:  review.Reviewer,
+			Verdict:     review.Verdict,
+			Body:        review.Body,
+			ReviewURL:   review.URL,
+			SubmittedAt: review.SubmittedAt,
+			IsBot:       review.IsBot,
+		})
+	}
 	return SessionPRReviewSummary{
 		Decision:                   in.Decision,
 		HasUnresolvedHumanComments: in.HasUnresolvedHumanComments,
@@ -1949,6 +1974,7 @@ func newSessionPRReviewSummary(in sessionsvc.PRReviewSummary) SessionPRReviewSum
 		UnresolvedBy:               reviewers,
 		ResolvedBy:                 resolvedReviewers,
 		Reviews:                    entries,
+		History:                    history,
 	}
 }
 

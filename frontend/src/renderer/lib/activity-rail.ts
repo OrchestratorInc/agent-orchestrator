@@ -143,8 +143,8 @@ const RAIL_TURN_LIMIT = 50;
  * The session's activity, newest first: its creation, what the agent was
  * asked and how each turn went, where it stopped to ask, commits, the PRs'
  * opening and closing, and what people said on them (comments, review notes
- * and replies, approvals and change requests). A person's commits or review
- * notes on one day fold into one row.
+ * and replies, approvals and change requests). A person's commits, or review
+ * notes on one PR, on one day fold into one row.
  *
  * GitHub records a reply in a review thread as its own review, so a review
  * shows only when it approves, asks for changes or says something itself;
@@ -198,14 +198,27 @@ export function railEvents({ createdAt, branch, commits, prs, work }: RailInput)
 				});
 			});
 		}
-		for (const review of pr.review.reviews ?? []) {
+		for (const review of railReviews(pr)) {
 			const kind: RailKind | undefined = review.verdict === "approved" ? "approved" : review.verdict === "changes_requested" ? "changes" : review.body?.trim() ? "reviewed" : undefined;
 			if (!kind) continue;
-			events.push({ key: `review:${review.reviewUrl ?? `${review.reviewerId}:${review.submittedAt}`}`, kind, at: review.submittedAt, author: review.reviewerId, bot: review.isBot, count: 1, detail: review.body ? commentExcerpt(review.body) : undefined, pr: ref });
+			// GitLab names an approval by who gave it, so only the PR tells two apart.
+			events.push({ key: `review:${pr.url}:${review.key}`, kind, at: review.submittedAt, author: review.reviewerId, bot: review.isBot, count: 1, detail: review.body ? commentExcerpt(review.body) : undefined, pr: ref });
 		}
 	}
 	events.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
 	return events;
+}
+
+type RailReview = { key: string; reviewerId: string; verdict: string; submittedAt: string; body?: string; isBot?: boolean };
+
+/**
+ * Every review submitted on the PR, so one a reviewer followed with another
+ * stays on the rail. A host that doesn't send the history yet has only each
+ * reviewer's newest review.
+ */
+export function railReviews(pr: SessionPRSummary): RailReview[] {
+	if (pr.review.history) return pr.review.history.map((review) => ({ ...review, key: review.id }));
+	return (pr.review.reviews ?? []).map((review) => ({ ...review, key: review.reviewUrl ?? `${review.reviewerId}:${review.submittedAt}` }));
 }
 
 /** How the rail folds: the agent's work into its requests, then a person's commits or review notes on one day. */
@@ -316,27 +329,30 @@ export function railWorkItems(event: RailEvent): RailWorkItem[] {
 	];
 }
 
-// A person's commits, or review notes, in a row on one day: one line that says how many.
+// A person's commits, or review notes, on one PR and one day: one line that says
+// how many, at its newest one's place, whatever else happened in between.
 function foldRepeats(events: RailEvent[], dayOf: (iso: string) => string): RailEvent[] {
 	const out: RailEvent[] = [];
+	const rows = new Map<string, RailEvent>();
 	for (const event of events) {
-		const last = out[out.length - 1];
-		const folds = last
-			&& (event.kind === "commits" || event.kind === "reviewNotes")
-			&& last.kind === event.kind
-			&& last.author === event.author
-			&& last.pr?.url === event.pr?.url
-			&& dayOf(last.at) === dayOf(event.at);
-		if (!folds) {
+		if (event.kind !== "commits" && event.kind !== "reviewNotes") {
 			out.push({ ...event });
 			continue;
 		}
-		last.count += 1;
-		if (event.kind === "commits") last.commits = [...(last.commits ?? []), ...(event.commits ?? [])];
-		if (event.kind === "reviewNotes") {
-			const where = [last.detail, event.detail].filter(Boolean);
-			last.detail = [...new Set(where.join(" · ").split(" · "))].join(" · ");
-			last.resolved = Boolean(last.resolved && event.resolved);
+		const group = JSON.stringify([event.kind, event.author, event.pr?.url, dayOf(event.at)]);
+		const row = rows.get(group);
+		if (!row) {
+			const first = { ...event };
+			rows.set(group, first);
+			out.push(first);
+			continue;
+		}
+		row.count += 1;
+		if (event.kind === "commits") row.commits = [...(row.commits ?? []), ...(event.commits ?? [])];
+		else {
+			const where = [row.detail, event.detail].filter(Boolean);
+			row.detail = [...new Set(where.join(" · ").split(" · "))].join(" · ");
+			row.resolved = Boolean(row.resolved && event.resolved);
 		}
 	}
 	return out;
@@ -345,7 +361,7 @@ function foldRepeats(events: RailEvent[], dayOf: (iso: string) => string): RailE
 /** The words a comment opens with: no quoted text, @mention, markup or HTML comments. */
 export function commentExcerpt(body: string): string {
 	const lines = body
-		.replace(/<!--[\s\S]*?-->/g, "")
+		.replace(/<!--[\s\S]*?(?:-->|$)/g, "")
 		.split("\n")
 		.map((line) => line.trim())
 		.filter((line) => line && !line.startsWith(">"));
