@@ -80,6 +80,10 @@ type Service struct {
 	// keyMu serializes changes to an API key account's key with each other and
 	// with removing an account, apart from mu so a key check never holds it.
 	keyMu sync.Mutex
+
+	// identityMu serializes UpdateIdentity's read and write, so two partial
+	// updates never write back a field the other just changed.
+	identityMu sync.Mutex
 }
 
 // reading is the last identity and limits read for one account.

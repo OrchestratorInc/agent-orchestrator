@@ -126,6 +126,8 @@ func (s *Service) UpdateIdentity(ctx context.Context, id string, name, color *st
 	if color != nil && *color != "" && !domain.ValidAgentAccountColor(*color) {
 		return AccountView{}, ports.ErrAgentAccountColorInvalid
 	}
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
 	account, err := s.find(ctx, id)
 	if err != nil {
 		return AccountView{}, err
