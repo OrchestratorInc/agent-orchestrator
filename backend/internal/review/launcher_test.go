@@ -1274,6 +1274,63 @@ func TestLauncherDropsLateTaskForReplacedReviewer(t *testing.T) {
 	}
 }
 
+type cancellableLaunchSpecReviewer struct {
+	*fakeReviewerWithLaunchSpec
+}
+
+func (f cancellableLaunchSpecReviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
+	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInput, Inputs: []string{"\x1b"}}, nil
+}
+
+func TestLauncherDropsPendingTaskWhenReviewerWorkChanges(t *testing.T) {
+	for name, change := range map[string]func(context.Context, Launcher, LaunchResult) error{
+		"cancel": func(ctx context.Context, l Launcher, launch LaunchResult) error {
+			return l.Cancel(ctx, launch.HandleID, domain.ReviewerClaudeCode)
+		},
+		"notify": func(ctx context.Context, l Launcher, launch LaunchResult) error {
+			spec := launchSpec()
+			spec.RunID = "run-2"
+			return l.Notify(ctx, launch.HandleID, spec)
+		},
+		"destroy": func(ctx context.Context, l Launcher, launch LaunchResult) error {
+			return l.Destroy(ctx, launch.HandleID)
+		},
+		"relaunch": func(ctx context.Context, l Launcher, _ LaunchResult) error {
+			spec := launchSpec()
+			spec.DeferInitialMessage = true
+			_, err := l.Spawn(ctx, spec)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reviewer := cancellableLaunchSpecReviewer{&fakeReviewerWithLaunchSpec{
+				spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},
+				hints: ports.PromptReadinessHints{
+					Patterns: []string{"READY>"}, PollInterval: time.Millisecond, Timeout: time.Minute, Lines: 20,
+				},
+			}}
+			rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true}}
+			l := newTestLauncher(t, reviewer, rt)
+			ctx, cancel := context.WithTimeout(context.Background(), reviewerReadinessDeadlineReserve)
+			defer cancel()
+			launch, err := l.Spawn(ctx, launchSpec())
+			if err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			if err := change(context.Background(), l, launch); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			rt.setReady()
+			time.Sleep(100 * time.Millisecond)
+			for _, msg := range rt.messages() {
+				if msg == "task ref" {
+					t.Fatalf("typed the superseded task after %s: %q", name, rt.messages())
+				}
+			}
+		})
+	}
+}
+
 func TestLauncherCancelCanSendReviewerMessage(t *testing.T) {
 	reviewer := &fakeCancellableReviewer{mode: ports.ReviewCancelMessage, message: "stop reviewing"}
 	rt := &fakeRuntime{}

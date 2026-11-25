@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -175,6 +176,9 @@ type agentLauncher struct {
 	chat       ReviewerChatController
 	forceStop  forceStopHooks
 	stops      forceStopState
+	// pending holds review tasks still waiting for their reviewer to become
+	// ready after the launch returned.
+	pending pendingDeliveries
 }
 
 type preLaunchReviewer interface {
@@ -563,6 +567,9 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 		}
 	}
 	handleID := reviewerHandleID(spec.WorkerID)
+	// A task still waiting for the previous reviewer on this handle belongs to
+	// work this launch replaces.
+	l.pending.drop(handleID)
 	// The reviewer handle is stable per worker, so a still-live pane from a
 	// previous pass would otherwise block `tmux new-session` (duplicate name) or,
 	// worse, keep serving under its old harness. Destroy any stale pane on this
@@ -643,7 +650,8 @@ func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer port
 			return fmt.Errorf("reviewer prompt readiness: %w", err)
 		}
 		if !ready && capped {
-			go l.deliverWhenReady(context.WithoutCancel(ctx), handle, hints, hints.Timeout-time.Since(started), launchID, message)
+			pendingCtx, delivery := l.pending.start(context.WithoutCancel(ctx), handle.ID)
+			go l.deliverWhenReady(pendingCtx, delivery, handle, hints, hints.Timeout-time.Since(started), launchID, message)
 			return nil
 		}
 	}
@@ -654,20 +662,97 @@ func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer port
 }
 
 // deliverWhenReady finishes a readiness wait the caller's deadline cut short.
-// The reviewer handle is stable per worker, so the task is typed only while
-// the pane still runs this launch, never into a replacement reviewer.
-func (l *agentLauncher) deliverWhenReady(ctx context.Context, handle ports.RuntimeHandle, hints ports.PromptReadinessHints, wait time.Duration, launchID, message string) {
+// The reviewer handle is stable per worker and its pane outlives cancellation
+// and reuse, so the task is typed only while it is still the reviewer's
+// current work: Cancel, Notify, Destroy, or a new launch on the handle drops
+// it, and the pane must still run this launch.
+func (l *agentLauncher) deliverWhenReady(ctx context.Context, delivery *pendingDelivery, handle ports.RuntimeHandle, hints ports.PromptReadinessHints, wait time.Duration, launchID, message string) {
+	defer l.pending.finish(handle.ID, delivery)
 	if _, err := l.waitForPromptReadiness(ctx, handle, hints, wait); err != nil {
 		return
 	}
 	alive, err := l.Alive(ctx, handle.ID, launchID)
 	if err != nil || !alive {
-		slog.Default().WarnContext(ctx, "reviewer exited before its review task was delivered", "handle", handle.ID, "launch", launchID, "err", err)
+		if ctx.Err() == nil {
+			slog.Default().WarnContext(ctx, "reviewer exited before its review task was delivered", "handle", handle.ID, "launch", launchID, "err", err)
+		}
 		return
 	}
-	if err := l.runtime.SendMessage(ctx, handle, message); err != nil {
+	sent, err := l.pending.deliver(handle.ID, delivery, func() error {
+		return l.runtime.SendMessage(ctx, handle, message)
+	})
+	if sent && err != nil {
 		slog.Default().WarnContext(ctx, "deliver reviewer review task", "handle", handle.ID, "launch", launchID, "err", err)
 	}
+}
+
+// pendingDeliveries tracks at most one background task delivery per
+// reviewer handle.
+type pendingDeliveries struct {
+	mu         sync.Mutex
+	deliveries map[string]*pendingDelivery
+}
+
+type pendingDelivery struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// pendingDeliveryKey ignores a runtime prefix (ptyhost-v1:review-<worker>),
+// so the handle a launch returns and the bare stable handle name match.
+func pendingDeliveryKey(handleID string) string {
+	if i := strings.LastIndex(handleID, ":"); i >= 0 {
+		return handleID[i+1:]
+	}
+	return handleID
+}
+
+func (p *pendingDeliveries) start(parent context.Context, handleID string) (context.Context, *pendingDelivery) {
+	ctx, cancel := context.WithCancel(parent)
+	delivery := &pendingDelivery{ctx: ctx, cancel: cancel}
+	key := pendingDeliveryKey(handleID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.deliveries == nil {
+		p.deliveries = map[string]*pendingDelivery{}
+	}
+	if previous := p.deliveries[key]; previous != nil {
+		previous.cancel()
+	}
+	p.deliveries[key] = delivery
+	return ctx, delivery
+}
+
+// drop abandons the handle's pending delivery. It serializes with deliver, so
+// a task is either typed before drop returns or never.
+func (p *pendingDeliveries) drop(handleID string) {
+	key := pendingDeliveryKey(handleID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if delivery := p.deliveries[key]; delivery != nil {
+		delivery.cancel()
+		delete(p.deliveries, key)
+	}
+}
+
+// deliver runs send only while delivery is still the handle's current one.
+func (p *pendingDeliveries) deliver(handleID string, delivery *pendingDelivery, send func() error) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.deliveries[pendingDeliveryKey(handleID)] != delivery || delivery.ctx.Err() != nil {
+		return false, nil
+	}
+	return true, send()
+}
+
+func (p *pendingDeliveries) finish(handleID string, delivery *pendingDelivery) {
+	key := pendingDeliveryKey(handleID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.deliveries[key] == delivery {
+		delete(p.deliveries, key)
+	}
+	delivery.cancel()
 }
 
 // waitForPromptReadiness polls for a readiness marker for at most wait and
@@ -856,6 +941,8 @@ func (l *agentLauncher) Notify(ctx context.Context, handleID string, spec Launch
 	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
 		return l.chat.SendReviewChat(ctx, reviewID, msg, spec.BatchID)
 	}
+	// The new task supersedes one still waiting for this reviewer to start.
+	l.pending.drop(handleID)
 	if err := l.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: handleID}, msg); err != nil {
 		return fmt.Errorf("notify reviewer: %w", err)
 	}
@@ -921,6 +1008,8 @@ func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness dom
 		// Keep the controller and conversation usable; Archive owns teardown.
 		return l.chat.InterruptReviewChat(ctx, reviewID)
 	}
+	// Cancelling keeps the pane alive, so a task not yet typed must not be.
+	l.pending.drop(handleID)
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {
 		return fmt.Errorf("no reviewer adapter for harness %q", harness)
@@ -998,6 +1087,7 @@ func (l *agentLauncher) Destroy(ctx context.Context, handleID string) error {
 	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
 		return l.chat.StopReviewChat(ctx, reviewID)
 	}
+	l.pending.drop(handleID)
 	return l.runtime.Destroy(ctx, ports.RuntimeHandle{ID: handleID})
 }
 
