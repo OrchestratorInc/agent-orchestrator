@@ -69,6 +69,7 @@ type ProxyRequest = Readable & { headers: IncomingHttpHeaders; url?: string; met
 type ProxyResponse = Writable & {
 	headersSent: boolean;
 	writableFinished: boolean;
+	socket?: object | null;
 	writeHead(status: number, headers?: OutgoingHttpHeaders): unknown;
 	flushHeaders?: () => void;
 };
@@ -585,7 +586,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			return true;
 		}, (error: unknown) => error instanceof LoopbackPortRefused);
 
-	const unmanagedPreview = async (path: string): Promise<string | undefined> => {
+	const unmanagedPreview = async (res: ProxyResponse, path: string): Promise<string | undefined> => {
+		if (!(res.socket as Partial<TLSSocket> | null | undefined)?.encrypted) return undefined;
 		const [, sessionId, tail] = /\/sessions\/([^/]+)\/preview\/app(\/.*)$/.exec(path) ?? [];
 		const source = sessionId && previewSessions.get(decodeURIComponent(sessionId))?.sourceHref;
 		return source && await loopbackReach() ? new URL(tail!, source).href : undefined;
@@ -611,7 +613,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		}
 		if (kind === "app" && status === 409 && upstreamHeaders["x-ao-preview-managed-required"] === "1") {
 			body.resume();
-			void unmanagedPreview(path).then((location) => {
+			void unmanagedPreview(res, path).then((location) => {
 				if (location) {
 					res.writeHead(302, { location, "cache-control": "no-store" });
 					res.end();

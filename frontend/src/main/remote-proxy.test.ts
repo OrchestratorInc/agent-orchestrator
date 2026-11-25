@@ -413,6 +413,9 @@ describe("startRemoteProxy", () => {
 		expect(await proxy.loopbackReach()).toBe(true);
 		const redirected = await request();
 		expect([redirected.statusCode, redirected.headers.location]).toEqual([302, "http://localhost:5173/app?tab=1"]);
+		const outside = new URL(proxy.externalUrl(preview.href));
+		const outsideStatus = await new Promise((resolve) => httpRequest({ hostname: "127.0.0.1", port: outside.port, path: "/app", headers: { Host: outside.host } }, (res) => { res.resume(); resolve(res.statusCode); }).end());
+		expect(outsideStatus).toBe(409);
 		tunnel = { status: 404 };
 		expect(await proxy.loopbackReach()).toBe(false);
 		expect((await request()).statusCode).toBe(409);
