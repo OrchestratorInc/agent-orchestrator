@@ -68,8 +68,32 @@ func TestUnreadableLeaseRecordStartsEmpty(t *testing.T) {
 	if err := writeFileAtomic(leasesPath(dir), "not a lease file"); err != nil {
 		t.Fatal(err)
 	}
-	leases, owned := loadLeases(dir)
-	if len(leases) != 0 || len(owned) != 0 {
+	leases, owned, parked := loadLeases(dir)
+	if len(leases) != 0 || len(owned) != 0 || len(parked) != 0 {
 		t.Fatalf("leases=%v owned=%v from a corrupt file", leases, owned)
+	}
+}
+
+// A device released warm is still powered off when its session ends after a
+// daemon restart.
+func TestParkedDevicesSurviveADaemonRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sessions := &endableSessions{}
+	p := iosFleet()
+	first := newEndableService(t, dir, p, sessions)
+	openBooted(t, first, p, "s-1", "A")
+	if err := first.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+
+	second := newEndableService(t, dir, p, sessions)
+	sessions.end("s-1")
+	second.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 1 || got[0] != "A" {
+		t.Fatalf("shutdowns = %v after a restart, want [A]", got)
+	}
+	if _, _, parked := loadLeases(dir); len(parked) != 0 {
+		t.Fatalf("parked record = %v after powering A off, want empty", parked)
 	}
 }

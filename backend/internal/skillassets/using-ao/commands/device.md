@@ -72,8 +72,10 @@ not run setup yourself unless the user asked for device support.
    ao device close
    ```
 
+   Without `--shutdown` the device stays on for another session to take.
    A session that ends releases its device automatically within half a
-   minute; the device keeps running for the next session.
+   minute, and a simulator or emulator AO started is powered off then unless
+   another session has taken it. One that was already running stays on.
 
 ## Other commands
 
