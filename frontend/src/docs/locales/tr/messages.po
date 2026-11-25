@@ -63,6 +63,10 @@ msgstr "Bu bölümün bağlantısını kopyala"
 msgid "Copy Markdown"
 msgstr "Markdown'ı kopyala"
 
+msgctxt "theme switcher"
+msgid "Dark theme"
+msgstr "Koyu tema"
+
 msgid "Docs"
 msgstr "Belgeler"
 
@@ -81,6 +85,10 @@ msgstr "Yardım"
 msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Kenar çubuğunu gizle"
+
+msgctxt "theme switcher"
+msgid "Light theme"
+msgstr "Açık tema"
 
 msgid "Main site"
 msgstr "Ana site"
@@ -163,9 +171,17 @@ msgctxt "mobile menu"
 msgid "Toggle menu"
 msgstr "Menüyü aç/kapat"
 
+msgctxt "theme switcher"
+msgid "Toggle theme"
+msgstr "Temayı değiştir"
+
 msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Takip araçları"
+
+msgctxt "theme switcher"
+msgid "Use system theme"
+msgstr "Sistem temasını kullan"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"

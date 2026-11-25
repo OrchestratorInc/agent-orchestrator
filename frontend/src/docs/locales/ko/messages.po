@@ -63,6 +63,10 @@ msgstr "이 섹션 링크 복사"
 msgid "Copy Markdown"
 msgstr "Markdown 복사"
 
+msgctxt "theme switcher"
+msgid "Dark theme"
+msgstr "다크 테마"
+
 msgid "Docs"
 msgstr "문서"
 
@@ -81,6 +85,10 @@ msgstr "도움말"
 msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "사이드바 숨기기"
+
+msgctxt "theme switcher"
+msgid "Light theme"
+msgstr "라이트 테마"
 
 msgid "Main site"
 msgstr "메인 사이트"
@@ -163,9 +171,17 @@ msgctxt "mobile menu"
 msgid "Toggle menu"
 msgstr "메뉴 전환"
 
+msgctxt "theme switcher"
+msgid "Toggle theme"
+msgstr "테마 전환"
+
 msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "트래커"
+
+msgctxt "theme switcher"
+msgid "Use system theme"
+msgstr "시스템 테마 사용"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"

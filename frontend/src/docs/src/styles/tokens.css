@@ -1,4 +1,56 @@
+/* Light is the default; `.dark` (set by next-themes from the OS or the
+   reader's choice) switches every token. Text tokens keep at least 4.5:1
+   against --background, --card and --muted in both themes. Light values
+   follow the desktop app's light theme (frontend/src/styles/tokens.css). */
 :root {
+  color-scheme: light;
+  --background: oklch(0.985 0.002 106.5);
+  --foreground: oklch(0.18 0.006 107.4);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.006 107.4);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.006 107.4);
+  --primary: oklch(0.24 0.006 107.4);
+  --primary-foreground: oklch(0.97 0.002 106.5);
+  --secondary: oklch(0.955 0.003 106.5);
+  --secondary-foreground: oklch(0.18 0.006 107.4);
+  --muted: oklch(0.955 0.003 106.5);
+  --muted-foreground: oklch(0.48 0.01 107.3);
+  --accent: oklch(0.945 0.003 106.5);
+  --accent-foreground: oklch(0.18 0.006 107.4);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0 0 0 / 8%);
+  --input: oklch(0 0 0 / 15%);
+  --ring: oklch(0.64 0.01 107.3);
+  --chart-1: oklch(0.394 0.023 107.4);
+  --chart-2: oklch(0.58 0.031 107.3);
+  --chart-3: oklch(0.466 0.025 107.3);
+  --chart-4: oklch(0.88 0.011 106.6);
+  --chart-5: oklch(0.286 0.016 107.4);
+  --sidebar: oklch(0.968 0.003 106.5);
+  --sidebar-background: var(--sidebar);
+  --sidebar-foreground: oklch(0.18 0.006 107.4);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.988 0.003 106.5);
+  --sidebar-accent: oklch(0.94 0.003 106.5);
+  --sidebar-accent-foreground: oklch(0.18 0.006 107.4);
+  --sidebar-border: oklch(0 0 0 / 8%);
+  --sidebar-ring: oklch(0.58 0.031 107.3);
+  --link: #304c83; /* the desktop app's light Markdown link */
+  --code-surface: oklch(0 0 0 / 3.5%);
+  --code-border: oklch(0 0 0 / 8%);
+  --brand: #d25611;
+  --brand-light: #e8804a;
+  --brand-dark: #9e400a;
+}
+
+.dark {
+  color-scheme: dark;
+  --link: oklch(0.714 0.143 254.6);
+  --code-surface: oklch(1 0 0 / 4%);
+  --code-border: oklch(1 0 0 / 4%);
+
   --background: oklch(0.153 0.006 107.1);
   --foreground: oklch(0.988 0.003 106.5);
   --card: oklch(0.228 0.013 107.4);
@@ -32,9 +84,6 @@
   --sidebar-accent-foreground: oklch(0.988 0.003 106.5);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.58 0.031 107.3);
-  --brand: #d25611;
-  --brand-light: #e8804a;
-  --brand-dark: #9e400a;
 }
 
 @theme {

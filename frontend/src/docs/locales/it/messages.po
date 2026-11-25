@@ -63,6 +63,10 @@ msgstr "Copia il link a questa sezione"
 msgid "Copy Markdown"
 msgstr "Copia Markdown"
 
+msgctxt "theme switcher"
+msgid "Dark theme"
+msgstr "Tema scuro"
+
 msgid "Docs"
 msgstr "Documentazione"
 
@@ -81,6 +85,10 @@ msgstr "Aiuto"
 msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Nascondi la barra laterale"
+
+msgctxt "theme switcher"
+msgid "Light theme"
+msgstr "Tema chiaro"
 
 msgid "Main site"
 msgstr "Sito principale"
@@ -163,9 +171,17 @@ msgctxt "mobile menu"
 msgid "Toggle menu"
 msgstr "Mostra o nascondi il menu"
 
+msgctxt "theme switcher"
+msgid "Toggle theme"
+msgstr "Cambia tema"
+
 msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Tracker"
+
+msgctxt "theme switcher"
+msgid "Use system theme"
+msgstr "Usa il tema di sistema"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"

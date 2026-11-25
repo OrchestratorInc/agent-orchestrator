@@ -23,7 +23,9 @@ export function baseOptions(i18n: I18n, homeUrl = "/"): BaseLayoutProps {
       ),
     },
     themeSwitch: {
-      enabled: false,
+      enabled: true,
+      // Light, dark, or follow the operating system (the default).
+      mode: "light-dark-system",
     },
     slots: {
       languageSelect: { root: LanguageSelect, text: LanguageSelectText },

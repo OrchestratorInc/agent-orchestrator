@@ -63,6 +63,10 @@ msgstr "Sao chép liên kết đến mục này"
 msgid "Copy Markdown"
 msgstr "Sao chép Markdown"
 
+msgctxt "theme switcher"
+msgid "Dark theme"
+msgstr "Giao diện tối"
+
 msgid "Docs"
 msgstr "Tài liệu"
 
@@ -81,6 +85,10 @@ msgstr "Trợ giúp"
 msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Ẩn thanh bên"
+
+msgctxt "theme switcher"
+msgid "Light theme"
+msgstr "Giao diện sáng"
 
 msgid "Main site"
 msgstr "Trang chính"
@@ -163,9 +171,17 @@ msgctxt "mobile menu"
 msgid "Toggle menu"
 msgstr "Bật/tắt menu"
 
+msgctxt "theme switcher"
+msgid "Toggle theme"
+msgstr "Chuyển giao diện"
+
 msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Trình theo dõi"
+
+msgctxt "theme switcher"
+msgid "Use system theme"
+msgstr "Dùng giao diện của hệ thống"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"

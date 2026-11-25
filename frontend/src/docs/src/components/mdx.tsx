@@ -193,8 +193,8 @@ export function PluginCard({
 type Status = PlatformStatus;
 
 const STATUS_DOT: Record<Status, string> = {
-  full: "bg-green-400",
-  partial: "bg-amber-400",
+  full: "bg-green-600 dark:bg-green-400",
+  partial: "bg-amber-500 dark:bg-amber-400",
   none: "bg-muted-foreground",
 };
 

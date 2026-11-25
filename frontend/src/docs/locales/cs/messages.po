@@ -63,6 +63,10 @@ msgstr "Kopírovat odkaz na tuto sekci"
 msgid "Copy Markdown"
 msgstr "Kopírovat Markdown"
 
+msgctxt "theme switcher"
+msgid "Dark theme"
+msgstr "Tmavý motiv"
+
 msgid "Docs"
 msgstr "Dokumentace"
 
@@ -81,6 +85,10 @@ msgstr "Nápověda"
 msgctxt "sidebar"
 msgid "Hide sidebar"
 msgstr "Skrýt postranní panel"
+
+msgctxt "theme switcher"
+msgid "Light theme"
+msgstr "Světlý motiv"
 
 msgid "Main site"
 msgstr "Hlavní web"
@@ -163,9 +171,17 @@ msgctxt "mobile menu"
 msgid "Toggle menu"
 msgstr "Přepnout nabídku"
 
+msgctxt "theme switcher"
+msgid "Toggle theme"
+msgstr "Přepnout motiv"
+
 msgctxt "sidebar section"
 msgid "Trackers"
 msgstr "Sledování úkolů"
+
+msgctxt "theme switcher"
+msgid "Use system theme"
+msgstr "Použít motiv systému"
 
 msgctxt "sidebar section"
 msgid "Using Orchestrator"
