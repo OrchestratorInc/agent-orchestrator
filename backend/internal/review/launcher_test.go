@@ -1157,6 +1157,18 @@ func TestLauncherReadsRenderedScreenForReviewerPromptMarker(t *testing.T) {
 	}
 }
 
+func TestOutputContainsAnyStripsEachEscapeSequence(t *testing.T) {
+	for name, output := range map[string]string{
+		"sgr split":             "\x1b[1mAo\x1b[0m\x1b[1m-Review-\x1b[0mMer-1",
+		"between st-ended osc":  "\x1b]0;title\x1b\\\x1b[1mAo\x1b[0m-Review-Mer-1\x1b]8;;\x1b\\",
+		"between bel-ended osc": "\x1b]0;title\x07\x1b[1mAo\x1b[0m-Review-Mer-1\x1b]8;;\x07",
+	} {
+		if !outputContainsAny(output, []string{"Ao-Review-"}) {
+			t.Errorf("%s: marker in %q not found", name, output)
+		}
+	}
+}
+
 func TestLauncherFallsBackToRawOutputWithoutRenderedScreen(t *testing.T) {
 	reviewer := &fakeReviewerWithLaunchSpec{
 		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},

@@ -29,8 +29,10 @@ const defaultReviewerInitialDelay = 500 * time.Millisecond
 const reviewerReadinessDeadlineReserve = 5 * time.Second
 
 // readinessOutputEscape strips CSI and OSC sequences so a marker drawn with
-// styling (rendered screens, colored footers) still matches as plain text.
-var readinessOutputEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
+// styling (rendered screens, colored footers) still matches as plain text. An
+// OSC payload stops at its first terminator, so text between two
+// ST-terminated sequences survives.
+var readinessOutputEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\))`)
 
 const reviewerTaskMessagePrefix = "Read and follow the AO review task in `"
 
