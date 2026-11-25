@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ChevronLeft, Folder, Link2, LoaderCircle } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -271,10 +272,11 @@ export default function CloneRepositoryDialog({
 		});
 	};
 
+	useTelemetrySurface("onboarding", open && firstRun);
 	return (
 		<Dialog.Root open={open} onOpenChange={(next) => !next && !disabled && !firstRun && onClose()}>
 			<Dialog.Portal>
-				<Dialog.Content onEscapeKeyDown={firstRun ? (event) => event.preventDefault() : undefined} onInteractOutside={firstRun ? (event) => event.preventDefault() : undefined} className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
+				<Dialog.Content data-telemetry-surface={firstRun ? "onboarding" : undefined} onEscapeKeyDown={firstRun ? (event) => event.preventDefault() : undefined} onInteractOutside={firstRun ? (event) => event.preventDefault() : undefined} className={`fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none ${shake || externalShake ? "modal-shake" : ""}`}>
 					{(() => {
 						const render = (gh: GitHubState) => {
 						const showRepoPicker = firstRun && gh.hasGitHub;

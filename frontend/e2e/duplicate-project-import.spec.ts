@@ -44,7 +44,7 @@ test("renderer: importing an alias opens the registered project without starting
 	}, selectedPath);
 	await page.getByRole("button", { name: "New project", exact: true }).first().click();
 	await page.getByRole("button", { name: "Open a local folder", exact: true }).click();
-	await page.getByRole("button", { name: "Create and start", exact: true }).click();
+	// Nothing to ask in the setup sheet, so picking the folder creates the project.
 	await expect(page).toHaveURL(new RegExp(`projects/${projectId}`));
 	await expect(page.getByText("Opened the registered project for this folder.")).toBeVisible();
 	await expect(page.getByRole("dialog")).toHaveCount(0);

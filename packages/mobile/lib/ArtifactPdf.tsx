@@ -122,7 +122,9 @@ export function ArtifactPdf({ backend, sessionId, artifact, active, label, hint 
 	);
 }
 
-class UnrequestablePathError extends Error {}
+class UnrequestablePathError extends Error {
+	readonly code: string = "UNREQUESTABLE_PATH_ERROR";
+}
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },

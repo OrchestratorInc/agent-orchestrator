@@ -7,20 +7,26 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/unreallabsai/unreal-agent/harness/inbox"
 	"github.com/unreallabsai/unreal-agent/harness/llm"
+	"github.com/unreallabsai/unreal-agent/harness/operation"
+	"github.com/unreallabsai/unreal-agent/harness/sessionstore"
+	"github.com/unreallabsai/unreal-agent/harness/tool"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 type fakeProviderClient struct {
-	request chan llm.Request
+	request   chan llm.Request
+	bashFirst bool
 }
 
 type writerFunc func([]byte) (int, error)
@@ -29,6 +35,10 @@ func (write writerFunc) Write(value []byte) (int, error) { return write(value) }
 
 func (client *fakeProviderClient) Respond(_ context.Context, request llm.Request, _ llm.RequestOptions) (llm.Response, error) {
 	client.request <- request
+	if client.bashFirst {
+		client.bashFirst = false
+		return llm.Response{ID: "bash-response", Output: []llm.Item{{Type: llm.ItemToolCall, Data: llm.ToolCall{CallID: "bash-call", Name: tool.BashName, Arguments: `{"command":"printf unreal-foreground"}`}}}}, nil
+	}
 	return llm.Response{
 		ID: "response-1",
 		Output: []llm.Item{{
@@ -43,11 +53,23 @@ func (client *fakeProviderClient) Respond(_ context.Context, request llm.Request
 func (*fakeProviderClient) Close() error { return nil }
 
 func TestProviderRunsPersistentTurnProtocol(t *testing.T) {
+	for _, bashFirst := range []bool{false, true} {
+		name := "text"
+		if bashFirst {
+			name = "foreground-bash"
+		}
+		t.Run(name, func(t *testing.T) { testProviderRunsPersistentTurnProtocol(t, bashFirst) })
+	}
+}
+
+func testProviderRunsPersistentTurnProtocol(t *testing.T, bashFirst bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	inputReader, inputWriter := io.Pipe()
 	outputReader, outputWriter := io.Pipe()
-	client := &fakeProviderClient{request: make(chan llm.Request, 1)}
+	stop := context.AfterFunc(ctx, func() { _ = outputReader.Close(); _ = inputWriter.Close() })
+	defer stop()
+	client := &fakeProviderClient{request: make(chan llm.Request, 2), bashFirst: bashFirst}
 	cfg := providerConfig{
 		AOSessionID: "ao-session", ProviderConversationID: "provider-session",
 		DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
@@ -94,6 +116,13 @@ func TestProviderRunsPersistentTurnProtocol(t *testing.T) {
 			t.Errorf("missing %s event", kind)
 		}
 	}
+	if bashFirst {
+		for _, kind := range []ports.ChatEventKind{ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted} {
+			if !seen[kind] {
+				t.Errorf("foreground Bash missing %s", kind)
+			}
+		}
+	}
 	select {
 	case request := <-client.request:
 		if request.Model.ID != "test-model" || !requestContainsUserText(request, "hello") {
@@ -101,6 +130,28 @@ func TestProviderRunsPersistentTurnProtocol(t *testing.T) {
 		}
 	default:
 		t.Error("model was not called")
+	}
+	if bashFirst {
+		select {
+		case request := <-client.request:
+			found := false
+			for _, item := range request.Input {
+				if item.Type != llm.ItemToolResult {
+					continue
+				}
+				result := item.Data.(llm.ToolResult)
+				for _, output := range result.Output {
+					if result.CallID == "bash-call" && strings.Contains(fmt.Sprint(output.Value), "unreal-foreground") {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("model did not receive the actual foreground Bash result: %#v", request.Input)
+			}
+		default:
+			t.Fatal("model did not continue after Bash")
+		}
 	}
 	if err := json.NewEncoder(inputWriter).Encode(command{
 		Version: protocolVersion, Type: "turn", RequestID: "request-2",
@@ -310,4 +361,36 @@ func TestProviderUsageSurvivesRestart(t *testing.T) {
 	if usage.InputTokens != 7 || usage.OutputTokens != 3 || usage.CachedTokens != 3 || usage.TotalTokens != 10 || !usage.TotalsKnown {
 		t.Fatalf("restarted cumulative usage = %#v", usage)
 	}
+}
+
+// Exercise every pair of pinned Unreal operation states, including unknown and
+// missing operations. WaitingFor remains populated in final coordinator updates.
+func TestToolStatusWaitsForEveryReferencedOperation(t *testing.T) {
+	states := []operation.Status{operation.StatusReady, operation.StatusAwaiting, operation.StatusCanceling, operation.StatusCompleted, operation.StatusFailed, operation.StatusCanceled, "unknown"}
+	terminal := func(state operation.Status) bool {
+		return state == operation.StatusCompleted || state == operation.StatusFailed || state == operation.StatusCanceled
+	}
+	for _, first := range states {
+		for _, second := range states {
+			t.Run(string(first)+"/"+string(second), func(t *testing.T) {
+				journal, err := newEventJournal(filepath.Join(t.TempDir(), "events.json"), io.Discard)
+				if err != nil {
+					t.Fatal(err)
+				}
+				runtime := &providerRuntime{journal: journal, pendingTools: map[string]domain.ActivityKind{"call": domain.ActivityKindCommand}}
+				status := sessionstore.ToolCallStatus{CallID: "call", Status: tool.CallStatus{WaitingFor: []operation.ID{"first", "second"}}, Operations: []operation.Operation{{ID: "first", Status: first}, {ID: "second", Status: second}}}
+				runtime.observeToolStatus("turn", status)
+				if got, want := runtime.hasPendingTools(), !terminal(first) || !terminal(second); got != want {
+					t.Fatalf("pending = %v, want %v", got, want)
+				}
+			})
+		}
+	}
+	t.Run("missing", func(t *testing.T) {
+		runtime := &providerRuntime{pendingTools: map[string]domain.ActivityKind{"call": domain.ActivityKindCommand}}
+		runtime.observeToolStatus("turn", sessionstore.ToolCallStatus{CallID: "call", Status: tool.CallStatus{WaitingFor: []operation.ID{"missing"}}})
+		if !runtime.hasPendingTools() {
+			t.Fatal("missing operation must not settle tool")
+		}
+	})
 }
