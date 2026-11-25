@@ -297,8 +297,6 @@ export type ProjectSetupAlert = {
 
 export function ProjectSetupFormView({
 	actions,
-	agentControls,
-	agents,
 	alert,
 	canSubmit,
 	intakeControl,
@@ -306,16 +304,6 @@ export function ProjectSetupFormView({
 	setupNotice,
 }: {
 	actions: ReactNode;
-	agentControls: { worker: ReactNode; orchestrator: ReactNode };
-	agents: {
-		cacheMessage?: string;
-		error?: string | null;
-		loading: boolean;
-		loadingMessage: string;
-		onRetry?: () => void;
-		retrying?: boolean;
-		retryLabel?: string;
-	};
 	alert?: ProjectSetupAlert | null;
 	canSubmit: boolean;
 	intakeControl: ReactNode;
@@ -328,42 +316,6 @@ export function ProjectSetupFormView({
 	};
 	return (
 		<form className="space-y-5 p-4" onSubmit={submit}>
-			<div className="grid gap-4 sm:grid-cols-2">
-				{agentControls.worker}
-				{agentControls.orchestrator}
-			</div>
-
-			{agents.loading && (
-				<p className="text-xs leading-row text-[var(--color-text-agents-sheet-description)]" role="status">
-					{agents.loadingMessage}
-				</p>
-			)}
-
-			{agents.cacheMessage ? (
-				<p className="text-xs leading-row text-[var(--color-text-agents-sheet-description)]">
-					{agents.cacheMessage}
-				</p>
-			) : null}
-
-			{agents.error && (
-				<div
-					className="flex items-center justify-between gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs leading-row text-destructive"
-					role="alert"
-				>
-					<span>{agents.error}</span>
-					{agents.onRetry && (
-						<button
-							type="button"
-							className="shrink-0 rounded text-[var(--color-text-agents-sheet-title)] underline-offset-2 hover:underline disabled:pointer-events-none disabled:opacity-50"
-							disabled={agents.retrying}
-							onClick={agents.onRetry}
-						>
-							{agents.retryLabel}
-						</button>
-					)}
-				</div>
-			)}
-
 			<div>{intakeControl}</div>
 
 			{setupNotice && (

@@ -5,6 +5,20 @@ description: Commands provided by the current Go CLI.
 
 The `ao` CLI is a thin client for the local desktop app's daemon. Commands that operate on projects and sessions require the app and its daemon to be running. `ao start` opens or downloads the app, `ao status` inspects daemon state even when it is stopped, and `ao doctor` checks the local environment without requiring a running daemon. Run `ao <command> --help` to see flags supported by your installed version.
 
+## Run the CLI
+
+The desktop app bundles the CLI and does not add it to your PATH. Until you link it, run it by its full path. On macOS:
+
+```bash
+"/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao" status
+```
+
+On Windows and Linux the binary is `daemon/ao` (`ao.exe` on Windows) inside the app's `resources` folder.
+
+To use the short `ao` name in any terminal on macOS or Linux, open **Settings → General**, turn on **Developer mode**, and choose **Link** beside **Global ao command**. The link stays up to date with the app. On macOS, move the app to Applications before linking; an AppImage install cannot be linked. Sessions that Orchestrator starts already have `ao` on their PATH.
+
+To have a coding agent run these commands for you, see [Set up with your coding agent](/guides/agent-setup).
+
 ## Command tree
 
 ```text
@@ -91,7 +105,7 @@ Agent adapters are compiled into Orchestrator. There is no plugin marketplace or
 
 | Command | Purpose |
 | --- | --- |
-| `ao project add` | Register a local Git repository or multi-repository workspace. Scratch is an Orchestrator-managed built-in project. |
+| `ao project add` | Register a local Git repository or multi-repository workspace. Pass `--default-branch <branch>` for a repository with no remote. Scratch is an Orchestrator-managed built-in project. |
 | `ao project ls` | List registered projects. |
 | `ao project get <id>` | Show one project and its resolved configuration. |
 | `ao project set-config <id>` | Update typed per-project configuration. |
@@ -130,6 +144,7 @@ Important flags include:
 | `--issue <id>` | Associate a tracker issue. |
 | `--claim-pr <ref>` | Claim an existing pull request after spawning. |
 | `--no-takeover` | Refuse a PR already owned by another active session. |
+| `--review` | Claim the PR to review it, not work on it: automatic CI and review-comment fixing and native auto-review are turned off first. Implies `--no-takeover`. Requires `--claim-pr`. |
 | `--skip-agent-check` | Skip only the CLI-side install/auth preflight. |
 
 Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the project for `AO_SESSION_ID`, then the closest registered project containing the current directory. Before spawning, Orchestrator refreshes the selected agent's readiness unless you use `--skip-agent-check`. Readiness is advisory.
@@ -143,11 +158,11 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | `ao session kill <id>` | Terminate a session. Dirty workspaces are preserved. |
 | `ao session restore <id>` | Relaunch a terminated session when recovery is supported. |
 | `ao session exit-agent <id>` | Stop the controller while retaining the session. |
-| `ao session resume-agent <id>` | Start the controller again in that session. |
+| `ao session resume-agent <id>` | Start the controller again in that session. Also retries a session that failed to start. |
 | `ao session rename <id> <name>` | Change its display name. The project orchestrator cannot be renamed. |
 | `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. Workspaces already released are not listed again. |
-| `ao session delete <id>` | Permanently delete a terminated session and its AO history once its worktree is cleaned up; `--cleanup` cleans it up first, never forced. Branches, PRs and agent account usage totals are kept. |
-| `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
+| `ao session delete <id>` | Permanently delete a terminated session and its AO history once its worktree is cleaned up; `--cleanup` cleans it up first, never forced; `--keep-artifacts` keeps its artifact files, view only, on the Artifacts page. Branches, PRs and agent account usage totals are kept. |
+| `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. `--review` claims it to review: automatic CI and review-comment fixing and native auto-review are turned off first, and it never takes the PR from another active session. `--review=false` turns fixing back on to take it over. |
 
 Most lookup commands accept `--project` to disambiguate a session ID.
 
@@ -179,7 +194,7 @@ Inside a worker, `ao report "Progress summary"` sends a report to its existing o
 
 Needs-input reports are sent immediately. Stuck reports may interrupt or combine with other reports. Done reports wait five minutes before delivery; ordinary checkpoints can wait up to one hour.
 
-For a structured report, choose one state flag: `--checkpoint`, `--needs-input`, `--stuck`, or `--done`. Include `--note` with it. Attach reviewable deliverables with `--artifact`, `--pr-created`, or `--pr-reviewed`; pull-request flags require full URLs. Do not combine free-form text with structured state or output flags.
+For a structured report, choose one state flag: `--checkpoint`, `--needs-input`, `--stuck`, or `--done`. Include `--note` with it. `--note` and free-form text are each limited to 1000 characters. Attach reviewable deliverables with `--artifact`, `--pr-created`, or `--pr-reviewed`; pull-request flags require full URLs. Do not combine free-form text with structured state or output flags.
 
 ```bash
 ao report --done --note "Focused tests passed"
@@ -238,6 +253,9 @@ Lets your other devices use this machine through its authenticated remote listen
 | Command | Purpose |
 | --- | --- |
 | `ao remote-host status` | Show the host ID, addresses, and whether the address is fixed. Add `--show-password` to also print the pairing password; treat that output as a credential. |
+| `ao remote-host pair` | Print the address and a one-time pairing code. One device can use it, within 10 minutes, and gets its own token. |
+| `ao remote-host devices` | List the devices that can reach this machine. `devices revoke <ID>` revokes one; `devices revoke --all` revokes every device and unlinks the account. |
+| `ao remote-host require-device-credentials on\|off` | Stop accepting the pairing password, so each device needs its own token or the linked account's. |
 | `ao remote-host enable` | Turn on remote access. `--tunnel-only` serves it only through a Cloudflare tunnel; `--tunnel` keeps the LAN listener too. |
 | `ao remote-host disable` | Turn off remote access. Sessions keep running. |
 | `ao remote-host link` | Add this machine to your AO account: it prints a sign-in link and a QR code, and waits up to 5 minutes for you to sign in from any device. The machine then gets a fixed address and appears on every device signed in to the account. `--label` sets its name (default: the name the account already has for it, else the hostname); `--no-qr` prints only the link. On a LAN-only listener it adds a Cloudflare tunnel, as `--tunnel` does. |
@@ -265,3 +283,11 @@ Lets your other devices use this machine through its authenticated remote listen
 | `AO_PROJECT_ID` | unset | Current project context for spawn resolution. |
 
 All current Orchestrator application state stays under `~/.ao` unless `AO_DATA_DIR` or `AO_RUN_FILE` overrides it.
+
+## Report a problem
+
+Unreleased: `ao triage` collects bounded, redacted diagnostics and opens Claude Code
+or Codex to help draft a report, even with the daemon down. Files go under
+`$AO_DATA_DIR/triage` when set, otherwise `~/.ao/triage`. After the agent exits,
+review the text and answer `[y/N]` before posting. Use `--no-launch` to prepare
+files only, or `--agent claude|codex` to choose an installed agent.

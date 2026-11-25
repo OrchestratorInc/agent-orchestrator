@@ -1,3 +1,4 @@
+import { uiUsage, useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { useEffect, useState } from "react";
 import { Check } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
@@ -41,6 +42,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 	const { t } = useTranslation();
 	const [exiting, setExiting] = useState(false);
 	const dismissGlobalToast = useUiStore((state) => state.dismissGlobalToast);
+	useTelemetrySurface("toast");
 	const isError = toast.tone === "error";
 	const isSuccess = toast.tone === "success";
 	const dismissMs = toast.durationMs ?? (isError ? ERROR_TOAST_DISMISS_MS : TOAST_DISMISS_MS);
@@ -48,7 +50,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 	const [paused, setPaused] = useState(false);
 
 	useEffect(() => {
-		if (paused) return;
+		if (paused || dismissMs === 0) return;
 		const exitTimer = window.setTimeout(() => setExiting(true), Math.max(0, dismissMs - 180));
 		const dismissTimer = window.setTimeout(() => dismissGlobalToast(toast.nonce), dismissMs);
 		return () => {
@@ -65,6 +67,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 			}`}
 			role={isError ? "alert" : "status"}
 			data-global-toast=""
+			data-telemetry-surface="toast"
 			onMouseEnter={() => setPaused(true)}
 			onMouseLeave={() => setPaused(false)}
 			onFocus={() => setPaused(true)}
@@ -85,6 +88,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 						dismissGlobalToast(toast.nonce);
 					}}
 					className="-my-1 font-medium"
+					data-telemetry-id="toast.action"
 					data-toast-action=""
 				>
 					{toast.action.label}
@@ -93,7 +97,11 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 			{toast.dismissible ? (
 				<CloseButton
 					aria-label={t("shortcut.dismissNotification")}
-					onClick={() => dismissGlobalToast(toast.nonce)}
+					data-telemetry-id="toast.dismiss"
+					onClick={() => {
+						uiUsage.dismissed("toast");
+						dismissGlobalToast(toast.nonce);
+					}}
 					size="icon-xs"
 				/>
 			) : null}

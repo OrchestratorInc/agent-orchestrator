@@ -140,6 +140,9 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 		if bucket.InvalidWindow || bucket.Reached == domain.CodexCapacityReached || bucket.Reached == domain.CodexCapacityReachUnknown {
 			out.Incomplete = true
 		}
+		if bucket.Reached == domain.CodexCapacityReached {
+			out.ReachedScopes = append(out.ReachedScopes, prefix)
+		}
 		for _, w := range []*domain.CodexCapacityWindow{bucket.Primary, bucket.Secondary} {
 			if w == nil {
 				continue
@@ -149,7 +152,7 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 				label = prefix + " · " + label
 			}
 			window := domain.AgentAccountLimitWindow{
-				ID: bucket.LimitID + ":" + label, Label: label, UsedPercent: min(max(w.UsedPercent, 0), 100), ResetsAt: w.ResetsAt,
+				ID: bucket.LimitID + ":" + label, Label: label, UsedPercent: min(max(w.UsedPercent, 0), 100), ResetsAt: w.ResetsAt, Scope: prefix,
 			}
 			if w.WindowDurationMinutes != nil && *w.WindowDurationMinutes > 0 {
 				window.DurationMinutes = int(*w.WindowDurationMinutes)

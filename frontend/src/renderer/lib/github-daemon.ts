@@ -20,6 +20,7 @@ export interface GitHubReposResponse {
 }
 
 export class GitHubDaemonError extends Error {
+	readonly telemetryCode: string = "GITHUB_DAEMON_ERROR";
 	constructor(
 		message: string,
 		readonly status: number,

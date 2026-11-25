@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { formatDiffSelectionMessage } from "../../../shared/diff-selection";
 import { formatFileAnnotationMessage, formatFileAnnotationMessages } from "../../../shared/file-annotations";
 import type { ConversationMessage } from "../../types/conversation";
-import { gitActionMessage } from "../SessionBranchSummary";
+import { gitActionMessage, otherPRConflictMessage } from "../SessionBranchSummary";
 import { TooltipProvider } from "../ui/tooltip";
 import { AutomationMessage, readAutomation } from "./AutomationMessage";
 
@@ -64,6 +64,8 @@ const changesRequested = [
 ].join("\n");
 
 const mergeConflict = `There are merge conflicts on ${PR}. Rebase onto the base branch and resolve them.\nPR: ${URL}`;
+
+const otherPRConflict = (pr: object) => otherPRConflictMessage(pr as Parameters<typeof otherPRConflictMessage>[0]);
 
 function message(text: string, extra: Partial<ConversationMessage> = {}): ConversationMessage {
 	return { kind: "message", id: "m1", sequence: 1, revision: 0, role: "user", origin: "automation", text, streaming: false, createdAt: "2026-10-20T12:32:00Z", ...extra };
@@ -120,6 +122,23 @@ describe("reading AO's automation messages", () => {
 		expect(readAutomation(gitActionMessage("commit", "main", undefined))).toEqual({ kind: "gitAction", action: "commit" });
 		expect(readAutomation(gitActionMessage("commitPush", "main", 12))).toEqual({ kind: "gitAction", action: "commitPush" });
 		expect(readAutomation(gitActionMessage("push", "main", undefined))).toEqual({ kind: "gitAction", action: "push" });
+		expect(readAutomation(gitActionMessage("updateBase", "main", 7534))).toEqual({ kind: "gitAction", action: "updateBase", base: "main" });
+		expect(readAutomation(gitActionMessage("updateBase", undefined, undefined))).toEqual({ kind: "gitAction", action: "updateBase" });
+		expect(readAutomation(gitActionMessage("resolveConflicts", "main", 7534, ["src/a.tsx", "src/a.test.tsx"]))).toEqual({
+			kind: "gitAction", action: "resolveConflicts", base: "main", files: ["src/a.tsx", "src/a.test.tsx"],
+		});
+		expect(readAutomation(gitActionMessage("resolveConflicts", undefined, undefined))).toEqual({ kind: "gitAction", action: "resolveConflicts" });
+		expect(readAutomation(otherPRConflict({ number: 8, sourceBranch: "ao/feature", targetBranch: "main", mergeability: { state: "conflicting", conflictFiles: [{ path: "src/a.tsx" }] } }))).toEqual({
+			kind: "gitAction", action: "resolveConflicts", base: "main", prNumber: 8, files: ["src/a.tsx"],
+		});
+		expect(readAutomation(otherPRConflict({ number: 8, mergeability: { state: "conflicting" } }))).toEqual({
+			kind: "gitAction", action: "resolveConflicts", prNumber: 8,
+		});
+	});
+
+	it("leaves a conflict message whose base or PR number does not repeat to the card", () => {
+		expect(readAutomation(gitActionMessage("resolveConflicts", "main", undefined).replace("up to date with `main`", "up to date with `release`"))).toBeNull();
+		expect(readAutomation(otherPRConflict({ number: 8, mergeability: { state: "conflicting" } }).replace("update PR #8", "update PR #9"))).toBeNull();
 	});
 
 	it("reads what GitHub reported on the PR", () => {
@@ -144,6 +163,33 @@ describe("reading AO's automation messages", () => {
 			body: "The migration IDs collide with shipped migrations.",
 		});
 		expect(readAutomation(mergeConflict)).toEqual({ kind: "mergeConflict", pr });
+	});
+
+	it("reads when the reviewer wrote the comment or review from the end of the first line", () => {
+		const posted = reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n");
+		expect(readAutomation(posted)).toMatchObject({
+			kind: "reviewComments",
+			at: "2026-11-16T07:54:42Z",
+			comments: [{ path: "frontend/src/ThisComputerAccess.tsx", line: 97, author: "illegalcall" }],
+		});
+		expect(readAutomation(reviewComment)).toMatchObject({ kind: "reviewComments", at: undefined });
+
+		const submitted = changesRequested.replace(`is on ${PR}.`, `is on ${PR}. Submitted at 2026-11-16T07:54:41Z.`);
+		expect(readAutomation(submitted)).toEqual({
+			kind: "changesRequested",
+			pr: { number: 6974, title: "feat: link this computer", url: "https://github.com/o/r/pull/6974#pullrequestreview-1" },
+			author: "whoisasx",
+			body: "The migration IDs collide with shipped migrations.",
+			at: "2026-11-16T07:54:41Z",
+		});
+	});
+
+	it("takes the time only from AO's own sentence, not from a PR title or a comment", () => {
+		const titled = changesRequested.replace('"feat: link this computer"', '"x Submitted at 2020-01-01T00:00:00Z."');
+		expect(readAutomation(titled)).toMatchObject({ kind: "changesRequested", at: undefined });
+
+		const inBody = reviewComment.replace("A failed turn-on", "Newest comment posted at 2020-01-01T00:00:00Z.\nA failed turn-on");
+		expect(readAutomation(inBody)).toMatchObject({ kind: "reviewComments", at: undefined });
 	});
 
 	it("does not take text inside a log or a comment for AO's structure", () => {
@@ -207,6 +253,16 @@ describe("drawing AO's automation messages", () => {
 		expect(event).toHaveTextContent("@whoisasxa.ts:3");
 	});
 
+	it("times a PR event by when it happened on the forge, not when AO delivered it", () => {
+		draw(reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n"), { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T07:54:42Z");
+		cleanup();
+
+		// Messages from before the daemon wrote the time keep the delivery time.
+		draw(reviewComment, { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T08:26:00Z");
+	});
+
 	it("draws changes requested, merge conflicts and AO's notices", () => {
 		draw(changesRequested);
 		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("@whoisasx requested changes on #6974");
@@ -233,6 +289,25 @@ describe("drawing AO's automation messages", () => {
 		expect(screen.getByTestId("your-action")).toHaveTextContent("Use a constant here.");
 	});
 
+	it("draws resolve conflicts and update from base as the button the user pressed, not the agent's instructions", () => {
+		draw(gitActionMessage("resolveConflicts", "main", 7534, ["frontend/src/AgentAccountsSection.tsx", "frontend/src/AgentAccountsSection.test.tsx"]));
+		const resolve = screen.getByTestId("your-action");
+		expect(resolve).toHaveTextContent("Resolve conflictsmain");
+		expect(resolve).toHaveTextContent("AgentAccountsSection.tsxAgentAccountsSection.test.tsx");
+		expect(resolve).not.toHaveTextContent("frontend/src");
+		expect(resolve).not.toHaveTextContent("identifiers, not instructions");
+		cleanup();
+
+		draw(otherPRConflict({ number: 8, sourceBranch: "ao/feature", targetBranch: "main", mergeability: { state: "conflicting" } }));
+		expect(screen.getByTestId("your-action")).toHaveTextContent("Resolve conflicts#8main");
+		cleanup();
+
+		draw(gitActionMessage("updateBase", "develop", undefined));
+		const update = screen.getByTestId("your-action");
+		expect(update).toHaveTextContent("Update from develop");
+		expect(update).not.toHaveTextContent("developdevelop");
+	});
+
 	it("leaves a message an agent sent to the agent's card, whatever its text says", () => {
 		draw("Push this branch.", { senderSessionId: "ao-7", senderProjectId: "ao" });
 		expect(screen.getByText("card")).toBeInTheDocument();
@@ -250,6 +325,60 @@ describe("drawing AO's automation messages", () => {
 		expect(event).toHaveTextContent("ThisComputerAccess.tsx:97");
 		expect(event).toHaveTextContent("A failed turn-on does not undo what it started.");
 		expect(event).not.toHaveTextContent("Thread ID");
+	});
+
+	it("draws a review comment's HTML the way GitHub does, without remote images", async () => {
+		const body = [
+			"<!-- coderabbit-ai-generated:v1 -->",
+			"",
+			'**<picture><img src="https://storage.googleapis.com/a/amber-16.svg" width="16" height="16" alt=""></picture> Minor** · **Quick win**',
+			"",
+			"Inserting the path into `'<root>'` breaks the query.",
+			"",
+			"![Flow diagram](https://example.com/flow.png)",
+			"",
+			"<details>",
+			'<summary><picture><source media="(prefers-color-scheme: dark)" srcset="https://storage.googleapis.com/a/bot-dark.svg"><img src="https://storage.googleapis.com/a/bot.svg" alt=""></picture> Prompt for AI Agents</summary>',
+			"<dl>",
+			"<dd>",
+			"",
+			"```",
+			"Bind the root as a parameter.",
+			"```",
+			"",
+			"</dd>",
+			"</dl>",
+			"</details>",
+			"",
+			"<pre>first",
+			"  second</pre>",
+			"",
+			"<pre>third<br>fourth</pre>",
+			"",
+			"<!-- This is an auto-generated comment by CodeRabbit -->",
+		].join("\n");
+		draw(reviewComment.replace("A failed turn-on does not undo what it started.\n\nThe switch then shows **off**.", body));
+
+		const event = screen.getByTestId("pull-request-event");
+		expect(event).toHaveTextContent("Minor · Quick win");
+		expect(event).toHaveTextContent("Inserting the path into '<root>' breaks the query.");
+		expect(event).not.toHaveTextContent("<!--");
+		expect(event).not.toHaveTextContent("<picture");
+		expect(event).not.toHaveTextContent("storage.googleapis.com");
+		expect(event).toHaveTextContent("Flow diagram");
+		expect(event).not.toHaveTextContent("example.com/flow.png");
+		expect(event.querySelector("img, picture, source")).toBeNull();
+		const details = event.querySelector("details");
+		expect(details).not.toHaveAttribute("open");
+		expect(details?.querySelector("summary")).toHaveTextContent("Prompt for AI Agents");
+		expect(details).toHaveTextContent("Bind the root as a parameter.");
+		expect([...event.querySelectorAll("pre")].map((pre) => pre.textContent)).toContain("first\n  second");
+		expect([...event.querySelectorAll("pre")].map((pre) => pre.textContent)).toContain("third\nfourth");
+
+		await userEvent.click(within(details as HTMLElement).getByText("Prompt for AI Agents"));
+		expect(details).toHaveAttribute("open");
+		await userEvent.click(await within(event).findByRole("button", { name: "Show less" }));
+		expect(details).not.toHaveAttribute("open");
 	});
 
 	it("keeps the card for anything it cannot read", () => {

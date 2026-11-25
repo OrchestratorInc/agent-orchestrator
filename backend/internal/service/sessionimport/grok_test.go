@@ -10,7 +10,7 @@ import (
 )
 
 func TestGrokDiscoveryAndChunks(t *testing.T) {
-	root := t.TempDir()
+	root := canonical(t.TempDir())
 	id := "00000000-0000-7000-8000-000000000001"
 	dir := filepath.Join(root, "sessions", "%2Fwork", id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -49,7 +49,7 @@ func TestGrokDiscoveryAndChunks(t *testing.T) {
 }
 
 func TestGrokRewindDropsDiscardedPrompts(t *testing.T) {
-	root := t.TempDir()
+	root := canonical(t.TempDir())
 	id := "00000000-0000-7000-8000-000000000002"
 	dir := filepath.Join(root, "sessions", "bucket", id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

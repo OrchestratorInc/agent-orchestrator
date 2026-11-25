@@ -1,7 +1,7 @@
 import * as Clipboard from "expo-clipboard";
 import { useCallback, useState, type ReactNode } from "react";
 import { ActionSheetIOS, Alert, Modal, Platform, Pressable, Share, StyleSheet, Text, View } from "react-native";
-import { deleteArtifact, getArtifactText } from "./api";
+import type { ArtifactsBackend } from "./artifactsBackend";
 import { artifactMenuActions, looksBinary, type ArtifactMenuAction, type SessionArtifact } from "./artifacts";
 import { userFacingError } from "./connectionError";
 import { haptics } from "./haptics";
@@ -42,16 +42,16 @@ type OpenMenu = { artifact: SessionArtifact; actions: ArtifactMenuAction[]; run:
  * sheet. Android shows `menu`, an in-app list like the worker row's options:
  * an Android alert holds at most three buttons. A published file's menu shows
  * its link under the name. Callers render `menu`.
- * `onDeleted` runs once the daemon has removed the file.
+ * `onDeleted` runs once the daemon or Orchestrator Cloud has removed the file.
  */
-export function useArtifactActions(sessionId: string, onDeleted?: (artifact: SessionArtifact) => void) {
-	const { config, refresh } = useApp();
+export function useArtifactActions(sessionId: string, backend: ArtifactsBackend | null, onDeleted?: (artifact: SessionArtifact) => void) {
+	const { refresh } = useApp();
 	const [open, setOpen] = useState<OpenMenu | null>(null);
 
 	const copy = useCallback(async (artifact: SessionArtifact) => {
-		if (!config) return;
+		if (!backend) return;
 		try {
-			const text = await getArtifactText(config, sessionId, artifact.path);
+			const text = await backend.text(sessionId, artifact.path);
 			if (looksBinary(text)) throw new Error("This file isn't text, so it can't be copied.");
 			await Clipboard.setStringAsync(text);
 			haptics.success();
@@ -59,7 +59,7 @@ export function useArtifactActions(sessionId: string, onDeleted?: (artifact: Ses
 			haptics.error();
 			Alert.alert("Couldn't copy the artifact", userFacingError(cause));
 		}
-	}, [config, sessionId]);
+	}, [backend, sessionId]);
 
 	const copyLink = useCallback(async (url: string) => {
 		try {
@@ -87,8 +87,8 @@ export function useArtifactActions(sessionId: string, onDeleted?: (artifact: Ses
 				text: "Delete",
 				style: "destructive",
 				onPress: () => {
-					if (!config) return;
-					void deleteArtifact(config, sessionId, artifact.path)
+					if (!backend) return;
+					void backend.remove(sessionId, artifact.path)
 						.then(() => {
 							haptics.success();
 							onDeleted?.(artifact);
@@ -101,11 +101,12 @@ export function useArtifactActions(sessionId: string, onDeleted?: (artifact: Ses
 				},
 			},
 		]);
-	}, [config, onDeleted, refresh, sessionId]);
+	}, [backend, onDeleted, refresh, sessionId]);
 
 	/** Opens the menu for `artifact`; Open runs `onOpen`, Ask the agent `onAsk`, Version history `onHistory`. */
 	const openMenu = useCallback((artifact: SessionArtifact, { inViewer = false, onOpen, onAsk, onHistory }: { inViewer?: boolean; onOpen?: () => void; onAsk?: () => void; onHistory?: () => void } = {}) => {
-		const actions = artifactMenuActions(artifact, { inViewer });
+		// On Cloud only the session's creator may delete its files.
+		const actions = artifactMenuActions(artifact, { inViewer }).filter((action) => action !== "delete" || backend?.canChange !== false);
 		if (!actions.length) return;
 		haptics.select();
 		const run = (action: ArtifactMenuAction) => {

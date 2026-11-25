@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { AgentModelField, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
+import { AgentModelField, ProjectAttributionToggles, ProjectAutoReviewToggle, ProjectCoAuthorCommitsToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
@@ -32,6 +32,12 @@ export type ProjectSettingsDraft = {
 	autoReview: boolean;
 	/** Local-only: workers may ask AO to review their own PRs. */
 	workersRequestReview?: boolean;
+	/** Cloud-only: agent commits name the AO GitHub App as a co-author. */
+	coAuthorCommits?: boolean;
+	/** Local-only, Orchestrator attribution beta: add the Co-authored-by trailer to commits. */
+	attributionCommitTrailer?: boolean;
+	/** Local-only, Orchestrator attribution beta: end PR bodies with the Orchestrator line. */
+	attributionPRFooter?: boolean;
 	intakeEnabled: boolean;
 	intakeRepo: string;
 	intakeAssignee: string;
@@ -50,10 +56,15 @@ export type ProjectAgentPickerProps = {
 type Capabilities = {
 	workflow: boolean;
 	sessionPrefix: boolean;
+	/** Shown in an empty session prefix field: the prefix new sessions get. */
+	sessionPrefixPlaceholder?: string;
 	intake: boolean;
 	reviewer: boolean;
 	requiredAgents: boolean;
 	workersRequestReview?: boolean;
+	coAuthorCommits?: boolean;
+	/** Shown while the Orchestrator attribution beta is on (Settings, Advanced). */
+	attribution?: boolean;
 	nameLimit?: number;
 	requiredBranch?: boolean;
 	/** Cloud defaults and tuning belong to its runtime, rather than the local catalog. */
@@ -181,13 +192,17 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 				{capabilities.workflow && <>
 					<ProjectSettingsSection title={t("settings.project.worktrees")} grouped>
 						<ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} />
-						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
+						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder={capabilities.sessionPrefixPlaceholder ?? "ao"} onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
 					</ProjectSettingsSection>
 					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}
 					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
 						<ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} />
 						{capabilities.workersRequestReview && <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />}
+						{capabilities.coAuthorCommits && <ProjectCoAuthorCommitsToggle checked={draft.coAuthorCommits ?? true} onCheckedChange={(coAuthorCommits) => patch({ coAuthorCommits })} />}
 					</ProjectSettingsSection>
+					{capabilities.attribution && <ProjectSettingsSection title={t("settings.project.attribution")} grouped>
+						<ProjectAttributionToggles commitTrailer={draft.attributionCommitTrailer ?? true} prFooter={draft.attributionPRFooter ?? true} onChange={patch} />
+					</ProjectSettingsSection>}
 				</>}
 				{generalExtra}
 			</> : <>
@@ -214,8 +229,9 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						[fields.permissions]: value,
 					}));
 					return <ProjectSettingsSection key={role} title={t(`settings.models.${role}Role`)} grouped>
-						<ProjectSettingsRow label={t("settings.project.agent")}><div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1.5"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
-						{/* The field's picker sits beside the agent's; a warning takes its own line below both. */}<div className="contents"><AgentModelField warningClassName="basis-full justify-end text-right" role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} cloudOrgId={cloudOrgId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
+						{/* A warning wraps onto its own line under the whole row, starting at the label. Top-aligned, so it grows the row downward and moves nothing; the control-height label box keeps "Agent" level with the pickers. */}
+						<ProjectSettingsRow label={t("settings.project.agent")} className="flex-wrap items-start justify-end gap-x-2 gap-y-1.5 [&>:first-child]:mr-auto [&>:first-child]:min-h-control-md [&>:last-child]:contents"><div className="contents"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
+						<div className="contents"><AgentModelField warningClassName="order-last basis-full px-0" role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} cloudOrgId={cloudOrgId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
 							emptyLabel={capabilities.runtimeDefaults && agent === "" ? t("settings.cloudProject.sessionModel") : undefined}

@@ -1,6 +1,8 @@
 package conpty
 
 import (
+	"bytes"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"testing"
@@ -34,8 +36,7 @@ func TestRingAppendPartialThenComplete(t *testing.T) {
 // TestRingExceedsMaxOutputLines verifies the buffer trims to MaxOutputLines.
 func TestRingExceedsMaxOutputLines(t *testing.T) {
 	r := NewRing()
-	// Push 1005 lines.
-	for i := 0; i < 1005; i++ {
+	for i := 0; i < MaxOutputLines+5; i++ {
 		r.Append([]byte("x\n"))
 	}
 
@@ -43,6 +44,33 @@ func TestRingExceedsMaxOutputLines(t *testing.T) {
 	got := strings.Count(string(snap), "\n")
 	if got != MaxOutputLines {
 		t.Errorf("stored %d lines, want %d", got, MaxOutputLines)
+	}
+	r = NewRingOfLines(5000)
+	for i := 0; i < 5005; i++ {
+		r.Append([]byte("x\n"))
+	}
+	if got := strings.Count(string(r.Snapshot()), "\n"); got != 5000 {
+		t.Errorf("ring of 5000 lines stored %d", got)
+	}
+}
+
+func TestRingTrimsToMaxOutputBytes(t *testing.T) {
+	r := NewRingOfLines(5000)
+	line := strings.Repeat("y", 1023) + "\n"
+	for i := 0; i < 2000; i++ {
+		r.Append([]byte(line))
+	}
+	r.Append([]byte("last\n"))
+
+	snap := string(r.Snapshot())
+	if len(snap) > MaxOutputBytes {
+		t.Fatalf("stored %d bytes, want at most %d", len(snap), MaxOutputBytes)
+	}
+	if len(snap) < MaxOutputBytes-len(line) {
+		t.Fatalf("stored %d bytes, trimmed more than needed", len(snap))
+	}
+	if !strings.HasSuffix(snap, "last\n") {
+		t.Fatalf("newest line dropped: %q", snap[len(snap)-20:])
 	}
 }
 
@@ -167,4 +195,122 @@ func TestRingConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestRingBoundsNewlineFreeOutput(t *testing.T) {
+	r := NewRing()
+	chunk := strings.Repeat("a", MaxOutputBytes)
+	r.Append([]byte("line\n"))
+	r.Append([]byte(chunk))
+	r.Append([]byte(strings.Repeat("b", MaxOutputBytes/2)))
+	got := r.Replay()
+	if len(got) > MaxOutputBytes {
+		t.Fatalf("replay = %d bytes, want at most %d", len(got), MaxOutputBytes)
+	}
+	if !strings.HasSuffix(string(got), strings.Repeat("b", MaxOutputBytes/2)) {
+		t.Fatal("replay lost the newest output")
+	}
+}
+
+// refRing is the string-based Ring this package used before the partial line
+// became an in-place buffer; TestRingMatchesReference checks the two agree.
+type refRing struct {
+	lines       []string
+	size        int
+	maxLines    int
+	partialLine string
+}
+
+func (r *refRing) append(raw []byte) {
+	parts := strings.Split(r.partialLine+string(raw), "\n")
+	r.partialLine = parts[len(parts)-1]
+	for _, line := range parts[:len(parts)-1] {
+		r.lines = append(r.lines, line+"\n")
+		r.size += len(line) + 1
+	}
+	r.trim()
+}
+
+func (r *refRing) trim() {
+	drop := 0
+	for drop < len(r.lines) && (len(r.lines)-drop > r.maxLines || r.size+len(r.partialLine) > MaxOutputBytes) {
+		r.size -= len(r.lines[drop])
+		drop++
+	}
+	r.lines = r.lines[drop:]
+	if len(r.partialLine) > MaxOutputBytes {
+		r.partialLine = r.partialLine[len(r.partialLine)-MaxOutputBytes:]
+	}
+}
+
+func (r *refRing) flushPartial() {
+	if r.partialLine == "" {
+		return
+	}
+	r.lines = append(r.lines, r.partialLine)
+	r.size += len(r.partialLine)
+	r.partialLine = ""
+	r.trim()
+}
+
+func TestRingMatchesReference(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	for _, maxLines := range []int{MaxOutputLines, 5000} {
+		r, ref := NewRingOfLines(maxLines), &refRing{maxLines: maxLines}
+		for step := 0; step < 1500; step++ {
+			var chunk []byte
+			switch rng.IntN(5) {
+			case 0: // short lines
+				chunk = []byte(strings.Repeat("ab\n", 1+rng.IntN(200)))
+			case 1: // newline-free repaints, often past the byte cap
+				chunk = bytes.Repeat([]byte("\x1b[H\x1b[2Kx"), 1+rng.IntN(200000))
+			case 2: // a long line ending mid-chunk
+				chunk = append(bytes.Repeat([]byte("y"), rng.IntN(300000)), "\ntail"...)
+			case 3:
+				chunk = []byte("\n")
+			default: // random bytes with sparse newlines
+				chunk = make([]byte, rng.IntN(32<<10))
+				const alphabet = "abcd\r\x1b\n"
+				for i := range chunk {
+					chunk[i] = alphabet[rng.IntN(len(alphabet))]
+				}
+			}
+			if rng.IntN(50) == 0 {
+				r.FlushPartial()
+				ref.flushPartial()
+			} else {
+				r.Append(chunk)
+				ref.append(chunk)
+			}
+			if step%25 != 0 {
+				continue
+			}
+			wantReplay := strings.Join(ref.lines, "") + ref.partialLine
+			if got := r.Replay(); string(got) != wantReplay {
+				t.Fatalf("maxLines %d step %d: Replay differs (%d bytes, want %d)", maxLines, step, len(got), len(wantReplay))
+			}
+			if got := r.Snapshot(); string(got) != strings.Join(ref.lines, "") {
+				t.Fatalf("maxLines %d step %d: Snapshot differs", maxLines, step)
+			}
+			if got := r.Tail(7); got != strings.Join(ref.lines[max(0, len(ref.lines)-7):], "") {
+				t.Fatalf("maxLines %d step %d: Tail differs", maxLines, step)
+			}
+		}
+	}
+}
+
+// BenchmarkRingAppendRedraw measures a full-screen program repainting with
+// cursor moves and no newline, once the partial line has reached the byte cap.
+func BenchmarkRingAppendRedraw(b *testing.B) {
+	chunk := []byte(strings.Repeat("\x1b[H\x1b[2Kframe text ", 4096/21))
+	r := NewRing()
+	for len(r.Replay()) < MaxOutputBytes {
+		r.Append(chunk)
+	}
+	b.SetBytes(int64(len(chunk)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Append(chunk)
+	}
 }

@@ -27,6 +27,7 @@ import {
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
+	SKIP_DOM_SELECTION_TAG,
 	TextNode,
 	type EditorConfig,
 	type LexicalEditor,
@@ -55,8 +56,9 @@ import {
 import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { composerFileIcon } from "./composerFileIcon";
-import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { findActiveTrigger, skillCommandName, type TriggerKind } from "./composerSuggest";
 import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
 import { splitInlineImagePaths } from "./messageAttachments";
 import type { ComposerSentToken } from "./sentComposerTokens";
@@ -84,10 +86,12 @@ export type ComposerEditorHandle = {
 	focus(): void;
 	clear(): void;
 	/** Replaces the text with the caret at its end, or at its start when asked. */
-	setText(text: string, caret?: "start" | "end"): void;
+	setText(text: string, caret?: "start" | "end", options?: { preserveFocus?: boolean }): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	/** Removes the typed `/query` or `@query`, for a completion that runs instead of inserting. */
+	removeTrigger(trigger: ComposerTrigger): void;
 	/**
 	 * Shows a dictation transcript at the caret (or the end), replacing the one
 	 * shown before it, so the words appear as they are recognized.
@@ -180,6 +184,15 @@ type SerializedComposerTokenNode = Spread<
 const DICTATION_FADE_MS = 300;
 /** Letters that arrive together fade in this far apart, left to right. */
 const DICTATION_LETTER_STAGGER_MS = 14;
+
+/** The draft's text sits this far inside the composer's padding on both sides. */
+const COMPOSER_TEXT_INSET = "px-[7px]";
+/**
+ * Reserved on both edges of whichever element scrolls the draft, and on the placeholder
+ * standing in for it. A classic scrollbar then neither reflows the text when it appears
+ * nor pushes the text off-centre; overlay scrollbars reserve nothing.
+ */
+const COMPOSER_SCROLL_GUTTER = "chat-composer-scrollbar [scrollbar-gutter:stable_both-edges]";
 
 /**
  * One letter of a dictation in progress. A letter fades in once, when it first
@@ -300,7 +313,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 				className={cn(
 					"mx-0.5 inline-flex items-center gap-1 rounded-md border border-border-strong bg-interactive-hover px-1.5 py-0.5 align-middle text-[0.9em] leading-none select-none",
 					this.__kind === "skill"
-						? "text-logo-accent"
+						? "text-logo-accent-text"
 						: "text-foreground",
 				)}
 			>
@@ -315,7 +328,10 @@ function $createComposerTokenNode(kind: TokenKind, value: string): ComposerToken
 	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
 	const wire = kind === "skill" ? `/${value}` : /\s/.test(value) ? `"${value}"` : value;
 	const slash = value.lastIndexOf("/");
-	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
+	// A `skill:` command reads as `/name` like every other agent's; the wire still
+	// carries the command the agent runs.
+	const skillName = skillCommandName(value);
+	const display = kind === "skill" ? (skillName ? `/${skillName}` : wire) : slash >= 0 ? value.slice(slash + 1) : value;
 	return new ComposerTokenNode(kind, value, display, wire);
 }
 
@@ -345,6 +361,26 @@ function $composerTokens(): ComposerSentToken[] {
 				? [{ kind: child.__kind, value: child.__value, display: child.__display, wire: child.__wire }]
 				: [],
 		);
+}
+
+/**
+ * What onComplete returns for a choice that runs at once rather than becoming a
+ * chip, such as AO's `/model`: the typed trigger is removed and nothing inserted.
+ */
+export const CONSUME_TRIGGER = Symbol("consume-trigger");
+
+function $removeComposerTrigger(trigger: ComposerTrigger): boolean {
+	const node = $getNodeByKey<LexicalNode>(trigger.nodeKey);
+	if (!$isTextNode(node)) return false;
+	const text = node.getTextContent();
+	const expected = `${trigger.kind === "skill" ? "/" : "@"}${trigger.query}`;
+	if (text.slice(trigger.start, trigger.end) !== expected) return false;
+	const before = text.slice(0, trigger.start);
+	// Drop the space after the trigger too, so no gap is left where it was.
+	const after = text.slice(trigger.end).replace(/^ /, "");
+	node.setTextContent(before + after);
+	node.select(before.length, before.length);
+	return true;
 }
 
 function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean {
@@ -610,7 +646,7 @@ const EditorBridge = forwardRef<
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | typeof CONSUME_TRIGGER | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
 >(function EditorBridge({ disabled, enterSends, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onChange, onComplete, onEnter }, ref) {
@@ -619,6 +655,17 @@ const EditorBridge = forwardRef<
 	const dictation = useRef<{ anchor: NodeKey; keys: NodeKey[]; prefix: string; settled: number } | null>(null);
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
+
+	// Links typed or pasted here load their site icons before they are sent.
+	useEffect(() => {
+		const warmer = createDraftFaviconWarmer();
+		warmer.update(editor.getEditorState().read(() => $getRoot().getTextContent()));
+		const unregister = editor.registerTextContentListener((text) => warmer.update(text));
+		return () => {
+			unregister();
+			warmer.dispose();
+		};
+	}, [editor]);
 
 	useImperativeHandle(
 		ref,
@@ -633,8 +680,9 @@ const EditorBridge = forwardRef<
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
 			},
-			setText: (text, caret) => {
+			setText: (text, caret, options) => {
 				editor.update(() => {
+					if (options?.preserveFocus) $addUpdateTag(SKIP_DOM_SELECTION_TAG);
 					$replaceEditorText(text, attachedImages(), caret);
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
@@ -645,6 +693,11 @@ const EditorBridge = forwardRef<
 			insertToken: (trigger, value) => {
 				editor.update(() => {
 					$insertComposerToken(trigger, value);
+				}, { discrete: true });
+			},
+			removeTrigger: (trigger) => {
+				editor.update(() => {
+					$removeComposerTrigger(trigger);
 				}, { discrete: true });
 			},
 			dictate: (text) => {
@@ -777,7 +830,15 @@ const EditorBridge = forwardRef<
 				return true;
 			}
 			const value = onComplete(snapshot, key);
-			if (snapshot.trigger && value) {
+			if (snapshot.trigger && value === CONSUME_TRIGGER) {
+				if (!$removeComposerTrigger(snapshot.trigger)) return false;
+				if (event) {
+					completionHandledEvents.add(event);
+					event.preventDefault();
+				}
+				return true;
+			}
+			if (snapshot.trigger && typeof value === "string" && value) {
 				if (!$insertComposerToken(snapshot.trigger, value)) return false;
 				if (event) {
 					completionHandledEvents.add(event);
@@ -838,7 +899,15 @@ const EditorBridge = forwardRef<
 			if (!plainKey(event)) return false;
 			const caret = $caretLine();
 			const action = caret && listEnter(caret.line, caret.column, caret.previous);
-			if (!caret || !action) return false;
+			if (!caret || !action) {
+				// Shift+Enter inserts a plain newline (PlainTextPlugin has no default handler).
+				if (!event.shiftKey) return false;
+				const selection = $getSelection();
+				if (!$isRangeSelection(selection)) return false;
+				$addUpdateTag(HISTORY_PUSH_TAG);
+				selection.insertRawText("\n");
+				return handled(event);
+			}
 			if (action.kind === "exit") return $applyLinePrefixEdit(caret.node, caret.column, action.edit) && handled(event);
 			$addUpdateTag(HISTORY_PUSH_TAG);
 			caret.selection.insertRawText(action.text);
@@ -897,6 +966,8 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Takes no input but looks exactly as usual: same text, no dimming. */
+		readOnly?: boolean;
 		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
@@ -910,7 +981,7 @@ export const ComposerEditor = forwardRef<
 		activeIndex: number;
 		images?: ComposerImage[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | typeof CONSUME_TRIGGER | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 		onCompositionChange: (isComposing: boolean) => void;
 		onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -919,6 +990,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		readOnly = false,
 		enterSends,
 		concealed,
 		dictating,
@@ -942,7 +1014,8 @@ export const ComposerEditor = forwardRef<
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
 	const [empty, setEmpty] = useState(true);
-	const suggestion = empty && !disabled && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
+	const locked = Boolean(disabled) || readOnly;
+	const suggestion = empty && !locked && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -954,7 +1027,7 @@ export const ComposerEditor = forwardRef<
 	const initialConfig = {
 		namespace: "AOChatComposer",
 		nodes: [ComposerTokenNode, DictationLetterNode],
-		editable: !disabled,
+		editable: !locked,
 		theme: { paragraph: "m-0" },
 		onError(error: Error) {
 			throw error;
@@ -970,10 +1043,12 @@ export const ComposerEditor = forwardRef<
 	const placeholderNode = useCallback(
 		() => (
 			<div className={cn(
-				"py-1 pl-[7px] text-base! leading-relaxed text-muted-foreground",
+				"py-1 text-base! leading-relaxed text-muted-foreground",
+				COMPOSER_TEXT_INSET,
 				suggestion
 					? "min-h-[4.5rem] whitespace-pre-wrap break-words"
-					: "pointer-events-none absolute inset-x-0 top-0",
+					// Same gutter as the field below, so the first typed character lands where the placeholder began.
+					: cn("pointer-events-none absolute inset-x-0 top-0 overflow-hidden", COMPOSER_SCROLL_GUTTER),
 			)}>
 				{suggestion ? <span data-testid="prompt-suggestion">{suggestion.text}</span> : (
 					// Both stay mounted in one grid cell, so turning dictation on or off crossfades them.
@@ -994,7 +1069,7 @@ export const ComposerEditor = forwardRef<
 	return (
 		<LexicalComposer initialConfig={initialConfig}>
 			<ComposerImages.Provider value={images}>
-			<div className={cn("relative", suggestion && "chat-composer-scrollbar max-h-40 overflow-y-auto overscroll-contain")}>
+			<div className={cn("relative", suggestion && cn("max-h-40 overflow-y-auto overscroll-contain", COMPOSER_SCROLL_GUTTER))}>
 				<PlainTextPlugin
 					contentEditable={
 						<ContentEditable
@@ -1020,7 +1095,9 @@ export const ComposerEditor = forwardRef<
 								if (event.defaultPrevented) event.stopPropagation();
 							}}
 							className={cn(
-								"chat-composer-scrollbar max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 pl-[7px] pr-0 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								"max-h-40 min-h-[4.5rem] w-full overflow-y-auto overscroll-contain bg-transparent py-1 text-base! leading-relaxed text-foreground caret-foreground outline-none selection:bg-foreground selection:text-on-foreground",
+								COMPOSER_TEXT_INSET,
+								COMPOSER_SCROLL_GUTTER,
 								suggestion && "absolute inset-0 overflow-visible overscroll-auto",
 								dictating && "caret-transparent",
 								concealed ? "invisible" : disabled && "opacity-50",
@@ -1038,7 +1115,7 @@ export const ComposerEditor = forwardRef<
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}
-					disabled={disabled}
+					disabled={locked}
 					enterSends={enterSends}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}

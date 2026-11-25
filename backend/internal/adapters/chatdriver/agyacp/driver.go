@@ -1,17 +1,22 @@
 // Package agyacp binds Google Antigravity to AO's reusable ACP Chat transport.
 //
-// The agy CLI has no ACP mode. Google publishes a separate ACP server,
-// `agy_acp_server`, through the ACP registry (`antigravity-acp`). Like
-// Autohand's separately distributed `autohand-acp`, AO launches the user's own
-// installed copy, found beside the agy CLI or on PATH, and never downloads or
-// bundles it. Login, models, MCP configuration, and conversations stay the
-// user's own under GEMINI_HOME (default ~/.gemini).
+// The agy CLI has a built-in ACP server, `agy acp`, which steers a running turn
+// when another prompt arrives. AO launches it from agy 1.5.4, the first release
+// whose `agy acp` does not hang on a second approval. Older CLIs have no ACP
+// mode, or that bug, so AO falls back to
+// Google's separate `agy_acp_server` from the ACP registry (`antigravity-acp`),
+// found beside the agy CLI or on PATH. Like Autohand's separately distributed
+// `autohand-acp`, AO never downloads or bundles either. Login, models, MCP
+// configuration, and conversations stay the user's own under GEMINI_HOME
+// (default ~/.gemini); both servers keep Chat conversations in the same
+// antigravity-acp folder.
 package agyacp
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -39,6 +44,21 @@ const (
 	modeYolo     = "yolo"
 )
 
+// thinkingLevelOption is the config option agy_acp_server 1.4 moved reasoning
+// levels into. Its model option then lists gemini-3.8-flash where 1.3 and the
+// agy CLI list gemini-3.8-flash-high. `agy acp` 1.5 splits its models the same
+// way but names the option thought_level; the ACP driver then sends the level to
+// the session's thought_level-category option instead.
+const thinkingLevelOption = "thinking_level"
+
+var modelVariantPattern = regexp.MustCompile(`^(.+)-(minimal|low|medium|high|xhigh)$`)
+
+// `agy acp`'s mode ids. It has no mode that runs every tool without asking;
+// that is a launch flag, and AO's approval can change between turns. 1.5.4's
+// `auto` still asks before a command leaves the terminal sandbox, so AO's
+// auto, which runs without asking, does not map onto it.
+const cliModeAcceptEdits = "accept-edits"
+
 // New constructs the Antigravity ACP Chat driver.
 func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 	var agyCLI func(context.Context) (string, error)
@@ -50,7 +70,8 @@ func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 
 func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Config {
 	return acpdriver.Config{
-		Harness: domain.HarnessAgy,
+		Harness:     domain.HarnessAgy,
+		HideCommand: hiddenCommands,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming: true,
 			ports.ChatCapabilityTools:     true,
@@ -59,8 +80,12 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			ports.ChatCapabilityInterrupt: true,
 			ports.ChatCapabilityResume:    true,
 		},
+		InstallCheck: func(ctx context.Context) error {
+			_, err := resolve.target(ctx)
+			return err
+		},
 		Probe: func(ctx context.Context) error {
-			if _, err := resolve.serverPath(ctx); err != nil {
+			if _, err := resolve.target(ctx); err != nil {
 				return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
 			if plugin != nil {
@@ -76,7 +101,7 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			return nil
 		},
 		Launch: func(ctx context.Context, cfg acpdriver.LaunchConfig) (acpdriver.Launch, error) {
-			server, err := resolve.serverPath(ctx)
+			target, err := resolve.target(ctx)
 			if err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
@@ -84,25 +109,104 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			for key, value := range cfg.Env {
 				env[key] = value
 			}
-			if env[harnessPathEnvVar] == "" {
-				if harness := resolve.harnessPath(server); harness != "" {
-					env[harnessPathEnvVar] = harness
-				}
-			}
 			if env[disableWorkspaceTrustEnvVar] == "" {
 				env[disableWorkspaceTrustEnvVar] = "1"
 			}
-			return acpdriver.Launch{Command: server, Args: launchArgs(runtime.GOOS), Env: env}, nil
+			if target.cli {
+				return acpdriver.Launch{Command: target.path, Args: cliLaunchArgs(env, resolve.getenv), Env: env}, nil
+			}
+			if env[harnessPathEnvVar] == "" {
+				if harness := resolve.harnessPath(target.path); harness != "" {
+					env[harnessPathEnvVar] = harness
+				}
+			}
+			return acpdriver.Launch{Command: target.path, Args: launchArgs(runtime.GOOS), Env: env}, nil
 		},
-		ValidateInitialize: validateInitialize,
-		AfterInitialize:    newAuthBootstrap(agy.GeminiHome).run,
-		SessionMode:        sessionMode,
-		SessionOptions:     sessionOptions,
-		SessionPreamble:    sessionPreamble,
-		// No PermissionPolicy: every request Antigravity raises is answered by
-		// the user. AO never selects allow_always for them, which would let a
-		// cached grant survive a later switch to a stricter approval mode.
+		ValidateInitialize:  validateInitialize,
+		AfterInitialize:     afterInitialize(newAuthBootstrap(agy.GeminiHome, cliSignedIn(resolve.agyCLI))),
+		SessionMode:         sessionMode,
+		SessionModeForAgent: sessionModeForAgent,
+		SessionOptions:      sessionOptions,
+		SplitModelVariant:   splitModelVariant,
+		SessionPreamble:     sessionPreamble,
+		// Every request Antigravity raises is answered by the user, except under
+		// `agy acp` in AO's auto modes (see permissionPolicy). AO never selects
+		// allow_always, which would let a cached grant survive a later switch to
+		// a stricter approval mode.
+		PermissionPolicy: permissionPolicy,
+		SteerPrompt:      &acpdriver.SteerPrompt{Supported: cliSteers},
+		// run_command hands a command to the background once its
+		// WaitMsBeforeAsync passes, and the turn can end while it runs.
+		// Antigravity reports its exit later, then answers it in a cycle of its
+		// own, so the command is a background task, not a failed tool.
+		ToolsOutliveTurn: true,
 	}
+}
+
+// cliLaunchArgs starts `agy acp` with its Chat data in antigravity-acp, where
+// the separate server keeps it, so AO's history checks and the Chat/terminal
+// handoff find it, and a Chat started on the separate server resumes. `agy acp`
+// ignores the GEMINI_HOME variable and stores under its --gemini-dir, so a
+// GEMINI_HOME set for the session or inherited by the daemon is passed as that
+// flag, the same precedence agy.GeminiHome uses.
+func cliLaunchArgs(env map[string]string, getenv func(string) string) []string {
+	args := []string{"acp", "--app-data-dir", agy.ACPStorageDir}
+	home := strings.TrimSpace(env["GEMINI_HOME"])
+	if home == "" {
+		home = strings.TrimSpace(getenv("GEMINI_HOME"))
+	}
+	if home != "" {
+		args = append(args, "--gemini-dir", home)
+	}
+	return args
+}
+
+// afterInitialize runs the separate server's sign-in bootstrap. `agy acp`
+// reuses the CLI's own login, and its authenticate method could start a
+// browser sign-in, so AO leaves it alone.
+func afterInitialize(bootstrap authBootstrap) func(context.Context, *acpsdk.ClientSideConnection, acpsdk.InitializeResponse, acpdriver.LaunchConfig) error {
+	return func(ctx context.Context, conn *acpsdk.ClientSideConnection, init acpsdk.InitializeResponse, cfg acpdriver.LaunchConfig) error {
+		if isCLIServer(init) {
+			return nil
+		}
+		return bootstrap.run(ctx, conn, init, cfg)
+	}
+}
+
+// sessionModeForAgent maps AO's approvals onto `agy acp`'s modes. AO's auto
+// modes take accept-edits, and permissionPolicy approves the commands it still
+// asks about. The separate server keeps sessionMode.
+func sessionModeForAgent(init acpsdk.InitializeResponse) func(ports.PermissionMode) string {
+	if !isCLIServer(init) {
+		return nil
+	}
+	return func(permission ports.PermissionMode) string {
+		switch ports.NormalizePermissionMode(permission) {
+		case ports.PermissionModeDefault:
+			return modeDefault
+		case ports.PermissionModeAcceptEdits, ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
+			return cliModeAcceptEdits
+		default:
+			return ""
+		}
+	}
+}
+
+// permissionPolicy approves a request once under AO's auto modes, which is
+// what the separate server's yolo mode does. `agy acp` has no such mode. The
+// separate server in yolo never asks, so this changes nothing there.
+func permissionPolicy(permission ports.PermissionMode, request acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+	switch ports.NormalizePermissionMode(permission) {
+	case ports.PermissionModeAuto, ports.PermissionModeBypassPermissions:
+	default:
+		return "", false
+	}
+	for _, option := range request.Options {
+		if option.Kind == acpsdk.PermissionOptionKindAllowOnce {
+			return option.OptionId, true
+		}
+	}
+	return "", false
 }
 
 // launchArgs mirrors the registry entry's per-platform arguments. The Linux
@@ -132,11 +236,25 @@ func sessionMode(permission ports.PermissionMode) string {
 	}
 }
 
+// sessionOptions selects the chosen model. It is optional because a task's model
+// comes from the agy CLI's list, which is wider than what the ACP server offers:
+// a session on a model it lacks keeps its default, and the chat's own picker
+// lists what the server really has.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if model := strings.TrimSpace(settings.Model); model != "" {
-		return []acpdriver.SessionOption{{ID: "model", Value: model}}
+		return []acpdriver.SessionOption{{ID: "model", Value: model, Optional: true}}
 	}
 	return nil
+}
+
+// splitModelVariant turns gemini-3.8-flash-high into what server 1.4 and `agy
+// acp` 1.5 offer: the gemini-3.8-flash model at thinking level high.
+func splitModelVariant(model string) (string, acpdriver.SessionOption, bool) {
+	match := modelVariantPattern.FindStringSubmatch(model)
+	if match == nil {
+		return "", acpdriver.SessionOption{}, false
+	}
+	return match[1], acpdriver.SessionOption{ID: thinkingLevelOption, Value: match[2], Optional: true}, true
 }
 
 // sessionPreamble delivers AO's standing instructions as a text block ahead of
@@ -150,8 +268,5 @@ func sessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	if standing == "" {
 		return nil
 	}
-	return []acpsdk.ContentBlock{acpsdk.TextBlock(
-		"Standing instructions from Agent Orchestrator. Follow them for this whole session:\n" +
-			"<ao_standing_instructions>\n" + standing + "\n</ao_standing_instructions>",
-	)}
+	return []acpsdk.ContentBlock{acpdriver.PlainStandingInstructionsBlock(standing)}
 }

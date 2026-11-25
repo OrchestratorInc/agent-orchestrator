@@ -13,18 +13,22 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "@/components/app-icons";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Share2, Trash2 } from "@/components/app-icons";
 import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
-import { renameCloudSession, renameSession } from "../lib/rename-session";
+import { commitSessionRename } from "../lib/commit-session-rename";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
+import { useSettings } from "../hooks/useSettings";
+import { prepareUnpublish, sessionDeleteTargets, sessionPublishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { sessionPRMix } from "../lib/session-pr-mix";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId, sessionDeliverables } from "../types/workspace";
@@ -36,9 +40,7 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
-import { useUiStore } from "../stores/ui-store";
 import { appI18n } from "../i18n";
-import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -49,11 +51,14 @@ import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
+import { useHostShareLinks } from "./ShareArtifactPopover";
+import { Checkbox } from "./ui/checkbox";
 import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
 import { SessionPeopleStack } from "./SessionPeople";
 import { SessionOwnerTag } from "./SessionOwnerTag";
+import { useSessionContentExpired } from "../stores/content-expired-sessions-store";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
@@ -91,6 +96,7 @@ export function toBoardSessionPresentation(
 		isTerminated: session.isTerminated,
 		kanbanColumn: session.kanbanColumn,
 		displayStatus: session.displayStatus,
+		prMix: sessionPRMix(session),
 		provider: session.provider,
 		status: session.status,
 		statusReadiness: session.statusReadiness,
@@ -109,6 +115,7 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
+	backgroundTasks,
 	me,
 	participants,
 	memory,
@@ -116,9 +123,11 @@ export function BoardSessionCardAdapter({
 	onOpen,
 	onOpenArtifact,
 	onOpenArtifacts,
+	onShare,
 	onTerminate,
 	session,
 }: {
+	backgroundTasks?: ReactNode;
 	/** Live reading of the session's process tree, for the card's resource chip. */
 	memory?: SessionMemoryReading;
 	/** Colour for the chip; neutral unless this card is part of the fix. */
@@ -127,6 +136,8 @@ export function BoardSessionCardAdapter({
 	/** Opens the session with this artifact (by path) shown in the inspector. */
 	onOpenArtifact?: (path: string) => void;
 	onOpenArtifacts?: () => void;
+	/** Opens the share dialog for this session; set only where this person can share it. */
+	onShare?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
 	/** The people in this session when it is shared. */
@@ -136,6 +147,7 @@ export function BoardSessionCardAdapter({
 }) {
 	return (
 		<DesktopSessionCard
+			footer={backgroundTasks}
 			me={me}
 			participants={participants}
 			memory={memory}
@@ -143,6 +155,7 @@ export function BoardSessionCardAdapter({
 			onOpen={onOpen}
 			onOpenArtifact={onOpenArtifact}
 			onOpenArtifacts={onOpenArtifacts}
+			onShare={onShare}
 			onTerminate={onTerminate}
 			session={session}
 		/>
@@ -155,6 +168,7 @@ export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSessi
 }
 
 export function ArchivedSessionCardAdapter({
+	compact = false,
 	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
@@ -163,8 +177,11 @@ export function ArchivedSessionCardAdapter({
 	isRestoring,
 	restoreAction,
 	restoreError,
+	selected,
 	session,
 }: {
+	/** The archive grid's dense card: branch, PRs and time on one line. */
+	compact?: boolean;
 	/** Drops the "1 of 1 PR merged" line; the PR links already say it. */
 	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
@@ -176,22 +193,34 @@ export function ArchivedSessionCardAdapter({
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
+	/** The list's selection, which then replaces the card's own hover fill. */
+	selected?: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
 	const branch = sessionBranchPresentation(session).branch ?? "";
+	// The control plane refused its restore for data retention: say so instead of offering Restore.
+	const contentExpired = useSessionContentExpired(session.cloud ? session.id : undefined);
 	return (
 		<DesktopSessionCard
+			compact={compact}
+			// A grid of many archived cards shows the PRs each session recorded
+			// (and any summary already cached) instead of fetching and polling
+			// one SCM summary per card.
+			live={!compact}
+			selected={selected}
 			hidePullRequestProgress={hidePullRequestProgress}
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<div className="flex items-center">
-					<ArchiveRestoreButton
-						isDisabled={isRestoreDisabled}
-						isRestoring={isRestoring}
-						label={t("shell.restoreNamed", { title: session.title })}
-						onClick={restoreAction}
-					/>
+					{contentExpired ? null : (
+						<ArchiveRestoreButton
+							isDisabled={isRestoreDisabled}
+							isRestoring={isRestoring}
+							label={t("shell.restoreNamed", { title: session.title })}
+							onClick={restoreAction}
+						/>
+					)}
 					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
 					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} onRequest={onDelete} session={session} />}
 				</div>
@@ -205,7 +234,7 @@ export function ArchivedSessionCardAdapter({
 					/>
 				) : undefined
 			}
-			footer={<ArchiveRestoreError message={restoreError} />}
+			footer={<ArchiveRestoreError message={contentExpired ? t("restoreUnavailable.contentExpired") : restoreError} />}
 			interactive={Boolean(onOpen)}
 			onOpen={onOpen}
 			session={session}
@@ -218,31 +247,40 @@ function DesktopSessionCard({
 	participants,
 	action,
 	branchAction,
+	compact = false,
 	footer,
 	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	interactive = true,
+	live = true,
 	memory,
 	memoryTone,
 	onOpen,
 	onOpenArtifact,
 	onOpenArtifacts,
+	onShare,
 	onTerminate,
+	selected,
 	session,
 	still = false,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
+	compact?: boolean;
 	footer?: ReactNode;
 	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
+	/** Fetch and follow the session's PRs and archive state (on by default). */
+	live?: boolean;
 	memory?: SessionMemoryReading;
 	memoryTone?: ChipTone;
 	onOpen?: () => void;
 	onOpenArtifact?: (path: string) => void;
 	onOpenArtifacts?: () => void;
+	onShare?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
+	selected?: boolean;
 	session: WorkspaceSession;
 	participants?: readonly SessionPerson[];
 	me?: string;
@@ -254,9 +292,9 @@ function DesktopSessionCard({
 	const [renameOpen, setRenameOpen] = useState(false);
 	const summaries = sessionPRDisplaySummaries(
 		session,
-		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
+		useSessionScmSummary(session.id, live, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
-	const termination = useTerminateSessionState(session.id, session.hostId);
+	const termination = useTerminateSessionState(session.id, session.hostId, live);
 	// Archiving is the owner workspace's; a guest's archive would always be refused.
 	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
@@ -315,7 +353,31 @@ function DesktopSessionCard({
 		/>
 	) : undefined;
 
-	const newSidebarDesign = useUiStore(isNewSidebarDesign);
+	// Share sits beside Archive and shows the same way: on hover or focus.
+	const share = interactive && onShare ? onShare : undefined;
+	const shareButton = share ? (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-label={t("share.titleNamed", { name: session.title })}
+					className="rounded-sm pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+					onClick={(event) => {
+						event.stopPropagation();
+						share();
+					}}
+					size="icon-sm"
+					type="button"
+					variant="quiet"
+					data-board-share-session=""
+				>
+					<Share2 className="size-icon-sm" aria-hidden="true" />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{t("share.button")}</TooltipContent>
+		</Tooltip>
+	) : null;
+	const people = participants && participants.length > 0 ? participants : undefined;
+
 	const card = (
 		<SessionCardView
 			action={action}
@@ -327,6 +389,7 @@ function DesktopSessionCard({
 			branchAction={branchAction}
 			branchLabel={sessionBranchPresentation(session).naming ? <BranchNamingLabel /> : undefined}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
+			compact={compact}
 			error={termination.error ?? undefined}
 			externalLink={ProductExternalLink}
 			footer={
@@ -344,9 +407,11 @@ function DesktopSessionCard({
 			}}
 			onOpen={onOpen}
 			resource={resourcePresentation}
-			overlay={participants && participants.length > 0 ? (
+			overlay={people || shareButton ? (
 				<span className="inline-flex items-center gap-1">
-					<SessionPeopleStack people={participants} me={me} />
+					{/* The circles open the same share dialog, as they do in the session header. */}
+					{people ? <SessionPeopleStack people={people} me={me} onActivate={share} /> : null}
+					{shareButton}
 					{terminationOverlay}
 				</span>
 			) : terminationOverlay}
@@ -371,8 +436,8 @@ function DesktopSessionCard({
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
 					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
 			}
+			selected={selected}
 			still={still}
-			legacyStatus={!newSidebarDesign}
 			translate={translate}
 		/>
 	);
@@ -413,17 +478,12 @@ function SessionRenameDialog({
 	const queryClient = useQueryClient();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [draft, setDraft] = useState(session.title);
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
 	// Start each opening from the current title, but keep what is typed if the
 	// title changes while the dialog is open.
 	const [wasOpen, setWasOpen] = useState(open);
 	if (open !== wasOpen) {
 		setWasOpen(open);
-		if (open) {
-			setDraft(session.title);
-			setError(null);
-		}
+		if (open) setDraft(session.title);
 	}
 	useEffect(() => {
 		if (!open) return;
@@ -432,34 +492,18 @@ function SessionRenameDialog({
 		return () => cancelAnimationFrame(frame);
 	}, [open]);
 	const name = draft.trim();
-	const save = async () => {
-		if (name === session.title) {
-			onOpenChange(false);
-			return;
-		}
-		setBusy(true);
-		try {
-			if (session.cloud) {
-				await renameCloudSession(queryClient, { id: session.id, cloud: session.cloud }, name);
-			} else {
-				await renameSession(session.id, name, session.hostId);
-				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
-			}
-			onOpenChange(false);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(false);
-		}
+	// The card shows the new title as the dialog closes; a failure rolls it back
+	// and says so in a toast.
+	const save = () => {
+		onOpenChange(false);
+		void commitSessionRename(queryClient, session, name);
 	};
 	return (
 		<ConfirmDialog
-			busy={busy}
 			confirmDisabled={!name}
 			confirmLabel={t("shell.rename")}
 			description={null}
-			error={error}
-			onConfirm={() => void save()}
+			onConfirm={save}
 			onOpenChange={onOpenChange}
 			open={open}
 			title={t("shell.renameSession", { title: session.title })}
@@ -469,9 +513,9 @@ function SessionRenameDialog({
 				maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
-					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name || busy) return;
+					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name) return;
 					event.preventDefault();
-					void save();
+					save();
 				}}
 				ref={inputRef}
 				value={draft}
@@ -773,19 +817,37 @@ export function DeleteArchivedSessionDialog({
 	const queryClient = useQueryClient();
 	const [deleting, setDeleting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Each opening starts without the last attempt's error.
+	const [deleteArtifacts, setDeleteArtifacts] = useState(false);
+	// Each opening starts without the last attempt's error, keeping the artifacts.
 	const [wasOpen, setWasOpen] = useState(open);
 	if (open !== wasOpen) {
 		setWasOpen(open);
-		if (open) setError(null);
+		if (open) {
+			setError(null);
+			setDeleteArtifacts(false);
+		}
 	}
 	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
+	const baseUrl = useSettings().settings?.cloudControlPlaneUrl ?? "";
+	// Only a local or remote host's session is deleted here: its files, matched
+	// to this computer's host links on a remote host, say which are published.
+	const publishedCount = sessionPublishedCheck(session, useHostShareLinks()).known;
+	// This computer's session keeps its artifacts unless the box is checked;
+	// they stay on the Artifacts page. A remote host's are deleted with it.
+	const keepable = !session.hostId;
+	const artifactCount = sessionDeliverables(session).length;
+	const checkboxId = useId();
+	// An empty or stale list is no proof the folder is empty; the daemon deletes
+	// a session without files plainly.
+	const keeping = keepable && !deleteArtifacts;
 	const confirmDelete = async () => {
 		setDeleting(true);
 		setError(null);
 		try {
+			// Looked up while the files are there; unpublished only once they are gone.
+			const links = keeping ? null : await prepareUnpublish(baseUrl, await sessionDeleteTargets(baseUrl, session), { deleting: [{ hostId: session.hostId, sessionId: session.id }] });
 			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
-				params: { path: { sessionId: session.id }, query: { cleanup: true } },
+				params: { path: { sessionId: session.id }, query: { cleanup: true, ...(keeping ? { keepArtifacts: true } : {}) } },
 			});
 			if (deleteError) {
 				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
@@ -793,26 +855,56 @@ export function DeleteArchivedSessionDialog({
 			}
 			onOpenChange(false);
 			onDeleted?.();
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+			if (links) warnLinksStillLive(t, await links.unpublish());
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
+				...(keepable ? [queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey })] : []),
+			]);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
 		} finally {
 			setDeleting(false);
 		}
 	};
+	const body = keepable
+		? released ? t("deleteSession.bodyKeep") : t("deleteSession.bodyKeepCleanup")
+		: released ? t("deleteSession.body") : t("deleteSession.bodyCleanup");
 	return (
 		<ConfirmDialog
 			busy={deleting}
 			confirmAriaLabel={t("deleteSession.confirmAria")}
 			confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
-			description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
+			description={body}
 			destructive
 			error={error}
 			onConfirm={() => void confirmDelete()}
 			onOpenChange={onOpenChange}
 			open={open}
 			title={t("deleteSession.dialog")}
-		/>
+		>
+			{keepable && artifactCount > 0 ? (
+				<div className="flex items-start gap-2">
+					<Checkbox
+						id={checkboxId}
+						className="mt-0.5"
+						checked={deleteArtifacts}
+						onCheckedChange={(next) => setDeleteArtifacts(next === true)}
+					/>
+					<div className="min-w-0 text-control leading-5">
+						<label htmlFor={checkboxId} className="text-foreground">
+							{t("deleteSession.deleteArtifacts", { count: artifactCount })}
+						</label>
+						<p className="text-settings-muted">
+							{deleteArtifacts
+								? publishedCount > 0 ? t("deleteSession.published", { count: publishedCount }) : t("deleteSession.deleteArtifactsHint", { count: artifactCount })
+								: t("deleteSession.keepArtifactsHint", { count: artifactCount })}
+						</p>
+					</div>
+				</div>
+			) : publishedCount > 0 ? (
+				<p className="text-control leading-5 text-foreground">{t("deleteSession.published", { count: publishedCount })}</p>
+			) : null}
+		</ConfirmDialog>
 	);
 }
 

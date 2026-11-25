@@ -33,6 +33,7 @@ vi.mock("react-native", async () => {
 				return { remove: () => backHandlers.delete(handler) };
 			},
 		},
+		PixelRatio: { getFontScale: () => 1 },
 		Platform: { OS: "android" },
 		StyleSheet: { create: (styles: object) => styles, hairlineWidth: 0.5 },
 		View: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("View", props, children),
@@ -67,10 +68,12 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 	const record = (name: string) => (...args: unknown[]) => ({ modifier: name, args });
 	return {
+		align: record("align"),
 		background: record("background"),
 		clip: record("clip"),
 		fillMaxWidth: record("fillMaxWidth"),
 		height: record("height"),
+		onSizeChanged: (handler: (size: { width: number; height: number }) => void) => ({ modifier: "onSizeChanged", args: [], handler }),
 		padding: record("padding"),
 		semantics: record("semantics"),
 		size: record("size"),
@@ -160,6 +163,16 @@ describe("Android spawn selectors", () => {
 		expect(modifier(trigger(root, "spawn-project"), "semantics")?.args).toEqual([{ contentDescription: "Project, Project" }]);
 		expect(trigger(root, "spawn-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Auto");
 		expect(root.findAll((node) => hostType(node) === "DropdownMenu").every((menu) => menu.props.expanded === false)).toBe(true);
+	});
+
+	// Each machine with its glyph, as each project has its folder.
+	it("draws a computer for each machine and a cloud for Orchestrator Cloud in the machine menu", async () => {
+		const root = await render(baseProps({ hosts: [{ id: "host-a", label: "Alpha" }, { id: "orchestrator-cloud", label: "Cloud", icon: "cloud" }], hostId: "orchestrator-cloud" }));
+		await act(async () => trigger(root, "spawn-host").props.onClick());
+		const menu = menuOf(trigger(root, "spawn-host"));
+		const glyph = (label: string) => item(menu, label).findAll((node) => hostType(node) === "Icon").map((node) => node.props.source)[0];
+		expect(glyph("Alpha")).toBe("drawable:laptop");
+		expect(glyph("Cloud")).toBe("drawable:cloud");
 	});
 
 	it("selects another machine from its menu and closes it", async () => {
@@ -307,5 +320,47 @@ describe("Android spawn model", () => {
 		expect(items(models).map(text)).toEqual(["GPT-6.1-Sol · Default", "GPT-5", `All models (${(8929).toLocaleString()})`]);
 		await act(async () => item(models, `All models (${(8929).toLocaleString()})`).props.onClick());
 		expect(props.onBrowseModels).toHaveBeenCalledWith("codex");
+	});
+
+	// The capsule takes what the speedometer and the approval mode leave: a long
+	// name pushed both out of the row, and Material's 8dp above and below the
+	// name cut it off at larger font sizes.
+	const hostParent = (node: ReactTestInstance) => {
+		let current = node.parent;
+		while (current && hostType(current) === "") current = current.parent;
+		return current!;
+	};
+
+	it("measures the capsule after the speedometer and the approval mode, with no padding above or below its name", async () => {
+		const root = await render(baseProps());
+		const capsule = trigger(root, "spawn-harness");
+		expect(capsule.props.contentPadding).toMatchObject({ top: 0, bottom: 0 });
+		expect(modifier(capsule, "height")?.args).toEqual([34]);
+		const menu = menuOf(capsule);
+		expect(modifier(menu, "weight")?.args).toEqual([1, { fill: false }]);
+		const start = hostParent(menu);
+		expect(hostType(start)).toBe("Row");
+		expect(modifier(start, "weight")?.args).toEqual([1]);
+		expect(start.findAll((node) => hostType(node) === "EffortGaugeButton" || node.props.testID === "spawn-effort").length).toBeGreaterThan(0);
+		// The approval mode sits outside the weighted part, at the row's end.
+		expect(start.findAll((node) => tagged(node, "spawn-approval"))).toHaveLength(0);
+		expect(trigger(root, "spawn-approval")).toBeTruthy();
+	});
+
+	it("keeps the arrow when the name ellipsizes, and draws the mark alone where a few letters would not fit", async () => {
+		const root = await render(baseProps({ usesDefaultModel: false, modelSelection: "gpt-5", modelLabel: "Qwen3.5 27B Claude 4.6 Opus Reasoning Distilled" }));
+		const arrow = () => trigger(root, "spawn-harness").findAll((node) => hostType(node) === "Icon" && node.props.source === "drawable:unfold_more")[0];
+		expect(text(trigger(root, "spawn-harness"))).toBe("Qwen3.5 27B Claude 4.6 Opus Reasoning Distilled");
+		// Drawn over the end of the name's box, which keeps room for it.
+		expect(modifier(arrow(), "align")?.args).toEqual(["centerEnd"]);
+		const report = (width: number) => act(async () => {
+			const start = hostParent(menuOf(trigger(root, "spawn-harness")));
+			(start.props.modifiers as { modifier: string; handler?: (size: { width: number; height: number }) => void }[]).find((entry) => entry.modifier === "onSizeChanged")!.handler!({ width, height: 48 });
+		});
+		await report(120);
+		expect(text(trigger(root, "spawn-harness"))).toBe("");
+		expect(arrow()).toBeTruthy();
+		await report(300);
+		expect(text(trigger(root, "spawn-harness"))).toBe("Qwen3.5 27B Claude 4.6 Opus Reasoning Distilled");
 	});
 });

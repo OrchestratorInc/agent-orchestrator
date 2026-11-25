@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
@@ -123,7 +124,7 @@ type ReviewerChatStart struct {
 // typed Chat service. It deliberately excludes HTTP and renderer concerns.
 type ReviewerChatController interface {
 	SupportsReviewChat(domain.AgentHarness) bool
-	PreflightReviewChat(context.Context, domain.AgentHarness) error
+	PreflightReviewChat(context.Context, domain.AgentHarness, string) error
 	StartReviewChat(context.Context, ReviewerChatStart) (string, error)
 	RestoreReviewChat(context.Context, ReviewerChatStart) (string, error)
 	SendReviewChat(context.Context, string, string, string) error
@@ -160,6 +161,8 @@ type agentLauncher struct {
 	auth       agentAuthResolver
 	executable func() (string, error)
 	chat       ReviewerChatController
+	forceStop  forceStopHooks
+	stops      forceStopState
 }
 
 type preLaunchReviewer interface {
@@ -230,7 +233,7 @@ func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHa
 		return fmt.Errorf("no reviewer adapter for harness %q", harness)
 	}
 	if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && (len(mode) == 0 || mode[0] != domain.ReviewerInterfaceTUI) && l.reviewChatSupported(profile) {
-		return l.chat.PreflightReviewChat(ctx, profile.ReviewChatHarness())
+		return l.chat.PreflightReviewChat(ctx, profile.ReviewChatHarness(), workspacePath)
 	}
 	cmd, err := reviewer.ReviewCommand(ctx, ports.ReviewInvocation{WorkspacePath: workspacePath})
 	if err != nil {
@@ -671,6 +674,16 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 	}
 	env[sessionmanager.EnvProjectID] = string(spec.ProjectID)
 	env[sessionmanager.EnvDataDir] = l.dataDir
+	// A reviewer inherits the daemon's environment, which holds every AO-saved
+	// provider key. Hold back the ones this harness's sessions never receive,
+	// as a worker would, unless the project sets them itself.
+	if strings.TrimSpace(l.dataDir) != "" {
+		for key, value := range providerkeys.Withheld(l.dataDir, string(spec.Harness)) {
+			if _, set := spec.ProjectEnv[key]; !set {
+				env[key] = value
+			}
+		}
+	}
 	if strings.TrimSpace(l.runFile) != "" {
 		env[EnvRunFile] = l.runFile
 	}
@@ -809,6 +822,17 @@ func (l *agentLauncher) Reusable(harness domain.ReviewerHarness) bool {
 	}
 	policy, ok := reviewer.(ports.ReviewerReusePolicy)
 	return !ok || policy.ReviewProcessReusable()
+}
+
+// ReportsActivity reports whether the harness's terminal reviewer reliably
+// reports activity through hooks, for the review run lifecycle.
+func (l *agentLauncher) ReportsActivity(harness domain.ReviewerHarness) bool {
+	reviewer, ok := l.reviewers.Reviewer(harness)
+	if !ok {
+		return false
+	}
+	hooks, ok := reviewer.(ports.ReviewerActivityHooks)
+	return ok && hooks.ReviewActivityHooks()
 }
 
 func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness domain.ReviewerHarness) error {

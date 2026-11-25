@@ -793,6 +793,17 @@ describe("BrowserPanel", () => {
 		writeText.mockRestore();
 	});
 
+	it("never hands an agent tab's host-local page to the person's browser", async () => {
+		const url = "http://localhost:5173/";
+		hookState.navState = { ...hookState.navState, url };
+		const agentTab = { id: "a1", url, title: "", active: true, remote: { tabId: "R1" } };
+		hookState.tabs = [agentTab];
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ })).toHaveAttribute("data-disabled");
+	});
+
 	it("opens an agent tab's public page in the system browser", async () => {
 		const url = "https://github.com/aoagents/ao";
 		hookState.navState = { ...hookState.navState, url };
@@ -834,6 +845,26 @@ describe("BrowserPanel", () => {
 			expect(useUiStore.getState().globalToast?.title).toBe("Screenshot copied to clipboard"),
 		);
 		expect(useUiStore.getState().globalToast?.placement).toBe("top-center");
+	});
+
+	it("opens the page in the person's own browser from the controls menu", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://shop.test/cart" };
+		vi.spyOn(window.ao!.browser, "openInUserBrowser").mockResolvedValue({ name: "Chrome", chrome: true });
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		await openBrowserControls();
+		await userEvent.click(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ }));
+
+		expect(window.ao!.browser.openInUserBrowser).toHaveBeenCalledWith("42:sess-1");
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe("Opened in Chrome"));
+	});
+
+	it("offers to open a page elsewhere only for ordinary web pages", async () => {
+		hookState.navState = { ...hookState.navState, url: "" };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ })).toHaveAttribute("data-disabled");
 	});
 
 	it("disables screenshots until the active tab has a page", async () => {
@@ -1195,8 +1226,14 @@ describe("BrowserPanel", () => {
 
 		expect(firstTab).toHaveAttribute("aria-selected", "false");
 		expect(secondTab).toHaveAttribute("aria-selected", "true");
-		expect(firstTab).toHaveAttribute("data-slot", "tooltip-trigger");
-		expect(screen.getByRole("button", { name: "Close tab First app" })).toHaveAttribute("data-slot", "tooltip-trigger");
+		// The shared tab frame: the full title as the tab's native tooltip, and
+		// the ghost close button at the tab's right edge.
+		expect(firstTab).toHaveAttribute("title", "First app");
+		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toBeNull();
+		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toHaveAttribute("data-active");
+		expect(secondTab.closest("[data-terminal-tab-frame]")).toHaveAttribute("data-active");
+		expect(tabList).toHaveAttribute("data-tab-strip");
+		expect(screen.getByRole("button", { name: "Close tab First app" }).closest("[data-terminal-tab-action]")?.previousElementSibling).toBe(firstTab);
 		await userEvent.click(firstTab);
 		expect(hookState.selectTab).toHaveBeenCalledWith("t1");
 	});
@@ -1210,9 +1247,10 @@ describe("BrowserPanel", () => {
 
 		const overlay = screen.getByTestId("browser-tab-drag-overlay");
 		expect(overlay).toHaveClass("browser-panel__tab--drag-overlay");
+		expect(overlay).toHaveAttribute("data-dragging");
 		expect(overlay).toHaveTextContent("First app");
-		expect(overlay.querySelector(".browser-panel__tab-icon")).not.toBeNull();
-		expect(overlay.querySelector(".browser-panel__tab-close")).not.toBeNull();
+		expect(overlay.querySelector("[data-terminal-tab-frame][data-active]")).not.toBeNull();
+		expect(overlay.querySelector('button[aria-label="Close tab First app"]')).not.toBeNull();
 	});
 
 	it("moves browser tab focus and selection with arrow keys", async () => {
@@ -1245,6 +1283,8 @@ describe("BrowserPanel", () => {
 		await userEvent.click(within(tabList).getByRole("button", { name: "Close tab Second app" }));
 
 		expect(hookState.closeTab).toHaveBeenCalledWith("t2");
+		// Closing an inactive tab does not select it first.
+		expect(hookState.selectTab).not.toHaveBeenCalled();
 	});
 
 	it("allows closing the final browser tab", async () => {
@@ -1267,7 +1307,7 @@ describe("BrowserPanel", () => {
 
 	it("shows the empty tab's close icon in its drag overlay", () => {
 		render(<BrowserTopTabDragOverlay tab={{ id: "t1", url: "about:blank", title: "", active: true }} />);
-		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector(".browser-panel__tab-close")).not.toBeNull();
+		expect(screen.getByTestId("browser-tab-drag-overlay").querySelector('button[aria-label="Close tab New tab"]')).not.toBeNull();
 	});
 
 	it("shows no placeholder tab when empty and still offers the new tab button", async () => {
@@ -1644,6 +1684,21 @@ describe("BrowserPanel", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Discard all comments" }));
 		expect(hookState.annotationAction).toHaveBeenCalledWith("discard-all");
+	});
+
+	it("renders the empty annotation placeholder text in the annotation context area", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://example.test/docs" };
+		hookState.annotationMode = true;
+		hookState.annotationState = { count: 0, screenshotCount: 0, hasDraft: false };
+
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const annotationToolbar = screen.getByTestId("browser-annotation-toolbar");
+		const hint = annotationToolbar.querySelector<HTMLElement>(".browser-panel__annotation-hint");
+		expect(hint).not.toBeNull();
+		expect(hint).toHaveTextContent("Point at something and say what to change");
+		const context = annotationToolbar.querySelector<HTMLElement>(".browser-panel__annotation-context");
+		expect(context).toContainElement(hint);
 	});
 
 	it("previews the original page while Enter or Space is held on the eye button", async () => {

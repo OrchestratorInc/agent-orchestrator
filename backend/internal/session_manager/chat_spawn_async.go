@@ -27,6 +27,9 @@ type asyncChatSpawn struct {
 	preparation       *taskPreparation
 	releaseHarness    func()
 	retry             bool
+	// attribution is the trailer decision made before the first prompt,
+	// applied by the workspace setup in the background.
+	attribution spawnAttribution
 }
 
 type asyncChatSpawnRun struct {
@@ -58,7 +61,7 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	if !in.retry && len(in.cfg.Attachments) > 0 {
 		stageStarted := time.Now()
 		for i, attachment := range in.cfg.Attachments {
-			if err := m.attachments.PutCanonical(ctx, id, spawnAttachmentName(i, attachment), attachment.Data); err != nil {
+			if err := m.attachments.PutCanonicalSource(ctx, id, spawnAttachmentName(i, attachment), attachmentSource(attachment)); err != nil {
 				rollback()
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnAttachments, err)
 			}
@@ -79,6 +82,9 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	in.record = rec
 	// Each Setup step has its own limit; the start budget leaves room for all of them.
 	bg, cancel := context.WithTimeout(m.backgroundContext, postCreateBudget(asyncChatSpawnBudget, in.project.Config.PostCreate))
+	// The outcome event reads this start's steps from the request's trace.
+	bg = carrySpawnTrace(ctx, bg)
+	NoteSpawnLaunch(ctx, domain.SessionModeChat, true)
 	run := &asyncChatSpawnRun{cancel: cancel, done: make(chan struct{})}
 	m.asyncChatSpawnsMu.Lock()
 	m.asyncChatSpawns[id] = run
@@ -156,8 +162,10 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		}
 	}
 	if in.preparation != nil {
+		prepared := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.awaitTaskPreparation(ctx, in.preparation)
 		if err != nil && ctx.Err() != nil {
+			prepared(err)
 			in.preparation.cancel()
 			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceCreate, err))
 			// The claimed preparation has no timer or cache entry. Keep owning its
@@ -168,6 +176,9 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 			}
 			return
 		}
+		// A preparation that failed on its own falls back to a fresh worktree
+		// below; only that attempt's outcome is the spawn's.
+		prepared(nil)
 	}
 	// The foreground response must not wait behind Git, but the background
 	// workspace lifecycle still serializes with spawn, restore and cleanup.
@@ -175,11 +186,15 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 	defer releaseWorkspaceGate()
 	if ws.Path == "" {
+		fetched := BeginSpawnStep(ctx, SpawnStepBranchFetch)
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
+		fetched(nil)
 		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
 		progress.complete(ctx, domain.SessionProvisionStepFetch)
 		stageStarted = time.Now()
+		created := BeginSpawnStep(ctx, SpawnStepWorktree)
 		ws, workspaceProject, err = m.createSessionWorkspace(ctx, in.project, in.cfg, id, in.branch, baseRefs)
+		created(err)
 	} else {
 		m.logAsyncChatSpawnStage(id, "prepared_workspace_wait", stageStarted)
 		stageStarted = time.Now()
@@ -200,10 +215,20 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
 	if !reusePublishedWorkspace || slices.Contains(plan, domain.SessionProvisionStepSetup) {
-		if err := m.provisionWorkspace(ctx, in.project, ws.Path); err != nil {
+		provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
+		err := m.provisionSpawnWorkspace(ctx, in.project, id, ws.Path, in.attribution)
+		provisioned(err)
+		if err != nil {
 			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
 			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceProvision, err))
 			return
+		}
+	} else {
+		// A reused workspace skips Setup but still credits Orchestrator.
+		if in.attribution.decided {
+			m.configureAttribution(ctx, in.project, ws.Path, in.attribution.coAuthor)
+		} else {
+			m.applyCommitAttribution(ctx, in.project, id, ws.Path, attributionFromSettings)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -257,6 +282,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	stageStarted = time.Now()
+	started := BeginSpawnStep(ctx, SpawnStepAgentStart)
 	if _, err := m.launchChatController(ctx, chatSpawn{
 		cfg:              in.cfg,
 		project:          in.project,
@@ -271,9 +297,11 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		// it together with anything typed while this was starting.
 		promptQueued: true,
 	}); err != nil {
+		started(err)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
+	started(nil)
 	// The agent owns the checkout now; nothing below touches the workspace.
 	releaseWorkspaceGate()
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
@@ -386,6 +414,8 @@ func (m *Manager) logAsyncChatSpawnStage(id domain.SessionID, stage string, star
 
 // failAsyncChatSpawn preserves the visible row and queue for retry.
 func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, cause error) {
+	// ctx is the start's own budget: a stage it killed is a timeout.
+	cause = classifySpawnError(ctx, RelabelSpawnTimeout(cause, ctx))
 	m.logger.Error("spawn: asynchronous chat start failed", "sessionID", id, "error", cause)
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
@@ -472,6 +502,9 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 	if err != nil {
 		return RestoreResult{}, false, err
 	}
+	// A retry decides attribution again, before its prompt is written, and
+	// carries the decision to its workspace setup.
+	attribution := spawnAttribution{coAuthor: m.recordSpawnAttributionFor(ctx, project, rec.ID), decided: true}
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return RestoreResult{}, false, err
@@ -488,6 +521,15 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
+	}
+	if m.forkRetry != nil && m.isSessionFork(ctx, rec.ID) {
+		// A fork that failed to start is copied again from its original;
+		// a plain restart would leave an empty chat in a blank worktree.
+		fork, err := m.forkRetry(ctx, rec)
+		if err != nil {
+			return RestoreResult{}, false, fmt.Errorf("retry fork %s: %w", rec.ID, err)
+		}
+		cfg.Fork = fork
 	}
 	if rec.Harness == domain.HarnessCodex {
 		// ChatUI can change the saved model independently of effort, and provider
@@ -513,6 +555,7 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		cfg: cfg, project: project, projectKind: projectKind,
 		record: rec, branch: branch, systemPrompt: systemPrompt, systemPromptFile: systemPromptFile,
 		retry: true, releaseHarness: releaseHarness,
+		attribution: attribution,
 	})
 	if err != nil {
 		return RestoreResult{}, false, err

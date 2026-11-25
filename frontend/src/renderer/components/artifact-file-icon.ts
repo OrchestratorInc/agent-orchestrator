@@ -1,4 +1,4 @@
-import { Archive, ChartBar, Code2, Database, File, FileText, Globe, Image, Music, Presentation, Table2, Video, type AppIcon } from "@/components/app-icons";
+import { Archive, ChartBar, Code2, Database, File, FileCode2, FileText, Image, Music, Presentation, Table2, Video, type AppIcon } from "@/components/app-icons";
 import type { ArtifactKind } from "../types/workspace";
 import { isDelimitedTextPath } from "../lib/delimited-text";
 import { fileMediaKind } from "../lib/file-media";
@@ -19,7 +19,8 @@ const ARCHIVE = /\.(?:zip|tar|t?gz|bz2|xz|7z|rar)$/i;
  */
 export function artifactFileIcon(artifact: { kind: ArtifactKind; path: string }): AppIcon {
 	const { kind, path } = artifact;
-	if (kind === "html" || /\.html?$/i.test(path)) return Globe;
+	// Not a globe: that marks a published artifact beside its time.
+	if (kind === "html" || /\.html?$/i.test(path)) return FileCode2;
 	if (kind === "markdown" || isMarkdownPreviewPath(path)) return FileText;
 	if (isRasterImagePath(path) || isSvgPath(path)) return Image;
 	const media = fileMediaKind(path);

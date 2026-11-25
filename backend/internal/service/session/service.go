@@ -54,6 +54,7 @@ type Store interface {
 	GetDisplayPRFactsForSession(ctx context.Context, id domain.SessionID) (domain.PRFacts, bool, error)
 	ListPRFactsForSession(ctx context.Context, id domain.SessionID) ([]domain.PRFacts, error)
 	ListPRFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error)
+	ListPRStateTimes(ctx context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error)
 	ListCurrentHeadReviewRunsForSession(ctx context.Context, id domain.SessionID) ([]domain.CurrentHeadReviewRun, error)
 	ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.CurrentHeadReviewRun, error)
 	ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error)
@@ -83,6 +84,11 @@ type ListFilter struct {
 	// order, as before paging.
 	Limit  int
 	Cursor string
+	// PRState keeps the sessions owning a pull request in that state, ordered
+	// by when their newest such PR reached it rather than pinned-then-updated,
+	// and has the page report how many sessions match. Empty keeps every
+	// session.
+	PRState domain.PRState
 }
 
 // commander is the command-side surface Service delegates to: the
@@ -119,6 +125,13 @@ type interfaceTransitionCommander interface {
 // service fakes while production delegates to Session Manager.
 type exitAgentCommander interface {
 	ExitAgent(context.Context, domain.SessionID) (domain.SessionRecord, error)
+}
+
+// taskPreparationRenewer keeps a held task preparation alive while the new
+// chat page uses its worktree. Optional so focused service fakes need not
+// implement it.
+type taskPreparationRenewer interface {
+	RenewTaskPreparation(domain.TaskPreparationToken)
 }
 
 // agentAccountCommander keeps account moves optional for focused service fakes.
@@ -212,6 +225,10 @@ type terminalTitleSource interface {
 // session operations to the internal sessionmanager.Manager and owns read-model
 // assembly, including user-facing display status derivation.
 type Service struct {
+	// preferredAgent picks the agent for a project role that names none.
+	preferredAgent func(context.Context) domain.AgentHarness
+	// prMoved tells a live session that another session took its PR.
+	prMoved             PRMovedNotifier
 	manager             commander
 	terminalTitles      terminalTitleSource
 	store               Store
@@ -225,6 +242,7 @@ type Service struct {
 	milestones          ports.InstallMilestones
 	firstSession        firstSessionClaims
 	asyncSpawns         asyncSpawnAttempts
+	autoSpawns          autoSpawnBreaker
 	delivery            *deliverytelemetry.Recorder
 	logger              *slog.Logger
 	backgroundContext   context.Context
@@ -248,6 +266,8 @@ type Service struct {
 	// each session's last reconciled branch, remote, and base tips.
 	branchStateMu sync.Mutex
 	branchTips    map[domain.SessionID]string
+	// conflicts remembers the conflicting files of a PR's head against its base.
+	conflicts conflictCache
 	// signalCapable reports whether a harness has a hook pipeline that can
 	// deliver activity signals at all. Only capable harnesses are eligible for
 	// the no_signal downgrade: a hook-less harness staying silent forever is
@@ -283,10 +303,136 @@ type Service struct {
 	githubRepos ports.GitHubRepositoryResolver
 }
 
+// renewTaskPreparation extends a hidden preparation's expiry when its files
+// are read or staged, which only the page holding it does.
+func (s *Service) renewTaskPreparation(rec domain.SessionRecord) {
+	if !rec.IsTaskPreparation {
+		return
+	}
+	if renewer, ok := s.manager.(taskPreparationRenewer); ok {
+		renewer.RenewTaskPreparation(domain.TaskPreparationToken(rec.ID))
+	}
+}
+
 // SetGitHubRepositoryResolver late-binds the resolver ClaimPR uses to follow
 // a github.com origin's rename or transfer.
 func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) {
 	s.githubRepos = r
+}
+
+// SetPreferredProjectAgent late-binds the ranked default agent that heals a
+// project whose worker or orchestrator role names no agent before a session of
+// that project starts. It returns "" when no agent can launch, and the role is
+// then left empty.
+func (s *Service) SetPreferredProjectAgent(pick func(context.Context) domain.AgentHarness) {
+	s.preferredAgent = pick
+}
+
+// projectRoleAgentFiller fills a project's empty role agents atomically.
+type projectRoleAgentFiller interface {
+	FillProjectRoleAgents(ctx context.Context, id string, agent domain.AgentHarness) (domain.ProjectRecord, bool, error)
+}
+
+// fillMissingRoleAgents gives every empty role the ranked default before a
+// project session starts. The transaction preserves concurrent settings edits
+// and roles that already name an agent. Each ranked candidate is validated
+// under the launch readiness policy before saving so stale cached readiness
+// never persists a removed or signed-out agent.
+func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.ProjectRecord) domain.ProjectRecord {
+	if !project.Config.MissingRoleAgent() || s.preferredAgent == nil {
+		return project
+	}
+	filler, ok := s.store.(projectRoleAgentFiller)
+	if !ok {
+		return project
+	}
+	agent := s.pickLaunchableProjectAgent(ctx)
+	if agent == "" {
+		return project
+	}
+	row, changed, err := filler.FillProjectRoleAgents(ctx, project.ID, agent)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("fill project role agents", "projectID", project.ID, "agent", agent, "error", err)
+		}
+		return project
+	}
+	if changed && s.logger != nil {
+		s.logger.Info("filled missing project role agents", "projectID", project.ID, "agent", agent)
+	}
+	if row.ID == "" {
+		return project
+	}
+	return row
+}
+
+// pickLaunchableProjectAgent validates the ranked candidate under the launch
+// readiness policy before it can be saved to a project. When cached readiness
+// went stale (for example, an agent was uninstalled or signed out), the launch
+// check updates the coordinator's snapshot so the next iteration can rank any
+// remaining launchable agent without persisting the broken one.
+func (s *Service) pickLaunchableProjectAgent(ctx context.Context) domain.AgentHarness {
+	var tried map[domain.AgentHarness]struct{}
+	for {
+		agent := s.preferredAgent(ctx)
+		if agent == "" {
+			return ""
+		}
+		if _, seen := tried[agent]; seen {
+			return ""
+		}
+		ok, err := s.roleCandidateLaunchable(ctx, agent)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("validate preferred project agent", "agent", agent, "error", err)
+			}
+			if ctx.Err() != nil {
+				return ""
+			}
+			if tried == nil {
+				tried = make(map[domain.AgentHarness]struct{})
+			}
+			tried[agent] = struct{}{}
+			continue
+		}
+		if !ok {
+			if s.logger != nil {
+				s.logger.Info("skipping unlaunchable preferred project agent", "agent", agent)
+			}
+			if tried == nil {
+				tried = make(map[domain.AgentHarness]struct{})
+			}
+			tried[agent] = struct{}{}
+			continue
+		}
+		return agent
+	}
+}
+
+func (s *Service) roleCandidateLaunchable(ctx context.Context, agent domain.AgentHarness) (bool, error) {
+	if s.agentReadiness == nil || agent == "" {
+		return true, nil
+	}
+	readiness, err := s.agentReadiness.EnsureAgentReadiness(ctx, string(agent), domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		return false, err
+	}
+	if readiness.Installation.State == domain.AgentInstallationNotInstalled {
+		return false, nil
+	}
+	if readiness.Authentication.State == domain.AgentAuthenticationUnauthorized &&
+		(s.runsOnComputerLogin == nil || s.runsOnComputerLogin(ctx, agent, "")) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// roleHarness is the agent the project names for sessions of kind.
+func roleHarness(project domain.ProjectRecord, kind domain.SessionKind) domain.AgentHarness {
+	if kind == domain.KindOrchestrator {
+		return project.Config.Orchestrator.Harness
+	}
+	return project.Config.Worker.Harness
 }
 
 // SetComputerLoginCheck late-binds the account check the launch gate needs: the
@@ -294,6 +440,13 @@ func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) 
 func (s *Service) SetComputerLoginCheck(check func(ctx context.Context, harness domain.AgentHarness, accountID string) bool) {
 	s.runsOnComputerLogin = check
 }
+
+// PRMovedNotifier is told when session to takes PR pr from live session from.
+type PRMovedNotifier func(ctx context.Context, from, to domain.SessionID, pr domain.PullRequest)
+
+// SetPRMovedNotifier wires the notice sent to a session whose PR was claimed
+// by another session.
+func (s *Service) SetPRMovedNotifier(notify PRMovedNotifier) { s.prMoved = notify }
 
 // SetChatProviderPreserver wires the live Chat lifetime observation after both
 // services have been constructed. It performs no provider or filesystem probes.
@@ -423,7 +576,7 @@ func (s *Service) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			return newestSession(existing), 0, 0, nil
 		}
 	}
-	return s.spawn(ctx, cfg)
+	return s.spawnUnlessAutoPaused(ctx, cfg, func(spawnCtx context.Context) (domain.Session, int, int, error) { return s.spawn(spawnCtx, cfg) })
 }
 
 func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
@@ -433,6 +586,13 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		project, err = s.requireProject(ctx, cfg.ProjectID)
 		if err != nil {
 			return domain.Session{}, 0, 0, err
+		}
+		needsHarness := cfg.Harness == "" && roleHarness(project, cfg.Kind) == ""
+		project = s.fillMissingRoleAgents(ctx, project)
+		if needsHarness {
+			// A daemon-selected agent goes through the same launch checks as
+			// an explicit one.
+			cfg.Harness = roleHarness(project, cfg.Kind)
 		}
 	} else {
 		if cfg.IssueID != "" || strings.TrimSpace(cfg.Branch) != "" {
@@ -461,7 +621,7 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	rec, promptBytes, systemPromptBytes, err := s.spawnWithTelemetry(ctx, cfg, project)
 	if err != nil {
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
-		apiErr := toSpawnAPIError(err)
+		apiErr := withSpawnClassification(toSpawnAPIError(err), err)
 		s.recordSpawnOutcome(ctx, cfg, domain.SessionRecord{}, actionStatusForError(err), apiErr)
 		return domain.Session{}, 0, 0, apiErr
 	}
@@ -484,6 +644,9 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		cfg.KeepDisplayName = cfg.DisplayName != ""
 	}
 	start := s.monoNow()
+	// The manager records step timings and the launch it chose here; the
+	// outcome event reads them, from the background for an async Chat start.
+	ctx, _ = sessionmanager.WithSpawnTrace(ctx)
 	firstSession, err := s.isFirstSession(ctx)
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
@@ -494,8 +657,9 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	createdBy := s.spawnCreatedBy(ctx, cfg)
 	// An asynchronous Chat start answers before it is usable; the provision
 	// observer then owns the outcome (spawn_outcome.go) and reads these facts.
-	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project}
+	acc := &spawnAcceptance{start: start, createdBy: createdBy, firstEligible: firstSession, project: project, autoSpawn: autoSpawnAttemptFrom(ctx)}
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(context.WithValue(ctx, spawnAcceptanceKey{}, acc), cfg)
+	err = sessionmanager.ClassifySpawnError(ctx, sessionmanager.RelabelSpawnTimeout(err, ctx))
 	answeredMs := s.monoNow().Sub(start).Milliseconds()
 	if err != nil {
 		if acc.deferred {
@@ -508,7 +672,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		}
 		s.firstSession.finish(s.milestones, firstSession, false)
 		elapsed := answeredMs
-		s.emitSpawnFailed(spawnFailure{kind: cfg.Kind, harness: cfg.Harness, projectID: cfg.ProjectID, requestID: reqid.FromContext(ctx)}, err, elapsed, elapsed)
+		s.emitSpawnFailed(spawnFailure{kind: cfg.Kind, harness: cfg.Harness, projectID: cfg.ProjectID, mode: cfg.RequestedMode, facts: s.spawnFactsFromRequest(ctx, createdBy, false)}, err, elapsed, elapsed)
 		return domain.SessionRecord{}, 0, 0, err
 	}
 	s.recordCreatedBy(ctx, rec.ID, createdBy)
@@ -651,6 +815,7 @@ func (s *Service) emitSpawned(rec domain.SessionRecord, durationMs, spawnDuratio
 	if facts.githubActor != "" {
 		payload["github_actor"] = facts.githubActor
 	}
+	addSpawnLaunchProps(payload, facts.trace.Facts(), rec.Mode)
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
@@ -712,7 +877,10 @@ type spawnFailure struct {
 	kind      domain.SessionKind
 	harness   domain.AgentHarness
 	projectID domain.ProjectID
-	requestID string
+	// mode is the requested mode, used when the start failed before the
+	// manager chose one.
+	mode  domain.SessionMode
+	facts spawnFacts
 }
 
 // emitSpawnFailed reports one failed start attempt. durationMs keeps its
@@ -740,13 +908,29 @@ func (s *Service) emitSpawnFailed(f spawnFailure, err error, durationMs, spawnDu
 	if errorCode != "" {
 		payload["error_code"] = errorCode
 	}
+	if f.facts.createdBy.Valid() {
+		payload["created_by"] = string(f.facts.createdBy)
+	}
+	if f.facts.surface != "" {
+		payload["surface"] = string(f.facts.surface)
+	}
+	trace := f.facts.trace.Facts()
+	addSpawnLaunchProps(payload, trace, f.mode)
+	payload["failed_step"], payload["cause"] = sessionmanager.ClassifySpawnFailure(err, trace)
+	// A start cancelled on purpose (the client left, the session was killed
+	// mid-start, the daemon shut down) is not a launch failure: it reports
+	// separately so it cannot inflate a harness's failure rate.
+	name, level := "ao.sessions.spawn_failed", ports.TelemetryLevelError
+	if errorCode == "SPAWN_CANCELLED" {
+		name, level = "ao.sessions.spawn_cancelled", ports.TelemetryLevelInfo
+	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.sessions.spawn_failed",
+		Name:       name,
 		Source:     "session_service",
 		OccurredAt: s.now(),
-		Level:      ports.TelemetryLevelError,
+		Level:      level,
 		ProjectID:  &projectID,
-		RequestID:  f.requestID,
+		RequestID:  f.facts.requestID,
 		Payload:    payload,
 	})
 }
@@ -922,7 +1106,8 @@ func (s *Service) verifyOrchestratorReplacement(project domain.ProjectRecord, se
 		return orchestratorReplacementUnverified("new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
 	}
 	expectedBranch := sessionmanager.DefaultOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
-	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) {
+	legacyBranch := sessionmanager.LegacyOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
+	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) && !isOrchestratorBranch(branch, legacyBranch) {
 		return orchestratorReplacementUnverified("new session %s uses branch %q, want %q", sess.ID, branch, expectedBranch)
 	}
 	return nil
@@ -1309,6 +1494,8 @@ func (s *Service) Delete(ctx context.Context, id domain.SessionID, cleanup bool)
 	}
 	s.cancelTitleRefinement(id)
 	s.deleteArtifactDir(ctx, id)
+	// A kept record left by an earlier keeping delete that failed.
+	s.forgetKeptArtifacts(ctx, id)
 	return nil
 }
 
@@ -1318,8 +1505,9 @@ type archivedSessionLister interface {
 }
 
 // DeleteExpired permanently deletes the archived sessions whose worktree is
-// released and that were archived more than days ago, the same way Delete
-// does. The store leaves out sessions with shared history, which the delete
+// released and that were archived more than days ago. Their artifacts are
+// kept, the way DeleteKeepingArtifacts keeps them: artifacts are deleted only
+// when the person deletes them. The store leaves out sessions with shared history, which the delete
 // always refuses. A session the delete refuses for now (an operation running)
 // or that is already gone is left for a later pass.
 func (s *Service) DeleteExpired(ctx context.Context, days int) error {
@@ -1340,7 +1528,7 @@ func (s *Service) DeleteExpired(ctx context.Context, days int) error {
 		if sess.ArchivedAt.After(cutoff) {
 			continue
 		}
-		err := s.Delete(ctx, sess.ID, false)
+		err := s.DeleteKeepingArtifacts(ctx, sess.ID, false)
 		var apiErr *apierr.Error
 		if err == nil || errors.As(err, &apiErr) && (apiErr.Kind == apierr.KindConflict || apiErr.Kind == apierr.KindNotFound) {
 			continue
@@ -1617,6 +1805,8 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 // filter.Limit is set, and reports the archive an active-only list left out.
 // The page is chosen from the stored rows before any read-model facts are
 // loaded, so a page of an archive of thousands costs a page's worth of reads.
+// A PR-state filter adds one narrow read of the PR table (session and time
+// only), not the card facts of every candidate.
 func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, error) {
 	recoveryRevision := s.statusRecoveryRevision()
 	if filter.Limit < 0 || filter.Limit > MaxListLimit {
@@ -1639,8 +1829,26 @@ func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, er
 	}
 	matched, archive := selectSessionRecords(recs, filter)
 	page := ListPage{Archived: archive}
+	keyOf := pageKeyOf
+	if filter.PRState != "" {
+		var reachedAt map[domain.SessionID]time.Time
+		matched, reachedAt, err = s.selectByPRState(ctx, matched, filter.PRState)
+		if err != nil {
+			return ListPage{}, err
+		}
+		total := len(matched)
+		page.Total = &total
+		// The archive summary sizes a list without the PR filter; with it the
+		// total is the count that matters.
+		page.Archived = nil
+		keyOf = func(rec domain.SessionRecord) listPageKey {
+			return listPageKey{updatedAt: reachedAt[rec.ID], id: rec.ID}
+		}
+		sortSessionRecords(matched, keyOf)
+		page.Version = prStateListVersion(matched, reachedAt)
+	}
 	if filter.Limit > 0 {
-		matched, page.NextCursor = pageSessionRecords(matched, after, filter.Limit)
+		matched, page.NextCursor = pageSessionRecords(matched, keyOf, after, filter.Limit)
 	}
 	page.Sessions, err = s.sessionsFromRecords(ctx, matched, recoveryRevision)
 	if err != nil {
@@ -1835,7 +2043,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		}
 	}
 	runs = canonicalizeCurrentHeadReviewRuns(prs, runs)
-	prs = deduplicatePRFacts(prs)
+	prs = clearStaleChangesRequested(deduplicatePRFacts(prs), runs)
 	// Both derivations read the clock once, from the same instant: they share
 	// the no-signal rule, and two reads could put them either side of its grace
 	// period and have the card contradict its own status.
@@ -1897,9 +2105,13 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnchanged):
 		return apierr.Conflict("AGENT_ACCOUNT_UNCHANGED", "The session already uses this account", nil)
+	case errors.Is(err, ports.ErrAgentAccountNeedsDeveloperMode):
+		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
+			"Turn on Windows Developer Mode to use this account: search Windows Settings for Developer Mode (System > Advanced on Windows 11 25H2 and later).",
+			map[string]any{"windowsDeveloperMode": true})
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		return apierr.Conflict("AGENT_ACCOUNT_UNSHARED",
-			"Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode.", nil)
+			"Orchestrator cannot link this account's folder to this computer's history.", nil)
 	case errors.Is(err, sessionmanager.ErrNotRestorable):
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
@@ -1990,12 +2202,16 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("HARNESS_INSTALL_ACTIVE", "The selected harness is currently being installed", nil)
 	case errors.Is(err, sessionmanager.ErrUnsupportedModel):
 		return apierr.Invalid("UNSUPPORTED_MODEL", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrTerminalUnsupported):
+		return apierr.Invalid("TERMINAL_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):
 		return apierr.Invalid("TARGET_AGENT_UNAUTHORIZED",
 			"The target agent is not authenticated; authenticate it before switching", nil)
 	case errors.Is(err, sessionmanager.ErrDeliveryUnconfirmed):
 		return apierr.Conflict("SESSION_DELIVERY_UNCONFIRMED",
 			"Message was written to the terminal but the agent did not start a turn; prompt may be unsubmitted", nil)
+	case errors.Is(err, sessionmanager.ErrBaseBranchUnsupported):
+		return apierr.Invalid("BASE_BRANCH_UNSUPPORTED", "Base branches need a repository project", nil)
 	case errors.Is(err, sessionmanager.ErrScratchBranchUnsupported):
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
@@ -2051,6 +2267,9 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("CHAT_DRIVER_INCOMPATIBLE", err.Error(), nil)
 	case errors.Is(err, ports.ErrChatAuthRequired):
 		return apierr.Conflict("CHAT_AUTH_REQUIRED", "The agent is installed but not authenticated", nil)
+	case errors.Is(err, ports.ErrChatProviderSessionLost):
+		return apierr.Conflict("CHAT_PROVIDER_SESSION_LOST",
+			"The agent's process lost this conversation and was stopped. Resume the agent to continue; your history is kept.", nil)
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		return apierr.Conflict("CHAT_RESUME_FAILED",
 			"The agent could not resume its saved conversation. Your Orchestrator history is still available.", nil)
@@ -2087,6 +2306,12 @@ func mapSessionError(err error) error {
 func toSpawnAPIError(err error) error {
 	if err == nil {
 		return nil
+	}
+	// A stage killed by the spawn's expired budget is a timeout, whatever the
+	// stage returned (sessionmanager.RelabelSpawnTimeout).
+	var timedOut *sessionmanager.SpawnTimeoutError
+	if errors.As(err, &timedOut) {
+		return apierr.Conflict("SPAWN_TIMEOUT", "Session spawn timed out before the agent could start", nil)
 	}
 	var already *apierr.Error
 	if errors.As(err, &already) {
@@ -2227,12 +2452,10 @@ func currentWorkspaceCleanup(rec domain.SessionRecord, facts domain.SessionClean
 	return domain.SessionCleanupRecord{}
 }
 
-// currentHeadReviewRuns reads the session's AO review passes for the Kanban
-// reducer. Sessions the reducer already decides without them — terminated ones
-// and ones with no PR yet — skip the query, so listing a board of building
-// workers stays one read per session.
+// currentHeadReviewRuns reads the session's AO review passes for both Kanban
+// and the effective review decision. Only sessions without PRs skip the query.
 func (s *Service) currentHeadReviewRuns(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts) ([]domain.CurrentHeadReviewRun, error) {
-	if rec.IsTerminated || len(prs) == 0 {
+	if len(prs) == 0 {
 		return nil, nil
 	}
 	runs, err := s.store.ListCurrentHeadReviewRunsForSession(ctx, rec.ID)

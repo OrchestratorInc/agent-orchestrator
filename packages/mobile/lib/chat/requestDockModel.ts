@@ -75,7 +75,11 @@ export function requestDockModel(
 			pages: [{
 				// The reason reads as a question; the command is the fallback and is
 				// shown verbatim because it is what will actually run.
-				question: approval.detail?.reason?.trim() || approval.detail?.command || approval.summary || "",
+				// A file change has no command to show; without a summary of its
+				// own it asks the desktop's question for one.
+				question: approval.detail?.reason?.trim() || approval.detail?.command
+					|| (approval.detail?.subjectKind === "file_change" && (!approval.summary || approval.summary === "Permission required")
+						? "Do you want to allow these file changes?" : approval.summary) || "",
 				options: decisions.map((decision) => ({ id: decision.id, label: decision.label })),
 				multi: false,
 				required: true,

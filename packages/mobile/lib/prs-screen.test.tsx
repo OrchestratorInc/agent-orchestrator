@@ -2,14 +2,15 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { HostedSession } from "./hostedRows";
 import type { HostSnapshot } from "./otherHosts";
-import type { SessionPRSummary } from "./api";
+import type { PRStatePage, SessionPRSummary } from "./api";
 
 const fixture = vi.hoisted(() => ({
 	allSessions: [] as HostedSession[], hostStates: [] as HostSnapshot[],
 	cardRenders: [] as string[], params: {} as { hostId?: string; projectId?: string },
 	configForHost: vi.fn(() => ({ host: "ao.test", httpPort: "3011", muxPort: "3011", password: "test" })),
 	summaries: new Map<string, SessionPRSummary>(),
-	reload: vi.fn(), focus: undefined as (() => void) | undefined, summaryTargets: [] as unknown[][],
+	reload: vi.fn(), refreshAll: vi.fn(async () => {}), focus: undefined as (() => void) | undefined, summaryTargets: [] as unknown[][],
+	getArchivedPRSessions: vi.fn(),
 	theme: new Proxy({}, { get: () => "#888888" }),
 	router: { push: vi.fn(), navigate: vi.fn(), back: vi.fn(), canGoBack: () => true, replace: vi.fn() },
 }));
@@ -22,8 +23,8 @@ vi.mock("react-native", async () => {
 			if (props.accessibilityRole === "button" && props.accessibilityLabel?.includes("Pull request")) fixture.cardRenders.push(props.accessibilityLabel);
 			return React.createElement("Pressable", props, children);
 		},
-		SectionList: ({ sections, renderItem, ...props }: { sections: { key: string; data: unknown[] }[]; renderItem: (args: { item: unknown }) => React.ReactNode }) =>
-			React.createElement("SectionList", { ...props, sections }, sections.flatMap(section => section.data.map((item, index) => React.createElement(React.Fragment, { key: `${section.key}:${index}` }, renderItem({ item }))))),
+		SectionList: ({ sections, renderItem, ...props }: { sections: { key: string; data: unknown[] }[]; renderItem: (args: { item: unknown; index: number; section: { key: string; data: unknown[] } }) => React.ReactNode }) =>
+			React.createElement("SectionList", { ...props, sections }, sections.flatMap(section => section.data.map((item, index) => React.createElement(React.Fragment, { key: `${section.key}:${index}` }, renderItem({ item, index, section }))))),
 	};
 });
 vi.mock("./native-header-button", async () => {
@@ -45,7 +46,8 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {} }));
 vi.mock("expo-secure-store", () => ({}));
 vi.mock("./installId", () => ({}));
 vi.mock("./sentry", () => ({}));
-vi.mock("./store", () => ({ useApp: () => ({ ...fixture, activeProjectId: "all", refreshAll: vi.fn() }) }));
+vi.mock("./api", async (importOriginal) => ({ ...(await importOriginal<typeof import("./api")>()), getArchivedPRSessions: fixture.getArchivedPRSessions }));
+vi.mock("./store", () => ({ useApp: () => ({ ...fixture, activeProjectId: "all" }) }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixture.theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (theme: object) => object) => factory(fixture.theme) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn() } }));
@@ -59,7 +61,7 @@ vi.mock("./Toast", () => ({ ToastHost: "ToastHost" }));
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./pr-filter-control", () => ({ PRFilterControl: "PRFilterControl" }));
 vi.mock("./ProjectSwitcher", () => ({ ProjectSwitcher: "ProjectSwitcher" }));
-vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
+vi.mock("./FreshnessLine", () => ({ FreshnessLine: "FreshnessLine" }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
 vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({}) }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
@@ -67,7 +69,12 @@ vi.mock("./usePRSummaries", () => ({ PR_SUMMARY_REUSE_MS: 60_000, usePRSummaries
 	fixture.summaryTargets.push(targets);
 	return { summaryFor: (_config: unknown, id: string) => fixture.summaries.get(id), reload: fixture.reload };
 } }));
-vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState", ListSectionHeader: "ListSectionHeader" }));
+vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState" }));
+// A still clock: a ticking one would redraw every card and hide what these tests count.
+vi.mock("./useNow", () => ({ MINUTE_MS: 60_000, useNow: () => 0 }));
+const cloudLookup = vi.hoisted(() => ({ summaryFor: () => undefined, reload: () => {} }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ sessionsLoaded: true }) }));
+vi.mock("./cloud/useCloudPRSummaries", () => ({ useCloudPRSummaries: () => cloudLookup }));
 
 import PRsScreen from "../app/prs/index";
 let renderer: ReactTestRenderer | undefined;
@@ -88,7 +95,8 @@ beforeEach(() => {
 		projects: [], projectsKnown: true, orchestrators: [], orchestratorId: null, stats: {}, lastSyncAt: 0,
 	}));
 	fixture.cardRenders = []; fixture.params = {}; fixture.summaries.clear();
-	fixture.reload.mockClear(); fixture.focus = undefined; fixture.summaryTargets = [];
+	fixture.reload.mockClear(); fixture.refreshAll.mockReset(); fixture.refreshAll.mockImplementation(async () => {}); fixture.focus = undefined; fixture.summaryTargets = [];
+	fixture.getArchivedPRSessions.mockReset();
 });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -141,6 +149,25 @@ it("redraws only the card whose rich summary has loaded", () => {
 	expect(fixture.cardRenders).toHaveLength(1);
 	expect(fixture.cardRenders[0]).toContain("Rich PR title");
 });
+// The app drops a machine's verified connection on every app switch, and the
+// cards read their detail through it: they fell back to their thin version
+// until the connection was verified again.
+it("keeps a card's rich summary while its machine's connection is away", () => {
+	fixture.summaries.set("mac", { number: 7, state: "open", title: "Rich PR title", changedFiles: 0, additions: 0, deletions: 0 } as SessionPRSummary);
+	act(() => { renderer = create(<PRsScreen />); });
+	expect(fixture.cardRenders.some((label) => label.includes("Rich PR title"))).toBe(true);
+	fixture.cardRenders = [];
+	const connected = fixture.configForHost.getMockImplementation()!;
+	try {
+		fixture.configForHost.mockImplementation(((hostId: string) => hostId === "mac" ? null : connected()) as never);
+		fixture.hostStates = fixture.hostStates.map((host) => host.hostId === "mac" ? { ...host, connection: "closed" } : host);
+		act(() => renderer!.update(<PRsScreen />));
+		expect(fixture.cardRenders.filter((label) => !label.includes("Rich PR title") && label.includes("Task on mac"))).toEqual([]);
+	} finally {
+		fixture.configForHost.mockImplementation(connected);
+	}
+});
+
 it("scopes PRs to the requested host and project", () => {
 	fixture.params = { hostId: "windows", projectId: "same-project" };
 	act(() => { renderer = create(<PRsScreen />); });
@@ -191,6 +218,36 @@ it("refreshes without a haptic of its own", async () => {
 	expect(haptics.tap).not.toHaveBeenCalled();
 });
 
+// iOS's refresh control scrolls the list down by its spinner's height when
+// `refreshing` turns on without a pull, and never scrolls it back, so each
+// Retry would leave the page ~60 pt lower.
+it("retries from the freshness line without turning on the pull-to-refresh spinner", async () => {
+	let answer!: () => void;
+	fixture.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+	fixture.hostStates = fixture.hostStates.slice(0, 1);
+	act(() => { renderer = create(<PRsScreen />); });
+	const refreshing = () => renderer!.root.findByType("SectionList" as never).props.refreshControl.props.refreshing;
+	type Header = { props: { children: ({ type: unknown; props: { onRetry?: () => void } } | null)[] } };
+	const banner = (renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as Header).props.children.find((child) => child?.type === "FreshnessLine")!;
+	await act(async () => { banner.props.onRetry!(); });
+	expect(fixture.refreshAll).toHaveBeenCalledTimes(1);
+	expect(fixture.reload).toHaveBeenCalledTimes(1);
+	expect(refreshing()).toBe(false);
+	await act(async () => answer());
+	expect(refreshing()).toBe(false);
+});
+
+it("shows the pull-to-refresh spinner for a pull until the refresh lands", async () => {
+	let answer!: () => void;
+	fixture.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+	act(() => { renderer = create(<PRsScreen />); });
+	const control = () => renderer!.root.findByType("SectionList" as never).props.refreshControl;
+	await act(async () => { control().props.onRefresh(); });
+	expect(control().props.refreshing).toBe(true);
+	await act(async () => answer());
+	expect(control().props.refreshing).toBe(false);
+});
+
 // iOS has no system confirmation for a copy; the page shows one.
 it("confirms a copied pull-request link without redrawing the cards", () => {
 	act(() => { renderer = create(<PRsScreen />); });
@@ -211,4 +268,86 @@ it("leaves by the back button instead of carrying the board's items", () => {
 	expect(buttons.map((button) => button.props.label)).toEqual(["Back"]);
 	act(() => buttons[0].props.onPress());
 	expect(fixture.router.back).toHaveBeenCalledTimes(1);
+});
+
+// Seen on the Pixel: with Cloud answering and its only pull request merged,
+// the Open filter showed the paired Mac's "rejected the password" full-screen.
+it("keeps the plain empty state when a machine fails but Orchestrator Cloud answers", () => {
+	const withCloud = fixture as typeof fixture & { cloud?: object };
+	fixture.allSessions = [];
+	fixture.hostStates = fixture.hostStates.slice(0, 1).map((host) => ({ ...host, sessions: [], connection: "closed", error: "Your machine rejected the password", errorStatus: 401 }));
+	const emptyTitle = () => renderer!.root.findByType("SectionList" as never).props.ListEmptyComponent.props.title;
+	try {
+		act(() => { renderer = create(<PRsScreen />); });
+		expect(emptyTitle()).not.toBe("No pull requests");
+		act(() => renderer!.unmount());
+		withCloud.cloud = { orgId: "org" };
+		act(() => { renderer = create(<PRsScreen />); });
+		expect(emptyTitle()).toBe("No pull requests");
+	} finally {
+		delete withCloud.cloud;
+	}
+});
+
+// The poll carries live workers only, so a PR merged by a session that has
+// ended comes from the machine's archive, read when Merged (or All) opens.
+it("lists the merged PRs of ended sessions once Merged is open", async () => {
+	fixture.hostStates = fixture.hostStates.map((host, index) => index === 0 ? { ...host, archive: { total: 5, byProject: {} } } : host);
+	const ended: HostedSession = { ...session("mac"), id: "ended", isTerminated: true, pr: undefined, prs: [{ number: 3, url: "https://github.com/ao/test/pull/3", state: "merged" }] };
+	let release!: (page: PRStatePage) => void;
+	fixture.getArchivedPRSessions.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+	act(() => { renderer = create(<PRsScreen />); });
+	expect(fixture.getArchivedPRSessions).not.toHaveBeenCalled();
+
+	// The filter heads the list, which this mock does not render.
+	const control = () => {
+		const header = renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as { props: { children: { type: unknown; props: Record<string, unknown> }[] } };
+		return header.props.children.find((child) => child?.type === "PRFilterControl")!;
+	};
+	await act(async () => (control().props.onChange as (filter: string) => void)("merged"));
+	// Only the machine with an archive is asked.
+	expect(fixture.getArchivedPRSessions).toHaveBeenCalledTimes(1);
+	expect(fixture.getArchivedPRSessions.mock.calls[0]?.[1]).toMatchObject({ prState: "merged", cursor: null });
+
+	await act(async () => release({ sessions: [ended], nextCursor: null, total: 1, version: "v1" }));
+	const sections = renderer!.root.findByType("SectionList" as never).props.sections as { key: string; data: { session: HostedSession }[] }[];
+	expect(sections.map((section) => section.key)).toEqual(["merged"]);
+	expect(sections[0]?.data.map((item) => `${item.session.hostId}/${item.session.id}`)).toEqual(["mac/ended"]);
+	expect(control().props.counts).toMatchObject({ open: 2, merged: 1, all: 3 });
+	expect(fixture.summaryTargets.at(-1)).toContainEqual(expect.objectContaining({ sessionId: "ended" }));
+});
+
+it("adds the closed PRs of ended sessions under All", async () => {
+	fixture.hostStates = fixture.hostStates.map((host, index) => index === 0 ? { ...host, archive: { total: 5, byProject: {} } } : host);
+	const ended = (id: string, number: number, state: "merged" | "closed"): HostedSession =>
+		({ ...session("mac"), id, isTerminated: true, pr: undefined, prs: [{ number, url: `https://github.com/ao/test/pull/${number}`, state }] });
+	fixture.getArchivedPRSessions.mockImplementation(async (_config: unknown, options: { prState: string }) => (
+		options.prState === "closed"
+			? { sessions: [ended("gave-up", 4, "closed")], nextCursor: null, total: 1 }
+			: { sessions: [ended("shipped", 3, "merged")], nextCursor: null, total: 1 }
+	));
+	act(() => { renderer = create(<PRsScreen />); });
+	const header = () => (renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as { props: { children: { type: unknown; props: Record<string, unknown> }[] } })
+		.props.children.find((child) => child?.type === "PRFilterControl")!;
+	await act(async () => (header().props.onChange as (filter: string) => void)("all"));
+	expect(fixture.getArchivedPRSessions.mock.calls.map((call) => (call[1] as { prState: string }).prState).sort()).toEqual(["closed", "merged"]);
+	const sections = renderer!.root.findByType("SectionList" as never).props.sections as { key: string; data: { session: HostedSession }[] }[];
+	expect(sections.map((section) => section.key)).toEqual(["review", "merged", "closed"]);
+	expect(sections.at(-1)?.data.map((item) => item.session.id)).toEqual(["gave-up"]);
+	expect(header().props.counts).toMatchObject({ open: 2, merged: 1, all: 4 });
+});
+
+// With viewable-item reporting on, React Native runs the key extractor on
+// section headers too; a row-only extractor crashed the page as it opened.
+it("keys a section header as well as a row", () => {
+	act(() => { renderer = create(<PRsScreen />); });
+	const list = renderer!.root.findByType("SectionList" as never).props as {
+		keyExtractor: (item: unknown, index: number) => string;
+		sections: { key: string; data: unknown[] }[];
+		onViewableItemsChanged?: unknown;
+	};
+	expect(list.onViewableItemsChanged).toBeDefined();
+	const section = list.sections[0]!;
+	expect(() => list.keyExtractor(section, 0)).not.toThrow();
+	expect(list.keyExtractor(section.data[0], 0)).toBe("mac:same-project#7");
 });

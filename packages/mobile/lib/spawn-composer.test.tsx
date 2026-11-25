@@ -5,13 +5,17 @@ const fixtures = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: (_target, key) => `#${String(key)}` }),
 	dismiss: vi.fn(),
 	platform: "ios",
+	fontScale: 1,
 	listeners: new Map<string, (event: { data: { closing: boolean } }) => void>(),
+	pasteLayout: () => {},
+	useImagePaste: vi.fn(),
 }));
 
 vi.mock("react-native", () => ({
 	Platform: { get OS() { return fixtures.platform; } },
 	ActivityIndicator: "ActivityIndicator", Keyboard: { dismiss: fixtures.dismiss }, Pressable: "Pressable", TextInput: "TextInput", View: "View",
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1, absoluteFill: {} },
+	useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: fixtures.fontScale }),
 }));
 vi.mock("react-native-reanimated", () => ({
 	default: { View: "AnimatedView" },
@@ -31,6 +35,7 @@ vi.mock("./pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: u
 vi.mock("./AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("./chat/ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
 vi.mock("./voice/DictationField", () => ({ DictationField: "DictationField" }));
+vi.mock("./chat/useImagePaste", () => ({ useImagePaste: fixtures.useImagePaste }));
 vi.mock("./chat/composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 
 import { SpawnComposer, type SpawnComposerProps } from "./spawn-composer";
@@ -47,9 +52,11 @@ beforeEach(() => {
 	fixtures.dismiss.mockClear();
 	fixtures.platform = "ios";
 	fixtures.listeners.clear();
+	fixtures.useImagePaste.mockReset().mockReturnValue(fixtures.pasteLayout);
 });
 
 afterEach(async () => {
+	fixtures.fontScale = 1;
 	if (renderer) await act(async () => renderer?.unmount());
 	renderer = undefined;
 	vi.restoreAllMocks();
@@ -94,6 +101,29 @@ describe("SpawnComposer", () => {
 		expect(props.onChoosePhoto).toHaveBeenCalledOnce();
 	});
 
+	// Pasting an image is a way to attach, as in a conversation's composer.
+	it("grows the field with the text size up to the composer's cap, so the placeholder is never cut", async () => {
+		const flat = (style: unknown): Record<string, unknown> => Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+		const field = (await render(baseProps())).findByType("TextInput" as never);
+		expect(field.props.maxFontSizeMultiplier).toBe(1.6);
+		expect(flat(field.props.style).minHeight).toBe(44);
+		fixtures.fontScale = 3.1;
+		const large = (await render(baseProps())).findByType("TextInput" as never);
+		// Capped at 1.6, as the text is: 44pt grows to 70pt.
+		expect(flat(large.props.style).minHeight).toBe(70);
+	});
+
+	it("takes pasted images into the field, and stops while they can't be attached", async () => {
+		const onPasteImages = vi.fn();
+		const root = await render(baseProps({ onPasteImages }));
+		expect(fixtures.useImagePaste).toHaveBeenLastCalledWith(onPasteImages);
+		expect(root.findByType("TextInput" as never).props.onLayout).toBe(fixtures.pasteLayout);
+		await render(baseProps({ onPasteImages: null }));
+		expect(fixtures.useImagePaste).toHaveBeenLastCalledWith(null);
+		await render(baseProps());
+		expect(fixtures.useImagePaste).toHaveBeenLastCalledWith(null);
+	});
+
 	it("starts the task once there is text", async () => {
 		const props = baseProps();
 		const button = primary(await render(props));
@@ -131,6 +161,19 @@ describe("SpawnComposer", () => {
 
 		button = primary(await render(baseProps({ prompt: "", voice: { ...baseProps().voice, state: "unavailable" } })));
 		expect(button.props.testID).toBe("spawn-submit");
+	});
+
+	// Access being off is not a missing recogniser: the mic stays, crossed out,
+	// and its tap is the way to Settings.
+	it("keeps a crossed-out mic that goes to Settings while access is off", async () => {
+		const props = baseProps({ prompt: "", voice: { ...baseProps().voice, state: "denied" } });
+		const button = primary(await render(props));
+		expect(button.props.testID).toBe("spawn-dictate");
+		expect(button.props.accessibilityLabel).toBe("Turn on microphone access in Settings");
+		expect(button.props.disabled).toBe(false);
+		expect(button.findByProps({ name: "micOff" })).toBeTruthy();
+		await act(async () => button.props.onPress());
+		expect(props.voice.onToggleLatched).toHaveBeenCalledOnce();
 	});
 
 	// iOS focuses with the page; Android's focus is lost mid-transition, so it
