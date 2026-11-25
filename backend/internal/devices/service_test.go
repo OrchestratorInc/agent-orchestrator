@@ -34,8 +34,10 @@ type fakeProvider struct {
 	bootID func(ports.DeviceInfo) string
 	// releaseGate, when set, holds a full release (no session kept) until closed.
 	releaseGate chan struct{}
-	installed   []string
-	released    []string
+	// shutdownGate, when set, holds Shutdown until closed.
+	shutdownGate chan struct{}
+	installed    []string
+	released     []string
 	// bound records each agent command written, as session=device; revoked
 	// each session whose command was turned off.
 	bound   []string
@@ -112,6 +114,9 @@ func (f *fakeProvider) Boot(_ context.Context, d ports.DeviceInfo) (ports.Device
 	return d, nil
 }
 func (f *fakeProvider) Shutdown(_ context.Context, d ports.DeviceInfo) error {
+	if f.shutdownGate != nil {
+		<-f.shutdownGate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shutdowns = append(f.shutdowns, d.ID)
@@ -1674,4 +1679,162 @@ func TestTheReaperPowersOffAnEndedSessionsDevice(t *testing.T) {
 	openBooted(t, svc, p, "s-1", "A")
 	sessions.end("s-1")
 	waitFor(t, func() bool { return len(p.shutdownList()) == 1 })
+}
+
+// savedParked reads the parked record a restarted daemon would load.
+func savedParked(dir string) map[string]parkedDevice {
+	_, _, parked := loadLeases(dir)
+	return parked
+}
+
+// The save that removes an ended lease already records the parked device, so
+// a daemon that stops mid-release still powers it off after a restart.
+func TestTheLeaseRemovalSavesTheParkedDevice(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	p := iosFleet()
+	svc := newEndableService(t, dir, p, &endableSessions{})
+	openBooted(t, svc, p, "s-1", "A")
+	p.mu.Lock()
+	p.releaseGate = make(chan struct{})
+	p.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- svc.Close(ctx, "s-1", false) }()
+	waitFor(t, func() bool {
+		_, has := svc.Lease("s-1")
+		return !has
+	})
+	if got := savedParked(dir)["ios:A"]; got.session != "s-1" {
+		t.Fatalf("saved parked record mid-release = %+v, want A parked by s-1", got)
+	}
+	close(p.releaseGate)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The parked record stays saved while the power-off runs and goes only once
+// it succeeded.
+func TestRetiringKeepsTheRecordUntilTheShutdownSucceeds(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	p := iosFleet()
+	sessions := &endableSessions{}
+	svc := newEndableService(t, dir, p, sessions)
+	openBooted(t, svc, p, "s-1", "A")
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	sessions.end("s-1")
+	p.mu.Lock()
+	p.shutdownGate = make(chan struct{})
+	p.mu.Unlock()
+	done := make(chan struct{})
+	go func() { svc.retireParked(ctx); close(done) }()
+	waitFor(t, func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		return svc.releasing["ios:A"]
+	})
+	if _, ok := savedParked(dir)["ios:A"]; !ok {
+		t.Fatal("the parked record was dropped before the shutdown finished")
+	}
+	if _, err := svc.Open(ctx, "s-2", OpenRequest{DeviceID: "A"}); apiCode(err) != "DEVICE_IN_USE" {
+		t.Fatalf("opening A while it powers off = %v, want DEVICE_IN_USE", err)
+	}
+	close(p.shutdownGate)
+	<-done
+	if parked := savedParked(dir); len(parked) != 0 {
+		t.Fatalf("saved parked = %v after the shutdown, want empty", parked)
+	}
+}
+
+// iosListFails lists without its iOS devices, as List does when simctl failed
+// while emulators still listed, and says so per platform.
+type iosListFails struct{ *fakeProvider }
+
+func (f iosListFails) List(ctx context.Context) ([]ports.DeviceInfo, error) {
+	all, _ := f.fakeProvider.List(ctx)
+	var out []ports.DeviceInfo
+	for _, d := range all {
+		if d.Platform != ports.DevicePlatformIOS {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+func (f iosListFails) ListPlatform(ctx context.Context, platform ports.DevicePlatform) ([]ports.DeviceInfo, error) {
+	if platform == ports.DevicePlatformIOS {
+		return nil, errors.New("simctl list failed")
+	}
+	return f.List(ctx)
+}
+
+// A parked simulator missing from a list whose iOS part failed is not taken
+// for off: it stays parked for the next pass instead of being forgotten.
+func TestRetiringKeepsADeviceWhosePlatformFailedToList(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	p := iosFleet()
+	sessions := &endableSessions{}
+	first := newEndableService(t, dir, p, sessions)
+	openBooted(t, first, p, "s-1", "A")
+	if err := first.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	sessions.end("s-1")
+	svc := newAvailable(Config{DataDir: dir, Provider: iosListFails{p}, Sessions: sessions.lookup})
+	if _, err := svc.Setup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		return svc.state == SetupReady
+	})
+	svc.retireParked(ctx)
+	if got := p.shutdownList(); len(got) != 0 {
+		t.Fatalf("shutdowns = %v, want none while iOS cannot list", got)
+	}
+	svc.mu.Lock()
+	_, parked := svc.parked["ios:A"]
+	owned := svc.owned["ios:A"]
+	svc.mu.Unlock()
+	if !parked || !owned {
+		t.Fatalf("parked=%v owned=%v, want A kept for the next pass", parked, owned)
+	}
+}
+
+// A listing taken before a boot finished may still show the device off:
+// Open must not drop ownership on it.
+func TestAListingFromBeforeABootDropsNothing(t *testing.T) {
+	ctx := context.Background()
+	p := iosFleet()
+	svc := newEndableService(t, t.TempDir(), p, &endableSessions{})
+	stale, _ := p.List(ctx) // A still off
+	svc.mu.Lock()
+	listGen := svc.bootGen
+	svc.mu.Unlock()
+	openBooted(t, svc, p, "s-1", "A")
+	if err := svc.Close(ctx, "s-1", false); err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.Lock()
+	svc.forgetStoppedLocked(stale, listGen)
+	_, parked := svc.parked["ios:A"]
+	owned := svc.owned["ios:A"]
+	current := svc.bootGen
+	svc.mu.Unlock()
+	if !parked || !owned {
+		t.Fatalf("parked=%v owned=%v after a stale listing, want A kept", parked, owned)
+	}
+	// The same "off" seen with no boot since does drop it.
+	svc.mu.Lock()
+	svc.forgetStoppedLocked(stale, current)
+	_, parked = svc.parked["ios:A"]
+	svc.mu.Unlock()
+	if parked {
+		t.Fatal("a current listing showing A off kept it parked")
+	}
 }
