@@ -13,24 +13,6 @@ func normalizeTime(t time.Time) time.Time {
 	return t.UTC()
 }
 
-// normalizeTimePtr returns a pointer to t converted to UTC, preserving nil.
-func normalizeTimePtr(t *time.Time) *time.Time {
-	if t == nil {
-		return nil
-	}
-	utc := normalizeTime(*t)
-	return &utc
-}
-
-// normalizeNullTime converts a sql.NullTime to UTC if valid and non-zero,
-// preserving null and zero-time semantics.
-func normalizeNullTime(nt sql.NullTime) sql.NullTime {
-	if !nt.Valid || nt.Time.IsZero() {
-		return nt
-	}
-	return sql.NullTime{Time: nt.Time.UTC(), Valid: true}
-}
-
 // timeToNullTime converts a time.Time to sql.NullTime in UTC, preserving zero-time as invalid (null).
 func timeToNullTime(t time.Time) sql.NullTime {
 	if t.IsZero() {

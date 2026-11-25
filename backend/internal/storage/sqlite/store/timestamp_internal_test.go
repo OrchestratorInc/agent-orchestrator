@@ -8,7 +8,6 @@ import (
 
 func TestTimestampNormalizationHelpers(t *testing.T) {
 	locEST := time.FixedZone("EST", -5*3600)
-	locJST := time.FixedZone("JST", 9*3600)
 
 	t.Run("normalizeTime", func(t *testing.T) {
 		// Zero time preservation
@@ -29,63 +28,6 @@ func TestTimestampNormalizationHelpers(t *testing.T) {
 		}
 		if normEST.Hour() != 15 || normEST.Minute() != 30 {
 			t.Errorf("expected 15:30 UTC, got %02d:%02d", normEST.Hour(), normEST.Minute())
-		}
-	})
-
-	t.Run("normalizeTimePtr", func(t *testing.T) {
-		// Nil pointer
-		if res := normalizeTimePtr(nil); res != nil {
-			t.Errorf("expected nil, got %v", res)
-		}
-
-		// Pointer to zero-time
-		zero := time.Time{}
-		normZeroPtr := normalizeTimePtr(&zero)
-		if normZeroPtr == nil || !normZeroPtr.IsZero() {
-			t.Errorf("expected pointer to zero-time, got %v", normZeroPtr)
-		}
-
-		// Non-UTC pointer converted to UTC
-		tJST := time.Date(2026, 5, 1, 15, 0, 0, 0, locJST)
-		normJSTPtr := normalizeTimePtr(&tJST)
-		if normJSTPtr == nil {
-			t.Fatal("expected non-nil pointer")
-		}
-		if normJSTPtr.Location() != time.UTC {
-			t.Errorf("expected UTC location, got %v", normJSTPtr.Location())
-		}
-		if !normJSTPtr.Equal(tJST) {
-			t.Errorf("expected instant equality: %v != %v", *normJSTPtr, tJST)
-		}
-		if normJSTPtr.Hour() != 6 {
-			t.Errorf("expected 06:00 UTC, got %02d:00", normJSTPtr.Hour())
-		}
-	})
-
-	t.Run("normalizeNullTime", func(t *testing.T) {
-		// Invalid
-		invalid := sql.NullTime{Valid: false}
-		if res := normalizeNullTime(invalid); res.Valid {
-			t.Errorf("expected invalid, got valid %v", res)
-		}
-
-		// Valid but zero
-		validZero := sql.NullTime{Valid: true, Time: time.Time{}}
-		if res := normalizeNullTime(validZero); !res.Time.IsZero() {
-			t.Errorf("expected zero time, got %v", res)
-		}
-
-		// Valid non-UTC
-		tEST := time.Date(2026, 5, 1, 10, 0, 0, 0, locEST)
-		res := normalizeNullTime(sql.NullTime{Valid: true, Time: tEST})
-		if !res.Valid {
-			t.Fatal("expected valid")
-		}
-		if res.Time.Location() != time.UTC {
-			t.Errorf("expected UTC location, got %v", res.Time.Location())
-		}
-		if !res.Time.Equal(tEST) {
-			t.Errorf("expected instant equality")
 		}
 	})
 
