@@ -56,7 +56,7 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "@/components/app-icons";
+import { ArrowUp, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { isMacPlatform } from "../../lib/platform";
 import { useDictation } from "./useDictation";
@@ -94,7 +94,6 @@ import {
 	MAX_ATTACHMENTS,
 	type FileAttachmentPayload,
 } from "../../hooks/useFileAttachments";
-import { File } from "@/components/app-icons";
 import type { ChatSkill, ChatSteerOutcome } from "../../types/conversation";
 import {
 	acknowledgeChatComposerMutation,
@@ -129,8 +128,9 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
-import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
-import { AttachmentFileText, AttachmentThumbnail } from "./StagedAttachmentItems";
+import { attachmentPreviewKind, attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath, withAttachmentReferences } from "./messageAttachments";
+import { ComposerAttachmentTile, ComposerPendingTile } from "./ComposerAttachmentTile";
+import { AttachmentStrip } from "./StagedAttachmentItems";
 import { rememberAttachmentName } from "../../lib/chat-attachment-names";
 import { noteComposerDropTargetFocus, registerComposerDropTarget, type ComposerDropTarget } from "../../lib/composer-drop-targets";
 import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
@@ -933,7 +933,10 @@ export const ChatComposer = memo(function ChatComposer({
 		// while they are in memory, else as a file.
 		const preview = file.dataUrl ?? (path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && IMAGE_ATTACHMENT_PATH.test(path)
 			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined);
-		return { file, path, preview };
+		// Videos, PDFs and text files preview from the staged copy once the picked file is gone.
+		const mediaUrl = path && !isCloudAttachmentReference(path) && assetOrigin !== undefined && attachmentPreviewKind(path)
+			? attachmentURL(assetOrigin, assetSessionId ?? boundarySessionId ?? "", path) : undefined;
+		return { file, path, preview, mediaUrl };
 	});
 	const composerImages: ComposerImage[] = stripAttachments.flatMap(({ file, path, preview }) =>
 		path && IMAGE_ATTACHMENT_PATH.test(path) ? [{ path, name: file.name, src: preview }] : []);
@@ -2640,93 +2643,57 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 				{(staged && !stripConcealed) || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
-					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
+					<AttachmentStrip
+						// The top and right padding leave room for each tile's corner remove control and its focus ring.
+						className="-mr-1 -mt-1 max-w-none pr-2.5 pt-2.5"
+						itemCount={stripAttachments.length + pendingAttachments.length}
+						data-testid="composer-attachments-and-annotations"
+					>
 						{(staged && !stripConcealed) || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
-								{stripAttachments.map(({ file, path, preview }) => {
-									return (
-									<li
+								{stripAttachments.map(({ file, path, preview, mediaUrl }) => (
+									<ComposerAttachmentTile
 										key={file.id}
-										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
-									>
-										{preview ? (
-											<AttachmentThumbnail src={preview} name={file.name} />
-										) : (
-											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
-												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
-											</div>
-										)}
-										{preview ? (
-											<span className="max-w-[120px] truncate text-xs text-muted-foreground" title={file.name}>
-												{file.name}
-											</span>
-										) : (
-											<span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground" title={file.name}>
-												<AttachmentFileText name={file.name} bytes={"bytes" in file ? file.bytes : undefined} nameClassName="max-w-[120px]" />
-											</span>
-										)}
-										<Button
-											type="button"
-											variant="destructive-ghost"
-											size="icon-xs"
-											onMouseDown={(event) => {
-												if (event.button === 0) event.preventDefault();
-											}}
-											onClick={() => {
+										name={file.name}
+										bytes={"bytes" in file ? file.bytes : undefined}
+										imageSrc={preview}
+										file={"file" in file ? file.file : undefined}
+										mediaUrl={mediaUrl}
+										removeLabel={`Remove ${file.name}`}
+										removeDisabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										onRemove={() => {
 											if (submitInFlight.current) return;
 											if (path) {
-											editor.current?.removeImage(path);
-											removeImageFromSavedDraft(path);
-										}
+												editor.current?.removeImage(path);
+												removeImageFromSavedDraft(path);
+											}
 											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 												setRetainedAttachments(next);
 												onQueuedRetainedAttachmentsChange?.(next);
 											} else fileAttachments.remove(file.id);
 											editor.current?.focus();
-											}}
-											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-											aria-label={`Remove ${file.name}`}
-										>
-											<X aria-hidden="true" className="size-3" />
-										</Button>
-									</li>
-									);
-								})}
+										}}
+									/>
+								))}
+								{/* Removing a file while it attaches cancels it. */}
 								{pendingAttachments.map((file) => (
-									<li
+									<ComposerPendingTile
 										key={file.id}
-										role="status"
-										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded-md bg-interactive-hover py-0.5 pl-0.5 pr-1"
-									>
-										<div aria-hidden="true" className="size-6 rounded-sm bg-surface motion-safe:animate-pulse" />
-										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs motion-safe:animate-pulse">
-											<span className="invisible">{file.name}</span>
-											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
-										</span>
-										{/* Removing a file while it attaches cancels it. */}
-										<Button
-											type="button"
-											variant="destructive-ghost"
-											size="icon-xs"
-											onMouseDown={(event) => {
-												if (event.button === 0) event.preventDefault();
-											}}
-											onClick={() => {
-												fileAttachments.cancelPending(file.id);
-												editor.current?.focus();
-											}}
-											aria-label={`Cancel attaching ${file.name}`}
-										>
-											<X aria-hidden="true" className="size-3" />
-										</Button>
-									</li>
+										name={file.name}
+										statusLabel={`Attaching ${file.name}`}
+										cancelLabel={`Cancel attaching ${file.name}`}
+										onCancel={() => {
+											fileAttachments.cancelPending(file.id);
+											editor.current?.focus();
+										}}
+									/>
 								))}
 							</ul>
 						) : null}
 						{contextReferences.length > 0 ? (
 							<ChatAnnotationSummary
+								appearance="card"
 								annotations={contextReferences}
 								onSelect={onSelectAnnotation}
 								disabled={controlsDisabled || draftMutationPending}
@@ -2754,7 +2721,7 @@ export const ChatComposer = memo(function ChatComposer({
 								}}
 							/>
 						) : null}
-					</div>
+					</AttachmentStrip>
 				) : null}
 
 				<ComposerEditor
