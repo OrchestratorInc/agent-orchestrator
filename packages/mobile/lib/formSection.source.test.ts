@@ -32,6 +32,16 @@ function sectionFooters(source: string): string[] {
 	return footers;
 }
 
+// The same holds through @expo/ui's FieldGroup (SettingsSection and the cloud
+// credential fields use it): an empty SectionFooter is dropped, so the slot
+// stays mounted only when it always holds an element, one that may draw nothing.
+it("never mounts a FieldGroup section's footer slot only some of the time", () => {
+	const offenders = [...sources(join(root, "lib")), ...sources(join(root, "app"))]
+		.filter((path) => /(\?|&&)\s*\(?\s*<FieldGroup\.SectionFooter/.test(readFileSync(path, "utf8")))
+		.map((path) => path.slice(root.length));
+	expect(offenders).toEqual([]);
+});
+
 it("never gives a SwiftUI Section a footer that comes and goes", () => {
 	const offenders = [...sources(join(root, "lib")), ...sources(join(root, "app"))]
 		.filter((path) => /import \{[^}]*\bSection\b[^}]*\} from "@expo\/ui\/swift-ui"/.test(readFileSync(path, "utf8")))

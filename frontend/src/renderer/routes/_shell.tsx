@@ -1,15 +1,21 @@
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useWindowZoomFactor } from "../hooks/useWindowZoomFactor";
+import { useAutoSpawnPauseNotice } from "../hooks/useAutoSpawnPauseNotice";
 import { AppBrowserLinkContext } from "../components/AppLink";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
+import { CatchBoundary, createFileRoute, Outlet, useMatch, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FolderPlus } from "lucide-react";
+import { FolderPlus } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
+import { MainViewVisibleContext } from "../lib/main-view-visibility";
 import { CommandPalette } from "../components/CommandPalette";
+import { useLatestCallback } from "../hooks/useStable";
+import { isRemoveTarget, useRemoveProject } from "../hooks/useRemoveProject";
+import { clearOptimisticProjectRemoval } from "../hooks/optimistic-project-removals";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
@@ -18,18 +24,25 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
+import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
+import { GuidedTour } from "../components/onboarding/GuidedTour";
+import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
+import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { PageTopbar } from "../components/PageTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
+import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
+import { useHostUpdatePolling } from "../hooks/useHostUpdates";
+import { useSettingsPolling } from "../hooks/useSettings";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
 import { SwipeNavigation } from "../components/SwipeNavigation";
@@ -44,7 +57,7 @@ import { useDaemonStatus } from "../hooks/useDaemonStatus";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
 import { useDocumentFlag } from "../hooks/useElementFlag";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
-import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { useRemoteWorkspaces, useWorkspacePolling, useWorkspaceQuery, workspaceQueryKey, toWorkspaceSession, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
@@ -54,6 +67,7 @@ import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
+import { reportOnboardingProjectAdded } from "../lib/onboarding-telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -62,6 +76,7 @@ import { applyWindowTranslucency } from "../lib/window-translucency";
 import { aoBridge } from "../lib/bridge";
 import { handleModifierLinkClick } from "../lib/external-link-policy";
 import { recordProjectOpened } from "../lib/project-history";
+import { composerDropTargetFor, type ComposerDropTarget } from "../lib/composer-drop-targets";
 import { cn } from "../lib/utils";
 import {
 	isLinuxPlatform,
@@ -70,10 +85,13 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, sessionIsActive, STANDALONE_PROJECT_KIND, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
-import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
+import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/session-links";
+import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
+import { useHeldSession } from "../hooks/useHeldSession";
+import { useSwitchHistoryRead } from "../hooks/useSwitchHistoryRead";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
@@ -84,12 +102,24 @@ import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to
 import { sessionUiKey } from "../lib/hosts";
 import { pageHasTopbar } from "../lib/shell-topbar";
 import { forgetRemoteHost, syncRemoteCache } from "../lib/remote-chat-cache";
+import { watchRemoteUnpins } from "../lib/remote-session-unpins";
+import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
-import { useAppShortcut } from "../hooks/useAppShortcut";
+import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
+import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
+import { markLaunchUsable } from "../lib/launch-telemetry";
+import { useSessionOpenTiming } from "../lib/performance-telemetry";
+import { uiUsage } from "../lib/ui-usage-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
+// The agent update notice checks every installed harness, and on a daemon that
+// has just started each check can hold a connection to it for seconds. The
+// renderer has few (Chromium opens six per host and the event streams keep
+// several), so checks started with the app made the session and Files views
+// opened first wait behind them. They start once launch has settled.
+const HARNESS_UPDATE_CHECKS_DELAY_MS = 15_000;
 
 // Only shown while an orchestrator is starting, but it pulls in the whole chat
 // stack (ChatWorkspace, lexical, markdown). Lazy keeps that off every route.
@@ -97,6 +127,8 @@ const loadOrchestratorStartingChat = () => import("../components/chat/Orchestrat
 const OrchestratorStartingChat = lazy(() =>
 	loadOrchestratorStartingChat().then((module) => ({ default: module.OrchestratorStartingChat })),
 );
+
+const EMPTY_PAUSE_PROJECTS: never[] = [];
 function preloadOrchestratorStartingChat(): void {
 	void loadOrchestratorStartingChat().catch(() => undefined);
 }
@@ -122,7 +154,7 @@ function lastProjectId(workspaces: WorkspaceSummary[]): string | undefined {
 	} catch {
 		return undefined;
 	}
-	return workspaces.some((workspace) => workspace.id === id && workspace.kind !== STANDALONE_PROJECT_KIND) ? id ?? undefined : undefined;
+	return workspaces.some((workspace) => workspace.id === id && !isScratchpadWorkspace(workspace)) ? id ?? undefined : undefined;
 }
 
 export const Route = createFileRoute("/_shell")({
@@ -152,6 +184,9 @@ function ShellLayoutWithSettings() {
 	return (
 		<SettingsProvider>
 			<ShellLayout />
+			{/* Outside ShellLayout, so links it holds survive every route and the
+			    startup loader that replaces the shell while the daemon restarts. */}
+			<SharedArtifactLinkHost />
 		</SettingsProvider>
 	);
 }
@@ -165,7 +200,10 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 	return (
 		<>
 			<div className={cn("relative flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
-				<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /><LocalSessionHost /></div>
+				{/* Settings and a starting chat hide the page but keep it mounted; videos in it pause. */}
+				<MainViewVisibleContext.Provider value={!settingsOpen && !startingChat}>
+					<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /><LocalSessionHost /></div>
+				</MainViewVisibleContext.Provider>
 				{startingChat}
 			</div>
 			<SettingsPane />
@@ -197,13 +235,20 @@ function LocalSessionHost() {
 		select: (match) => match.params,
 	});
 	const { org } = useCloudOrg();
-	const sessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const cloudOrgId = org?.id;
+	const liveSessionId = projectSession?.sessionId ?? scratchpadSessionId;
+	const liveProjectId = projectSession?.projectId;
+	const historyPending = useSwitchHistoryRead(liveSessionId);
+	const { sessionId, projectId } = useHeldSession(liveSessionId, liveProjectId, historyPending);
+	useSessionOpenTiming(liveSessionId, sessionId);
+	const view = useMemo(
+		() => (sessionId ? <SessionView cloudOrgId={cloudOrgId} projectId={projectId} sessionId={sessionId} /> : null),
+		[cloudOrgId, projectId, sessionId],
+	);
 	if (!sessionId) return null;
 	return (
 		<CatchBoundary errorComponent={LazyChunkErrorPanel} getResetKey={() => sessionId} onCatch={captureSessionViewCrash}>
-			<Suspense fallback={null}>
-				<SessionView cloudOrgId={org?.id} projectId={projectSession?.projectId} sessionId={sessionId} />
-			</Suspense>
+			<Suspense fallback={null}>{view}</Suspense>
 		</CatchBoundary>
 	);
 }
@@ -226,6 +271,7 @@ function findRegisteredWorkspaceByPath(workspaces: WorkspaceSummary[], path: str
 type CreateProjectConfigInput = {
 	workerAgent: string;
 	orchestratorAgent: string;
+	reviewerAgent?: string;
 	trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	defaultBranch?: string;
 };
@@ -235,6 +281,7 @@ export function createProjectConfig(input: CreateProjectConfigInput): components
 		...(input.defaultBranch ? { defaultBranch: input.defaultBranch } : {}),
 		worker: { agent: input.workerAgent as components["schemas"]["RoleOverride"]["agent"] },
 		orchestrator: { agent: input.orchestratorAgent as components["schemas"]["RoleOverride"]["agent"] },
+		...(input.reviewerAgent ? { reviewers: [{ harness: input.reviewerAgent }] } : {}),
 		...(input.trackerIntake ? { trackerIntake: input.trackerIntake } : {}),
 	};
 }
@@ -264,6 +311,7 @@ const ShellCenter = memo(function ShellCenter({
 	startingCloudOrchestrator,
 	startingSteps,
 	startingCoderWorkspaceUrl,
+	startingHarness,
 }: {
 	isSessionRoute: boolean;
 	isHomeRoute: boolean;
@@ -273,9 +321,13 @@ const ShellCenter = memo(function ShellCenter({
 	startingCloudOrchestrator: boolean;
 	startingSteps?: WorkspaceSession["provisionSteps"];
 	startingCoderWorkspaceUrl?: string;
+	startingHarness?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
-	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /></Suspense></LazyChunkBoundary> : null;
+	// Once the new chat page sends, it takes the session's top bar so the first
+	// message lands where the session will show it, and nothing moves at handoff.
+	const newChatSending = useUiStore((state) => state.newChatSending);
+	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} harness={startingHarness} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
@@ -288,8 +340,8 @@ const ShellCenter = memo(function ShellCenter({
 		<CenterPanelShell
 			className={panelClassName}
 			notifications={!isHomeRoute || startingOrchestrator}
-			// The home and new chat pages have no top bar, so their panel takes the band back.
-			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute, startingOrchestrator })}
+			// The home and unsent new chat pages have no top bar, so their panel takes the band back.
+			topbar={pageHasTopbar({ isHomeRoute, isNewChatRoute: isNewChatRoute && !newChatSending, startingOrchestrator })}
 		>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
@@ -300,9 +352,18 @@ const ShellCenter = memo(function ShellCenter({
 // the <Outlet> content (board / session / settings / …) swaps. Lifted out of
 // the old single <App>, with selection now owned by the router (route params)
 // instead of Zustand. The daemon-status effect runs here exactly once.
+// What useMatchRoute checked: "/" and "/new" exactly, the settings pages fuzzily, ignoring case.
+function shellRouteKind(pathname: string): "home" | "new" | "settings" | "" {
+	const path = pathname.toLowerCase();
+	if (path === "/") return "home";
+	if (path === "/new") return "new";
+	return /^\/(projects\/[^/]+\/)?settings(\/|$)/.test(path) ? "settings" : "";
+}
+
 function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
+	useSetupCheckedTelemetry();
 	useSessionSwitchSnap();
 	useLinkThisComputerOnSignIn();
 	const { t } = useTranslation();
@@ -310,30 +371,36 @@ function ShellLayout() {
 	const router = useRouter();
 	const canGoForward = useCanGoForward();
 	const settingsPage = useSettingsPage();
-	const matchRoute = useMatchRoute();
+	// One string, so a session switch (same kind of route) does not re-render the shell
+	// while the router loads; useMatchRoute would on every location and status change.
+	const routeKind = useRouterState({ select: (state) => shellRouteKind((state.resolvedLocation ?? state.location).pathname) });
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
 	useWorkspacePolling();
+	useSettingsPolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const { hosts: remoteHosts, listed: remoteHostsListed, refresh: refreshRemoteHosts } = useRemoteHosts();
+	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
+	useHostUpdatePolling(remoteHosts);
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
 	// while they connect or are offline.
 	useEffect(() => {
-		if (remoteHostsListed) void syncRemoteCache(queryClient, remoteHostIds);
+		if (!remoteHostsListed) return;
+		void syncRemoteCache(queryClient, remoteHostIds);
+		// Pins removed here for a host that is no longer saved have no row left to hide.
+		useRemoteUnpinStore.getState().keepHosts(remoteHostIds);
 	}, [queryClient, remoteHostIds, remoteHostsListed]);
+	// Pins removed here while a host was unreachable reach it once its list loads.
+	useEffect(() => watchRemoteUnpins(queryClient), [queryClient]);
 	const refusedRemoteHostKey = remoteHosts.filter((host) => host.failureReason === "unauthorized").map((host) => host.hostId).join("\0");
 	useEffect(() => {
 		for (const hostId of refusedRemoteHostKey ? refusedRemoteHostKey.split("\0") : []) void forgetRemoteHost(queryClient, hostId);
 	}, [queryClient, refusedRemoteHostKey]);
-	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
-	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
-	useEffect(() => {
-		if (failedRemoteHostKey) void refreshRemoteHosts();
-	}, [failedRemoteHostKey, refreshRemoteHosts]);
+	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds, loadedSessionHostIds: remoteLoadedSessionHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.
 	const workspacesRef = useRef(workspaces);
@@ -352,18 +419,38 @@ function ShellLayout() {
 			preloadSessionView();
 		});
 	}, [daemonIsReady]);
+	const [harnessUpdateChecksDue, setHarnessUpdateChecksDue] = useState(false);
+	useEffect(() => {
+		if (!daemonIsReady) return;
+		const timer = setTimeout(() => setHarnessUpdateChecksDue(true), HARNESS_UPDATE_CHECKS_DELAY_MS);
+		// A daemon that comes back, or a new one that replaces it, has cold checks
+		// again: wait out its launch too.
+		return () => {
+			clearTimeout(timer);
+			setHarnessUpdateChecksDue(false);
+		};
+	}, [daemonIsReady, daemonStatus.pid, daemonStatus.port]);
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
 	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
-	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
-	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
+	const firstRunOnboardingOpen = useUiStore((state) => state.firstRunOnboardingOpen);
+	// While the full-window onboarding shows, the shell behind it takes no
+	// focus or clicks; Settings opened from it lifts that, as it steps aside.
+	const onboardingCoversShell = useUiStore((state) => state.firstRunOnboardingOpen && state.settingsModal?.scope !== "global");
+	// One chain per daemon setting Developer Mode drives: each request waits for
+	// its own previous one, so an older enable cannot finish after a disable.
+	const developerModeSyncRef = useRef<Record<"chatHibernation" | "limitHistory" | "devices", Promise<void>>>({
+		chatHibernation: Promise.resolve(),
+		limitHistory: Promise.resolve(),
+		devices: Promise.resolve(),
+	});
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
@@ -433,7 +520,9 @@ function ShellLayout() {
 			workspaces.some((workspace) => workspace.id === routeParams.projectId && workspace.kind !== CLOUD_PROJECT_KIND),
 		leavePage: () => void navigate({ to: "/", replace: true }),
 	});
-	const linkSession = routeParams.hostId ? undefined : workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === routeParams.sessionId);
+	const linkSession = (routeParams.hostId ? remoteWorkspaces ?? [] : workspaces)
+		.flatMap((workspace) => workspace.sessions)
+		.find((session) => session.id === routeParams.sessionId && session.hostId === routeParams.hostId);
 	const openBrowserLink = useSessionBrowserLink(linkSession);
 	const canOpenBrowserLink = linkSession?.kind === "worker" && sessionIsActive(linkSession);
 	useEffect(() => {
@@ -441,7 +530,8 @@ function ShellLayout() {
 		return () => document.removeEventListener("click", handleModifierLinkClick);
 	}, []);
 	// Drop a folder anywhere in the app window to add it as a project, mirroring
-	// VS Code's "drop a folder to open it". A depth counter (not a relatedTarget
+	// VS Code's "drop a folder to open it". Drop files anywhere to attach them
+	// to the nearest chat composer. A depth counter (not a relatedTarget
 	// check) tracks dragenter/dragleave so the overlay doesn't flicker as the
 	// pointer crosses child-element boundaries. XtermTerminal's own drop handler
 	// only swallows (preventDefault/stopPropagation) a drop that is NOT a
@@ -455,6 +545,16 @@ function ShellLayout() {
 			const item = event.dataTransfer?.items?.[0];
 			return item?.webkitGetAsEntry?.()?.isDirectory ?? false;
 		};
+		// Files (not folders) dropped anywhere go to the nearest chat composer,
+		// unless something under the pointer (a terminal, a PR comment box, the
+		// composer itself) already claimed the drag with preventDefault.
+		let highlighted: ComposerDropTarget | undefined;
+		const highlight = (target: ComposerDropTarget | undefined) => {
+			if (highlighted === target) return;
+			highlighted?.setDragging(false);
+			highlighted = target;
+			target?.setDragging(true);
+		};
 		const handleDragEnter = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
 			event.preventDefault();
@@ -463,21 +563,38 @@ function ShellLayout() {
 		};
 		const handleDragOver = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
+			if (event.defaultPrevented) {
+				// Claimed below; a composer under the pointer highlights itself.
+				if (highlighted && !highlighted.element()?.contains(event.target as Node)) highlight(undefined);
+				else highlighted = undefined;
+			} else if (!firstEntryIsDirectory(event)) {
+				const target = composerDropTargetFor(event.target);
+				highlight(target?.accepts() ? target : undefined);
+			}
 			event.preventDefault();
 			if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 		};
 		const handleDragLeave = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
 			dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-			if (dragDepthRef.current === 0) setIsDragActive(false);
+			if (dragDepthRef.current === 0) {
+				setIsDragActive(false);
+				highlight(undefined);
+			}
 		};
 		const handleDrop = (event: DragEvent) => {
 			if (!isFileDrag(event)) return;
+			const claimed = event.defaultPrevented;
 			event.preventDefault();
 			dragDepthRef.current = 0;
 			setIsDragActive(false);
+			highlight(undefined);
+			if (claimed) return;
 			const item = event.dataTransfer?.items?.[0];
-			if (!item?.webkitGetAsEntry?.()?.isDirectory) return;
+			if (!item?.webkitGetAsEntry?.()?.isDirectory) {
+				composerDropTargetFor(event.target)?.attach(Array.from(event.dataTransfer?.files ?? []));
+				return;
+			}
 			const file = item.getAsFile();
 			if (!file) return;
 			// Must be synchronous, on the File taken directly from dataTransfer, in
@@ -507,7 +624,7 @@ function ShellLayout() {
 	// The last project the user was in, so a new session started from outside any
 	// project opens there rather than in the scratchpad.
 	const scopedIsProject = Boolean(scopedProjectId) && workspaces.some(
-		(workspace) => workspace.id === scopedProjectId && workspace.kind !== STANDALONE_PROJECT_KIND,
+		(workspace) => workspace.id === scopedProjectId && !isScratchpadWorkspace(workspace),
 	);
 	useEffect(() => {
 		if (!scopedIsProject || !scopedProjectId || scopedProjectId === STANDALONE_WORKSPACE_ID) return;
@@ -529,6 +646,10 @@ function ShellLayout() {
 				: null,
 		);
 	}, [routeParams.hostId, scopedSession?.id, scopedSession?.kind]);
+	// Counts a switch to another session and where it started (sidebar, tab, Cmd+K…).
+	useEffect(() => {
+		if (scopedSession?.id) uiUsage.sessionViewed(sessionUiKey(scopedSession.id, routeParams.hostId));
+	}, [routeParams.hostId, scopedSession?.id]);
 	// Warms the New Task composer's model-catalog cache while the user is just
 	// looking at the project, so the picker never shows a loading flash the
 	// first time they actually open the dialog.
@@ -557,10 +678,10 @@ function ShellLayout() {
 	}, [queryClient, scopedProjectId]);
 	// The root route is the intentionally minimal home surface, regardless of
 	// whether projects have already been registered.
-	const isHomeRoute = Boolean(matchRoute({ to: "/" }));
+	const isHomeRoute = routeKind === "home";
 	// The new chat page is a session that does not exist yet, so it takes the
 	// session frame and the session view replaces it without the chrome moving.
-	const isNewChatRoute = Boolean(matchRoute({ to: "/new" }));
+	const isNewChatRoute = routeKind === "new";
 	// The new chat page keeps its host in the search, not the path.
 	const newChatHost = useRouterState({
 		select: (state) => (isNewChatRoute ? (state.location.search as { host?: string }).host : undefined),
@@ -572,9 +693,7 @@ function ShellLayout() {
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
-	const isSettingsRoute =
-		Boolean(matchRoute({ to: "/settings", fuzzy: true })) ||
-		Boolean(matchRoute({ to: "/projects/$projectId/settings", fuzzy: true }));
+	const isSettingsRoute = routeKind === "settings";
 	// Welcome/settings always self-frame. Platforms that hide the shell-owned
 	// topbar (macOS) use the same full-height inset; session actions mount
 	// inside SessionView.
@@ -608,6 +727,20 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	// Launch timing: the second frame runs once the first frame that shows the
+	// workspace is on screen. A daemon failure is not a launch, and main logs the
+	// first report only, so nothing is reported while one is showing.
+	const workspaceShown = !isStartupLoading && !daemonStatus.code && workspaceQuery.data !== undefined;
+	useEffect(() => {
+		if (!workspaceShown) return;
+		let frame = requestAnimationFrame(() => {
+			frame = requestAnimationFrame(() => {
+				markLaunchUsable();
+				aoBridge.app.reportSessionsShown();
+			});
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [workspaceShown]);
 	// The startup loader renders no sidebar, so measure again once the shell
 	// mounts it. Otherwise the strip keeps the 240px default and its fill
 	// paints over the center panel's top-left corner beside a narrower sidebar.
@@ -702,6 +835,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					projectId: workspace.id,
 					kind: "orchestrator",
 					harness: input.orchestratorAgent as components["schemas"]["SpawnSessionRequest"]["harness"],
+					// The daemon already starts orchestrators in the background; say so
+					// explicitly, as the CLI does, so the request never holds a Setup.
+					async: true,
 				},
 			});
 			if (spawnError || !spawnData?.session?.id) {
@@ -710,7 +846,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					: `Failed to spawn orchestrator (${spawnResponse.status})`;
 				throw new Error(message);
 			}
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", {
+			void captureRendererEvent("ao.orchestrators.spawned", {
 				project_id: workspace.id,
 				source,
 			});
@@ -722,23 +858,26 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					? { ...item, sessions: [toWorkspaceSession(spawnData.session, { id: workspace.id, name: workspace.name }), ...item.sessions.filter((session) => session.id !== sessionId)] }
 					: item),
 			);
+			// Follow the new orchestrator only if the user is still waiting on
+			// this project's board; do not pull them back from another page.
+			// The provisioning gate stays up until the session route has landed,
+			// otherwise the board shows through for a beat between the two.
+			const current = routeParamsRef.current;
+			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
+				// A failed navigation is not a failed start: the session exists.
+				await navigate({
+					to: "/projects/$projectId/sessions/$sessionId",
+					params: { projectId: workspace.id, sessionId },
+				}).catch(() => undefined);
+			}
 			// The session now exists, so the sidebar button can open it even if
 			// the user left while it spawned.
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			// Follow the new orchestrator only if the user is still waiting on
-			// this project's board; do not pull them back from another page.
-			const current = routeParamsRef.current;
-			if (current.projectId === workspace.id && !current.sessionId && !current.hostId) {
-				void navigate({
-					to: "/projects/$projectId/sessions/$sessionId",
-					params: { projectId: workspace.id, sessionId },
-				});
-			}
 		} catch (spawnError) {
 			window.clearTimeout(provisioningGuard);
 			setProjectProvisioning(workspace.id, false);
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", {
+			void captureRendererEvent("ao.orchestrators.spawn_failed", {
 				project_id: workspace.id,
 				source,
 			});
@@ -755,6 +894,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			project: components["schemas"]["Project"],
 			input: CreateProjectConfigInput,
 			source: "project_add" | "project_clone",
+			// The onboarding tour's project source; a prepared clone is added as a project but came from a clone.
+			onboardingSource: "clone" | "local_folder" = source === "project_add" ? "local_folder" : "clone",
 		) => {
 			const workspace: WorkspaceSummary = {
 				id: project.id,
@@ -766,9 +907,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				orchestratorAgent: input.orchestratorAgent as WorkspaceSummary["orchestratorAgent"],
 				sessions: [],
 			};
-			void captureRendererEvent(`ao.renderer.${source}_succeeded`, { project_id: workspace.id });
+			void captureRendererEvent(source === "project_add" ? "ao.projects.added" : "ao.renderer.project_clone_succeeded", { project_id: workspace.id });
+			reportOnboardingProjectAdded(onboardingSource, workspace.id);
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
+			// Ids come from the folder name: a folder removed and added again is the same id.
+			clearOptimisticProjectRemoval(workspace.id);
 			useSidebarOrderStore.getState().moveProjectToTop(workspace.id);
 			updateWorkspaces((current) => [workspace, ...current.filter((item) => item.id !== workspace.id)]);
 			setOrchestratorStartupError(workspace.id, null);
@@ -784,6 +928,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			path: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			asWorkspace?: boolean;
 			clonePreparationId?: string;
@@ -800,7 +945,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
-				throw new Error(status.message || "AO daemon is not ready.");
+				throw new AoError("DAEMON_NOT_READY", status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
 				body: {
@@ -846,6 +991,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					}
 					if (registeredWorkspace) {
 						if (input.clonePreparationId) {
+							// The clone registered before its response was lost: still a clone for the tour.
+							reportOnboardingProjectAdded("clone", registeredWorkspace.id);
 							setOrchestratorStartupError(registeredWorkspace.id, null);
 							setProjectProvisioning(registeredWorkspace.id, true);
 							await navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
@@ -871,7 +1018,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				reportFailure("NO_PROJECT");
 				throw new Error("Project creation returned no project");
 			}
-			await completeProjectCreation(data.project, input, "project_add");
+			await completeProjectCreation(data.project, input, "project_add", input.clonePreparationId ? "clone" : "local_folder");
 		},
 		[completeProjectCreation, navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast],
 	);
@@ -882,6 +1029,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			destinationParent: string;
 			workerAgent: string;
 			orchestratorAgent: string;
+			reviewerAgent?: string;
 			trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 			signal?: AbortSignal;
 		}) => {
@@ -891,12 +1039,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				surface: "project_board",
 			});
 			const reportFailure = (code: string | undefined) => {
-				void captureRendererEvent("ao.renderer.project_clone_failed", { error_code: code || "unknown" });
+				void captureRendererEvent("ao.projects.clone_failed", { error_code: code || "unknown" });
 			};
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
-				throw new Error(status.message || "AO daemon is not ready.");
+				throw new Error(status.message || "Daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects/clone", {
 				signal: input.signal,
@@ -965,6 +1113,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			}
 		}
 		if (!projectId) throw Object.assign(apiErrorException(error, "Could not add project on this host."), { code: apiErrorCode(error) });
+		clearOptimisticProjectRemoval(projectId, hostId);
 		const showProject = (sessionId?: string) => {
 			void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			void navigate(sessionId ? sessionNavigateTarget(projectId, sessionId, hostId) : projectNavigateTarget(projectId, hostId));
@@ -1005,118 +1154,76 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[],
 	);
 
+	// Removal is optimistic: the project leaves every list on confirm and the
+	// daemon's teardown runs in the background (see useRemoveProject).
+	const findWorkspaceToRemove = useCallback((projectId: string, hostId?: string, cloud?: boolean) =>
+		(hostId ? remoteWorkspacesRef.current ?? [] : workspacesRef.current)
+			.find((workspace) => isRemoveTarget(workspace, projectId, hostId, cloud)), []);
+	const isViewingProject = useCallback((workspace: WorkspaceSummary) => {
+		const route = routeParamsRef.current;
+		if (route.hostId !== workspace.hostId) return false;
+		return route.projectId === workspace.id ||
+			(route.sessionId !== undefined && workspace.sessions.some((session) => session.id === route.sessionId));
+	}, []);
+	const removeProjectById = useRemoveProject({
+		findWorkspace: findWorkspaceToRemove,
+		isViewing: isViewingProject,
+		cloud: { client: cloudClient, orgId: cloudOrg?.id },
+	});
+	// The flag tells a local project from a cloud project with the same id.
 	const removeProject = useCallback(
-		async (projectId: string) => {
-			const isLastWorkspace =
-              workspaces.length === 1 && workspaces[0]?.id === projectId;
-			void addRendererExceptionStep("Project removal requested", {
-				source: "project-remove",
-				operation: "project_remove",
-				surface: "project_board",
-				project_id: projectId,
-			});
-			// Cloud projects live in the control plane, not the local daemon: route
-			// their delete to the CP (which archives the project and all its
-			// sessions) instead of the local project endpoint.
-			const isCloudProject =
-				workspaces.find((item) => item.id === projectId)?.kind === CLOUD_PROJECT_KIND;
-			if (isCloudProject) {
-				if (!cloudOrg?.id) {
-					const failure = new Error("The cloud control plane is not ready. Sign in and try again.") as Error & {
-						code?: string;
-					};
-					failure.code = "cloud_not_ready";
-					void captureRendererException(failure, {
-						source: "project-remove",
-						operation: "project_remove",
-						surface: "project_board",
-						project_id: projectId,
-					});
-					throw failure;
-				}
-				try {
-					await cloudClient.deleteProject(cloudOrg.id, projectId);
-				} catch (error) {
-					const failure = new Error(
-						error instanceof Error ? error.message : "Unable to delete cloud project",
-					) as Error & { code?: string };
-					void captureRendererException(failure, {
-						source: "project-remove",
-						operation: "project_remove",
-						surface: "project_board",
-						project_id: projectId,
-					});
-					throw failure;
-				}
-				void captureRendererEvent("ao.renderer.project_removed", { project_id: projectId });
-				// The archive is asynchronous (202); refresh the cloud queries so the
-				// merged board drops the project and its sessions on the next fetch.
-				await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
-				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
-				if (isLastWorkspace) {
-					void navigate({ to: "/" });
-				}
-				return;
-			}
-			const { error } = await apiClient.DELETE("/api/v1/projects/{id}", {
-				params: { path: { id: projectId } },
-			});
-			if (error) {
-				const failure = apiErrorException(error) as Error & { code?: string };
-				failure.code = apiErrorCode(error);
-				void captureRendererException(failure, {
-					source: "project-remove",
-					operation: "project_remove",
-					surface: "project_board",
-					project_id: projectId,
-				});
-				throw failure;
-			}
-			void captureRendererEvent("ao.renderer.project_removed", { project_id: projectId });
-			updateWorkspaces((current) => current.filter((item) => item.id !== projectId));
-			if (isLastWorkspace) {
-              void navigate({ to: "/" });
-}
-		},
-		[cloudClient, cloudOrg?.id, navigate, queryClient, updateWorkspaces, workspaces],
+		(projectId: string, cloud: boolean) => removeProjectById(projectId, undefined, cloud),
+		[removeProjectById],
 	);
-	const removeRemoteProject = useCallback(async (hostId: string, projectId: string) => {
-		const selectedProject = routeParams.hostId === hostId && (
-			routeParams.projectId === projectId || remoteWorkspaces.some((workspace) =>
-				workspace.hostId === hostId && workspace.id === projectId &&
-				workspace.sessions.some((session) => session.id === routeParams.sessionId),
-			)
-		);
-		const { error } = await clientForHost(hostId).DELETE("/api/v1/projects/{id}", {
-			params: { path: { id: projectId } },
-		});
-		if (error) throw apiErrorException(error);
-		void queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
-		if (selectedProject) void navigate({ to: "/" });
-	}, [navigate, queryClient, remoteWorkspaces, routeParams.hostId, routeParams.projectId, routeParams.sessionId]);
+	const removeRemoteProjectFromSidebar = useCallback(
+		(hostId: string, projectId: string) => removeProjectById(projectId, hostId),
+		[removeProjectById],
+	);
 	const openRemoteProjectOrchestrator = useCallback(async (hostId: string, projectId: string) => {
 		const workspace = remoteWorkspaces.find((item) => item.hostId === hostId && item.id === projectId);
 		if (!workspace) return;
 		const projectKey = sessionUiKey(projectId, hostId);
 		const uiState = useUiStore.getState();
 		if (uiState.provisioningProjectIds.has(projectKey) || uiState.restartingProjectIds.has(projectKey)) return;
-		if (!hasConfiguredOrchestratorAgent(workspace)) {
-			openProjectSettings(projectId, hostId);
-			return;
-		}
 		setOrchestratorStartupError(projectId, null, hostId);
 		try {
-			const sessionId = await openRemoteOrchestrator(hostId, projectId, newestActiveOrchestrator(workspace.sessions));
+			const activeOrchestrator = newestActiveOrchestrator(workspace.sessions);
+			const sessionId = await openRemoteOrchestrator(hostId, projectId, activeOrchestrator);
 			const refresh = queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			// Only a new orchestrator must be in the list before its route can find it.
 			if (!workspace.sessions.some((session) => session.id === sessionId)) await refresh;
 			void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
 		} catch (cause) {
+			if (apiErrorCode(cause) === "AGENT_REQUIRED") {
+				openProjectSettings(projectId, { hostId, section: "agents" });
+				return;
+			}
 			const message = cause instanceof Error ? cause.message : t("shell.couldNotSpawn");
 			setOrchestratorStartupError(projectId, message, hostId);
 			showGlobalToast(t("shell.couldNotSpawn"), message, "error");
 		}
 	}, [navigate, openProjectSettings, queryClient, remoteWorkspaces, setOrchestratorStartupError, showGlobalToast, t]);
+	// The sidebar is memoized, and the shell re-renders several times per route
+	// change. Handlers that keep their identity let those renders skip it.
+	const openRemoteProjectFromSidebar = useCallback((hostId: string, projectId: string) => {
+		void navigate(projectNavigateTarget(projectId, hostId));
+	}, [navigate]);
+	const openRemoteOrchestratorFromSidebar = useLatestCallback((hostId: string, projectId: string) => {
+		void openRemoteProjectOrchestrator(hostId, projectId);
+	});
+	const configureRemoteProjectFromSidebar = useCallback(
+		(hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
+		[openProjectSettings],
+	);
+	const retryRemoteHosts = useCallback(() => {
+		void retryRemoteHostsNow();
+		void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
+	}, [queryClient, retryRemoteHostsNow]);
+	// A new handler on every shell render would rebuild the sidebar context and
+	// re-render every row button that reads it.
+	const handleSidebarOpenChange = useCallback((open: boolean) => {
+		if (open !== isSidebarOpen) toggleSidebar();
+	}, [isSidebarOpen, toggleSidebar]);
 
 	const restartOrchestrator = useCallback(
 		async (projectId: string, mode?: "chat" | "tui", approvalMode?: "bypass-permissions") => {
@@ -1145,27 +1252,35 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, [themeStyle]);
 
 	// The renderer owns Developer Mode; the daemon must know its value before
-	// either the view-close path or the idle sweep can hibernate a provider.
+	// either the view-close path or the idle sweep can hibernate a provider,
+	// and devices (a Developer mode preview) stay off in the daemon until it does.
+	// Each setting syncs and retries on its own: one failing request must not
+	// leave another, such as devices, stuck at its old value.
 	useEffect(() => {
 		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
-		let retry: ReturnType<typeof setTimeout> | undefined;
-		const sync = () => {
-			// Serialize toggles so an older enable request cannot finish after disable.
-			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
+		const retries = new Set<ReturnType<typeof setTimeout>>();
+		const chains = developerModeSyncRef.current;
+		const sync = (key: keyof typeof chains, send: () => Promise<{ error?: unknown }>) => {
+			chains[key] = chains[key].then(async () => {
 				if (cancelled) return;
-				const { error } = await apiClient.PATCH("/api/v1/settings/chat-hibernation", {
-					body: { enabled: developerMode },
-				});
+				const { error } = await send();
 				if (error) throw error;
 			}).catch(() => {
-				if (!cancelled) retry = setTimeout(sync, 5_000);
+				if (cancelled) return;
+				const retry = setTimeout(() => {
+					retries.delete(retry);
+					sync(key, send);
+				}, 5_000);
+				retries.add(retry);
 			});
 		};
-		sync();
+		sync("chatHibernation", () => apiClient.PATCH("/api/v1/settings/chat-hibernation", { body: { enabled: developerMode } }));
+		sync("limitHistory", () => apiClient.PUT("/api/v1/usage/limit-history", { body: { enabled: developerMode } }));
+		sync("devices", () => apiClient.PUT("/api/v1/devices/availability", { body: { enabled: developerMode } }));
 		return () => {
 			cancelled = true;
-			clearTimeout(retry);
+			for (const retry of retries) clearTimeout(retry);
 		};
 	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
 
@@ -1240,10 +1355,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// transparency").
 	const windowTranslucent = isMac && windowTranslucency;
 
-	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read. A translucent window
-	// paints no background, and the read forces a whole-document style recalc
-	// mid-switch, so it is skipped there.
+	// Match the native window background to the sidebar fill, following both the
+	// mode and the color theme. Deferred a frame so data-theme and
+	// data-style-theme have been applied before the token is read. A translucent
+	// window paints no background, and the read forces a whole-document style
+	// recalc mid-switch, so it is skipped there.
 	useEffect(() => {
 		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
@@ -1251,7 +1367,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, windowTranslucent]);
+	}, [resolvedTheme, themeStyle, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
@@ -1289,6 +1405,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		if (router.history.canGoBack()) router.history.back();
 	});
 	useAppShortcut("history-forward", () => router.history.forward());
+	// The shell is mounted on every route, so these menu items always apply.
+	useAppMenuAvailable("new-session", true);
+	useAppMenuAvailable("toggle-sidebar", true);
+	useAppMenuAvailable("history-back", true);
+	useAppMenuAvailable("history-forward", true);
 
 	// New session (⌘N / Ctrl+Shift+N) is detected in the main process and
 	// delivered here, so it fires even when focus is inside xterm or a native
@@ -1296,7 +1417,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// for the in-scope project, or a standalone agent when no project is in scope.
 	useEffect(
 		() =>
-			aoBridge.app.onNewSessionShortcut(() => {
+			onDedicatedShortcut("new-session", (handler) => aoBridge.app.onNewSessionShortcut(handler), () => {
 			// On the new chat page, stay with the project and host it shows.
 			if (newChatHost) {
 				requestNewTask(newChatProject ?? STANDALONE_WORKSPACE_ID, newChatHost);
@@ -1354,7 +1475,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// strip, so the shortcut does nothing outside a session (#4772).
 	useEffect(
 		() =>
-			aoBridge.app.onNewShellTerminalShortcut(() => {
+			onDedicatedShortcut("new-shell-terminal", (handler) => aoBridge.app.onNewShellTerminalShortcut(handler), () => {
 				if (routeParams.sessionId) requestNewShellTerminal();
 			}),
 		[requestNewShellTerminal, routeParams.sessionId],
@@ -1396,9 +1517,101 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[queryClient],
 	);
 
+	// ao-app://sessions/… deep links from external tools. The raw URL is
+	// re-read as its in-app ao:// form and resolved through the same
+	// session-links path as ao:// links, so both schemes behave alike:
+	// artifact routes open the file in the destination session, a terminated
+	// session refuses with the same toast, and a stale link focuses the app
+	// with a quiet toast instead of navigating to a wrong session.
+	//
+	// A link is handled only once its evidence can be trusted, and held until
+	// then (flushed as soon as that flips true):
+	// - the confirmed startup fetch has landed — a green query alone is not
+	//   enough, since the route loader can cache a stale [] from before the
+	//   daemon port was known (same gate the startup loader uses);
+	// - remote hosts that are on have finished loading (or failed) — a
+	//   cold-start link must not race a host's project query, whose workspaces
+	//   carry sessions only after the session query lands too. An offline host
+	//   has concluded its connect attempt, so it counts as settled and never
+	//   holds the gate open;
+	// - the remote side has concluded — useRemoteHosts' settled flag mirrors
+	//   its own enable rule (disabled or signed out never lists), so the gate
+	//   cannot drift from it; a listed host counts as settled once offline,
+	//   failed, or its project and session queries have both landed.
+	const remoteWorkspaceLoadSettled = remoteHostsSettled
+		&& (!remoteHostsListed || remoteHostIds.every((hostId) => remoteHosts.some((host) => host.hostId === hostId && host.status === "offline")
+			|| (remoteLoadedProjectHostIds.includes(hostId) && remoteLoadedSessionHostIds.includes(hostId))
+			|| remoteFailedHostIds.includes(hostId)));
+	const sessionDeepLinksReady = workspaceQuery.isSuccess && workspaceStartupState === "ready" && remoteWorkspaceLoadSettled;
+	const pendingSessionDeepLinkRef = useRef<string | null>(null);
+	const handleSessionDeepLink = useCallback(
+		(rawUrl: string) => {
+			const link = `ao://${rawUrl.slice("ao-app://".length)}`;
+			const artifact = parseArtifactLink(link);
+			const target = parseSessionLink(link) ?? artifact;
+			const workspaces = workspacesRef.current;
+			const remoteWorkspaces = remoteWorkspacesRef.current;
+			// Resolve the session and its owning workspace from the same list:
+			// a local and a remote project can share an id, and the workspace
+			// supplies the hostId for the route and artifact requests.
+			const resolvedLocal = target ? resolveSessionLink(link, workspaces) : undefined;
+			const resolvedRemote = target ? resolveSessionLink(link, remoteWorkspaces) : undefined;
+			if (resolvedLocal && resolvedRemote) {
+				// Session ids are <project>-<n> per daemon, so a paired machine
+				// running the same repo can host a session with the same id. The
+				// URL carries no host, so honoring either side is a guess that
+				// can open the wrong session — refuse instead.
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionAmbiguous"));
+				return;
+			}
+			const resolved = resolvedLocal ?? resolvedRemote;
+			const workspace = resolvedLocal
+				? workspaces.find((entry) => entry.id === resolvedLocal.projectId)
+				: resolvedRemote
+					// Hosts merge into one list and can share an id (standalone), so
+					// the workspace must be the one holding the resolved session.
+					? remoteWorkspaces.find((entry) => entry.id === resolvedRemote.projectId && entry.sessions.some((session) => session.id === resolvedRemote.sessionId))
+					: undefined;
+			if (!resolved || !workspace) {
+				// A failed host query settles the gate with that host's projects
+				// holding empty session lists, so a miss on such a project is
+				// "could not load", not "does not exist" (CodeRabbit round 4).
+				const missOnFailedHost = target !== undefined && remoteFailedHostIds.some((hostId) =>
+					remoteWorkspacesRef.current.some((entry) => entry.hostId === hostId && entry.id === target.projectId));
+				useUiStore.getState().showGlobalToast(t(missOnFailedHost ? "deepLink.sessionHostUnavailable" : "deepLink.sessionNotFound"));
+				return;
+			}
+			// Same refusal as in-app ao:// links; a terminated session's
+			// artifact files are still served.
+			if (resolved.isTerminated && !artifact) {
+				useUiStore.getState().showGlobalToast(t("deepLink.sessionTerminated", { sessionId: resolved.sessionId }));
+				return;
+			}
+			if (artifact) useUiStore.getState().requestWorkspaceFileOpen(resolved.sessionId, artifact.path, workspace.hostId, "artifact");
+			void navigate(sessionNavigateTarget(resolved.projectId, resolved.sessionId, workspace.hostId));
+		},
+		[navigate, remoteFailedHostIds, t],
+	);
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));
-		const disposeNext = aoBridge.app.onNextSessionShortcut(() => navigateSession(1));
+		return aoBridge.app.onOpenSessionDeepLink((rawUrl) => {
+			if (!sessionDeepLinksReady) {
+				pendingSessionDeepLinkRef.current = rawUrl;
+				return;
+			}
+			handleSessionDeepLink(rawUrl);
+		});
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
+	useEffect(() => {
+		if (!sessionDeepLinksReady) return;
+		const pending = pendingSessionDeepLinkRef.current;
+		if (!pending) return;
+		pendingSessionDeepLinkRef.current = null;
+		handleSessionDeepLink(pending);
+	}, [handleSessionDeepLink, sessionDeepLinksReady]);
+
+	useEffect(() => {
+		const disposePrevious = onDedicatedShortcut("previous-session", (handler) => aoBridge.app.onPreviousSessionShortcut(handler), () => navigateSession(-1));
+		const disposeNext = onDedicatedShortcut("next-session", (handler) => aoBridge.app.onNextSessionShortcut(handler), () => navigateSession(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -1418,6 +1631,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			initializeProjectRepository,
 			openRemoteProjectSettings: (hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
 			openProject,
+			remoteHosts,
+			removeProject,
+			retryRemoteHosts,
 			validateImport,
 		}),
 		[
@@ -1427,6 +1643,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			initializeProjectRepository,
 			openProjectSettings,
 			openProject,
+			remoteHosts,
+			removeProject,
+			retryRemoteHosts,
 			validateImport,
 			workspaceStartupState,
 		],
@@ -1457,7 +1676,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
+				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonIsReady && harnessUpdateChecksDue} />}
 				<TrayRuntime />
 				<SharedWithYouNotifier />
 				{isDragActive ? (
@@ -1477,8 +1696,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					</div>
 				) : null}
 				<NewTaskNavigator />
+				<FirstRunOnboarding />
+				<GuidedTour />
+				<ArchiveModalHost />
 				<GlobalToast />
 				<RestartToUpdateDialog />
+				<SessionImportDialog />
 				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
@@ -1505,6 +1728,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					isLinux && "platform-linux",
 					isFullScreen && "native-fullscreen",
 				)}
+				inert={onboardingCoversShell}
 			>
 				{/* Windows-only custom title bar (sidebar toggle + File/Edit/View/…
             menu); paints the chrome the frameless window drops. Renders null on
@@ -1516,9 +1740,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<SidebarProvider
 					className="min-h-0 flex-1 flex-col overflow-x-hidden"
 					keyboardShortcut={false}
-					onOpenChange={(open) => {
-						if (open !== isSidebarOpen) toggleSidebar();
-					}}
+					onOpenChange={handleSidebarOpenChange}
 					open={!isStartupLoading && isSidebarOpen}
 					style={
 						{
@@ -1547,14 +1769,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						remoteHosts={remoteHosts}
 						onCreateRemoteProject={createRemoteProject}
 						onInitializeRemoteProject={initializeRemoteProject}
-						onOpenRemoteProject={(hostId, projectId) => { void navigate(projectNavigateTarget(projectId, hostId)); }}
-						onOpenRemoteOrchestrator={(hostId, projectId) => { void openRemoteProjectOrchestrator(hostId, projectId); }}
-						onConfigureRemoteProject={(hostId, projectId) => openProjectSettings(projectId, hostId)}
-						onRemoveRemoteProject={removeRemoteProject}
-						onRetryRemoteHosts={() => {
-							void refreshRemoteHosts();
-							void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
-						}}
+						onOpenRemoteProject={openRemoteProjectFromSidebar}
+						onOpenRemoteOrchestrator={openRemoteOrchestratorFromSidebar}
+						onConfigureRemoteProject={configureRemoteProjectFromSidebar}
+						onRemoveRemoteProject={removeRemoteProjectFromSidebar}
+						onRetryRemoteHosts={retryRemoteHosts}
 						remoteWorkspaces={remoteWorkspaces}
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>
@@ -1570,6 +1789,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}
 								startingSteps={startingSteps}
 								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
+								startingHarness={startingWorkspace?.orchestratorAgent ?? startingOrchestratorSession?.provider}
 							/>
 							<SwipeNavigation containerRef={centerPaneRef} navigation={settingsPage?.navigation ?? {
 								canGoBack: !isHomeRoute && router.history.canGoBack(),

@@ -3,12 +3,13 @@ import { AccessibilityInfo, Platform } from "react-native";
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
 import { configForEndpoint } from "./connect";
-import { isValidPort, portError } from "./connectionFields";
+import { manualAddressError, resolveManualAddress } from "./connectionFields";
 import { classifyConnectionFailure, describeConnectionFailure, isLocalNetworkHost } from "./connectionError";
 import { probeEndpoint, probeIdentity } from "./connectRuntime";
-import { normalizeServerHost } from "./endpoints";
 import { haptics } from "./haptics";
 import { renameHost, saveHost, setActiveHost, type Host } from "./hosts";
+import { isPairingSecret } from "./deviceToken";
+import { pairThisDevice } from "./deviceTokenRuntime";
 import { setLocalNetworkConfirmed } from "./localNetworkStore";
 import { AccountManagedHostError, adoptManualConnection, DifferentMachineError, persistManualHostEdit } from "./manualConnect";
 import { IncompatibleHostVersionError } from "./race";
@@ -41,11 +42,13 @@ export type ManualConnectFailure = {
  * legacy mux port is unused against the Go daemon, so it stays hidden.
  */
 export function useManualConnect({ onConnected, onBusyChange, editingHost, editingEndpointIndex = 0 }: ManualConnectProps) {
-	// New pairings start blank; editing preloads only the pairing the user selected.
-	const [cfg, setCfg] = useState<ServerConfig>(() => {
-		const endpoint = editingHost?.endpoints[editingEndpointIndex];
-		return endpoint ? configForEndpoint(endpoint, editingHost.token, editingHost.id) : { ...DEFAULT_CONFIG, password: editingHost?.token ?? "" };
-	});
+	// New pairings start blank, the port too: an empty port follows the address
+	// (443 for TLS, the Connect Mobile port otherwise). Editing preloads only the
+	// pairing the user selected, and an unchanged address keeps how it connects.
+	const saved = editingHost?.endpoints[editingEndpointIndex];
+	const [cfg, setCfg] = useState<ServerConfig>(() => saved && editingHost
+		? configForEndpoint(saved, editingHost.token, editingHost.id)
+		: { ...DEFAULT_CONFIG, httpPort: "", password: editingHost?.token ?? "" });
 	const [machineName, setMachineName] = useState(editingHost?.name ?? "");
 	const [busy, setBusy] = useState(false);
 	useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
@@ -56,22 +59,20 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		setCfg((prev) => ({ ...prev, [key]: value }));
 		setFailure(null);
 	};
-	const setSecure = (secure: boolean) => {
-		setCfg((prev) => ({ ...prev, secure }));
-		setFailure(null);
-	};
-
 	async function connect() {
+		const address = resolveManualAddress(cfg.host, cfg.httpPort, saved);
+		if (!address.ok) return;
 		setBusy(true);
 		setFailure(null);
-		const target = { ...cfg, host: normalizeServerHost(cfg.host), httpPort: cfg.httpPort.trim() };
+		const target = { ...cfg, host: address.host, httpPort: address.port, secure: address.secure };
 		try {
 			if (editingHost) {
-				await persistManualHostEdit(editingHost, target, machineName, editingEndpointIndex, {
+				await persistManualHostEdit(editingHost, cfg, machineName, editingEndpointIndex, {
 					probe: (endpoint) => probeEndpoint(endpoint, new AbortController().signal),
 					ping: pingServer,
 					saveHost,
 					renameHost,
+					pair: (config) => pairThisDevice(config, { fresh: true }),
 				});
 				if (isLocalNetworkHost(target.host)) void setLocalNetworkConfirmed();
 				haptics.success();
@@ -88,19 +89,28 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 			// and the daemon locks a device out for a minute after 5 failed auths,
 			// so a persisted wrong password locks the user out on its own in ~40s,
 			// with no further input from them.
-			await pingServer(target);
+			let connection = target;
+			let fallbackToken: string | undefined;
+			if (isPairingSecret(target.password)) {
+				const paired = await pairThisDevice({ ...target, ...(hostId ? { hostId } : {}) }, { fresh: true });
+				if (paired.kind === "paired") {
+					connection = { ...target, password: paired.token };
+					if (paired.credential === "password") fallbackToken = target.password;
+				}
+			}
+			await pingServer(connection);
 			// Reaching a LAN address proves iOS granted Local Network access, so a
 			// later scan that reaches nothing can say so at once (localNetworkWait).
 			if (isLocalNetworkHost(target.host)) void setLocalNetworkConfirmed();
-			await saveConfig(target);
+			await saveConfig(connection);
 			// Store it as a machine and select it. Writing only the legacy config
 			// left resolution reconnecting the previously active machine on the
 			// next launch, so a manual connection silently did not stick.
-			await adoptManualConnection(target, {
+			await adoptManualConnection(connection, {
 				identity: async () => hostId,
 				saveHost,
 				setActiveHost,
-			}, machineName);
+			}, machineName, fallbackToken);
 			mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "manual" });
 			haptics.success();
 			onConnected();
@@ -116,22 +126,21 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		}
 	}
 
-	const validPort = isValidPort(cfg.httpPort);
-	const canConnect = !!machineName.trim() && !!cfg.host.trim() && validPort;
+	const address = resolveManualAddress(cfg.host, cfg.httpPort, saved);
+	const canConnect = !!machineName.trim() && address.ok;
 	const editing = !!editingHost;
 	// What Connect is waiting for, said beside it: a disabled button alone does
-	// not say a name is required. A bad port has its own error.
+	// not say a name is required. A bad port or address has its own error.
 	const missing = [!machineName.trim() && "a name", !cfg.host.trim() && "a host"].filter(Boolean);
 	const connectHint = missing.length ? `Add ${missing.join(" and ")} to ${editing ? "save" : "connect"}.` : undefined;
 	return {
 		cfg,
 		setField,
-		setSecure,
 		machineName,
 		setMachineName,
 		busy,
 		failure,
-		portError: portError(cfg.httpPort),
+		portError: manualAddressError(cfg.host, cfg.httpPort, saved),
 		canConnect,
 		connectHint,
 		connect,
@@ -151,9 +160,10 @@ function connectFailure(error: unknown, target: ServerConfig, editing: boolean):
 		host: target.host,
 		port: target.httpPort,
 		platform: Platform.OS,
+		secure: target.secure,
 	});
 	return {
-		message: editing && kind === "auth" ? "That password was rejected. Check it and try again." : copy.message,
+		message: editing && kind === "auth" ? "That code or password was rejected. Get a new code and try again." : copy.message,
 		field: kind === "auth" ? "password" : "host",
 		showLocalNetworkHint: copy.showLocalNetworkHint,
 	};

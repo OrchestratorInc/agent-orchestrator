@@ -82,7 +82,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	path := filepath.Join(dir, standingInstructionsName)
 	if data, err := os.ReadFile(path); err == nil { //nolint:gosec // caller-owned workspace path
 		if !strings.Contains(string(data), standingInstructionsMark) {
-			return fmt.Errorf("codewhale.GetAgentHooks: refusing to overwrite non-AO file at %s", path)
+			return fmt.Errorf("codewhale.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s", path)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("codewhale.GetAgentHooks: read standing instructions: %w", err)
@@ -140,20 +140,33 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: create runtime config directory: %w", err)
 	}
-	runtimeDir := filepath.Join(dir, "launches", launchID, "runtime")
+	runtimeDir, err := p.nativeRestoreRuntimeDir(ctx, cfg, cfg.NativeSessionID, cfg.ImportConfigDir, filepath.Join(dir, "launches", launchID, "runtime"))
+	if err != nil {
+		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: select native runtime: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(runtimeDir), 0o750); err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: create launch metadata directory: %w", err)
 	}
 	sessionsDir, err := codewhaleSessionsDir(cfg.WorkspacePath, cfg.Env)
+	if cfg.NativeSessionID != "" {
+		var root string
+		root, err = p.nativeRestoreConfigDir(ctx, cfg)
+		if err == nil {
+			sessionsDir = filepath.Join(root, "sessions")
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: resolve sessions directory: %w", err)
 	}
-	locator := nativeSessionLocator{SessionsDir: sessionsDir, RuntimeDir: runtimeDir}
+	locator := nativeSessionLocator{SessionsDir: sessionsDir, RuntimeDir: runtimeDir, SessionID: cfg.NativeSessionID}
 	locatorData, err := json.Marshal(locator)
 	if err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: encode native session locator: %w", err)
 	}
 	locatorPath := nativeSessionLocatorPath(dataDir, sessionID, launchID)
+	if err := os.MkdirAll(filepath.Dir(locatorPath), 0o750); err != nil {
+		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: create launch locator directory: %w", err)
+	}
 	if err := hookutil.AtomicWriteFile(locatorPath, locatorData, 0o600); err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: write native session locator: %w", err)
 	}

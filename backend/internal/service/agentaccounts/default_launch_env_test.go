@@ -3,6 +3,8 @@ package agentaccounts
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -57,5 +59,32 @@ func TestDefaultLaunchEnvLeavesComputerLoginUnchanged(t *testing.T) {
 		if err != nil || len(env) != 0 {
 			t.Fatalf("computer login env = %v, error = %v", env, err)
 		}
+	}
+}
+
+type fakeCodex struct{ fakeClaude }
+
+func (*fakeCodex) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderCodex }
+
+func TestCustomCodexModelProviderStartsOnSignedOutDefault(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	store := &memStore{bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{&fakeCodex{}}, t.TempDir(), nil, nil)
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.BindSession(ctx, "openai", domain.HarnessCodex, ""); !errors.Is(err, ports.ErrAgentAccountDefaultUnusable) {
+		t.Fatalf("signed-out default with the OpenAI provider: %v", err)
+	}
+
+	config := "model_provider = \"litellm\"\n[model_providers.litellm]\nenv_key = \"LITELLM_API_KEY\"\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	device := domain.DeviceAgentAccountID(domain.AgentAccountProviderCodex)
+	if err := svc.BindSession(ctx, "litellm", domain.HarnessCodex, ""); err != nil || store.bindings["litellm"] != device {
+		t.Fatalf("bind with a custom provider = %q, %v; want %q", store.bindings["litellm"], err, device)
 	}
 }

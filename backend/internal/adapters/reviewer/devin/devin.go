@@ -85,7 +85,7 @@ func initialMessage(inv ports.ReviewInvocation) (string, error) {
 		return "", errors.New("devin reviewer: system prompt file is required")
 	}
 	return fmt.Sprintf(
-		"Read and follow the AO reviewer role in `%s`, then %s",
+		"Read and follow the Orchestrator reviewer role in `%s`, then %s",
 		filepath.ToSlash(inv.SystemPromptFile),
 		strings.TrimSpace(inv.Prompt),
 	), nil

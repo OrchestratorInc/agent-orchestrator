@@ -3,7 +3,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import GitCommitHorizontal from "lucide-react-native/icons/git-commit-horizontal";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { cancelSessionReview, getSession, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, sessionTitle, triggerSessionReview, type DashboardSession, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
+import { sessionTitle, type DashboardSession, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { userFacingError } from "../../lib/connectionError";
 import { AppSymbol } from "../../lib/AppSymbol";
@@ -17,9 +17,12 @@ import { useOpenPage } from "../../lib/pageNavigation";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { usePressFeedback } from "../../lib/pressFeedback";
 import { refreshControlColors } from "../../lib/refreshControlColors";
+import { useReviewBackend } from "../../lib/reviewBackend";
 import { ReviewActionButton } from "../../lib/review-action-button";
-import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
+import { reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit, workerRouteForSession } from "../../lib/reviewView";
+import { useCloud } from "../../lib/cloud/CloudProvider";
+import { isCloudHost } from "../../lib/cloud/mapping";
 import { HostScope, useApp } from "../../lib/store";
 import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -47,7 +50,9 @@ function ReviewDetailContent() {
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const { sessionId, prUrl, prNumber, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string; hostId?: string }>();
-	const { config, sessions, currentHostId, restore } = useApp();
+	const { sessions, currentHostId, restore } = useApp();
+	// The paired machine's daemon, or Orchestrator Cloud for a cloud worker.
+	const { backend, signedOut } = useReviewBackend();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const listedWorker = sessions.find((session) => session.id === sessionId);
 	// The board poll holds live workers only on a daemon that pages its archive,
@@ -59,11 +64,11 @@ function ReviewDetailContent() {
 	const listed = Boolean(listedWorker);
 	useEffect(() => {
 		if (listed) { setReadWorker(undefined); return; }
-		if (!hostMatches || !config || !sessionId) return;
+		if (!hostMatches || !backend || !sessionId) return;
 		let current = true;
-		void getSession(config, sessionId).then((read) => read, () => null).then((read) => { if (current) setReadWorker(read); });
+		void backend.worker(sessionId).then((read) => read, () => null).then((read) => { if (current) setReadWorker(read); });
 		return () => { current = false; };
-	}, [config, hostMatches, listed, sessionId]);
+	}, [backend, hostMatches, listed, sessionId]);
 	const worker = listedWorker ?? readWorker ?? undefined;
 	const autoReviewEnabled = worker?.autoReviewEnabled === true;
 	const [data, setData] = useState<SessionReviews>();
@@ -85,22 +90,40 @@ function ReviewDetailContent() {
 	const rowFeedback = usePressFeedback("row");
 	const dismissFeedback = usePressFeedback("icon");
 	const latestLoad = useRef(0);
+	// A Cloud review belongs to one account and organization: another one
+	// (a sign-out, a switch) clears what this page shows and drops its loads still out.
+	const { account: cloudAccount, org: cloudOrg } = useCloud();
+	const scope = isCloudHost(currentHostId) ? `${cloudAccount?.id ?? ""}/${cloudOrg?.id ?? ""}` : "";
+	const shownScope = useRef(scope);
+	useEffect(() => {
+		if (shownScope.current === scope) return;
+		shownScope.current = scope;
+		latestLoad.current++;
+		setData(undefined);
+		setPRs([]);
+		setMergedURL(undefined);
+		setReadWorker(undefined);
+	}, [scope]);
 
+	// The backend on screen: a reload started by an earlier scope's action (a
+	// review requested, a merge) finishing later must not show that scope's review.
+	const shownBackend = useRef(backend);
+	shownBackend.current = backend;
 	const load = useCallback(async (quiet = false) => {
-		if (!hostMatches || !config || !sessionId) return;
+		if (!hostMatches || !backend || !sessionId || shownBackend.current !== backend) return;
 		const request = ++latestLoad.current;
 		if (!quiet) setError("");
 		try {
-			const [next, nextPRs] = await Promise.all([getSessionReviews(config, sessionId), getSessionPR(config, sessionId).catch(() => undefined)]);
-			if (request === latestLoad.current) {
+			const [next, nextPRs] = await Promise.all([backend.reviews(sessionId), backend.pullRequests(sessionId).catch(() => undefined)]);
+			if (request === latestLoad.current && shownBackend.current === backend) {
 				setData(next);
 				if (nextPRs) setPRs(nextPRs);
 				setError("");
 			}
 		} catch (value) {
-			if (!quiet && request === latestLoad.current) setError(userFacingError(value, "Could not load this review."));
+			if (!quiet && request === latestLoad.current && shownBackend.current === backend) setError(userFacingError(value, "Could not load this review."));
 		}
-	}, [config, hostMatches, sessionId]);
+	}, [backend, hostMatches, sessionId]);
 
 	useFocusEffect(useCallback(() => { void load(); }, [load]));
 	const review = reviewForPullRequest(data?.reviews ?? [], prUrl, Number(prNumber) || undefined);
@@ -147,6 +170,7 @@ function ReviewDetailContent() {
 	};
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="git-pull-request" title="Review belongs to another machine" message="Open it from that machine's session." /></View>;
+	if (signedOut) return <View style={styles.center}><EmptyState icon="git-pull-request" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this pull request." /></View>;
 	if (!data && !error) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Loading review" /></View>;
 	if (!data || !review) return <EmptyState icon={error ? "warning" : "git-pull-request"} iconColor={error ? t.red : undefined} title={error ? "Could not load review" : "No review found"} message={error || "Orchestrator has no review state for this pull request yet."} action={<Button title="Try again" icon="refresh" onPress={() => void load()} />} />;
 	const primaryAction = reviewBatchAction(review, data.reviews);
@@ -158,12 +182,12 @@ function ReviewDetailContent() {
 		openPage(destination);
 	};
 	const restoreReviewer = async () => {
-		if (!config || mutation) return;
+		if (!backend?.restoreReviewer || mutation) return;
 		haptics.tap();
 		setMutation("restore");
 		setError("");
 		try {
-			await restoreSessionReviewer(config, sessionId);
+			await backend.restoreReviewer(sessionId);
 			await load();
 		} catch (value) {
 			setError(userFacingError(value, "Could not restore the reviewer."));
@@ -190,27 +214,28 @@ function ReviewDetailContent() {
 		}
 	};
 	const confirmKillReviewer = () => {
-		if (!config || mutation || !data.reviewerHandleId || autoReviewEnabled) return;
+		const kill = backend?.killReviewer;
+		if (!kill || mutation || !data.reviewerHandleId || autoReviewEnabled) return;
 		Alert.alert("Stop reviewer session?", "This closes the persistent reviewer and cancels any review it is currently running. Review history is preserved.", [
 			{ text: "Keep reviewer", style: "cancel" },
 			{ text: "Stop reviewer", style: "destructive", onPress: () => void (async () => {
 				setMutation("kill"); setError("");
-				try { setData(await killSessionReviewer(config, sessionId)); haptics.success(); }
+				try { setData(await kill(sessionId)); haptics.success(); }
 				catch (value) { setError(userFacingError(value, "Could not stop the reviewer session.")); }
 				finally { setMutation(undefined); }
 			})() },
 		]);
 	};
 	const runPrimaryAction = async () => {
-		if (!config || primaryAction === "none" || mutation) return;
+		if (!backend || primaryAction === "none" || mutation) return;
 		haptics.tap();
 		setMutation("review");
 		setError("");
 		setReviewNotice("");
 		try {
-			if (primaryAction === "cancel") await cancelSessionReview(config, sessionId);
+			if (primaryAction === "cancel") await backend.cancel(sessionId);
 			else {
-				const result = await triggerSessionReview(config, sessionId);
+				const result = await backend.trigger(sessionId);
 				if (!result.created) setReviewNotice("This commit has already been reviewed. Push a new commit to run another review.");
 			}
 			await load();
@@ -221,11 +246,11 @@ function ReviewDetailContent() {
 		}
 	};
 	const sendRun = async (run: ReviewRun) => {
-		if (!config || mutation) return;
+		if (!backend || mutation) return;
 		setMutation(`send:${run.id}`);
 		setError("");
 		try {
-			await sendMessage(config, sessionId, formatReviewSummaryMessage(run), { userAuthored: true });
+			await backend.sendRun(sessionId, run);
 			setSentRuns((current) => new Set(current).add(run.id));
 			haptics.success();
 		} catch (value) {
@@ -235,21 +260,24 @@ function ReviewDetailContent() {
 		}
 	};
 
-	const controls = reviewerControls(data, review, sessionId);
+	// Cloud has no reviewer session to restore or stop: its reviewers run as
+	// conversations, opened while there is one.
+	const daemonControls = reviewerControls(data, review, sessionId);
+	const controls = backend?.cloud ? { open: daemonControls.open === "chat" ? "chat" as const : undefined, restore: false, stop: false } : daemonControls;
 	const pr = observedPR && awaitingMerge ? { ...observedPR, state: "merged" as const } : observedPR;
 	const merge = pr ? mergeReadiness(pr) : undefined;
 	const closedPR = pr?.state === "merged" || pr?.state === "closed";
 	const merging = mutation === "merge";
 	// The swipe itself is the confirmation; only the screen reader path asks again.
 	const runMerge = async (): Promise<boolean> => {
-		if (!config || !pr || !merge?.canMerge || (mutation && !merging)) return false;
+		if (!backend || !pr || !merge?.canMerge || (mutation && !merging)) return false;
 		setMutation("merge"); setError("");
-		try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
+		try { await backend.merge(sessionId, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
 		catch (value) { setError(userFacingError(value, `Could not merge PR #${pr.number}.`)); return false; }
 		finally { setMutation(undefined); }
 	};
 	const confirmMerge = () => {
-		if (!config || !pr || !merge?.canMerge || mutation) return;
+		if (!backend || !pr || !merge?.canMerge || mutation) return;
 		Alert.alert(`Merge PR #${pr.number}?`, `This will squash-merge PR #${pr.number} in the remote repository.`, [
 			{ text: "Cancel", style: "cancel" },
 			{ text: "Merge", onPress: () => void runMerge() },

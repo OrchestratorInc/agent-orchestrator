@@ -47,10 +47,13 @@ function MachineEditor({ host, isDefault }: { host: Host; isDefault: boolean }) 
 	const { hostStates, configForHost, reloadConfig, reloadHostMetadata } = useApp();
 	const snapshot = hostStates.find((item) => item.hostId === host.id);
 	const editor = useMachineEditor(host, snapshot?.config ?? configForHost(host.id) ?? undefined, async (draft) => {
-		const { routeChanged } = await saveEnvironmentMachine(host, draft, Platform.OS);
+		const { routeChanged, appearanceError } = await saveEnvironmentMachine(host, draft, Platform.OS);
 		await reloadHostMetadata();
 		// The default machine reconnects over the route it was just given.
 		if (routeChanged && isDefault) void reloadConfig().catch(() => {});
+		// Only the icon failed: what did save is applied above, and the editor
+		// stays open to say so and to try again.
+		if (appearanceError) throw appearanceError;
 	});
 	const [saved, setSaved] = useState(false);
 
@@ -78,7 +81,13 @@ function MachineEditor({ host, isDefault }: { host: Host; isDefault: boolean }) 
 	// Unsaved edits hold the page: no swipe back from it, nor from Settings
 	// around it (a native swipe can't be asked first), and the back button asks
 	// first. A save in flight can't be called back, so it holds too.
-	const holding = !saved && (editor.dirty || saving);
+	//
+	// A landed save leaves through the hold, the way Discard does, instead of
+	// letting go first. Letting go changes the page's header (the back button's
+	// menu follows the hold) in the same commit that pops it, and on Android
+	// react-native-screens then updates a header no longer in its stack and
+	// throws, which blanks the app.
+	const holding = editor.dirty || saving;
 	useEffect(() => {
 		if (!holding) return;
 		const held = [navigation, navigation.getParent()];
@@ -86,13 +95,14 @@ function MachineEditor({ host, isDefault }: { host: Host; isDefault: boolean }) 
 		return () => { for (const screen of held) screen?.setOptions({ gestureEnabled: true }); };
 	}, [holding, navigation]);
 	usePreventRemove(holding, ({ data }) => {
+		if (saved) { navigation.dispatch(data.action); return; }
 		if (saving) return;
 		Alert.alert("Discard changes?", "Your changes to this machine haven't been saved.", [
 			{ text: "Keep editing", style: "cancel" },
 			{ text: "Discard", style: "destructive", onPress: () => navigation.dispatch(data.action) },
 		]);
 	});
-	// Leave once the save has landed. After the hold above, so it has let go.
+	// Leave once the save has landed.
 	useEffect(() => { if (saved) backOr(router, `/settings/machine/${host.id}`); }, [host.id, router, saved]);
 
 	return (

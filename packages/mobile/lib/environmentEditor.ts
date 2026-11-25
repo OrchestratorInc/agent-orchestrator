@@ -1,5 +1,5 @@
 import type { ServerConfig } from "./config";
-import { isValidPort } from "./connectionFields";
+import { resolveManualAddress, type SavedRoute } from "./connectionFields";
 import type { Host } from "./hosts";
 import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 
@@ -45,22 +45,26 @@ export function machineEditDraft(host: Host, activeConfig?: ServerConfig | null)
 	return { machineName: host.name, appearance: machineAppearance(host), config: editConfig(host, endpointIndex), endpointIndex };
 }
 
-/** Whether the draft differs from what it started from, so leaving would lose something. */
+/**
+ * Whether the draft differs from what it started from, so leaving would lose
+ * something. TLS is not edited: the address decides it when the route is saved.
+ */
 export function isDraftDirty(initial: EnvironmentMachineDraft, draft: EnvironmentMachineDraft): boolean {
 	return draft.machineName !== initial.machineName ||
 		draft.appearance.symbol !== initial.appearance.symbol ||
 		draft.config.host !== initial.config.host ||
 		draft.config.httpPort !== initial.config.httpPort ||
-		Boolean(draft.config.secure) !== Boolean(initial.config.secure) ||
 		draft.config.password !== initial.config.password;
 }
 
-export function canSaveDraft(draft: EnvironmentMachineDraft): boolean {
-	return Boolean(draft.machineName.trim() && draft.config.host.trim() && isValidPort(draft.config.httpPort));
+/** `saved` is the route being edited: left as it is, it never blocks a rename. */
+export function canSaveDraft(draft: EnvironmentMachineDraft, saved?: SavedRoute): boolean {
+	return Boolean(draft.machineName.trim()) && resolveManualAddress(draft.config.host, draft.config.httpPort, saved).ok;
 }
 
 /** A save the machine refused, said against the field it is about. */
 export class MachineSaveError extends Error {
+	readonly code: string = "MACHINE_SAVE_ERROR";
 	constructor(message: string, readonly field: "host" | "password") {
 		super(message);
 		this.name = "MachineSaveError";

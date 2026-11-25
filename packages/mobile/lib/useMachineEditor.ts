@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { AccessibilityInfo } from "react-native";
 import type { ServerConfig } from "./config";
-import { portError } from "./connectionFields";
+import { manualAddressError } from "./connectionFields";
 import { canSaveDraft, isDraftDirty, MachineSaveError, machineEditDraft, type EnvironmentMachineDraft } from "./environmentEditor";
 import { haptics } from "./haptics";
 import type { Host } from "./hosts";
@@ -31,7 +31,7 @@ export function useMachineEditor(host: Host, activeConfig: ServerConfig | undefi
 
 	const dirty = isDraftDirty(initial, draft);
 	// Save waits for a change, as a form's Done does.
-	const canSave = dirty && canSaveDraft(draft) && !saving;
+	const canSave = dirty && canSaveDraft(draft, host.endpoints[draft.endpointIndex]) && !saving;
 
 	/** Resolves true once the draft is saved. */
 	async function save(): Promise<boolean> {
@@ -64,7 +64,7 @@ export function useMachineEditor(host: Host, activeConfig: ServerConfig | undefi
 		canSave,
 		saving,
 		failure,
-		portError: portError(draft.config.httpPort),
+		portError: manualAddressError(draft.config.host, draft.config.httpPort, host.endpoints[draft.endpointIndex]),
 		/** Account sync owns this machine's route and password; only its name and icon edit here. */
 		accountManaged: Boolean(host.accountUserId),
 		setName: (machineName: string) => edit((current) => ({ ...current, machineName })),
@@ -72,7 +72,6 @@ export function useMachineEditor(host: Host, activeConfig: ServerConfig | undefi
 		setHost: setConfig("host"),
 		setPort: setConfig("httpPort"),
 		setPassword: setConfig("password"),
-		setSecure: (secure: boolean) => edit((current) => ({ ...current, config: { ...current.config, secure } })),
 		save,
 	};
 }

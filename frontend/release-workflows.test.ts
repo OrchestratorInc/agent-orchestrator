@@ -173,6 +173,30 @@ run: |
     );
   });
 
+  it("marks artifacts as published builds and hands Sentry source maps to the conductor", async () => {
+    const contents = await readFile(artifactBuilder, "utf8");
+
+    expect(contents).toContain('AO_PUBLISHED_BUILD: "1"');
+    expect(contents).toContain("name: sentry-sourcemaps-${{ matrix.platform }}");
+    expect(contents).toContain("frontend/.vite/renderer/main_window/assets/*.js.map");
+  });
+
+  it("builds the Linux arm64 host package natively in every release build", async () => {
+    const builder = await readFile(artifactBuilder, "utf8");
+    const host = await readFile(path.join(workflowsDirectory, "linux-arm64-host.yml"), "utf8");
+
+    expect(builder).toContain("uses: ./.github/workflows/linux-arm64-host.yml");
+    expect(builder).toContain("needs: [build, host-linux-arm64]");
+    expect(host).toContain("workflow_call:");
+    expect(host).toContain("runs-on: ubuntu-22.04-arm");
+    expect(host).toMatch(/permissions:\s*\n\s*contents:\s*read/);
+    expect(host).not.toContain("${{ secrets.");
+    // setup-self-hosted.sh downloads this exact asset name.
+    expect(host).toContain("name: linux-arm64-host\n          path: frontend/dist-artifact/ao-host-linux-arm64.tar.gz");
+    expect(host).toContain("name: digest-linux-arm64-host");
+    expect(host).toContain("github.event.pull_request.number || github.run_id");
+  });
+
   it("takes Teams for stable builds only from the VITE_AO_TEAMS repository variable", async () => {
     const contents = await readFile(artifactBuilder, "utf8");
 

@@ -1,12 +1,17 @@
 import { apiErrorException } from "../../lib/api-error-exception";
-import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ChevronRight, Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "@/components/app-icons";
+import { useQueryClient } from "@tanstack/react-query";
+import { motion, useReducedMotion } from "motion/react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { subscribeArtifactFileChanges } from "../../lib/artifact-file-events";
+import { aoBridge } from "../../lib/bridge";
 import {
 	clampRenderHeight,
 	measuredRenderHeight,
 	readRenderContentHeight,
+	readRenderImageRequest,
 	readRenderLinkRequest,
 	readRenderTheme,
 	renderFileName,
@@ -22,9 +27,13 @@ import type { ArtifactRef, RenderRef } from "../../types/conversation";
 import { BrowserIcon } from "../icons";
 import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
+import { Pressable } from "../ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { useChatArtifactLinks, useChatRemoteHost } from "./chat-image-source";
+import { ChatImageDialog } from "./ChatImage";
+import { useChatArtifactFiles, useChatArtifactLinks, useChatRemoteHost, useChatRemoteSession } from "./chat-image-source";
 import { useChatBrowserOpen } from "./ChatMarkdown";
+
+type RenderImage = { src: string; alt: string };
 
 /** What a frame shows: a page the agent rendered, or an HTML artifact it reported. */
 interface FramePage {
@@ -41,6 +50,8 @@ interface FramePage {
 	 * fonts work; the daemon refuses that origin, and it is not the app's.
 	 */
 	frameUrl?: string;
+	/** A remote host's render on its proxy's render origin; framed with the same sandbox as the daemon's route. */
+	remoteUrl?: string;
 	/**
 	 * Caps the inline frame and scrolls the page inside it. An artifact is an
 	 * ordinary document, not written to the render rules, so a page sized to
@@ -53,6 +64,22 @@ interface FramePage {
 // page up to ARTIFACT_FRAME_MAX_HEIGHT, past which it scrolls inside the frame.
 const ARTIFACT_FRAME_HEIGHT = 400;
 const ARTIFACT_FRAME_MAX_HEIGHT = 640;
+
+/**
+ * Artifact cards the reader folded, by card. A long chat virtualizes turns that
+ * scroll away, so a card remounts; starting from the remembered fold keeps it
+ * shut instead of reopening the page each time it comes back into view.
+ */
+const foldedArtifacts = new Set<string>();
+/** Bounds the memory above; the oldest entries go first. */
+const REMEMBERED_FOLDS = 200;
+
+function rememberFold(key: string, folded: boolean) {
+	foldedArtifacts.delete(key);
+	if (!folded) return;
+	foldedArtifacts.add(key);
+	if (foldedArtifacts.size > REMEMBERED_FOLDS) foldedArtifacts.delete(foldedArtifacts.values().next().value as string);
+}
 
 /** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
 function useRenderTheme(): RenderTheme {
@@ -87,11 +114,13 @@ function RenderDocument({
 	page,
 	displayMode,
 	wrapContent,
+	onOpenImage,
 	className,
 }: {
 	page: FramePage;
 	displayMode: RenderDisplayMode;
 	wrapContent: boolean;
+	onOpenImage: (image: RenderImage) => void;
 	className?: string;
 }) {
 	const theme = useRenderTheme();
@@ -100,14 +129,16 @@ function RenderDocument({
 	themeRef.current = theme;
 	const wrapContentRef = useRef(wrapContent);
 	wrapContentRef.current = wrapContent;
+	const onOpenImageRef = useRef(onOpenImage);
+	onOpenImageRef.current = onOpenImage;
 	// The daemon can come back on another port, so the src follows the API base
 	// (a frame not yet loaded would otherwise point at a dead port). Theme and
 	// wrapping ride in the fragment only for the first paint; later changes are
 	// posted, so they never reload the page.
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const src = useMemo(
-		() => `${page.frameUrl ?? `${baseUrl}${page.path}`}${renderThemeFragment(themeRef.current, displayMode, page.scrollable, wrapContentRef.current)}`,
-		[baseUrl, page.path, page.frameUrl, displayMode, page.scrollable],
+		() => `${page.frameUrl ?? page.remoteUrl ?? `${baseUrl}${page.path}`}${renderThemeFragment(themeRef.current, displayMode, page.scrollable, wrapContentRef.current)}`,
+		[baseUrl, page.path, page.frameUrl, page.remoteUrl, displayMode, page.scrollable],
 	);
 	const [contentHeight, setContentHeight] = useState<number>();
 	// The frame's width picks its measured first height; read before the first
@@ -140,10 +171,11 @@ function RenderDocument({
 				return;
 			}
 			// Only while the reader is using this frame: a page can post on load.
+			if (document.activeElement !== frame || navigator.userActivation?.isActive === false) return;
 			const url = readRenderLinkRequest(event.data);
-			if (url && document.activeElement === frame && navigator.userActivation?.isActive !== false) {
-				window.open(url, "_blank", "noopener,noreferrer");
-			}
+			if (url) window.open(url, "_blank", "noopener,noreferrer");
+			const image = readRenderImageRequest(event.data);
+			if (image) onOpenImageRef.current(image);
 		};
 		window.addEventListener("message", onMessage);
 		return () => window.removeEventListener("message", onMessage);
@@ -181,16 +213,61 @@ function RenderAction({ label, children, ...props }: ButtonProps & { label: stri
 	);
 }
 
+/** The daemon route of one session artifact file, as a chat artifact card records it. */
+function artifactFileRoute(sessionId: string, path: string): string {
+	return `/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** Where the render is served: its remote host's render origin, or this computer's daemon. */
+function renderUrl(page: FramePage): string {
+	return page.remoteUrl ?? `${getApiBaseUrl()}${page.path}`;
+}
+
 /** The render as the daemon serves it; `?source=1` is the page as the agent wrote it. */
-async function fetchRender(path: string, signal?: AbortSignal): Promise<Response> {
-	const response = await fetch(`${getApiBaseUrl()}${path}`, { signal });
-	if (!response.ok) throw new Error(`render ${path}: HTTP ${response.status}`);
+async function fetchRender(url: string, signal?: AbortSignal): Promise<Response> {
+	const response = await fetch(url, { signal });
+	if (!response.ok) throw new Error(`render ${url}: HTTP ${response.status}`);
 	return response;
+}
+
+/**
+ * A remote host's render on its proxy's render origin. The proxy URL itself is
+ * not framed: its path carries the proxy's token, which the page could read.
+ * undefined while it is looked up, null when the host cannot serve it.
+ */
+function useRemoteRenderUrl(path: string | undefined): string | null | undefined {
+	const remote = useChatRemoteSession();
+	const hostId = remote?.hostId;
+	const sessionId = remote?.sessionId;
+	// The proxy's base changes when it reconnects, and with it the render's origin.
+	const baseUrl = remote?.baseUrl;
+	// A result counts only for the inputs that produced it.
+	const key = JSON.stringify([hostId, sessionId, baseUrl, path]);
+	const [lookup, setLookup] = useState<{ key: string; url: string | null }>();
+	useEffect(() => {
+		if (!sessionId || !path || !hostId || !baseUrl) return;
+		let live = true;
+		aoBridge.remotes.previewUrl(hostId, sessionId, path).then(
+			(next) => {
+				if (live) setLookup({ key, url: /^http:\/\//.test(next) ? next : null });
+			},
+			(error: unknown) => {
+				console.error("remote render url", error);
+				if (live) setLookup({ key, url: null });
+			},
+		);
+		return () => {
+			live = false;
+		};
+	}, [hostId, sessionId, baseUrl, path, key]);
+	if (!sessionId || !path) return undefined;
+	if (!hostId || !baseUrl) return null;
+	return lookup?.key === key ? lookup.url : undefined;
 }
 
 /** The served page, bootstrap included, so the saved file renders on its own. */
 async function saveRender(page: FramePage) {
-	const url = URL.createObjectURL(await (await fetchRender(page.path)).blob());
+	const url = URL.createObjectURL(await (await fetchRender(renderUrl(page))).blob());
 	const link = document.createElement("a");
 	link.href = url;
 	link.download = page.fileName;
@@ -211,19 +288,19 @@ async function saveRenderAsArtifact(render: RenderRef): Promise<string> {
 }
 
 /** The page's HTML as plain text. No highlighting: a page can run to 25 MiB. */
-function RenderSource({ path }: { path: string }) {
+function RenderSource({ url }: { url: string }) {
 	const { t } = useTranslation();
 	// undefined while loading, null when the fetch failed.
 	const [source, setSource] = useState<string | null>();
 	useEffect(() => {
 		const controller = new AbortController();
-		fetchRender(`${path}?source=1`, controller.signal)
+		fetchRender(`${url}?source=1`, controller.signal)
 			.then((response) => response.text())
 			.then(setSource, () => {
 				if (!controller.signal.aborted) setSource(null);
 			});
 		return () => controller.abort();
-	}, [path]);
+	}, [url]);
 	if (source === undefined) {
 		return (
 			<div aria-busy="true" className="flex h-20 items-center justify-center">
@@ -243,6 +320,18 @@ function RenderSource({ path }: { path: string }) {
 	);
 }
 
+/**
+ * Follows a local session's artifact directory while a card's page is missing
+ * from the session's list. A chat event brings the card, not the list, so a page
+ * the agent has just reported can be missing from a list read moments earlier;
+ * the stream rereads the list as it connects and on each change.
+ */
+function FollowArtifactList({ sessionId }: { sessionId: string }) {
+	const queryClient = useQueryClient();
+	useEffect(() => subscribeArtifactFileChanges(sessionId, queryClient), [sessionId, queryClient]);
+	return null;
+}
+
 /** Opens the artifact in the session's contextual Artifacts tab. */
 function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; path: string; onOpen: () => void }) {
 	const { t } = useTranslation();
@@ -260,18 +349,42 @@ function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; pat
 	);
 }
 
-/** A render, or an HTML artifact, inline in its turn and expandable to a dialog sized to the page. */
-export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactRef }) {
+/**
+ * A render, or an HTML artifact, inline in its turn and expandable to a dialog
+ * sized to the page. An artifact's card header folds the page away; `foldKey`
+ * names the card (its activity), so a fold survives a remount without folding
+ * a later report of the same file.
+ */
+export function RenderFrame(props: ({ render: RenderRef } | { artifact: ArtifactRef }) & { foldKey?: string }) {
 	const { t } = useTranslation();
+	const reducedMotion = useReducedMotion();
+	const frameId = useId();
+	const foldKey = "artifact" in props ? `${props.foldKey ?? ""}\n${props.artifact.url}` : undefined;
+	const [folded, setFolded] = useState(() => foldKey !== undefined && foldedArtifacts.has(foldKey));
+	// A card that comes back folded loads its page only once the reader opens it.
+	const [frameMounted, setFrameMounted] = useState(!folded);
+	const toggleFold = () => {
+		const next = !folded;
+		setFolded(next);
+		if (!next) setFrameMounted(true);
+		if (foldKey !== undefined) rememberFold(foldKey, next);
+	};
 	const remoteHost = useChatRemoteHost();
+	const chatArtifacts = useChatArtifactFiles();
+	const cloud = Boolean(chatArtifacts?.cloud);
 	const render = "render" in props ? props.render : undefined;
 	const links = useChatArtifactLinks("artifact" in props ? props.artifact.path : undefined);
+	const remoteUrl = useRemoteRenderUrl(render?.path);
+	// A page renamed since its card was recorded is read from where it is now.
+	const artifactPath = "artifact" in props
+		? links && links.path !== props.artifact.path ? artifactFileRoute(links.sessionId, links.path) : props.artifact.url
+		: undefined;
 	const page: FramePage =
 		"render" in props
-			? { title: props.render.title, path: props.render.path, height: props.render.height, heights: props.render.heights, fileName: renderFileName(props.render.title) }
+			? { title: props.render.title, path: props.render.path, height: props.render.height, heights: props.render.heights, fileName: renderFileName(props.render.title), remoteUrl: remoteUrl ?? undefined }
 			: {
 					title: props.artifact.name,
-					path: props.artifact.url,
+					path: artifactPath ?? props.artifact.url,
 					height: ARTIFACT_FRAME_HEIGHT,
 					fileName: props.artifact.name,
 					scrollable: true,
@@ -282,17 +395,32 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 	const [showSource, setShowSource] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [savingArtifact, setSavingArtifact] = useState(false);
+	const [image, setImage] = useState<RenderImage>();
+	const [imageOpen, setImageOpen] = useState(false);
+	const openImage = (next: RenderImage) => {
+		setImage(next);
+		setImageOpen(true);
+	};
 	const openInBrowserPanel = useChatBrowserOpen();
-	// The local daemon has no copy of a remote host's render, and the remote
-	// proxy URL must not reach the page: its path carries the proxy's capability
-	// token, which the page could read from its own location.
-	if (remoteHost) {
+	// A remote host's HTML artifact has no inline origin here.
+	if (remoteHost && (!render || remoteUrl === null)) {
 		return (
 			<p className="text-xs text-muted-foreground">
 				{page.title} · {t("chat.render.remoteHost")}
 			</p>
 		);
 	}
+	if (remoteHost && !remoteUrl) return <div aria-busy="true" style={{ height: clampRenderHeight(page.height) }} />;
+	// A local chat frames an artifact only from its inline origin: the daemon
+	// refuses frames on the artifact-files route the card records
+	// (ORIGIN_FORBIDDEN). A card whose page the session no longer lists, deleted
+	// since it was shown, says so rather than framing that refusal; one listed
+	// without an inline page (renamed to another kind of file) points to the
+	// Artifacts tab.
+	const unavailable = "artifact" in props && !cloud && !page.frameUrl;
+	// A page deleted while its dialog is open closes the dialog too, which would
+	// otherwise frame that refusal.
+	if (unavailable && expanded) setExpanded(false);
 	const save = () => {
 		setSaving(true);
 		saveRender(page)
@@ -333,7 +461,7 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 	const standaloneUrl = (): string | undefined => "artifact" in props
 		? artifactPreviewUrl
 		: `${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`;
-	const opensStandalone = !("artifact" in props) || artifactPreviewUrl !== undefined;
+	const opensStandalone = !remoteHost && (!("artifact" in props) || artifactPreviewUrl !== undefined);
 	const openStandalone = (open: (url: string) => void) => {
 		const url = standaloneUrl();
 		if (url) open(url);
@@ -353,33 +481,72 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 		<div className="group/render relative min-w-0">
 			{"artifact" in props ? (
 				<div className="flex h-8 items-center gap-1.5 text-xs" data-testid="artifact-card-header">
-					<FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-					<span className="shrink-0 font-medium text-foreground">{t("chat.artifact.label")}</span>
-					<span className="min-w-0 flex-1 truncate text-muted-foreground">{page.title}</span>
+					{/* The header is the fold, like a turn's "Worked for" line; its
+					    chevron stays visible so the card reads as foldable. */}
+					<Pressable
+						aria-expanded={!folded}
+						aria-controls={frameId}
+						onClick={toggleFold}
+						className="group/fold flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						<FileText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+						<span className="shrink-0 font-medium text-foreground">{t("chat.artifact.label")}</span>
+						{/* A flex row never draws this space; it keeps the toggle's name "Artifact <name>". */}{" "}
+						<span className="min-w-0 truncate text-muted-foreground group-hover/fold:text-foreground">{page.title}</span>
+						<ChevronRight
+							aria-hidden="true"
+							className={cn(
+								"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/fold:text-muted-foreground motion-reduce:transition-none",
+								!folded && "rotate-90",
+							)}
+						/>
+					</Pressable>
 					{links && "artifact" in props ? (
-						<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => undefined} />
+						<OpenInPanelAction sessionId={links.sessionId} path={links.path} onOpen={() => undefined} />
 					) : null}
 				</div>
 			) : null}
-			<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} />
-			<div
-				className={cn(
-					"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
-					"artifact" in props ? "top-9" : "top-1",
-				)}
-			>
-				{wrapAction}
-				{browserPanelAction}
-				<RenderAction
-					label={t("chat.render.expand")}
-					onClick={() => {
-						setShowSource(false);
-						setExpanded(true);
-					}}
+			{"artifact" in props ? (
+				<motion.div
+					id={frameId}
+					initial={false}
+					animate={folded ? { height: 0, opacity: 0 } : { height: "auto", opacity: 1 }}
+					transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+					inert={folded}
+					className="overflow-hidden"
 				>
-					<Maximize2 className="size-3.5" />
-				</RenderAction>
-			</div>
+					{!frameMounted ? null : unavailable ? (
+						<>
+							<p className="py-2 text-xs text-muted-foreground">{t(links ? "chat.artifact.notInline" : "chat.artifact.unavailable")}</p>
+							{!links && chatArtifacts ? <FollowArtifactList sessionId={chatArtifacts.sessionId} /> : null}
+						</>
+					) : (
+						<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
+					)}
+				</motion.div>
+			) : (
+				<RenderDocument page={page} displayMode="inline" wrapContent={wrapContent} onOpenImage={openImage} />
+			)}
+			{folded || unavailable ? null : (
+				<div
+					className={cn(
+						"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
+						"artifact" in props ? "top-9" : "top-1",
+					)}
+				>
+					{wrapAction}
+					{browserPanelAction}
+					<RenderAction
+						label={t("chat.render.expand")}
+						onClick={() => {
+							setShowSource(false);
+							setExpanded(true);
+						}}
+					>
+						<Maximize2 className="size-3.5" />
+					</RenderAction>
+				</div>
+			)}
 			<Dialog open={expanded} onOpenChange={setExpanded}>
 				<DialogContent
 					aria-describedby={undefined}
@@ -411,13 +578,13 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 						>
 							<Download className="size-3.5" />
 						</RenderAction>
-						{render ? (
+						{render && !remoteHost ? (
 							<RenderAction label={t("chat.render.saveAsArtifact")} disabled={savingArtifact} onClick={() => saveArtifact(render)}>
 								<FilePlus className="size-3.5" />
 							</RenderAction>
 						) : null}
 						{links && "artifact" in props ? (
-							<OpenInPanelAction sessionId={links.sessionId} path={props.artifact.path} onOpen={() => setExpanded(false)} />
+							<OpenInPanelAction sessionId={links.sessionId} path={links.path} onOpen={() => setExpanded(false)} />
 						) : null}
 						{browserPanelAction}
 						{opensStandalone ? (
@@ -430,12 +597,13 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 						) : null}
 					</div>
 					{!expanded ? null : showSource ? (
-						<RenderSource path={page.path} />
+						<RenderSource url={renderUrl(page)} />
 					) : (
-						<RenderDocument page={page} displayMode="fullscreen" wrapContent={wrapContent} className="max-h-[calc(100svh-8rem)]" />
+						<RenderDocument page={page} displayMode="fullscreen" wrapContent={wrapContent} onOpenImage={openImage} className="max-h-[calc(100svh-8rem)]" />
 					)}
 				</DialogContent>
 			</Dialog>
+			{image ? <ChatImageDialog open={imageOpen} onOpenChange={setImageOpen} url={image.src} label={image.alt} /> : null}
 		</div>
 	);
 }

@@ -2,8 +2,10 @@ import { act, render } from "@testing-library/react";
 import { useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwipeNavigation } from "./SwipeNavigation";
+import { ChatMarkdown } from "./chat/ChatMarkdown";
 import { useUiStore } from "../stores/ui-store";
 import { useCanGoForward } from "./TitlebarNav";
+import { claimSwipe } from "../lib/swipe-ownership";
 import type { ScrollPhase } from "../../shared/scroll-phase";
 
 type HistoryListener = (event: { location: { state: { __TSR_index: number } }; action: { type: string } }) => void;
@@ -83,6 +85,24 @@ describe("SwipeNavigation", () => {
 		vi.clearAllMocks();
 		listeners.length = 0;
 		phaseListeners.clear();
+	});
+
+	it("clips the parked pucks in a box that cannot be scrolled", () => {
+		const { getByTestId } = render(<Harness />);
+		const pane = getByTestId("pane");
+		const pucks = pane.querySelectorAll("[data-swipe-puck]");
+		expect(pucks).toHaveLength(2);
+		for (const puck of pucks) {
+			const box = puck.parentElement;
+			// overflow-hidden would still let scrollIntoView or focus scroll the
+			// pane by the pucks' overhang and slide it under the sidebar.
+			expect(box).toHaveAttribute("data-swipe-pucks");
+			expect(box?.className).toContain("overflow-clip");
+			expect(box?.className).not.toContain("overflow-hidden");
+			expect(box?.className).toContain("absolute");
+			expect(box?.className).toContain("inset-0");
+			expect(box?.className).toContain("pointer-events-none");
+		}
 	});
 
 	it("goes back after a two-finger swipe right past the threshold", () => {
@@ -321,5 +341,167 @@ describe("SwipeNavigation", () => {
 		scroller.scrollLeft = 50;
 		fingers("up");
 		expect(history.back).not.toHaveBeenCalled();
+	});
+	describe("swipes that belong to other content", () => {
+		let outside: HTMLElement;
+		beforeEach(() => {
+			// A notice or popover portaled to the end of <body>, outside the pane.
+			outside = document.createElement("div");
+			document.body.append(outside);
+		});
+		afterEach(() => outside.remove());
+
+		it("ignores the rest of a swipe that started outside the pane once it lands on the pane", () => {
+			const { getByTestId } = render(<Harness />);
+			const pane = getByTestId("pane");
+			fingers("down");
+			// Swiping a notice away: it slides off, and Chromium sends the rest of the scroll to the pane under the fingers.
+			swipe(outside, drag(-20, 4), 0);
+			swipe(pane, drag(-20, 10), 0);
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+			expect(pane.querySelector('[data-swipe-puck="back"]')).not.toHaveAttribute("data-armed");
+		});
+
+		it("ignores the tail of such a swipe without native finger phases", () => {
+			const { getByTestId } = render(<Harness />);
+			swipe(outside, drag(-20, 4), 0);
+			swipe(getByTestId("pane"), drag(-20, 10));
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("ignores momentum from such a swipe that arrives as a new scroll right after the lift", () => {
+			const { getByTestId } = render(<Harness />);
+			fingers("down");
+			swipe(outside, drag(-20, 4), 0);
+			fingers("up");
+			fingers("down");
+			swipe(getByTestId("pane"), drag(-20, 10), 0);
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("navigates on the next swipe once that one has ended", () => {
+			const { getByTestId } = render(<Harness />);
+			fingers("down");
+			swipe(outside, drag(-20, 4), 0);
+			fingers("up");
+			act(() => vi.advanceTimersByTime(300));
+			fingers("down");
+			swipe(getByTestId("pane"), drag(-20, 8), 0);
+			fingers("up");
+			expect(history.back).toHaveBeenCalledTimes(1);
+		});
+
+		it.each([
+			["a swipe-to-dismiss card or code block", undefined, true],
+			["a tab strip or attachment row", "edge-fade edge-fade-x", false],
+			["the Browser panel", "browser-panel", false],
+			["a terminal", "xterm", false],
+		] as const)("ignores a swipe that starts over %s inside the pane", (_name, className, marked) => {
+			const { getByTestId } = render(
+				<Harness>
+					<div className={className} data-no-swipe-nav={marked ? "" : undefined}><span data-testid="inner">content</span></div>
+				</Harness>,
+			);
+			const pane = getByTestId("pane");
+			fingers("down");
+			swipe(getByTestId("inner"), drag(-20, 4), 0);
+			swipe(pane, drag(-20, 10), 0);
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			["a finished code block", "```ts\nconst a = 1;\n```\n\nmore", "pre code"],
+			["a code block still being written", "Here:\n\n```ts\nconst a = 1;", "pre code"],
+			["a table", "| a | b |\n|---|---|\n| 1 | 2 |\n\nmore", "td"],
+			["a display formula", "$$\nx^2\n$$\n\nmore", '[data-math="display"]'],
+		] as const)("ignores an edge swipe that starts over %s while streaming", (_name, text, selector) => {
+			useUiStore.setState({ renderMath: true });
+			try {
+				const { container, getByTestId } = render(<Harness><ChatMarkdown streaming text={text} /></Harness>);
+				const target = container.querySelector(selector);
+				expect(target).not.toBeNull();
+				fingers("down");
+				swipe(target!, drag(-20, 4), 0);
+				swipe(getByTestId("pane"), drag(-20, 10), 0);
+				fingers("up");
+				expect(history.back).not.toHaveBeenCalled();
+			} finally {
+				useUiStore.setState({ renderMath: false });
+			}
+		});
+
+		it("stops once a handler inside the pane claims the swipe", () => {
+			const { getByTestId } = render(<Harness><div data-testid="claimer" /></Harness>);
+			const claimer = getByTestId("claimer");
+			claimer.addEventListener("wheel", () => claimSwipe());
+			swipe(claimer, drag(-20, 8));
+			expect(history.back).not.toHaveBeenCalled();
+			// The claim lasts one swipe.
+			swipe(getByTestId("pane"), drag(-20, 8));
+			expect(history.back).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not navigate when the target claims the swipe on its only event", () => {
+			const { getByTestId } = render(<Harness><div data-testid="claimer" /></Harness>);
+			const claimer = getByTestId("claimer");
+			claimer.addEventListener("wheel", () => claimSwipe());
+			fingers("down");
+			swipe(claimer, [[-120, 0]], 0);
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("does not flick back when the target claims the event that decides the flick", () => {
+			const { getByTestId } = render(<Harness><div data-testid="claimer" /></Harness>);
+			const claimer = getByTestId("claimer");
+			claimer.addEventListener("wheel", (event) => {
+				if (event.deltaX === -18) claimSwipe();
+			});
+			fingers("down");
+			swipe(claimer, [...drag(-30, 5), [-27, 0], [-24, 0], [-21, 0], [-18, 0]], 0);
+			expect(history.back).not.toHaveBeenCalled();
+			fingers("up");
+			// Its momentum, arriving as a new scroll over plain content, stays the claimer's.
+			fingers("down");
+			swipe(getByTestId("pane"), drag(-20, 10), 0);
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("keeps the momentum of a swipe that scrolled content on its only event", () => {
+			const { getByTestId } = render(<Harness><div data-testid="scroller" style={{ overflowX: "auto" }} /></Harness>);
+			const scroller = getByTestId("scroller");
+			Object.defineProperties(scroller, {
+				scrollWidth: { value: 800 }, clientWidth: { value: 400 }, scrollLeft: { value: 200, writable: true },
+			});
+			fingers("down");
+			swipe(scroller, [[-150, 0]], 0);
+			scroller.scrollLeft = 50;
+			fingers("up");
+			fingers("down");
+			swipe(getByTestId("pane"), drag(-20, 10), 0);
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("still navigates when a scroll lock prevents the wheel's default", () => {
+			const { getByTestId } = render(<Harness><div data-testid="content" /></Harness>);
+			// A modal's scroll lock (react-remove-scroll) prevents every wheel event that cannot scroll.
+			const lock = (event: Event) => event.preventDefault();
+			document.addEventListener("wheel", lock, { passive: false });
+			try {
+				fingers("down");
+				act(() => {
+					getByTestId("content").dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: -150, deltaMode: 0 }));
+				});
+				fingers("up");
+				expect(history.back).toHaveBeenCalledTimes(1);
+			} finally {
+				document.removeEventListener("wheel", lock);
+			}
+		});
 	});
 });

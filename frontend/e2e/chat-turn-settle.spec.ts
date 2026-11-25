@@ -162,9 +162,10 @@ for (const priorTurns of [1, 30]) {
 
 		expectSteady(frames, "scrollTop");
 		expectSteady(frames, "prompt");
-		// The reply rises into the room its steps left, and only rises.
+		// The reply rises into the room its steps left, and only rises. The steps are
+		// already folded to one summary line while the turn runs, so that room is one row.
 		expectOnlyRising(frames);
-		expect(frames.at(-1)!.reply).toBeLessThan(frames[settled - 1]!.reply - 50);
+		expect(frames.at(-1)!.reply).toBeLessThan(frames[settled - 1]!.reply - 20);
 		// The live row fades out where it was rather than jumping away.
 		const live = frames.slice(settled).flatMap((frame) => (frame.live === null ? [] : [frame.live]));
 		for (const top of live) expect(Math.abs(top - frames[settled - 1]!.live!)).toBeLessThan(1);

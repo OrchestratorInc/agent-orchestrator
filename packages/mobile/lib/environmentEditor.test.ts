@@ -18,6 +18,15 @@ const host: Host = {
 const onTailscale: ServerConfig = { host: "studio.tail123.ts.net", httpPort: "3011", muxPort: "3012", secure: true, password: "secret", hostId: "host-1", endpointKind: "tailscale" };
 
 describe("machine editor draft", () => {
+	it("lets a machine be renamed although its saved address predates the Host checks", () => {
+		const legacy: Host = { ...host, endpoints: [{ kind: "lan", host: "box/ao", port: 3011, secure: false }] };
+		const renamed = { ...machineEditDraft(legacy), machineName: "Box" };
+		expect(canSaveDraft(renamed, legacy.endpoints[0])).toBe(true);
+		expect(canSaveDraft({ ...renamed, config: { ...renamed.config, host: "box/other" } }, legacy.endpoints[0])).toBe(false);
+		const slashed: Host = { ...host, endpoints: [{ kind: "lan", host: "box/ao/", port: 3011, secure: false }] };
+		expect(canSaveDraft({ ...machineEditDraft(slashed), machineName: "Box" }, slashed.endpoints[0])).toBe(true);
+	});
+
 	it("edits the route the phone is connected over, else the first", () => {
 		expect(editableEndpointIndex(host, onTailscale)).toBe(1);
 		expect(editableEndpointIndex(host)).toBe(0);
@@ -44,5 +53,11 @@ describe("machine editor draft", () => {
 		expect(canSaveDraft({ ...draft, machineName: "  " })).toBe(false);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, host: "" } })).toBe(false);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, httpPort: "70000" } })).toBe(false);
+		// An empty port follows the address (443 for TLS, 3011 otherwise), whatever
+		// the route was saved with: TLS is no longer the draft's to decide.
+		expect(canSaveDraft({ ...draft, config: { ...draft.config, httpPort: "" } })).toBe(true);
+		expect(canSaveDraft({ ...draft, config: { ...draft.config, secure: false, httpPort: "" } })).toBe(true);
+		expect(canSaveDraft({ ...draft, config: { ...draft.config, host: "192.168.1.24:3011", httpPort: "" } })).toBe(true);
+		expect(canSaveDraft({ ...draft, config: { ...draft.config, host: "studio.tail123.ts.net:443" } })).toBe(false);
 	});
 });

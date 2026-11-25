@@ -246,7 +246,7 @@ describe("ScriptRunPanel", () => {
 		])[0];
 		const { container } = render(<ScriptRunPanel collapsible run={run} />);
 		expect(screen.getByText("Did not run")).toBeInTheDocument();
-		expect(screen.getByText("AO could not run Cleanup before deleting the sandbox, so none of its steps ran.")).toBeInTheDocument();
+		expect(screen.getByText("Orchestrator could not run Cleanup before deleting the sandbox, so none of its steps ran.")).toBeInTheDocument();
 		expect(steps().map((row) => row.getAttribute("data-status"))).toEqual(["skipped", "skipped"]);
 		expect(container.querySelector(".animate-spin")).toBeNull();
 		expect(screen.queryByText(/did not resume/)).toBeNull();

@@ -1,5 +1,5 @@
 import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, View, type GestureResponderEvent } from "react-native";
 import { haptics } from "./haptics";
 import { usePressFeedback } from "./pressFeedback";
@@ -20,6 +20,12 @@ import type { WorkerRowContextMenuProps } from "./worker-row-interaction.types";
  *
  * The row asks the menu to open, and gives the long-press haptic the system
  * gives a view that opens a menu.
+ *
+ * The menu exists only while it is open. Android pushes every scroll frame
+ * into React Native's shadow tree, and each push lays out everything mounted,
+ * including screens under the current one; a Compose menu under every worker
+ * row was most of a resting row's nodes, so the board slowed every scroll in
+ * the app.
  */
 export function WorkerRowContextMenu({
 	children,
@@ -36,7 +42,17 @@ export function WorkerRowContextMenu({
 	const menu = useRef<MenuComponentRef>(null);
 	// Where the finger came down, in the row, and where the anchor sits.
 	const touch = useRef({ x: 0, y: 0 });
-	const [anchor, setAnchor] = useState({ x: 0, y: 0 });
+	// Where the open menu sits; null while no menu exists.
+	const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+	const teardown = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+	// Opened once the menu has mounted with its anchor under the finger.
+	useEffect(() => {
+		if (!anchor) return;
+		const frame = requestAnimationFrame(() => menu.current?.show());
+		return () => cancelAnimationFrame(frame);
+	}, [anchor]);
+	useEffect(() => () => clearTimeout(teardown.current), []);
 
 	const menuActions: MenuAction[] = actions.map((action) => ({
 		id: action.id,
@@ -69,27 +85,35 @@ export function WorkerRowContextMenu({
 				}}
 				onLongPress={() => {
 					haptics.press();
-					setAnchor(touch.current);
-					// Opened once the anchor has moved under the finger.
-					requestAnimationFrame(() => menu.current?.show());
+					clearTimeout(teardown.current);
+					setAnchor({ ...touch.current });
 				}}
 				style={({ pressed }) => [style, pressed && feedback.pressed]}
 			>
 				{children}
 			</Pressable>
-			<MenuView
+			{anchor ? <MenuView
 				ref={menu}
 				colorScheme={scheme}
 				actions={menuActions}
 				onPressAction={chooseAction}
+				onCloseMenu={() => {
+					// Compose plays the close on its popup; unmounting the host
+					// at once would cut it off.
+					clearTimeout(teardown.current);
+					teardown.current = setTimeout(() => setAnchor(null), MENU_TEARDOWN_MS);
+				}}
 				style={[styles.anchor, { left: anchor.x, top: anchor.y }]}
 				testID="worker-row-menu"
 			>
 				<View pointerEvents="none" style={styles.point} />
-			</MenuView>
+			</MenuView> : null}
 		</View>
 	);
 }
+
+/** Long enough for Compose's menu exit animation to finish. */
+const MENU_TEARDOWN_MS = 400;
 
 const styles = StyleSheet.create({
 	// Takes no touches: the row under it has them all.

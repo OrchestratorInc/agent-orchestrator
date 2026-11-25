@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,10 +21,12 @@ import (
 // subscription accounts AO launches agents with.
 type AgentAccountService interface {
 	List(context.Context, bool) ([]agentaccounts.AccountView, error)
-	StartLogin(context.Context, domain.AgentAccountProvider) (agentaccounts.LoginStart, error)
-	StartSignInAgain(context.Context, string) (agentaccounts.LoginStart, error)
+	StartLogin(context.Context, domain.AgentAccountProvider, agentaccounts.LoginRequest) (agentaccounts.LoginStart, error)
+	StartSignInAgain(context.Context, string, agentaccounts.LoginRequest) (agentaccounts.LoginStart, error)
 	VerifyLogin(context.Context, string) (agentaccounts.LoginStatus, *agentaccounts.AccountView, error)
 	CancelLogin(context.Context, string) error
+	AddAPIKeyAccount(context.Context, domain.AgentAccountProvider, string, string) (agentaccounts.AccountView, error)
+	ReplaceAPIKey(context.Context, string, string) (agentaccounts.AccountView, error)
 	SetDefault(context.Context, string) error
 	Remove(context.Context, string) error
 	ConsumeResetCredit(context.Context, string, string) (domain.CodexResetCreditOutcome, error)
@@ -50,6 +53,8 @@ func (c *AgentAccountsController) Register(r chi.Router) {
 	r.Post("/agents/accounts/login", c.startLogin)
 	r.Post("/agents/accounts/login/{operationId}/verify", c.verifyLogin)
 	r.Post("/agents/accounts/login/{operationId}/cancel", c.cancelLogin)
+	r.Post("/agents/accounts/api-keys", c.addAPIKey)
+	r.Put("/agents/accounts/{accountId}/api-key", c.replaceAPIKey)
 	r.Get("/agents/accounts/sessions/{sessionId}", c.sessionAccounts)
 	r.Put("/agents/accounts/sessions/{sessionId}", c.switchSession)
 	r.Post("/agents/accounts/{accountId}/login", c.signInAgain)
@@ -80,13 +85,17 @@ func (c *AgentAccountsController) writeAccounts(w http.ResponseWriter, r *http.R
 }
 
 func agentAccountResponse(view agentaccounts.AccountView) AgentAccountResponse {
+	kind := view.Account.Kind
+	if kind == "" {
+		kind = domain.AgentAccountKindSubscription
+	}
 	out := AgentAccountResponse{
-		ID: view.Account.ID, Provider: view.Account.Provider, Device: view.Account.Device(),
+		ID: view.Account.ID, Provider: view.Account.Provider, Device: view.Account.Device(), Kind: kind, Name: view.Account.Name, KeyHint: view.Account.KeyHint,
 		Email: view.Account.Email, Plan: view.Account.Plan, Default: view.Default, SignedIn: view.SignedIn, LoggedIn: view.LoggedIn,
-		Problem: view.IdentityErr, Limits: view.Limits,
+		Problem: view.IdentityErr, ProblemKind: view.IdentityProblem, Limits: view.Limits, SameLoginAs: view.SameLoginAs, OrgID: view.OrgID, OrgName: view.OrgName,
 	}
 	if out.Problem == "" && view.SignedIn {
-		out.Problem = view.LimitsErr
+		out.Problem, out.ProblemKind = view.LimitsErr, view.LimitsProblem
 	}
 	if !view.Account.CreatedAt.IsZero() {
 		created := view.Account.CreatedAt
@@ -105,7 +114,7 @@ func (c *AgentAccountsController) startLogin(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	start, err := c.Svc.StartLogin(r.Context(), in.Provider)
+	start, err := c.Svc.StartLogin(r.Context(), in.Provider, agentaccounts.LoginRequest{Method: in.Method, Secret: in.Secret, Name: in.Name})
 	if err != nil {
 		writeAgentAccountError(w, r, err)
 		return
@@ -118,7 +127,13 @@ func (c *AgentAccountsController) signInAgain(w http.ResponseWriter, r *http.Req
 		apispec.NotImplemented(w, r, "POST", "/api/v1/agents/accounts/{accountId}/login")
 		return
 	}
-	start, err := c.Svc.StartSignInAgain(r.Context(), strings.TrimSpace(chi.URLParam(r, "accountId")))
+	// The body is optional: none opens the CLI's own sign-in in a terminal.
+	var in SignInAgentAccountAgainRequest
+	if err := decodeJSONStrict(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	start, err := c.Svc.StartSignInAgain(r.Context(), strings.TrimSpace(chi.URLParam(r, "accountId")), agentaccounts.LoginRequest{Method: in.Method, Secret: in.Secret})
 	if err != nil {
 		writeAgentAccountError(w, r, err)
 		return
@@ -127,10 +142,15 @@ func (c *AgentAccountsController) signInAgain(w http.ResponseWriter, r *http.Req
 }
 
 func writeAgentAccountLoginStart(w http.ResponseWriter, start agentaccounts.LoginStart) {
-	envelope.WriteJSON(w, http.StatusAccepted, StartAgentAccountLoginResponse{
-		OperationID: start.OperationID, Provider: start.Provider,
-		ShellTerminal: CodexAccountLoginTerminalResponse{HandleID: start.Terminal.HandleID, Title: start.Terminal.Title, CreatedAt: start.Terminal.CreatedAt},
-	})
+	out := StartAgentAccountLoginResponse{OperationID: start.OperationID, Provider: start.Provider, AuthOperationID: start.AuthOperationID}
+	if start.Terminal.HandleID != "" {
+		out.ShellTerminal = &CodexAccountLoginTerminalResponse{HandleID: start.Terminal.HandleID, Title: start.Terminal.Title, CreatedAt: start.Terminal.CreatedAt}
+	}
+	if start.Account != nil {
+		account := agentAccountResponse(*start.Account)
+		out.Account = &account
+	}
+	envelope.WriteJSON(w, http.StatusAccepted, out)
 }
 
 func (c *AgentAccountsController) verifyLogin(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +201,40 @@ func (c *AgentAccountsController) remove(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := c.Svc.Remove(r.Context(), strings.TrimSpace(chi.URLParam(r, "accountId"))); err != nil {
+		writeAgentAccountError(w, r, err)
+		return
+	}
+	c.writeAccounts(w, r, false)
+}
+
+func (c *AgentAccountsController) addAPIKey(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/agents/accounts/api-keys")
+		return
+	}
+	var in AddAgentAccountAPIKeyRequest
+	if err := decodeJSONStrict(r, &in); err != nil || strings.TrimSpace(in.APIKey) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "API_KEY_REQUIRED", "An API key is required", nil)
+		return
+	}
+	if _, err := c.Svc.AddAPIKeyAccount(r.Context(), in.Provider, in.Name, in.APIKey); err != nil {
+		writeAgentAccountError(w, r, err)
+		return
+	}
+	c.writeAccounts(w, r, false)
+}
+
+func (c *AgentAccountsController) replaceAPIKey(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PUT", "/api/v1/agents/accounts/{accountId}/api-key")
+		return
+	}
+	var in ReplaceAgentAccountAPIKeyRequest
+	if err := decodeJSONStrict(r, &in); err != nil || strings.TrimSpace(in.APIKey) == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "API_KEY_REQUIRED", "An API key is required", nil)
+		return
+	}
+	if _, err := c.Svc.ReplaceAPIKey(r.Context(), strings.TrimSpace(chi.URLParam(r, "accountId")), in.APIKey); err != nil {
 		writeAgentAccountError(w, r, err)
 		return
 	}
@@ -270,8 +324,12 @@ func (c *AgentAccountsController) switchSession(w http.ResponseWriter, r *http.R
 }
 
 // agentAccountUnsharedMessage is shown when an account folder cannot link to
-// this computer's history; Windows allows the links only in Developer Mode.
-const agentAccountUnsharedMessage = "AO cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode."
+// this computer's history. When Windows refused the link for want of its own
+// Developer Mode (not Orchestrator's), the message says where to turn it on.
+const (
+	agentAccountUnsharedMessage      = "Orchestrator cannot link this account's folder to this computer's history."
+	agentAccountDeveloperModeMessage = "Turn on Windows Developer Mode to use this account: search Windows Settings for Developer Mode (System > Advanced on Windows 11 25H2 and later)."
+)
 
 func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
@@ -281,12 +339,26 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "AGENT_ACCOUNT_LOGIN_NOT_FOUND", "Unknown or finished sign-in", nil)
 	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_PROVIDER_INVALID", "Accounts are available for Claude Code and Codex only", nil)
+	case errors.Is(err, ports.ErrAgentAccountKeyRejected):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_KEY_REJECTED", "The provider did not accept this key or token. Check it and try again.", nil)
+	case errors.Is(err, ports.ErrAgentAccountKeyUnchecked):
+		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "AGENT_ACCOUNT_KEY_UNCHECKED", "Orchestrator could not reach the provider to check this API key. Try again in a moment.", nil)
+	case errors.Is(err, ports.ErrAgentAccountKindMismatch):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_KIND_MISMATCH", "This account does not support that action", nil)
+	case errors.Is(err, ports.ErrAgentAccountMethodInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_METHOD_INVALID", "This sign-in method cannot add an account here", nil)
+	case errors.Is(err, ports.ErrAgentAccountSignInUnavailable):
+		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "AGENT_ACCOUNT_SIGN_IN_UNAVAILABLE", "The in-app sign-in is unavailable. Use the terminal sign-in instead.", nil)
+	case errors.Is(err, ports.ErrAgentAccountNeedsDeveloperMode):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_UNSHARED", agentAccountDeveloperModeMessage, map[string]any{"windowsDeveloperMode": true})
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_UNSHARED", agentAccountUnsharedMessage, nil)
 	case errors.Is(err, ports.ErrAgentAccountInUse):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_IN_USE", "AO could not stop an agent that uses this account, so it kept the account. Stop that agent, then remove the account again.", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_IN_USE", "Orchestrator could not stop an agent that uses this account, so it kept the account. Stop that agent, then remove the account again.", nil)
+	case errors.Is(err, ports.ErrSessionNotFound):
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "SESSION_NOT_FOUND", "session not found", nil)
 	case errors.Is(err, ports.ErrAgentAccountDeviceFixed):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_DEVICE_FIXED", "This computer's own login is managed by its CLI, not AO", nil)
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_DEVICE_FIXED", "This computer's own login is managed by its CLI, not Orchestrator", nil)
 	default:
 		envelope.WriteError(w, r, err)
 	}

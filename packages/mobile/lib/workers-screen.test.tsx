@@ -20,6 +20,10 @@ const fixtures = vi.hoisted(() => {
 		// expo-router's router is one object for the app's lifetime.
 		router: { push, navigate },
 		configured: true,
+		connection: "open" as "open" | "closed",
+		cloudSessionsLoaded: false,
+		cloudSessionsError: null as string | null,
+		cloud: null as null | { hostId: string; name: string; appearance: { symbol: string }; connection: "open"; projects: []; sessions: []; orchestrators: [] },
 		notificationsUnread: 0,
 		theme: new Proxy({}, { get: (_, key) => `#${String(key)}` }),
 	};
@@ -69,15 +73,21 @@ vi.mock("./machine-menu-image", async (importOriginal) => {
 vi.mock("./worker-environment-filter", () => ({ WorkerEnvironmentFilter: "WorkerEnvironmentFilter" }));
 // The picker is a SwiftUI menu or a Compose dropdown, tested in environment-picker.test.
 vi.mock("./environment-picker", () => ({ EnvironmentPicker: "EnvironmentPicker" }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({
+	status: fixtures.cloud ? "ready" : "signed-out", notificationsUnread: 0,
+	sessionsLoaded: fixtures.cloudSessionsLoaded, sessionsError: fixtures.cloudSessionsError,
+	refreshSessions: async () => {}, watch: () => () => {},
+}) }));
 vi.mock("./store", () => ({ useApp: () => ({
-	configured: fixtures.configured, configResolved: true, connection: "open", loading: false, error: null,
+	configured: fixtures.configured, configResolved: true, connection: fixtures.connection, loading: false, error: null, cloud: fixtures.cloud,
 	config: { hostId: "mac" },
 	refreshAll: fixtures.refreshAll, refreshHost: fixtures.refreshHost,
 	allSessions: fixtures.hostStates.flatMap((host) => host.sessions.map((session) => ({ ...session, hostId: host.hostId }))), allProjects: fixtures.projects,
 	hostStates: fixtures.hostStates, notificationsUnread: fixtures.notificationsUnread,
 	phoneNetwork: { connected: true, internet: true },
 }) }));
-vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
+vi.mock("./FreshnessLine", () => ({ FreshnessLine: "FreshnessLine" }));
+vi.mock("./useMachineFreshness", () => ({ useMachineFreshness: () => new Map() }));
 vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({ icon: "wifi-off", title: "Can't connect", hint: "Try again" }) }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
 vi.mock("./ThemeProvider", () => ({
@@ -98,13 +108,19 @@ vi.mock("./worker-board-list", async () => {
 		React.createElement("WorkerBoardList", props, ListHeaderComponent, props.sessions.length === 0 ? ListEmptyComponent : null) };
 });
 // The real one draws nothing on iOS; this stands in for Android's FAB on both.
-vi.mock("./AddFab", () => ({ AddFab: "AddFab", addFabClearance: 72 }));
 vi.mock("./workers-idle-state", () => ({ WorkersIdleState: "WorkersIdleState" }));
 vi.mock("./archive/useLatestArchivedAt", () => ({ useLatestArchivedAt: () => undefined }));
 vi.mock("./frost", () => ({ useTabBarFrost: () => ({ inset: 0, frost: null }) }));
-vi.mock("./largeTitle", () => ({
-	useLargeTitle: (_title: string, onScroll?: unknown) => ({ header: null, edge: null, onScroll, topInset: 0 }),
-}));
+// As the real hook places the title's accessory: back to the page on iOS,
+// pinned under the bar (inside the edge) on Android.
+vi.mock("./largeTitle", async () => {
+	const React = await import("react");
+	return {
+		useLargeTitle: (_title: string, onScroll?: unknown, options?: { accessory?: React.ReactNode; backdrop?: string }) => fixtures.platform === "android"
+			? { header: null, edge: React.createElement("LargeTitleEdge", { backdrop: options?.backdrop }, options?.accessory), onScroll, topInset: 0, accessory: null }
+			: { header: null, edge: null, onScroll, topInset: 0, accessory: options?.accessory ?? null },
+	};
+});
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import { startNewTask } from "./newTaskAction";
@@ -178,6 +194,10 @@ function project(id: string, name: string, hostId: string, hostName: string): Ho
 beforeEach(() => {
 	fixtures.platform = "ios";
 	fixtures.configured = true;
+	fixtures.connection = "open";
+	fixtures.cloud = null;
+	fixtures.cloudSessionsLoaded = false;
+	fixtures.cloudSessionsError = null;
 	fixtures.notificationsUnread = 0;
 	fixtures.projects = [];
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -242,7 +262,6 @@ describe("Workers header", () => {
 		expect(headerButtons().map((button) => button.props.accessibilityLabel)).toEqual(["Settings"]);
 		expect(toolbar("left")).toBeUndefined();
 		expect(renderer.root.findAllByType("StackSearchBar" as never)).toHaveLength(0);
-		expect(renderer.root.findAllByType("AddFab" as never)).toHaveLength(0);
 	});
 
 });
@@ -297,6 +316,59 @@ describe("Workers filter menu", () => {
 		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(1);
 	});
 
+	// A project filter can put every row on one machine while All machines stays
+	// chosen; the line under the title then speaks for that machine.
+	it("points the freshness line at the filtered project's machine", () => {
+		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac" }), snapshot({ hostId: "windows", name: "Windows" })];
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
+		act(() => { renderer = create(<FleetScreen />); });
+		const line = () => renderer.root.findByType("FreshnessLine" as never);
+		expect(line().props.hostId).toBeUndefined();
+		choose(filterMenu(), "Game · Windows");
+		expect(selectedEnvironment()).toBe("All machines");
+		expect(line().props.hostId).toBe("windows");
+	});
+
+	// Android's title is in the bar, whose frost dimmed a line placed right under
+	// it; the chips draw above the frost, so there the line goes beneath them.
+	// Android's bar frost washed out a line placed in the page whenever nothing
+	// (the machine chips) came first: there it is the title's accessory, pinned
+	// under the bar. On iOS it sits under the large title, above the chips.
+	it("pins the freshness line under the Android bar and puts it above the chips on iOS", () => {
+		const pinned = () => renderer.root.findAllByType("LargeTitleEdge" as never).flatMap((edge) => edge.findAllByType("FreshnessLine" as never));
+		const inList = () => renderer.root.findByType(WorkerBoardList).findAllByType("FreshnessLine" as never);
+		for (const machines of [[snapshot({ hostId: "mac", name: "Mac" })], [snapshot({ hostId: "mac", name: "Mac" }), snapshot({ hostId: "windows", name: "Windows" })]]) {
+			fixtures.hostStates = machines;
+			fixtures.platform = "ios";
+			act(() => { renderer = create(<FleetScreen />); });
+			const order = renderer.root.findByType(WorkerBoardList).findAll((node) => node.type === ("FreshnessLine" as never) || node.type === WorkerEnvironmentFilter)
+				.map((node) => (node.type === WorkerEnvironmentFilter ? "chips" : "line"));
+			expect(order).toEqual(machines.length > 1 ? ["line", "chips"] : ["line"]);
+			expect(pinned()).toHaveLength(0);
+			act(() => renderer.unmount());
+			fixtures.platform = "android";
+			act(() => { renderer = create(<FleetScreen />); });
+			expect(pinned()).toHaveLength(1);
+			expect(inList()).toHaveLength(0);
+			// A solid bar: the frost's tail lay over the chips and dimmed them at rest.
+			expect(renderer.root.findByType("LargeTitleEdge" as never).props.backdrop).toBe("solid");
+			act(() => renderer.unmount());
+		}
+		act(() => { renderer = create(<FleetScreen />); });
+	});
+
+	// An empty board explains itself, but a project or idle empty state would not
+	// say the phone is offline: the line stays, limited to that (no machine).
+	it("keeps only the phone-offline line on an empty board", () => {
+		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac", connection: "open" })];
+		act(() => { renderer = create(<FleetScreen />); });
+		const line = () => renderer.root.findAllByType("FreshnessLine" as never);
+		expect(line()[0].props.hostId).toBe("mac");
+		act(() => renderer.root.findByType(WorkerBoardList).props.onEmptyChange(true));
+		expect(line()).toHaveLength(1);
+		expect(line()[0].props.hostId).toBeUndefined();
+	});
+
 	it("scopes the project choices to the chosen machine and drops one it does not have", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
@@ -332,25 +404,61 @@ describe("Workers spawn action", () => {
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
 	});
 
-	// Android floats Material's FAB instead, at the page's bottom-end corner,
-	// which already ends at the navigation bar.
-	// Settings and Pull Requests are tabs on Android, so the bar keeps the bell.
-	it("floats the Android spawn button instead of a header item", () => {
+	// Android lays its header out as iOS does: New task is the board bar's
+	// round button, and Settings and Pull Requests open from the header.
+	it("keeps Settings and Pull Requests in the Android header, and floats no button", () => {
 		fixtures.platform = "android";
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Notifications"]);
-		const fab = renderer.root.findByType("AddFab" as never);
-		expect(fab.props.label).toBe("New task");
-		act(() => fab.props.onPress());
+		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Pull Requests", "Notifications"]);
+		act(() => startNewTask(() => fixtures.push("/spawn")));
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
+	});
+
+	// With the default machine offline and nothing else connected, New task
+	// opens on Orchestrator Cloud rather than on a machine it cannot reach.
+	it("starts on Orchestrator Cloud when no machine is connected and Cloud is signed in", () => {
+		fixtures.connection = "closed";
+		for (const host of fixtures.hostStates) Object.assign(host, { connection: "closed", loading: false, error: "Host is unreachable" });
+		act(() => { renderer = create(<FleetScreen />); });
+		act(() => startNewTask(() => fixtures.push("/spawn")));
+		expect(fixtures.push).toHaveBeenLastCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
+		act(() => renderer.unmount());
+
+		fixtures.cloud = { hostId: "orchestrator-cloud", name: "Cloud", appearance: { symbol: "cloud" }, connection: "open", projects: [], sessions: [], orchestrators: [] };
+		act(() => { renderer = create(<FleetScreen />); });
+		act(() => startNewTask(() => fixtures.push("/spawn")));
+		expect(fixtures.push).toHaveBeenLastCalledWith({ pathname: "/spawn", params: { hostId: "orchestrator-cloud" } });
 	});
 
 	it("carries the project filter into the spawn sheet", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
 		choose(filterMenu(), "Game · Windows");
-		act(() => renderer.root.findByType("AddFab" as never).props.onPress());
+		act(() => startNewTask(() => fixtures.push("/spawn")));
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "windows", projectId: "game" } });
+	});
+});
+
+// Filtered to Cloud, the board shows Cloud's rows alone: the machines'
+// workers elsewhere must not turn a Cloud list still loading, or one that
+// failed, into "No workers on Cloud".
+describe("Workers filtered to Cloud", () => {
+	const signIn = () => { fixtures.cloud = { hostId: "orchestrator-cloud", name: "Cloud", appearance: { symbol: "cloud" }, connection: "open", projects: [], sessions: [], orchestrators: [] }; };
+
+	it("waits for Cloud's first list rather than saying it has no workers", () => {
+		signIn();
+		act(() => { renderer = create(<FleetScreen />); });
+		chooseMachine("Cloud");
+		expect(renderer.root.findAllByType("ActivityIndicator" as never)).toHaveLength(1);
+		expect(renderer.root.findAllByType("EmptyState" as never)).toHaveLength(0);
+	});
+
+	it("offers Retry when Cloud's first list failed", () => {
+		signIn();
+		fixtures.cloudSessionsError = "Couldn't reach Orchestrator Cloud.";
+		act(() => { renderer = create(<FleetScreen />); });
+		chooseMachine("Cloud");
+		expect(emptyState().props.title).toBe("Couldn't load cloud workers");
 	});
 });
 
@@ -401,7 +509,7 @@ describe("Workers selected-machine reachability", () => {
 	it.each(["open", "closed"] as const)("targets the selected environment when creating work, even when %s", (connection) => {
 		fixtures.hostStates[1].connection = connection;
 		selectWindows();
-		act(() => renderer.root.findByType("AddFab" as never).props.onPress());
+		act(() => startNewTask(() => fixtures.push("/spawn")));
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "windows" } });
 	});
 	it("does not claim an unreachable machine has no workers while another machine is online", () => {
@@ -441,6 +549,41 @@ describe("Workers selected-machine reachability", () => {
 		await act(async () => renderer.root.findByProps({ title: "Retry" }).props.onPress());
 		expect(fixtures.refreshHost).toHaveBeenCalledWith("windows");
 		expect(fixtures.refreshAll).not.toHaveBeenCalled();
+	});
+	// iOS's refresh control scrolls the list down by its spinner's height when
+	// `refreshing` turns on without a pull, and never scrolls it back, so each
+	// Retry left the board ~60 pt lower until Retry slid under the tab bar.
+	it("retries the machine with its own spinner, never the pull-to-refresh one", async () => {
+		let answer!: () => void;
+		fixtures.refreshHost.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+		selectWindows();
+		const retry = () => renderer.root.findByProps({ title: "Retry" });
+		await act(async () => { retry().props.onPress(); });
+		expect(fixtures.refreshHost).toHaveBeenCalledWith("windows");
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
+		expect(retry().props.loading).toBe(true);
+		await act(async () => answer());
+		expect(retry().props.loading).toBe(false);
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
+	});
+	it("retries from the freshness line without turning on the pull-to-refresh spinner", async () => {
+		let answer!: () => void;
+		fixtures.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+		fixtures.hostStates = [fixtures.hostStates[0]];
+		act(() => { renderer = create(<FleetScreen />); });
+		await act(async () => { renderer.root.findByType("FreshnessLine" as never).props.onRetry(); });
+		expect(fixtures.refreshAll).toHaveBeenCalledTimes(1);
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
+		await act(async () => answer());
+	});
+	it("shows the pull-to-refresh spinner for a pull until the refresh lands", async () => {
+		let answer!: () => void;
+		fixtures.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+		act(() => { renderer = create(<FleetScreen />); });
+		await act(async () => { renderer.root.findByType(WorkerBoardList).props.onRefresh(); });
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(true);
+		await act(async () => answer());
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
 	});
 	// The same picker on both platforms; its native menus are tested on their own.
 	it("offers every environment from the unreachable machine's picker and applies a choice immediately", () => {

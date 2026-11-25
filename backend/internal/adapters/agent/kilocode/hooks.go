@@ -73,6 +73,10 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return errors.New("kilocode.GetAgentHooks: WorkspacePath is required")
 	}
 
+	if err := validateKiloImportedWorkspace(cfg); err != nil {
+		return err
+	}
+
 	pluginPath := kilocodePluginPath(cfg.WorkspacePath)
 	// Guard against clobbering a user file at our path: overwrite only when the
 	// target is absent or already AO-managed. A foreign file is a loud error,
@@ -83,7 +87,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 			return fmt.Errorf("kilocode.GetAgentHooks: %w", err)
 		}
 		if !managed {
-			return fmt.Errorf("kilocode.GetAgentHooks: refusing to overwrite non-AO file at %s — move it so AO can install its plugin", pluginPath)
+			return fmt.Errorf("kilocode.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s — move it so Orchestrator can install its plugin", pluginPath)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("kilocode.GetAgentHooks: stat plugin: %w", err)

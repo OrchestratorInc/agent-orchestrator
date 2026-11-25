@@ -1,5 +1,5 @@
 import { useQueries } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileCode2, GitCommitHorizontal, MessageSquarePlus } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileCode2, GitCommitHorizontal, MessageSquarePlus } from "@/components/app-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudWorkspaceReviewDiffsQueryOptions } from "../../hooks/useCloudWorkspaceReview";
@@ -22,7 +22,7 @@ const statusLabel: Record<CloudCpWorkspaceReviewFileSummary["status"], string> =
 };
 const statusTone: Record<CloudCpWorkspaceReviewFileSummary["status"], string> = {
 	unmodified: "text-passive", modified: "text-warning", added: "text-success", deleted: "text-error",
-	renamed: "text-logo-accent", copied: "text-logo-accent", untracked: "text-success",
+	renamed: "text-logo-accent-text", copied: "text-logo-accent-text", untracked: "text-success",
 };
 
 function chunk<T>(items: readonly T[]): T[][] {
@@ -64,7 +64,7 @@ function isViewedRecord(file: CloudCpWorkspaceReviewFileSummary, records: Viewed
 }
 
 export function CloudWorkspaceReviewPane({
-	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, repository, sessionId, split,
+	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, ready = true, repository, sessionId, split,
 }: {
 	annotation: FileAnnotationModel;
 	baseUrl: string;
@@ -74,6 +74,8 @@ export function CloudWorkspaceReviewPane({
 	onBrowseAll: () => void;
 	onOpenFile?: (path: string, options?: CloudFileOpenOptions) => void;
 	orgId: string;
+	/** False while the session's workspace cannot answer yet (useCloudWorkspaceReady): diffs wait, and those read before stay. */
+	ready?: boolean;
 	/** The sibling repository under review in a multi-repository session; undefined for the main one. */
 	repository?: string;
 	sessionId: string;
@@ -136,7 +138,7 @@ export function CloudWorkspaceReviewPane({
 	const requested = files.filter((file) => !deferredByDefault(file) || fileStates[file.path]?.loadedDeferred);
 	const batches = chunk(requested.map((file) => file.path));
 	const diffQueries = useQueries({ queries: batches.map((paths) => ({
-		...cloudWorkspaceReviewDiffsQueryOptions({ client, baseUrl, orgId, sessionId, paths, scope, commitSha: selectedCommit?.sha, workspaceVersion: data.workspaceVersion, ignoreWhitespace: false }),
+		...cloudWorkspaceReviewDiffsQueryOptions({ client, baseUrl, orgId, sessionId, paths, scope, commitSha: selectedCommit?.sha, workspaceVersion: data.workspaceVersion, ignoreWhitespace: false, enabled: ready }),
 		staleTime: Infinity,
 	})) });
 	const patchByPath = useMemo(() => {
@@ -207,7 +209,7 @@ export function CloudWorkspaceReviewPane({
 						<Checkbox aria-label={isViewed(file) ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })} checked={isViewed(file)} onCheckedChange={(checked) => markViewed(file, checked === true)} />
 					</header>
 					{!closed && patch ? <CloudDiffFile annotation={annotation} baseUrl={baseUrl} client={client} commitSha={selectedCommit?.sha} file={file} onActiveSelectionChange={() => undefined} orgId={orgId} patch={patch} scope={scope} sessionId={sessionId} split={split} workspaceVersion={data.workspaceVersion} /> : null}
-					{!closed && !patch ? <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><span className="min-w-0 flex-1">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : reason ? t("files.diffUnavailableReason", { reason }) : t("files.loadingDiff")}</span>{deferred ? <Button onClick={() => setFileStates({ ...fileStates, [file.path]: { ...fileStates[file.path], loadedDeferred: true } })} size="sm" variant="outline">{t("files.loadDiff")}</Button> : null}<Button onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="sm" variant="outline">{t("files.fileView")}</Button></div> : null}
+					{!closed && !patch ? <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><span className="min-w-0 flex-1">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : reason ? t("files.diffUnavailableReason", { reason }) : t("files.loadingDiff")}</span>{deferred ? <Button onClick={() => setFileStates({ ...fileStates, [file.path]: { ...fileStates[file.path], loadedDeferred: true } })} size="sm" variant="secondary">{t("files.loadDiff")}</Button> : null}<Button onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="sm" variant="secondary">{t("files.fileView")}</Button></div> : null}
 				</section>;
 			})}
 		</div>}

@@ -35,10 +35,10 @@ func TestRateLimitedSinkCapsBurstPerMinute(t *testing.T) {
 func TestRateLimitedSinkLetsPreSummarizedNamesExceedTheMinuteCap(t *testing.T) {
 	rec := &recordingSink{}
 	s := NewRateLimitedSink(rec, nil)
-	s.SkipMinuteWindow("ao.cli.usage_errors")
+	s.SkipMinuteWindow("ao.usage.cli_usage_errors")
 	now := time.Now()
 	for i := 0; i < 20; i++ {
-		s.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.cli.usage_errors", OccurredAt: now})
+		s.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.usage.cli_usage_errors", OccurredAt: now})
 	}
 	if len(rec.events) != 20 {
 		t.Fatalf("events forwarded = %d, want 20", len(rec.events))

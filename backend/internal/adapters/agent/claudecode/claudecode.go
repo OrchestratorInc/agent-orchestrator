@@ -62,6 +62,9 @@ func New() *Plugin {
 // accepted. See ports.SubmitActivitySignaler.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
+// InterruptKey uses Ctrl+C to cancel work without closing Claude Code.
+func (*Plugin) InterruptKey() string { return "\x03" }
+
 // EmitsSemanticMessageAcceptance reports that UserPromptSubmit includes the
 // accepted prompt, allowing AO delivery ids to be correlated semantically.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
@@ -208,11 +211,18 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 // claudeLaunchSettingsArgs passes a session's launch choices to Claude Code as
 // settings: Ultracode, and the token count at which it compacts on its own.
 // They share one --settings flag with the auto-mode dialog guard (see
-// autoDefaultNudgeGuardArgs).
+// autoDefaultNudgeGuardArgs) and the bypass-permissions dialog guard.
 func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions, policy agentruntime.PermissionPolicy) []string {
 	settings := autoDefaultNudgeGuardSettings(policy)
 	if settings == nil {
 		settings = map[string]any{}
+	}
+	if agentruntime.NormalizePermissionPolicy(policy) == agentruntime.PermissionBypassPermissions {
+		// Claude Code asks once before entering bypass-permissions mode. No one
+		// answers that dialog in an AO terminal, so the session would sit on it
+		// with its prompt unread while AO showed it idle (#6484). The mode was
+		// chosen in AO, so it counts as accepted.
+		settings["skipDangerousModePermissionPrompt"] = true
 	}
 	if options.Ultracode {
 		settings["ultracode"] = true
