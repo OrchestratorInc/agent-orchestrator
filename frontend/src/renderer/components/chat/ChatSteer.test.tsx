@@ -1026,6 +1026,42 @@ describe("ChatWorkspace steering", () => {
 		expect(steer.compareDocumentPosition(screen.getByText("Rebasing onto main.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	describe("turns that run beside the active one", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		const said = (id: string, turnId: string, sequence: number, text: string, role: "user" | "assistant" = "assistant") =>
+			({ kind: "message" as const, id, turnId, sequence, revision: 0, role, origin: role === "user" ? "human" as const : "provider" as const, text, streaming: false, createdAt: at(sequence) });
+		const run = { id: "run", state: "running" as const, providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) };
+		const child = (id: string, start: number, end: number) =>
+			({ id, state: "completed" as const, providerTurnId: `provider-${id}`, requestedAt: at(start), startedAt: at(start), completedAt: at(end) });
+		const opening = [said("prompt", "run", 1, "Check both platforms", "user"), said("plan", "run", 2, "Starting two checks.")];
+		const parallel = [said("a1", "a", 4, "Linux started."), said("b1", "b", 5, "Mac started."), said("a2", "a", 6, "Linux passed."), said("b2", "b", 7, "Mac passed.")];
+		const snapshot = (turns: (typeof run | ReturnType<typeof child>)[], items: ReturnType<typeof said>[]) =>
+			({ ...chatFixture, turns, items, latestSequence: items.at(-1)!.sequence });
+		const expectOrder = (rows: Element[]) => rows.slice(1).forEach((row, index) =>
+			expect(rows[index]!.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy());
+
+		it("keeps a waiting turn's live row below them, in the part its next row joins", () => {
+			const turns = [run, child("a", 3, 6), child("b", 3, 7)];
+			const view = render(<ChatWorkspace snapshot={snapshot(turns, [...opening, ...parallel])} />);
+			const live = () => [...document.querySelectorAll("[data-turn-live-row]")];
+			const part = () => live()[0]!.closest("[data-chat-turn]")!.getAttribute("data-chat-turn");
+			expect(live()).toHaveLength(1);
+			expectOrder([screen.getByText("Check both platforms"), screen.getByText("Starting two checks."), screen.getByText("Mac passed."), live()[0]!]);
+
+			const waiting = part();
+			view.rerender(<ChatWorkspace snapshot={snapshot(turns, [...opening, ...parallel, said("next", "run", 8, "Both passed.")])} />);
+			expectOrder([screen.getByText("Mac passed."), screen.getByText("Both passed."), live()[0]!]);
+			expect(part()).toBe(waiting);
+		});
+
+		it("leaves turns that run beside each other whole, and draws the answer last once settled", () => {
+			const settled = { ...child("run", 0, 9), id: "run" };
+			render(<ChatWorkspace snapshot={snapshot([settled, child("a", 3, 6), child("b", 4, 7)], [...opening, ...parallel, said("answer", "run", 8, "Both passed.")])} />);
+			expect(document.querySelectorAll("[data-chat-turn]")).toHaveLength(4);
+			expectOrder(["Starting two checks.", "Linux passed.", "Mac passed.", "Both passed."].map((text) => screen.getByText(text)));
+		});
+	});
+
 	it("draws a queued turn that ran after a steered turn below that turn's steer and answer", () => {
 		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
 		render(
