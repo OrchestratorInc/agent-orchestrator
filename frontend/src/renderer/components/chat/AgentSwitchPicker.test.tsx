@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import claudeCodeLogo from "../../assets/agents/claude-code.svg";
@@ -177,15 +177,23 @@ describe("AgentModelPicker", () => {
 		expect(labels).toEqual([expect.stringContaining("Opus 5.5"), expect.stringContaining("Sonnet 4.5"), expect.stringContaining("Opus 4.5")]);
 	});
 
-	it.each(["Opus", "Sonnet"])("keeps the menu open, effort under it, after picking model %s", async (model) => {
+	it.each(["Opus", "Sonnet"])("closes the menu after picking model %s", async (model) => {
 		const user = userEvent.setup();
 		const { current } = open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		fireEvent.click(screen.getByRole("menuitemradio", { name: new RegExp(`^${model}`) }));
+		await user.click(screen.getByRole("menuitemradio", { name: new RegExp(`^${model}`) }));
 		if (model === "Sonnet") expect(current.onPickModel).toHaveBeenCalledWith("sonnet");
 		else expect(current.onPickModel).not.toHaveBeenCalled();
+		await waitFor(() => expect(screen.queryAllByRole("menu")).toHaveLength(0));
+	});
+
+	it("keeps a terminal's menu open after a model is picked for the switch, for its Switch button", async () => {
+		const user = userEvent.setup();
+		const { onPendingChange } = open({ harness: "codex" }, true);
+		await user.click(screen.getByRole("button", { name: "Agent running in this terminal" }));
+		await user.click(await screen.findByRole("menuitemradio", { name: /^GPT Y/ }));
+		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-y" }));
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
-		expect(screen.getByRole("menuitem", { name: /Effort/ })).toBeInTheDocument();
 	});
 
 	it.each([["menuitemcheckbox", "Fast mode"], ["switch", "Thinking"]] as const)("keeps the parent menu open after toggling a %s named %s", async (role, label) => {
@@ -259,16 +267,12 @@ describe("AgentModelPicker", () => {
 		expect(current.onPickModel).not.toHaveBeenCalled();
 	});
 
-	it("lists the chat's model first, and keeps the rows still while the menu stays open", async () => {
+	it("lists the chat's model first", async () => {
 		const user = userEvent.setup();
-		const { current } = open(undefined, false, "claude-code", { modelId: "sonnet", modelLabel: "Sonnet" });
+		open(undefined, false, "claude-code", { modelId: "sonnet", modelLabel: "Sonnet" });
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		const labels = () => screen.getAllByRole("menuitemradio").map((row) => row.textContent);
-		expect(labels()).toEqual([expect.stringContaining("Sonnet"), expect.stringContaining("Opus")]);
-		fireEvent.click(screen.getByRole("menuitemradio", { name: /^Opus/ }));
-		expect(current.onPickModel).toHaveBeenCalledWith("opus");
-		// The pick moves to the top only the next time the menu opens.
-		expect(labels()).toEqual([expect.stringContaining("Sonnet"), expect.stringContaining("Opus")]);
+		const labels = screen.getAllByRole("menuitemradio").map((row) => row.textContent);
+		expect(labels).toEqual([expect.stringContaining("Sonnet"), expect.stringContaining("Opus")]);
 	});
 
 	it("has no favourite stars", async () => {
