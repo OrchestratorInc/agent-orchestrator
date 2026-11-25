@@ -141,7 +141,12 @@ vi.mock("./conversationBanners", () => ({
 	threadBanner: () => undefined,
 }));
 vi.mock("./conversationErrors", () => ({ conversationActionError: () => undefined, conversationActionUnsupported: () => false }));
-vi.mock("./types", () => ({ brokenMcpServers: () => [], can: () => false }));
+// The real busy test: the agent menu's disabled state reads it.
+vi.mock("./types", async (importOriginal) => ({
+	brokenMcpServers: () => [],
+	can: () => false,
+	sendWaitsInQueue: (await importOriginal<typeof import("./types")>()).sendWaitsInQueue,
+}));
 vi.mock("./useConversation", () => ({ useMobileConversation: () => fixtures.conversation }));
 vi.mock("./useAgentSwitchMenu", () => ({ useAgentSwitchMenu: fixtures.agentSwitchMenu }));
 vi.mock("../useLastVerifiedConfig", () => ({ useLastVerifiedConfig: () => undefined }));
