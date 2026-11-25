@@ -1287,11 +1287,6 @@ func TestLauncherDropsPendingTaskWhenReviewerWorkChanges(t *testing.T) {
 		"cancel": func(ctx context.Context, l Launcher, launch LaunchResult) error {
 			return l.Cancel(ctx, launch.HandleID, domain.ReviewerClaudeCode)
 		},
-		"notify": func(ctx context.Context, l Launcher, launch LaunchResult) error {
-			spec := launchSpec()
-			spec.RunID = "run-2"
-			return l.Notify(ctx, launch.HandleID, spec)
-		},
 		"destroy": func(ctx context.Context, l Launcher, launch LaunchResult) error {
 			return l.Destroy(ctx, launch.HandleID)
 		},
@@ -1328,6 +1323,52 @@ func TestLauncherDropsPendingTaskWhenReviewerWorkChanges(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLauncherNotifyWaitsForReviewerStillStarting(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{
+		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},
+		hints: ports.PromptReadinessHints{
+			Patterns: []string{"READY>"}, PollInterval: time.Millisecond, Timeout: time.Minute, Lines: 20,
+		},
+	}
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true}}
+	l := newTestLauncher(t, reviewer, rt)
+	ctx, cancel := context.WithTimeout(context.Background(), reviewerReadinessDeadlineReserve)
+	defer cancel()
+	launch, err := l.Spawn(ctx, launchSpec())
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	next := launchSpec()
+	next.RunID = "run-2"
+	if err := l.Notify(context.Background(), launch.HandleID, next); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	// The reviewer has not loaded its configuration yet, so the new task waits
+	// for readiness instead of running on the default agent.
+	if sent := rt.messages(); len(sent) != 0 {
+		t.Fatalf("sent %q before the reviewer was ready", sent)
+	}
+	rt.setReady()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(rt.messages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	sent := rt.messages()
+	if len(sent) != 1 || !strings.Contains(sent[0], "run-2") {
+		t.Fatalf("sent = %q, want only the newer task once the reviewer is ready", sent)
+	}
+	// Once the pending task is typed, a later task goes straight to the pane.
+	later := launchSpec()
+	later.RunID = "run-3"
+	if err := l.Notify(context.Background(), launch.HandleID, later); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if sent := rt.messages(); len(sent) != 2 || !strings.Contains(sent[1], "run-3") {
+		t.Fatalf("sent = %q, want the later task delivered directly", sent)
 	}
 }
 
