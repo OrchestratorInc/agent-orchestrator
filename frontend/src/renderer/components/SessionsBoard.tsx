@@ -1,5 +1,6 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -12,32 +13,37 @@ import {
 import { AlertTriangle, Archive, RotateCw } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
-	STANDALONE_PROJECT_KIND,
+	isScratchpadWorkspace,
 	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	isOrchestratorSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
 	workerSessions,
-	hasConfiguredOrchestratorAgent,
 } from "../types/workspace";
 import { isArchivedSession } from "../lib/standalone-archive";
+import { boardSearchTokens, filterBoardSessions } from "../lib/board-search";
 import {
 	boardKanbanColumnOrder,
 	getKanbanColumnView,
 	type KanbanColumnView,
 } from "../lib/session-presentation";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
-import { useSessionShortcut } from "../hooks/useAppShortcut";
+import { isSettingsPageOpen, useAppShortcut, useSessionShortcut } from "../hooks/useAppShortcut";
 import { useTerminateSession } from "../hooks/useTerminateSession";
+import { useBackgroundTaskReadings } from "../hooks/useBackgroundTasks";
+import { BackgroundTasksBadge } from "./BackgroundTasks";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
-import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
+import { FREESTYLE_PROVIDER, projectSandboxProvider, SHARE_FEATURE } from "../lib/cloud-offering";
+import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
+import { ShareSessionDialog } from "./ShareSessionDialog";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { ProjectImportOffer } from "./ProjectImportOffer";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { ToolbarSearch } from "./PageToolbar";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { demoBoardSessions } from "../lib/demo-board-sessions";
@@ -47,6 +53,8 @@ import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
+import { HostOfflineStatus, hostOfflineReasonKey } from "./HostOfflineStatus";
+import { cn } from "../lib/utils";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
@@ -61,7 +69,9 @@ import {
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
-import { SessionArchiveModal } from "./SessionArchiveModal";
+
+/** Focus here keeps Cmd/Ctrl+F for itself (its own find, or plain text editing). */
+const BOARD_FIND_YIELDS_TO = "[role='dialog'], input, textarea, [contenteditable='true'], [role='textbox'], .xterm, .terminal-surface, .monaco-editor, .cm-editor, iframe, webview, [data-chat-find-scope], [data-chat-find-surface]";
 
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
@@ -69,15 +79,15 @@ type SessionsBoardProps = {
 	hostId?: string;
 };
 
-/** How long Cmd+K's "Open archive" waits for the board it navigated to. */
-const ARCHIVE_REQUEST_TTL_MS = 5000;
-
 export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const shell = useShellMaybe();
 	const connected = useConnectedHosts().includes(hostId ?? "");
+	const hostOffline = Boolean(hostId) && !connected;
+	const savedHost = hostId ? shell?.remoteHosts?.find((host) => host.hostId === hostId) : undefined;
+	const hostLabel = hostId ? labelForHost(hostId) ?? savedHost?.label ?? hostId : undefined;
 	const scopeKey = refKey({ host: hostId ?? LOCAL_HOST, id: projectId ?? "all" });
 	// Lanes follow the daemon's delivery order: building -> validating ->
 	// in review -> ready. The middle two are one review-feedback loop, split by
@@ -96,6 +106,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// Only this machine's cloud projects start in place: a remote host's board
 	// never reads this machine's cloud settings (as useCloudCp below).
 	const localCloudBoard = !hostId && workspace?.kind === CLOUD_PROJECT_KIND;
+	const backgroundTasks = useBackgroundTaskReadings(!hostId && !localCloudBoard, projectId);
 	const cloudProjects = useCloudProjectsQuery({ enabled: localCloudBoard });
 	const offering = useCloudOffering(localCloudBoard);
 	const cloudProject = cloudProjects.data?.find((candidate) => candidate.id === projectId);
@@ -136,13 +147,18 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		ui.setAutoStartOrchestrator(projectId, false);
 		openOrchestrator();
 	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
+	// A Cloud standalone agent has no board: its one session is the agent.
+	// Arriving on its project route leaves for Home.
+	useEffect(() => {
+		if (workspace?.standaloneAgent) void navigate({ to: "/", replace: true });
+	}, [navigate, workspace?.standaloneAgent]);
 	useSessionShortcut("open-orchestrator", () => {
-		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || workspace?.kind === STANDALONE_PROJECT_KIND || workspace?.shared) return;
+		if (!projectId || projectId === STANDALONE_WORKSPACE_ID || isScratchpadWorkspace(workspace) || workspace?.shared) return;
 		projectActions.openOrchestrator();
 	}, Boolean(projectId) && !projectActions.isSpawning && !isProvisioning);
 	useSessionMenuAvailable(
 		"open-orchestrator",
-		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && workspace?.kind !== STANDALONE_PROJECT_KIND && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
+		Boolean(projectId) && projectId !== STANDALONE_WORKSPACE_ID && !isScratchpadWorkspace(workspace) && !workspace?.shared && !projectActions.isSpawning && !isProvisioning,
 	);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
@@ -152,18 +168,75 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// the owner's orchestrator: they can't start tasks or an orchestrator
 	// here, so the board offers neither and doesn't ask them to.
 	const guest = Boolean(workspace?.shared);
-	const archived = sessions
-		.filter(isArchivedSession)
-		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+	// The archive itself is the shell's modal; the board only shows its count.
+	const archivedCount = sessions.filter(isArchivedSession).length;
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
 	// Who is in each shared cloud session, read without joining any of them.
 	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
-	const { userId: cloudUserId } = useCloudCp(!hostId && activeSessions.some((session) => Boolean(session.cloud)));
+	const cloudBoard = !hostId && activeSessions.some((session) => Boolean(session.cloud));
+	const { userId: cloudUserId } = useCloudCp(cloudBoard);
+	// Share on a card, as the session header has it: only the session's own
+	// organization shares it, once WorkOS enables sharing for that organization,
+	// and a standalone agent shared with this person stays its owner's to share.
+	const shareOffering = useCloudOffering(cloudBoard);
+	const teams = useTeamsEnabled();
+	const sharingEnabled = cloudBoard && shareOffering.features?.includes(SHARE_FEATURE) === true;
+	const canShareSession = (session: WorkspaceSession): boolean => {
+		if (!sharingEnabled || !session.cloud || session.isTerminated === true || isOrchestratorSession(session)) return false;
+		if (session.cloud.orgId !== shareOffering.org?.id) return false;
+		const owner = workspaces.find((candidate) => candidate.id === session.workspaceId);
+		return !(owner?.standaloneAgent && owner.shared);
+	};
+	// The card the share dialog is for, kept while it closes so its content stays put.
+	const [shareTarget, setShareTarget] = useState<WorkspaceSession | null>(null);
+	const [shareOpen, setShareOpen] = useState(false);
+	const shareTargetWorkspace = shareTarget ? workspaces.find((candidate) => candidate.id === shareTarget.workspaceId) : undefined;
 	const boardSessions = activeSessions.map((session) =>
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }
 			: session,
 	);
+	// Search narrows the cards already loaded for this board; lanes and their
+	// order are the grid's, so a match stays where it was. Each board scope
+	// starts unfiltered (the local project route keeps this component mounted).
+	const [searchQuery, setSearchQuery] = useState("");
+	const [searchScope, setSearchScope] = useState(scopeKey);
+	if (searchScope !== scopeKey) {
+		setSearchScope(scopeKey);
+		setSearchQuery("");
+	}
+	// Typing narrows on a deferred render; clearing (or a new scope) restores
+	// the whole board at once instead of one render with the old query.
+	const deferredQuery = useDeferredValue(searchQuery);
+	const deferredSearchQuery = searchQuery === "" ? "" : deferredQuery;
+	const boardRef = useRef<HTMLDivElement>(null);
+	const searchInputRef = useRef<HTMLInputElement>(null);
+	const searching = boardSearchTokens(deferredSearchQuery).length > 0;
+	const visibleBoardSessions = filterBoardSessions(boardSessions, deferredSearchQuery);
+	const searchMissed = searching && boardSessions.length > 0 && visibleBoardSessions.length === 0;
+	const clearSearch = () => {
+		setSearchQuery("");
+		// The button that cleared it goes away with the empty state.
+		requestAnimationFrame(() => searchInputRef.current?.focus());
+	};
+	// Cmd/Ctrl+F is find-in-chat's chord, claimed by whichever surface is in
+	// front. The board takes it while its field is on screen, unless a dialog,
+	// terminal, editor or another field has focus, or a chat on screen owns it.
+	const canFocusSearch = useCallback(() => {
+		const input = searchInputRef.current;
+		if (!input || input.getClientRects().length === 0 || isSettingsPageOpen() || useUiStore.getState().archiveModal) return false;
+		const focused = document.activeElement;
+		if (focused === input) return true;
+		if (focused instanceof Element && focused !== document.body) {
+			if (focused.closest(BOARD_FIND_YIELDS_TO)) return false;
+			if (boardRef.current?.contains(focused)) return true;
+		}
+		return !Array.from(document.querySelectorAll("[data-chat-find-surface]")).some((surface) => surface.getClientRects().length > 0);
+	}, []);
+	useAppShortcut("find-in-chat", () => {
+		searchInputRef.current?.focus();
+		searchInputRef.current?.select();
+	}, true, canFocusSearch);
 	const boardLabels = sessionsBoardLabels(t);
 	const presentation = useBoardPresentation({
 		projectId,
@@ -198,23 +271,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		return (session: WorkspaceSession): ChipTone =>
 			chipTone(pressure ?? "fine", facts.find((f) => f.id === session.id) ?? toSessionFacts(session, memoryBySession?.get(session.id), now), largest);
 	}, [sessions, memoryBySession, pressure]);
-	const hasArchive = archived.length > 0;
+	const hasArchive = archivedCount > 0;
 	const terminateSession = useTerminateSession();
 	const activeScopeRef = useRef(scopeKey);
 	activeScopeRef.current = scopeKey;
-	const [archiveOpen, setArchiveOpen] = useState(false);
-	useEffect(() => setArchiveOpen(false), [scopeKey]);
-	// Cmd+K's "Open archive" asks this project's board to open it, from here or
-	// from a page that navigates here first.
-	const archiveOpenRequest = useUiStore((state) => state.archiveOpenRequest);
-	useEffect(() => {
-		if (!archiveOpenRequest || !projectId) return;
-		if (archiveOpenRequest.projectId !== projectId || (archiveOpenRequest.hostId ?? "") !== (hostId ?? "")) return;
-		useUiStore.getState().clearArchiveOpenRequest(archiveOpenRequest.nonce);
-		if (Date.now() - archiveOpenRequest.at > ARCHIVE_REQUEST_TTL_MS) return;
-		setArchiveOpen(true);
-	}, [archiveOpenRequest, hostId, projectId]);
-
 	const openSession = useCallback((session: WorkspaceSession) => {
 		if (session.kind === "worker") recordManualWorkerOpen(session.id, hostId);
 		void navigate(sessionNavigateTarget(session.workspaceId, session.id, hostId));
@@ -257,14 +317,27 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		});
 	};
 
+	const search = <ToolbarSearch persistent inputRef={searchInputRef} label={t("board.search")} query={searchQuery} onQueryChange={setSearchQuery} />;
 	const actions = projectId && (!hostId || connected) ? (
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			{memoryLight}
+			{search}
 			{guest ? null : <ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />}
 		</>
-	) : memoryLight ?? undefined;
+	) : hostOffline ? (
+		<>
+			{search}
+			<HostOfflineStatus host={savedHost} label={hostLabel ?? ""} updatedAt={workspace ? remoteProjectQuery.dataUpdatedAt : undefined} />
+		</>
+	) : (
+		<>
+			{memoryLight}
+			{search}
+		</>
+	);
 
+	useTelemetrySurface("board", !(projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)));
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
 			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
@@ -275,30 +348,23 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	}
 
 	return (
-		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-host-id={hostId} data-project-id={projectId}>
+		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-telemetry-surface="board" ref={boardRef} data-host-id={hostId} data-project-id={projectId}>
 			<PageTopbar
 				lead={showWelcome ? undefined : (
 					<PageTopbarTitle
 						data-testid="board-topbar-label"
 					>
 						{boardLabel}
-						{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
+						{hostLabel ? <span className="truncate text-muted-foreground">· {hostLabel}</span> : null}
 					</PageTopbarTitle>
 				)}
 				actions={showWelcome ? undefined : actions}
 			/>
-			{hostId && !connected ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("remote.hostOffline")}</p> : null}
-			{hostId && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
+			{connected && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
 			{hostId && remoteProjectQuery.isSuccess && !workspace ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("session.notFound")}</p> : null}
-			{hostId && projectId && connected && workspace && !orchestrator && !hasConfiguredOrchestratorAgent(workspace) ? (
-				<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
-					<span className="min-w-0 flex-1">{t("remote.configureOrchestratorFirst", { label: labelForHost(hostId) ?? hostId, defaultValue: "Choose an orchestrator agent on {{label}} to start one." })}</span>
-					<Button type="button" variant="ghost" size="xs" className="font-medium" onClick={() => shell?.openRemoteProjectSettings(hostId, projectId)}>{t("restoreUnavailable.configureOrchestrator")}</Button>
-				</div>
-			) : null}
 
-			<div className="min-h-0 flex-1 overflow-hidden">
-				{projectId && !guest && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
+			<div className={cn("min-h-0 flex-1 overflow-hidden", hostOffline && workspace && "opacity-75")} data-host-offline={hostOffline && workspace ? "" : undefined}>
+				{projectId && !guest && health.state !== "ok" && (!hostId || connected) ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
 						<span className="min-w-0 flex-1">{health.message}</span>
@@ -332,6 +398,13 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			) : null}
 				{!hostId && (presentation.workspaceStartupState === "error" || localWorkspaceQuery.isError) ? (
 					<p className="py-10 text-center text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
+				) : hostOffline && !workspace ? (
+					<div className="flex h-full min-h-0 items-center justify-center overflow-y-auto" data-testid="board-host-offline-empty">
+						<div className="flex w-full max-w-xl flex-col items-center px-4 pb-empty-offset-y text-center">
+							<h2 className="text-subtitle font-semibold tracking-tight text-foreground">{hostLabel}</h2>
+							<p className="mt-2 text-md-sm leading-relaxed text-muted-foreground">{t(hostOfflineReasonKey(savedHost))}</p>
+						</div>
+					</div>
 				) : hostId && !workspace ? null : showWelcome ? (
 				<BoardWelcome />
 				) : showProjectEmpty ? (
@@ -339,6 +412,15 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />}
 						offer={projectId && !hostId ? <ProjectImportOffer className="mt-8 w-full text-left" projectId={projectId} /> : null}
 					/>
+				) : searchMissed ? (
+					<div className="flex h-full min-h-0 flex-col items-center justify-center gap-1 px-4 pb-empty-offset-y text-center" data-testid="board-search-empty">
+						<p className="text-control font-medium text-foreground" role="status">
+							{t("board.searchNoMatches", { query: deferredSearchQuery.trim() })}
+						</p>
+						<Button type="button" variant="quiet" size="sm" onClick={clearSearch}>
+							{t("board.searchClear")}
+						</Button>
+					</div>
 				) : (
 					<SessionsBoardGridView
 						columns={columns}
@@ -346,6 +428,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						labels={boardLabels}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
+								backgroundTasks={!hostId && !localCloudBoard ? <BackgroundTasksBadge session={session} reading={backgroundTasks.data?.get(session.id)} stale={backgroundTasks.isError} /> : undefined}
 								participants={participantsBySession.get(session.id)}
 								me={cloudUserId}
 								memory={memoryBySession?.get(session.id)}
@@ -354,42 +437,54 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								onOpenArtifact={(path) => openSessionArtifact(session, path)}
 								onOpenArtifacts={() => openSessionArtifacts(session)}
 								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
+								onShare={canShareSession(session) ? () => {
+									setShareTarget(session);
+									setShareOpen(true);
+								} : undefined}
 								session={session}
 							/>
 						)}
-						sessions={boardSessions}
+						sessions={visibleBoardSessions}
 					/>
 				)}
 			</div>
 
 			{hasArchive ? (
-				<div className="flex h-9 shrink-0 items-center border-t border-border px-2">
+				// Even 4px gap to the divider and the panel's bottom and left edges; the
+				// 30px button puts its text on the same line as the sidebar's Sign in.
+				<div className="flex shrink-0 items-center border-t border-border p-1">
 					<Button
 						aria-haspopup="dialog"
-						aria-label={t("shell.archiveSessionsAria", { count: archived.length })}
+						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
 						data-testid="board-archive-button"
-						onClick={() => setArchiveOpen(true)}
-						size="xs"
+						// The shell's archive modal, the same one the sidebar and Cmd+K open.
+						onClick={(event) => useUiStore.getState().openArchive({ projectId, hostId, returnFocus: event.currentTarget })}
+						// The xs button at 30px (no Button size is 30).
+						className="h-7.5 gap-1 px-2 text-xs"
+						size="none"
 						type="button"
 						variant="quiet"
 					>
 						<Archive className="size-icon-sm" aria-hidden="true" />
-						{t("shell.archive")}
-						<span className="tabular-nums text-passive">{archived.length}</span>
+						{t("shell.archivedSessions")}
+						<span className="tabular-nums text-passive">{archivedCount}</span>
 					</Button>
 				</div>
 			) : null}
-			{/* Stays mounted while open even if the last archived session goes. */}
-			<SessionArchiveModal
-				connected={!hostId || connected}
-				hostId={hostId}
-				onOpenChange={setArchiveOpen}
-				onOpenSession={openSession}
-				open={archiveOpen}
-				resetKey={scopeKey}
-				sessions={archived}
-			/>
 			{showStartup ? <DaemonStartupLoader /> : null}
+			{shareTarget?.cloud ? (
+				<ShareSessionDialog
+					open={shareOpen}
+					onOpenChange={setShareOpen}
+					orgId={shareTarget.cloud.orgId}
+					projectId={shareTarget.workspaceId}
+					sessionId={shareTarget.id}
+					sessionName={shareTarget.title}
+					projectName={shareTargetWorkspace?.name}
+					people={teams}
+					standaloneAgent={shareTargetWorkspace?.standaloneAgent}
+				/>
+			) : null}
 		</div>
 	);
 }

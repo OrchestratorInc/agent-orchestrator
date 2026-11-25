@@ -23,7 +23,6 @@ import {
 } from "@aoagents/product-ui";
 import type { TFunction } from "i18next";
 import { appI18n, type MessageKey } from "../i18n";
-import { isNewSidebarDesignActive } from "./new-sidebar-design";
 import { toKanbanColumn, type SessionActivity, type SessionStatus } from "../types/workspace";
 
 function translator(t: TFunction): ProductUITranslator {
@@ -61,7 +60,7 @@ export function getAttentionZoneViewForZone(
 export type SessionStatusDotView = {
 	className: string;
 	breathe: boolean;
-	/** The agent is waiting on the user; the sidebar swaps the dot for an alert icon. */
+	/** The agent is waiting on the user; the sidebar swaps the dot for a question mark. */
 	needsInput?: true;
 };
 
@@ -86,7 +85,6 @@ export function getSessionStatusDotView(
 	},
 	t: TFunction = appI18n.t,
 ): SessionStatusDotView {
-	if (!isNewSidebarDesignActive()) return getLegacySessionStatusDotView(session, t);
 	const breathe = isAgentActivityWorking(session.activity);
 	const sectionStatus: SessionStatus = session.scmStatus ?? session.status;
 	const dot = (className: string): SessionStatusDotView => ({ className, breathe });
@@ -107,44 +105,20 @@ export function getSessionStatusDotView(
 	return dot(getKanbanColumnView(column, t).dotClassName);
 }
 
-// The dot before the new sidebar design: colour from the SCM section (merged
-// keeps its own tone), and a no-PR idle session blinks blue while it works.
-function getLegacySessionStatusDotView(
-	session: {
-		activity?: SessionActivity | null;
-		displayStatus?: string;
-		scmStatus?: SessionStatus;
-		status: SessionStatus;
-	},
-	t: TFunction,
-): SessionStatusDotView {
-	const working = isAgentActivityWorking(session.activity);
-	const closedWithoutMerge = session.displayStatus === "Closed without merge";
-	const sectionStatus: SessionStatus =
-		closedWithoutMerge ? "exited" : (session.scmStatus ?? session.status);
-	const toneStatus = sectionStatus === "idle" && working ? "working" : sectionStatus;
-	const className =
-		closedWithoutMerge
-			? getSessionStatusView("exited", t).dotClassName
-			: toneStatus === "exited"
-				? "bg-passive"
-				: toneStatus === "idle" || toneStatus === "merged"
-					? getSessionStatusView(toneStatus, t).dotClassName
-					: getAttentionZoneView(toneStatus, t).dotClassName;
-	return { className, breathe: working };
-}
-
 /**
  * The things a sidebar row may flag, in order of how much they ask of the
  * user. Everything else (working aside, which has its own spinner) is quiet, so
  * the few icons that appear stand out:
- *  - "attention", red: the session needs you now (input or blocked, CI failing,
- *    or changes requested)
+ *  - "input", amber question mark: the agent stopped to ask you something
+ *    (a question, a decision or a permission prompt)
+ *  - "attention", red: something went wrong that you have to fix (CI failing,
+ *    merge conflicts or changes requested)
  *  - "ready", green: a PR you can merge
- *  - "review", orange alert: a person's review is next
+ *  - "review", amber alert: a person's review is next (same amber as "input";
+ *    the shape tells them apart)
  *  - "merged", purple and dimmed: a PR that has landed, nothing left to do
  */
-export type SessionRowMarker = "attention" | "ready" | "review" | "merged";
+export type SessionRowMarker = "input" | "attention" | "ready" | "review" | "merged";
 
 /**
  * What a sidebar row says about its session, if anything, from the daemon's
@@ -163,8 +137,8 @@ export function getSessionRowMarker(session: {
 	const display = session.displayStatus;
 	if (display === "Terminated" || sectionStatus === "terminated" || display === "Closed without merge") return null;
 
-	if (sessionNeedsInput(session)) return "attention";
-	if (display === "CI failing" || display === "Changes requested") return "attention";
+	if (sessionNeedsInput(session)) return "input";
+	if (display === "CI failing" || display === "Merge conflicts" || display === "Changes requested") return "attention";
 	if (!display && (session.status === "ci_failed" || session.status === "changes_requested")) {
 		return "attention";
 	}
@@ -172,7 +146,9 @@ export function getSessionRowMarker(session: {
 	switch (toKanbanColumn(session.kanbanColumn, sectionStatus)) {
 		case "needs_review":
 			// The review lane is the person's turn, short of the red states above.
-			// A draft is still the author's, so it stays quiet.
+			// A draft is still the author's, and a PR waiting on its stack parent
+			// is waiting on another PR, so both stay quiet.
+			if (display === "Waiting on base PR") return null;
 			return (display ? display === "Draft" : sectionStatus === "draft") ? null : "review";
 		case "validating":
 			// AO's own review loop needs nothing from the user unless it failed.
@@ -222,7 +198,8 @@ export function sessionNeedsInput(session: {
 		session.status === "needs_input" ||
 		session.activity?.state === "waiting_input" ||
 		session.activity?.state === "blocked" ||
-		session.displayStatus === "Blocked"
+		session.displayStatus === "Blocked" ||
+		session.displayStatus === "Needs input"
 	);
 }
 
@@ -234,6 +211,7 @@ function sessionNeedsYou(session: {
 }): boolean {
 	switch (session.displayStatus) {
 		case "CI failing":
+		case "Merge conflicts":
 		case "Changes requested":
 			return true;
 		case undefined:

@@ -1,27 +1,35 @@
+import { issueArtifactType } from "../../shared/github-issue-artifact";
+import { GitHubIssueArtifactDialog } from "./GitHubIssueArtifactDialog";
+import { artifactContentUrl } from "../lib/artifact-content-url";
+import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, FolderOpen, MoreVertical, Pencil, Pin, PinOff, Share, SquareTerminal, Trash2 } from "@/components/app-icons";
+import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, EyeOff, FolderOpen, Link, MessageSquarePlus, MoreVertical, Pencil, Pin, PinOff, Share, SquareTerminal, Trash2 } from "@/components/app-icons";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { isBrowserArtifactPath } from "../../shared/editor-handoff";
 import { useOpenArtifactInBrowser, useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudArtifacts";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpClient } from "../lib/cloud-cp";
-import { artifactChangeError, artifactKey, canChangeSessionArtifacts } from "../lib/artifacts";
+import { artifactChangeError, artifactKey, canChangeSessionArtifacts, findHostShareLink } from "../lib/artifacts";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
+import { captureRendererEvent } from "../lib/telemetry";
+import { deleteTargets, prepareUnpublish, publishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
-import { ShareArtifactMenuPopover, VIDEO_FILE, useShareAvailable } from "./ShareArtifactPopover";
-import type { CloudShareFile } from "../../shared/cloud-share";
+import { ShareArtifactMenuPopover, useHostShareLinks, useShareAccess, useShareAvailable } from "./ShareArtifactPopover";
+import { isUnplayableShareVideo, type CloudShareFile } from "../../shared/cloud-share";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -75,6 +83,7 @@ export function ArtifactActionsMenu({
 	downloadUrl,
 	hostId,
 	session,
+	viewingHistoricalVersion = false,
 	iconOnly = false,
 	verticalDots = false,
 	share,
@@ -84,19 +93,25 @@ export function ArtifactActionsMenu({
 	pinned = false,
 	onTogglePin,
 	onOpenInSession,
+	startsSession = false,
 	onDeleted,
 	errorClassName,
 	className,
 	children,
 }: {
-	artifact: Pick<SessionArtifact, "name" | "path" | "rawUrl" | "updatedAt">;
+	artifact: Pick<SessionArtifact, "id" | "name" | "path" | "rawUrl" | "updatedAt" | "shareUrl" | "sha256">;
 	downloadUrl?: string;
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
+	viewingHistoricalVersion?: boolean;
 	iconOnly?: boolean;
 	/** Draws the icon-only trigger as a vertical ellipsis. */
 	verticalDots?: boolean;
-	/** Adds a Share item to an icon-only menu; it opens the share panel under the trigger. */
+	/**
+	 * Adds Publish to an icon-only menu, or Copy public link and Unpublish once
+	 * the artifact is published; Publish and Unpublish open the publish panel
+	 * under the trigger.
+	 */
 	share?: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	variant?: "default" | "sidebar";
 	onEdit?: () => void;
@@ -104,6 +119,8 @@ export function ArtifactActionsMenu({
 	pinned?: boolean;
 	onTogglePin?: () => void;
 	onOpenInSession?: () => void;
+	/** Shows onOpenInSession as Start a session with this, for a file no session lists. */
+	startsSession?: boolean;
 	onDeleted?: () => void;
 	errorClassName?: string;
 	className?: string;
@@ -116,10 +133,14 @@ export function ArtifactActionsMenu({
 	const [copyError, setCopyError] = useState("");
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
+	const filenameButton = useRef<HTMLButtonElement>(null);
+	const [issueOpener, setIssueOpener] = useState<HTMLButtonElement | null>(null);
 	const [shareOpen, setShareOpen] = useState(false);
+	const [shareIntent, setShareIntent] = useState<"publish" | "unpublish">("publish");
+	const published = Boolean(artifact.shareUrl);
 	const sharing = useRef(false);
 	const shareAvailable = useShareAvailable();
-	const canShare = Boolean(share) && iconOnly && shareAvailable && !VIDEO_FILE.test(artifact.path);
+	const canShare = Boolean(share) && iconOnly && shareAvailable && !isUnplayableShareVideo(artifact.path);
 	const actionClassName = cn(className, (menuOpen || shareOpen) && "opacity-100 [@media(hover:hover)]:opacity-100");
 	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
@@ -130,19 +151,42 @@ export function ArtifactActionsMenu({
 	const cloudFileUrl = session.cloud
 		? downloadUrl ?? (access.data ? cloudArtifactFileUrl(access.data, artifact.path, artifact.updatedAt) : undefined)
 		: undefined;
+	const { baseUrl: shareBaseUrl } = useShareAccess();
+	// A cloud file's link is looked up while its delete is being confirmed.
+	// A remote daemon lists no link: a host's file takes it from this computer's host links.
+	const hostLink = findHostShareLink(useHostShareLinks(), hostId ?? "", session.id, artifact);
+	const deleted = { ...artifact, ...(hostId && !artifact.shareUrl && hostLink ? { shareUrl: hostLink.url } : {}) };
+	const deletesLink = usePublishedLinkCount(shareBaseUrl, publishedCheck({ ...session, hostId }, [deleted]), confirmingDelete) > 0;
 	// The deleted file leaves the session's artifact list on the next read.
+	// Its link is looked up while the file is there and unpublished once it is
+	// gone; a remote host's file is matched to this computer's host links then.
 	const remove = useMutation({
-		mutationFn: () => session.cloud
-			? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
-			: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
-		onSuccess: async () => {
+		mutationFn: async () => {
+			const targets = await deleteTargets(shareBaseUrl, { ...session, hostId }, [deleted]);
+			const links = await prepareUnpublish(
+				shareBaseUrl,
+				share ? targets.map(() => share) : targets,
+				{ deleting: [{ hostId, sessionId: session.id, path: artifact.path }] },
+			);
+			await (session.cloud
+				? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
+				: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }));
+			return links.unpublish();
+		},
+		onSuccess: async (linksLive) => {
 			setConfirmingDelete(false);
-			if (!hostId) useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path }));
+			warnLinksStillLive(t, linksLive);
+			useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path, hostId }));
 			onDeleted?.();
-			await queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) });
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) }),
+				...(local ? [queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey })] : []),
+			]);
 		},
 	});
 	const markdown = /\.(md|markdown)$/i.test(artifact.path);
+	const openLabel = t(startsSession ? "artifacts.startSession" : "artifacts.openInSession");
+	const OpenIcon = startsSession ? MessageSquarePlus : ArrowUpRight;
 	const confirmDelete = () => {
 		remove.reset();
 		setConfirmingDelete(true);
@@ -207,7 +251,26 @@ export function ArtifactActionsMenu({
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}
 	};
+	const issueActionLabel = t(viewingHistoricalVersion ? "issueArtifact.addLatest" : "issueArtifact.add");
+	const canAddToIssue = !iconOnly && owner && !session.cloud?.shared && Boolean(issueArtifactType(artifact.path));
+	const readIssueContent = async () => {
+		const url = session.cloud ? cloudFileUrl : artifactContentUrl(session.id, artifact.path, artifact.rawUrl, undefined, hostId);
+		if (!url) throw new Error(t("files.error.loadArtifact"));
+		const response = session.cloud ? await cloudCpFetch(url) : await fetch(url);
+		if (!response.ok) throw new Error(t("files.error.loadArtifact"));
+		return new TextDecoder("utf-8", { fatal: true }).decode(await response.arrayBuffer());
+	};
 	const copyable = owner && !fileMediaKind(artifact.path);
+	/** Copies the artifact's public link, showing why below the menu if the clipboard refuses. */
+	const copyPublicLink = async (url: string) => {
+		setCopyError("");
+		try {
+			await aoBridge.clipboard.writeText(url);
+			void captureRendererEvent("ao.artifacts.link_copied", { surface: "menu" });
+		} catch (error) {
+			setCopyError(error instanceof Error ? error.message : String(error));
+		}
+	};
 
 	const error = open.error?.message || browser.error?.message || copyError;
 	const resetOpen = open.reset;
@@ -222,7 +285,7 @@ export function ArtifactActionsMenu({
 		return () => clearTimeout(timer);
 	}, [error, resetBrowser, resetOpen]);
 	const menuTrigger = (
-		<DropdownMenuTrigger asChild>
+		<DropdownMenuTrigger asChild ref={filenameButton}>
 			<Button
 				aria-label={iconOnly ? `${t("files.moreFileActions")}: ${artifact.name}` : undefined}
 				className={cn(!iconOnly && "min-w-0 gap-1 px-1.5", actionClassName)}
@@ -278,23 +341,23 @@ export function ArtifactActionsMenu({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
-							aria-label={`${t("artifacts.openInSession")}: ${artifact.name}`}
+							aria-label={`${openLabel}: ${artifact.name}`}
 							className={actionClassName}
 							onClick={onOpenInSession}
 							size="icon-sm"
 							type="button"
 							variant="quiet"
 						>
-							<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+							<OpenIcon aria-hidden="true" className="size-icon-sm" />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">{t("artifacts.openInSession")}</TooltipContent>
+					<TooltipContent side="bottom">{openLabel}</TooltipContent>
 				</Tooltip>
 			) : null}
 			{!sidebar || local || session.cloud ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
 				{iconOnly ? (
 					canShare && share ? (
-						<ShareArtifactMenuPopover file={share} name={artifact.name} onOpenChange={setShareOpen} open={shareOpen}>
+						<ShareArtifactMenuPopover file={share} intent={shareIntent} name={artifact.name} onOpenChange={setShareOpen} open={shareOpen}>
 							<span className="inline-flex">{menuTrigger}</span>
 						</ShareArtifactMenuPopover>
 					) : <span className="inline-flex">{menuTrigger}</span>
@@ -312,12 +375,30 @@ export function ArtifactActionsMenu({
 				>
 					{/* The caller's rows come first and end with their own separator, if any render. */}
 					{children}
-					{onTogglePin || onOpenInSession || canShare ? (
+					{onTogglePin || onOpenInSession || canShare || published || canAddToIssue ? (
 						<>
-							{canShare ? (
-								<DropdownMenuItem onSelect={() => { sharing.current = true; setShareOpen(true); }}>
+							{canShare && !published ? (
+								<DropdownMenuItem onSelect={() => { sharing.current = true; setShareIntent("publish"); setShareOpen(true); }}>
 									<Share aria-hidden="true" />
 									{t("artifacts.share.publish")}
+								</DropdownMenuItem>
+							) : null}
+							{artifact.shareUrl ? (
+								<DropdownMenuItem onSelect={() => void copyPublicLink(artifact.shareUrl ?? "")}>
+									<Link aria-hidden="true" />
+									{t("artifacts.share.copyPublicLink")}
+								</DropdownMenuItem>
+							) : null}
+							{canAddToIssue ? (
+								<DropdownMenuItem onSelect={() => { sharing.current = true; setIssueOpener(filenameButton.current); }}>
+									<ArrowUpRight aria-hidden="true" />
+									{issueActionLabel}
+								</DropdownMenuItem>
+							) : null}
+							{canShare && published ? (
+								<DropdownMenuItem onSelect={() => { sharing.current = true; setShareIntent("unpublish"); setShareOpen(true); }}>
+									<EyeOff aria-hidden="true" />
+									{t("artifacts.share.unpublish")}
 								</DropdownMenuItem>
 							) : null}
 							{onTogglePin ? (
@@ -328,8 +409,8 @@ export function ArtifactActionsMenu({
 							) : null}
 							{onOpenInSession ? (
 								<DropdownMenuItem onSelect={onOpenInSession}>
-									<ArrowUpRight aria-hidden="true" />
-									{t("artifacts.openInSession")}
+									<OpenIcon aria-hidden="true" />
+									{openLabel}
 								</DropdownMenuItem>
 							) : null}
 							<DropdownMenuSeparator />
@@ -389,8 +470,8 @@ export function ArtifactActionsMenu({
 							) : null}
 							{local || copyable || session.cloud ? <DropdownMenuSeparator /> : null}
 							<DropdownMenuItem
-								className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
 								onSelect={confirmDelete}
+								variant="destructive"
 							>
 								<Trash2 aria-hidden="true" />
 								{t("artifacts.delete")}
@@ -402,10 +483,11 @@ export function ArtifactActionsMenu({
 					)}
 				</DropdownMenuContent>
 			</DropdownMenu> : null}
+			{issueOpener && <GitHubIssueArtifactDialog actionLabel={issueActionLabel} returnFocus={issueOpener} name={artifact.path.split("/").pop() || artifact.name} readContent={readIssueContent} onClose={() => setIssueOpener(null)} />}
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}
-				description={t(session.cloud ? "artifacts.deleteCloudDescription" : "artifacts.deleteDescription", { name: artifact.name })}
+				description={`${t(session.cloud ? "artifacts.deleteCloudDescription" : "artifacts.deleteDescription", { name: artifact.name })}${deletesLink ? ` ${t("artifacts.deletePublished")}` : ""}`}
 				destructive
 				error={remove.error?.message ?? null}
 				onConfirm={() => remove.mutate()}
@@ -446,7 +528,7 @@ type ArtifactActionsMenuProps = Parameters<typeof ArtifactActionsMenu>[0];
  */
 export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 	const { t } = useTranslation();
-	const { artifact, session, className, pinned = false, onTogglePin, pinInMenu = false, onOpenInSession, verticalDots = false } = props;
+	const { artifact, session, className, pinned = false, onTogglePin, pinInMenu = false, onOpenInSession, startsSession = false, verticalDots = false } = props;
 	const [active, setActive] = useState(false);
 	const pinRef = useRef<HTMLButtonElement>(null);
 	const openRef = useRef<HTMLButtonElement>(null);
@@ -616,7 +698,7 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 			{onOpenInSession ? (
 				<Button
 					ref={openRef}
-					aria-label={`${t("artifacts.openInSession")}: ${artifact.name}`}
+					aria-label={`${t(startsSession ? "artifacts.startSession" : "artifacts.openInSession")}: ${artifact.name}`}
 					className={actionClassName}
 					data-slot="tooltip-trigger"
 					data-state="closed"
@@ -624,7 +706,7 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 					type="button"
 					variant="quiet"
 				>
-					<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+					{startsSession ? <MessageSquarePlus aria-hidden="true" className="size-icon-sm" /> : <ArrowUpRight aria-hidden="true" className="size-icon-sm" />}
 				</Button>
 			) : null}
 			<span className="inline-flex">

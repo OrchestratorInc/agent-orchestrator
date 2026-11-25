@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, summarizeActivities } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, settledTurnItems, summarizeActivities } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -69,6 +69,12 @@ describe("mobile Chat timeline model", () => {
 			activity("usage", 5, "t1"), activity("reasoning", 6, "t1"), activity("plan", 7, "t1"), activity("system", 8, "t1"),
 		);
 		expect(readableConversationItems(value).slice(-1)[0]).toMatchObject({ activityKind: "system" });
+	});
+
+	it("drops model reroute notes, which the model picker already names", () => {
+		const value = snapshot();
+		value.items.push({ ...activity("system", 5, "t1"), id: "rerouted", detail: { event: "model.rerouted", fromModel: "sonnet", toModel: "claude-sonnet-5-5" } });
+		expect(readableConversationItems(value).map((item) => item.id)).not.toContain("rerouted");
 	});
 
 	// Claude keeps one task list across turns and can revise it after a turn ends,
@@ -218,7 +224,7 @@ describe("partitionTurnItems", () => {
 	});
 
 	it("keeps errors and warnings out of the fold, and leaves later steers inside it", () => {
-		const items = [message("u", 1, "user", "go"), activity("ls", 2), activity("steer", 3, { activityKind: "system", detail: { event: "steer" } }), activity("err", 4, { activityKind: "error" }), activity("warn", 5, { activityKind: "system", detail: { event: "model.rerouted" } }), message("done", 6, "assistant", "ok")];
+		const items = [message("u", 1, "user", "go"), activity("ls", 2), activity("steer", 3, { activityKind: "system", detail: { event: "steer" } }), activity("err", 4, { activityKind: "error" }), activity("warn", 5, { activityKind: "system", detail: { event: "auth.reauth_required" } }), message("done", 6, "assistant", "ok")];
 		const part = partitionTurnItems(items, turn("failed"))!;
 		expect(ids(part.work)).toEqual(["ls", "steer"]);
 		expect(ids(part.notices)).toEqual(["err", "warn"]);
@@ -239,27 +245,6 @@ describe("partitionTurnItems", () => {
 	it("leaves queued and unrecorded turns flat", () => {
 		expect(partitionTurnItems([message("u", 1, "user", "go")], turn("queued"))).toBeUndefined();
 		expect(partitionTurnItems([message("u", 1, "user", "go")], undefined)).toBeUndefined();
-	});
-});
-
-describe("streamingCursorMessageId", () => {
-	const message = (id: string, sequence: number, streaming: boolean, role: "user" | "assistant" = "assistant"): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role, origin: role === "user" ? "human" : "provider", text: id, streaming, createdAt: "" });
-	const command = (id: string, sequence: number): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "command", status: "running", summary: id, createdAt: "" });
-
-	it("puts the cursor only on the newest streaming reply", () => {
-		// ACP providers settle a turn's text blocks only when the turn ends, so
-		// earlier blocks still arrive marked streaming.
-		const items = [message("u", 1, false, "user"), message("a", 2, true), command("ls", 3), message("b", 4, true)];
-		expect(timelineModel.streamingCursorMessageId(items)).toBe("b");
-	});
-
-	it("shows no cursor while work runs after the last reply", () => {
-		expect(timelineModel.streamingCursorMessageId([message("a", 1, true), command("ls", 2)])).toBeUndefined();
-	});
-
-	it("shows no cursor once the reply has settled", () => {
-		expect(timelineModel.streamingCursorMessageId([message("a", 1, false)])).toBeUndefined();
-		expect(timelineModel.streamingCursorMessageId([])).toBeUndefined();
 	});
 });
 
@@ -350,5 +335,49 @@ describe("turn plans", () => {
 		const value = snapshot();
 		value.turns[0].plan = { steps: [] };
 		expect(groupConversationByTurn(value)[0].plan).toBeUndefined();
+	});
+});
+
+describe("settledTurnItems", () => {
+	const limit = "You've hit your 5-hour limit · resets 4:50pm (Asia/Calcutta)";
+	const notice = (id: string, summary: string, status: ConversationActivity["status"] = "running"): ConversationActivity => ({
+		kind: "activity", id, turnId: "t", sequence: 1, revision: 1, activityKind: "system", status, summary, createdAt: "",
+		detail: { event: "provider.failure" },
+	} as ConversationActivity);
+	const command = (status: ConversationActivity["status"]): ConversationActivity => ({
+		kind: "activity", id: "c", turnId: "t", sequence: 2, revision: 1, activityKind: "command", status, summary: "ls", createdAt: "",
+	} as ConversationActivity);
+	const turn = (state: ConversationTurn["state"], errorMessage?: string): ConversationTurn => ({ id: "t", state, requestedAt: "x", errorMessage });
+
+	it("leaves a running turn's rows alone, spinners included", () => {
+		const items = [notice("n1", limit), command("running")];
+		expect(settledTurnItems(items, turn("running"))).toBe(items);
+		expect(settledTurnItems(items, undefined)).toBe(items);
+	});
+
+	// Older daemons store the replayed limit notice again, running, on every agent restart.
+	it("drops a finished turn's notices that restate its error, however many replays added", () => {
+		const items = [notice("n1", limit), notice("n2", limit), notice("n3", limit, "failed")];
+		expect(settledTurnItems(items, turn("failed", limit))).toEqual([]);
+	});
+
+	it("shows one copy of another replayed notice, without a spinner", () => {
+		const weekly = "You've hit your weekly limit · resets 12:30pm (Asia/Calcutta)";
+		const shown = settledTurnItems([notice("n1", weekly), notice("n2", weekly)], turn("completed"));
+		expect(shown.map((item) => [item.id, item.kind === "activity" && item.status])).toEqual([["n1", "completed"]]);
+	});
+
+	it("keeps notices that share a title but say something different", () => {
+		const title = "Reconnecting to Claude";
+		const first = { ...notice("n1", title), detail: { event: "provider.failure", category: "connection", text: "Trying again in 4s." } } as ConversationActivity;
+		const second = { ...notice("n2", title), detail: { event: "provider.failure", category: "connection", text: "The API is overloaded." } } as ConversationActivity;
+		const replay = { ...first, id: "n3" } as ConversationActivity;
+		expect(settledTurnItems([first, second, replay], turn("completed")).map((item) => item.id)).toEqual(["n1", "n2"]);
+	});
+
+	it("settles any leftover running row the way the daemon settles a turn", () => {
+		const status = (state: ConversationTurn["state"]) => (settledTurnItems([command("running")], turn(state))[0] as ConversationActivity).status;
+		expect([status("completed"), status("recovered"), status("interrupted"), status("failed")]).toEqual(["completed", "completed", "cancelled", "failed"]);
+		expect((settledTurnItems([command("failed")], turn("completed"))[0] as ConversationActivity).status).toBe("failed");
 	});
 });

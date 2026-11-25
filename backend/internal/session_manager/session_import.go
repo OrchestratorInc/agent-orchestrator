@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -306,6 +308,71 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	return false
 }
 
+// ImportedChatWrittenElsewhere reports whether another Claude Code process has
+// an imported chat open, and otherwise whether one wrote turns to its
+// transcript after since.
+func (m *Manager) ImportedChatWrittenElsewhere(ctx context.Context, rec domain.SessionRecord, since time.Time) (open, wrote bool) {
+	if rec.Metadata.ImportSource == nil || rec.Harness != domain.HarnessClaudeCode {
+		return false, false
+	}
+	// ImportSource remains as provenance after an edit forks the conversation
+	// or a provider switch replaces it. Those providers no longer share the
+	// imported transcript, whose path is intentionally cleared at that boundary.
+	if current := rec.Metadata.ProviderConversationID; current != "" && current != importedNativeRef(rec.Metadata.ImportSource).NativeSessionID {
+		return false, false
+	}
+	if adoptedOwnedElsewhere(ctx, rec) {
+		return true, false
+	}
+	return false, !since.IsZero() && claudeTurnsWrittenElsewhere(ctx, rec.Metadata.NativeTranscriptPath, rec.Metadata.WorkspacePath, since)
+}
+
+func claudeTurnsWrittenElsewhere(ctx context.Context, path, workspace string, since time.Time) bool {
+	// Unknown transcript state cannot prove the live provider is current.
+	if path == "" || workspace == "" {
+		return true
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return true
+	}
+	if !info.ModTime().After(since) {
+		return false
+	}
+	// A tool result or image can exceed a fixed tail window, and our own
+	// output can push an external turn out of it. Read complete records from
+	// the changed file, keeping only one record in memory at a time.
+	reader := bufio.NewReader(file)
+	for {
+		if ctx.Err() != nil {
+			return true
+		}
+		line, readErr := reader.ReadBytes('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return true
+		}
+		if len(line) == 0 {
+			return false
+		}
+		var record struct {
+			Type      string    `json:"type"`
+			CWD       string    `json:"cwd"`
+			Timestamp time.Time `json:"timestamp"`
+		}
+		if json.Unmarshal(line, &record) != nil || record.Type != "user" && record.Type != "assistant" {
+			continue
+		}
+		if record.CWD != "" && record.Timestamp.After(since) && !pathWithin(workspace, record.CWD) {
+			return true
+		}
+	}
+}
+
 // claudeSessionLive reads Claude Code's live-session registry. A launch inside
 // this session's own AO workspace is an earlier AO attempt, not another owner.
 func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) bool {
@@ -323,6 +390,7 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 			SessionID string `json:"sessionId"`
 			CWD       string `json:"cwd"`
 			StartedAt int64  `json:"startedAt"`
+			Version   string `json:"version"`
 		}
 		if err != nil || json.Unmarshal(body, &live) != nil || live.SessionID != nativeID || live.PID <= 0 {
 			continue
@@ -330,7 +398,7 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 		if ownWorkspace != "" && pathWithin(ownWorkspace, live.CWD) {
 			continue
 		}
-		if claudeProcessLive(ctx, live.PID, live.StartedAt) {
+		if claudeProcessLive(ctx, live.PID, live.StartedAt, live.Version) {
 			return true
 		}
 	}
@@ -340,13 +408,13 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 // claudeProcessLive checks a registry entry against the process now holding its
 // PID. Registry files outlive crashes and PIDs are reused, so the PID must still
 // be a Claude process, and one that started before it registered the session.
-func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) bool {
+func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64, version string) bool {
 	if !processalive.Alive(pid) {
 		return false
 	}
 	name, started, ok := processStart(ctx, pid)
 	name = strings.ToLower(name)
-	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") {
+	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") && (version == "" || !strings.EqualFold(name, version)) {
 		return false
 	}
 	return registeredAtMillis <= 0 || !started.After(time.UnixMilli(registeredAtMillis))
@@ -360,6 +428,23 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) b
 // live-session registry, and their ACP session/load does not refuse a second
 // writer. See importOwnedElsewhere.
 func writableTranscriptOwner(ctx context.Context, path string) bool {
+	return writableTranscriptOwnerMatching(ctx, path, func(_ context.Context, _ int, command string) bool {
+		for _, name := range importedProcessNames {
+			if name == "fx" {
+				if command == "fx" || command == "fx.exe" {
+					return true
+				}
+				continue
+			}
+			if strings.Contains(command, name) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func writableTranscriptOwnerMatching(ctx context.Context, path string, match func(context.Context, int, string) bool) bool {
 	if path == "" {
 		return false
 	}
@@ -367,18 +452,18 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 	defer cancel()
 	out, _ := process.CommandContext(probeCtx, "lsof", "-F", "pcfa", "--", path).Output()
 	command := ""
+	pid := 0
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "p") {
 			command = ""
+			pid, _ = strconv.Atoi(line[1:])
 		}
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
 		if line == "aw" || line == "au" {
-			for _, name := range importedProcessNames {
-				if strings.Contains(command, name) {
-					return true
-				}
+			if match(probeCtx, pid, command) {
+				return true
 			}
 		}
 	}
@@ -671,7 +756,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		// top of the resume request's budget, so a long install is not cut
 		// short and rerun from the start on every retry.
 		setupCtx, cancelSetup := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
-		err := m.provisionWorkspace(setupCtx, project, ws.Path)
+		err := m.provisionWorkspace(setupCtx, project, rec.ID, ws.Path)
 		cancelSetup()
 		if err != nil {
 			return rec, err
@@ -812,12 +897,27 @@ func importChanges(ctx context.Context, repo string) ([]string, error) {
 	var paths []string
 	for _, path := range strings.Split(string(tracked)+string(untracked), "\x00") {
 		// A nested repository is listed as a directory.
-		if path != "" && !strings.HasSuffix(path, "/") {
+		if path != "" && !strings.HasSuffix(path, "/") && !importNativeDatabasePath(path) {
 			paths = append(paths, filepath.FromSlash(path))
 		}
 	}
 	slices.Sort(paths)
 	return slices.Compact(paths), nil
+}
+
+// Native Crush databases are prepared separately, selecting one conversation.
+// Transferring the raw store would leak unrelated history and block preparation.
+func importNativeDatabasePath(path string) bool {
+	path = filepath.FromSlash(path)
+	if filepath.Base(filepath.Dir(path)) != ".crush" {
+		return false
+	}
+	switch filepath.Base(path) {
+	case "crush.db", "crush.db-wal", "crush.db-shm", "crush.db-journal":
+		return true
+	default:
+		return false
+	}
 }
 
 // importFacts records each changed path as it is now; a path missing from the
@@ -950,7 +1050,9 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		if err != nil {
 			return err
 		}
-		staged, err := importGit(ctx, state.source, "diff", "--cached", "--binary", "--full-index", "HEAD")
+		staged, err := importGit(ctx, state.source, "diff", "--cached", "--binary", "--full-index", "HEAD", "--", ".",
+			":(glob,exclude)**/.crush/crush.db", ":(glob,exclude)**/.crush/crush.db-wal",
+			":(glob,exclude)**/.crush/crush.db-shm", ":(glob,exclude)**/.crush/crush.db-journal")
 		if err != nil {
 			return err
 		}

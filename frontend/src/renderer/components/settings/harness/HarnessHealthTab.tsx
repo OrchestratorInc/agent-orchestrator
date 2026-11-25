@@ -24,10 +24,7 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 	const installState: { tone: HarnessTone; label: string } = installation?.state === "installed" ? { tone: "ok", label: t("settings.harness.installed") }
 		: installation?.state === "not_installed" ? { tone: "off", label: t("settings.harness.notInstalled") }
 		: { tone: "off", label: t("settings.harness.installationUnknown") };
-	// An expired login token the harness renews by itself is signed in, not a problem to fix.
-	const authTone: HarnessTone = authCheckFailed || readinessAgent?.authentication.freshness !== "fresh" ? "off"
-		: renewsOnRun || details.authStatus === "authorized" || details.authStatus === "not_applicable" ? "ok"
-		: details.authStatus === "unauthorized" ? "error" : "off";
+	const { authTone } = details;
 	const authLabel = renewsOnRun ? t("settings.harness.health.authRenewsOnRun")
 		: details.authStatus === "configured" && !details.unverifiedProvider ? t("settings.harness.health.connectionNotChecked")
 		: details.authSummary;

@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { ProjectSettingsSaveState, ProjectSettingsSection as SettingsSection } from "./ProjectSettingsForm";
 import { deriveRepoHost, deriveRepoPath, IntakeFields, intakeNeedsRule } from "./IntakeFields";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { AgentModelField, ProjectAutoReviewToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
+import { AgentModelField, ProjectAttributionToggles, ProjectAutoReviewToggle, ProjectCoAuthorCommitsToggle, ProjectWorkersRequestReviewToggle } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Button } from "./ui/button";
 
@@ -32,6 +32,12 @@ export type ProjectSettingsDraft = {
 	autoReview: boolean;
 	/** Local-only: workers may ask AO to review their own PRs. */
 	workersRequestReview?: boolean;
+	/** Cloud-only: agent commits name the AO GitHub App as a co-author. */
+	coAuthorCommits?: boolean;
+	/** Local-only, Orchestrator attribution beta: add the Co-authored-by trailer to commits. */
+	attributionCommitTrailer?: boolean;
+	/** Local-only, Orchestrator attribution beta: end PR bodies with the Orchestrator line. */
+	attributionPRFooter?: boolean;
 	intakeEnabled: boolean;
 	intakeRepo: string;
 	intakeAssignee: string;
@@ -50,10 +56,15 @@ export type ProjectAgentPickerProps = {
 type Capabilities = {
 	workflow: boolean;
 	sessionPrefix: boolean;
+	/** Shown in an empty session prefix field: the prefix new sessions get. */
+	sessionPrefixPlaceholder?: string;
 	intake: boolean;
 	reviewer: boolean;
 	requiredAgents: boolean;
 	workersRequestReview?: boolean;
+	coAuthorCommits?: boolean;
+	/** Shown while the Orchestrator attribution beta is on (Settings, Advanced). */
+	attribution?: boolean;
 	nameLimit?: number;
 	requiredBranch?: boolean;
 	/** Cloud defaults and tuning belong to its runtime, rather than the local catalog. */
@@ -68,6 +79,7 @@ type RoleFields = {
 	effort: "workerEffort" | "orchestratorEffort" | "reviewerEffort";
 	permissions: "workerPermissions" | "orchestratorPermissions" | "reviewerPermissions";
 };
+type ValidationField = "agents" | "displayName" | "defaultBranch" | "tuning";
 const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 	worker: { agent: "workerAgent", model: "workerModel", mode: "workerMode", effort: "workerEffort", permissions: "workerPermissions" },
 	orchestrator: { agent: "orchestratorAgent", model: "orchestratorModel", mode: "orchestratorMode", effort: "orchestratorEffort", permissions: "orchestratorPermissions" },
@@ -105,7 +117,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 	const { t } = useTranslation();
 	const [draft, setDraft] = useState(initialValues);
 	const saved = useRef(JSON.stringify(initialValues));
-	const failedKey = useRef<string | undefined>(undefined);
+	const failedKey = useRef<{ draft: string; validity?: string; section?: SettingsSection; field?: ValidationField } | undefined>(undefined);
 	const [error, setError] = useState<string>();
 	const [replacementError, setReplacementError] = useState<string>();
 	const [didSave, setDidSave] = useState(false);
@@ -122,37 +134,64 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 			setDidSave(true);
 		},
 		onError: (cause, values) => {
-			failedKey.current = JSON.stringify(values);
+			failedKey.current = { draft: JSON.stringify(values) };
 			setError(cause instanceof Error ? cause.message : t("settings.project.saveFailed"));
 		},
 	});
 	const dirty = JSON.stringify(draft) !== saved.current;
+	const savedValues = JSON.parse(saved.current) as ProjectSettingsDraft;
+	const failed = failedKey.current;
+	const failedDraft = failed !== undefined && failed.draft === JSON.stringify(draft) &&
+		(failed.validity === undefined || failed.validity === JSON.stringify(validity)) &&
+		(failed.section === undefined || failed.section === section);
+	const inlineError = failedDraft ? error : undefined;
+	const settingRow = (id: string, fields: (keyof ProjectSettingsDraft)[], content: ReactNode) => {
+		const changed = fields.some((field) => draft[field] !== savedValues[field]);
+		return <div data-testid={`setting-${id}`}>
+			{content}
+			{changed && inlineError && <p id={`setting-${id}-feedback`} className="px-(--settings-row-inset) pb-2 text-xs text-warning" aria-live="polite">
+				{t("settings.project.unsavedChanges")} · {inlineError}
+			</p>}
+		</div>;
+	};
 	const intake = { enabled: draft.intakeEnabled, repo: draft.intakeRepo, assignee: draft.intakeAssignee };
 	const intakeIncomplete = capabilities.intake && intakeNeedsRule(intake);
 	const visibleRoles = capabilities.reviewer ? roles : roles.slice(0, 2);
 	const nameLimit = capabilities.nameLimit ?? MAX_PROJECT_DISPLAY_NAME_LEN;
-	const validate = () => {
-		if (capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent)) return t("settings.project.agentsRequired");
-		if (!draft.displayName.trim()) return t("settings.project.nameRequired");
-		if ([...draft.displayName.trim()].length > nameLimit && draft.displayName.trim() !== initialValues.displayName.trim()) return t("settings.project.nameTooLong", { max: nameLimit });
-		if (capabilities.requiredBranch && (!draft.defaultBranch.trim() || [...draft.defaultBranch.trim()].length > 255)) return t("settings.cloudProject.identityValidation");
-		if (visibleRoles.some((role) => !validity[role])) return t("settings.project.tuningInvalid");
+	const nameInvalid = inlineError !== undefined && failed?.field === "displayName";
+	const validate = (): { field: ValidationField; message: string } | undefined => {
+		if (capabilities.requiredAgents &&
+			(section === "agents" || draft.workerAgent !== savedValues.workerAgent || draft.orchestratorAgent !== savedValues.orchestratorAgent) &&
+			(!draft.workerAgent || !draft.orchestratorAgent)) return { field: "agents", message: t("settings.project.agentsRequired") };
+		if (!draft.displayName.trim()) return { field: "displayName", message: t("settings.project.nameRequired") };
+		if ([...draft.displayName.trim()].length > nameLimit && draft.displayName.trim() !== initialValues.displayName.trim()) return { field: "displayName", message: t("settings.project.nameTooLong", { max: nameLimit }) };
+		if (capabilities.requiredBranch && (!draft.defaultBranch.trim() || [...draft.defaultBranch.trim()].length > 255)) return { field: "defaultBranch", message: t("settings.cloudProject.identityValidation") };
+		if (visibleRoles.some((role) => !validity[role])) return { field: "tuning", message: t("settings.project.tuningInvalid") };
 		return undefined;
 	};
 	const submit = () => {
 		if (disabled || mutation.isPending || intakeIncomplete || (!dirty && !saveUnchanged)) return;
 		const problem = validate();
-		setError(problem);
-		if (problem) return;
+		setError(problem?.message);
+		if (problem) {
+			failedKey.current = { draft: JSON.stringify(draft), validity: JSON.stringify(validity), section, field: problem.field };
+			return;
+		}
 		setReplacementError(undefined);
 		setDidSave(false);
 		mutation.mutate(draft);
 	};
 	useEffect(() => {
-		if (disabled || !dirty || mutation.isPending || JSON.stringify(draft) === failedKey.current) return;
+		if (error && !failedDraft) {
+			failedKey.current = undefined;
+			setError(undefined);
+		}
+	}, [draft, error, failedDraft, validity, section]);
+	useEffect(() => {
+		if (disabled || !dirty || mutation.isPending || failedDraft) return;
 		const timeout = window.setTimeout(submit, 650);
 		return () => window.clearTimeout(timeout);
-	}, [disabled, draft, dirty, mutation.isPending, validity]);
+	}, [disabled, draft, dirty, mutation.isPending, validity, failedDraft, section]);
 	useEffect(() => {
 		if (!mutation.isPending) { setShowSaving(false); return; }
 		const timeout = window.setTimeout(() => setShowSaving(true), 200);
@@ -172,7 +211,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		<fieldset disabled={disabled || mutation.isPending} className="flex min-w-0 flex-col gap-(--size-settings-section-gap)">
 			{section === "general" ? <>
 				<ProjectSettingsSection title={t("settings.project.details")} grouped>
-					<ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} onChange={(displayName) => patch({ displayName })} />
+					{settingRow("displayName", ["displayName"], <ProjectSettingsInputRow id="projectName" label={t("settings.project.name")} editLabel={t("settings.field.edit", { label: t("settings.project.name") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.displayName} describedBy={inlineError && draft.displayName !== savedValues.displayName ? "setting-displayName-feedback" : undefined} invalid={nameInvalid} onChange={(displayName) => patch({ displayName })} />)}
 					{details.map((detail) => <ProjectSettingsValueRow key={detail.label} {...detail} externalLink={ProductExternalLink} />)}
 				</ProjectSettingsSection>
 				{workspaceRepos && <ProjectSettingsSection title={t("settings.project.workspaceRepos")} grouped>
@@ -180,14 +219,18 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 				</ProjectSettingsSection>}
 				{capabilities.workflow && <>
 					<ProjectSettingsSection title={t("settings.project.worktrees")} grouped>
-						<ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} />
-						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
+						{settingRow("defaultBranch", ["defaultBranch"], <ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} describedBy={inlineError && draft.defaultBranch !== savedValues.defaultBranch ? "setting-defaultBranch-feedback" : undefined} invalid={inlineError !== undefined && failed?.field === "defaultBranch"} onChange={(defaultBranch) => patch({ defaultBranch })} />)}
+						{capabilities.sessionPrefix && settingRow("sessionPrefix", ["sessionPrefix"], <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder={capabilities.sessionPrefixPlaceholder ?? "ao"} describedBy={inlineError && draft.sessionPrefix !== savedValues.sessionPrefix ? "setting-sessionPrefix-feedback" : undefined} onChange={(sessionPrefix) => patch({ sessionPrefix })} />)}
 					</ProjectSettingsSection>
-					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}
+					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped>{settingRow("intake", ["intakeEnabled", "intakeRepo", "intakeAssignee"], <IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} />)}</ProjectSettingsSection>}
 					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
-						<ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} />
-						{capabilities.workersRequestReview && <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />}
+						{settingRow("autoReview", ["autoReview"], <ProjectAutoReviewToggle description={autoReviewDescription} checked={draft.autoReview} onCheckedChange={(autoReview) => patch({ autoReview })} />)}
+						{capabilities.workersRequestReview && settingRow("workersRequestReview", ["workersRequestReview"], <ProjectWorkersRequestReviewToggle checked={draft.workersRequestReview ?? false} onCheckedChange={(workersRequestReview) => patch({ workersRequestReview })} />)}
+						{capabilities.coAuthorCommits && settingRow("coAuthorCommits", ["coAuthorCommits"], <ProjectCoAuthorCommitsToggle checked={draft.coAuthorCommits ?? true} onCheckedChange={(coAuthorCommits) => patch({ coAuthorCommits })} />)}
 					</ProjectSettingsSection>
+					{capabilities.attribution && <ProjectSettingsSection title={t("settings.project.attribution")} grouped>
+						{settingRow("attribution", ["attributionCommitTrailer", "attributionPRFooter"], <ProjectAttributionToggles commitTrailer={draft.attributionCommitTrailer ?? true} prFooter={draft.attributionPRFooter ?? true} onChange={patch} />)}
+					</ProjectSettingsSection>}
 				</>}
 				{generalExtra}
 			</> : <>
@@ -214,16 +257,17 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						[fields.permissions]: value,
 					}));
 					return <ProjectSettingsSection key={role} title={t(`settings.models.${role}Role`)} grouped>
-						<ProjectSettingsRow label={t("settings.project.agent")}><div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1.5"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: error !== undefined && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
-						{/* The field's picker sits beside the agent's; a warning takes its own line below both. */}<div className="contents"><AgentModelField warningClassName="basis-full justify-end text-right" role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} cloudOrgId={cloudOrgId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
+						{/* A warning wraps onto its own line under the whole row, starting at the label. Top-aligned, so it grows the row downward and moves nothing; the control-height label box keeps "Agent" level with the pickers. */}
+						{settingRow(`${role}-agent`, [fields.agent, fields.model, fields.mode, fields.effort], <ProjectSettingsRow label={t("settings.project.agent")} className="flex-wrap items-start justify-end gap-x-2 gap-y-1.5 [&>:first-child]:mr-auto [&>:first-child]:min-h-control-md [&>:last-child]:contents"><div className="contents"><div className="min-w-0">{renderAgent({ disabled: capabilities.lockedAgents, role, draft, value: selectedAgent, invalid: inlineError !== undefined && failed?.field === "agents" && !selectedAgent, onChange: (value) => setDraft((current) => ({ ...current, [fields.agent]: value, ...(value !== current[fields.agent] ? { [fields.model]: "", [fields.mode]: "", [fields.effort]: "", ...(role === "reviewer" || capabilities.runtimeDefaults ? { [fields.permissions]: "" } : {}) } : {}) })) })}</div>
+						<div className="contents"><AgentModelField warningClassName="order-last basis-full px-0" role={role} agentId={agent} projectId={modelScope(agent)} hostId={modelHostId} cloudOrgId={cloudOrgId} model={inheritsWorker ? draft.workerModel : draft[fields.model]} mode={draft[fields.mode]} effort={inheritsWorker ? draft.workerEffort : draft[fields.effort]}
 							allowCustomFallback={capabilities.runtimeDefaults} followCatalogDefaults={!capabilities.runtimeDefaults}
 							supportedEfforts={capabilities.runtimeDefaults ? agent === "codex" ? ["low", "medium", "high", "xhigh", "max"] : agent === "claude-code" ? ["low", "medium", "high", "max"] : undefined : undefined}
 							emptyLabel={capabilities.runtimeDefaults && agent === "" ? t("settings.cloudProject.sessionModel") : undefined}
 							independentMode={capabilities.runtimeDefaults && agent === "cursor"}
 							onModelChange={(value) => updateConfig(fields.model, value)} onModeChange={(value) => updateConfig(fields.mode, value)} onEffortChange={(value) => updateConfig(fields.effort, value)} onValidityChange={(valid) => setValidity((current) => current[role] === valid ? current : { ...current, [role]: valid })} />
 							{capabilities.runtimeDefaults && agent === "cursor" && <SettingsOptionMenu aria-label={t(`settings.models.${role}Mode`)} value={draft[fields.mode]} triggerClassName="w-fit" options={[{ value: "", label: t("settings.cloudProject.agentMode") }, { value: "plan", label: t("settings.cloudProject.plan") }, { value: "ask", label: t("settings.cloudProject.ask") }]} onChange={(value) => updateConfig(fields.mode, value)} />}
-						</div></div></ProjectSettingsRow>
-						<ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>
+						</div></div></ProjectSettingsRow>)}
+						{settingRow(`${role}-permissions`, [fields.permissions], <ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>)}
 					</ProjectSettingsSection>;
 				})}
 				{capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}

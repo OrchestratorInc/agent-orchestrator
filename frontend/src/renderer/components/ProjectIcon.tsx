@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Folder, FolderOpen } from "@/components/app-icons";
-import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 
@@ -43,7 +42,7 @@ export function ProjectIcon({
 	expanded: boolean;
 	className?: string;
 }) {
-	const avatarsEnabled = useUiStore((state) => state.projectAvatars && isNewSidebarDesign(state));
+	const avatarsEnabled = useUiStore((state) => state.projectAvatars);
 	const [loadedUrl, setLoadedUrl] = useState<string>();
 	const [failedUrl, setFailedUrl] = useState<string>();
 	if (!avatarsEnabled) {

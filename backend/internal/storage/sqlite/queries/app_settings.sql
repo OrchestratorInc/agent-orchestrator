@@ -13,6 +13,8 @@ UPDATE app_settings SET version_refresh = ?, updated_at = ? WHERE id = 1;
 -- name: SetComputerUse :exec
 UPDATE app_settings SET computer_use = ?, updated_at = ? WHERE id = 1;
 
+-- name: SetCommitAttribution :exec
+UPDATE app_settings SET commit_attribution = ?, updated_at = ? WHERE id = 1;
 -- name: SetLimitHistory :exec
 UPDATE app_settings SET limit_history = ?, updated_at = ? WHERE id = 1;
 
@@ -33,3 +35,6 @@ UPDATE app_settings
 SET harness_defaults = json_remove(harness_defaults, sqlc.arg(harness_path)),
     updated_at = sqlc.arg(updated_at)
 WHERE id = 1;
+
+-- name: SetAccountHandoff :exec
+UPDATE app_settings SET account_handoff = ?, updated_at = ? WHERE id = 1;

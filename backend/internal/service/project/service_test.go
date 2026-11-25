@@ -756,7 +756,7 @@ func TestManager_DefaultsWhenUnconfigured(t *testing.T) {
 	}
 
 	// A remoteless project stays in automatic mode instead of deriving a default
-	// from its current checkout. The empty config remains unpersisted.
+	// from its current checkout. Only the role agents are filled in.
 	got, err := m.Get(ctx, "ao")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -770,8 +770,11 @@ func TestManager_DefaultsWhenUnconfigured(t *testing.T) {
 	if got.Project.Agent != "claude-code" {
 		t.Fatalf("default agent = %q, want claude-code", got.Project.Agent)
 	}
-	if got.Project.Config != nil {
-		t.Fatalf("unconfigured project should omit config, got %#v", got.Project.Config)
+	if got.Project.Config == nil || got.Project.Config.Worker.Harness != domain.HarnessClaudeCode || got.Project.Config.Orchestrator.Harness != domain.HarnessClaudeCode {
+		t.Fatalf("unconfigured project should get the default worker and orchestrator agents, got %#v", got.Project.Config)
+	}
+	if got.Project.Config.DefaultBranch != "" {
+		t.Fatalf("unconfigured project should not pin a default branch, got %q", got.Project.Config.DefaultBranch)
 	}
 
 	list, err := m.List(ctx)
@@ -809,6 +812,81 @@ func TestManager_GetUsesConfiguredDefaultHarness(t *testing.T) {
 	}
 }
 
+func TestManager_AddFillsMissingRoleAgentsFromPreferredAgent(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := project.NewWithDeps(project.Deps{Store: store, PreferredAgent: func(context.Context) domain.AgentHarness { return domain.HarnessCodex }})
+
+	// `ao project add --worker-agent claude-code` names only the worker.
+	cfg := domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessClaudeCode}}
+	proj, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("partial"), Config: &cfg})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if proj.Config == nil || proj.Config.Worker.Harness != domain.HarnessClaudeCode || proj.Config.Orchestrator.Harness != domain.HarnessCodex {
+		t.Fatalf("partial config should keep the worker and fill the orchestrator, got %#v", proj.Config)
+	}
+
+	// A folder added with no config gets the preferred agent for both roles.
+	proj, err = m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("bare")})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if proj.Config == nil || proj.Config.Worker.Harness != domain.HarnessCodex || proj.Config.Orchestrator.Harness != domain.HarnessCodex {
+		t.Fatalf("bare add should fill both roles, got %#v", proj.Config)
+	}
+}
+
+func TestManager_AddLeavesRolesEmptyWhenPreferredAgentFindsNone(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var rankCalls int
+	m := project.NewWithDeps(project.Deps{
+		Store:          store,
+		DefaultHarness: domain.HarnessClaudeCode,
+		PreferredAgent: func(context.Context) domain.AgentHarness {
+			rankCalls++
+			return ""
+		},
+	})
+
+	// Cheap repository validation fails before calling PreferredAgent.
+	if _, err := m.Add(ctx, project.AddInput{Path: t.TempDir(), ProjectID: ptr("not-a-repo")}); err == nil {
+		t.Fatal("expected NOT_A_GIT_REPO error")
+	}
+	if rankCalls != 0 {
+		t.Fatalf("PreferredAgent called %d times on invalid repo, want 0", rankCalls)
+	}
+
+	// Partial add keeps the explicit worker and leaves the orchestrator empty
+	// instead of persisting an uninstalled default fallback.
+	cfg := domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessAider}}
+	proj, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("partial"), Config: &cfg})
+	if err != nil {
+		t.Fatalf("Add partial: %v", err)
+	}
+	if proj.Config == nil || proj.Config.Worker.Harness != domain.HarnessAider || proj.Config.Orchestrator.Harness != "" {
+		t.Fatalf("partial config = %#v, want worker=aider orchestrator=\"\"", proj.Config)
+	}
+
+	// Bare add leaves both roles empty when no launchable agent is installed.
+	proj, err = m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("bare")})
+	if err != nil {
+		t.Fatalf("Add bare: %v", err)
+	}
+	if proj.Config != nil && (proj.Config.Worker.Harness != "" || proj.Config.Orchestrator.Harness != "") {
+		t.Fatalf("bare config = %#v, want empty role harnesses", proj.Config)
+	}
+}
+
 func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
@@ -822,8 +900,8 @@ func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 	if proj.DefaultBranch != domain.DefaultBranchAuto {
 		t.Fatalf("DefaultBranch = %q, want auto", proj.DefaultBranch)
 	}
-	if proj.Config != nil {
-		t.Fatalf("automatic branch selection should not pin config, got %#v", proj.Config)
+	if proj.Config != nil && proj.Config.DefaultBranch != "" {
+		t.Fatalf("automatic branch selection should not pin a branch, got %#v", proj.Config)
 	}
 
 	got, err := m.Get(ctx, "ao")
@@ -2092,11 +2170,6 @@ func TestManager_AddWorkspaceRejectsReservedChildName(t *testing.T) {
 	wantCode(t, err, "WORKSPACE_CHILD_RESERVED_NAME")
 }
 
-// TestManager_AddWorkspaceNonGitChildWithNestedRepo verifies that a non-git
-// child folder containing a nested git repo is retained internally as an asset
-// but omitted from the repository list. The child is gitignored in the parent,
-// so the nested repo is never staged by git add -A and guardNoGitlinks never
-// fires.
 func TestManager_AddWorkspaceNonGitChildWithNestedRepo(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
@@ -2106,8 +2179,6 @@ func TestManager_AddWorkspaceNonGitChildWithNestedRepo(t *testing.T) {
 	// One direct committed child repo — valid on its own.
 	gitRepoWithCommit(t, filepath.Join(parent, "app"))
 	// A non-git child folder containing a nested git repo at depth 2.
-	// detectWorkspaceChildren registers packages/ as needs_init; it gets
-	// gitignored in the parent, so packages/foo is never staged as a gitlink.
 	pkgs := filepath.Join(parent, "packages")
 	if err := os.MkdirAll(pkgs, 0o755); err != nil {
 		t.Fatalf("mkdir packages: %v", err)
@@ -2562,4 +2633,124 @@ func TestManager_AddFirstForInstallFalseForUpgradeWithOnlyArchivedProjects(t *te
 	if !milestones["project_added"] {
 		t.Fatal("marker not claimed")
 	}
+}
+
+func TestManager_InitializeRepositoryCreatesNewProjectFolder(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+
+	newFolder := func(t *testing.T) string {
+		t.Helper()
+		base := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", base)
+		return filepath.Join(base, "ao", "projects", "fresh")
+	}
+
+	t.Run("makes the folder and its parents, then it can be added", func(t *testing.T) {
+		dir := newFolder(t)
+		result, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
+		if err != nil {
+			t.Fatalf("InitializeRepository: %v", err)
+		}
+		if result.Path != dir {
+			t.Fatalf("Path = %q, want %q", result.Path, dir)
+		}
+		if out, err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "HEAD").CombinedOutput(); err != nil {
+			t.Fatalf("expected initial commit: %v (%s)", err, out)
+		}
+		if _, err := m.Add(ctx, project.AddInput{Path: dir, ProjectID: ptr("fresh")}); err != nil {
+			t.Fatalf("Add after create: %v", err)
+		}
+	})
+
+	t.Run("refuses a folder that already exists and leaves it alone", func(t *testing.T) {
+		dir := isolatedPlainFolder(t)
+		keep := filepath.Join(dir, "keep.txt")
+		if err := os.WriteFile(keep, []byte("mine\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
+		wantCode(t, err, "PATH_EXISTS")
+		if _, err := os.Stat(keep); err != nil {
+			t.Fatalf("existing file touched: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
+			t.Fatalf("existing folder was initialized: %v", err)
+		}
+	})
+
+	t.Run("refuses a path in Orchestrator's state and makes no folders", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("GIT_CEILING_DIRECTORIES", home)
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: filepath.Join(home, ".ao", "x", "y"), Create: true})
+		wantCode(t, err, "PROJECT_SETUP_PATH_UNSAFE")
+		if _, statErr := os.Stat(filepath.Join(home, ".ao", "x")); !os.IsNotExist(statErr) {
+			t.Fatalf("parent folder made inside Orchestrator's state: %v", statErr)
+		}
+	})
+
+	t.Run("removes the new folder when setup fails", func(t *testing.T) {
+		dir := newFolder(t)
+		// No git on PATH: git init fails after the folder was made.
+		t.Setenv("PATH", t.TempDir())
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
+		if err == nil {
+			t.Fatal("expected failure without git")
+		}
+		if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+			t.Fatalf("new folder left behind after failure: %v", statErr)
+		}
+	})
+}
+
+func TestManager_InitializeRepositoryCreateResumesItsOwnFolder(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	newFolder := func(t *testing.T) string {
+		t.Helper()
+		base := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", base)
+		return filepath.Join(base, "fresh")
+	}
+
+	t.Run("a retry with the same id succeeds on the folder it made", func(t *testing.T) {
+		dir := newFolder(t)
+		in := project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-1"}
+		if _, err := m.InitializeRepository(ctx, in); err != nil {
+			t.Fatalf("first create: %v", err)
+		}
+		// The response was lost; the phone asks again.
+		result, err := m.InitializeRepository(ctx, in)
+		if err != nil {
+			t.Fatalf("retry: %v", err)
+		}
+		if result.Path != dir {
+			t.Fatalf("Path = %q, want %q", result.Path, dir)
+		}
+		out, err := exec.Command("git", "-C", dir, "rev-list", "--count", "HEAD").CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != "1" {
+			t.Fatalf("commits = %q (%v), want 1", out, err)
+		}
+	})
+
+	t.Run("another request's folder is not taken over", func(t *testing.T) {
+		dir := newFolder(t)
+		if _, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-a"}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-b"})
+		wantCode(t, err, "PATH_EXISTS")
+	})
+
+	t.Run("an existing folder with no id is not taken over", func(t *testing.T) {
+		dir := gitRepo(t)
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true, CreateID: "req-c"})
+		wantCode(t, err, "PATH_EXISTS")
+	})
+
+	t.Run("refuses an id that could reach git as anything but a value", func(t *testing.T) {
+		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: newFolder(t), Create: true, CreateID: "--global"})
+		wantCode(t, err, "INVALID_CREATE_ID")
+	})
 }

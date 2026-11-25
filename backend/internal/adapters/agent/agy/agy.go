@@ -46,6 +46,7 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.RWMutex
 	resolvedBinary string
+	importVersion  func(context.Context) (string, error)
 }
 
 // New returns a ready-to-register Agy adapter.
@@ -104,7 +105,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 // GetLaunchCommand builds the argv to start an interactive Agy session.
 // Shape:
 //
-//	agy --add-dir <WorkspacePath> [--dangerously-skip-permissions] [--model <Model>] [--prompt-interactive <Prompt>]
+//	agy --add-dir <WorkspacePath> [--mode <mode> | --dangerously-skip-permissions] [--model <Model>] [--prompt-interactive <Prompt>]
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.agyBinary(ctx)
 	if err != nil {
@@ -117,8 +118,15 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		cmd = append(cmd, "--add-dir", cfg.WorkspacePath)
 	}
 
-	if cfg.Permissions == ports.PermissionModeBypassPermissions {
+	switch ports.NormalizePermissionMode(cfg.Permissions) {
+	case ports.PermissionModeAcceptEdits:
+		cmd = append(cmd, "--mode", "accept-edits")
+	case ports.PermissionModeAuto:
+		cmd = append(cmd, "--mode", "auto")
+	case ports.PermissionModeBypassPermissions:
 		cmd = append(cmd, "--dangerously-skip-permissions")
+	default:
+		// default emits no approval flag and lets Agy use its own config.
 	}
 
 	appendModelFlag(&cmd, cfg.Config)
@@ -131,7 +139,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 }
 
 // GetRestoreCommand rebuilds the argv that continues an existing Agy session:
-// `agy --add-dir <WorkspacePath> [--dangerously-skip-permissions] [--model <Model>] --conversation <agentSessionId>`.
+// `agy --add-dir <WorkspacePath> [--mode <mode> | --dangerously-skip-permissions] [--model <Model>] --conversation <agentSessionId>`.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -139,6 +147,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	if agentSessionID == "" {
+		if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+			return nil, false, ports.ErrNativeHistoryUnavailable
+		}
 		return nil, false, nil
 	}
 
@@ -149,12 +160,42 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 
 	cmd = []string{binary}
 
+	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		root := cfg.Session.Metadata[ports.MetadataKeyImportConfigDir]
+		if cfg.Session.Metadata[ports.MetadataKeyImportResumeNativeID] != "" && cfg.Session.Metadata[ports.MetadataKeyImportResumeNativeID] != agentSessionID {
+			return nil, false, ports.ErrNativeHistoryUnavailable
+		}
+		launch, err := filepath.EvalSymlinks(cfg.Session.WorkspacePath)
+		if err != nil {
+			return nil, false, err
+		}
+		store := CLIStorageDir
+		// A Chat-to-Terminal preflight validates the still-owning ACP copy.
+		// The manager supplies this source-mode hint only during preflight;
+		// actual terminal launches must validate the bridged CLI copy.
+		if cfg.Session.Metadata[ports.MetadataKeySessionMode] == string(domain.SessionModeChat) {
+			store = ACPStorageDir
+		}
+		ref := ports.NativeSessionRef{NativeSessionID: agentSessionID, ConfigDir: root, TranscriptPath: filepath.Join(root, store, "conversations", agentSessionID+".db")}
+		if err := validatePreparedImport(ctx, ref, launch, nil); err != nil {
+			return nil, false, err
+		}
+		cmd = append(cmd, "--gemini-dir", root)
+	}
+
 	if cfg.Session.WorkspacePath != "" {
 		cmd = append(cmd, "--add-dir", cfg.Session.WorkspacePath)
 	}
 
-	if cfg.Permissions == ports.PermissionModeBypassPermissions {
+	switch ports.NormalizePermissionMode(cfg.Permissions) {
+	case ports.PermissionModeAcceptEdits:
+		cmd = append(cmd, "--mode", "accept-edits")
+	case ports.PermissionModeAuto:
+		cmd = append(cmd, "--mode", "auto")
+	case ports.PermissionModeBypassPermissions:
 		cmd = append(cmd, "--dangerously-skip-permissions")
+	default:
+		// default emits no approval flag and lets Agy use its own config.
 	}
 
 	appendModelFlag(&cmd, cfg.Config)

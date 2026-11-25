@@ -5,7 +5,7 @@ import { Stack } from "expo-router";
 import { useMemo, useRef } from "react";
 import { Linking } from "react-native";
 import { LOCAL_NETWORK_HINT } from "./connectionError";
-import { FormFooter, formModifiers, FormPasswordField, FormSection, FormTextField, FormTextFieldRow, FormToggle, sectionModifiers } from "./formFields";
+import { FormFooter, formModifiers, FormPasswordField, FormSection, FormTextField, FormTextFieldRow, sectionModifiers } from "./formFields";
 import { Spinner } from "./Spinner";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { useManualConnect, type ManualConnectProps } from "./useManualConnect";
@@ -90,10 +90,9 @@ export function ManualConnectSheet(props: ManualConnectProps) {
 							label="Password"
 							value={cfg.password}
 							onChangeText={form.setField("password")}
-							placeholder="Connection password"
+							placeholder="Pairing code or password"
 							testID="manual-connect-password"
 						/>
-						<FormToggle label="Use TLS" value={!!cfg.secure} onValueChange={form.setSecure} testID="manual-connect-tls" />
 					</FormSection>
 					{props.onScanInstead ? (
 						<Section modifiers={sectionModifiers(t)}>

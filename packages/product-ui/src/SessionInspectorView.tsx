@@ -23,7 +23,21 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
+// Usage telemetry names for each inspector view: the desktop's
+// `inspector_<name>` surfaces and `inspector.tab_<name>` controls.
+const INSPECTOR_TELEMETRY_NAMES: Record<InspectorView, string> = {
+	summary: "summary",
+	reviews: "reviews",
+	browser: "browser",
+	device: "device",
+	sideChat: "side_chat",
+	subagents: "subagents",
+	files: "files",
+	artifacts: "artifacts",
+	task: "background_tasks",
+};
+
+export type InspectorView = "summary" | "reviews" | "browser" | "device" | "sideChat" | "subagents" | "files" | "artifacts" | "task";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -46,7 +60,9 @@ export function SessionInspectorShellView({
 	artifactsView,
 	browserPoppedOut,
 	browserView,
+	deviceView,
 	sideChatView,
+	subagentsView,
 	filesView,
 	headerActions,
 	isVisible = true,
@@ -55,13 +71,16 @@ export function SessionInspectorShellView({
 	reviewsView,
 	summaryView,
 	tabs,
+	taskView,
 }: {
 	activeView: InspectorView;
 	ariaLabel: string;
 	artifactsView?: ReactNode;
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
+	deviceView?: ReactNode;
 	sideChatView?: ReactNode;
+	subagentsView?: ReactNode;
 	filesView?: ReactNode;
 	headerActions?: ReactNode;
 	isVisible?: boolean;
@@ -70,6 +89,8 @@ export function SessionInspectorShellView({
 	reviewsView?: ReactNode;
 	summaryView?: ReactNode;
 	tabs: InspectorTab[];
+	/** The Background tasks tab: its list, or the task it has open. */
+	taskView?: ReactNode;
 }) {
 
 	if (loadingText) {
@@ -132,6 +153,7 @@ export function SessionInspectorShellView({
 								key={tab.id}
 								type="button"
 								role="tab"
+								data-telemetry-id={`inspector.tab_${INSPECTOR_TELEMETRY_NAMES[tab.id]}`}
 								aria-selected={activeView === tab.id}
 								tabIndex={activeView === tab.id ? 0 : -1}
 								className={cn(
@@ -179,23 +201,27 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && activeView !== "task" && activeView !== "device" && inspectorScrollableBodyClass,
 					// Read-only details opt out of the app-wide `user-select: none` so they can be copied.
 					(activeView === "summary" || activeView === "reviews") && "select-text",
-					(activeView === "sideChat" || activeView === "artifacts") && "p-0 overflow-hidden",
+					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts" || activeView === "task" || activeView === "device") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
 					activeView === "files" && "p-0 overflow-hidden [&>[role=tabpanel]]:h-full",
 				)}
 				inert={!isVisible}
+				data-telemetry-surface={`inspector_${INSPECTOR_TELEMETRY_NAMES[activeView]}`}
 			>
 				{activeView === "summary" ? summaryView : null}
 				{activeView === "reviews" ? reviewsView : null}
 				{activeView === "browser" ? browserView : null}
+				{activeView === "device" ? deviceView : null}
 				{activeView === "sideChat" ? sideChatView : null}
+				{activeView === "subagents" ? subagentsView : null}
 				{activeView === "files" ? filesView : null}
 				{activeView === "artifacts" ? artifactsView : null}
+				{activeView === "task" ? taskView : null}
 			</div>
 		</aside>
 	);
@@ -204,12 +230,15 @@ export function SessionInspectorShellView({
 export function InspectorSection({
 	children,
 	defaultOpen = true,
+	meta,
 	surface = true,
 	title,
 }: {
 	children: ReactNode;
 	/** Off for reference detail the reader opens on demand (a Setup log). */
 	defaultOpen?: boolean;
+	/** A short fact beside the title, such as a count. */
+	meta?: ReactNode;
 	surface?: boolean;
 	title: string;
 }) {
@@ -218,18 +247,19 @@ export function InspectorSection({
 	const reduceMotion = useReducedMotion();
 	// Header: 6px slot + 6px button inset puts the label 12px from the edge; collapsed headers sit 4px apart.
 	return (
-		<section className="group/inspector-section flex flex-col" data-testid="inspector-section">
+		<section className="flex flex-col" data-testid="inspector-section">
 			<div className="px-1.5 py-0.5">
 				<button
 					aria-controls={contentId}
 					aria-expanded={open}
-					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full items-center rounded-lg p-1.5 text-left text-muted-foreground")}
+					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full select-none items-center rounded-lg p-1.5 text-left text-muted-foreground")}
 					onClick={() => setOpen((current) => !current)}
 					type="button"
 				>
 					<NavRowHighlight />
 					<span className="relative z-[1] flex w-full min-w-0 items-center justify-between gap-2 text-sm">
 						<span className="min-w-0 flex-1">{title}</span>
+						{meta ? <span className="shrink-0 pr-1.5 text-xs text-passive">{meta}</span> : null}
 						<ChevronIcon aria-hidden="true" className="size-icon-2xs shrink-0 text-passive" direction={open ? "down" : "right"} />
 					</span>
 				</button>
@@ -243,7 +273,13 @@ export function InspectorSection({
 						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
 						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
 					>
-						<div className="min-w-0 px-3 pt-0.5 pb-3.5 group-last/inspector-section:pb-0" id={contentId}>
+						{/*
+						 * The last section drops its bottom padding. Match the section as this div's
+						 * grandparent, not as any ancestor (`group-last/...`): an any-ancestor
+						 * `:last-child` makes Chromium restyle the whole document whenever a node is
+						 * added to <body>, which every tooltip and hover card does.
+						 */}
+						<div className="min-w-0 px-3 pt-0.5 pb-3.5 [:last-child>*>&]:pb-0" id={contentId}>
 							{surface ? <div className="overflow-hidden bg-settings-row py-1">{children}</div> : children}
 						</div>
 					</motion.div>
@@ -254,13 +290,14 @@ export function InspectorSection({
 }
 
 export function SessionInspectorSummaryView({
-	activity,
-	activityTitle,
+	activity: _activity,
+	activityTitle: _activityTitle,
 	artifactCards,
 	artifactTitle,
 	branch,
 	completion,
 	context,
+	footer,
 	pullRequestCards,
 	pullRequestTitle,
 	reviews,
@@ -268,19 +305,24 @@ export function SessionInspectorSummaryView({
 	usage,
 	workers,
 }: {
-	activity: ReactNode;
-	activityTitle: string;
+	activity?: ReactNode;
+	activityTitle?: string;
 	/** Omit alongside {@link artifactTitle} to skip the artifacts section entirely. */
 	artifactCards?: ReactNode;
 	artifactTitle?: string;
 	branch?: ReactNode;
 	completion?: ReactNode;
 	context?: ReactNode;
+	/**
+	 * Rows under the sections (the session's account, Resume agent), on the
+	 * sections' content inset. Each may render nothing.
+	 */
+	footer?: ReactNode;
 	/** Omit alongside {@link pullRequestTitle} to skip the PR section entirely (e.g. no known PR output). */
 	pullRequestCards?: ReactNode;
 	pullRequestTitle?: string;
 	reviews?: ReactNode;
-	/** The project's Setup and Cleanup runs (Cloud sessions), just before the activity. */
+	/** The project's Setup and Cleanup runs (Cloud sessions), just before the footer. */
 	scripts?: ReactNode;
 	usage?: ReactNode;
 	/**
@@ -290,7 +332,9 @@ export function SessionInspectorSummaryView({
 	workers?: ReactNode;
 }) {
 	return (
-		<div role="tabpanel">
+		// An empty footer is still the last child, so the section above it drops
+		// its bottom padding here, as it would if it were last.
+		<div className="[&>section:has(+[data-inspector-footer]:empty:last-child)>*>div]:pb-0" role="tabpanel">
 			{workers}
 			{context}
 			{branch}
@@ -307,7 +351,15 @@ export function SessionInspectorSummaryView({
 			{reviews}
 			{completion}
 			{scripts}
-			<InspectorSection title={activityTitle}>{activity}</InspectorSection>
+			{/* Activity is hidden for now. To restore it, uncomment this:
+			{_activityTitle ? <InspectorSection title={_activityTitle}>{_activity}</InspectorSection> : null}
+			*/}
+			{/* No divider above the first row: sections are set apart by spacing alone. */}
+			{footer ? (
+				<div className="min-w-0 px-3 empty:hidden [&>:first-child]:mt-0 [&>:first-child]:border-t-0 [&>:first-child]:pt-0" data-inspector-footer="">
+					{footer}
+				</div>
+			) : null}
 			{usage}
 		</div>
 	);
@@ -335,31 +387,60 @@ const prStateTone: Record<InspectorPullRequestState, string> = {
 };
 
 export function InspectorPullRequestCardView({
+	compact = false,
 	countNounLabel,
+	description,
+	details,
 	externalIcon,
 	externalLink: ExternalLink,
+	headerless = false,
+	hideDiffCounts = false,
 	mergeAction,
 	mergeError,
 	openLabel,
 	openedViaLabel,
 	pr,
 	pullRequestIcon,
+	readinessDetails,
 	statusNotice,
 }: {
+	/**
+	 * The PR view's denser card: the author and diff stats on one line, and one
+	 * dropdown for the facts that decide the merge instead of every status row.
+	 */
+	compact?: boolean;
 	countNounLabel: CountNounLabel;
+	/** The PR body, shown under the number and state, before the branches. */
+	description?: ReactNode;
+	/** Shown under the author and diff stats, such as labels and requested reviewers. */
+	details?: ReactNode;
 	externalIcon?: ReactNode;
 	externalLink: ExternalLinkComponent;
+	/**
+	 * Drop the card frame, title and number: the host shows them in its own
+	 * header row, as the inspector's PR card does with its own state row.
+	 */
+	headerless?: boolean;
+	/** Leave +/− off the branch line: a row under the card states the same numbers. */
+	hideDiffCounts?: boolean;
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
 	openedViaLabel?: string;
 	pr: InspectorPullRequest;
 	pullRequestIcon?: ReactNode;
+	/** More under a merge-readiness row, keyed by the row. */
+	readinessDetails?: Partial<Record<string, ReactNode>>;
 	statusNotice?: ReactNode;
 }) {
+	const Frame = headerless ? "div" : "article";
 	return (
-		<article className="min-w-0 w-full rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5">
-			{pr.title ? (
+		<Frame
+			className={headerless
+				? "min-w-0 w-full pb-2"
+				: "min-w-0 w-full rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-2.5"}
+		>
+			{!headerless && pr.title ? (
 				<ExternalLink
 					className="inline text-sm font-semibold leading-snug tracking-tight text-settings-label underline-offset-2 hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 					href={pr.href}
@@ -367,7 +448,7 @@ export function InspectorPullRequestCardView({
 					{pr.title}
 				</ExternalLink>
 			) : null}
-			<div className={cn("flex min-w-0 items-center gap-2", pr.title && "mt-1.5")}>
+			{headerless ? null : <div className={cn("flex min-w-0 items-center gap-2", pr.title && "mt-1.5")}>
 				<ExternalLink
 					ariaLabel={openLabel}
 					className="inline-flex min-w-0 items-center gap-1 font-mono text-xs font-medium text-settings-label decoration-muted-foreground underline-offset-2 hover:text-settings-label hover:underline focus-visible:rounded-sm focus-visible:text-settings-label focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
@@ -388,21 +469,27 @@ export function InspectorPullRequestCardView({
 				>
 					{pr.stateLabel}
 				</span>
-			</div>
+			</div>}
+			{description}
 			<PRSummaryMeta
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
 				externalLink={ExternalLink}
+				hideDiffCounts={hideDiffCounts}
+				inline={compact}
 				openedViaLabel={openedViaLabel}
 				pr={pr}
 			/>
+			{details}
 			{pr.state !== "merged" ? (
 				<>
 					<PRCardStatusSummary
 						action={mergeAction}
 						className="mt-2"
+						compactReadiness={compact}
 						externalLink={ExternalLink}
 						presentation={pr.card}
+						readinessDetails={readinessDetails}
 						reviewDetailsAction={pr.reviewDetailsAction}
 					/>
 					{statusNotice}
@@ -413,7 +500,7 @@ export function InspectorPullRequestCardView({
 					) : null}
 				</>
 			) : null}
-		</article>
+		</Frame>
 	);
 }
 
@@ -500,6 +587,8 @@ export type InspectorGithubReview = {
 	id: string;
 	inlineComments?: InspectorInlineComment[];
 	isBot?: boolean;
+	/** A top-level PR comment rather than a review: its time reads "Commented", not "Reviewed". */
+	kind?: "comment";
 	pullRequestUrl?: string;
 	resolvedComments?: InspectorInlineComment[];
 	reviewerId: string;
@@ -562,6 +651,7 @@ export type InspectorReviewLabels = {
 	reviewActions: string;
 	reviews: string;
 	reviewedAt: (time: string) => string;
+	commentedAt?: (time: string) => string;
 	resolvedComments: (count: number) => string;
 	rereviewRequested: string;
 	rereviewRequestFailed: string;
@@ -1045,7 +1135,7 @@ function ExternalReviewCard({
 					<span className="min-w-0 break-words">{entry.reviewerId}</span>
 					{entry.isBot ? <span className="shrink-0 font-mono text-micro text-passive">{labels.bot}</span> : null}
 				</span>
-				{entry.submittedAtLabel ? <span className="font-mono text-micro text-passive">{labels.reviewedAt(entry.submittedAtLabel)}</span> : null}
+				{entry.submittedAtLabel ? <span className="font-mono text-micro text-passive">{entry.kind === "comment" && labels.commentedAt ? labels.commentedAt(entry.submittedAtLabel) : labels.reviewedAt(entry.submittedAtLabel)}</span> : null}
 			</span>
 			<span className={cn("flex shrink-0 items-center gap-2 whitespace-nowrap pr-1 text-2xs font-medium @max-[420px]/inspector:col-start-2 @max-[420px]/inspector:row-start-2 @max-[420px]/inspector:justify-self-start", reviewerVerdictTone[entry.verdict.tone])}>
 				<span>{entry.verdict.label}</span>
@@ -1073,8 +1163,8 @@ function ExternalReviewCard({
 				{body ? (
 					<ReviewMarkdownBody body={body} clamped={!open} elementRef={bodyRef} renderMarkdown={renderMarkdown} testId="github-review-summary" />
 				) : null}
-				{open ? <GithubInlineComments comments={openComments} externalLink={externalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={entry.reviewerId} reviewUrl={entry.reviewUrl} /> : null}
-				{open && resolvedComments.length > 0 ? <ResolvedInlineComments comments={resolvedComments} externalLink={externalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={entry.reviewerId} reviewUrl={entry.reviewUrl} /> : null}
+				{open ? <GithubInlineComments comments={openComments} externalLink={externalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={entry.reviewerId} renderMarkdown={renderMarkdown} reviewUrl={entry.reviewUrl} /> : null}
+				{open && resolvedComments.length > 0 ? <ResolvedInlineComments comments={resolvedComments} externalLink={externalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={entry.reviewerId} renderMarkdown={renderMarkdown} reviewUrl={entry.reviewUrl} /> : null}
 			</div>
 		</article>
 	);
@@ -1087,6 +1177,7 @@ function GithubInlineComments({
 	onResolveInlineComment,
 	onSendInlineComment,
 	onViewInlineCommentInFile,
+	renderMarkdown,
 	reviewerId,
 	reviewUrl,
 }: {
@@ -1096,6 +1187,8 @@ function GithubInlineComments({
 	onResolveInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
 	onSendInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
 	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	/** Draws an opened comment's text; without it the text shows as written. */
+	renderMarkdown?: (body: string) => ReactNode;
 	reviewerId: string;
 	reviewUrl?: string;
 }) {
@@ -1107,7 +1200,7 @@ function GithubInlineComments({
 				<ChevronIcon className="size-icon-2xs shrink-0" direction={open ? "down" : "right"} />
 				<span>{labels.openComments} · {comments.length}</span>
 			</button>
-			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} reviewUrl={reviewUrl} /> : null}
+			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onResolveInlineComment={onResolveInlineComment} onSendInlineComment={onSendInlineComment} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} renderMarkdown={renderMarkdown} reviewUrl={reviewUrl} /> : null}
 		</section>
 	);
 }
@@ -1117,6 +1210,7 @@ function ResolvedInlineComments({
 	externalLink: ExternalLink,
 	labels,
 	onViewInlineCommentInFile,
+	renderMarkdown,
 	reviewerId,
 	reviewUrl,
 }: {
@@ -1124,6 +1218,7 @@ function ResolvedInlineComments({
 	externalLink: ExternalLinkComponent;
 	labels: InspectorReviewLabels;
 	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	renderMarkdown?: (body: string) => ReactNode;
 	reviewerId: string;
 	reviewUrl?: string;
 }) {
@@ -1134,7 +1229,7 @@ function ResolvedInlineComments({
 				<ChevronIcon className="size-icon-2xs shrink-0" direction={open ? "down" : "right"} />
 				<span>{labels.resolvedComments(comments.length)}</span>
 			</button>
-			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} reviewUrl={reviewUrl} /> : null}
+			{open ? <InlineCommentList comments={comments} externalLink={ExternalLink} labels={labels} onViewInlineCommentInFile={onViewInlineCommentInFile} reviewerId={reviewerId} renderMarkdown={renderMarkdown} reviewUrl={reviewUrl} /> : null}
 		</section>
 	);
 }
@@ -1146,6 +1241,7 @@ function InlineCommentList({
 	onResolveInlineComment,
 	onSendInlineComment,
 	onViewInlineCommentInFile,
+	renderMarkdown,
 	reviewerId,
 	reviewUrl,
 }: {
@@ -1155,6 +1251,8 @@ function InlineCommentList({
 	onResolveInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
 	onSendInlineComment?: (comment: InspectorInlineComment & { reviewerId?: string }) => Promise<void> | void;
 	onViewInlineCommentInFile?: (comment: InspectorInlineComment & { reviewerId?: string }) => void;
+	/** Draws an opened comment's text; without it the text shows as written. */
+	renderMarkdown?: (body: string) => ReactNode;
 	reviewerId: string;
 	reviewUrl?: string;
 }) {
@@ -1219,6 +1317,7 @@ function InlineCommentList({
 						}
 					} : undefined}
 					onViewInFile={comment.file && onViewInlineCommentInFile ? () => onViewInlineCommentInFile(comment) : undefined}
+					renderMarkdown={renderMarkdown}
 					resolveError={resolveErrorCommentIds.has(comment.id)}
 					resolvedSuccess={manuallyResolvedCommentIds.has(comment.id)}
 					resolving={resolvingCommentIds.has(comment.id)}
@@ -1231,6 +1330,44 @@ function InlineCommentList({
 	);
 }
 
+/**
+ * A comment's words line by line, as plain text: HTML comments and tags,
+ * heading, list and quote markers, and emphasis go; rules and code fences are
+ * not lines of words.
+ */
+export function commentTextLines(body: string): string[] {
+	return body
+		.replace(/<!--[\s\S]*?-->/g, "")
+		// Only tag-shaped spans outside inline code are HTML: `Map<string, number>`
+		// and `a < b && c > d` are words to keep.
+		.split(/(`[^`\n]*`)/)
+		.map((part, index) => index % 2 === 1 ? part : part.replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g, ""))
+		.join("")
+		.split("\n")
+		.map((line) => {
+			const raw = line.trim();
+			// Fences and rules go before any marker is stripped, while they still look like
+			// themselves: a suggestion block previews as its code, not as "suggestion".
+			if (/^(?:```|~~~)/.test(raw) || /^(?:[-*_=]\s*){3,}$/.test(raw)) return "";
+			// A GitHub alert's "> [!NOTE]" marker is its type, not its text.
+			if (/^(?:>\s*)?\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/i.test(raw)) return "";
+			return raw
+				// A quoted line can carry its own heading or list marker ("> ## Reviews paused").
+				.replace(/^(?:>\s*)+/, "")
+				.replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?)/, "")
+				// Emphasis is stripped outside inline code only; `_` must sit at a word edge, so snake_case stays.
+				.split(/(`[^`\n]*`)/)
+				.map((part, index) => index % 2 === 1 ? part.slice(1, -1) : part
+					.replace(/\*\*|__/g, "")
+					.replace(/(^|[^\w])_([^_\n]+?)_(?!\w)/g, "$1$2")
+					.replace(/`/g, ""))
+				.join("")
+				.replace(/\s+/g, " ")
+				.trim();
+		})
+		.filter(Boolean);
+}
+
 function InlineCommentRow({
 	comment,
 	externalLink: ExternalLink,
@@ -1238,6 +1375,7 @@ function InlineCommentRow({
 	onResolve,
 	onSend,
 	onViewInFile,
+	renderMarkdown,
 	resolveError = false,
 	resolvedSuccess = false,
 	resolving = false,
@@ -1251,6 +1389,7 @@ function InlineCommentRow({
 	onResolve?: () => void;
 	onSend?: () => void;
 	onViewInFile?: () => void;
+	renderMarkdown?: (body: string) => ReactNode;
 	resolveError?: boolean;
 	resolvedSuccess?: boolean;
 	resolving?: boolean;
@@ -1262,8 +1401,12 @@ function InlineCommentRow({
 	const [menuOpen, setMenuOpen] = useState(false);
 	const body = comment.body?.trim();
 	const fileLabel = comment.file ? `${comment.file}${comment.line ? `:${comment.line}` : ""}` : labels.commentNumber(1);
-	const preview = body ? body.split("\n")[0] : "";
-	const hasHiddenLines = Boolean(body && body.split("\n").slice(1).some((line) => line.trim()));
+	// A bot writes HTML and markdown (CodeRabbit opens with a hidden comment and
+	// an icon), so the one-line preview is the first line of its words.
+	const lines = body ? commentTextLines(body) : [];
+	const preview = lines[0] ?? "";
+	const hasHiddenLines = lines.length > 1 || Boolean(renderMarkdown && body && body !== preview);
+	const rendered = expanded && body && renderMarkdown;
 	const { ref: previewRef, isOverflowing: previewOverflows } = useRenderedOverflow<HTMLSpanElement>(preview, "horizontal", !expanded);
 	const canExpand = hasHiddenLines || previewOverflows;
 	useEffect(() => {
@@ -1317,8 +1460,10 @@ function InlineCommentRow({
 						) : null}
 					</span>
 				</span>
-				{body ? <span data-overflow-axis="horizontal" ref={previewRef} className={cn("mt-1 block min-w-0 text-muted-foreground", expanded ? "whitespace-pre-wrap break-words" : "truncate")}>{expanded ? body : preview}</span> : null}
+				{body && !rendered ? <span data-overflow-axis="horizontal" ref={previewRef} className={cn("mt-1 block min-w-0 text-muted-foreground", expanded ? "whitespace-pre-wrap break-words" : "truncate")}>{expanded ? body : preview}</span> : null}
 			</div>
+			{/* Outside the toggle, so a link or a <details> in the text works without folding the comment. */}
+			{rendered ? <ReviewMarkdownBody body={body} clamped={false} renderMarkdown={renderMarkdown} testId="inline-comment-body" /> : null}
 			{resolvedSuccess ? <p className="m-0 text-2xs font-medium text-success">{labels.resolvedReview}</p> : null}
 			{resolveError ? <p className="m-0 text-2xs font-medium text-error">{labels.resolveReviewFailed}</p> : null}
 			{sendError && !sent ? <p className="m-0 text-2xs font-medium text-error">{labels.sendToWorkerAgentError}</p> : null}
@@ -1413,6 +1558,7 @@ function ReviewSummaryCard({
 				onResolveInlineComment={onResolveInlineComment}
 				onSendInlineComment={onSendInlineComment}
 				onViewInlineCommentInFile={onViewInlineCommentInFile}
+				renderMarkdown={renderMarkdown}
 				reviewerId={actor}
 				reviewUrl={url ?? undefined}
 			/>
@@ -1422,6 +1568,7 @@ function ReviewSummaryCard({
 					externalLink={externalLink}
 					labels={labels}
 					onViewInlineCommentInFile={onViewInlineCommentInFile}
+					renderMarkdown={renderMarkdown}
 					reviewerId={actor}
 					reviewUrl={url ?? undefined}
 				/>
@@ -1455,7 +1602,9 @@ function ReviewMarkdownBody({
 				"[&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1",
 				"[&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_th]:text-foreground",
 				"[&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-				clamped && "line-clamp-4",
+				// line-clamp counts lines of text only: a table or a <details> block in a
+				// bot's comment would still show in full, so the height is capped too.
+				clamped && "line-clamp-4 max-h-[6lh] overflow-hidden",
 			)}
 			data-testid={testId}
 			data-overflow-axis="vertical"

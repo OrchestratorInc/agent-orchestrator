@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -81,6 +82,81 @@ func TestRuntimeIntegration(t *testing.T) {
 	}
 	if alive {
 		t.Fatal("alive after destroy = true, want false")
+	}
+}
+
+func TestRuntimeIntegrationUserShellVariants(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	for _, shell := range []string{"fish", "zsh", "bash", "sh"} {
+		path, err := exec.LookPath(shell)
+		if err != nil {
+			t.Run(shell, func(t *testing.T) { t.Skipf("%s unavailable", shell) })
+			continue
+		}
+		t.Run(shell, func(t *testing.T) {
+			t.Setenv("SHELL", path)
+			ctx := context.Background()
+			id := strings.ReplaceAll(t.Name(), "/", "_")
+			r := New(Options{Timeout: 5 * time.Second, EnvDir: t.TempDir()})
+			t.Cleanup(func() { _ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id}) })
+			marker := filepath.Join(t.TempDir(), "launched")
+			h, err := r.Create(ctx, ports.RuntimeConfig{
+				SessionID:     domain.SessionID(id),
+				WorkspacePath: t.TempDir(),
+				Argv:          []string{"/bin/sh", "-c", `printf 'launched-under-posix\n' > "$1"`, "sh", marker},
+			})
+			if err != nil {
+				t.Fatalf("Create with SHELL=%s: %v", path, err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				data, err := os.ReadFile(marker)
+				if err == nil && string(data) == "launched-under-posix\n" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("launch marker = %q, %v; want launched-under-posix", data, err)
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			if alive, err := r.IsAlive(ctx, h); err != nil || !alive {
+				t.Fatalf("IsAlive after launch = %v, %v; want true", alive, err)
+			}
+		})
+	}
+}
+
+// TestRuntimeIntegrationDeliversEnvironmentThroughAFile checks the agent
+// receives its environment from the sourced launch file, which the pane's
+// shell deletes before the agent runs.
+func TestRuntimeIntegrationDeliversEnvironmentThroughAFile(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	ctx := context.Background()
+	id := strings.ReplaceAll(t.Name(), "/", "_")
+	envDir := t.TempDir()
+	r := New(Options{Timeout: 5 * time.Second, EnvDir: envDir})
+	_ = r.Destroy(ctx, ports.RuntimeHandle{ID: id})
+	t.Cleanup(func() { _ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id}) })
+
+	h, err := r.Create(ctx, ports.RuntimeConfig{
+		SessionID:     domain.SessionID(id),
+		WorkspacePath: t.TempDir(),
+		Argv:          []string{"sh", "-c", `printf 'key-length:%s\n' "${#AO_TEST_PROVIDER_KEY}"`},
+		Env:           map[string]string{"AO_SESSION_ID": id, "AO_TEST_PROVIDER_KEY": "sk-test-0123456789"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if out := waitForOutput(t, r, h, "key-length:18", 5*time.Second); !strings.Contains(out, "key-length:18") {
+		t.Fatalf("output = %q, want key-length:18", out)
+	}
+	entries, err := os.ReadDir(envDir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("launch environment left behind: %v err=%v", entries, err)
 	}
 }
 

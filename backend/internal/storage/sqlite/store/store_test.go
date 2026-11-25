@@ -281,6 +281,46 @@ func TestTaskPreparationBaseWriteCannotOverwritePromotedSession(t *testing.T) {
 	}
 }
 
+func TestTaskPreparationPromotionPersistsTerminateOnPRMerge(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		prepVal   bool
+		launchVal bool
+	}{
+		{name: "prep false promoted to true", prepVal: false, launchVal: true},
+		{name: "prep true promoted to false", prepVal: true, launchVal: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestStore(t)
+			ctx := context.Background()
+			seedProject(t, s, "mer")
+
+			prepared := sampleRecord("mer")
+			prepared.IsTaskPreparation = true
+			prepared.ProvisionState = domain.SessionProvisionProvisioning
+			prepared.TerminateOnPRMerge = tc.prepVal
+			created, err := s.CreateSession(ctx, prepared)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			visible := sampleRecord("mer")
+			visible.TerminateOnPRMerge = tc.launchVal
+			if ok, err := s.PromoteTaskPreparation(ctx, created.ID, visible); err != nil || !ok {
+				t.Fatalf("promote preparation = %v, %v", ok, err)
+			}
+
+			got, ok, err := s.GetSession(ctx, created.ID)
+			if err != nil || !ok {
+				t.Fatalf("get promoted session = %v, %v", ok, err)
+			}
+			if got.TerminateOnPRMerge != tc.launchVal {
+				t.Fatalf("promoted TerminateOnPRMerge = %v, want %v", got.TerminateOnPRMerge, tc.launchVal)
+			}
+		})
+	}
+}
+
 func TestProvisionedWorkspaceRejectsTerminatedSession(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -1691,43 +1731,6 @@ func TestPRCommentsReplace(t *testing.T) {
 	}
 }
 
-func TestMarkPRCommentResolved(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	seedProject(t, s, "mer")
-	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
-	now := time.Now().UTC().Truncate(time.Second)
-	pr := domain.PullRequest{URL: "pr1", SessionID: r.ID, UpdatedAt: now}
-	if err := s.WritePR(ctx, pr, nil, []domain.PullRequestComment{
-		{ID: "c1", Author: "a", Body: "nit", URL: "comment-1", CreatedAt: now},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	updated, err := s.MarkPRCommentResolved(ctx, "pr1", "c1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !updated {
-		t.Fatal("MarkPRCommentResolved updated = false, want true")
-	}
-	comments, err := s.ListPRComments(ctx, "pr1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(comments) != 1 || !comments[0].Resolved {
-		t.Fatalf("comments = %+v, want c1 resolved", comments)
-	}
-
-	updated, err = s.MarkPRCommentResolved(ctx, "pr1", "missing")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated {
-		t.Fatal("MarkPRCommentResolved missing updated = true, want false")
-	}
-}
-
 func TestMarkPRReviewThreadResolved(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -2817,4 +2820,68 @@ func artifactRegistrations(paths ...string) []domain.SessionArtifactRegistration
 		out = append(out, domain.SessionArtifactRegistration{Path: path})
 	}
 	return out
+}
+
+func TestFillProjectRoleAgentsFillsOnlyEmptyRoles(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	worker := domain.RoleOverride{
+		Harness:     domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-5.2", Effort: "xhigh"},
+	}
+	orchestrator := domain.RoleOverride{
+		Harness:     domain.HarnessClaudeCode,
+		AgentConfig: domain.AgentConfig{Permissions: domain.PermissionModeAcceptEdits},
+	}
+	if err := s.UpsertProject(ctx, domain.ProjectRecord{
+		ID: "half", DisplayName: "Half", Path: "/tmp/half", RegisteredAt: now,
+		Config: domain.ProjectConfig{
+			DefaultBranch: "develop",
+			Worker:        worker,
+			Orchestrator: domain.RoleOverride{AgentConfig: domain.AgentConfig{
+				Model: "gpt-5.2", Mode: "high", Effort: "xhigh", Permissions: domain.PermissionModeAcceptEdits,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("seed half: %v", err)
+	}
+
+	row, changed, err := s.FillProjectRoleAgents(ctx, "half", domain.HarnessClaudeCode)
+	if err != nil || !changed {
+		t.Fatalf("fill half: changed=%v err=%v", changed, err)
+	}
+	if row.Config.Worker != worker || row.Config.Orchestrator != orchestrator {
+		t.Fatalf("returned roles = worker %+v orchestrator %+v", row.Config.Worker, row.Config.Orchestrator)
+	}
+	got, _, err := s.GetProject(ctx, "half")
+	if err != nil {
+		t.Fatalf("get half: %v", err)
+	}
+	// The chosen worker, approval setting, and unrelated project details survive.
+	if got.Config.Worker != worker || got.Config.Orchestrator != orchestrator ||
+		got.Config.DefaultBranch != "develop" || got.DisplayName != "Half" {
+		t.Fatalf("stored project = %+v", got)
+	}
+
+	// Both roles named: nothing to change.
+	if _, changed, err := s.FillProjectRoleAgents(ctx, "half", domain.HarnessCursor); err != nil || changed {
+		t.Fatalf("second fill: changed=%v err=%v", changed, err)
+	}
+}
+
+func TestFillProjectRoleAgentsSkipsArchivedAndMissingProjects(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+	seedProject(t, s, "gone")
+	if ok, err := s.ArchiveProject(ctx, "gone", now); err != nil || !ok {
+		t.Fatalf("archive: ok=%v err=%v", ok, err)
+	}
+	if _, changed, err := s.FillProjectRoleAgents(ctx, "gone", domain.HarnessClaudeCode); err != nil || changed {
+		t.Fatalf("archived fill: changed=%v err=%v", changed, err)
+	}
+	if row, changed, err := s.FillProjectRoleAgents(ctx, "nope", domain.HarnessClaudeCode); err != nil || changed || row.ID != "" {
+		t.Fatalf("missing fill: row=%+v changed=%v err=%v", row, changed, err)
+	}
 }

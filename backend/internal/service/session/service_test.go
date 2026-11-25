@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -228,7 +229,7 @@ func TestInterruptedChatSessionShowsInterruptedOnTheBoard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Awaiting PR"}
+	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Idle"}
 	for _, sess := range list {
 		if sess.KanbanColumn != "building" || sess.DisplayStatus != want[sess.ID] {
 			t.Fatalf("list %s = %q/%q, want building/%q", sess.ID, sess.KanbanColumn, sess.DisplayStatus, want[sess.ID])
@@ -587,6 +588,48 @@ func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID
 	return []domain.PRFacts{pr}, nil
 }
 
+// ListPRStateTimes answers from the same PR facts the fake serves to
+// ListPRFactsForSessions, so a test seeds one place.
+func (f *fakeStore) ListPRStateTimes(_ context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error) {
+	out := map[domain.SessionID]time.Time{}
+	add := func(id domain.SessionID, pr domain.PRFacts) {
+		if fakePRFactsState(pr) != state {
+			return
+		}
+		at := pr.StateChangedAt
+		if at.IsZero() {
+			at = pr.UpdatedAt
+		}
+		if prev, seen := out[id]; !seen || at.After(prev) {
+			out[id] = at
+		}
+	}
+	for id, prs := range f.prFacts {
+		for _, pr := range prs {
+			add(id, pr)
+		}
+	}
+	for id, pr := range f.pr {
+		if _, listed := f.prFacts[id]; !listed {
+			add(id, pr)
+		}
+	}
+	return out, nil
+}
+
+func fakePRFactsState(pr domain.PRFacts) domain.PRState {
+	switch {
+	case pr.Merged:
+		return domain.PRStateMerged
+	case pr.Closed:
+		return domain.PRStateClosed
+	case pr.Draft:
+		return domain.PRStateDraft
+	default:
+		return domain.PRStateOpen
+	}
+}
+
 func (f *fakeStore) ListPRFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error) {
 	f.listPRFactsCalls++
 	out := make(map[domain.SessionID][]domain.PRFacts, len(ids))
@@ -795,12 +838,21 @@ func TestSessionSetTerminateOnPRMergePersistsPolicy(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
 
-	sess, err := (&Service{store: st}).SetTerminateOnPRMerge(context.Background(), "mer-1", true)
+	svc := &Service{store: st}
+	sess, err := svc.SetTerminateOnPRMerge(context.Background(), "mer-1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !sess.TerminateOnPRMerge || !st.sessions["mer-1"].TerminateOnPRMerge {
 		t.Fatalf("terminate-on-merge policy was not persisted: session=%+v stored=%+v", sess, st.sessions["mer-1"])
+	}
+
+	sess, err = svc.SetTerminateOnPRMerge(context.Background(), "mer-1", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.TerminateOnPRMerge || st.sessions["mer-1"].TerminateOnPRMerge {
+		t.Fatalf("terminate-on-merge policy was not toggled off: session=%+v stored=%+v", sess, st.sessions["mer-1"])
 	}
 }
 
@@ -1023,12 +1075,12 @@ func TestLinkedWorkspaceMissingCommonRepository(t *testing.T) {
 }
 
 func TestWorkspaceGitErrorClassificationPreservesUnknownFailure(t *testing.T) {
-	busy := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
+	busy := classifyWorkspaceGitError(context.Background(), "/repo", "status", errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
 	var apiErr *apierr.Error
 	if !errors.As(busy, &apiErr) || apiErr.Code != "WORKSPACE_GIT_BUSY" {
 		t.Fatalf("lock error = %v, want retryable WORKSPACE_GIT_BUSY", busy)
 	}
-	unknown := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: bad object")
+	unknown := classifyWorkspaceGitError(context.Background(), "/repo-unknown", "status", errors.New("git exit"), "fatal: bad object")
 	if !errors.As(unknown, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
 		t.Fatalf("unknown Git error = %v, want WORKSPACE_GIT_READ_FAILED", unknown)
 	}
@@ -5606,14 +5658,14 @@ func TestListPRSummariesSuppressesFailingChecksUnlessCIFailing(t *testing.T) {
 	}
 }
 
-func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
+func TestListPRSummariesListsCurrentCancelledChecksWhenCIFailing(t *testing.T) {
 	cases := []struct {
 		name string
 		ci   domain.CIState
 		want []string
 	}{
-		{name: "failing lists only real failures", ci: domain.CIFailing, want: []string{"build"}},
-		{name: "unknown lists cancelled checks", ci: domain.CIUnknown, want: []string{"lint"}},
+		{name: "failing lists failures and cancellations", ci: domain.CIFailing, want: []string{"build", "lint"}},
+		{name: "unknown lists nothing", ci: domain.CIUnknown},
 		{name: "pending lists nothing", ci: domain.CIPending},
 	}
 	for _, tc := range cases {
@@ -5631,7 +5683,7 @@ func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
 			}}}
 			stList.checks[prURL] = []domain.PullRequestCheck{
 				{Name: "build", CommitHash: "new-sha", Status: domain.PRCheckFailed, Conclusion: "failure"},
-				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled"},
+				{Name: "lint", CommitHash: "new-sha", Status: domain.PRCheckCancelled, Conclusion: "cancelled", URL: "https://github.com/acme/repo/actions/runs/2"},
 			}
 
 			got, err := (&Service{store: stList}).ListPRSummaries(context.Background(), "mer-1")
@@ -5640,6 +5692,9 @@ func TestListPRSummariesListsCancelledChecksOnlyWhenCIUnknown(t *testing.T) {
 			}
 			if names := failingCheckNames(got[0].CI.FailingChecks); !sameStrings(names, tc.want) {
 				t.Fatalf("listed checks = %v, want %v", names, tc.want)
+			}
+			if tc.ci == domain.CIFailing && got[0].CI.FailingChecks[1].URL != "https://github.com/acme/repo/actions/runs/2" {
+				t.Fatalf("cancelled check link = %q", got[0].CI.FailingChecks[1].URL)
 			}
 		})
 	}
@@ -5854,6 +5909,33 @@ func TestDeduplicatePRFactsKeepsSameNumberAcrossDifferentRepos(t *testing.T) {
 	}
 }
 
+func TestDeduplicatePRFactsCarriesStackParentOnlyForTheSameBase(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	stale := domain.PRFacts{URL: "https://github.com/acme/app/pull/9", Number: 9, TargetBranch: "feat/base", StackParent: 8, UpdatedAt: now}
+
+	// Retargeted onto main since: the old base's parent no longer applies.
+	got := deduplicatePRFacts([]domain.PRFacts{stale, {URL: "https://github.com/Acme/App/pull/9", Number: 9, TargetBranch: "main", UpdatedAt: now.Add(time.Minute)}})
+	if len(got) != 1 || got[0].TargetBranch != "main" || got[0].StackParent != 0 {
+		t.Fatalf("retargeted alias = %+v, want main with no stack parent", got)
+	}
+
+	// An alias with no target inherits the base and its parent together.
+	got = deduplicatePRFacts([]domain.PRFacts{stale, {URL: "https://github.com/Acme/App/pull/9", Number: 9, UpdatedAt: now.Add(time.Minute)}})
+	if len(got) != 1 || got[0].TargetBranch != "feat/base" || got[0].StackParent != 8 {
+		t.Fatalf("alias without a target = %+v, want feat/base waiting on #8", got)
+	}
+
+	// Branch names are case-sensitive: feat/Base is a different base, in
+	// either input order.
+	recased := domain.PRFacts{URL: "https://github.com/Acme/App/pull/9", Number: 9, TargetBranch: "feat/Base", UpdatedAt: now.Add(time.Minute)}
+	for _, in := range [][]domain.PRFacts{{stale, recased}, {recased, stale}} {
+		got = deduplicatePRFacts(in)
+		if len(got) != 1 || got[0].TargetBranch != "feat/Base" || got[0].StackParent != 0 {
+			t.Fatalf("alias retargeted to feat/Base = %+v, want no stack parent", got)
+		}
+	}
+}
+
 func TestDeduplicatePRFactsKeepsSameBasenameAcrossDifferentOwners(t *testing.T) {
 	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
 	got := deduplicatePRFacts([]domain.PRFacts{
@@ -6009,7 +6091,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 		{
 			SessionID: rec.ID, Harness: "claude-code", PRURL: newURL,
-			Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
+			Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved,
 			ID: "run-new", CreatedAt: rec.UpdatedAt.Add(time.Minute),
 		},
 	}
@@ -6021,8 +6103,8 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 	if sess.KanbanColumn != "needs_review" {
 		t.Fatalf("column = %q, want needs_review", sess.KanbanColumn)
 	}
-	if sess.DisplayStatus != "Needs human review" {
-		t.Fatalf("displayStatus = %q, want Needs human review", sess.DisplayStatus)
+	if sess.DisplayStatus != "Awaiting review" {
+		t.Fatalf("displayStatus = %q, want Awaiting review", sess.DisplayStatus)
 	}
 }
 
@@ -6631,5 +6713,114 @@ func TestDeleteExpiredDeletesSessionsArchivedLongEnough(t *testing.T) {
 	mgr.refuse["mer-old"] = errors.New("disk I/O error")
 	if err := svc.DeleteExpired(ctx, 30); err == nil || !strings.Contains(err.Error(), "mer-old") {
 		t.Fatalf("failed delete err = %v, want it reported", err)
+	}
+}
+
+// A polled read against a repository stuck in one broken state reports to
+// Sentry once per state change, not once per poll (AO-DAEMON-9).
+func TestWorkspaceGitReadFailureReportsOncePerStateChange(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "w-1")
+	read := func(detail string) error {
+		return classifyWorkspaceGitError(context.Background(), root, "status", errors.New("git exit"), detail)
+	}
+	steps := []struct {
+		name   string
+		run    func() error
+		repeat bool
+	}{
+		{"first failure", func() error { return read("fatal: bad object HEAD") }, false},
+		{"same failure on the next poll", func() error { return read("fatal: bad object HEAD") }, true},
+		{"and the poll after", func() error { return read("fatal: bad object HEAD") }, true},
+		{"a different failure", func() error { return read("fatal: your current branch appears to be broken") }, false},
+		{"after a successful read", func() error {
+			noteWorkspaceGitReadOK(root, "status")
+			return read("fatal: your current branch appears to be broken")
+		}, false},
+	}
+	for _, step := range steps {
+		err := step.run()
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+			t.Fatalf("%s: client sees %v, want WORKSPACE_GIT_READ_FAILED", step.name, err)
+		}
+		if got := sentryobs.IsRepeat(err); got != step.repeat {
+			t.Errorf("%s: skipped by Sentry = %v, want %v", step.name, got, step.repeat)
+		}
+	}
+	other := classifyWorkspaceGitError(context.Background(), filepath.Join(t.TempDir(), "w-2"), "status", errors.New("git exit"), "fatal: bad object HEAD")
+	if sentryobs.IsRepeat(other) {
+		t.Error("a second workspace's first failure was skipped")
+	}
+}
+
+func TestWorkspaceGitRecoveryIsScopedToOperation(t *testing.T) {
+	root := newWorkspaceRepo(t)
+	read := func(op string) error {
+		return classifyWorkspaceGitError(t.Context(), root, op, errors.New("git exit"), "fatal: bad object HEAD")
+	}
+	read("diff")
+	for _, capped := range []bool{false, true} {
+		read("status")
+		if capped {
+			if _, _, err := gitWorkspaceOutputCapped(t.Context(), root, 1, "status"); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			if _, err := gitWorkspaceOutput(t.Context(), root, "status"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if sentryobs.IsRepeat(read("status")) {
+			t.Error("recovered status was still suppressed")
+		}
+		if !sentryobs.IsRepeat(read("diff")) {
+			t.Error("successful status rearmed unrelated diff")
+		}
+	}
+}
+
+type renewingCommander struct {
+	*fakeCommander
+	renewed []domain.TaskPreparationToken
+}
+
+func (c *renewingCommander) RenewTaskPreparation(token domain.TaskPreparationToken) {
+	c.renewed = append(c.renewed, token)
+}
+
+func TestWorkspaceFileReadsRenewAHeldPreparation(t *testing.T) {
+	st := newFakeStore()
+	// Still being created: no worktree yet, which the page polls through.
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", IsTaskPreparation: true}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2"}
+	commander := &renewingCommander{fakeCommander: &fakeCommander{}}
+	svc := &Service{store: st, manager: commander}
+
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-1"); err == nil {
+		t.Fatal("listed files of a preparation with no worktree yet")
+	}
+	if _, err := svc.ListWorkspaceFiles(context.Background(), "mer-2"); err == nil {
+		t.Fatal("listed files of a session with no worktree")
+	}
+	if want := []domain.TaskPreparationToken{"mer-1"}; !slices.Equal(commander.renewed, want) {
+		t.Fatalf("renewed = %v, want only the preparation %v", commander.renewed, want)
+	}
+}
+
+// An imported chat whose agent CLI changed between import and first open shows
+// the adapter's version message, not the generic "check the daemon log".
+func TestResumeAgentShowsImportVersionMessage(t *testing.T) {
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	versionErr := &ports.ImportRefusedError{Message: "droid: session import supports only verified version 0.251.0"}
+	cause := sessionmanager.RelaunchError{Step: "prepare_import", Err: fmt.Errorf("prepare imported session: %w", versionErr)}
+	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore(), Telemetry: &fakeTelemetrySink{}})
+
+	_, err := svc.ResumeAgent(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "SESSION_IMPORT_RESUME_FAILED" || apiErr.Message != versionErr.Message {
+		t.Fatalf("err = %#v, want SESSION_IMPORT_RESUME_FAILED with the version message", err)
 	}
 }

@@ -1,8 +1,13 @@
 import { StrictMode, useEffect, type ReactNode } from "react";
+import { noPRDetails } from "../lib/pr-display";
+import { queryShown } from "../lib/dom-selectors";
+import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
+import { sessionUiKey } from "../lib/hosts";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { activatePRTab, deactivatePRTab, openPRTab, resetPRTabs } from "../lib/pr-tabs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionView } from "./SessionView";
 import { appShortcutBus } from "../test/app-shortcut-bus";
@@ -20,8 +25,11 @@ import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { setChatDraftBoundary } from "../lib/chat-draft-boundary";
 import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { seedCloudOpening } from "../lib/cloud-opening";
+import { noteCloudWorkerStarting, resetCloudWorkerStartingForTests } from "../lib/cloud-worker-starting";
+import { CloudCpError } from "../lib/cloud-cp/errors";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
 import { forgetSharedSessions, rememberSharedSessions } from "../lib/shared-session-memory";
+import { useMainViewVisible } from "../lib/main-view-visibility";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const annotationOpen = vi.hoisted(() => ({ current: undefined as import("../../shared/chat-file-reference").OpenFileAnnotation | undefined }));
@@ -261,7 +269,7 @@ const { workspaces, workspaceQueryState, shellTerminalsState } = vi.hoisted(() =
 		{ id: "proj-1", name: "my-app", path: "/p", type: "main", sessions: [worker, secondWorker, orchestrator] },
 		{ id: "proj-2", name: "other-app", path: "/q", type: "main", sessions: [crossProjectWorker] },
 	];
-	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean } = {
+	const workspaceQueryState: { data: WorkspaceSummary[] | undefined; isLoading: boolean; directLoading?: boolean; isStale?: boolean } = {
 		data: workspaces,
 		isLoading: false,
 	};
@@ -341,6 +349,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onConversationWorkChange,
 		auxiliaryTabOrder,
 		onAuxiliaryTabOrderChange,
+		onRevealSubagents,
 	}: {
 		session: WorkspaceSession;
 		onOpenShell?: () => void;
@@ -366,6 +375,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void;
 		auxiliaryTabOrder?: string[];
 		onAuxiliaryTabOrderChange?: (keys: string[]) => void;
+		onRevealSubagents?: () => void;
 	}) => {
 		chatSurfaceRenders.push(session.id);
 		annotationOpen.current=onOpenFileAnnotation;
@@ -459,6 +469,9 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			</button>
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>
 				report chat work
+			</button>
+			<button type="button" onClick={onRevealSubagents}>
+				open a subagent
 			</button>
 		</div>
 		);
@@ -656,13 +669,14 @@ vi.mock("./SessionFileExplorer", () => ({
 	},
 }));
 vi.mock("./SessionFileWorkspace", () => ({
-	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, previousPath, scope, split }: {
+	SessionFileWorkspace: ({ active, annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, previousPath, scope, split }: {
 		annotation: {
 			begin: (target: { path: string; scope: string; side: string; surface: string }) => void;
 			draftFor: (target: { path: string }) => string;
 			setDraft: (target: { path: string }, draft: string) => void;
 			targets: Array<{ path: string }>;
 		};
+		active: boolean;
 		initialEditing?: boolean;
 		initialLine?: number;
 		initialMode?: string;
@@ -674,7 +688,7 @@ vi.mock("./SessionFileWorkspace", () => ({
 		split: boolean;
 	}) => {
 		return (
-			<div data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
+			<div data-active={String(active)} data-main-view-visible={String(useMainViewVisible())} data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
 				{path}
 				{initialLine != null ? <button onClick={() => onInitialLineConsumed?.(path, initialRequestKey ?? 0)} type="button">consume initial line</button> : null}
 				<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
@@ -686,7 +700,10 @@ vi.mock("./SessionFileWorkspace", () => ({
 vi.mock("./CloudWorkspaceDiff", () => ({
 	CloudFileContentPane: ({ path }: { path: string }) => <div data-testid="cloud-file-workspace">{path}</div>,
 	CloudWorkspaceDiff: ({ onOpenFile }: { onOpenFile?: (path: string) => void }) => (
-		<button onClick={() => onOpenFile?.("src/cloud.ts")} type="button">open cloud file</button>
+		<>
+			<button onClick={() => onOpenFile?.("src/cloud.ts")} type="button">open cloud file</button>
+			<button onClick={() => onOpenFile?.("src/other.ts")} type="button">open other cloud file</button>
+		</>
 	),
 }));
 const { browserDestroy, browserViewOptions, browserViewState } = vi.hoisted(() => ({
@@ -744,6 +761,15 @@ function ArtifactsViewMock({
 		{request?.feedback ? <span>{`feedback request ${request.key}`}</span> : null}
 	</div>;
 }
+const deviceRevealWatcherProps = vi.hoisted(() => ({
+	current: undefined as undefined | { enabled: boolean; onReveal: () => void; sessionId: string; terminated: boolean },
+}));
+vi.mock("./DeviceRevealWatcher", () => ({
+	DeviceRevealWatcher: (props: { enabled: boolean; onReveal: () => void; sessionId: string; terminated: boolean }) => {
+		deviceRevealWatcherProps.current = props;
+		return null;
+	},
+}));
 vi.mock("./SessionInspector", () => ({
 	SessionInspector: ({
 		artifactRequest,
@@ -819,7 +845,8 @@ vi.mock("./SessionInspector", () => ({
 		);
 	},
 }));
-vi.mock("../lib/shell-context", () => ({
+vi.mock("../lib/shell-context", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/shell-context")>(),
 	useShell: () => ({ daemonStatus: { state: "ready" } }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -846,6 +873,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 			?.flatMap((workspace) => workspace.sessions)
 			.find((session) => session.id === sessionId),
 		isLoading: workspaceQueryState.directLoading ?? workspaceQueryState.isLoading,
+		isStale: workspaceQueryState.isStale ?? false,
 		});
 	},
 }));
@@ -855,7 +883,17 @@ vi.mock("../hooks/useShellTerminals", () => ({
 	adoptedShellHandle: (handleId: string) => adoptedShellHandles.get(handleId),
 	useShellTerminals: () => ({ data: shellTerminalsState.loaded ? shellTerminalsState.data : undefined, isLoading: !shellTerminalsState.loaded }),
 	useOpenShellTerminal: () => ({ open: openShellTerminalMock, isPending: false }),
-	useCloseShellTerminal: () => ({ mutate: closeShellTerminalMock }),
+	useCloseShellTerminal: () => ({
+		mutate: closeShellTerminalMock,
+		// Settles on the mock's callbacks, like the real mutation does.
+		mutateAsync: (handleId: string) =>
+			new Promise<void>((resolve, reject) => {
+				closeShellTerminalMock(handleId, {
+					onSuccess: () => resolve(),
+					onError: (error: unknown) => reject(error),
+				});
+			}),
+	}),
 	useRenameShellTerminal: () => ({ mutate: vi.fn() }),
 }));
 
@@ -957,6 +995,31 @@ function render(ui: ReactNode) {
 	};
 }
 
+/** A PR the session's summary reports, as the inspector reads it. */
+function prSummaryFixture(number: number, url: string): SessionPRSummary {
+	return {
+		...noPRDetails(),
+		url,
+		htmlUrl: url,
+		number,
+		title: `PR ${number}`,
+		state: "open",
+		provider: "github",
+		repo: "acme/app",
+		author: "ada",
+		sourceBranch: `feat/${number}`,
+		targetBranch: "main",
+		headSha: `sha-${number}`,
+		additions: 1,
+		deletions: 0,
+		changedFiles: 1,
+		ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
+		review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		mergeability: { state: "mergeable", reasons: [], prUrl: url, conflictFiles: [] },
+		updatedAt: "2026-06-15T12:00:00Z",
+	};
+}
+
 describe("SessionView", () => {
 	function inspectorWidthVariable() {
 		return screen
@@ -1000,8 +1063,11 @@ describe("SessionView", () => {
 		workspaceQueryState.data = workspaces;
 		workspaceQueryState.isLoading = false;
 		workspaceQueryState.directLoading = undefined;
+		workspaceQueryState.isStale = undefined;
 		useUiStore.setState({
 			activeShellTerminalHandleId: null,
+			developerMode: false,
+			prView: false,
 			workspaceFileOpenRequest: null,
 			// Opening a session leaves the inspector closed (covered by the
 			// "keeps the inspector closed" test); most tests here exercise the
@@ -1094,6 +1160,95 @@ describe("SessionView", () => {
 			}
 			return { data: { reviewerHandleId: "", reviews: [], runs: [] }, error: undefined };
 		});
+	});
+
+	it("shows no PR tab while the PR view is off, even one opened before", () => {
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			expect(screen.queryByTestId("pr-tab-pane")).not.toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: /^#7 Seven/ })).not.toBeInTheDocument();
+
+			// Turning the PR view on brings the tab back where it was.
+			act(() => useUiStore.setState({ developerMode: true, prView: true }));
+			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+		}
+	});
+
+	it("keeps the tab of a PR the summary found before the session's facts did", async () => {
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/9";
+		const defaultGet = reviewGetMock.getMockImplementation()!;
+		reviewGetMock.mockImplementation(async (path: string, ...args: unknown[]) => path === "/api/v1/sessions/{sessionId}/pr"
+			? { data: { prs: [prSummaryFixture(9, url)], linkedPrs: [] }, error: undefined }
+			: defaultGet(path, ...args));
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			await waitFor(() => expect(reviewGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/pr", expect.anything()));
+			// The workspace facts don't list PR #9 yet; its tab stays open.
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+			expect(screen.getByTestId("pr-tab-pane")).toBeInTheDocument();
+		} finally {
+			resetPRTabs();
+		}
+	});
+
+	it("keeps a PR's tab mounted behind the others, so coming back finds it as it was", () => {
+		// A PR's tab is part of the PR view, a Developer mode preview.
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		try {
+			openPRTab("sess-1", url);
+			render(<SessionView sessionId="sess-1" />);
+			const pane = screen.getByTestId("pr-tab-pane");
+			expect(pane.parentElement).not.toHaveClass("invisible");
+
+			act(() => deactivatePRTab("sess-1"));
+			expect(screen.getByTestId("pr-tab-pane")).toBe(pane);
+			expect(pane.parentElement).toHaveClass("invisible");
+
+			act(() => activatePRTab("sess-1", url));
+			expect(screen.getByTestId("pr-tab-pane")).toBe(pane);
+			expect(pane.parentElement).not.toHaveClass("invisible");
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+		}
+	});
+
+	it("lets go of a selected shell when a PR's tab opens, so the shell changing doesn't take the view back", () => {
+		useUiStore.setState({ developerMode: true, prView: true });
+		const url = "https://github.com/acme/app/pull/7";
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		worker.prs = [{ number: 7, state: "open", url, title: "Seven" } as unknown as WorkspaceSession["prs"][number]];
+		const shell = { handleId: "sh-a", sessionId: "sess-1", title: "build", workingDir: "/p", createdAt: "2026-07-24T00:00:00Z" };
+		shellTerminalsState.data = [shell];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => useUiStore.getState().setActiveShellTerminal("sh-a"));
+			act(() => openPRTab("sess-1", url));
+			const pane = screen.getByTestId("pr-tab-pane");
+			expect(pane.parentElement).not.toHaveClass("invisible");
+			expect(useUiStore.getState().activeShellTerminalHandleId).toBeNull();
+
+			// The shell's title changes, as a running command renames it.
+			shellTerminalsState.data = [{ ...shell, title: "build (watching)" }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(screen.getByTestId("pr-tab-pane").parentElement).not.toHaveClass("invisible");
+		} finally {
+			resetPRTabs();
+			worker.prs = [];
+			shellTerminalsState.data = [];
+		}
 	});
 
 	it("opens the Artifacts view for an artifact and consumes its feedback request once", async () => {
@@ -1230,7 +1385,7 @@ describe("SessionView", () => {
 		expect(resumeAgentPostMock).not.toHaveBeenCalled();
 	});
 
-	it.each([false, true])("leaves a failed automatic resume stopped for manual retry (imported=%s)", async (imported) => {
+	it.each([false, true])("retries a failed automatic resume once, then leaves it stopped for manual retry (imported=%s)", async (imported) => {
 		const session = workerSession("sess-1");
 		session.mode = "chat";
 		session.status = "exited";
@@ -1238,14 +1393,40 @@ describe("SessionView", () => {
 		session.needsResume = imported;
 		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
 		const priorToast = useUiStore.getState().globalToast;
+		vi.useFakeTimers({ shouldAdvanceTime: true });
 		const view = render(<SessionView sessionId="sess-1" />);
-		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+		try {
+			await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+			await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+		} finally {
+			vi.useRealTimers();
+		}
+		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(view.client.isMutating()).toBe(0));
 		expect(useUiStore.getState().globalToast).toBe(priorToast);
 		expect(chatSurfaceTransitionRenders[0]).toBe(true);
 		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
 		view.rerender(<SessionView sessionId="sess-1" />);
 		await act(async () => {});
+		expect(resumeAgentPostMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("drops the automatic retry when the user moves to another session during the wait", async () => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		session.status = "exited";
+		session.activity = { state: "exited", lastActivityAt: "" };
+		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const view = render(<SessionView sessionId="sess-1" />);
+		try {
+			await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+			view.rerender(<SessionView sessionId="sess-2" />);
+			await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+		} finally {
+			vi.useRealTimers();
+		}
+		await waitFor(() => expect(view.client.isMutating()).toBe(0));
 		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -1701,9 +1882,9 @@ describe("SessionView", () => {
 			const invalidate = vi.spyOn(view.client, "invalidateQueries");
 			await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledTimes(1));
 			await act(async () => { finishView({ error: undefined }); });
-			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
-			const conversationReloads = invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
-			expect(conversationReloads, state).toHaveLength(reloads);
+			const conversationReloads = () => invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
+			await waitFor(() => expect(conversationReloads(), state).toHaveLength(reloads));
+			expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] });
 			view.unmount();
 			chatViewPostMock.mockClear();
 		}
@@ -1810,15 +1991,21 @@ describe("SessionView", () => {
 		));
 	});
 
-	it("remounts the session-owned Chat surface when navigation selects another Chat session", () => {
+	it("gives each Chat session its own surface and keeps the last one hidden for switching back", () => {
 		workerSession("sess-1").mode = "chat";
 		workerSession("sess-2").mode = "chat";
 		const view = render(<SessionView sessionId="sess-1" />);
 		const firstSurface = screen.getByTestId("chat-surface");
 
 		view.rerender(<SessionView sessionId="sess-2" />);
+		const secondSurface = queryShown('[data-testid="chat-surface"]');
+		expect(secondSurface).not.toBeNull();
+		expect(secondSurface).not.toBe(firstSurface);
+		expect(firstSurface).toBeInTheDocument();
+		expect(firstSurface).toHaveStyle({ display: "none" });
 
-		expect(screen.getByTestId("chat-surface")).not.toBe(firstSurface);
+		view.rerender(<SessionView sessionId="sess-1" />);
+		expect(queryShown('[data-testid="chat-surface"]')).toBe(firstSurface);
 	});
 
 	// The strip only ever shows the session on screen — pinning another session's
@@ -1954,6 +2141,44 @@ describe("SessionView", () => {
 		// The checkout would follow the resume; let that chain settle first.
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
 		expect(checkout).not.toHaveBeenCalled();
+	});
+
+	it("retries a failed startup on open even while the session's reads wait out a starting answer", async () => {
+		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
+		const id = "sess-2";
+		const starting = new CloudCpError("The session is still starting. Try again shortly.", { status: 409, code: "WORKER_STARTING", retryAfterMs: 60_000 });
+		for (const [code, prepares] of [
+			// A failed restore or checkout waits for this request, so it is sent.
+			["conversation_restore_failed", true],
+			["repository_checkout_failed", true],
+			// A workspace still being prepared is already doing what it asks.
+			[undefined, false],
+		] as const) {
+			resetCloudWorkerStartingForTests();
+			noteCloudWorkerStarting("cloud-org", id, starting);
+			checkout.mockClear();
+			cloudResumeMock.mockClear();
+			const session = workerSession(id);
+			session.runtimeConnected = true;
+			session.cloud = {
+				orgId: "cloud-org",
+				sandboxProvider: "freestyle",
+				desiredState: "running",
+				observedState: "running",
+				startupError: code ? { code, message: "The conversation could not be restored.", at: "2026-11-23T20:30:00Z" } : undefined,
+			};
+			const view = render(<SessionView sessionId={id} />);
+			await waitFor(() => expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", id));
+			if (prepares) {
+				await waitFor(() => expect(checkout).toHaveBeenCalledWith("cloud-org", id));
+			} else {
+				// The checkout would follow the resume; let that chain settle first.
+				await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+				expect(checkout).not.toHaveBeenCalled();
+			}
+			view.unmount();
+		}
+		resetCloudWorkerStartingForTests();
 	});
 
 	it("asks the worker to prepare the workspace on open, but never re-runs a failed Setup just for viewing it", async () => {
@@ -2344,6 +2569,34 @@ describe("SessionView", () => {
 			expect(screen.queryByRole("figure", { name: queued })).not.toBeInTheDocument();
 			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 		});
+
+		it.each(["running", "failed"])("keeps a Freestyle Chat session first opened with a disconnected worker (%s) on its conversation", (observed) => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: observed };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		});
+
+		it("still raises the startup screen for a Coder Chat session with a disconnected worker", () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		});
+
+		it("shows no startup screen for a paused Freestyle Chat session", () => {
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "paused", observedState: "stopped" };
+			render(<SessionView sessionId="sess-2" />);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		});
 	});
 
 	it("leaves a booting Coder Chat session's events to its chat, from before the session resolves", async () => {
@@ -2632,6 +2885,8 @@ describe("SessionView", () => {
 			// The topbar stays usable above the error state.
 			expect(screen.getByTestId("session-topbar-host").contains(errorState)).toBe(false);
 
+			// Retry waits while the resume that opening the session sent is in flight.
+			await waitFor(() => expect(within(errorState).getByRole("button", { name: "Retry" })).toBeEnabled());
 			fireEvent.click(within(errorState).getByRole("button", { name: "Retry" }));
 			await waitFor(() => expect(cloudRetryStartupMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
 			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-sessions"] }));
@@ -5158,6 +5413,9 @@ describe("SessionView", () => {
 		});
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 		expect(screen.getByTestId("inspector-resize-handle")).toBeInTheDocument();
+		// Last in the rail, so its no-drag punches through the inspector header's
+		// macOS drag region (Electron applies regions in document order).
+		expect(screen.getByTestId("panel-inspector").lastElementChild).toBe(screen.getByTestId("inspector-resize-handle"));
 	});
 
 	it("keeps the inspector closed when a session opens, then opens it on Summary", () => {
@@ -5248,6 +5506,46 @@ describe("SessionView", () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
 
 		expect(chatSurfaceRenders).toHaveLength(rendersBeforeToggle);
+	});
+
+	it("keeps the device watcher off without Developer mode", () => {
+		useUiStore.setState({ developerMode: false });
+		render(<SessionView sessionId="sess-1" />);
+		expect(deviceRevealWatcherProps.current).toMatchObject({ enabled: false });
+	});
+
+	it("opens the Device tab when the device watcher reveals a device", () => {
+		useUiStore.setState({ developerMode: true });
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", false));
+		render(<SessionView sessionId="sess-1" />);
+		expect(deviceRevealWatcherProps.current).toMatchObject({ enabled: true, sessionId: "sess-1", terminated: false });
+		expect(inspectorOpen("sess-1")).toBe(false);
+
+		act(() => deviceRevealWatcherProps.current!.onReveal());
+
+		expect(inspectorOpen("sess-1")).toBe(true);
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("device");
+	});
+
+	it("dismisses maximized Files when an agent's device reveals the Device tab", () => {
+		useUiStore.setState({ developerMode: true });
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(within(screen.getByTestId("panel-inspector")).getByRole("button", { name: "files rail" }));
+		expect(document.querySelector(".files-popout-overlay")).toBeInTheDocument();
+
+		act(() => deviceRevealWatcherProps.current!.onReveal());
+
+		expect(document.querySelector(".files-popout-overlay")).not.toBeInTheDocument();
+		expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("device");
+	});
+
+	it("keeps the device watcher off for cloud sessions", () => {
+		const worker = workspaces.flatMap((workspace) => workspace.sessions).find((candidate) => candidate.id === "sess-1")!;
+		(worker as { cloud?: unknown }).cloud = { orgId: "cloud-org" };
+		useUiStore.setState({ developerMode: true });
+		render(<SessionView sessionId="sess-1" />);
+		expect(deviceRevealWatcherProps.current).toMatchObject({ enabled: false });
 	});
 
 	it("starts collapsing the resize handle with the inspector panel", () => {
@@ -5720,6 +6018,32 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("summary");
 	});
 
+	it("resizes the orchestrator's inspector from Browser to Subagents when a subagent opens", () => {
+		vi.useFakeTimers();
+		try {
+			workerSession("sess-orch").mode = "chat";
+			render(<SessionView sessionId="sess-orch" />);
+			act(() => {
+				useUiStore.getState().setSubagentsAvailable("sess-orch", true);
+				useUiStore.getState().setInspectorView("sess-orch", "browser");
+				useUiStore.getState().setInspectorOpen("sess-orch", true);
+			});
+			const split = screen.getByTestId("panel-group");
+			expect(split).toHaveAttribute("data-workspace-mode", "browser");
+			act(() => vi.advanceTimersByTime(300));
+
+			fireEvent.click(screen.getByRole("button", { name: "open a subagent" }));
+
+			// The same spring a tab click runs, not a snap from the canvas width.
+			expect(split).toHaveAttribute("data-workspace-resizing", "true");
+			expect(split).toHaveAttribute("data-workspace-mode", "utility");
+			expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("subagents");
+			expect(inspectorOpen("sess-orch")).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("opens an absolute chat path at the workspace-relative path the daemon returns", async () => {
 		const defaultGet = reviewGetMock.getMockImplementation()!;
 		reviewGetMock.mockImplementation(async (path: string, ...args: unknown[]) =>
@@ -5785,6 +6109,196 @@ describe("SessionView", () => {
 			expect(await screen.findByText("selected out/report.md")).toBeInTheDocument();
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
 			expect(screen.queryByTestId("session-file-workspace")).not.toBeInTheDocument();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("opens a newly registered artifact of any file type in the Artifacts view", async () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "data.parquet", path: "data.parquet", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(await screen.findByText("selected data.parquet")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(inspectorOpen("sess-1")).toBe(true);
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("does not reveal a remote host's artifact that only its refetch after entry lists", () => {
+		const worker = workerSession("sess-1");
+		const uiKey = sessionUiKey("sess-1", "box-a");
+		worker.artifactFiles = [];
+		// The sidebar's kept list from an earlier visit is stale and predates the artifact.
+		workspaceQueryState.isStale = true;
+		try {
+			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+			workspaceQueryState.isStale = false;
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("reveals the next registration at once when a remote host's data is fresh on entry", () => {
+		const worker = workerSession("sess-1");
+		const uiKey = sessionUiKey("sess-1", "box-a");
+		worker.artifactFiles = [];
+		workspaceQueryState.isStale = false;
+		try {
+			const view = render(<SessionView hostId="box-a" sessionId="sess-1" />);
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView hostId="box-a" sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions[uiKey]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("keeps Browser on a live page and only badges Artifacts when an artifact is registered", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		worker.previewUrl = "http://localhost:5173/";
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "browser");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "report.md", path: "report.md", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("browser");
+			expect(inspectorOpen("sess-1")).toBe(true);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
+			expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
+		} finally {
+			delete worker.artifactFiles;
+			delete worker.previewUrl;
+		}
+	});
+
+	it("opens Artifacts for a registration while Browser has no page", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "browser");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "report.md", path: "report.md", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("dismisses a session's artifact toast when the user leaves that session", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		const toastFor = (key: string) => useUiStore.getState().globalToasts.find((entry) => entry.dedupeKey === key);
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "files");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "shot.png", path: "shot.png", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(toastFor("artifact-registered:sess-1")).toBeDefined();
+
+			view.rerender(<SessionView sessionId="sess-2" />);
+			expect(toastFor("artifact-registered:sess-1")).toBeUndefined();
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("takes the baseline from a cloud session's artifact list once it loads", () => {
+		const worker = workerSession("sess-1");
+		// The session arrives before its artifact list.
+		worker.artifactFilesPending = true;
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			delete worker.artifactFilesPending;
+			worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ id: "a2", kind: "file", name: "new.csv", path: "new.csv", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+		} finally {
+			delete worker.artifactFilesPending;
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("only badges Artifacts for a registration while the user is in Files", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			act(() => {
+				useUiStore.getState().setInspectorOpen("sess-1", true);
+				useUiStore.getState().setInspectorView("sess-1", "files");
+			});
+			worker.artifactFiles = [{ id: "a1", kind: "file", name: "shot.png", path: "shot.png", size: 10, updatedAt: "2026-06-11T00:00:00Z", registered: true }];
+			view.rerender(<SessionView sessionId="sess-1" />);
+
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("files");
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(true);
+			// The toast reaches a maximized Browser and screen readers; Open shows the file.
+			const toast = useUiStore.getState().globalToasts.find((entry) => entry.dedupeKey === "artifact-registered:sess-1");
+			expect(toast?.title).toContain("shot.png");
+			expect(toast?.action).toBeDefined();
+			act(() => toast?.action?.run());
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(screen.getByText("selected shot.png")).toBeInTheDocument();
+			act(() => useUiStore.getState().setInspectorView("sess-1", "files"));
+			act(() => useUiStore.getState().setInspectorView("sess-1", "artifacts"));
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.artifactsUnseen).toBe(false);
+		} finally {
+			delete worker.artifactFiles;
+		}
+	});
+
+	it("does not reveal artifacts already registered on entry, or unregistered files", () => {
+		const worker = workerSession("sess-1");
+		worker.artifactFiles = [{ id: "a1", kind: "markdown", name: "old.md", path: "old.md", size: 10, updatedAt: "2026-06-10T00:00:00Z", registered: true }];
+		try {
+			const view = render(<SessionView sessionId="sess-1" />);
+			worker.artifactFiles = [
+				...worker.artifactFiles,
+				{ kind: "file", name: "scratch.txt", path: "scratch.txt", size: 1, updatedAt: "2026-06-11T00:00:00Z" },
+			];
+			view.rerender(<SessionView sessionId="sess-1" />);
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).not.toBe("artifacts");
+			expect(screen.queryByText("artifacts view")).not.toBeInTheDocument();
 		} finally {
 			delete worker.artifactFiles;
 		}
@@ -5910,6 +6424,26 @@ describe("SessionView", () => {
 		}
 	});
 
+	it("hides the center file from its video, but keeps the pane active, while the maximized Browser covers it", async () => {
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+		const workspace = await screen.findByTestId("session-file-workspace");
+		expect(workspace).toHaveAttribute("data-main-view-visible", "true");
+
+		fireEvent.click(screen.getByRole("button", { name: "pop browser" }));
+		expect(document.querySelector(".browser-popout-overlay")).toBeInTheDocument();
+		// A video in the pane pauses...
+		expect(workspace).toHaveAttribute("data-main-view-visible", "false");
+		// ...but the pane stays active, so closing the Browser does not refocus it.
+		expect(workspace).toHaveAttribute("data-active", "true");
+
+		fireEvent.click(screen.getByRole("button", { name: "browser center" }));
+		expect(document.querySelector(".browser-popout-overlay")).not.toBeInTheDocument();
+		expect(workspace).toHaveAttribute("data-main-view-visible", "true");
+		expect(workspace).toHaveAttribute("data-active", "true");
+	});
+
 	it("does not reserve the traffic-light band during native macOS fullscreen", () => {
 		nativeFullScreenMock.mockReturnValue(true);
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
@@ -5955,6 +6489,29 @@ describe("SessionView", () => {
 
 		expect(screen.getByRole("tab", { name: "cloud.ts" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByTestId("cloud-file-workspace")).toHaveTextContent("src/cloud.ts");
+	});
+
+	it("keeps each open Cloud file's view mounted behind the others, as local file tabs do", () => {
+		workerSession("sess-1").cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "open cloud file" }));
+		const first = screen.getByTestId("cloud-file-workspace");
+		fireEvent.click(screen.getByRole("button", { name: "open other cloud file" }));
+
+		expect(screen.getByRole("tab", { name: "other.ts" })).toHaveAttribute("aria-selected", "true");
+		const views = screen.getAllByTestId("cloud-file-workspace");
+		expect(views.map((view) => view.textContent)).toEqual(["src/cloud.ts", "src/other.ts"]);
+		// The first file is hidden, not unmounted, so it keeps its mode, scroll and edit.
+		expect(views[0]).toBe(first);
+		expect(first.closest("[inert]")).not.toBeNull();
+		expect(views[1].closest("[inert]")).toBeNull();
+
+		fireEvent.click(screen.getByRole("tab", { name: "cloud.ts" }));
+		expect(screen.getAllByTestId("cloud-file-workspace")[0]).toBe(first);
+		expect(first.closest("[inert]")).toBeNull();
 	});
 
 	it("opens a selected tree file in a center tab while retaining the right-side tree", () => {

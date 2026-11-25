@@ -59,7 +59,7 @@ func TestGeminiJSONLImportUsesNativeHeaderAndCurrentBranch(t *testing.T) {
 }
 
 func TestGeminiLegacyJSONAndRegistryCWD(t *testing.T) {
-	root := t.TempDir()
+	root := canonical(t.TempDir())
 	cwd := t.TempDir()
 	dir := filepath.Join(root, "tmp", "synthetic", "chats")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -130,7 +130,7 @@ func TestGeminiSkimsOversizeToolRecordAndKeepsVisibleText(t *testing.T) {
 	before := maxRecordBytes
 	maxRecordBytes = 256
 	t.Cleanup(func() { maxRecordBytes = before })
-	root, cwd := t.TempDir(), t.TempDir()
+	root, cwd := canonical(t.TempDir()), t.TempDir()
 	dir := filepath.Join(root, "tmp", "synthetic", "chats")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

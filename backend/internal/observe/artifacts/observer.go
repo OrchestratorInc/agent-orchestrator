@@ -76,21 +76,29 @@ func (o *Observer) Start(ctx context.Context) <-chan struct{} {
 // poll is what notices artifact additions and removals. Version capture runs
 // after the reconcile, outside the lifecycle reconcile lock.
 func (o *Observer) Poll(ctx context.Context) error {
-	sessions, err := o.sessions.ListAllSessions(ctx)
+	// The poll's reads are not cancellable: a cancellable context makes the
+	// SQLite driver and database/sql each start a watcher goroutine for every
+	// query, and a poll reads for every session. The loop still stops between
+	// sessions once ctx is cancelled; one in-flight session simply finishes.
+	readCtx := context.WithoutCancel(ctx)
+	sessions, err := o.sessions.ListAllSessions(readCtx)
 	if err != nil {
 		return err
 	}
 	for _, sess := range sessions {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if sess.IsTerminated {
 			continue
 		}
-		if err := o.sink.ReconcileSessionOutputType(ctx, sess.ID); err != nil {
+		if err := o.sink.ReconcileSessionOutputType(readCtx, sess.ID); err != nil {
 			o.logger.Debug("artifact output observer: reconcile failed", "session", sess.ID, "err", err)
 		}
 		if o.versions == nil {
 			continue
 		}
-		if err := o.versions.CaptureSession(ctx, sess); err != nil {
+		if err := o.versions.CaptureSession(readCtx, sess); err != nil {
 			o.logger.Debug("artifact output observer: version capture failed", "session", sess.ID, "err", err)
 		}
 	}

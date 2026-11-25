@@ -28,17 +28,34 @@ type harnessImporter struct {
 	mode domain.SessionMode
 	// Global stores can also need registered paths to resolve older metadata.
 	readWithProjects func(context.Context, string, []string, ...string) (transcript, error)
+	// A source that is not an agent sets as to the agent its chats continue
+	// on, and adopt writes a selected chat where that agent reads it.
+	as    domain.AgentHarness
+	adopt func(context.Context, transcript) (transcript, error)
 }
 
 // Keep entries immutable after package initialization: scans read them in parallel.
 var harnessImporters = map[domain.AgentHarness]harnessImporter{
+	// Prime first opens through a native Terminal fork with exact-id adoption.
+	domain.HarnessPrimeAgent: {root: primeAgentRoot, discover: discoverPrimeAgent, read: readPrimeAgentTranscript, mode: domain.SessionModeTUI},
+
+	domain.HarnessDroid:      {root: droidRoot, discover: discoverDroid, read: readDroidTranscript, mode: domain.SessionModeTUI},
+	domain.HarnessKimi:       {root: kimiRoot, discover: discoverKimi, read: readKimiTranscript, mode: domain.SessionModeChat},
+	domain.HarnessAgy:        {root: agyRoot, discover: discoverAgy, read: readAgyTranscript},
+	domain.HarnessDeepSeek:   {root: deepseekRoot, discover: discoverDeepSeek, read: readDeepSeekTranscript, mode: domain.SessionModeChat},
 	domain.HarnessAider:      {discoverRegistered: discoverAiderRegistered, read: readAiderTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessClaudeCode: {root: claudeRoot, discover: walkSources(domain.HarnessClaudeCode, "projects", jsonlKey), read: readClaudeTranscript},
+	domain.HarnessCodewhale:  {root: codewhaleRoot, discover: discoverCodewhale, read: readCodewhaleTranscript, mode: domain.SessionModeTUI},
+	domain.HarnessFX:         {root: fxRoot, discover: discoverFX, read: readFXTranscript, mode: domain.SessionModeTUI},
+	domain.HarnessOpenHands:  {root: openHandsRoot, discover: discoverOpenHands, read: readOpenHandsTranscript, mode: domain.SessionModeTUI},
 	// Archived Codex threads are not resumable without unarchiving them in Codex.
 	domain.HarnessCodex:    {root: codexRoot, discover: walkSources(domain.HarnessCodex, "sessions", codexKey), read: readCodexTranscript},
 	domain.HarnessCopilot:  {root: copilotRoot, discover: discoverCopilot, read: readCopilotTranscript},
+	domain.HarnessKilocode: {root: kiloCodeRoot, discover: discoverKiloCode, read: readKiloCodeTranscript, mode: domain.SessionModeTUI},
+	domain.HarnessCrush:    {root: crushRoot, discover: discoverCrush, read: readCrushTranscript},
 	domain.HarnessKimchi:   {root: kimchiRoot, discover: walkSources(domain.HarnessKimchi, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessKimchi)},
 	domain.HarnessOMP:      {root: ompRoot, discover: walkSources(domain.HarnessOMP, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessOMP)},
+	domain.HarnessMemcode:  {discoverRegistered: discoverMemcodeRegistered, read: readMemcodeTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessOpenCode: {root: openCodeRoot, discover: discoverOpenCode, read: readOpenCodeTranscript},
 	domain.HarnessPi:       {root: piRoot, discover: walkSources(domain.HarnessPi, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessPi)},
 	domain.HarnessQwen:     {root: qwenRoot, discover: walkSources(domain.HarnessQwen, "projects", qwenKey), read: readQwenTranscript},
@@ -46,6 +63,7 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessCursor:   {root: cursorRoot, discover: discoverCursor, read: readCursorTranscript},
 	domain.HarnessGrok:     {root: grokRoot, discover: discoverGrok, read: readGrokTranscript},
 	domain.HarnessGemini:   {root: geminiRoot, discover: discoverGemini, readWithProjects: readGeminiTranscriptWithProjects},
+	conductorSource:        {root: conductorRoot, discover: discoverConductor, read: readConductorTranscript, as: domain.HarnessClaudeCode, adopt: writeConductorTranscript},
 }
 
 func claudeRoot(home string) string {
@@ -83,3 +101,5 @@ func importTitle(text string) string {
 	}
 	return text
 }
+
+func kimiRoot(home string) string { return envOr("KIMI_CODE_HOME", filepath.Join(home, ".kimi-code")) }

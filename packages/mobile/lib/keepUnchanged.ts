@@ -1,3 +1,5 @@
+import { useRef } from "react";
+
 /**
  * Deep equality for the daemon's JSON read model.
  *
@@ -39,4 +41,11 @@ export function sameJson(a: unknown, b: unknown): boolean {
  */
 export function keepUnchanged<T>(prev: T, next: T): T {
 	return sameJson(prev, next) ? prev : next;
+}
+
+/** A value that keeps its identity across renders while its data is the same (see keepUnchanged). */
+export function useKeepUnchanged<T>(next: T): T {
+	const kept = useRef(next);
+	if (!sameJson(kept.current, next)) kept.current = next;
+	return kept.current;
 }

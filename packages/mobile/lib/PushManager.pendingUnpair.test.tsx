@@ -21,6 +21,7 @@ vi.mock("expo-notifications", () => ({ setNotificationHandler: vi.fn() }));
 vi.mock("expo-router", () => ({ useRouter: () => ({}), useRootNavigationState: () => null }));
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./store", () => ({ useApp: () => ({ hostStates: [] }) }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ client: {}, org: null }) }));
 vi.mock("./telemetry/runtime", () => ({ mobileTelemetry: () => null }));
 vi.mock("./api", () => ({ ApiError: class extends Error {}, unpairFromDaemon: vi.fn(async () => {}) }));
 vi.mock("react-native", () => ({ Platform: { OS: "ios" }, Linking: {}, AppState: {

@@ -10,6 +10,36 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+// Getenv reads name as the checked harness's sessions see it: an override
+// the readiness check put in ctx (a held-back key reads as unset), else AO's
+// own environment.
+func Getenv(ctx context.Context, name string) string {
+	if value, ok := ports.AuthEnvironmentOverride(ctx, name); ok {
+		return value
+	}
+	return os.Getenv(name)
+}
+
+// Environ applies ctx's overrides to a child probe's environment, replacing
+// any inherited entry for the same name.
+func Environ(ctx context.Context, env []string) []string {
+	overrides := ports.AuthEnvironmentOverrides(ctx)
+	if len(overrides) == 0 {
+		return env
+	}
+	out := make([]string, 0, len(env)+len(overrides))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, ok := overrides[name]; !ok {
+			out = append(out, entry)
+		}
+	}
+	for name, value := range overrides {
+		out = append(out, name+"="+value)
+	}
+	return out
+}
+
 // FileSource names a credential or config file, home-relative when possible.
 func FileSource(path string) domain.AgentAccountIdentity {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
@@ -52,7 +82,7 @@ func ReadCredentialFile(ctx context.Context, path string) ([]byte, error) {
 // shell profiles are not read.
 func CredentialEnvironment(ctx context.Context, method domain.AgentAccountMethod, names ...string) string {
 	for _, name := range names {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
+		if strings.TrimSpace(Getenv(ctx, name)) != "" {
 			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(method))
 			return name
 		}

@@ -74,6 +74,8 @@ type UseBrowserViewOptions = {
 	 * remain visible even if the DB still carries a preview_url.
 	 */
 	terminated?: boolean;
+	/** Destroy this view on unmount instead of retaining it for a session switch. */
+	transient?: boolean;
 	/** The daemon tears down native targets when the session ends, even for durable artifacts. */
 	sessionEnded?: boolean;
 	/**
@@ -215,6 +217,16 @@ const HIDDEN_RECT: BrowserRect = { x: 0, y: 0, width: 0, height: 0 };
 // newly loaded shell a newer range while staying below Number.MAX_SAFE_INTEGER.
 let nextLayoutRevision = Math.floor(globalThis.performance?.timeOrigin ?? Date.now()) * 1_000;
 
+function sameRect(a: BrowserRect, b: BrowserRect): boolean {
+	return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+function scrollCanMoveSlot(target: EventTarget | null, slot: Element | null): boolean {
+	if (!slot || !(target instanceof Node)) return true;
+	if (target.nodeType === Node.DOCUMENT_NODE) return true;
+	return target.contains(slot);
+}
+
 function claimLayoutRevision(): number {
 	nextLayoutRevision += 1;
 	return nextLayoutRevision;
@@ -317,12 +329,14 @@ export function useBrowserView({
 	active,
 	poppedOut,
 	terminated,
+	transient,
 	sessionEnded,
 	previewUrl,
 	previewRevision,
 }: UseBrowserViewOptions): BrowserViewModel {
 	const lifecycleRef = useRef({ sessionId, terminated });
 	lifecycleRef.current = { sessionId, terminated };
+	const transientClosedRef = useRef(false);
 	const [viewId, setViewId] = useState("");
 	const [navState, setNavState] = useState<BrowserNavState>(EMPTY_NAV_STATE);
 	const [annotationMode, setAnnotationModeState] = useState(false);
@@ -350,6 +364,10 @@ export function useBrowserView({
 	const frameRef = useRef<number | null>(null);
 	const appliedLayoutRevisionRef = useRef(0);
 	const settleTimerRef = useRef<number | null>(null);
+	// What the last setBounds told main, so a scroll that moved nothing sends nothing.
+	const lastSentBoundsRef = useRef<{ viewId: string; rect: BrowserRect; visible: boolean } | null>(null);
+	// The queued measure came only from scrolling; any other trigger clears it.
+	const scrollOnlyMeasureRef = useRef(false);
 	const observerRef = useRef<ResizeObserver | null>(null);
 	const previewTriggerRef = useRef<PreviewTrigger | null>(null);
 	const tabNoticeTimerRef = useRef<number | null>(null);
@@ -393,6 +411,7 @@ export function useBrowserView({
 	const sendHiddenBounds = useCallback((id = viewIdRef.current) => {
 		if (!id) return;
 		publishBrowserHole(id, null);
+		lastSentBoundsRef.current = { viewId: id, rect: HIDDEN_RECT, visible: false };
 		window.ao?.browser.setBounds({
 			viewId: id,
 			revision: claimLayoutRevision(),
@@ -401,7 +420,10 @@ export function useBrowserView({
 		});
 	}, []);
 
-	const measureAndSend = useCallback(() => {
+	// onlyIfChanged is for scroll-driven measures alone. Main can hide a view on
+	// its own (clearing the page, closing the last tab), so every other trigger
+	// always re-sends the geometry.
+	const measureAndSend = useCallback((onlyIfChanged = false) => {
 		// measureAndSend runs both from the scheduleMeasure() rAF callback and as a
 		// direct synchronous call (parking on overlay open, the settle timer). A
 		// direct call may land while a scheduled frame is still queued, so cancel
@@ -417,16 +439,18 @@ export function useBrowserView({
 		const node = slotNodeRef.current;
 		if (!id) return;
 		if (!activeRef.current || !node || !node.isConnected || hiddenByFullscreen(node)) {
+			// A hidden view stays hidden while the page scrolls: say so once.
+			const last = lastSentBoundsRef.current;
+			if (onlyIfChanged && last?.viewId === id && !last.visible) return;
 			sendHiddenBounds(id);
 			return;
 		}
 		const rect = visibleSlotRect(node);
-		const payload = {
-			viewId: id,
-			revision: claimLayoutRevision(),
-			rect,
-			visible: rect.width > 0 && rect.height > 0,
-		};
+		const visible = rect.width > 0 && rect.height > 0;
+		const last = lastSentBoundsRef.current;
+		if (onlyIfChanged && last?.viewId === id && last.visible === visible && sameRect(last.rect, rect)) return;
+		const payload = { viewId: id, revision: claimLayoutRevision(), rect, visible };
+		lastSentBoundsRef.current = { viewId: id, rect, visible };
 		publishBrowserHole(id, payload.visible ? rect : null);
 		window.ao?.browser.setBounds(payload);
 	}, [sendHiddenBounds]);
@@ -441,10 +465,22 @@ export function useBrowserView({
 	}, []);
 
 	const scheduleMeasure = useCallback(() => {
+		scrollOnlyMeasureRef.current = false;
 		if (frameRef.current !== null) return;
 		frameRef.current = window.requestAnimationFrame
-			? window.requestAnimationFrame(() => measureAndSend())
-			: window.setTimeout(() => measureAndSend(), 16);
+			? window.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
+			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
+	}, [measureAndSend]);
+
+	// Scrolling only moves the slot when the document or an element containing
+	// it scrolls; chat, terminal and list scrolling beside it cannot.
+	const scheduleScrollMeasure = useCallback((event: Event) => {
+		if (!scrollCanMoveSlot(event.target, slotNodeRef.current)) return;
+		if (frameRef.current !== null) return;
+		scrollOnlyMeasureRef.current = true;
+		frameRef.current = window.requestAnimationFrame
+			? window.requestAnimationFrame(() => measureAndSend(scrollOnlyMeasureRef.current))
+			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
 	}, [measureAndSend]);
 
 	// A ResizeObserver only fires on size changes, so a position-only layout shift
@@ -501,6 +537,7 @@ export function useBrowserView({
 
 	useEffect(() => {
 		let disposed = false;
+		transientClosedRef.current = false;
 		// Preview revisions are scoped to a session. A native view survives session
 		// switches, so seed from the per-session consumed trigger to avoid
 		// reasserting previewUrl over manual navigation on switch-back.
@@ -566,7 +603,7 @@ export function useBrowserView({
 		}
 		window.ao?.browser.ensure(sessionId, false).then((state) => {
 			if (disposed) {
-				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
+				if (transient || (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated)) {
 					window.ao?.browser.destroy(state.viewId);
 				}
 				return;
@@ -597,6 +634,12 @@ export function useBrowserView({
 		});
 		return () => {
 			disposed = true;
+			if (transient) {
+				transientClosedRef.current = true;
+				consumedPreviewTriggers.delete(sessionId);
+				closedTabsBySession.delete(sessionId);
+				nativeViewBySession.delete(sessionId);
+			}
 			const id = ownViewId;
 			if (id) {
 				if (annotationModeRef.current) {
@@ -606,7 +649,7 @@ export function useBrowserView({
 					});
 					setAnnotationModeState(false);
 				}
-				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
+				if (transient || (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated)) {
 					window.ao?.browser.destroy(id);
 				} else if (viewIdRef.current === id) {
 					// Otherwise a session switch already took over this view and
@@ -623,6 +666,7 @@ export function useBrowserView({
 		scheduleSettleMeasure,
 		sendHiddenBounds,
 		sessionId,
+		transient,
 	]);
 
 	// Swap native views as the destination session first paints: show its
@@ -870,17 +914,17 @@ export function useBrowserView({
 		// leading edge, and the restore on exit waits for the final geometry.
 		const handleFullscreenChange = () => scheduleSettleMeasure();
 		window.addEventListener("resize", handle);
-		window.addEventListener("scroll", handle, true);
+		window.addEventListener("scroll", scheduleScrollMeasure, true);
 		document.addEventListener("fullscreenchange", handleFullscreenChange);
 		return () => {
 			window.removeEventListener("resize", handle);
-			window.removeEventListener("scroll", handle, true);
+			window.removeEventListener("scroll", scheduleScrollMeasure, true);
 			document.removeEventListener("fullscreenchange", handleFullscreenChange);
 			observerRef.current?.disconnect();
 			cancelScheduledMeasure();
 			if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
 		};
-	}, [cancelScheduledMeasure, scheduleMeasure, scheduleSettleMeasure]);
+	}, [cancelScheduledMeasure, scheduleMeasure, scheduleScrollMeasure, scheduleSettleMeasure]);
 
 	const withView = useCallback(async (fn: (id: string) => Promise<BrowserNavState | void>) => {
 		const id = viewIdRef.current;
@@ -993,10 +1037,14 @@ export function useBrowserView({
 
 	const openTab = useCallback(
 		async (url?: string) => {
-			if (!hasNativeBrowser) return;
+			if (!hasNativeBrowser || transientClosedRef.current) return;
 			let viewId = viewIdRef.current;
 			if (!viewId) {
 				const ensured = await window.ao!.browser.ensure(sessionId, false);
+				if (transientClosedRef.current) {
+					window.ao?.browser.destroy(ensured.viewId);
+					return;
+				}
 				viewId = ensured.viewId;
 				viewIdRef.current = viewId;
 				setViewId(viewId);
@@ -1009,10 +1057,14 @@ export function useBrowserView({
 	);
 	const openLink = useCallback(
 		async (url: string) => {
-			if (!hasNativeBrowser) return;
+			if (!hasNativeBrowser || transientClosedRef.current) return;
 			let id = viewIdRef.current;
 			if (!id) {
 				const ensured = await window.ao!.browser.ensure(sessionId, false);
+				if (transientClosedRef.current) {
+					window.ao?.browser.destroy(ensured.viewId);
+					return;
+				}
 				id = ensured.viewId;
 				viewIdRef.current = id;
 				setViewId(id);
@@ -1030,6 +1082,7 @@ export function useBrowserView({
 				// Keep the last known tabs as a fallback if the native host is briefly
 				// unavailable; opening the link remains better than dropping the click.
 			}
+			if (transientClosedRef.current) return;
 			// A link is the person's: it never selects or loads into an agent tab.
 			const existingTab = tabs.find((tab) => !tab.remote && !isBlankTabUrl(tab.url) && sameBrowserURL(tab.url, url));
 			if (existingTab) {

@@ -1,5 +1,7 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
+import { settingsSurface, type UiSurface } from "../lib/ui-surfaces";
 import type { AppIcon } from "./icons";
-import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench } from "@/components/app-icons";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, Share2, TriangleAlert, Wrench } from "@/components/app-icons";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,6 +20,10 @@ import { GlobalSettingsForm } from "./GlobalSettingsForm";
 import { ProjectSettingsForm, type ProjectSettingsSaveState, type ProjectSettingsSection as ProjectFormSection } from "./ProjectSettingsForm";
 import { CloudProjectScriptsSettings, ProjectScriptsSettings } from "./ProjectScriptsSettings";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
+import { CloudProjectSharingSettings } from "./CloudProjectSharingSettings";
+import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { isCloudWorkspaceProject } from "../lib/cloud-project-repos";
 import { CloudProjectEnvironmentSettings, ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
@@ -35,8 +41,10 @@ import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, teamsPageFor, type TeamsPage, visibleGlobalSettings } from "./settings/settingsCatalog";
 import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
+import { fetchPairingCode, mobilePairingCodeQueryKey, PAIRING_CODE_REFRESH_MS } from "../lib/mobile-pairing-code";
 import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
 import { useEdgeFade } from "../hooks/useEdgeFade";
+import { SettingsBrowserLinkContext, SettingsBrowserOverlay } from "./settings/SettingsBrowserOverlay";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -98,6 +106,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// record of it. Resolve it here so its settings load from the control plane.
 	const explicitCloudOrgId = displaySettings?.scope === "project" ? displaySettings.cloudOrgId : undefined;
 	const localProjectScope = displaySettings?.scope === "project" && !remoteHostId && explicitCloudOrgId === undefined;
+	// Only a project the local daemon may hold needs the org's list to tell
+	// whether it is a Cloud project; one opened as a Cloud project is read on
+	// its own below.
 	const cloudProjects = useCloudProjectsQuery({ enabled: localProjectScope });
 	const cloudProject = localProjectScope
 		? cloudProjects.data?.find((project) => project.id === displaySettings.projectId)
@@ -116,6 +127,16 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const cloudOrgId = explicitCloudOrgId ?? cloudProject?.orgId;
 	const isCloudProjectSettings = displaySettings?.scope === "project" && cloudOrgId !== undefined;
+	// The Cloud project itself, by the query its settings pages load it with,
+	// so they share one read: whichever org it is in, wherever it sits in the
+	// org's list.
+	const cloudCp = useCloudCp(isCloudProjectSettings);
+	const cloudProjectRecord = useQuery({
+		queryKey: cloudProjectSettingsQueryKey(cloudCp.baseUrl, cloudOrgId ?? "", projectId),
+		enabled: isCloudProjectSettings && cloudCp.ready,
+		retry: false,
+		queryFn: ({ signal }) => cloudCp.client.getProject(cloudOrgId ?? "", projectId, { signal }).then((response) => response.project),
+	});
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
@@ -130,7 +151,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// A Cloud project's repositories, where its agent starts, and the
 	// instructions added to its agents' prompts live on the control plane.
 	if (isCloudProjectSettings) {
-		projectSections.push({ id: "repositories", label: t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
+		// A workspace's repositories are all its own, side by side in its folder.
+		const workspace = isCloudWorkspaceProject(cloudProjectRecord.data ?? cloudProject);
+		projectSections.push({ id: "repositories", label: workspace ? t("settings.cloudProject.workspaceRepositories", { defaultValue: "Workspace repositories" }) : t("settings.project.repositories", { defaultValue: "Repositories" }), icon: FolderGit2 });
 		projectSections.push({ id: "instructions", label: t("settings.project.instructions", { defaultValue: "Instructions" }), icon: ScrollText });
 	}
 	if (!remoteHostId) projectSections.push({ id: "scripts", label: t("settings.project.scripts"), icon: Wrench });
@@ -138,6 +161,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
 	}
+	// Sharing the whole project, as a session's Share does: only the project's
+	// own organization shares it, and only once WorkOS enables sharing for it.
+	const canShareProject = isCloudProjectSettings && cloudOrgId === offering.org?.id && offering.features?.includes(SHARE_FEATURE) === true;
+	if (canShareProject) projectSections.push({ id: "sharing", label: t("settings.project.sharing"), icon: Share2 });
 
 	const isProjectSettings = displaySettings?.scope === "project";
 	const globalHistory = useSectionHistory<GlobalSettingsSection>("general");
@@ -249,6 +276,8 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		// flips after it opens.
 		void queryClient.prefetchQuery({ queryKey: mobileStatusQueryKey, queryFn: fetchMobileStatus });
 		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
+		// Fails quietly while Connect Mobile is off; the page fetches it once on.
+		void queryClient.prefetchQuery({ queryKey: mobilePairingCodeQueryKey, queryFn: fetchPairingCode, staleTime: PAIRING_CODE_REFRESH_MS });
 	}, [queryClient, settingsModal?.scope]);
 
 	const selectProjectSection = (id: ProjectSettingsSection, navigate = () => projectHistory.visit(id)) => {
@@ -283,7 +312,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			else if (!isProjectSettings) { globalHistory.forward(); setFocusAgentId(undefined); }
 		},
 	};
-	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" &&
+	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" && activeProjectSection !== "sharing" &&
 		(projectSaveState.phase === "failed" ||
 			(projectSaveState.phase === "pending" && !projectSaveState.unsaveable) ||
 			projectSaveState.phase === "saving" ||
@@ -301,6 +330,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		close: closeSettingsDialog,
 		title: activeLabel,
 		isBodyReady,
+		telemetrySurface: (displaySettings?.scope === "project" ? "settings_project" : settingsSurface(activeSection)) as UiSurface,
 		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
 		body: () => {
 			if (!isBodyReady) return <div aria-hidden="true" className="h-full" data-testid="settings-dialog-body-pending" />;
@@ -318,6 +348,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			}
 			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "repositories") {
 				return <CloudProjectRepositoriesSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && canShareProject && cloudOrgId !== undefined && activeProjectSection === "sharing") {
+				return <CloudProjectSharingSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} />;
 			}
 			if (displaySettings?.scope === "project" && isCloudProjectSettings && cloudOrgId !== undefined && activeProjectSection === "instructions") {
 				return <CloudProjectInstructionsSettings projectId={displaySettings.projectId} cloudOrgId={cloudOrgId} onSaveState={setProjectSaveState} />;
@@ -441,14 +474,25 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
  * Settings page rendered inside the center panel, in place of the routed page:
  * shared page topbar above a centered, scrolling content column.
  */
+let nextSettingsBrowserRequestId = 0;
+
 export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
 	const scrollerRef = useRef<HTMLDivElement>(null);
+	const [browserRequest, setBrowserRequest] = useState<{ id: number; url: string } | null>(null);
+	const openSettingsBrowser = useCallback((url: string) => {
+		setBrowserRequest({ id: ++nextSettingsBrowserRequestId, url });
+	}, []);
+	useEffect(() => {
+		if (!page) setBrowserRequest(null);
+	}, [page]);
 	useSettingsRowFocus(scrollerRef, page?.active ?? null);
 	useEdgeFade(scrollerRef, "y", [page?.active]);
+	useTelemetrySurface(page?.active.telemetrySurface ?? "settings_general", Boolean(page));
 	if (!page) return null;
 	const layer = page.active;
 	return (
+		<SettingsBrowserLinkContext.Provider value={openSettingsBrowser}>
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
 			<PageTopbar
 				lead={
@@ -470,12 +514,17 @@ export function SettingsPane() {
 					key={entry.bodyKey}
 					ref={entry === layer ? scrollerRef : undefined}
 				>
-					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-6">
+					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-6" data-telemetry-surface={entry.telemetrySurface}>
 						{entry.body()}
 					</div>
 				</div>
 			))}
 		</div>
+		{browserRequest ? createPortal(
+			<SettingsBrowserOverlay key={browserRequest.id} request={browserRequest} onClose={() => setBrowserRequest(null)} />,
+			document.body,
+		) : null}
+		</SettingsBrowserLinkContext.Provider>
 	);
 }
 
@@ -524,10 +573,11 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 	// body's tree (the page or anything it portals) and keep the dialog open
 	// for exactly that press. A press on the backdrop never passes through here.
 	const bodyPointerDown = useRef<Event | null>(null);
+	useTelemetrySurface(layer.telemetrySurface, !covered);
 	return (
 		<>
 		{createPortal(
-			<div className="contents" onPointerDownCapture={(event) => { bodyPointerDown.current = event.nativeEvent; }}>{layer.body()}</div>,
+			<div className="contents" data-telemetry-surface={layer.telemetrySurface} onPointerDownCapture={(event) => { bodyPointerDown.current = event.nativeEvent; }}>{layer.body()}</div>,
 			bodyHost,
 		)}
 		<Dialog.Root open={!covered} onOpenChange={(open) => { if (!open) layer.close(); }}>

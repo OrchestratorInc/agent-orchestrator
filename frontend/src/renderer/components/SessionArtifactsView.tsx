@@ -19,14 +19,15 @@ import { ArtifactZoomContext, ArtifactZoomController, MAX_ARTIFACT_ZOOM, MIN_ART
 import { aoBridge } from "../lib/bridge";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
-import { artifactChangeError, canChangeSessionArtifacts, type ArtifactRow } from "../lib/artifacts";
-import { sessionUiKey } from "../lib/hosts";
+import { artifactChangeError, canChangeSessionArtifacts, findHostShareLink, type ArtifactRow } from "../lib/artifacts";
+import { isArchivedSession } from "../lib/standalone-archive";
+import { LOCAL_HOST, sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AppBrowserLinkContext } from "./AppLink";
 import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
 import { artifactAtPath, deliverableArtifacts } from "../../../../packages/shared/artifacts/deliverables";
-import { ShareArtifactButton } from "./ShareArtifactPopover";
+import { ShareArtifactButton, useHostShareLinks, useReconciledShareLinks } from "./ShareArtifactPopover";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
@@ -37,6 +38,7 @@ import { DropdownMenuItem, DropdownMenuRadioGroup, DropdownMenuRadioItem, Dropdo
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { BrowserIcon } from "./icons";
 import { FileAnnotationComposer, PanelMessage, RetryButton } from "./WorkspaceDiffView";
+import { GridSpacer, useVirtualGridRows } from "../hooks/useVirtualGridRows";
 
 export type ArtifactOpenRequest = { feedback?: boolean; key: number; path: string };
 
@@ -407,6 +409,7 @@ function ArtifactViewerFrame({
  * an edit in progress survives a look at an earlier version.
  */
 function ArtifactViewerBody({
+	active,
 	artifact,
 	artifactRoot,
 	cloud = false,
@@ -420,6 +423,7 @@ function ArtifactViewerBody({
 	onPreviewVersion,
 	previewVersion,
 	readOnly,
+	noFeedback = false,
 	save,
 	sendMessage,
 	sessionId,
@@ -428,6 +432,8 @@ function ArtifactViewerBody({
 	menuActions,
 	zoomController,
 }: {
+	/** False while the view is hidden: a video pauses then. */
+	active: boolean;
 	artifact: SessionArtifact;
 	/** A cloud file's access prefix, which relative links resolve against. */
 	artifactRoot?: string;
@@ -447,6 +453,8 @@ function ArtifactViewerBody({
 	onPreviewVersion: (version: number | null) => void;
 	previewVersion: number | null;
 	readOnly: boolean;
+	/** Offers no feedback to the worker, as for an archived session's files. */
+	noFeedback?: boolean;
 	/** Sends feedback to a cloud session's worker. */
 	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
@@ -460,7 +468,9 @@ function ArtifactViewerBody({
 	const restore = useRestoreArtifactVersion({ cloud: cloudVersions, hostId, path: artifact.path, rawUrl: artifact.rawUrl, sessionId });
 	const previewing = previewVersion !== null;
 	const media = fileMediaKind(artifact.path);
-	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
+	// Another host's page has no inline origin here; it is framed from its proxy's artifact origin, sandboxed.
+	const remotePage = artifact.kind === "html" && hostId && hostId !== LOCAL_HOST ? artifact.rawUrl : undefined;
+	const page = remotePage ?? (artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined);
 	const showingPage = Boolean(page) && !htmlSource && !previewing;
 	// An error from one version's restore does not belong to the next one looked at.
 	const resetRestore = restore.reset;
@@ -479,6 +489,7 @@ function ArtifactViewerBody({
 				{previewing && media ? null : <div className={cn("h-full", (previewing || showingPage) && "hidden")}>
 					<ArtifactZoomContext.Provider value={previewing || showingPage ? null : zoomController}>
 					<ArtifactFileView
+						active={active}
 						artifactName={artifact.name}
 						initialEditing={initialEditing}
 						artifactRoot={artifactRoot}
@@ -490,6 +501,7 @@ function ArtifactViewerBody({
 						path={artifact.path}
 						rawUrl={artifact.rawUrl}
 						readOnly={readOnly}
+						noFeedback={noFeedback}
 						save={save}
 						sendMessage={sendMessage}
 						sessionId={sessionId}
@@ -499,7 +511,15 @@ function ArtifactViewerBody({
 					/>
 					</ArtifactZoomContext.Provider>
 				</div>}
-				{showingPage && page ? (
+				{showingPage && page && noFeedback ? (
+					<ArtifactZoomContext.Provider value={zoomController}>
+						{remotePage ? (
+							<HostArtifactPageFrame key={`${page}:${artifact.updatedAt}`} title={artifact.name} url={page} />
+						) : (
+							<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+						)}
+					</ArtifactZoomContext.Provider>
+				) : showingPage && page ? (
 					<ArtifactZoomContext.Provider value={zoomController}>
 						<ArtifactPageFeedback
 							feedbackRequestKey={feedbackRequestKey}
@@ -511,12 +531,17 @@ function ArtifactViewerBody({
 							sendMessage={sendMessage}
 							sessionId={sessionId}
 						>
-							<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+							{remotePage ? (
+								<HostArtifactPageFrame key={`${page}:${artifact.updatedAt}`} title={artifact.name} url={page} />
+							) : (
+								<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+							)}
 						</ArtifactPageFeedback>
 					</ArtifactZoomContext.Provider>
 				) : null}
 				{previewing ? (
 					<ArtifactVersionPreview
+						active={active}
 						artifactOrigin={artifactOrigin}
 						cloud={cloudVersions}
 						hostId={hostId}
@@ -587,6 +612,15 @@ function ArtifactPageFeedback({
 	);
 }
 
+/**
+ * A remote host's HTML artifact, framed from its loopback proxy's artifact origin in an opaque
+ * sandbox, as a Cloud page is. The frame zooms itself, from the viewer's buttons and shortcuts.
+ */
+function HostArtifactPageFrame({ title, url }: { title: string; url: string }) {
+	const { zoom } = useArtifactZoomTarget();
+	return <CloudArtifactFrame source="host" title={title} url={url} zoom={zoom} />;
+}
+
 /** A cloud session's HTML artifact, framed from the control plane. */
 function CloudHtmlArtifactView({
 	artifact,
@@ -635,11 +669,14 @@ function CloudHtmlArtifactView({
  * with isolated inline HTML previews and an optional full-screen view.
  */
 export function SessionArtifactsView({
+	active = true,
 	hostId,
 	onRequestConsumed,
 	request,
 	session,
 }: {
+	/** False while the inspector is closed or on another tab: a video pauses then. */
+	active?: boolean;
 	hostId?: string;
 	onRequestConsumed?: (key: number) => void;
 	request?: ArtifactOpenRequest | null;
@@ -648,6 +685,7 @@ export function SessionArtifactsView({
 	const { t } = useTranslation();
 	const openInBrowser = useContext(AppBrowserLinkContext);
 	const cloud = Boolean(session.cloud);
+	const remote = !cloud && Boolean(hostId && hostId !== LOCAL_HOST);
 	const cloudAccess = useCloudArtifactAccess(session, cloud && (session.artifactFiles?.length ?? 0) > 0);
 	const cloudRoot = cloudAccess.data;
 	// A cloud file's URL comes from the session's short-lived access prefix.
@@ -663,11 +701,15 @@ export function SessionArtifactsView({
 	const listedArtifacts = useMemo(() => deliverableArtifacts(artifacts), [artifacts]);
 	const livePreviewPaths = useMemo(() => new Set(
 		listedArtifacts.filter((artifact) =>
-			(artifact.kind === "html" && (cloud || (artifact.inlineUrl && artifact.rawUrl)))
+			(artifact.kind === "html" && (cloud || (artifact.rawUrl && (artifact.inlineUrl || remote))))
 			|| (/\.pdf$/i.test(artifact.path) && (cloud || artifact.rawUrl)),
 		).slice(0, 4).map((artifact) => artifact.path),
-	), [listedArtifacts, cloud]);
+	), [listedArtifacts, cloud, remote]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
+	// A file a request opened before the session listed it, until the list has
+	// it. Only that file gets the not-listed-yet note: one that leaves the list
+	// later (deleted here or by the agent) is gone, not on its way.
+	const [awaitedPath, setAwaitedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
 	// Share hides while the open file is being edited.
 	const [editingFile, setEditingFile] = useState(false);
@@ -680,6 +722,10 @@ export function SessionArtifactsView({
 	const fileMenuActions = useRef<ArtifactMenuAction[]>([]);
 	const contentRef = useRef<HTMLDivElement>(null);
 	const uiKey = sessionUiKey(session.id, hostId);
+	// Who each published card's link opens for, so it is marked as on the Artifacts page.
+	const shareAccess = useReconciledShareLinks();
+	// A remote host's daemon lists no links: this computer's records mark its files.
+	const hostShareLinks = useHostShareLinks();
 	const { client: cloudClient } = useCloudCp(cloud);
 	// Only the person who started a cloud session shares its files.
 	const cloudUserId = useCloudMeUserId(cloud);
@@ -688,6 +734,10 @@ export function SessionArtifactsView({
 	// Another member's cloud session files open view only: no edit, restore,
 	// delete or copy of them (the control plane refuses the changes too).
 	const owner = canChangeSessionArtifacts(session.cloud, cloudUserId);
+	// An archived session's files are view only too: they can still be
+	// previewed, shared, downloaded or deleted, but not edited, restored to an
+	// older version, or sent to a worker that is no longer running.
+	const archived = isArchivedSession(session);
 	const queryClient = useQueryClient();
 	// A cloud session's artifacts are edited and versioned in the control plane,
 	// which hands a save to the session's worker.
@@ -709,7 +759,7 @@ export function SessionArtifactsView({
 		await cloudClient.sendSessionMessage(cloudOrgId, session.id, { text: message });
 	}, [cloudClient, cloudOrgId, session.id, t]);
 
-	useEffect(() => { setSelectedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
+	useEffect(() => { setSelectedPath(null); setAwaitedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
 	// History is per file: opening another one starts on its live content.
 	useEffect(() => setPreviewVersion(null), [selectedPath, uiKey]);
 	// Every file, and each look at its page or source, opens at fit.
@@ -751,12 +801,16 @@ export function SessionArtifactsView({
 			setEditingPath(null);
 			setHtmlSourcePath(null);
 			setSelectedPath(request.path);
+			setAwaitedPath(request.path);
 		}
 	}, [request]);
 
 	// A file renamed while it is open, or opened by a link from before its
 	// rename, is found by the path it had.
 	const listed = selectedPath === null ? undefined : artifactAtPath(artifacts, selectedPath);
+	// The awaited file is listed once the lookup finds it, under its own path
+	// or, renamed since the link was written, under a new one.
+	if (awaitedPath !== null && listed) setAwaitedPath(null);
 	useEffect(() => {
 		if (listed && listed.path !== selectedPath) setSelectedPath(listed.path);
 	}, [listed, selectedPath]);
@@ -764,19 +818,29 @@ export function SessionArtifactsView({
 	// is refreshed, so the refresh does not reload it.
 	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);
 	const selected = listed && cloud ? { ...listed, rawUrl: pinned.url } : listed;
-	const artifactRow = (artifact: SessionArtifact): ArtifactRow => ({
-		...artifact,
-		sessionId: session.id,
-		sessionTitle: session.title ?? "",
-		cloud: session.cloud,
-	});
+	const artifactRow = (artifact: SessionArtifact): ArtifactRow => {
+		const hostLink = hostId ? findHostShareLink(hostShareLinks, hostId, session.id, artifact) : undefined;
+		const shareUrl = artifact.shareUrl ?? hostLink?.url;
+		const access = shareUrl ? shareAccess.get(shareUrl) ?? hostLink?.access : undefined;
+		return {
+			...artifact,
+			sessionId: session.id,
+			sessionTitle: session.title ?? "",
+			cloud: session.cloud,
+			hostId,
+			...(shareUrl ? { shareUrl } : {}),
+			...(access ? { shareAccess: access } : {}),
+		};
+	};
 	const openArtifact = (artifact: Pick<SessionArtifact, "path">) => {
 		setEditingPath(null);
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
 	};
-	// A file the agent rewrites while it is open shows the new content.
-	useArtifactFileChanges(session, Boolean(selected) && !hostId);
+	// Follow a requested file before it appears in the list too: the stream's
+	// ready event rereads files written before the view opened, and later file
+	// changes refresh the list so the pending path can resolve.
+	useArtifactFileChanges(session, Boolean(selected || (awaitedPath !== null && selectedPath === awaitedPath)) && !hostId);
 	// Versions are read back as text or, from a daemon that can, by the media
 	// viewers, so a cloud media file and any other binary file, such as an
 	// archive, get no History. This shares the viewer's cached read of the file, which for a
@@ -825,10 +889,12 @@ export function SessionArtifactsView({
 		content.addEventListener("wheel", onWheel, { passive: false });
 		return () => content.removeEventListener("wheel", onWheel);
 	}, [hasSelection, zoomController]);
+	// Only the cards in view and near it are built; the list itself scrolls.
+	const grid = useVirtualGridRows(listedArtifacts.length);
 	if (selected) {
 		const fullscreenLabel = t(fullscreen ? "common.returnToPanel" : "common.maximize");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
-		const hasHtmlPreview = selected.kind === "html" && (cloud || (selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl)));
+		const hasHtmlPreview = selected.kind === "html" && (cloud || (remote ? Boolean(selected.rawUrl) : selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl)));
 		const showingHtmlSource = htmlSourcePath === selected.path;
 		// The page also opens in the session's Browser, the same target as
 		// `ao preview` on its path; full screen is left first since it covers it.
@@ -846,7 +912,7 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
+					<ArtifactActionsMenu artifact={selected} viewingHistoricalVersion={previewVersion !== null} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
 						<ArtifactViewMenuItems
 							fileActions={fileMenuActions}
 							history={(fileMediaKind(selected.path) ? session.cloud || (hostId && !hostServesMediaVersions) : selectedFile.data?.binary) ? null : (
@@ -864,17 +930,27 @@ export function SessionArtifactsView({
 						    session publishes its files. */}
 						{editingFile || session.cloud?.shared ? null : session.cloud ? (!cloudOwner ? null : (
 							<ShareArtifactButton
-								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "", ...(selected.id ? { artifactId: selected.id } : {}) }}
+								file={{ source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: selected.path, projectId: "", ...(selected.id ? { artifactId: selected.id } : {}), ...(selected.sha256 ? { fingerprint: selected.sha256 } : {}) }}
 								name={selected.name}
+								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
 							/>
 						)) : !hostId ? (
 							<ShareArtifactButton
 								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId, ...(selected.id ? { artifactId: selected.id } : {}) }}
 								name={selected.name}
+								published={Boolean(selected.shareUrl)}
 								revision={listed?.updatedAt}
 							/>
-						) : null}
+						) : (
+							// Downloaded from the host through its proxy, then uploaded from here.
+							<ShareArtifactButton
+								file={{ source: "host", hostId, sessionId: session.id, path: selected.path, projectId: session.workspaceId, ...(selected.id ? { artifactId: selected.id } : {}) }}
+								name={selected.name}
+								published={Boolean(findHostShareLink(hostShareLinks, hostId, session.id, selected))}
+								revision={listed?.updatedAt}
+							/>
+						)}
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
@@ -915,6 +991,7 @@ export function SessionArtifactsView({
 						</ArtifactZoomContext.Provider>
 					) : (
 						<ArtifactViewerBody
+							active={active}
 							artifact={selected}
 							htmlSource={showingHtmlSource}
 							initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated}
@@ -927,8 +1004,9 @@ export function SessionArtifactsView({
 							onFeedbackRequestConsumed={onRequestConsumed}
 							onPreviewVersion={setPreviewVersion}
 							previewVersion={previewVersion}
-							readOnly={!owner}
-							save={cloud && owner ? saveCloudArtifact : undefined}
+							readOnly={!owner || archived}
+							noFeedback={archived}
+							save={cloud && owner && !archived ? saveCloudArtifact : undefined}
 							sendMessage={cloud ? sendCloudFeedback : undefined}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}
@@ -951,11 +1029,19 @@ export function SessionArtifactsView({
 				{!hostId && !session.cloud && artifacts.length > 0 ? <OpenArtifactsFolderButtons sessionId={session.id} /> : null}
 				{session.cloud && owner && artifacts.length > 0 ? <OpenCloudArtifactsFolderButton orgId={session.cloud.orgId} sessionId={session.id} /> : null}
 			</div>
-			{artifacts.length === 0 ? (
+			{/* A file opened by its path (a chat link to one the agent just wrote)
+			    shows once the session lists it; until then, say so rather than
+			    leave the gallery as if nothing was asked. */}
+			{selectedPath !== null && selectedPath === awaitedPath ? (
+				<PanelMessage action={<Button onClick={() => setSelectedPath(null)} size="sm" type="button" variant="secondary">{t("artifacts.back")}</Button>}>
+					{t("artifacts.notListedYet", { name: selectedPath })}
+				</PanelMessage>
+			) : artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>
 			) : (
-				<ul className="board-scrollbar grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-y-auto px-3 pb-3 pt-1">
-					{listedArtifacts.map((artifact) => {
+				<ul ref={grid.listRef} className="board-scrollbar grid min-h-0 flex-1 grid-cols-2 content-start gap-3 overflow-y-auto px-3 pb-3 pt-1">
+					<GridSpacer height={grid.before} />
+					{listedArtifacts.slice(grid.start, grid.end).map((artifact) => {
 						const row = artifactRow(artifact);
 						return (
 							<ArtifactGalleryCard
@@ -978,6 +1064,7 @@ export function SessionArtifactsView({
 							/>
 						);
 					})}
+					<GridSpacer height={grid.after} />
 				</ul>
 			)}
 		</div>

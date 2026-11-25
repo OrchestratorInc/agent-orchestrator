@@ -652,3 +652,39 @@ func (t *blockingTransport) SendEvent(*sentry.Event) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestErrorFingerprintDailyCapReportsDroppedOnNextSend(t *testing.T) {
+	when := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	fingerprint := "aaaaaaaaaaaaaaa1"
+	for i := 0; i < maxErrorsPerFingerprintDay; i++ {
+		// One per minute keeps the per-minute limit out of the way.
+		ok, dropped := admitErrorFingerprint(fingerprint, "", when.Add(time.Duration(i)*time.Minute))
+		if !ok || dropped != 0 {
+			t.Fatalf("event %d: admitted=%v dropped=%d, want admitted with nothing dropped", i, ok, dropped)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if ok, _ := admitErrorFingerprint(fingerprint, "", when.Add(time.Hour+time.Duration(i)*time.Minute)); ok {
+			t.Fatalf("event %d past the daily cap of %d was admitted", maxErrorsPerFingerprintDay+i, maxErrorsPerFingerprintDay)
+		}
+	}
+	ok, dropped := admitErrorFingerprint(fingerprint, "", when.Add(24*time.Hour))
+	if !ok || dropped != 3 {
+		t.Fatalf("first event of the next day: admitted=%v dropped=%d, want admitted carrying 3", ok, dropped)
+	}
+	if ok, dropped := admitErrorFingerprint(fingerprint, "", when.Add(24*time.Hour+time.Minute)); !ok || dropped != 0 {
+		t.Fatalf("the dropped count was reported twice: admitted=%v dropped=%d", ok, dropped)
+	}
+	tags := withDropped(map[string]string{"operation": "chat_spawn"}, 3)
+	if tags["dropped_since_last"] != "3" || !safeSentryTag("dropped_since_last", "3") {
+		t.Fatalf("dropped_since_last tag = %q, or it does not pass the tag filter", tags["dropped_since_last"])
+	}
+	for _, tag := range [][2]string{{"failed_step", "worktree"}, {"cause", "branch_exists"}} {
+		if !safeSentryTag(tag[0], tag[1]) {
+			t.Errorf("safeSentryTag(%s=%s) = false, want true", tag[0], tag[1])
+		}
+	}
+	if safeSentryTag("cause", "fatal: /Users/me/repo") {
+		t.Error("free-text cause passed the tag filter")
+	}
+}

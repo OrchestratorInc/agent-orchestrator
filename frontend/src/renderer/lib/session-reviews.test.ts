@@ -3,8 +3,9 @@ import { appI18n } from "../i18n";
 import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import {
 	openReviewStatesFor,
-	reviewHasLiveActivity,
 	reviewIsRunning,
+	reviewPhase,
+	reviewPhaseRun,
 	reviewRunDisabled,
 	reviewSessionRunAction,
 	sessionReviewsQueryOptions,
@@ -85,15 +86,15 @@ describe("shared review eligibility helpers", () => {
 		expect(reviewIsRunning([reviewState(1, "needs_review")])).toBe(false);
 	});
 
-	it("only treats a running review as live when reviewer activity is not idle", () => {
-		const running = [reviewState(1, "running")];
-		expect(reviewHasLiveActivity(running, "active", true)).toBe(true);
-		expect(reviewHasLiveActivity(running, "blocked", true)).toBe(true);
-		expect(reviewHasLiveActivity(running, "idle", true)).toBe(false);
-		expect(reviewHasLiveActivity(running, "waiting_input", true)).toBe(false);
-		expect(reviewHasLiveActivity(running, "exited", true)).toBe(false);
-		expect(reviewHasLiveActivity(running, undefined, true)).toBe(true);
-		expect(reviewHasLiveActivity(running, "active", false)).toBe(false);
+	it("polls only while a run is still active", () => {
+		const interval = sessionReviewsQueryOptions(session(), true).refetchInterval as (query: { state: { data: unknown } }) => number | false;
+		const data = (status: string) => ({ reviewerHandleId: "", runs: [{ status }], reviews: [], activeReviewers: [] });
+		for (const status of ["queued", "launching", "running", "cancelling"]) {
+			expect(interval({ state: { data: data(status) } })).toBe(2500);
+		}
+		for (const status of ["completed", "failed", "cancelled", "superseded"]) {
+			expect(interval({ state: { data: data(status) } })).toBe(false);
+		}
 	});
 
 	it("disables the run when triggering, with no open states, or with every state ineligible", () => {
@@ -116,5 +117,22 @@ describe("shared review eligibility helpers", () => {
 		expect(reviewSessionRunAction([reviewState(1, "needs_review")], false)).toBe(
 			appI18n.t("inspector.review.runLatest"),
 		);
+	});
+});
+
+describe("reviewPhaseRun", () => {
+	const running = (n: number, harness: string, status: string) =>
+		({ prUrl: `https://github.com/acme/app/pull/${n}`, prNumber: n, targetSha: `sha-${n}`, status: "running", latestRun: { id: `run-${n}`, harness, status, targetSha: `sha-${n}`, createdAt: "2026-06-10T00:00:00Z" } }) as unknown as PRReviewState;
+
+	it("names the run waiting for input, not the first PR's", () => {
+		const states = [running(3, "codex", "launching"), running(4, "claude-code", "running")];
+		const phase = reviewPhase(states, "waiting_input", "claude-code");
+		expect(phase).toBe("waiting_input");
+		expect(reviewPhaseRun(states, phase, "claude-code")?.id).toBe("run-4");
+	});
+
+	it("names the launching run while a pass starts", () => {
+		const states = [running(3, "codex", "stopping"), running(4, "codex", "queued")];
+		expect(reviewPhaseRun(states, "starting")?.id).toBe("run-4");
 	});
 });

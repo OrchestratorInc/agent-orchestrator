@@ -1,6 +1,7 @@
 package sessionimport
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,12 +19,15 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	kimiadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// recentDays is the window of activity a chat needs to be offered.
+// recentDays is the window of activity a chat needs to be offered. Neither
+// limit applies to Conductor chats: a user leaving Conductor brings them all.
 const (
 	recentDays         = 30
 	maxChatsPerProject = 100
@@ -71,6 +75,7 @@ type selection struct {
 	candidate Candidate
 	source    transcript
 	cacheKey  string
+	conductor bool
 }
 
 // sourceFiles is one native conversation on disk; Codex may split it into segments.
@@ -100,6 +105,16 @@ type Service struct {
 	selections   map[string]selection
 	cache        map[string]parsed
 	now          func() time.Time
+	// importVersion reports whether harness's installed CLI can prepare a new
+	// import; nil skips the check. It is late-bound by the daemon.
+	importVersion func(context.Context, domain.AgentHarness) error
+}
+
+// SetImportVersionCheck late-binds the installed-CLI version gate for import.
+func (s *Service) SetImportVersionCheck(check func(context.Context, domain.AgentHarness) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.importVersion = check
 }
 
 // New uses the same provider homes as ordinary native AO launches. AO's own
@@ -569,6 +584,9 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		// Every scan reads the histories modified within recentDays; unchanged
 		// ones come from the cache, keyed by size and mtime.
 		recent := s.now().AddDate(0, 0, -recentDays)
+		if harness == conductorSource {
+			recent = time.Time{}
+		}
 		results := make([]parsed, len(files))
 		group, groupCtx := errgroup.WithContext(ctx)
 		group.SetLimit(max(1, runtime.GOMAXPROCS(0)/2))
@@ -578,7 +596,8 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 				continue
 			}
 			// AO's own sessions are never offered; skip reading their histories.
-			if _, own := managed[file.nativeID()]; own {
+			// A Conductor chat is checked once read: it imports from another root.
+			if _, own := managed[file.nativeID()]; own && harness != conductorSource {
 				if _, wasImported := imported[[2]string{file.root, file.nativeID()}]; !wasImported {
 					results[i] = parsed{err: errManagedByAO}
 					continue
@@ -612,11 +631,17 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			if source.last.Before(recent) {
 				continue
 			}
-			id := candidateID(harness, source.root, source.nativeID)
-			if prior, ok := selected[id]; ok && !source.last.After(prior.source.last) {
+			// A Conductor chat read from its agent's own history is the same
+			// candidate as that agent's, and keeps Conductor's title and limits.
+			conductor, shown, idHarness := harness == conductorSource, cmp.Or(importer.as, harness), harness
+			if conductor && source.harness != conductorSource {
+				shown, idHarness = source.harness, source.harness
+			}
+			id := candidateID(idHarness, source.root, source.nativeID)
+			if prior, ok := selected[id]; ok && (prior.conductor || !conductor) && (prior.conductor != conductor || !source.last.After(prior.source.last)) {
 				continue
 			}
-			dest := dests.destination(source.cwd)
+			dest := dests.destination(source.folder())
 			if !dest.eligible && dest.folder == "" {
 				continue
 			}
@@ -624,13 +649,13 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			if title == "" {
 				title = "Imported conversation"
 			}
-			c := Candidate{ID: id, Harness: harness, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last.UTC(), MessageCount: result.count, Shortened: source.shortened}
+			c := Candidate{ID: id, Harness: shown, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last.UTC(), MessageCount: result.count, Shortened: source.shortened}
 			if sessionID, ok := imported[[2]string{source.root, source.nativeID}]; ok {
 				c.SessionID = sessionID
 			} else if _, own := managed[source.nativeID]; own {
 				continue
 			}
-			selected[id] = selection{candidate: c, source: source, cacheKey: file.cacheKey()}
+			selected[id] = selection{candidate: c, source: source, cacheKey: file.cacheKey(), conductor: conductor}
 		}
 	}
 	for _, item := range selected {
@@ -642,7 +667,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	listed := map[[2]string]int{}
 	kept := preview.Candidates[:0]
 	for _, c := range preview.Candidates {
-		if c.SessionID == "" {
+		if c.SessionID == "" && !selected[c.ID].conductor {
 			key := [2]string{string(c.ProjectID), c.Folder}
 			listed[key]++
 			if listed[key] > maxChatsPerProject {
@@ -660,18 +685,41 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 // RefreshArchive rereads an imported conversation just before its first open,
 // so turns added in another app since the import stay in the visible history.
 // Once native preparation is checkpointed, retain the matching archive on
-// retries: later source turns need not exist in the pinned native copy.
+// retries: later source turns need not exist in the pinned native copy. Kilo
+// and CodeWhale refresh their verified prepared copies until adoption.
 func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
-	if source == nil || source.Adopted || source.ResumeNativeID != "" || source.ResumeCwd != "" {
+	if source == nil || source.Adopted {
 		return nil
+	}
+	preparedKilo := rec.Harness == domain.HarnessKilocode && source.ResumeNativeID != ""
+	preparedCodewhale := rec.Harness == domain.HarnessCodewhale && source.ResumeNativeID != ""
+	preparedNative := preparedKilo || preparedCodewhale
+	if !preparedNative && (source.ResumeNativeID != "" || source.ResumeCwd != "") {
+		return nil
+	}
+	root, nativeID, cwd := source.ConfigDir, source.NativeID, source.CWD
+	paths := []string{rec.Metadata.NativeTranscriptPath}
+	if preparedNative {
+		if source.ResumeConfigDir == "" || source.ResumeCwd == "" {
+			return errors.New("prepared native history has an incomplete binding")
+		}
+		root, nativeID, cwd = source.ResumeConfigDir, source.ResumeNativeID, source.ResumeCwd
+		if preparedKilo {
+			// Kilo's reader takes the row ID, not its db/id locator path.
+			paths = []string{nativeID}
+		} else {
+			if source.ResumeTranscriptPath == "" {
+				return errors.New("prepared CodeWhale history has no snapshot path")
+			}
+			paths = []string{source.ResumeTranscriptPath}
+		}
 	}
 	dests, err := s.destinations(ctx)
 	if err != nil {
 		return err
 	}
 	projects := s.registeredDiscoveryRoots(dests)
-	paths := []string{rec.Metadata.NativeTranscriptPath}
 	if rec.Harness == domain.HarnessCodex {
 		// Long Codex threads continue in later segment files.
 		segments, err := codexThreadSegments(ctx, source.ConfigDir, source.NativeID)
@@ -682,15 +730,18 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 			paths = segments
 		}
 	}
-	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, projects, paths...)
+	fresh, err := readTranscriptForProjects(ctx, rec.Harness, root, projects, paths...)
 	if err != nil {
 		return err
 	}
-	if fresh.nativeID != source.NativeID {
+	if fresh.nativeID != nativeID {
 		return errors.New("the source no longer holds this conversation")
 	}
+	if preparedNative && canonical(fresh.cwd) != canonical(cwd) {
+		return errors.New("prepared native history no longer matches its workspace")
+	}
 	if len(fresh.messages) == 0 {
-		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == source.CWD {
+		if !preparedNative && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == cwd {
 			return nil // A native server-side conversation need not expose a transcript.
 		}
 		return errors.New("the source no longer holds readable conversation history")
@@ -699,7 +750,7 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 }
 
 // importOne registers one selected conversation from its fresh read. s.mu is held.
-func (s *Service) importOne(ctx context.Context, dests *destinations, id string, source transcript, readErr error) Result {
+func (s *Service) importOne(ctx context.Context, dests *destinations, id string, source transcript, readErr error, versions map[domain.AgentHarness]error) Result {
 	result := Result{ID: id, Status: "failed"}
 	// Out of time: report every row, so the dialog shows what was created.
 	if ctx.Err() != nil {
@@ -716,12 +767,41 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 		result.SessionID = item.candidate.SessionID
 		return result
 	}
-	dest := dests.destination(source.cwd)
+	source.placeAt = cmp.Or(source.placeAt, item.source.placeAt)
+	dest := dests.destination(source.folder())
 	project := dest.id
 	if readErr != nil || !dest.eligible || project != item.candidate.ProjectID || source.nativeID != item.source.nativeID || source.cwd != item.source.cwd || source.fingerprint != item.source.fingerprint {
 		delete(s.cache, item.cacheKey)
 		result.Error = "The source or project changed. Scan again before importing."
 		return result
+	}
+	// A pinned native CLI must be the verified version now; otherwise the
+	// import would be created and then fail on first open.
+	if s.importVersion != nil {
+		err, checked := versions[source.harness]
+		if !checked {
+			err = s.importVersion(ctx, source.harness)
+			versions[source.harness] = err
+		}
+		if err != nil {
+			result.Error = err.Error()
+			return result
+		}
+	}
+	if source.harness == domain.HarnessKimi {
+		if err := kimiadapter.CheckImportedOAuth(ctx, source.root, source.model); err != nil {
+			result.Error = err.Error()
+			return result
+		}
+	}
+	adopt := harnessImporters[source.harness].adopt
+	if adopt != nil {
+		written, err := adopt(ctx, source)
+		if err != nil {
+			result.Error = fmt.Sprintf("Import failed: %v", err)
+			return result
+		}
+		source = written
 	}
 	now := time.Now().UTC()
 	mode := domain.SessionModeTUI
@@ -735,6 +815,9 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd, Fingerprint: item.source.fingerprint}}
 	created, fresh, createErr := s.store.CreateImportedSession(ctx, rec, source.messages)
 	if createErr != nil {
+		if adopt != nil {
+			_ = os.Remove(source.path)
+		}
 		result.Error = fmt.Sprintf("Import failed: %v", createErr)
 		return result
 	}
@@ -760,6 +843,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 		return nil, err
 	}
 	results := make([]Result, 0, len(ids))
+	versions := map[domain.AgentHarness]error{}
 	// Histories are read in parallel, as Scan reads them, a batch at a time so
 	// only one batch of full histories is held; each batch then registers in
 	// order.
@@ -786,7 +870,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 		}
 		_ = group.Wait()
 		for i, id := range chunk {
-			results = append(results, s.importOne(ctx, dests, id, reads[i].source, reads[i].err))
+			results = append(results, s.importOne(ctx, dests, id, reads[i].source, reads[i].err, versions))
 		}
 	}
 	return results, nil

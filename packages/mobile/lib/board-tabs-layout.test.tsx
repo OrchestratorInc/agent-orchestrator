@@ -5,18 +5,26 @@ import type { DashboardSession } from "./api";
 
 const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
-	fontScale: 1,
+	pathname: "/",
 	sessions: [] as DashboardSession[],
 	tabRenders: 0,
 	theme: new Proxy({}, { get: (_target, property) => `#${String(property)}` }),
 	push: vi.fn(),
-	router: undefined as unknown as { push: (href: string) => void },
+	navigate: vi.fn(),
+	router: undefined as unknown as { push: (href: string) => void; navigate: (href: string) => void },
 }));
 // One router for the whole run, as expo-router's own is stable.
-fixtures.router = { push: (href: string) => fixtures.push(href) };
+fixtures.router = { push: (href: string) => fixtures.push(href), navigate: (href: string) => fixtures.navigate(href) };
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-vi.mock("react-native", () => ({ Platform: fixtures.platform, useWindowDimensions: () => ({ fontScale: fixtures.fontScale }) }));
+vi.mock("react-native", () => ({
+	Platform: fixtures.platform,
+	StyleSheet: { create: <T,>(styles: T) => styles },
+	View: ({ children, ...props }: { children?: ReactNode }) => createElement("View", props, children),
+}));
+vi.mock("./BoardTabBar", () => ({ BoardTabBar: (props: object) => createElement("BoardTabBar", props) }));
+const reselect = vi.hoisted(() => vi.fn());
+vi.mock("./boardTabReselect", () => ({ reselectBoardTab: reselect }));
 vi.mock("expo-router/unstable-native-tabs", () => {
 	const host = (name: string) => ({ children, ...props }: { children?: ReactNode }) => createElement(name, props, children);
 	const NativeTabs = Object.assign(({ children, ...props }: { children?: ReactNode }) => {
@@ -27,7 +35,7 @@ vi.mock("expo-router/unstable-native-tabs", () => {
 	});
 	return { NativeTabs };
 });
-vi.mock("expo-router", () => ({ useRouter: () => fixtures.router }));
+vi.mock("expo-router", () => ({ useRouter: () => fixtures.router, usePathname: () => fixtures.pathname }));
 vi.mock("./store", () => ({ useApp: () => ({ allSessions: fixtures.sessions }) }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme }));
 
@@ -42,21 +50,18 @@ function render() {
 	act(() => { renderer = create(<BoardTabsLayout />); });
 	return renderer!;
 }
-/** The three board tabs, without the New task button set apart beside them. */
-const ANDROID_TABS = ["(pull-requests)", "(preferences)"];
-
 /** The board's own tabs, Workers and Projects, on both platforms. */
 function triggers() {
-	return renderer!.root.findAllByType("Trigger" as never).filter((trigger) => trigger.props.name !== "compose" && !ANDROID_TABS.includes(trigger.props.name));
+	return renderer!.root.findAllByType("Trigger" as never).filter((trigger) => trigger.props.name !== "compose");
 }
 
-function trigger(name: string) {
-	return renderer!.root.findAllByType("Trigger" as never).find((node) => node.props.name === name)!;
+function bar() {
+	return renderer!.root.findByType("BoardTabBar" as never);
 }
 
 beforeEach(() => {
 	fixtures.platform.OS = "ios";
-	fixtures.fontScale = 1;
+	fixtures.pathname = "/";
 	fixtures.sessions = [];
 	fixtures.tabRenders = 0;
 });
@@ -73,23 +78,59 @@ describe("board tabs", () => {
 		expect(triggers().map((trigger) => trigger.findByType("TriggerLabel" as never).props.children)).toEqual(["Workers", "Projects"]);
 	});
 
-	// Material's bar takes up to five destinations, so Android has Pull
-	// Requests and Settings there rather than in the top app bar; iOS opens both
-	// as sheets from the board's bar and never shows these.
-	it.each([["android", false], ["ios", true]])("shows Pull Requests and Settings as tabs on %s: hidden %s", (os, hidden) => {
-		fixtures.platform.OS = os;
+	// Pull Requests and Settings open from the header on both platforms, so
+	// the board has no tabs for them.
+	it("has no Pull Requests or Settings tab", () => {
 		render();
-		expect(ANDROID_TABS.map((name) => trigger(name).props.hidden)).toEqual([hidden, hidden]);
-		expect(ANDROID_TABS.map((name) => trigger(name).findByType("TriggerLabel" as never).props.children)).toEqual(["Pull Requests", "Settings"]);
+		expect(renderer!.root.findAllByType("Trigger" as never).map((trigger) => trigger.props.name)).toEqual(["(workers)", "(projects)", "compose"]);
 	});
 
-	// At 2× text Android's four labels ran together ("WorkersProjects"), so past
-	// the chrome cap only the selected tab keeps its label.
-	it.each([[1, "labeled"], [1.3, "labeled"], [2, "selected"]])("labels the tabs at %s× text as %s", (fontScale, mode) => {
-		fixtures.platform.OS = "android";
-		fixtures.fontScale = fontScale as number;
+	// iOS's bar is the system's own, with New task set apart at its end.
+	it("draws no bar of its own on iOS", () => {
 		render();
-		expect(renderer!.root.findByType("NativeTabs" as never).props.labelVisibilityMode).toBe(mode);
+		expect(renderer!.root.findByType("NativeTabs" as never).props.hidden).toBe(false);
+		expect(renderer!.root.findAllByType("BoardTabBar" as never)).toHaveLength(0);
+	});
+
+	// Material's bar shares the whole width out between its items, so Android
+	// hides it and floats the board's own bar, laid out as iOS's is.
+	it("hides Material's bar on Android and floats the board's own", () => {
+		fixtures.platform.OS = "android";
+		fixtures.sessions = [session("a", "needs_input")];
+		render();
+		expect(renderer!.root.findByType("NativeTabs" as never).props.hidden).toBe(true);
+		expect(bar().props).toMatchObject({ selected: "(workers)", waiting: 1 });
+		act(() => bar().props.onSelect("(projects)"));
+		expect(fixtures.navigate).toHaveBeenCalledWith("/projects");
+		act(() => bar().props.onNewTask());
+		expect(fixtures.push).toHaveBeenCalledWith("/spawn");
+	});
+
+	// Tapping the tab on screen again scrolls its list to the top, as iOS's bar
+	// does natively, rather than navigating to where it already is.
+	it("scrolls the selected tab to the top when it is tapped again on Android", () => {
+		fixtures.platform.OS = "android";
+		fixtures.navigate.mockClear();
+		reselect.mockClear();
+		render();
+		act(() => bar().props.onSelect("(workers)"));
+		expect(reselect).toHaveBeenCalledWith("(workers)");
+		expect(fixtures.navigate).not.toHaveBeenCalled();
+	});
+
+	// A page pushed over the board covers the bar; the tab under it stays
+	// selected rather than falling back to Workers.
+	it("keeps the board's tab selected under a pushed page", () => {
+		fixtures.platform.OS = "android";
+		fixtures.pathname = "/projects";
+		render();
+		expect(bar().props.selected).toBe("(projects)");
+		fixtures.pathname = "/project/ao";
+		act(() => renderer!.update(<BoardTabsLayout />));
+		expect(bar().props.selected).toBe("(projects)");
+		fixtures.pathname = "/";
+		act(() => renderer!.update(<BoardTabsLayout />));
+		expect(bar().props.selected).toBe("(workers)");
 	});
 
 	// Workers waiting on a person: the one count worth lighting a tab for.

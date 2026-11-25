@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
 import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
@@ -17,21 +17,32 @@ import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
  * onAccessRefused. A zoom scales the frame as browser zoom does: the page
  * gets a viewport of the pane's size over zoom, shown scaled by zoom, so it
  * reflows and pans with its own scrolling.
+ *
+ * With source "host" it frames a remote host's page instead, from that host's
+ * loopback proxy artifact origin, checked with a GET whose body is dropped. The proxy drops the host's own sandbox
+ * policy for its preview origins, so this frame's sandbox is what keeps the
+ * page in an opaque origin, as for a Cloud page.
  */
-export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGranted, onNavigate, thumbnail, zoom = 1 }: {
+export function CloudArtifactFrame({ title, url, source = "cloud", onAccessRefused, onAccessGranted, onNavigate, onThumbnailState, thumbnail, zoom = 1 }: {
 	title: string;
 	url: string;
+	/** Where the page is read from: the control plane, or a remote host's loopback proxy. */
+	source?: "cloud" | "host";
 	onAccessRefused?: () => void;
 	onAccessGranted?: () => void;
 	onNavigate?: (path: string) => void;
+	/** A thumbnail's state: loading until the file's status is known and its page has loaded, failed while it shows the fallback, ready once the page is drawn. */
+	onThumbnailState?: (state: "loading" | "failed" | "ready") => void;
 	/** Scale only the page; gallery fallbacks keep the card's normal size. */
 	thumbnail?: { width: number; height?: number; fallback: ReactNode };
 	/** The artifact viewer's zoom, 1 at fit. */
 	zoom?: number;
 }) {
 	const { t } = useTranslation();
+	// The URL whose page has finished loading, so a new URL starts over.
+	const [loadedUrl, setLoadedUrl] = useState<string>();
 	useEffect(() => {
-		const prefix = artifactFilesPrefix(url);
+		const prefix = source === "cloud" ? artifactFilesPrefix(url) : undefined;
 		if (!prefix) return;
 		return aoBridge.cloudArtifact.onFrameNavigated((navigation) => {
 			const path = artifactPathUnder(prefix, navigation.url);
@@ -39,19 +50,30 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 			if (navigation.status === 401 || navigation.status === 403) onAccessRefused?.();
 			if (path) onNavigate?.(path);
 		});
-	}, [url, onAccessRefused, onNavigate]);
+	}, [url, source, onAccessRefused, onNavigate]);
 	const status = useQuery({
-		queryKey: ["cloud-artifact-status", url],
-		queryFn: async () => (await cloudCpFetch(url, { method: "HEAD" })).status,
+		queryKey: [source === "host" ? "host-artifact-status" : "cloud-artifact-status", url],
+		queryFn: async ({ signal }) => {
+			if (source === "cloud") return (await cloudCpFetch(url, { method: "HEAD" })).status;
+			// A host's file route answers GET only (a HEAD gets 405): the body is dropped once the status is in.
+			const response = await fetch(url, { cache: "no-store", signal });
+			await response.body?.cancel().catch(() => undefined);
+			return response.status;
+		},
 		retry: false,
 	});
-	const refused = status.data === 401 || status.data === 403;
+	// Only a Cloud link expires and is renewed; a host that refuses is an error.
+	const refused = source === "cloud" && (status.data === 401 || status.data === 403);
 	useEffect(() => {
 		if (refused) onAccessRefused?.();
 	}, [refused, onAccessRefused]);
 	useEffect(() => {
 		if (status.data !== undefined && status.data >= 200 && status.data < 400) onAccessGranted?.();
 	}, [status.data, status.dataUpdatedAt, onAccessGranted]);
+	const thumbnailState = !thumbnail ? undefined : status.isPending ? "loading" : refused || status.isError || (status.data !== undefined && status.data >= 400) ? "failed" : loadedUrl === url ? "ready" : "loading";
+	useEffect(() => {
+		if (thumbnailState) onThumbnailState?.(thumbnailState);
+	}, [thumbnailState, onThumbnailState]);
 	if (thumbnail && (status.isPending || refused || status.isError || (status.data !== undefined && status.data >= 400))) return thumbnail.fallback;
 	if (status.isPending || refused) return <PanelMessage>{t("files.loading")}</PanelMessage>;
 	if (status.data === 404) return <PanelMessage>{t("artifacts.unavailable")}</PanelMessage>;
@@ -68,6 +90,7 @@ export function CloudArtifactFrame({ title, url, onAccessRefused, onAccessGrante
 			sandbox="allow-scripts allow-forms"
 			src={url}
 			title={title}
+			onLoad={() => setLoadedUrl(url)}
 		/>
 	);
 }
