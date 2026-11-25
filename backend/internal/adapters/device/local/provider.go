@@ -83,10 +83,12 @@ type Provider struct {
 	// bootIDs holds the boot each leased simulator was on when last seen
 	// running, and ownBoots the simulators this provider is booting, whose
 	// next boot is expected (see NoteBooted). replacingHub guards against a
-	// second replacement while one runs.
+	// second replacement while one runs; replaceAgain records a newer boot
+	// seen during one, which runs one more replacement after it.
 	bootIDs      map[string]string
 	ownBoots     map[string]bool
 	replacingHub bool
+	replaceAgain bool
 	// replaceHub stops the hub and starts a new one; a variable for tests.
 	replaceHub func()
 }
@@ -1103,19 +1105,60 @@ func (p *Provider) NoteBooted(device ports.DeviceInfo) {
 		p.bootIDs = map[string]string{}
 	}
 	previous, seen := p.bootIDs[device.ID]
+	// Only a newer boot says anything: a look that listed before another one
+	// (an older boot, or the same) must not move the record back or restart
+	// a hub that was already replaced.
+	if seen && !newerBoot(device.BootID, previous) {
+		p.mu.Unlock()
+		return
+	}
 	p.bootIDs[device.ID] = device.BootID
-	changed := seen && previous != device.BootID
-	// A boot Boot is still running is expected: Boot records it and clears
-	// the mark when it ends.
-	replace := changed && !p.ownBoots[device.ID] && p.hub != nil && !p.closed && !p.replacingHub
-	if replace {
-		p.replacingHub = true
+	// A first sighting only records. A boot Boot is still running is
+	// expected: Boot records it and clears the mark when it ends.
+	if !seen || p.ownBoots[device.ID] || p.hub == nil || p.closed {
+		p.mu.Unlock()
+		return
 	}
+	if p.replacingHub {
+		// The running replacement's helpers may already belong to the boot
+		// before this one: replace once more when it ends.
+		p.replaceAgain = true
+		p.mu.Unlock()
+		return
+	}
+	p.replacingHub = true
 	p.mu.Unlock()
-	if replace {
-		p.log.Info("simulator booted outside AO; restarting the device hub for fresh touch input", "device", device.ID)
-		go p.replaceHub() //nolint:gosec // G118: outlives the request that noticed the boot
+	p.log.Info("simulator booted outside AO; restarting the device hub for fresh touch input", "device", device.ID)
+	go p.runReplacements() //nolint:gosec // G118: outlives the request that noticed the boot
+}
+
+// runReplacements replaces the hub, and again while a newer boot was seen
+// during the last replacement, then clears replacingHub.
+func (p *Provider) runReplacements() {
+	for {
+		p.replaceHub()
+		p.mu.Lock()
+		again := p.replaceAgain && !p.closed
+		p.replaceAgain = false
+		if !again {
+			p.replacingHub = false
+			p.mu.Unlock()
+			return
+		}
+		p.mu.Unlock()
+		p.log.Info("simulator booted again during the device hub restart; restarting it once more")
 	}
+}
+
+// newerBoot reports whether boot a came after boot b. Boots are simctl's
+// lastUsedAt times; any other value counts as newer whenever it differs.
+func newerBoot(a, b string) bool {
+	ta, errA := time.Parse(time.RFC3339, a)
+	tb, errB := time.Parse(time.RFC3339, b)
+	if errA != nil || errB != nil {
+		return a != b
+	}
+	return ta.After(tb)
 }
 
 // currentBoots reads each simulator's boot now (simctl's lastUsedAt) by
@@ -1147,12 +1190,8 @@ func (p *Provider) storeBootsLocked(boots map[string]string) {
 
 // restartHub stops the running hub and starts a new one, whose stream helpers
 // are fresh. Each device's stream quality is put back by EnsureReady.
+// runReplacements owns replacingHub around it.
 func (p *Provider) restartHub() {
-	defer func() {
-		p.mu.Lock()
-		p.replacingHub = false
-		p.mu.Unlock()
-	}()
 	p.mu.Lock()
 	hub, closed := p.hub, p.closed
 	p.mu.Unlock()

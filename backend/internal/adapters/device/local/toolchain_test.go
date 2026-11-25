@@ -861,12 +861,7 @@ func replacementsSeen(replaced <-chan struct{}) int {
 
 func fakeReplacements(p *Provider) <-chan struct{} {
 	replaced := make(chan struct{}, 8)
-	p.replaceHub = func() {
-		p.mu.Lock()
-		p.replacingHub = false
-		p.mu.Unlock()
-		replaced <- struct{}{}
-	}
+	p.replaceHub = func() { replaced <- struct{}{} }
 	return replaced
 }
 
@@ -991,26 +986,77 @@ func TestHubStartRecordsEverySimulatorsBoot(t *testing.T) {
 	}
 }
 
-// Boots seen while a replacement runs do not start another one.
-func TestNoteBootedReplacesOneAtATime(t *testing.T) {
+// Newer boots seen while a replacement runs start exactly one more after it
+// (its helpers may belong to the boot before them); looks with no newer boot
+// start none.
+func TestNoteBootedReplacesOnceMoreForABootDuringAReplacement(t *testing.T) {
+	sim := func(boot string) ports.DeviceInfo {
+		return ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: boot}
+	}
+	run := func(during []string) int32 {
+		p := New(Config{DataDir: t.TempDir()})
+		p.hub = &hubProcess{done: make(chan struct{})}
+		release := make(chan struct{})
+		var starts atomic.Int32
+		p.replaceHub = func() {
+			if starts.Add(1) == 1 {
+				<-release
+			}
+		}
+		p.NoteBooted(sim("2026-11-25T10:00:00Z"))
+		p.NoteBooted(sim("2026-11-25T10:05:00Z"))
+		time.Sleep(20 * time.Millisecond)
+		for _, boot := range during {
+			p.NoteBooted(sim(boot))
+		}
+		close(release)
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			p.mu.Lock()
+			done := !p.replacingHub
+			p.mu.Unlock()
+			if done {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return starts.Load()
+	}
+	if n := run([]string{"2026-11-25T10:05:00Z", "2026-11-25T10:01:00Z"}); n != 1 {
+		t.Fatalf("looks with no newer boot during a replacement: %d replacements, want 1", n)
+	}
+	if n := run([]string{"2026-11-25T10:06:00Z", "2026-11-25T10:07:00Z", "2026-11-25T10:08:00Z"}); n != 2 {
+		t.Fatalf("newer boots during a replacement: %d replacements, want 2", n)
+	}
+}
+
+// A look that listed before another one carries an older boot: it neither
+// moves the record back nor restarts the hub again.
+func TestNoteBootedIgnoresAnOlderBoot(t *testing.T) {
 	p := New(Config{DataDir: t.TempDir()})
 	p.hub = &hubProcess{done: make(chan struct{})}
-	release := make(chan struct{})
-	var starts atomic.Int32
-	p.replaceHub = func() {
-		starts.Add(1)
-		<-release
-		p.mu.Lock()
-		p.replacingHub = false
-		p.mu.Unlock()
+	replaced := fakeReplacements(p)
+	sim := func(boot string) ports.DeviceInfo {
+		return ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: boot}
 	}
-	for _, boot := range []string{"boot-1", "boot-2", "boot-3", "boot-4"} {
-		p.NoteBooted(ports.DeviceInfo{ID: "UDID-1", Platform: ports.DevicePlatformIOS, Booted: true, BootID: boot})
-		time.Sleep(20 * time.Millisecond)
+	p.NoteBooted(sim("2026-11-25T10:00:00Z"))
+	p.NoteBooted(sim("2026-11-25T10:05:00Z"))
+	if n := replacementsSeen(replaced); n != 1 {
+		t.Fatalf("the outside boot replaced the hub %d times, want 1", n)
 	}
-	close(release)
-	if n := starts.Load(); n != 1 {
-		t.Fatalf("%d replacements started, want 1 while the first runs", n)
+	p.NoteBooted(sim("2026-11-25T10:00:00Z")) // a stale look
+	if n := replacementsSeen(replaced); n != 0 {
+		t.Fatalf("a stale look replaced the hub %d times", n)
+	}
+	p.mu.Lock()
+	recorded := p.bootIDs["UDID-1"]
+	p.mu.Unlock()
+	if recorded != "2026-11-25T10:05:00Z" {
+		t.Fatalf("recorded %q after a stale look, want the newer boot kept", recorded)
+	}
+	p.NoteBooted(sim("2026-11-25T10:09:00Z"))
+	if n := replacementsSeen(replaced); n != 1 {
+		t.Fatalf("a newer outside boot replaced the hub %d times, want 1", n)
 	}
 }
 
