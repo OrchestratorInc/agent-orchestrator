@@ -166,17 +166,18 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// MoveUsageLimitedSession starts moving a session whose resume a usage limit
-// refused to the account with the most room, reporting whether a move started.
-// It moves only a chat someone has open, so an event or an update never moves one.
+// MoveUsageLimitedSession starts an account move and reports whether it started.
 func (s *Service) MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool {
 	if !s.hasChatView(id) {
 		return false
 	}
+	s.mu.RLock()
+	own := s.usageLimitAccounts
+	s.mu.RUnlock()
 	s.handoffMu.Lock()
 	deps := s.handoff
 	s.handoffMu.Unlock()
-	if deps.enabled == nil || deps.accounts == nil || deps.mover == nil || !deps.enabled(ctx) {
+	if own == nil || deps.enabled == nil || deps.accounts == nil || deps.mover == nil || !deps.enabled(ctx) {
 		return false
 	}
 	record, err := s.requireChatSession(ctx, id)
@@ -186,6 +187,12 @@ func (s *Service) MoveUsageLimitedSession(ctx context.Context, id domain.Session
 	model := ""
 	if conversation, err := s.store.ConversationForSession(ctx, id); err == nil {
 		model = conversation.Settings.Model
+	}
+	provider, _ := domain.AgentAccountProviderFor(record.Harness)
+	_, limits, err := own.SessionLimits(ctx, id, record.Harness, true)
+	if room, _ := limits.HandoffHeadroom(provider, model); err != nil || room > 0 {
+		s.log.Info("account handoff: usage-limited resume stays; its account is not at a limit", "session", id, "room", room, "error", err)
+		return false
 	}
 	target, err := deps.accounts.HandoffTarget(ctx, id, record.Harness, model)
 	if err != nil || target == "" {

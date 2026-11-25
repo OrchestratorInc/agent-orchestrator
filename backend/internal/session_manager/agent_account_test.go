@@ -470,6 +470,7 @@ type usageLimitedChat struct {
 	target    string
 	moves     int
 	live      bool
+	moving    func()
 }
 
 func (c *usageLimitedChat) HasLiveChatController(domain.SessionID) bool { return c.live }
@@ -487,6 +488,7 @@ func (c *usageLimitedChat) StartChat(ctx context.Context, cfg ChatStart) (ChatSt
 func (c *usageLimitedChat) MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool {
 	c.moves++
 	_, err := c.manager.StartAccountTransition(ctx, id, c.target, domain.SessionInterfaceTransitionDrain)
+	c.moving()
 	return err == nil
 }
 
@@ -508,13 +510,15 @@ func TestUsageLimitedResumeWaitsForTheAccountMove(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manager, store, _, base, accounts, _ := newAccountTransitionManager(t, domain.SessionModeChat)
-			chat := &usageLimitedChat{transitionChat: base, manager: manager, sourceErr: tc.sourceErr, targetErr: tc.targetErr, target: tc.target}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			chat := &usageLimitedChat{transitionChat: base, manager: manager, sourceErr: tc.sourceErr, targetErr: tc.targetErr, target: tc.target, moving: cancel}
 			manager.chat = chat
 			rec := store.sessions["session-1"]
 			rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now()}
 			store.sessions["session-1"] = rec
 
-			result, err := manager.ResumeAgentWithMode(context.Background(), "session-1")
+			result, err := manager.ResumeAgentWithMode(ctx, "session-1")
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("resume error = %v, want %v", err, tc.want)
 			}

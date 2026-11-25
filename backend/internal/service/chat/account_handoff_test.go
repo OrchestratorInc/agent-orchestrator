@@ -140,6 +140,12 @@ func (hh *handoffHarness) wire(svc *chatsvc.Service) {
 	svc.SetAccountHandoff(func(context.Context) bool { return hh.enabled.Load() }, hh.accounts, hh.mover)
 }
 
+func (hh *handoffHarness) limitOwnAccount(usedPercent float64) {
+	hh.svc.SetUsageLimitAccounts(usageLimitAccountReaderFunc(func(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error) {
+		return handoffSource, domain.AgentAccountLimits{Windows: []domain.AgentAccountLimitWindow{{UsedPercent: usedPercent}}}, nil
+	}))
+}
+
 func (hh *handoffHarness) tick(t *testing.T) {
 	t.Helper()
 	if err := hh.svc.HandoffUsageLimitedTurns(context.Background()); err != nil {
@@ -548,6 +554,7 @@ func TestUsageLimitedResumeMovesToAnotherAccount(t *testing.T) {
 	if err := hh.svc.SetChatView(ctx, testSession, "view", true); err != nil {
 		t.Fatal(err)
 	}
+	hh.limitOwnAccount(100)
 	hh.enabled.Store(false)
 	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || hh.accounts.calls != 0 {
 		t.Fatal("moved with the setting off")
@@ -558,6 +565,11 @@ func TestUsageLimitedResumeMovesToAnotherAccount(t *testing.T) {
 		t.Fatal("moved without a candidate")
 	}
 	hh.accounts.target = handoffTarget
+	hh.limitOwnAccount(20)
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || len(hh.mover.moves()) != 0 {
+		t.Fatal("moved an account that has room")
+	}
+	hh.limitOwnAccount(100)
 	hh.mover.err = errors.New("account is signed out")
 	if hh.svc.MoveUsageLimitedSession(ctx, testSession) {
 		t.Fatal("reported a move that did not start")
@@ -574,6 +586,7 @@ func TestUsageLimitedResumeMovesToAnotherAccount(t *testing.T) {
 func TestUsageLimitedWakeMovesOnlyAnOpenChat(t *testing.T) {
 	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
 	hh := handoffHarnessFor(t, h, domain.HarnessCodex)
+	hh.limitOwnAccount(100)
 	ctx := context.Background()
 	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
 		t.Fatalf("hibernate = %v, %v", hibernated, err)

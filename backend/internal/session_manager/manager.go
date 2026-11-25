@@ -3960,21 +3960,16 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 	run := m.transitions[id]
 	m.transitionMu.Unlock()
 	if run != nil {
-		select {
-		case <-run.done:
-		case <-ctx.Done():
-			return result, err
-		}
+		<-run.done
 	}
 	if !m.chat.HasLiveChatController(id) {
 		return result, err
 	}
-	rec, err := m.getRecord(ctx, id)
+	rec, err := m.getRecord(context.WithoutCancel(ctx), id)
 	return RestoreResult{Session: rec, Mode: RestoreModeNative}, err
 }
 
-// ChatUsageLimitMover starts moving a Chat session whose resume a usage limit
-// refused to another account, reporting whether a move started.
+// ChatUsageLimitMover starts an account move for a usage-limited Chat session.
 type ChatUsageLimitMover interface {
 	MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool
 }
