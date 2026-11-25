@@ -81,6 +81,8 @@ function QueuedImageThumbnail({ path, name, source }: { path: string; name: stri
 			>
 				<img
 					crossOrigin={mediaCrossOrigin(url)}
+					// A long queue reads only the images scrolled near, not its whole backlog.
+					loading="lazy"
 					src={url}
 					alt=""
 					onError={local.onError ?? (() => setFailedUrl(url))}

@@ -421,6 +421,8 @@ describe("QueuedMessageDock attachment rows", () => {
 		expect(image).toHaveAttribute("src", shotURL);
 		expect(row()).not.toHaveTextContent("Attached files");
 		expect(image).toHaveAttribute("crossorigin", "anonymous");
+		// A long queue reads only the images scrolled near, not its whole backlog.
+		expect(image).toHaveAttribute("loading", "lazy");
 		expect(rowText()).toBeNull();
 	});
 

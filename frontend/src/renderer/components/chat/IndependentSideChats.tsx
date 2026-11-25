@@ -1779,8 +1779,6 @@ export function useIndependentSideChats(
 		() => (snapshot && snapshot.side.id === activeId ? sideConversationSnapshot(snapshot, readOnly ? retainedSnapshots.current.get(snapshot.side.id)?.olderPages ?? [] : olderPages) : undefined),
 		[snapshot, olderPages, activeId, readOnly],
 	);
-	// Side chats stage their files in the parent session, through the local daemon.
-	const queuedAttachmentSource = useMemo(() => ({ sessionId, apiBaseUrl: baseUrl }), [sessionId, baseUrl]);
 	const navigateAnnotation = useCallback(
 		(annotation: ChatAnnotationSummaryItem) => {
 			if (annotation.conversationId === activeId) timelineNavigationRef.current?.(annotation);
@@ -2248,7 +2246,6 @@ export function useIndependentSideChats(
 									<>
 										<QueuedMessageDock
 											messages={queuedMessages}
-											attachmentSource={queuedAttachmentSource}
 											onCancelQueuedTurn={(turnId) => cancelQueuedTurn(activeId, turnId)}
 											onBeginQueuedEdit={(turnId, text) => {
 												if (!operationCurrent(activeId)()) return;
