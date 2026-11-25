@@ -28,7 +28,7 @@ type leasingSessionService struct {
 
 func (f *leasingSessionService) StageDraftAttachments(ctx context.Context, id domain.SessionID, attachments []ports.SpawnAttachment) ([]string, error) {
 	f.draftStages++
-	return f.fakeSessionService.StageAttachments(ctx, id, attachments)
+	return f.StageAttachments(ctx, id, attachments)
 }
 
 func (f *leasingSessionService) UpdateAttachmentLeases(_ context.Context, id domain.SessionID, release, renew []string) ([]string, error) {

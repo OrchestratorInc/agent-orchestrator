@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -63,25 +64,15 @@ WHERE session_id = ? AND reclaiming_at_ms IS NOT NULL AND instr(?, name) > 0`, s
 		if claimed > 0 {
 			return nil, ErrChatAttachmentDiscarded
 		}
-		rows, err := tx.QueryContext(ctx, `
-SELECT name FROM chat_attachment_leases
-WHERE session_id = ? AND reclaiming_at_ms IS NULL AND instr(?, name) > 0`, string(id), text)
+		named, err := unclaimedLeasesNamedIn(ctx, tx, id, text)
 		if err != nil {
 			return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
 		}
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
-			}
+		for _, name := range named {
 			if !held[name] {
 				held[name] = true
 				names = append(names, name)
 			}
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
 		}
 	}
 	for _, name := range names {
@@ -95,6 +86,27 @@ WHERE session_id = ? AND name = ?`, string(id), name); err != nil {
 		return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
 	}
 	return names, nil
+}
+
+// unclaimedLeasesNamedIn lists the unclaimed lease names of id that appear
+// in text.
+func unclaimedLeasesNamedIn(ctx context.Context, tx *sql.Tx, id domain.SessionID, text string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT name FROM chat_attachment_leases
+WHERE session_id = ? AND reclaiming_at_ms IS NULL AND instr(?, name) > 0`, string(id), text)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
 }
 
 // SettleChatAttachmentHolds finishes HoldChatAttachmentLeases. If the message
