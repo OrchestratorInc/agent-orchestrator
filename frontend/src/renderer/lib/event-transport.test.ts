@@ -49,9 +49,10 @@ vi.mock("./host-clients", () => ({
 	clientForSessionHost: () => ({ GET: remoteGetMock }),
 }));
 
-import { createEventTransport } from "./event-transport";
+import { createEventTransport, EVENT_STREAM_STALL_MS } from "./event-transport";
 import { interfaceTransitionRefetchInterval } from "../hooks/useSessionInterfaceTransition";
 import { getEventsConnectionState, setEventsConnectionState } from "./events-connection";
+import { conversationQueryOptions } from "../hooks/useConversation";
 
 class EventSourceStub {
 	static instances: EventSourceStub[] = [];
@@ -422,6 +423,125 @@ describe("createEventTransport", () => {
 		onStatusHandler();
 
 		expect(EventSourceStub.instances).toHaveLength(1);
+	});
+
+	it("rebuilds a stream that stops delivering after heartbeats, and refreshes open chats", async () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			const first = cdcSources()[0];
+			first.readyState = 1;
+			first.onopen?.();
+			first.emit("heartbeat", "{}");
+			await vi.advanceTimersByTimeAsync(1_000);
+			(queryClient.invalidateQueries as ReturnType<typeof vi.fn>).mockClear();
+
+			// The browser still calls it open, but nothing arrives: no heartbeat, no event.
+			await vi.advanceTimersByTimeAsync(EVENT_STREAM_STALL_MS + 5_000);
+
+			expect(first.closed).toBe(true);
+			expect(cdcSources()).toHaveLength(2);
+			expect(getEventsConnectionState()).toBe("disconnected");
+			const replacement = cdcSources()[1];
+			replacement.readyState = 1;
+			replacement.onopen?.();
+			await vi.advanceTimersByTimeAsync(200);
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps a stream whose heartbeats keep arriving", async () => {
+		vi.useFakeTimers();
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+			source.readyState = 1;
+			source.onopen?.();
+			for (let beat = 0; beat < 12; beat += 1) {
+				source.emit("heartbeat", "{}");
+				await vi.advanceTimersByTimeAsync(10_000);
+			}
+			expect(cdcSources()).toHaveLength(1);
+			expect(source.closed).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("leaves an idle stream alone when the daemon has sent no heartbeat", async () => {
+		vi.useFakeTimers();
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+			source.readyState = 1;
+			source.onopen?.();
+			await vi.advanceTimersByTimeAsync(EVENT_STREAM_STALL_MS * 4);
+			expect(cdcSources()).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rebuilds a replacement that never opens once the daemon is known to send heartbeats", async () => {
+		vi.useFakeTimers();
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const first = cdcSources()[0];
+			first.readyState = 1;
+			first.onopen?.();
+			first.emit("heartbeat", "{}");
+			await vi.advanceTimersByTimeAsync(EVENT_STREAM_STALL_MS + 5_000);
+			expect(cdcSources()).toHaveLength(2);
+
+			// The replacement hangs in CONNECTING: it is rebuilt in turn.
+			await vi.advanceTimersByTimeAsync(EVENT_STREAM_STALL_MS + 5_000);
+			expect(cdcSources()).toHaveLength(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("reopens a stream the browser closed without an error on the next status echo", () => {
+		createEventTransport(fakeQueryClient()).connect();
+		const pushStatus = onStatusMock.mock.calls[0][0] as (status: { state: string; port?: number; pid?: number }) => void;
+		pushStatus({ state: "ready", port: 3001, pid: 10 });
+		const source = cdcSources()[0];
+		source.readyState = 1;
+		source.onopen?.();
+
+		// Closed with no error event: no retry was scheduled.
+		source.readyState = 2;
+		pushStatus({ state: "ready", port: 3001, pid: 10 });
+
+		expect(cdcSources()).toHaveLength(2);
+		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
+	});
+
+	it("leaves a scheduled retry's backoff alone on a status echo", () => {
+		vi.useFakeTimers();
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const pushStatus = onStatusMock.mock.calls[0][0] as (status: { state: string; port?: number; pid?: number }) => void;
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			const source = cdcSources()[0];
+			source.onopen?.();
+
+			// Closed with an error: the retry owns the next attempt.
+			source.readyState = 2;
+			source.onerror?.();
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			expect(cdcSources()).toHaveLength(1);
+
+			vi.advanceTimersByTime(5_000);
+			expect(cdcSources()).toHaveLength(2);
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("closes the old connection and reconnects when the base URL changes", () => {
@@ -1092,6 +1212,8 @@ describe("id-only session updates", () => {
 		vi.useFakeTimers();
 		const client = fakeQueryClient();
 		const disconnect = createEventTransport(client).connect();
+		const taskRefreshes = () => vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["background-tasks"]').length;
+		const initialTasks = taskRefreshes();
 		idOnly("busy");
 		await vi.advanceTimersByTimeAsync(1_000);
 		idOnly("busy");
@@ -1107,9 +1229,11 @@ describe("id-only session updates", () => {
 		sessionRow("a", "active");
 		await vi.advanceTimersByTimeAsync(150);
 		expect(workspaceRefreshes(client)).toBe(3);
+		expect(taskRefreshes()).toBe(initialTasks);
 		cdcSources()[0].emit("session_created", JSON.stringify({ sessionId: "new", type: "session_created", payload: { id: "new" } }));
 		await vi.advanceTimersByTimeAsync(150);
 		expect(workspaceRefreshes(client)).toBe(4);
+		expect(taskRefreshes()).toBe(initialTasks + 1);
 		// Those refreshes already covered the waiting id-only update.
 		await vi.advanceTimersByTimeAsync(6_000);
 		expect(workspaceRefreshes(client)).toBe(4);
@@ -1282,4 +1406,103 @@ it("refreshes again when a root catch-up joins an older targeted conversation fe
 		client.clear();
 		vi.useRealTimers();
 	}
+});
+
+describe("local chat tail refresh", () => {
+	const wire = (extra: Record<string, unknown>) => ({
+		data: { conversationId: "c1", sessionId: "local-chat", mode: "chat", controller: "busy", latestSequence: 4, activeBranchId: "b1", turns: [], messages: [], activities: [], ...extra },
+	});
+	const wireTurn = (id: string, state: string) => ({ id, state, requestedAt: `2026-11-03T00:00:0${id.slice(-1)}Z` });
+	const wireMessage = (id: string, turnId: string, sequence: number, text = id) => ({ kind: "message", id, turnId, sequence, revision: 1, role: "user", origin: "human", text, createdAt: "" });
+	// t1 settled at 1-2, so the floor is 2; t2 is still running at 3-4.
+	const wholePage = wire({ oldestSequence: 1, turns: [wireTurn("t1", "completed"), wireTurn("t2", "running")], messages: [wireMessage("m1", "t1", 1), wireMessage("r1", "t1", 2), wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "partial")] });
+	const emit = () => cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "local-chat", payload: { conversationId: "c1" } }));
+	const queries = () => remoteGetMock.mock.calls.map((call) => call[1].params.query);
+
+	it("catches up after an older-page read that overlapped a merged tail lands", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// t0 is on the older page at 1-2; the live page holds t1 (settled, 3-4) and t2 (running, 5-6), so its floor is 4.
+		let liveText = "partial";
+		const livePage = () => wire({
+			latestSequence: 6, oldestSequence: 3, hasMoreBefore: true,
+			turns: [wireTurn("t1", "completed"), wireTurn("t2", "running")],
+			messages: [wireMessage("m1", "t1", 3), wireMessage("r1", "t1", 4), wireMessage("m2", "t2", 5), wireMessage("r2", "t2", 6, liveText)],
+		});
+		const olderPage = wire({ latestSequence: 2, oldestSequence: 1, turns: [wireTurn("t0", "completed")], messages: [wireMessage("m0", "t0", 1), wireMessage("r0", "t0", 2)] });
+		let finishTail: ((value: unknown) => void) | undefined;
+		let finishOlder: ((value: unknown) => void) | undefined;
+		let olderReads = 0;
+		let fullReads = 0;
+		remoteGetMock.mockReset().mockImplementation((_path: string, init: { params: { query: { afterSequence?: number; beforeSequence?: number } } }) => {
+			const { afterSequence, beforeSequence } = init.params.query;
+			if (afterSequence) return new Promise((resolve) => { finishTail = resolve; });
+			if (beforeSequence) {
+				// The first older read is the user's scroll, held open past the tail.
+				olderReads++;
+				return olderReads === 1 ? new Promise((resolve) => { finishOlder = resolve; }) : Promise.resolve(olderPage);
+			}
+			fullReads++;
+			return Promise.resolve(livePage());
+		});
+		const observer = new InfiniteQueryObserver(client, conversationQueryOptions("local-chat"));
+		const unsubscribe = observer.subscribe(() => undefined);
+		const disconnect = createEventTransport(client).connect();
+		const data = () => client.getQueryData<{ pages: Array<{ items: Array<{ id: string; text?: string }> }> }>(["conversation", "local-chat"]);
+		const text = (id: string) => data()?.pages[0].items.find((item) => item.id === id)?.text;
+		try {
+			await vi.waitFor(() => expect(text("r2")).toBe("partial"));
+			emit();
+			await vi.waitFor(() => expect(finishTail).toBeDefined());
+			void observer.fetchNextPage();
+			await vi.waitFor(() => expect(finishOlder).toBeDefined());
+
+			// The tail lands first and merges.
+			liveText = "partial and more";
+			finishTail!(wire({ afterSequence: 4, latestSequence: 6, oldestSequence: 5, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 5), wireMessage("r2", "t2", 6, "partial and more")] }));
+			await vi.waitFor(() => expect(text("r2")).toBe("partial and more"));
+			const readsBeforeOlder = fullReads;
+
+			// The older page lands last and writes back the live page it captured; a catch-up reads the chat again.
+			finishOlder!(olderPage);
+			await vi.waitFor(() => {
+				expect(data()?.pages).toHaveLength(2);
+				expect(text("r2")).toBe("partial and more");
+				expect(fullReads).toBeGreaterThan(readsBeforeOlder);
+			});
+		} finally {
+			disconnect();
+			unsubscribe();
+			client.clear();
+		}
+	});
+
+	it("reads only an open chat's tail and refetches the whole chat only when the tail cannot be merged", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		remoteGetMock.mockReset().mockResolvedValueOnce(wholePage);
+		const observer = new InfiniteQueryObserver(client, conversationQueryOptions("local-chat"));
+		const unsubscribe = observer.subscribe(() => undefined);
+		const disconnect = createEventTransport(client).connect();
+		const text = (id: string) => client.getQueryData<{ pages: Array<{ items: Array<{ id: string; text?: string }> }> }>(["conversation", "local-chat"])
+			?.pages[0].items.find((item) => item.id === id)?.text;
+		try {
+			await vi.waitFor(() => expect(text("r2")).toBe("partial"));
+
+			remoteGetMock.mockResolvedValueOnce(wire({ afterSequence: 2, oldestSequence: 3, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "partial and more")] }));
+			emit();
+			await vi.waitFor(() => expect(text("r2")).toBe("partial and more"));
+			expect(queries()).toEqual([{ beforeSequence: undefined, limit: 30 }, { afterSequence: 2, limit: 30 }]);
+
+			// The turn settles: the tail no longer merges, so the whole chat is read as before.
+			remoteGetMock
+				.mockResolvedValueOnce(wire({ afterSequence: 2, oldestSequence: 3, turns: [wireTurn("t2", "completed")], messages: [wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "done")] }))
+				.mockResolvedValueOnce(wire({ oldestSequence: 1, turns: [wireTurn("t1", "completed"), wireTurn("t2", "completed")], messages: [wireMessage("m1", "t1", 1), wireMessage("r1", "t1", 2), wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "done")] }));
+			emit();
+			await vi.waitFor(() => expect(text("r2")).toBe("done"));
+			expect(queries().slice(2)).toEqual([{ afterSequence: 2, limit: 30 }, { beforeSequence: undefined, limit: 30 }]);
+		} finally {
+			disconnect();
+			unsubscribe();
+			client.clear();
+		}
+	});
 });

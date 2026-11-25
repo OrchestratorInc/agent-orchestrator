@@ -22,6 +22,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
@@ -65,12 +66,17 @@ type harnessProbe struct {
 	Name                  string
 	BinaryName            string
 	VersionArg            string
+	VersionCheck          func(version string) error
 	ExpectedVersionPrefix string
+	// DaemonInstalled is true when the running daemon reports the agent
+	// installed.
+	DaemonInstalled bool
 }
 
 type harnessProbeSpec struct {
 	BinaryName            string
 	VersionArg            string
+	VersionCheck          func(version string) error
 	ExpectedVersionPrefix string
 }
 
@@ -96,9 +102,16 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	// Command Code's binary is `cmd` on Unix and `cmdc` on Windows, where `cmd`
 	// is the built-in shell; the full name resolves on every platform.
 	"memcode":      {BinaryName: "memcode", VersionArg: "--version"},
+	"mastra-code":  {BinaryName: "mastracode"},
 	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
 	"hermes":       {BinaryName: "hermes", VersionArg: "--version"},
 	"stakpak":      {BinaryName: "stakpak", VersionArg: "--version"},
+	// MiniMax Code's CLI is `mcode`, not its harness ID.
+	"minimax-code": {BinaryName: "mcode", VersionArg: "--version"},
+	// Open Interpreter is pinned to its inspected Rust release; the older Python
+	// CLI also installs `interpreter`, so the version line must identify it.
+	"open-interpreter": {BinaryName: "interpreter", VersionArg: "--version", ExpectedVersionPrefix: "interpreter 0.0.56"},
+	"tau":              {BinaryName: "tau", VersionArg: "--version", VersionCheck: tau.CheckVersion},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {
@@ -215,6 +228,26 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 	if check, ok := c.checkAOLoginShell(ctx, daemonExe, cfg.DataDir); ok {
 		checks = append(checks, check)
 	}
+	// The daemon launches agents, so its inventory decides what is installed:
+	// it finds agents outside this shell's PATH, and a built-in agent has no
+	// binary to find.
+	daemonInstalled := map[string]bool{}
+	if err == nil && st.State == stateReady {
+		// The daemon re-probes agents whose cached state has expired, which
+		// takes longer than a health probe.
+		inventoryCtx, cancel := context.WithTimeout(ctx, 5*probeTimeout)
+		inventory, err := c.fetchAgentInventory(inventoryCtx, false)
+		cancel()
+		if err != nil {
+			checks = append(checks, doctorCheck{
+				Level: doctorWarn, Section: doctorSectionAgents, Name: "agent-inventory",
+				Message: fmt.Sprintf("could not read the running daemon's agent list (%v); the lines below reflect this shell's PATH only", err),
+			})
+		}
+		for _, agent := range inventory.Installed {
+			daemonInstalled[agent.ID] = true
+		}
+	}
 	for _, ha := range registry.Harnessed() {
 		id := string(ha.Harness)
 		spec := harnessProbeSpecs[id]
@@ -226,7 +259,9 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 			Name:                  id,
 			BinaryName:            binaryName,
 			VersionArg:            spec.VersionArg,
+			VersionCheck:          spec.VersionCheck,
 			ExpectedVersionPrefix: spec.ExpectedVersionPrefix,
+			DaemonInstalled:       daemonInstalled[id],
 		}))
 	}
 	checks = append(checks, c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx), c.checkGitLabToken(ctx))
@@ -547,6 +582,12 @@ func checkHooksLog(dataDir string, now time.Time) doctorCheck {
 func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe) doctorCheck {
 	path, err := c.deps.LookPath(harness.BinaryName)
 	if err != nil || path == "" {
+		if harness.DaemonInstalled {
+			return doctorCheck{
+				Level: doctorPass, Section: doctorSectionAgents, Name: harness.Name,
+				Message: fmt.Sprintf("installed according to the running daemon (%s is not on this shell's PATH)", harness.BinaryName),
+			}
+		}
 		return doctorCheck{
 			Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
 			Message: fmt.Sprintf("%s not found in PATH", harness.BinaryName),
@@ -567,6 +608,14 @@ func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe)
 	version := firstOutputLine(out)
 	if version == "" {
 		version = "version output was empty"
+	}
+	if harness.VersionCheck != nil {
+		if err := harness.VersionCheck(version); err != nil {
+			return doctorCheck{
+				Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
+				Message: fmt.Sprintf("%s resolves to %s, but reports %q: %v", harness.BinaryName, path, version, err),
+			}
+		}
 	}
 	if harness.ExpectedVersionPrefix != "" && !strings.HasPrefix(version, harness.ExpectedVersionPrefix) {
 		return doctorCheck{

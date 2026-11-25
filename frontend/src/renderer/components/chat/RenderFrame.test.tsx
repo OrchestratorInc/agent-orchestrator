@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
 import { useUiStore } from "../../stores/ui-store";
 import type { ConversationActivity } from "../../types/conversation";
 import type { SessionArtifact } from "../../types/workspace";
@@ -103,16 +104,68 @@ describe("render activity", () => {
 		expect(inline.getAttribute("src")).toBe(src);
 	});
 
-	it("shows a note instead of a frame in a remote host's chat", () => {
-		// The local daemon has no copy of a remote host's render, and the remote
-		// proxy URL carries a capability token the page could read.
-		render(
-			<ChatImageSourceProvider sessionId="proj-1" remoteHost>
-				<ActivityRow activity={renderActivity()} />
-			</ChatImageSourceProvider>,
-		);
-		expect(document.querySelector("iframe")).toBeNull();
-		expect(screen.getByText(/Turns by day/)).toHaveTextContent("Turns by day · Open this session on its host to see the page.");
+	describe("in a remote host's chat", () => {
+		const renderOrigin = "http://ao-preview-0123.localhost:4000";
+		afterEach(() => vi.restoreAllMocks());
+
+		function remoteChat(baseUrl?: string) {
+			return render(
+				<ChatImageSourceProvider sessionId="proj-1" assetBaseUrl={baseUrl} remoteHost hostId="h_box">
+					<ActivityRow activity={renderActivity()} />
+				</ChatImageSourceProvider>,
+			);
+		}
+
+		it("frames the page from the proxy's render origin, sandboxed, without the proxy token", async () => {
+			const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(`${renderOrigin}/r1`);
+			remoteChat("http://127.0.0.1:4000/tok123");
+			await waitFor(() => expect(frame().getAttribute("src")).toMatch(/^http:\/\/ao-preview-0123\.localhost:4000\/r1#ao-theme=/));
+			expect(previewUrl).toHaveBeenCalledWith("h_box", "proj-1", "/api/v1/sessions/proj-1/renders/r1");
+			expect(frame().getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+		});
+
+		it("reads the source from the render origin and offers no local-only actions", async () => {
+			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(`${renderOrigin}/r1`);
+			const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>chart</p>"));
+			const user = userEvent.setup();
+			remoteChat("http://127.0.0.1:4000/tok123");
+			await waitFor(() => expect(frame().getAttribute("src")).toContain(renderOrigin));
+			await user.click(screen.getByRole("button", { name: "Expand page" }));
+			const dialog = screen.getByRole("dialog");
+			for (const name of ["Save as artifact", "Open in Orchestrator Browser", "Open in external browser"]) {
+				expect(within(dialog).queryByRole("button", { name })).toBeNull();
+			}
+			await user.click(within(dialog).getByRole("button", { name: "View source" }));
+			await waitFor(() => expect(fetch).toHaveBeenCalledWith(`${renderOrigin}/r1?source=1`, expect.anything()));
+		});
+
+		it("drops the previous origin while a reconnected host's lookup is pending", async () => {
+			let resolveNext!: (url: string) => void;
+			vi.spyOn(aoBridge.remotes, "previewUrl")
+				.mockResolvedValueOnce(`${renderOrigin}/r1`)
+				.mockReturnValueOnce(new Promise((resolve) => (resolveNext = resolve)));
+			const chat = (baseUrl: string) => (
+				<TooltipProvider>
+					<ChatImageSourceProvider sessionId="proj-1" assetBaseUrl={baseUrl} remoteHost hostId="h_box">
+						<ActivityRow activity={renderActivity()} />
+					</ChatImageSourceProvider>
+				</TooltipProvider>
+			);
+			const { rerender } = rtlRender(chat("http://127.0.0.1:4000/tok123"));
+			await waitFor(() => expect(frame().getAttribute("src")).toContain(renderOrigin));
+			rerender(chat("http://127.0.0.1:4001/tok456"));
+			expect(document.querySelector("iframe")).toBeNull();
+			act(() => resolveNext("http://ao-preview-4567.localhost:4001/r1"));
+			await waitFor(() => expect(frame().getAttribute("src")).toMatch(/^http:\/\/ao-preview-4567\.localhost:4001\/r1#/));
+		});
+
+		it("shows the note while the host is not connected", () => {
+			const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl");
+			remoteChat();
+			expect(screen.getByText(/Turns by day/)).toHaveTextContent("Turns by day · Open this session on its host to see the page.");
+			expect(previewUrl).not.toHaveBeenCalled();
+			expect(document.querySelector("iframe")).toBeNull();
+		});
 	});
 
 	it("frames the page in a local chat", () => {
@@ -464,13 +517,17 @@ describe("artifact activity", () => {
 		detail: { event: "artifact", artifact: { path: "q3/Q3 (final).html", name: "Q3 (final).html", url } },
 	};
 	const previewUrl = "http://ao-preview-artifact.x.localhost:3001/q3/Q3%20(final).html";
-	const sessionArtifact = (path: string): SessionArtifact => ({ kind: "html", name: "Q3 (final).html", path, previewUrl, size: 9, updatedAt: "2026-10-08T10:00:00Z" });
+	const inlineUrl = "http://ao-inline-artifact.x.localhost:3001/q3/Q3%20(final).html";
+	const sessionArtifact = (path: string): SessionArtifact => ({ kind: "html", name: "Q3 (final).html", path, previewUrl, inlineUrl, size: 9, updatedAt: "2026-10-08T10:00:00Z" });
+	// What a local session lists for the row's file.
+	const listed = [sessionArtifact("q3/Q3 (final).html")];
+	const openButton = () => screen.getByRole("button", { name: "Open Q3 (final).html in Artifacts tab" });
 
-	function renderArtifact(artifacts?: SessionArtifact[]) {
+	function renderArtifact(artifacts: SessionArtifact[] | undefined = listed, hostId?: string) {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		return render(
 			<QueryClientProvider client={client}>
-				<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
+				<ChatImageSourceProvider sessionId="proj-1" hostId={hostId} remoteHost={Boolean(hostId)} artifacts={artifacts}>
 					<ActivityRow activity={artifactActivity} />
 				</ChatImageSourceProvider>
 			</QueryClientProvider>,
@@ -484,7 +541,7 @@ describe("artifact activity", () => {
 	});
 
 	it("names the artifact in one row and never frames its page in the thread", () => {
-		renderArtifact([sessionArtifact("q3/Q3 (final).html")]);
+		renderArtifact();
 		expect(document.querySelector("iframe")).toBeNull();
 		const row = screen.getByTestId("reported-artifact-row");
 		expect(row).toHaveTextContent("Artifact");
@@ -495,8 +552,8 @@ describe("artifact activity", () => {
 		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
 		try {
 			const user = userEvent.setup();
-			renderArtifact([sessionArtifact("q3/Q3 (final).html")]);
-			await user.click(screen.getByRole("button", { name: "Open Q3 (final).html in Artifacts tab" }));
+			renderArtifact();
+			await user.click(openButton());
 			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/Q3 (final).html", source: "artifact" });
 			expect(fetch).not.toHaveBeenCalled();
 		} finally {
@@ -506,16 +563,9 @@ describe("artifact activity", () => {
 
 	it("opens the artifact on its remote host's session, so that session's view takes the request", async () => {
 		const user = userEvent.setup();
-		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-		render(
-			<QueryClientProvider client={client}>
-				<ChatImageSourceProvider sessionId="proj-1" hostId="https://lab.example:3001" remoteHost artifacts={[sessionArtifact("q3/Q3 (final).html")]}>
-					<ActivityRow activity={artifactActivity} />
-				</ChatImageSourceProvider>
-			</QueryClientProvider>,
-		);
+		renderArtifact(listed, "https://lab.example:3001");
 		expect(document.querySelector("iframe")).toBeNull();
-		await user.click(screen.getByRole("button", { name: "Open Q3 (final).html in Artifacts tab" }));
+		await user.click(openButton());
 		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({
 			sessionId: "proj-1",
 			hostId: "https://lab.example:3001",
@@ -524,10 +574,80 @@ describe("artifact activity", () => {
 		});
 	});
 
+	it("opens an old row's file where it was renamed to", async () => {
+		const user = userEvent.setup();
+		const renamed: SessionArtifact = { ...sessionArtifact("q3/final/report.html"), previousPaths: ["q3/Q3 (final).html"] };
+		renderArtifact([sessionArtifact("other.html"), renamed]);
+		await user.click(openButton());
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "proj-1", path: "q3/final/report.html", source: "artifact" });
+	});
+
+	it("prefers the file listed at the row's path over one renamed away from it", async () => {
+		const user = userEvent.setup();
+		const elsewhere: SessionArtifact = { ...sessionArtifact("old/report.html"), previousPaths: ["q3/Q3 (final).html"] };
+		renderArtifact([elsewhere, sessionArtifact("q3/Q3 (final).html")]);
+		await user.click(openButton());
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ path: "q3/Q3 (final).html" });
+	});
+
 	it("shows the name without an action when the session does not list the artifact", () => {
 		renderArtifact([sessionArtifact("other.html")]);
 		expect(screen.getByTestId("reported-artifact-row")).toHaveTextContent("Q3 (final).html");
 		expect(screen.queryByRole("button")).toBeNull();
 		expect(document.querySelector("iframe")).toBeNull();
+	});
+
+	it("rereads the session's artifacts while a row's file is missing, and offers to open it once listed", () => {
+		// The row arrives on the chat stream; the list can lag behind a file just reported.
+		const opened: string[] = [];
+		const closed: string[] = [];
+		class EventSourceStub {
+			constructor(readonly url: string) {
+				opened.push(url);
+			}
+			addEventListener() {}
+			close() {
+				closed.push(this.url);
+			}
+		}
+		vi.stubGlobal("EventSource", EventSourceStub);
+		try {
+			const client = new QueryClient();
+			const view = (artifacts: SessionArtifact[]) => (
+				<TooltipProvider>
+					<QueryClientProvider client={client}>
+						<ChatImageSourceProvider sessionId="proj-1" artifacts={artifacts}>
+							<ActivityRow activity={artifactActivity} />
+						</ChatImageSourceProvider>
+					</QueryClientProvider>
+				</TooltipProvider>
+			);
+			const { rerender } = rtlRender(view([]));
+			expect(opened).toEqual(["http://127.0.0.1:3001/api/v1/sessions/proj-1/artifact-events"]);
+			expect(screen.queryByRole("button")).toBeNull();
+			rerender(view(listed));
+			expect(openButton()).toBeInTheDocument();
+			// Listed, the row stops following the directory.
+			expect(closed).toEqual(opened);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("does not follow a remote host's artifact directory from this computer", () => {
+		const opened: string[] = [];
+		vi.stubGlobal("EventSource", class {
+			constructor(url: string) {
+				opened.push(url);
+			}
+			addEventListener() {}
+			close() {}
+		});
+		try {
+			renderArtifact([], "https://lab.example:3001");
+			expect(opened).toEqual([]);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 });

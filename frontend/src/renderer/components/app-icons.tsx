@@ -37,6 +37,7 @@ import {
 	CircleDashed as MynaCircleDashed,
 	Clock3 as MynaClock3,
 	ClockCircle as MynaClockCircle,
+	CloudSolid as MynaCloudSolid,
 	Cloudy as MynaCloudy,
 	Code as MynaCode,
 	Coffee as MynaCoffee,
@@ -104,8 +105,10 @@ import {
 	Pin as MynaPin,
 	Plus as MynaPlus,
 	Presentation as MynaPresentation,
+	Question as MynaQuestion,
 	QuestionCircle as MynaQuestionCircle,
 	Refresh as MynaRefresh,
+	Repeat as MynaRepeat,
 	Rows as MynaRows,
 	Save as MynaSave,
 	Search as MynaSearch,
@@ -133,6 +136,8 @@ import {
 	Upload as MynaUpload,
 	User as MynaUser,
 	Users as MynaUsers,
+	VolumeHigh as MynaVolumeHigh,
+	VolumeX as MynaVolumeX,
 	Building as MynaBuilding,
 	Mail as MynaMail,
 	SearchMinus as MynaSearchMinus,
@@ -150,6 +155,10 @@ import {
 	Music as MynaMusic,
 	Database as MynaDatabase,
 	ChartBar as MynaChartBar,
+	Menu as MynaMenu,
+	DotsVertical as MynaDotsVertical,
+	LayersThree as MynaLayersThree,
+	Edit as MynaEdit,
 } from "@mynaui/icons-react";
 import {
 	ArrowDownUp as LucideArrowDownUp,
@@ -213,6 +222,7 @@ import {
 	Ungroup as LucideUngroup,
 	Check as LucideCheck,
 	Ellipsis as LucideEllipsis,
+	GalleryHorizontal as LucideGalleryHorizontal,
 	EllipsisVertical as LucideEllipsisVertical,
 	GripVertical as LucideGripVertical,
 	Pause as LucidePause,
@@ -312,6 +322,7 @@ export const CircleArrowUp = fromMyna(MynaArrowUpCircle, "circle-arrow-up");
 export const CircleCheck = fromMyna(MynaCheckCircle, "circle-check");
 export const CircleDashed = fromMyna(MynaCircleDashed, "circle-dashed");
 export const CircleHelp = fromMyna(MynaQuestionCircle, "circle-help");
+export const QuestionMark = fromMyna(MynaQuestion, "question-mark");
 export const CircleMinus = fromMyna(MynaMinusCircle, "circle-minus");
 export const CircleStop = fromMyna(MynaStopCircle, "circle-stop");
 export const CircleX = fromMyna(MynaXCircle, "circle-x");
@@ -320,6 +331,8 @@ export const Clock = fromMyna(MynaClockCircle, "clock");
 export const Clock3 = fromMyna(MynaClock3, "clock-3");
 // Myna's plain Cloud is an open arc that reads as clipped; Cloudy is closed.
 export const Cloud = fromMyna(MynaCloudy, "cloud", "full");
+// Filled single cloud for the small Cloud mark on rows; solid glyphs ignore stroke.
+export const CloudFilled = fromMyna(MynaCloudSolid, "cloud-filled", "full");
 export const Code2 = fromMyna(MynaCode, "code-xml");
 export const Coffee = fromMyna(MynaCoffee, "coffee");
 export const Columns2 = fromMyna(MynaColumns, "columns-2");
@@ -355,6 +368,7 @@ export const FolderOpen = fromLucide(LucideFolderOpen, "folder-open");
 export const FolderPlus = fromMyna(MynaFolderPlus, "folder-plus");
 export const FolderTree = fromLucide(LucideFolderTree, "folder-tree");
 export const Folders = fromLucide(LucideFolders, "folders");
+export const GalleryHorizontal = fromLucide(LucideGalleryHorizontal, "gallery-horizontal");
 export const Gauge = fromLucide(LucideGauge, "gauge");
 export const GitBranch = fromMyna(MynaGitBranch, "git-branch");
 export const GitCommitHorizontal = fromMyna(MynaGitCommit, "git-commit-horizontal");
@@ -439,6 +453,7 @@ export const QrCode = fromLucide(LucideQrCode, "qr-code");
 export const Quote = fromLucide(LucideQuote, "quote");
 export const RefreshCw = fromMyna(MynaRefresh, "refresh-cw");
 export const Regex = fromLucide(LucideRegex, "regex");
+export const Repeat = fromMyna(MynaRepeat, "repeat");
 export const RotateCcw = fromLucide(LucideRotateCcw, "rotate-ccw");
 export const RotateCw = fromLucide(LucideRotateCw, "rotate-cw");
 export const Route = fromLucide(LucideRoute, "route");
@@ -482,6 +497,8 @@ export const Undo2 = fromLucide(LucideUndo2, "undo-2");
 export const User = fromMyna(MynaUser, "user");
 export const UserRound = fromMyna(MynaUser, "user-round");
 export const Users = fromMyna(MynaUsers, "users");
+export const Volume2 = fromMyna(MynaVolumeHigh, "volume-2");
+export const VolumeX = fromMyna(MynaVolumeX, "volume-x");
 export const Video = fromMyna(MynaVideo, "video");
 export const WandSparkles = fromMyna(MynaSparkles, "wand-sparkles");
 export const Workflow = fromLucide(LucideWorkflow, "workflow");
@@ -506,3 +523,12 @@ export const Ungroup = fromLucide(LucideUngroup, "ungroup");
 export const UserPlus = fromMyna(MynaUserPlus, "user-plus");
 export const ZoomIn = fromMyna(MynaSearchPlus, "zoom-in");
 export const ZoomOut = fromMyna(MynaSearchMinus, "zoom-out");
+
+// The onboarding illustrations' icons.
+export const CircleCheckBig = fromMyna(MynaCheckCircle, "circle-check-big");
+export const ListFilter = fromMyna(MynaFilter, "list-filter");
+export const Menu = fromMyna(MynaMenu, "menu");
+export const EllipsisVertical = fromMyna(MynaDotsVertical, "ellipsis-vertical");
+export const Cog = fromMyna(MynaCog, "cog");
+export const Layers = fromMyna(MynaLayersThree, "layers");
+export const SquarePen = fromMyna(MynaEdit, "square-pen");

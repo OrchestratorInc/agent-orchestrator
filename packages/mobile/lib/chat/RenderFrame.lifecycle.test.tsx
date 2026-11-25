@@ -30,7 +30,7 @@ vi.mock("../ThemeProvider", () => {
 vi.mock("./RenderSkeleton", () => ({ RenderSkeleton: "RenderSkeleton" }));
 vi.mock("./renderHeightStore", () => ({ startRenderHeightStore: () => {} }));
 
-import { RenderFrame } from "./RenderFrame";
+import { RenderDocument, RenderFrame } from "./RenderFrame";
 import { notifyRenderViewport } from "./renderFrameModel";
 
 const render = { id: "page", title: "Page", height: 300, path: "/api/v1/sessions/s/renders/page" };
@@ -144,4 +144,20 @@ it("expands into the viewer route for its page and machine", () => {
 	act(() => expand.props.onPress());
 	expect(router.push).toHaveBeenCalledWith({ pathname: "/render", params: { path: render.path, title: "Page", hostId: "lab-host" } });
 	expect(renderer!.root.findAll((node) => node.type === ("Modal" as never))).toHaveLength(0);
+});
+
+// An inline frame stays live off screen and a tap opens the viewer instead of
+// reaching the page, so it keeps the default policy (nothing plays with sound
+// unprompted); the fullscreen viewer is the page on screen and plays inline.
+it("plays media unprompted only in the viewer, never in an inline frame", () => {
+	const inline = webView().props;
+	expect(inline.allowsInlineMediaPlayback).toBeUndefined();
+	expect(inline.mediaPlaybackRequiresUserAction).toBeUndefined();
+	let viewer: ReactTestRenderer | undefined;
+	act(() => {
+		viewer = create(<RenderDocument path={render.path} displayMode="fullscreen" onReady={() => {}} onGone={() => {}} onFailed={() => {}} />, { createNodeMock: () => ({ injectJavaScript: () => {} }) });
+	});
+	const fullscreen = viewer!.root.findAll((node) => node.type === ("WebView" as never))[0].props;
+	expect(fullscreen).toMatchObject({ allowsInlineMediaPlayback: true, mediaPlaybackRequiresUserAction: false });
+	act(() => viewer?.unmount());
 });

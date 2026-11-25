@@ -41,6 +41,7 @@ import {
   type BrowserProfileUsage,
 } from "../shared/browser-profiles";
 import { attachAppShortcuts } from "./app-shortcuts";
+import { APP_SHORTCUT_PRESSED_CHANNEL } from "../shared/shortcuts";
 import type {
   AppShortcutId,
   KeybindingOverrides,
@@ -1497,6 +1498,10 @@ export function createBrowserViewHost(
           devtoolsAction(session, "toggle"),
         ).catch(() => undefined);
       },
+      undefined,
+      undefined,
+      undefined,
+      (id) => shellWebContents.send(APP_SHORTCUT_PRESSED_CHANNEL, id),
     );
     view.webContents.on("focus", () => {
       if (!isCurrentEntry()) return;
@@ -2336,23 +2341,19 @@ export function createBrowserViewHost(
       return listTabs(session);
     }
     return queueNativeOperation(session, async () => {
-      if (!session.tabs.size) {
-        // Connecting agent-browser to zero targets bootstraps its own page
-        // before tab-new runs. Create the first user tab directly so one
-        // request cannot produce both a bootstrap page and a requested page.
-        await openTab(session, url, true);
-        session.nativeActiveTabId = undefined;
-        session.snapshotDeltaBaseline = undefined;
-        return listTabs(session);
-      }
-      await options.agentBrowserRuntime!.runAction(
-        session.sessionId,
-        "tab-new",
-        { url },
-        agentBrowserTargets(session),
-      );
-      session.nativeActiveTabId = session.activeTabId;
+      // A tab the person opens (a link clicked in chat, the + button) is made
+      // here, not through agent-browser's `tab new`. That ran the CLI twice and,
+      // the first time, started its daemon, all before the page began to load,
+      // so the first link took seconds to appear. The bridge's createTarget
+      // ends in this same openTab call anyway. agent-browser hears about the
+      // tab from the bridge, and its next command selects the person's tab by
+      // CDP identity first (ensureNativeActiveTab), as after a person closes a
+      // tab. Creating it directly also keeps a first tab from racing the
+      // bootstrap page agent-browser makes when it connects to zero targets.
+      await openTab(session, url, true);
+      session.nativeActiveTabId = undefined;
       session.snapshotDeltaBaseline = undefined;
+      options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
       return listTabs(session);
     });
   };

@@ -34,6 +34,8 @@ import {
 } from "./renderFrameModel";
 import { RenderSkeleton } from "./RenderSkeleton";
 import { startRenderHeightStore } from "./renderHeightStore";
+import { useLastVerifiedConfig } from "../useLastVerifiedConfig";
+import { ARTIFACT_MEDIA_PLAYBACK } from "../artifactMediaPlayback";
 
 startRenderHeightStore();
 
@@ -75,7 +77,11 @@ export function RenderDocument({ path, displayMode, onHeight, onReady, onGone, o
 	onFailed: () => void;
 }) {
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
+	const { config: verified, machine } = useApp();
+	// A page on screen keeps what it loaded with through an app switch, so it
+	// does not reload; one mounted while the connection is away waits for it to
+	// be verified (see useLastVerifiedConfig).
+	const config = useLastVerifiedConfig(verified, machine);
 	const web = useRef<WebView>(null);
 	const lastTouch = useRef(0);
 	const loaded = useRef(false);
@@ -87,7 +93,10 @@ export function RenderDocument({ path, displayMode, onHeight, onReady, onGone, o
 	const uri = useMemo(() => pageUrl && `${pageUrl}${renderThemeFragment(themeRef.current, displayMode)}`, [pageUrl, displayMode]);
 	const fullscreen = displayMode === "fullscreen";
 	// A stable source: a new object each render would make the WebView re-check it.
-	const source = useMemo(() => uri && config ? { uri, headers: authHeaders(config) } : undefined, [uri, config]);
+	// Keyed on the headers' content: the connection verified again after an app
+	// switch is a new object for the same credential, and must not reload the page.
+	const headers = config ? JSON.stringify(authHeaders(config)) : null;
+	const source = useMemo(() => uri && headers ? { uri, headers: JSON.parse(headers) as Record<string, string> } : undefined, [uri, headers]);
 
 	useEffect(() => {
 		if (loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
@@ -96,6 +105,9 @@ export function RenderDocument({ path, displayMode, onHeight, onReady, onGone, o
 	if (!source || !uri) return null;
 	return <View style={styles.document} onTouchStart={() => { lastTouch.current = Date.now(); }} onTouchEnd={() => { lastTouch.current = Date.now(); }}>
 		<WebView
+			// Inline, a frame stays live off screen and a tap opens the viewer
+			// rather than reaching the page, so only the viewer plays media unprompted.
+			{...(fullscreen ? ARTIFACT_MEDIA_PLAYBACK : undefined)}
 			ref={web}
 			source={source}
 			injectedJavaScriptBeforeContentLoaded={fullscreen ? VIEWER_STYLE_SCRIPT : undefined}
@@ -170,7 +182,10 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	// The whole frame is the button: Android ripples across it, over the page;
 	// iOS highlights the chip that marks it.
 	const expandFeedback = usePressFeedback("row", { foreground: true });
-	const { config, currentHostId } = useApp();
+	const { config: verified, machine, currentHostId } = useApp();
+	// Held through an app switch: the frame stays as it is instead of folding to
+	// its title and loading its page again on return.
+	const config = useLastVerifiedConfig(verified, machine);
 	const frame = useRef<View>(null);
 	const { height: viewportHeight } = useWindowDimensions();
 	const [width, setWidth] = useState<number>();

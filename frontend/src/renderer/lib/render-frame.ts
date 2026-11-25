@@ -69,30 +69,34 @@ function isMeasuredHeights(heights: unknown): heights is Array<[number, number]>
 }
 
 /**
- * The page's height at a frame width, from its measured heights: the taller of
- * the heights at the nearest measured widths on each side, since a breakpoint
- * between them can make the page as tall as either. Ported from T3 Code's
- * `measuredHeight` (packages/shared/src/htmlRender.ts).
+ * The page's height at a frame width, from the heights measured at other
+ * widths. Between two measured widths a breakpoint could make the page as tall
+ * as either, so it takes the taller; outside them, the nearest one.
  */
 export function measuredRenderHeight(heights: Array<[number, number]>, width: number): number {
-	const above = heights.findIndex(([measuredWidth]) => measuredWidth >= width);
-	const high = above === -1 ? heights.length - 1 : above;
-	const low = heights[high]![0] === width ? high : Math.max(0, high - 1);
-	return Math.max(heights[low]![1], heights[high]![1]);
+	let narrower = heights[0]!;
+	let wider = heights[heights.length - 1]!;
+	for (const pair of heights) {
+		if (pair[0] <= width) narrower = pair;
+		if (pair[0] >= width) {
+			wider = pair;
+			break;
+		}
+	}
+	return Math.max(narrower[1], wider[1]);
 }
 
+/** Longest saved-render file name, in code points, before ".html". */
+const MAX_FILE_NAME_CHARS = 120;
+
 /**
- * The file a saved render is written to: its title, without characters a file
- * system refuses, capped at 120. Ported from T3 Code's `htmlRenderFileName`
- * (packages/shared/src/htmlRender.ts).
+ * The file a saved render is written to: the words of its title, split at
+ * whitespace, control characters, and characters a file system refuses.
+ * renderpage.FileName in the daemon names it the same way.
  */
 export function renderFileName(title: string): string {
-	const name = title
-		.replace(/[\\/:*?"<>|\p{Cc}]+/gu, " ")
-		.replace(/\s+/g, " ")
-		.trim()
-		.slice(0, 120)
-		.trim();
+	const words = title.split(/[\s\p{Cc}\\/:*?"<>|]+/u).filter(Boolean);
+	const name = Array.from(words.join(" ")).slice(0, MAX_FILE_NAME_CHARS).join("").trimEnd();
 	return `${name || "Page"}.html`;
 }
 

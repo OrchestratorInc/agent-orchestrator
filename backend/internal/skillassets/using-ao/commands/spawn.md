@@ -13,7 +13,7 @@ ao spawn [flags]
 
 | Flag | Meaning | Default / Required |
 |---|---|---|
-| `--branch string` | Branch for the session worktree | `ao/<session-id>/root` |
+| `--branch string` | Branch for the session worktree | `orchestrator/<session-id>/root` |
 | `--claim-pr string` | Claim an existing PR. For review-only work, add `--no-takeover --review` | - |
 | `--kind string` | Session role: `worker` or `orchestrator` | `worker` |
 | `--harness string` | Agent harness to use (see list below) | Project `worker.agent`; required if the project has none |
@@ -34,7 +34,7 @@ ao spawn [flags]
 
 `--agent` is an alias for `--harness`.
 
-Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`, `grok`, `droid`, `amp`, `agy`, `crush`, `cursor`, `qwen`, `gemini`, `copilot`, `goose`, `auggie`, `continue`, `devin`, `cline`, `kimi`, `muse`, `kiro`, `kilocode`, `vibe`, `pi`, `kimchi`, `prime-agent`, `autohand`, `omp`, `fx`, `unreal-agent`, `mimo-code`, `deepseek-harness`, `openhands`, `command-code`. Check `ao agent ls --refresh` for readiness on the installed build. `unreal-agent` is Chat-only; Gemini, MiMo Code, and OpenHands are Terminal UI-only.
+Available harnesses: `claude-code`, `codex`, `aider`, `opencode`, `opencode-v2`, `grok`, `droid`, `amp`, `agy`, `crush`, `cursor`, `qwen`, `gemini`, `copilot`, `goose`, `auggie`, `continue`, `devin`, `cline`, `kimi`, `muse`, `kiro`, `kilocode`, `vibe`, `pi`, `kimchi`, `prime-agent`, `autohand`, `omp`, `fx`, `unreal-agent`, `mimo-code`, `minimax-code`, `deepseek-harness`, `openhands`, `command-code`. Check `ao agent ls --refresh` for readiness on the installed build. `unreal-agent` is Chat-only; Gemini, MiMo Code, MiniMax Code, and OpenHands are Terminal UI-only.
 
 `fx` is experimental and Terminal UI only: spawn it with `--agent fx --mode tui`.
 

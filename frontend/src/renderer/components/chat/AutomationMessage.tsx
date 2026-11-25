@@ -34,17 +34,15 @@ import {
 } from "@/components/app-icons";
 import { useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import type { Options } from "react-markdown";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
+import { GITHUB_HTML_REHYPE_NO_IMAGES } from "../../lib/github-html";
 import { cn } from "../../lib/utils";
 import type { SessionGitActionKind } from "../../stores/session-git-action-store";
 import { Pressable } from "../ui/pressable";
 import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
-import { formatTime, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
+import { formatMessageTimestamp, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
 import { cachedBy, Folded } from "./WorkerUpdates";
 
 export type PullRequestRef = { number: number; title?: string; url?: string };
@@ -71,8 +69,9 @@ export type Automation =
 	| { kind: "gitAction"; action: SessionGitActionKind; base?: string; prNumber?: number; files?: string[] }
 	| { kind: "browserFeedback"; annotations: ParsedBrowserAnnotationMessage }
 	| { kind: "ciFailing"; pr: PullRequestRef; checks: FailedCheck[] }
-	| { kind: "reviewComments"; pr: PullRequestRef; comments: ReviewComment[] }
-	| { kind: "changesRequested"; pr: PullRequestRef; author?: string; body: string }
+	// `at` is when the event happened on the forge; absent in messages from before AO wrote it.
+	| { kind: "reviewComments"; pr: PullRequestRef; comments: ReviewComment[]; at?: string }
+	| { kind: "changesRequested"; pr: PullRequestRef; author?: string; body: string; at?: string }
 	| { kind: "mergeConflict"; pr: PullRequestRef }
 	| { kind: "notice"; notice: AutomationNotice };
 
@@ -85,6 +84,14 @@ const PR_IDENTITY = /PR #(\d+)(?: ("(?:[^"\\\n]|\\.)*"))?(?: \([^\n]*? → [^\n]
 const PR_LINE = /\nPR: (\S+)\s*$/;
 // A GitHub or GitLab login, or the daemon's stand-in. Never markup: it is interpolated into a translation.
 const LOGIN = String.raw`[\w.-]+(?:\[bot\])?|unknown reviewer`;
+// The forge time lifecycle ends a nudge's first line with, in providerEventTime's
+// UTC RFC 3339. AO writes it after the PR identity, whose title is quoted and
+// whose branch names hold no spaces, so a title cannot end the line with one.
+const EVENT_TIME = String.raw`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\.$`;
+
+function firstLineTime(text: string, lead: string): string | undefined {
+	return new RegExp(String.raw` ${lead} ${EVENT_TIME}`).exec(text.split("\n", 1)[0]!)?.[1];
+}
 
 function pullRequest(text: string, url?: string): PullRequestRef | undefined {
 	const match = PR_IDENTITY.exec(text.split("\n", 1)[0]!);
@@ -161,13 +168,13 @@ function readPullRequestNudge(text: string): Automation | null {
 	if (announced) {
 		const pr = pullRequest(text, prURL);
 		const comments = pr ? reviewComments(text, Number(announced[1])) : null;
-		return pr && comments ? { kind: "reviewComments", pr, comments } : null;
+		return pr && comments ? { kind: "reviewComments", pr, comments, at: firstLineTime(text, "Newest comment posted at") } : null;
 	}
 	const reviewer = new RegExp(String.raw`^A changes-requested review from @(${LOGIN}) is on `).exec(text);
 	if (reviewer) {
 		const review = changesRequested(text.replace(PR_LINE, ""));
 		const pr = review ? pullRequest(text, review.url ?? prURL) : undefined;
-		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body } : null;
+		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body, at: firstLineTime(text, "Submitted at") } : null;
 	}
 	// AO's own reviewer, before its findings became GitHub reviews; only old history carries these.
 	if (text.startsWith("[AO reviewer] ")) {
@@ -275,7 +282,7 @@ export function readAutomation(text: string): Automation | null {
 }
 
 // A message an agent sent is the agent's, whatever its text says.
-const automationOf = cachedBy((item) =>
+export const automationOf = cachedBy((item) =>
 	item.kind === "message" && !item.senderSessionId && !/^\s*\[from /.test(item.text) ? readAutomation(item.text) : null,
 );
 
@@ -470,6 +477,24 @@ function NoticeLine({ notice }: { notice: AutomationNotice }) {
 	);
 }
 
+export function ReplacedNotice({ open, onOpenChange, children }: { open: boolean; onOpenChange: (open: boolean) => void; children: ReactNode }) {
+	const { t } = useTranslation();
+	return (
+		<div className="min-w-0" data-testid="replaced-notice">
+			<Pressable
+				aria-expanded={open}
+				onClick={() => onOpenChange(!open)}
+				className="-mx-1.5 flex min-h-7 min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+			>
+				<RefreshCw aria-hidden="true" className="size-3.5 shrink-0" />
+				<span className="min-w-0">{t("chat.automation.orchestratorReplaced")}</span>
+				<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+			</Pressable>
+			{open ? <div className="ml-[22px] mt-1 flex min-w-0 flex-col gap-2.5">{children}</div> : null}
+		</div>
+	);
+}
+
 // The forges AO reads PRs from. A URL in the message's text is a link only to
 // these, so a message that merely looks like AO's cannot send the user elsewhere.
 const FORGE_HOSTS = new Set(["github.com", "gitlab.com"]);
@@ -495,17 +520,15 @@ function ForgeLink({ url, className, children }: { url?: string; className?: str
 	);
 }
 
-const GITHUB_HTML: Options["rehypePlugins"] = [rehypeRaw, [rehypeSanitize, {
-	...defaultSchema,
-	tagNames: defaultSchema.tagNames?.filter((tag) => tag !== "picture" && tag !== "source"),
-	protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "ao"] },
-	attributes: { ...defaultSchema.attributes, img: [], code: [["className", /^language-./, "math-inline", "math-display"]] },
-}]];
+const GITHUB_HTML = GITHUB_HTML_REHYPE_NO_IMAGES;
 
 /** What GitHub reported on the session's PR, in the PR glyph tinted by what it means. */
 function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAutomation; createdAt: string }) {
 	const { t, i18n } = useTranslation();
 	const { pr } = automation;
+	// When it happened on the forge, not when AO delivered it: AO holds PR
+	// nudges while the session waits on the user, so delivery can lag by a lot.
+	const at = ("at" in automation && automation.at) || createdAt;
 	const components = {
 		strong: <span className="font-medium text-foreground" />,
 		pr: <ForgeLink url={pr.url} className="font-medium text-foreground" />,
@@ -568,7 +591,7 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 					{heading}
 					{pr.title ? <span className="ml-1.5">{pr.title}</span> : null}
 				</span>
-				<span className="ml-auto shrink-0 tabular-nums">{formatTime(createdAt)}</span>
+				<time className="ml-auto shrink-0 tabular-nums" dateTime={at}>{formatMessageTimestamp(at)}</time>
 			</div>
 			{detail ? <div className="flex min-w-0 flex-col gap-3 pb-1">{detail}</div> : null}
 		</div>

@@ -3,6 +3,7 @@ import { Code2, Download, ExternalLink, FilePlus, Loader2, Maximize2, WrapText }
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
 import {
 	clampRenderHeight,
 	measuredRenderHeight,
@@ -25,7 +26,7 @@ import { Button, type ButtonProps } from "../ui/button";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatImageDialog } from "./ChatImage";
-import { useChatRemoteHost } from "./chat-image-source";
+import { useChatRemoteHost, useChatRemoteSession } from "./chat-image-source";
 import { useChatBrowserOpen } from "./ChatMarkdown";
 
 type RenderImage = { src: string; alt: string };
@@ -39,6 +40,8 @@ interface FramePage {
 	heights?: Array<[number, number]>;
 	/** The file Save writes. */
 	fileName: string;
+	/** A remote host's render on its proxy's render origin; framed with the same sandbox as the daemon's route. */
+	remoteUrl?: string;
 }
 
 /** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
@@ -97,8 +100,8 @@ function RenderDocument({
 	// posted, so they never reload the page.
 	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	const src = useMemo(
-		() => `${baseUrl}${page.path}${renderThemeFragment(themeRef.current, displayMode, false, wrapContentRef.current)}`,
-		[baseUrl, page.path, displayMode],
+		() => `${page.remoteUrl ?? `${baseUrl}${page.path}`}${renderThemeFragment(themeRef.current, displayMode, false, wrapContentRef.current)}`,
+		[baseUrl, page.path, page.remoteUrl, displayMode],
 	);
 	const [contentHeight, setContentHeight] = useState<number>();
 	// The frame's width picks its measured first height; read before the first
@@ -168,16 +171,56 @@ function RenderAction({ label, children, ...props }: ButtonProps & { label: stri
 	);
 }
 
+/** Where the render is served: its remote host's render origin, or this computer's daemon. */
+function renderUrl(page: FramePage): string {
+	return page.remoteUrl ?? `${getApiBaseUrl()}${page.path}`;
+}
+
 /** The render as the daemon serves it; `?source=1` is the page as the agent wrote it. */
-async function fetchRender(path: string, signal?: AbortSignal): Promise<Response> {
-	const response = await fetch(`${getApiBaseUrl()}${path}`, { signal });
-	if (!response.ok) throw new Error(`render ${path}: HTTP ${response.status}`);
+async function fetchRender(url: string, signal?: AbortSignal): Promise<Response> {
+	const response = await fetch(url, { signal });
+	if (!response.ok) throw new Error(`render ${url}: HTTP ${response.status}`);
 	return response;
+}
+
+/**
+ * A remote host's render on its proxy's render origin. The proxy URL itself is
+ * not framed: its path carries the proxy's token, which the page could read.
+ * undefined while it is looked up, null when the host cannot serve it.
+ */
+function useRemoteRenderUrl(path: string | undefined): string | null | undefined {
+	const remote = useChatRemoteSession();
+	const hostId = remote?.hostId;
+	const sessionId = remote?.sessionId;
+	// The proxy's base changes when it reconnects, and with it the render's origin.
+	const baseUrl = remote?.baseUrl;
+	// A result counts only for the inputs that produced it.
+	const key = JSON.stringify([hostId, sessionId, baseUrl, path]);
+	const [lookup, setLookup] = useState<{ key: string; url: string | null }>();
+	useEffect(() => {
+		if (!sessionId || !path || !hostId || !baseUrl) return;
+		let live = true;
+		aoBridge.remotes.previewUrl(hostId, sessionId, path).then(
+			(next) => {
+				if (live) setLookup({ key, url: /^http:\/\//.test(next) ? next : null });
+			},
+			(error: unknown) => {
+				console.error("remote render url", error);
+				if (live) setLookup({ key, url: null });
+			},
+		);
+		return () => {
+			live = false;
+		};
+	}, [hostId, sessionId, baseUrl, path, key]);
+	if (!sessionId || !path) return undefined;
+	if (!hostId || !baseUrl) return null;
+	return lookup?.key === key ? lookup.url : undefined;
 }
 
 /** The served page, bootstrap included, so the saved file renders on its own. */
 async function saveRender(page: FramePage) {
-	const url = URL.createObjectURL(await (await fetchRender(page.path)).blob());
+	const url = URL.createObjectURL(await (await fetchRender(renderUrl(page))).blob());
 	const link = document.createElement("a");
 	link.href = url;
 	link.download = page.fileName;
@@ -198,19 +241,19 @@ async function saveRenderAsArtifact(render: RenderRef): Promise<string> {
 }
 
 /** The page's HTML as plain text. No highlighting: a page can run to 25 MiB. */
-function RenderSource({ path }: { path: string }) {
+function RenderSource({ url }: { url: string }) {
 	const { t } = useTranslation();
 	// undefined while loading, null when the fetch failed.
 	const [source, setSource] = useState<string | null>();
 	useEffect(() => {
 		const controller = new AbortController();
-		fetchRender(`${path}?source=1`, controller.signal)
+		fetchRender(`${url}?source=1`, controller.signal)
 			.then((response) => response.text())
 			.then(setSource, () => {
 				if (!controller.signal.aborted) setSource(null);
 			});
 		return () => controller.abort();
-	}, [path]);
+	}, [url]);
 	if (source === undefined) {
 		return (
 			<div aria-busy="true" className="flex h-20 items-center justify-center">
@@ -237,7 +280,8 @@ function RenderSource({ path }: { path: string }) {
 export function RenderFrame({ render }: { render: RenderRef }) {
 	const { t } = useTranslation();
 	const remoteHost = useChatRemoteHost();
-	const page: FramePage = { title: render.title, path: render.path, height: render.height, heights: render.heights, fileName: renderFileName(render.title) };
+	const remoteUrl = useRemoteRenderUrl(render.path);
+	const page: FramePage = { title: render.title, path: render.path, height: render.height, heights: render.heights, fileName: renderFileName(render.title), remoteUrl: remoteUrl ?? undefined };
 	const [expanded, setExpanded] = useState(false);
 	const [wrapContent, setWrapContent] = useState(false);
 	const [showSource, setShowSource] = useState(false);
@@ -250,16 +294,14 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 		setImageOpen(true);
 	};
 	const openInBrowserPanel = useChatBrowserOpen();
-	// The local daemon has no copy of a remote host's render, and the remote
-	// proxy URL must not reach the page: its path carries the proxy's capability
-	// token, which the page could read from its own location.
-	if (remoteHost) {
+	if (remoteHost && remoteUrl === null) {
 		return (
 			<p className="text-xs text-muted-foreground">
 				{page.title} · {t("chat.render.remoteHost")}
 			</p>
 		);
 	}
+	if (remoteHost && !remoteUrl) return <div aria-busy="true" style={{ height: clampRenderHeight(page.height) }} />;
 	const save = () => {
 		setSaving(true);
 		saveRender(page)
@@ -290,10 +332,12 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 		</RenderAction>
 	);
 	// The page on its own, as a tab opens it: from its render route, whose
-	// sandbox CSP keeps it off the daemon wherever it is opened.
+	// sandbox CSP keeps it off the daemon wherever it is opened. A remote host's
+	// render opens only in its frame here.
+	const opensStandalone = !remoteHost;
 	const openStandalone = (open: (url: string) => void) =>
 		open(`${getApiBaseUrl()}${page.path}${renderThemeFragment(readRenderTheme(), "fullscreen", false, wrapContent)}`);
-	const browserPanelAction = openInBrowserPanel ? (
+	const browserPanelAction = openInBrowserPanel && opensStandalone ? (
 		<RenderAction
 			label={t("inspector.openInAOBrowser")}
 			onClick={() => {
@@ -351,19 +395,23 @@ export function RenderFrame({ render }: { render: RenderRef }) {
 						>
 							<Download className="size-3.5" />
 						</RenderAction>
-						<RenderAction label={t("chat.render.saveAsArtifact")} disabled={savingArtifact} onClick={() => saveArtifact(render)}>
-							<FilePlus className="size-3.5" />
-						</RenderAction>
+						{!remoteHost ? (
+							<RenderAction label={t("chat.render.saveAsArtifact")} disabled={savingArtifact} onClick={() => saveArtifact(render)}>
+								<FilePlus className="size-3.5" />
+							</RenderAction>
+						) : null}
 						{browserPanelAction}
-						<RenderAction
-							label={t("chat.render.openInBrowser")}
-							onClick={() => openStandalone((url) => window.open(url, "_blank", "noopener,noreferrer"))}
-						>
-							<ExternalLink className="size-3.5" />
-						</RenderAction>
+						{opensStandalone ? (
+							<RenderAction
+								label={t("chat.render.openInBrowser")}
+								onClick={() => openStandalone((url) => window.open(url, "_blank", "noopener,noreferrer"))}
+							>
+								<ExternalLink className="size-3.5" />
+							</RenderAction>
+						) : null}
 					</div>
 					{!expanded ? null : showSource ? (
-						<RenderSource path={page.path} />
+						<RenderSource url={renderUrl(page)} />
 					) : (
 						<RenderDocument page={page} displayMode="fullscreen" wrapContent={wrapContent} onOpenImage={openImage} className="max-h-[calc(100svh-8rem)]" />
 					)}

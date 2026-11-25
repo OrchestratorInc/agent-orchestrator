@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
+  commentTextLines,
   InspectorActivityTimelineView,
   InspectorPullRequestCardView,
   InspectorReviewsView,
@@ -81,6 +82,18 @@ describe("SessionInspectorShellView", () => {
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
   });
+  it("lets the Subagents panel own its scrolling, like side chat", () => {
+    const withSubagents = [...tabs, { id: "subagents" as const, icon: <svg />, label: "Subagents" }];
+    render(<SessionInspectorShellView
+      activeView="subagents" ariaLabel="Session inspector" browserPoppedOut={false}
+      subagentsView={<div data-testid="subagents-slot" />}
+      tabs={withSubagents} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("subagents-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("tab", { name: "Subagents" })).toHaveAttribute("aria-selected", "true");
+  });
   it("makes summary and review details selectable but leaves the browser's drag chrome alone (#4268)", () => {
     const slots = { summaryView: <div data-testid="slot" />, reviewsView: <div data-testid="slot" />, browserView: <div data-testid="slot" /> };
     const { rerender } = render(<SessionInspectorShellView activeView="summary" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
@@ -89,6 +102,16 @@ describe("SessionInspectorShellView", () => {
     expect(screen.getByTestId("slot").parentElement).toHaveClass("select-text");
     rerender(<SessionInspectorShellView activeView="browser" ariaLabel="Session inspector" browserPoppedOut={false} tabs={tabs} onViewChange={vi.fn()} {...slots} />);
     expect(screen.getByTestId("slot").parentElement).not.toHaveClass("select-text");
+  });
+  it("renders the Background tasks view edge to edge under its own tab", () => {
+    const withTasks = [...tabs, { id: "task" as const, icon: <svg />, label: "Background tasks" }];
+    render(<SessionInspectorShellView
+      activeView="task" ariaLabel="Session inspector" browserPoppedOut={false}
+      taskView={<div data-testid="task-slot" />}
+      tabs={withTasks} onViewChange={vi.fn()}
+    />);
+    expect(screen.getByTestId("task-slot").parentElement).toHaveClass("p-0", "overflow-hidden");
+    expect(screen.getByRole("tab", { name: "Background tasks" })).toHaveAttribute("aria-selected", "true");
   });
   it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
@@ -215,11 +238,12 @@ describe("portable inspector presentations", () => {
     expect(Boolean(context.compareDocumentPosition(pullRequest) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
-  it("places the Setup and Cleanup sections before the activity and lets a section start collapsed", () => {
+  it("places the Setup and Cleanup sections before the footer and lets a section start collapsed", () => {
     render(
       <SessionInspectorSummaryView
         activity={<div>activity</div>}
         activityTitle="Activity"
+        footer={<div>account</div>}
         scripts={<InspectorSection defaultOpen={false} surface={false} title="Setup"><div>setup log</div></InspectorSection>}
       />,
     );
@@ -227,13 +251,42 @@ describe("portable inspector presentations", () => {
     const setup = screen.getByRole("button", { name: "Setup" });
     expect(setup).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("setup log")).toBeNull();
-    expect(Boolean(setup.compareDocumentPosition(screen.getByText("activity")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+    expect(screen.queryByText("activity")).not.toBeInTheDocument();
+    expect(Boolean(setup.compareDocumentPosition(screen.getByText("account")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     fireEvent.click(setup);
     expect(setup).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("setup log")).toBeInTheDocument();
   });
 
-  it("omits the PR/artifacts section entirely when no title is given", () => {
+  it("renders the footer rows after the sections, leaving an empty footer for the CSS to hide", () => {
+    const Nothing = () => null;
+    const { container, rerender } = render(
+      <SessionInspectorSummaryView
+        footer={<div>account</div>}
+        pullRequestCards={<div>pull request</div>}
+        pullRequestTitle="Pull request"
+      />,
+    );
+
+    const footer = container.querySelector("[data-inspector-footer]");
+    expect(footer).toContainElement(screen.getByText("account"));
+    expect(footer?.previousElementSibling).toBe(screen.getByTestId("inspector-section"));
+
+    rerender(
+      <SessionInspectorSummaryView
+        footer={<><Nothing /><Nothing /></>}
+        pullRequestCards={<div>pull request</div>}
+        pullRequestTitle="Pull request"
+      />,
+    );
+    expect(container.querySelector("[data-inspector-footer]")).toBeEmptyDOMElement();
+
+    rerender(<SessionInspectorSummaryView pullRequestCards={<div>pull request</div>} pullRequestTitle="Pull request" />);
+    expect(container.querySelector("[data-inspector-footer]")).toBeNull();
+  });
+
+  it("omits the PR, artifacts, and commented-out Activity sections when no titles are given", () => {
     render(
       <SessionInspectorSummaryView
         activity={<div>activity</div>}
@@ -241,7 +294,8 @@ describe("portable inspector presentations", () => {
       />,
     );
 
-    expect(screen.queryAllByTestId("inspector-section")).toHaveLength(1);
+    expect(screen.queryAllByTestId("inspector-section")).toHaveLength(0);
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
   });
 
   it("drops the frame, title and number when the host draws its own header", () => {
@@ -1014,8 +1068,11 @@ describe("portable inspector presentations", () => {
 
     setRenderedOverflow(preview, "horizontal", true);
     await waitFor(() => expect(preview.closest('[role="button"]')).toHaveAttribute("aria-expanded", "false"));
+    const toggle = preview.closest('[role="button"]')!;
     fireEvent.click(preview);
-    expect(preview.closest('[role="button"]')).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // Opened, the comment's text is drawn as markdown under its header.
+    expect(screen.getByTestId("inline-comment-body")).toHaveTextContent("A short comment");
   });
 
   it("offers AO browser, system browser, and worker-send actions for summaries", async () => {
@@ -1111,3 +1168,36 @@ const reviewLabels: InspectorReviewLabels = {
   viewInFileWorkInProgress: "View in file is coming soon.",
   viewOnPR: "View on PR",
 };
+
+describe("commentTextLines", () => {
+  it("reads a bot comment's words without its HTML, markers or rules", () => {
+    const body = [
+      "<!-- coderabbit-ai-generated:v1 -->",
+      "",
+      "**<picture><img src=\"x.svg\" width=\"16\" alt=\"\"></picture> Minor** · **Quick win**",
+      "",
+      "---",
+      "## Fix `rrule`",
+      "- [ ] keep it",
+    ].join("\n");
+    expect(commentTextLines(body)).toEqual(["Minor · Quick win", "Fix rrule", "keep it"]);
+  });
+
+  it("keeps generics and comparisons, in code and in prose", () => {
+    expect(commentTextLines("Use `Map<string, number>` here")).toEqual(["Use Map<string, number> here"]);
+    expect(commentTextLines("Reject when `a < b && c > d`.")).toEqual(["Reject when a < b && c > d."]);
+    expect(commentTextLines("Holds when a < b > c, <b>really</b>.")).toEqual(["Holds when a < b > c, really."]);
+  });
+
+  it("previews a suggestion block as its code and drops _emphasis_ but not snake_case", () => {
+    expect(commentTextLines("```suggestion\nconst x = 1;\n```")).toEqual(["const x = 1;"]);
+    expect(commentTextLines("_⚠️ Potential issue_\n\n**Rename `snake_case_name`.**\n\n___")).toEqual(["⚠️ Potential issue", "Rename snake_case_name."]);
+    expect(commentTextLines("Keep my_var and `_private_` as written.")).toEqual(["Keep my_var and _private_ as written."]);
+  });
+
+  it("previews a GitHub alert by its text, not its [!NOTE] marker", () => {
+    expect(commentTextLines("> [!NOTE]\n> Free review of this PR on us.")).toEqual(["Free review of this PR on us."]);
+    expect(commentTextLines("[!warning]\nCheck the migration.")).toEqual(["Check the migration."]);
+    expect(commentTextLines("> [!NOTE]\n> ## Reviews paused\n> - Resume with a comment")).toEqual(["Reviews paused", "Resume with a comment"]);
+  });
+});

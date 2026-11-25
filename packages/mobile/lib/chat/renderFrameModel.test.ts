@@ -80,7 +80,7 @@ describe("initialRenderHeight", () => {
 		expect(initialRenderHeight(render, 430)).toBe(700);
 		expect(initialRenderHeight(render, 390)).toBe(900);
 		expect(initialRenderHeight(render, 640)).toBe(500);
-		expect(initialRenderHeight(render, 2000)).toBe(700);
+		expect(initialRenderHeight(render, 2000)).toBe(500);
 	});
 
 	it("falls back to the agent's height before layout or without measurements", () => {

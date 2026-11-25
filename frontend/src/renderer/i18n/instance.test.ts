@@ -11,6 +11,7 @@ import {
 	koMessages,
 	ptBRMessages,
 	ruMessages,
+	trMessages,
 	zhCNMessages,
 } from "./all-messages";
 
@@ -24,6 +25,7 @@ const allCatalogs = {
 	de: deMessages,
 	"pt-BR": ptBRMessages,
 	ru: ruMessages,
+	tr: trMessages,
 } as const;
 
 function emptyCatalogs(): TranslationCatalogs {
@@ -41,6 +43,7 @@ describe("coerceLocale", () => {
 		expect(coerceLocale("de")).toBe("de");
 		expect(coerceLocale("pt-BR")).toBe("pt-BR");
 		expect(coerceLocale("ru")).toBe("ru");
+		expect(coerceLocale("tr")).toBe("tr");
 	});
 
 	it("defaults unknown values to en", () => {
@@ -70,6 +73,42 @@ describe("app i18next instance", () => {
 		}
 	});
 
+	it("names Settings agent setup and account management by user task in every locale", () => {
+		const agentLabels = {
+			en: "Agents",
+			"zh-CN": "智能体",
+			ja: "エージェント",
+			ko: "에이전트",
+			es: "Agentes",
+			fr: "Agents",
+			de: "Agenten",
+			"pt-BR": "Agentes",
+			ru: "Агенты",
+			tr: "Ajanlar",
+		} as const;
+		for (const locale of APP_LOCALES) {
+			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
+			expect(catalog["settings.harness"], locale).toBe(agentLabels[locale]);
+			expect(catalog["settings.agents"], locale).toBe(catalog["settings.codexAccounts.title"]);
+			expect(catalog["settings.cloudAgents.connect"], locale).not.toContain("Harness");
+			expect(catalog["settings.cloudAgents.description"], locale).not.toContain("Harness");
+			for (const key of ["settings.harness.viewLabel", "agentSelector.manageCloud"]) {
+				expect(catalog[key], `${locale}: ${key}`).not.toMatch(/harness|ハーネス|하네스/i);
+			}
+		}
+		expect(enMessages["settings.agents"]).toBe("Accounts");
+		expect(enMessages["settings.harness.viewLabel"]).toBe("Agent logins");
+		expect(enMessages["agentSelector.manageCloud"]).toBe("Manage agent connections…");
+		expect(enMessages["newTask.openHarnessSettings"]).toBe("Open Agents settings");
+		expect(enMessages["createProject.openHarnessSettings"]).toBe("Go to Agents settings");
+		const turkish = allCatalogs.tr as unknown as Record<string, string>;
+		const chinese = allCatalogs["zh-CN"] as unknown as Record<string, string>;
+		for (const key of ["settings.harness.viewLabel", "agentSelector.manage", "agentSelector.manageCloud", "newTask.openHarnessSettings", "createProject.openHarnessSettings", "usage.limits.emptyBody", "usage.limits.openSettings", "artifacts.noAgent.action", "inspector.resumeAuthRequired", "newTask.agentNotInstalled"]) {
+			expect(turkish[key], `tr: ${key}`).toMatch(/ajan/i);
+			expect(chinese[key], `zh-CN: ${key}`).toContain("智能体");
+		}
+	});
+
 	it("uses English by default and Chinese when selected", () => {
 		expect(createAppI18n().t("settings.general")).toBe("General");
 		expect(createAppI18n("zh-CN").t("settings.general")).toBe("通用");
@@ -87,6 +126,7 @@ describe("app i18next instance", () => {
 			de: "settings.language.de",
 			"pt-BR": "settings.language.ptBR",
 			ru: "settings.language.ru",
+			tr: "settings.language.tr",
 		} as const;
 		const expected = {
 			en: "English",
@@ -98,6 +138,7 @@ describe("app i18next instance", () => {
 			de: "Deutsch",
 			"pt-BR": "Português (Brasil)",
 			ru: "Русский",
+			tr: "Türkçe",
 		} as const;
 		for (const locale of APP_LOCALES) {
 			expect(createAppI18n(locale).t(labels[locale])).toBe(expected[locale]);
@@ -278,6 +319,20 @@ describe("app i18next instance", () => {
 });
 
 describe("lazy locale catalogs", () => {
+	it("loads Turkish on demand with the exact English key set and Turkish plural forms", async () => {
+		expect(Object.keys(trMessages).sort()).toEqual(Object.keys(enMessages).sort());
+		const instance = createLazyAppI18n();
+		expect(instance.getResource("tr", "translation", "settings.general")).toBeUndefined();
+		await instance.changeLanguage("tr");
+		expect(instance.language).toBe("tr");
+		expect(instance.t("settings.general")).toBe("Genel");
+		expect(instance.t("settings.language.tr")).toBe("Türkçe");
+		for (const count of [0, 1, 2, 21]) {
+			expect(instance.t("firstRun.importFound", { count, agents: "Codex" }))
+				.toBe(`Bu bilgisayarda Codex ile yapılmış ${count} sohbet bulundu.`);
+		}
+	});
+
 	it("loads a locale's catalog when the app instance changes language", async () => {
 		const instance = createLazyAppI18n();
 		expect(instance.getResource("ja", "translation", "settings.general")).toBeUndefined();

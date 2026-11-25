@@ -7,6 +7,7 @@ import {
 	describeUnreachableCode,
 	LOCAL_NETWORK_HINT,
 	isDesktopUnreachable,
+	isPollRejected,
 	isLocalNetworkHost,
 	isUnreachableError,
 	isTailscaleHost,
@@ -177,6 +178,41 @@ describe("describeConnectionFailure", () => {
 		// With empty host/port, the message should still be valid but not show ":"
 		expect(d.message).not.toContain("at :");
 		expect(d.message).not.toContain("at ::");
+	});
+
+	// A Tailscale name on the Connect Mobile port is plain HTTP, which the
+	// phone no longer assumes for a qualified name, so the failure says how.
+	describe("a Tailscale name tried over HTTPS on another port", () => {
+		const tried = (platform: string, over: Partial<{ host: string; port: string; secure: boolean | undefined }> = {}) =>
+			describeConnectionFailure("unreachable", { host: "my-pc.tail1234.ts.net", port: "3011", platform, secure: true, ...over });
+
+		// With the port, so the suggested Host retries the port that was tried
+		// and agrees with whatever Port holds.
+		it("tells Android to type http:// with the port that was tried", () => {
+			expect(tried("android").message).toBe(
+				"Nothing answered over HTTPS at my-pc.tail1234.ts.net:3011. A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://my-pc.tail1234.ts.net:3011.",
+			);
+			expect(tried("android", { port: "8443" }).message).toContain("enter http://my-pc.tail1234.ts.net:8443.");
+		});
+
+		// Clearing Port alone is not enough: a port written into Host stays, and an
+		// editor falls back to the saved port. A typed https:// with no port is 443.
+		it("tells iOS, which blocks plain HTTP to that name, to enter its HTTPS address instead", () => {
+			expect(tried("ios").message).toBe(
+				"Nothing answered over HTTPS at my-pc.tail1234.ts.net:3011. To use the machine's Tailscale HTTPS address, enter https://my-pc.tail1234.ts.net in Host and leave Port empty.",
+			);
+		});
+
+		it.each([
+			["port 443", { port: "443" }],
+			["plain HTTP", { secure: false }],
+			["a caller that does not say", { secure: undefined }],
+			["another name", { host: "ao.example.com" }],
+		])("keeps the usual copy for %s", (_name, over) => {
+			const message = tried("android", over).message;
+			expect(message).toMatch(/^Reached nothing at /);
+			expect(message).not.toContain("leave Port empty");
+		});
 	});
 
 	describe("the iOS Local Network hint", () => {
@@ -404,6 +440,32 @@ describe("isDesktopUnreachable", () => {
 	it("is false while connected and before any poll has failed", () => {
 		expect(isDesktopUnreachable(poll(null, { connection: "open", error: null }))).toBe(false);
 		expect(isDesktopUnreachable(poll(null, { error: null }))).toBe(false);
+	});
+});
+
+describe("isPollRejected", () => {
+	const poll = (errorStatus: number | null, over: Partial<{ connection: string; error: string | null }> = {}) => ({
+		connection: "closed",
+		error: "failed",
+		errorStatus,
+		...over,
+	});
+
+	// The refusals that stop the poll for good (see shouldKeepPolling).
+	it("is true when the last poll was refused and stopped", () => {
+		for (const status of [401, 403, 429, 426]) expect(isPollRejected(poll(status))).toBe(true);
+	});
+
+	it("is false for no answer and for errors the poll keeps going through", () => {
+		for (const status of [null, 500, 503]) expect(isPollRejected(poll(status))).toBe(false);
+	});
+
+	// An app switch closes the connection with no failed poll; a poll asking
+	// again (or through) is not stopped.
+	it("is false for a closed connection with no failure, and while connecting or open", () => {
+		expect(isPollRejected(poll(null, { error: null }))).toBe(false);
+		expect(isPollRejected(poll(401, { connection: "connecting" }))).toBe(false);
+		expect(isPollRejected(poll(401, { connection: "open" }))).toBe(false);
 	});
 });
 

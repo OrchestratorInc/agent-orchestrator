@@ -25,6 +25,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -676,8 +677,11 @@ type claudePreToolUseDenyOutput struct {
 
 const artifactToolName = "Artifact"
 
+// The nudge blocks only the first use, so the reason must say a retry works:
+// otherwise an agent told to make a Claude artifact reads it as a ban.
 const artifactNudgeReason = "Orchestrator does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
-	"in a chat session, use html_render."
+	"in a chat session, use html_render. This is a one-time reminder: if the user asked for a Claude artifact, " +
+	"call Artifact again and it will be allowed."
 
 // claimArtifactNudge reports whether this is the session's first Artifact tool
 // use, by atomically creating a marker file under AO_DATA_DIR. Any failure
@@ -716,9 +720,97 @@ func (c *commandContext) emitArtifactNudge(agent, event, sessionID string, paylo
 	}
 }
 
+// claudePostToolUseOutput adds to a Claude Code PostToolUse or
+// PostToolUseFailure result: SystemMessage is shown to the user in the
+// session, AdditionalContext is handed to the model with the tool's result.
+type claudePostToolUseOutput struct {
+	SystemMessage      string `json:"systemMessage,omitempty"`
+	HookSpecificOutput struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	} `json:"hookSpecificOutput"`
+}
+
+// Claude Code's built-in computer use, whose tools Claude Code names
+// mcp__computer-use__<tool>.
+const claudeComputerUseToolPrefix = "mcp__computer-use__"
+
+// envDesktopApp mirrors sessionmanager.EnvDesktopApp: "1" on sessions whose
+// daemon the Orchestrator desktop app started.
+const envDesktopApp = "AO_DESKTOP_APP"
+
+const computerUsePermissionNotice = "Computer use needs Orchestrator to have Accessibility and Screen Recording: macOS checks Orchestrator for " +
+	"everything this session runs, not Claude. Grant them in Orchestrator under Settings > Computer use agents > Native computer use > Grant macOS permissions to Orchestrator, " +
+	"then restart this session's agent if it still says not granted."
+
+const computerUsePermissionContext = "This session runs inside Orchestrator, so macOS checks Orchestrator's permissions, not the Claude desktop app's " +
+	"or a terminal's, for everything it runs. Ignore the advice to grant Claude: tell the user to grant Accessibility and Screen Recording to " +
+	"Orchestrator in Orchestrator's Settings > Computer use agents > Native computer use > Grant macOS permissions to Orchestrator, and that if it still says not granted afterwards, " +
+	"this session's agent needs a restart to see them."
+
+// computerUsePermissionDenied reports whether a tool result is Claude Code's
+// built-in computer use refusing because macOS has not granted Accessibility
+// or Screen Recording ("macOS Accessibility permission(s) are still not
+// granted"). Other refusals, such as the user declining access to one app,
+// keep the tool's own explanation.
+func computerUsePermissionDenied(payload []byte) bool {
+	// Check the tool first: every Claude tool result passes through here, and
+	// only computer use's needs its response read.
+	if toolName, _ := activityMeta(payload); !strings.HasPrefix(toolName, claudeComputerUseToolPrefix) {
+		return false
+	}
+	var p struct {
+		ToolResponse json.RawMessage `json:"tool_response"`
+		Error        string          `json:"error"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return false
+	}
+	for _, text := range []string{string(p.ToolResponse), p.Error} {
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "permission(s) are still not granted") &&
+			(strings.Contains(lower, "accessibility") || strings.Contains(lower, "screen recording")) {
+			return true
+		}
+	}
+	return false
+}
+
+// emitComputerUsePermissionNotice answers a Claude Code computer-use result
+// that macOS refused: the user sees where to grant the permissions, and the
+// model is told to name Orchestrator, whose grants macOS checks for the
+// session, instead of the Claude desktop app its own result names.
+func (c *commandContext) emitComputerUsePermissionNotice(agent, event, sessionID string, payload []byte) {
+	// Only under a desktop-started daemon does macOS check Orchestrator; under
+	// one started from a terminal, Claude's own advice names the right app.
+	if domain.AgentHarness(agent) != domain.HarnessClaudeCode || os.Getenv(envDesktopApp) != "1" {
+		return
+	}
+	var hookEventName string
+	switch event {
+	case "post-tool-use":
+		hookEventName = "PostToolUse"
+	case "post-tool-use-failure":
+		hookEventName = "PostToolUseFailure"
+	default:
+		return
+	}
+	if !computerUsePermissionDenied(payload) {
+		return
+	}
+	var out claudePostToolUseOutput
+	out.SystemMessage = computerUsePermissionNotice
+	out.HookSpecificOutput.HookEventName = hookEventName
+	out.HookSpecificOutput.AdditionalContext = computerUsePermissionContext
+	if err := json.NewEncoder(c.deps.Out).Encode(out); err != nil {
+		c.reportHookFailure(agent, event, sessionID, fmt.Errorf("write computer use permission notice: %w", err))
+	}
+}
+
 const reviewerPermissionDenyMessage = "Orchestrator headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
-	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
+	"and the exact submit commands from the review task, fed by a quoted <<'" + ports.ReviewSubmitHeredocDelimiter + "' heredoc " +
+	"or, in a read-only sandbox, by `printf '%s' '<text>' | ...`."
 
 // reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
 // allow the exact submit shapes (claudecode.ReviewerSubmitCommandAllowed, which
@@ -816,10 +908,14 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 			c.reportHookFailure(agent, event, sessionID, fmt.Errorf("read stdin: %w", err))
 		}
 	}
+	if agent == string(domain.HarnessOpenInterpreter) && !openinterpreter.IsRootHook(payload) {
+		return nil
+	}
 	if shouldEmitSessionStartContext(agent, event) {
 		c.emitSessionStartContext(agent, event, sessionID)
 	}
 	c.emitArtifactNudge(agent, event, sessionID, payload)
+	c.emitComputerUsePermissionNotice(agent, event, sessionID, payload)
 	if isCursorPermissionHook(agent, event) {
 		return c.runCursorPermissionHook(ctx, agent, event, sessionID, payload)
 	}
@@ -870,8 +966,8 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessContinue:
 		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
 	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
-		domain.HarnessOMP, domain.HarnessPi,
-		domain.HarnessAmp, domain.HarnessPrimeAgent:
+		domain.HarnessOMP, domain.HarnessPi, domain.HarnessTau,
+		domain.HarnessAmp, domain.HarnessPrimeAgent, domain.HarnessMiniMaxCode:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 		if domain.AgentHarness(agent) == domain.HarnessPi {
 			conversation.TranscriptPath = hookConversationFacts(domain.HarnessPi, event, payload).TranscriptPath
@@ -883,6 +979,16 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if domain.AgentHarness(agent) == domain.HarnessCopilot && event == "stop" && conversation.FinalAssistantMessage == "" {
 		// Copilot's stop hook names its event log instead of carrying the answer.
 		conversation.FinalAssistantMessage = capHookText(copilot.FinalAssistantMessage(payload), maxHookInteractionLen)
+	}
+	if domain.AgentHarness(agent) == domain.HarnessMastraCode && event == "stop" && conversation.FinalAssistantMessage == "" {
+		// Mastra's TUI Stop hook omits the answer. The daemon reads it from
+		// native history; the hook only forwards a reply the payload carries.
+		var reply struct {
+			AssistantMessage string `json:"assistant_message"`
+		}
+		if json.Unmarshal(payload, &reply) == nil {
+			conversation.FinalAssistantMessage = capHookText(strings.TrimSpace(reply.AssistantMessage), maxHookInteractionLen)
+		}
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
 	req := setActivityAPIRequest{
@@ -1113,7 +1219,7 @@ func shouldEmitSessionStartContext(agent, event string) bool {
 		return false
 	}
 	switch agent {
-	case "agy", "devin":
+	case "agy", "devin", "open-interpreter":
 		return true
 	default:
 		return false

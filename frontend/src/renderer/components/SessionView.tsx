@@ -1,8 +1,10 @@
 import { apiErrorException } from "../lib/api-error-exception";
+import { DeviceRevealWatcher } from "./DeviceRevealWatcher";
+import { useDevicesEnabled } from "../lib/devices-enabled";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
-import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isCancelledError, useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, PanelRight, Plus, SquareTerminal } from "@/components/app-icons";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
@@ -27,6 +29,7 @@ import { agentLabel } from "../lib/agent-options";
 import { useCloudAgentSwitch } from "../hooks/useCloudAgentSwitch";
 import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
+import { MainViewVisibleContext, useMainViewVisible } from "../lib/main-view-visibility";
 import { useSessionSplitGroups, useSplitPanesStore } from "../stores/split-panes-store";
 import { PANE_HEADER_PX, SplitDivider, SplitGroupTab, SplitJunction, SplitPaneHeader, SplitPaneTerminal, findJunctions, type SplitGroupMember } from "./SplitView";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
@@ -94,7 +97,7 @@ import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
-import { SessionTopbarHost } from "./SessionTopbarPortal";
+import { SessionTopbarHost, SessionTopbarScope } from "./SessionTopbarPortal";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useAgentAccountLabel } from "../hooks/useAgentAccounts";
@@ -109,7 +112,7 @@ import {
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { SESSION_WORKSPACE_ID } from "../hooks/useHeldSession";
-import { canResumeAgent, resumeAgentOnOpen, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
+import { canResumeAgent, resumeAgentOnOpen, resumeMayRecover, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
 import { trackImportFirstOpen, useImportedAgentBlock } from "../lib/session-import";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
@@ -129,8 +132,10 @@ import {
 	useWorkspaceSession,
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
+import { withOptimisticSessionTitle } from "../hooks/optimistic-session-titles";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, requestCloudWorkspaceCheckout, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { cloudWorkerStartingWait, recordCloudWorkspaceStartupEvent } from "../lib/cloud-worker-starting";
 import { FREESTYLE_PROVIDER, SHARE_FEATURE } from "../lib/cloud-offering";
 import { useCloudSessionEventStream } from "../hooks/useCloudSessionEvents";
 import { latestScriptRun } from "../lib/cloud-script-runs";
@@ -170,9 +175,11 @@ import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
+import { queryShown } from "../lib/dom-selectors";
+import { KeepRecentAlive } from "./KeepRecentAlive";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
-import { useSideChatsAvailable } from "../lib/side-chats";
+import { useSideChatTab, useSideChatsAvailable } from "../lib/side-chats";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
 	inspectorMaxWidthCss,
@@ -364,6 +371,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 		resumeAfter: () => 0,
 		onEvent: (event) => {
 			if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
+			if (orgId) recordCloudWorkspaceStartupEvent(orgId, sessionId, event);
 			const occurredAt = Date.parse(event.createdAt);
 			if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
 			// sandbox.provisioning only marks the start of workspace creation;
@@ -545,10 +553,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudSessionWorkspace = directCloudWorkspace ?? (isCloudRoute ? routedWorkspace : undefined);
 	const directCloudSession = routeCloudOrgId && cloudRouteSession.data && (!routedWorkspace || isCloudRoute) &&
 		projectId === cloudRouteSession.data.projectId
-		? toCloudWorkspaceSession(cloudRouteSession.data, {
+		? withOptimisticSessionTitle(toCloudWorkspaceSession(cloudRouteSession.data, {
 			id: cloudSessionWorkspace?.id ?? cloudRouteSession.data.projectId,
 			displayName: cloudSessionWorkspace?.name ?? "Cloud project",
-		}, routeCloudOrgId)
+		}, routeCloudOrgId))
 		: undefined;
 	const fallbackSession = !projectId || workspaceSessionQuery.data?.workspaceId === projectId
 		? workspaceSessionQuery.data : undefined;
@@ -611,12 +619,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
+	const [subagentContainer, setSubagentContainer] = useState<HTMLDivElement | null>(null);
+	// The chat reports this while it lists any subagents; it clears it when it unmounts.
+	const subagentsAvailable = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.subagentsAvailable));
 	const inspectorView = useUiStore((state) => state.inspectorSessions[uiSessionId]?.view ?? "summary");
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const { showTab: showSideChatTab, onSideChatsChange } = useSideChatTab(uiSessionId, sideChatsAvailable);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 	const resetFilesSelection = useUiStore((state) => state.resetFilesSelection);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
@@ -631,12 +643,25 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const importBlock = useImportedAgentBlock(session, hostId);
 	const openedSession = useRef({ key: uiSessionId, checked: false });
 	const autoResume = useMutation({
-		mutationKey: ["resume-agent", "local", sessionId],
-		mutationFn: resumeAgentOnOpen,
+		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
+		mutationFn: async (id: string) => {
+			const opening = openedSession.current;
+			try {
+				await resumeAgentOnOpen(id, hostId);
+			} catch (error) {
+				if (!resumeMayRecover(error)) throw error;
+				await new Promise((resolve) => setTimeout(resolve, 3_000));
+				if (openedSession.current !== opening) throw error;
+				await resumeAgentOnOpen(id, hostId).catch((retryError: unknown) => {
+					const code = apiErrorCode(retryError);
+					if (code !== "AGENT_NOT_EXITED" && code !== "AGENT_RESUME_IN_PROGRESS") throw retryError;
+				});
+			}
+		},
 		onSettled: async (_data, _error, id) => {
 			await Promise.all([
 				refreshWorkspaces(),
-				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id) }),
+				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id, hostId) }),
 			]);
 		},
 	});
@@ -647,26 +672,42 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// already-resumed session no longer flashes "Resuming agent…" while the
 	// workspace query catches up with the new activity state.
 	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
-		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
+		(!usesPreviewWorkspaceData && !hostUnreachable && canResumeAgent(session, resumeStatus.transition) &&
 		!resumeStatus.statusError && !importBlock.block && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
-	const resumeOnOpen = autoResume.mutate;
+	const resumeOnOpen = autoResume.mutateAsync;
 	// This session's background resume failed; the chat shows why.
-	const autoResumeFailed = !hostId && autoResume.variables === sessionId && autoResume.isError;
+	const autoResumeFailed = autoResume.variables === sessionId && autoResume.isError;
+	const remoteConnection = useRef({ key: "", base: remoteBase, at: 0 });
+	const refetchRemoteSession = remoteSessionQuery.refetch;
+	const remoteReadAt = Math.max(remoteSessionQuery.dataUpdatedAt, remoteSessionQuery.errorUpdatedAt);
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
-		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
+		if (hostId && (remoteConnection.current.key !== uiSessionId || remoteConnection.current.base !== remoteBase)) {
+			const reconnected = remoteConnection.current.base !== remoteBase;
+			remoteConnection.current = { key: uiSessionId, base: remoteBase, at: remoteBase ? Date.now() : 0 };
+			if (remoteBase && !openedSession.current.checked) {
+				if (reconnected) void queryClient.cancelQueries({ queryKey: workspaceQueryKeyForHost(hostId), exact: true }).then(() => refetchRemoteSession());
+				else void refetchRemoteSession({ cancelRefetch: false });
+			}
+		}
+		if (usesPreviewWorkspaceData || session?.cloud || !session || (hostId ? hostUnreachable || remoteSessionQuery.isFetching || remoteReadAt < remoteConnection.current.at : daemonStatus.state !== "ready") ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
 		if (!session.needsResume && !sessionAgentExited(session)) {
+			if (hostId && remoteSessionQuery.isError) return;
 			openedSession.current.checked = true;
 			return;
 		}
 		if (!canResume || importBlock.block || importBlock.checking) return;
-		// One attempt per route opening; a failed resume or a later agent exit
+		// One resume per route opening; a failed resume or a later agent exit
 		// stays stopped rather than entering an automatic restart loop.
 		openedSession.current.checked = true;
-		if (session.needsResume) trackImportFirstOpen(session.provider, resumeAgentOnOpen(session.id));
-		resumeOnOpen(session.id);
-	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, resumeOnOpen, session, uiSessionId]);
+		const resuming = resumeOnOpen(session.id);
+		resuming.catch(() => {});
+		if (session.needsResume) trackImportFirstOpen(session.provider, resuming);
+	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, hostUnreachable, queryClient, refetchRemoteSession, remoteBase, remoteReadAt, remoteSessionQuery.isError, remoteSessionQuery.isFetching, resumeOnOpen, session, uiSessionId]);
+	useEffect(() => () => {
+		openedSession.current = { key: "", checked: true };
+	}, []);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);
@@ -745,6 +786,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const browserPopOutPhase = browserPopOutState.sessionId === sessionId ? browserPopOutState.phase : "docked";
 	const browserPopOutMounted = browserPopOutPhase !== "docked";
 	const browserPoppedOut = browserPopOutPhase === "open";
+	const mainViewVisible = useMainViewVisible();
 	const [browserPopoutTopbarHost, setBrowserPopoutTopbarHost] = useState<HTMLDivElement | null>(null);
 	useLayoutEffect(() => {
 		if (browserPopOutPhase !== "mounting" || !browserPopoutTopbarHost) return;
@@ -890,7 +932,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const requestCloudResume = useCallback(async (prepareWorkspace: boolean) => {
 		if (!session?.cloud) return;
 		await resumeCloudSession(cloudCpClient, session.cloud.orgId, session.id);
-		if (prepareWorkspace) await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
+		// A worker that just said it is still preparing the workspace is already
+		// doing what this asks; the request would only wait on it. A recorded
+		// startup failure (a checkout or conversation restore) is not being
+		// prepared: it waits for this request, so it is always sent.
+		const startupFailed = cloudStartupProblem(session)?.phase === "failed";
+		if (prepareWorkspace && (startupFailed || !cloudWorkerStartingWait(session.cloud.orgId, session.id))) {
+			await requestCloudWorkspaceCheckout(cloudCpClient, session.cloud.orgId, session.id);
+		}
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
@@ -1034,6 +1083,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Split panes are a Developer mode preview; off, no split is shown and
 	// turning it off mid-split puts every tab back in the strip.
 	const splitPanes = useSplitPanesEnabled();
+	// Devices are a Developer mode preview: off, no Device tab opens on its own.
+	const devicesEnabled = useDevicesEnabled();
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
@@ -1613,6 +1664,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button size="icon-sm"
+						data-telemetry-id="tab.new"
 						aria-label={t("shortcut.new-shell-terminal")}
 						data-terminal-focus-handoff="true"
 						onClick={addShellTerminal}
@@ -1729,6 +1781,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (hostId && remoteBase && browserSlotVisible) void remoteSessionQuery.refetch();
 	}, [hostId, remoteBase, browserSlotVisible, remoteSessionQuery.refetch]);
 	const terminated = session ? !sessionIsActive(session) : false;
+	// An agent's `ao device open` reveals the Device tab, as `ao preview` reveals
+	// Browser: a lease opened while this session is on screen opens the tab once;
+	// entering a session that already holds one does not.
+	const deviceAvailable = devicesEnabled && Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
+	// A maximized Files or Browser would cover the revealed tab, so both go back
+	// to the inspector first, as opening an artifact does.
+	const revealDevice = useCallback(() => {
+		setBrowserPopOutState({ sessionId, phase: "docked" });
+		setFilesPoppedOut(false);
+		transitionInspectorView("device");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.
@@ -2027,6 +2091,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				label: shell?.title ?? key,
 				icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" />,
 				agentHandleId: tracksAgent ? key : undefined,
+				resumeHarness: shell?.resumeHarness,
 			};
 	}, [centerFileRequestsBySession, closePane, reviewerHarness, selectTab, sessionLabel, sessionProvider, shellTerminals, t, uiSessionId]);
 	// Pressing a file pane's title bar moves keyboard focus into that file.
@@ -2288,15 +2353,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				if (error) throw error;
 				if (active) renewedAt = Date.now();
 				// Remote conversations already refresh every two seconds. A ready or
-				// working chat hears every change through events, and a wake emits
-				// one, so only a chat still waking or stopped is refreshed here;
-				// refreshing a settled one reloaded every page it had on each return.
+				// working chat hears every change through events, so only a chat still
+				// waking or stopped is refreshed here; refreshing a settled one reloaded
+				// every page it had on each return.
 				if (active && !left && !refreshed && !hostId) {
 					refreshed = true;
 					if (!conversationSettled(queryClient, sessionId)) {
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 					}
-					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				}
 			} finally {
 				// Release a late registration too; leaving must not wait on wake.
@@ -2350,10 +2414,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		useSessionSwitchStore.getState().publish(id, sessionTabAgentMenu);
 		return () => useSessionSwitchStore.getState().publish(id, undefined);
 	}, [session?.id, sessionTabAgentMenu]);
-	// The session tab always shows its ⋮ menu after the title; the other tabs
-	// show a close button on hover. While an interface switch is requested or
+	// The session tab always shows its ⋮ menu after the title, where the other
+	// tabs show their close button. While an interface switch is requested or
 	// running, the switch's status (cancel on hover) takes the ⋮'s place.
-	const sessionTabActionPinned = Boolean(session);
 	const sessionTabActions = !session
 		? null
 		: interfaceUi.switchPending
@@ -2410,9 +2473,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [browserOnly, sessionId, uiSessionId, setFilesChangedOnly, setInspectorOpenForSession, transitionInspectorView]);
 
 	const fetchWorkspaceFiles = useCallback(async () => {
-		return queryClient.fetchQuery(
-			sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId),
-		);
+		const options = sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId);
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return await queryClient.fetchQuery(options);
+			} catch (error) {
+				if (!isCancelledError(error) || attempt === 3) throw error;
+			}
+		}
 	}, [hostId, queryClient, sessionId, t]);
 
 	const handleOpenArtifact = useCallback(
@@ -2544,8 +2612,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// changes, or its commits when the worktree is clean.
 		resetFilesSelection(uiSessionId);
 		prepareFilesInspector();
-		void fetchWorkspaceFiles();
-	}, [fetchWorkspaceFiles, prepareFilesInspector, resetFilesSelection, uiSessionId]);
+		void queryClient.prefetchQuery(sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId));
+	}, [hostId, prepareFilesInspector, queryClient, resetFilesSelection, sessionId, t, uiSessionId]);
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
@@ -2644,6 +2712,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		setBrowserUnseen,
 		terminated,
 	]);
+
+	// A subagent row opens its tab like any tab switch, so leaving the Browser canvas
+	// resizes the inspector to the utility width instead of snapping to it.
+	const revealSubagentsPanel = useCallback(() => {
+		transitionInspectorView("subagents");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
 
 	const revealBrowserPanel = useCallback(() => {
 		setBrowserContentRevealed(uiSessionId, true);
@@ -2791,7 +2866,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 		hasInspector,
 	);
-	useSessionShortcut("model-picker", openComposerModelPicker, hasInspector);
+	useSessionShortcut("model-picker", () => { openComposerModelPicker(); }, hasInspector);
 	useSessionShortcut("dictate", toggleComposerDictation, hasInspector);
 
 	const inspectorMotionReadyRef = useRef<string | null>(null);
@@ -2869,9 +2944,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		);
 	}
 
-	return (
+	const view = (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
-			{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
+			<DeviceRevealWatcher enabled={deviceAvailable} onReveal={revealDevice} sessionId={sessionId} terminated={terminated} uiSessionId={uiSessionId} />
+			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}
 				</p>
@@ -2942,7 +3018,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
 									session={session}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									reviewerTerminal={reviewerTerminal}
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
@@ -2966,10 +3041,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
 								</>
-							) : showChatSurface ? (
-								<>
+							) : null}
+							{/* Recent chats stay mounted, hidden, so switching back shows them at once. Other
+							    sessions' chats stay kept while a terminal session is shown; this session's own
+							    chat is dropped when it leaves Chat. */}
+							<KeepRecentAlive activeKey={uiSessionId} show={Boolean(showChatSurface && !session?.cloud)}>
+							{showChatSurface && !session?.cloud ? (
+								<SessionTopbarScope>
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
+									onSideChatsChange={onSideChatsChange}
+									subagentContainer={subagentContainer}
+									onRevealSubagents={revealSubagentsPanel}
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}
@@ -2995,7 +3078,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
@@ -3032,8 +3114,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
-								</>
-							) : (
+								</SessionTopbarScope>
+							) : null}
+							</KeepRecentAlive>
+							{!showChatSurface ? (
 								<CenterPane
 									hostId={hostId}
 									agentInputDisabled={interfaceUi.agentInputDisabled}
@@ -3056,14 +3140,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setMainAuxiliaryTabOrder}
 								/>
-							)}
+							) : null}
 							</div>
 							</SessionTabAgentMenuContext.Provider>
 							</TabSplitMenuContext.Provider>
@@ -3187,7 +3270,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											// selected, so a press on a selected pane puts the caret in it.
 											requestAnimationFrame(() => {
 												for (const pane of document.querySelectorAll<HTMLElement>("[data-split-pane]")) {
-													if (pane.dataset.splitPane === key) pane.querySelector<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']")?.focus({ preventScroll: true });
+													if (pane.dataset.splitPane === key) queryShown<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']", pane)?.focus({ preventScroll: true });
 												}
 											});
 										}}
@@ -3213,6 +3296,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{session && !session.cloud ? prTabs.open.map((url) => (
 								<div className={cn("absolute inset-0 z-10", url !== activePRUrl && "invisible pointer-events-none [content-visibility:hidden]")} key={url}>
 									<PRTabPane
+										// Not on screen while a maximized Browser or Files covers the workspace.
+										active={url === activePRUrl && !browserPoppedOut && !filesPoppedOut}
 										hostId={hostId}
 										onViewInDiff={handleOpenReviewFile}
 										request={prTabs.request?.url === url ? prTabs.request : undefined}
@@ -3249,7 +3334,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						splitRef={sessionSplitRef}
 					>
 						<SessionInspector
-							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							// Keyed per session: a kept, hidden chat still portals into the container it
+							// last had, so each chat needs its own or its panel shows over the next chat's.
+							sideChatView={showSideChatTab ? <div key={uiSessionId} ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							subagentsView={subagentsAvailable ? <div key={uiSessionId} ref={setSubagentContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
 							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
@@ -3295,6 +3383,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
 						<Button type="button" size="icon-sm"
+							data-telemetry-id="topbar.inspector"
 							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {
@@ -3391,6 +3480,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				: null}
 		</div>
 	);
+	// The maximized Browser covers the whole app without hiding it, so videos
+	// under it learn to pause from the main-view flag. File panes keep their
+	// own `active`, which also moves focus, so closing the Browser leaves focus
+	// where it was.
+	return <MainViewVisibleContext.Provider value={mainViewVisible && !browserPopOutMounted}>{view}</MainViewVisibleContext.Provider>;
 }
 
 /** The key a terminal target's tab has in the strips and the split layout. */

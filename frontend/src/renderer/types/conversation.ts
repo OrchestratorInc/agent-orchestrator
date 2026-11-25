@@ -155,6 +155,12 @@ export interface ConversationTurn {
 	 * reason, rather than as a run that failed.
 	 */
 	notRun?: boolean;
+	/**
+	 * A running Cloud turn no agent has taken yet: the session is still starting,
+	 * or its worker took the turn while it checks out the project, runs Setup and
+	 * starts the agent. It reads as the session getting ready, not as thinking.
+	 */
+	agentPending?: boolean;
 	usageLimit?: ConversationUsageLimit;
 	requestedAt: string;
 	startedAt?: string;

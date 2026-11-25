@@ -78,15 +78,21 @@ function isMeasuredHeights(heights: unknown): heights is Array<[number, number]>
 }
 
 /**
- * The page's height at a frame width: the taller of the heights at the nearest
- * measured widths on each side, since a breakpoint between them can make the
- * page as tall as either.
+ * The page's height at a frame width, from the heights measured at other
+ * widths. Between two measured widths a breakpoint could make the page as tall
+ * as either, so it takes the taller; outside them, the nearest one.
  */
 export function measuredRenderHeight(heights: Array<[number, number]>, width: number): number {
-	const above = heights.findIndex(([measuredWidth]) => measuredWidth >= width);
-	const high = above === -1 ? heights.length - 1 : above;
-	const low = heights[high][0] === width ? high : Math.max(0, high - 1);
-	return Math.max(heights[low][1], heights[high][1]);
+	let narrower = heights[0];
+	let wider = heights[heights.length - 1];
+	for (const pair of heights) {
+		if (pair[0] <= width) narrower = pair;
+		if (pair[0] >= width) {
+			wider = pair;
+			break;
+		}
+	}
+	return Math.max(narrower[1], wider[1]);
 }
 
 /** The height a frame opens at before the page reports its own. */

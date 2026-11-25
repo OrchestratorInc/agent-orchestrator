@@ -76,6 +76,7 @@ import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } f
 import type { BrowserProfile } from "../../shared/browser-profiles";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
+import { ConfirmDialog } from "./ConfirmDialog";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -165,7 +166,7 @@ function clampDeviceFrameWidth(width: number): number | undefined {
 }
 
 type BrowserPanelProps = {
-	session: WorkspaceSession;
+	session?: WorkspaceSession;
 	active: boolean;
 	poppedOut: boolean;
 	onTogglePopOut: (next: boolean) => void;
@@ -389,7 +390,7 @@ export function BrowserPanel({
 	poppedOut,
 	onTogglePopOut,
 	topbarHost,
-}: BrowserPanelProps) {
+}: BrowserPanelProps & { session: WorkspaceSession }) {
 	const browserView = useBrowserView({
 		sessionId: session.id,
 		active,
@@ -481,7 +482,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	const showStaticPreview = !hasNativeBrowser && navState.url !== "";
 	// Not on an agent tab: its page is its viewer's picture of the agent's page.
 	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
-	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url && !onAgentTab);
+	const canAnnotate = Boolean(session && window.ao?.browser && viewId && navState.url && !onAgentTab);
 	// An agent tab's localhost page is the host's: opened here it would be this
 	// computer's own. Before the viewer's first report the tab shows the viewer
 	// itself, an ao-preview-….localhost address, so that is held back too.
@@ -567,24 +568,35 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	}, [controlsView]);
 
 	const selectBrowserProfile = useCallback(
-		(profileId: string | null) => {
+		(profileId: string | null, confirmed = false) => {
 			if (!viewId || !window.ao?.browser) return;
-			void window.ao.browser.selectProfile({
-				viewId,
-				profileId,
-				labels: {
-					temporary: t("browser.profile.temporary"),
-					manage: t("browser.profile.manage"),
-					switchTitle: t("browser.profile.switchTitle"),
-					switchMessage: t("browser.profile.switchMessage"),
-					switchDetail: t("browser.profile.switchDetail"),
-					cancel: t("common.no"),
-					confirm: t("common.yes"),
-				},
-			});
+			void window.ao.browser.selectProfile({ viewId, profileId, confirmed }).catch(() => undefined);
 		},
-		[t, viewId],
+		[viewId],
 	);
+
+	// The main process decides whether a switch needs confirming (the page has
+	// navigated) and reports failures; both are shown here, inside the app,
+	// rather than as native dialogs detached from the window.
+	const [pendingProfileSwitch, setPendingProfileSwitch] = useState<{ profileId: string | null } | null>(null);
+	const showProfileSwitchFailure = useUiStore((state) => state.showGlobalToast);
+	useEffect(() => {
+		if (!viewId || !window.ao?.browser) return;
+		const offConfirm = window.ao.browser.onProfileSwitchConfirm((request) => {
+			if (request.viewId === viewId) setPendingProfileSwitch({ profileId: request.profileId });
+		});
+		const offFailed = window.ao.browser.onProfileSwitchFailed((failure) => {
+			if (failure.viewId !== viewId) return;
+			const body = failure.reason === "agent-active" ? t("browser.profile.switchAgentActive") : failure.message;
+			showProfileSwitchFailure(t("browser.profile.switchFailed"), body, "error");
+		});
+		return () => {
+			offConfirm();
+			offFailed();
+		};
+	}, [showProfileSwitchFailure, t, viewId]);
+	// A different session's browser has its own view; never carry a prompt over.
+	useEffect(() => setPendingProfileSwitch(null), [viewId]);
 
 	useEffect(() => {
 		if (!viewId) return;
@@ -887,7 +899,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// A remote preview's address works only in this panel, which trusts its
 	// certificate: outside AO it goes by its plain-http address.
 	const externalURL = async (url: string): Promise<string> => {
-		if (!session.hostId) return url;
+		if (!session?.hostId) return url;
 		// A disconnected host has no other address for it: keep the one shown.
 		return aoBridge.remotes.externalUrl(session.hostId, url).catch(() => url);
 	};
@@ -1843,6 +1855,23 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 					) : null}
 				</div>
 			</div>
+			<ConfirmDialog
+				open={pendingProfileSwitch !== null}
+				title={t("browser.profile.switchTitle")}
+				description={`${t("browser.profile.switchMessage")} ${t("browser.profile.switchDetail")}`}
+				confirmLabel={t("browser.profile.switchConfirm")}
+				// The old native alert defaulted to No: a repeated Enter from the
+				// profile menu must not reload away unsaved page state.
+				initialFocus="cancel"
+				onConfirm={() => {
+					if (!pendingProfileSwitch) return;
+					setPendingProfileSwitch(null);
+					selectBrowserProfile(pendingProfileSwitch.profileId, true);
+				}}
+				onOpenChange={(open) => {
+					if (!open) setPendingProfileSwitch(null);
+				}}
+			/>
 		</div>
 	);
 });
@@ -1899,7 +1928,6 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 			<TerminalTabFrame
 				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={close} />}
 				actionPinned
-				actionPosition="end"
 				active={selected}
 				buttonProps={{
 					...attributes,
@@ -1949,7 +1977,6 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 			<TerminalTabFrame
 				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={noop} />}
 				actionPinned
-				actionPosition="end"
 				active={tab.active}
 				buttonProps={{ tabIndex: -1, type: "button" }}
 				icon={<BrowserTabIcon favicon={tab.favicon} />}

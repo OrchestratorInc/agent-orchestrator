@@ -1,6 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import mastraCodeLogo from "../assets/agents/mastra-code.svg";
 import { AgentAvatar } from "./AgentAvatar";
+import dockerAgentDarkLogo from "../assets/agents/docker-agent-dark.svg";
+import dockerAgentLightLogo from "../assets/agents/docker-agent-light.svg";
 import fxDarkLogo from "../assets/agents/fx-dark.svg";
 import fxLightLogo from "../assets/agents/fx-light.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
@@ -14,6 +17,11 @@ function themeSources(name: string) {
 }
 
 describe("AgentAvatar", () => {
+	it("renders the mastra-code brand asset", () => {
+		render(<AgentAvatar provider="mastra-code" />);
+		expect(screen.getByRole("img", { name: "mastra-code" })).toHaveAttribute("src", mastraCodeLogo);
+	});
+
 	it("renders the bundled Memcode mark", () => {
 		render(<AgentAvatar provider="memcode" />);
 		expect(screen.getByRole("img", { name: "memcode" })).toHaveAttribute("src", memcodeLogo);
@@ -37,7 +45,7 @@ describe("AgentAvatar", () => {
 	});
 
 	it("gives every harness a theme-safe brand mark", () => {
-		const providers = ["prime-agent", "omp", "codewhale", "deepseek-harness", "mimo-code", "openhands", "amp"];
+		const providers = ["prime-agent", "omp", "codewhale", "deepseek-harness", "mimo-code", "minimax-code", "openhands", "amp"];
 		render(
 			<>
 				{providers.map((provider) => (
@@ -65,6 +73,11 @@ describe("AgentAvatar", () => {
 	it("renders the official Hermes Agent icon", () => {
 		render(<AgentAvatar provider="hermes" />);
 		expect(screen.getByRole("img", { name: "hermes" })).toHaveAttribute("src", expect.stringContaining("hermes.png"));
+	});
+	it("renders the official Docker Agent light and dark marks", () => {
+		render(<AgentAvatar provider="docker-agent" />);
+
+		expect(themeSources("docker-agent")).toEqual([dockerAgentLightLogo, dockerAgentDarkLogo]);
 	});
 	it("renders the official Stakpak icon", () => {
 		render(<AgentAvatar provider="stakpak" />);
