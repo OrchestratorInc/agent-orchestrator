@@ -301,6 +301,14 @@ describe("drawing AO's automation messages", () => {
 		expect(events[0]).toHaveTextContent("Rename this.");
 	});
 
+	it("names the one reviewer of a review round", () => {
+		const first = message(reviewComment, { id: "m1" });
+		const second = message(reviewComment.replace("frontend/src/ThisComputerAccess.tsx:97", "a.ts:3"), { id: "m2", sequence: 2 });
+		const bursts = reviewBursts([first, second]);
+		render(<TooltipProvider><AutomationMessage message={first} burst={bursts.get("m1")} fallback={<p>card</p>} /></TooltipProvider> as ReactElement);
+		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("@illegalcall, 2 files");
+	});
+
 	it("keeps a human message that reads like a review nudge out of the burst", () => {
 		const pasted = message(reviewComment, { id: "h1", origin: "human" });
 		const first = message(reviewComment, { id: "m1" });

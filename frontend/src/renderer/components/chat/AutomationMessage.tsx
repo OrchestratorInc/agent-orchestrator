@@ -647,8 +647,9 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 			heading = comments.length === 1
 				? lead("chat.automation.reviewComment", new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(authors))
 				: <Trans t={t} i18nKey="chat.automation.reviewComments" values={{ number: pr.number, count: comments.length }} components={components} />;
+			// The plural heading names no one, so a lone reviewer's name leads the counts.
 			counts = [
-				...(authors.length > 1 ? [t("chat.automation.reviewers", { count: authors.length })] : []),
+				...(authors.length > 1 ? [t("chat.automation.reviewers", { count: authors.length })] : comments.length > 1 ? authors : []),
 				...(files.size > 0 ? [t("chat.automation.commentFiles", { count: files.size })] : []),
 			].join(", ") || undefined;
 			collapsible = true;
