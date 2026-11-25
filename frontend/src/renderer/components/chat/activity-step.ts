@@ -46,6 +46,12 @@ export interface CommandStep {
 	/** The whole target for the tooltip when `target` is shortened to a basename. */
 	targetTitle?: string;
 	icon: StepIcon;
+	/**
+	 * Set when a settled row shows the command itself rather than `done`: any command
+	 * that is not a plain file read, search, list or write (see `isFileStepCommand`).
+	 * `done` and `live` still name it for the live line and the run's header.
+	 */
+	command?: string;
 }
 
 const GENERIC_STEP: CommandStep = { done: "Ran command", live: "Running command", icon: "run" };
@@ -55,8 +61,8 @@ const GENERIC_STEP: CommandStep = { done: "Ran command", live: "Running command"
  * no command line, only a summary, so that case is read from the summary.
  */
 export function activityCommandStep(activity: ConversationActivity): CommandStep {
-	const command = activity.detail?.command?.trim();
-	if (command) return describeCommandStep(command);
+	const command = ranCommand(activity.detail);
+	if (command) return withCommandTitle(describeCommandStep(command), command);
 
 	const title = activity.summary.trim();
 	const summary = title.replace(/^`+|`+$/g, "");
@@ -67,8 +73,125 @@ export function activityCommandStep(activity: ConversationActivity): CommandStep
 	// be prose that starts like one ("make the build pass", "touch up README"), so it
 	// is shown as written rather than read as a command.
 	const backticked = title.length > 2 && title.startsWith("`") && title.endsWith("`");
-	if (backticked && summary) return describeCommandStep(summary);
+	if (backticked && summary) return withCommandTitle(describeCommandStep(summary), summary);
 	return title && !NAMELESS_TITLE.test(title) ? { done: title, live: title, icon: "run" } : GENERIC_STEP;
+}
+
+/**
+ * A row shows the command itself unless it only reads, searches, lists or writes
+ * files, which it names by what it touched ("Read a.ts", "Searched for TODO").
+ * A name like "Type-checked" or "Ran node" hides what actually ran. Orchestrator's
+ * own `ao` commands keep their sentences: they are its actions, not a shell's.
+ */
+/**
+ * The command as it ran. A harness that wraps it (`/bin/zsh -lc '…'`) keeps the
+ * original in `rawCommand`; its `command` drops the wrapper but keeps the quoting
+ * inside, so `echo 'hi'` would read `echo '\''hi'\''`. The original, unwrapped here
+ * with the shell's own quoting, is what ran and what copy should give.
+ */
+export function ranCommand(detail: { command?: string; rawCommand?: string } | undefined): string | undefined {
+	const raw = detail?.rawCommand?.trim();
+	if (raw) {
+		const script = unwrapShellCommand(raw);
+		if (script !== raw) return script;
+	}
+	const command = detail?.command?.trim();
+	return command ? unwrapShellCommand(command) : undefined;
+}
+
+function withCommandTitle(step: CommandStep, command: string): CommandStep {
+	if (isFileStepCommand(command) || mainSegment(unwrapShellCommand(command))?.binary === "ao") return step;
+	return { ...step, command: unwrapShellCommand(command) };
+}
+
+/**
+ * The script a login-shell wrapper runs, `/bin/zsh -lc 'npm test'` as `npm test`, up to
+ * two levels deep. A wrapper whose script is not its last, whole, quoted word is kept.
+ */
+export function unwrapShellCommand(command: string): string {
+	let text = command.trim();
+	for (let depth = 0; depth < 2; depth += 1) {
+		const wrapped = /^(?:\S*\/)?(?:ba|z|da|k|fi)?sh\s+-[A-Za-z]*c\s+(['"])([\s\S]*)\1$/.exec(text);
+		if (!wrapped) break;
+		const [, quote, script] = wrapped as unknown as [string, string, string];
+		if (quote === "'") {
+			// A single-quoted script can only hold a quote as '\''.
+			if (script.replace(/'\\''/g, "").includes("'")) break;
+			text = script.replace(/'\\''/g, "'").trim();
+		} else {
+			if (/(?<!\\)"/.test(script)) break;
+			text = script.replace(/\\(["\\$`])/g, "$1").trim();
+		}
+	}
+	return text;
+}
+
+/** Programs that only steer or narrate a file step: they neither make one nor stop one. */
+const FILE_STEP_NOISE = new Set(["cd", "pushd", "popd", "export", "set", "unset", "true", ":", "echo", "printf", "pwd", "wc", "sort", "uniq", "cut", "tr", "xargs", "sleep"]);
+const FILE_STEP_READERS = new Set(["cat", "bat", "batcat", "nl", "less", "more", "tac", "head", "tail"]);
+const FILE_STEP_SEARCHERS = new Set(["grep", "egrep", "fgrep", "rgrep", "rg", "ag", "ack", "fd", "fdfind"]);
+/** Flags whose next word is a value, not the file or folder a reader or lister names. */
+const FILE_STEP_VALUE_FLAGS: Record<string, ReadonlySet<string>> = {
+	head: new Set(["-n", "-c", "--lines", "--bytes"]),
+	tail: new Set(["-n", "-c", "--lines", "--bytes"]),
+	ls: new Set(["--ignore", "-I", "--hide"]),
+	tree: new Set(["-L", "-I", "-P", "--ignore"]),
+};
+const FILE_STEP_LISTERS = new Set(["ls", "tree"]);
+
+/**
+ * Whether a shell command only reads, searches, lists or writes files: every stage of
+ * every chained command, pipes included, is `cat`/`head`/`sed -n 'A,Bp'`, `grep`/`rg`/
+ * `find -name`, `ls`/`tree`, or a `>` redirect, `tee` or `sed -i`, with `cd`, `echo`,
+ * `wc` and the like around them. Anything else, or anything built at run time with
+ * `$(…)`, `${…}` or backticks, is shown as the command.
+ */
+export function isFileStepCommand(command: string): boolean {
+	const text = unwrapShellCommand(command);
+	if (!text || text.length > 2000 || /\$\(|\$\{|`/.test(text)) return false;
+	let fileStep = false;
+	for (const line of logicalLines(text)) {
+		const stages: Word[][] = [[]];
+		for (const word of tokenize(line)) {
+			if (word.operator) stages.push([]);
+			else stages.at(-1)!.push(word);
+		}
+		for (const words of stages) {
+			if (words.length === 0) continue;
+			const segment = toSegment(words);
+			if (!segment) continue;
+			const { binary, args } = segment;
+			if (FILE_STEP_NOISE.has(binary)) {
+				if (segment.writeTarget) fileStep = true;
+				continue;
+			}
+			// A read or list that names no file or folder (a bare `ls -la`) has nothing to
+			// name the row by: it is filler, like `echo`, and on its own stays a command.
+			if (FILE_STEP_READERS.has(binary) || FILE_STEP_LISTERS.has(binary)) {
+				if (segment.writeTarget || positionals(args, FILE_STEP_VALUE_FLAGS[binary] ?? EMPTY).length > 0) fileStep = true;
+				continue;
+			}
+			if (FILE_STEP_SEARCHERS.has(binary) || binary === "tee") {
+				fileStep = true;
+				continue;
+			}
+			if (binary === "sed") {
+				const script = positionals(args, SED_VALUE_FLAGS)[0];
+				if (!sedInPlace(args) && !(args.includes("-n") && script !== undefined && /^\d+(?:,\d+)?p$/.test(script))) return false;
+				fileStep = true;
+				continue;
+			}
+			if (binary === "find") {
+				const named = args.some((arg) => /^-i?(?:name|path)$/.test(arg));
+				const acts = args.some((arg) => /^-(?:delete|exec|execdir|ok|okdir)$/.test(arg));
+				if (!named || acts) return false;
+				fileStep = true;
+				continue;
+			}
+			return false;
+		}
+	}
+	return fileStep;
 }
 
 /** A provider's title that names no particular command, so it says nothing a row can use. */

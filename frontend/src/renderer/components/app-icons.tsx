@@ -163,8 +163,13 @@ import {
 import {
 	AlignLeft as LucideAlignLeft,
 	ArrowDownUp as LucideArrowDownUp,
-	Bot as LucideBot,
 	Braces as LucideBraces,
+	FileText as LucideFileText,
+	Globe as LucideGlobe,
+	Search as LucideSearch,
+	SquareTerminal as LucideSquareTerminal,
+	Wrench as LucideWrench,
+	Bot as LucideBot,
 	Brain as LucideBrain,
 	CalendarClock as LucideCalendarClock,
 	CaseSensitive as LucideCaseSensitive,
@@ -232,6 +237,7 @@ import {
 	Copy as LucideCopy,
 	Undo2 as LucideUndo2,
 	type LucideIcon as LucideComponent,
+	MessageCircleQuestionMark as LucideMessageCircleQuestionMark,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -299,10 +305,6 @@ export const BellRing = fromMyna(MynaBellOn, "bell-ring");
 export const Bold = fromMyna(MynaTypeBold, "bold", "full");
 export const BookOpen = fromMyna(MynaBookOpen, "book-open");
 export const Bot = fromLucide(LucideBot, "bot");
-
-// Marks on a chat tool box's header: a call's JSON (arguments, result) and its text output.
-export const ToolBoxJson = fromLucide(LucideBraces, "tool-box-json");
-export const ToolBoxText = fromLucide(LucideAlignLeft, "tool-box-text");
 export const Box = fromMyna(MynaBox, "box");
 export const Brain = fromLucide(LucideBrain, "brain");
 export const Bug = fromMyna(MynaBug, "bug");
@@ -395,6 +397,20 @@ export const Heading3 = fromMyna(MynaHeading3, "heading-3");
 export const Heading4 = fromMyna(MynaHeading4, "heading-4");
 export const Heading5 = fromMyna(MynaHeading5, "heading-5");
 export const Hammer = fromLucide(LucideHammer, "hammer");
+
+// The mark on a chat run's header, by the kind of step it holds most of. Lucide,
+// like the header's file-edit mark, so the set reads as one family.
+export const RunKindEdit = fromLucide(LucideFilePen, "run-kind-edit");
+export const RunKindExecute = fromLucide(LucideSquareTerminal, "run-kind-execute");
+export const RunKindFetch = fromLucide(LucideGlobe, "run-kind-fetch");
+export const RunKindOther = fromLucide(LucideWrench, "run-kind-other");
+export const RunKindRead = fromLucide(LucideFileText, "run-kind-read");
+export const RunKindSearch = fromLucide(LucideSearch, "run-kind-search");
+export const ToolQuestion = fromLucide(LucideMessageCircleQuestionMark, "tool-question");
+
+// Marks on a chat tool box's header: a call's JSON (arguments, result) and its text output.
+export const ToolBoxJson = fromLucide(LucideBraces, "tool-box-json");
+export const ToolBoxText = fromLucide(LucideAlignLeft, "tool-box-text");
 export const History = fromLucide(LucideHistory, "history");
 export const Hourglass = fromLucide(LucideHourglass, "hourglass");
 export const House = fromMyna(MynaHome, "house");

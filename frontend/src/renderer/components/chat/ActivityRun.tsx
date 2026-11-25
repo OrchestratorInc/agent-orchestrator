@@ -16,10 +16,11 @@
 
 import { useContext, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ChevronRight, Loader2 } from "@/components/app-icons";
+import { ChevronRight, Loader2, RunKindEdit, RunKindExecute, RunKindFetch, RunKindOther, RunKindRead, RunKindSearch } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
+import { ToolImageThumbs } from "./ToolImageThumbs";
 import { Pressable } from "../ui/pressable";
-import { ActivityRow, ActivityTransition, RevealedChatActivity } from "./ChatTimelineItems";
+import { ActivityRail, ActivityRow, ActivityTransition, RevealedChatActivity } from "./ChatTimelineItems";
 import { useChatEntrance } from "./chat-entrance";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -101,13 +102,18 @@ export function ActivityRun({
 			<Pressable
 				onClick={() => updateOverride(disclosureKey ?? "", !open)}
 				aria-expanded={open}
+				data-thread-parent={open ? "" : undefined}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
-				<span className="activity-summary-label text-xs text-muted-foreground">
+				<RunMark activities={activities} />
+				{/* The summary and its notes ("2 failed", "+3 −1") share a baseline: they are
+				    different sizes, and centring each on its own sets the smaller one high. */}
+				<span className="flex min-w-0 items-baseline gap-2">
+				<span className="activity-summary-label text-control text-muted-foreground">
 					<ActivityTransition value={summary} inline enter={entering}>{summary}</ActivityTransition>
 				</span>
 				{nonzeroExits > 0 ? (
-					<span className="text-caption text-muted-foreground/70">
+					<span className="activity-row-target text-xs text-muted-foreground/70">
 						{nonzeroExits} exited
 					</span>
 				) : null}
@@ -117,12 +123,12 @@ export function ActivityRun({
 					</span>
 				) : null}
 				{cancelled > 0 ? (
-					<span className="text-caption text-muted-foreground/70">
+					<span className="activity-row-target text-xs text-muted-foreground/70">
 						{cancelled} stopped
 					</span>
 				) : null}
 				{diffTotals.additions > 0 || diffTotals.deletions > 0 ? (
-					<span className="shrink-0 font-mono text-micro tabular-nums text-muted-foreground/70">
+					<span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/70">
 						{diffTotals.additions > 0 ? (
 							<span className="text-success">+{diffTotals.additions}</span>
 						) : null}
@@ -132,6 +138,7 @@ export function ActivityRun({
 						) : null}
 					</span>
 				) : null}
+				</span>
 				{running ? (
 					<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60" />
 				) : null}
@@ -144,6 +151,8 @@ export function ActivityRun({
 						open && "rotate-90",
 					)}
 				/>
+				{/* The images the group's steps read, like a glance at what the agent looked at. */}
+				<ToolImageThumbs activities={activities} />
 			</Pressable>
 
 			<AnimatePresence initial={false}>
@@ -155,7 +164,7 @@ export function ActivityRun({
 						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 pt-1">
+						<ActivityRail className="mt-1 flex flex-col gap-1 [--thread-gap:0.25rem] [--thread-lead:0.25rem]">
 							{subgroups.length === 1
 								? renderActivityRows(subgroups[0]!.activities, nodesByActivityID)
 								: subgroups.map((group) => (
@@ -168,7 +177,7 @@ export function ActivityRun({
 											nodesByActivityID={nodesByActivityID}
 										/>
 								  ))}
-						</div>
+						</ActivityRail>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -244,7 +253,8 @@ function renderActivityRows(
 function repeatableLabel(activity: ConversationActivity): string | undefined {
 	if (activity.activityKind !== "command" || activity.status !== "completed") return undefined;
 	const step = activityCommandStep(activity);
-	return [step.done, step.target].filter(Boolean).join(" ");
+	// A row that shows its command folds only with the same command.
+	return step.command ?? [step.done, step.target].filter(Boolean).join(" ");
 }
 
 type ActivitySubgroupData = { key: string; activities: ConversationActivity[] };
@@ -322,14 +332,17 @@ function ActivitySubgroup({
 			<Pressable
 				onClick={() => updateOverride(!open)}
 				aria-expanded={open}
+				data-thread-parent={open ? "" : undefined}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
-				<span className="activity-summary-label text-xs text-muted-foreground">
+				<RunMark activities={activities} />
+				<span className="activity-summary-label text-control text-muted-foreground">
 					<ActivityTransition value={summary} inline enter={entering}>
 						{summary}
 					</ActivityTransition>
 				</span>
 				<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
+				<ToolImageThumbs activities={activities} />
 			</Pressable>
 			<AnimatePresence initial={false}>
 				{open ? (
@@ -340,9 +353,9 @@ function ActivitySubgroup({
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1">
+						<ActivityRail className="mt-1 flex flex-col gap-1 [--thread-gap:0.25rem] [--thread-lead:0.25rem]">
 							{renderActivityRows(activities, nodesByActivityID)}
-						</div>
+						</ActivityRail>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -462,7 +475,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 				onClick={() => setOpen(!open)}
 				aria-label={`Subagent ${count} ${count === 1 ? "step" : "steps"}`}
 				aria-expanded={open}
-				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+				className="activity-row-toggle flex min-h-7 w-full select-none items-center gap-2 text-control text-muted-foreground hover:text-foreground"
 			>
 				<span className="font-medium text-foreground/80">Subagent</span>
 				<span>{count} {count === 1 ? "step" : "steps"}</span>
@@ -530,6 +543,57 @@ function nodeActivities(node: ActivityNode): ConversationActivity[] {
 
 function nodeRunning(node: ActivityNode): boolean {
 	return node.activity.status === "running" || node.children.some(nodeRunning);
+}
+
+type RunKind = "edit" | "execute" | "read" | "search" | "fetch" | "other";
+
+/** Ties go to the kind that changed or ran something before the kinds that looked. */
+const RUN_KIND_ORDER: RunKind[] = ["edit", "execute", "read", "search", "fetch", "other"];
+const RUN_KIND_ICON = {
+	edit: RunKindEdit,
+	execute: RunKindExecute,
+	read: RunKindRead,
+	search: RunKindSearch,
+	fetch: RunKindFetch,
+	other: RunKindOther,
+} as const;
+
+/** What a step did, for its run's mark: a command that shows itself counts as one run. */
+function runKind(activity: ConversationActivity): RunKind | undefined {
+	if (activity.activityKind === "file_change") return "edit";
+	if (activity.activityKind === "plan" || activity.activityKind === "reasoning") return undefined;
+	const step = activity.activityKind === "command"
+		? activityCommandStep(activity)
+		: activity.activityKind === "mcp_tool" ? activityToolStep(activity) : undefined;
+	if (!step) return "other";
+	if (activity.activityKind === "command" && step.command) return "execute";
+	switch (step.icon) {
+		case "read": return "read";
+		case "search": case "find": case "list": return "search";
+		case "write": case "file-new": return "edit";
+		case "web": return "fetch";
+		default: return activity.activityKind === "command" ? "execute" : "other";
+	}
+}
+
+/** The mark for a run: the kind of step it holds most of. */
+function RunMark({ activities }: { activities: readonly ConversationActivity[] }) {
+	const counts = new Map<RunKind, number>();
+	for (const activity of activities) {
+		const kind = runKind(activity);
+		if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+	}
+	let best: RunKind = "other";
+	let most = 0;
+	for (const kind of RUN_KIND_ORDER) {
+		const count = counts.get(kind) ?? 0;
+		if (count > most) {
+			best = kind;
+			most = count;
+		}
+	}
+	const Icon = RUN_KIND_ICON[best];
+	return <Icon aria-hidden="true" data-run-kind={best} className="size-3.5 shrink-0 text-muted-foreground/70" />;
 }
 
 function summarize(activities: ConversationActivity[]): string {

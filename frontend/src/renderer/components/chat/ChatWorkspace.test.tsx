@@ -1742,7 +1742,7 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		const done = screen.getByRole("button", { name: /^Checked git status/ });
+		const done = screen.getByRole("button", { name: /^git status/ });
 		const live = screen.getByTestId("live-working-row");
 		const plan = screen.getByRole("region", { name: "Agent plan" });
 		// The running step is on the live row only, not also as a row of its own.
@@ -2001,7 +2001,7 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		expect(screen.getByRole("button", { name: /^Built project/ })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /^go build \.\/\.\.\./ })).toBeInTheDocument();
 		expect(screen.queryByTestId("live-working-row")).toBeNull();
 	});
 
@@ -2053,7 +2053,8 @@ describe("ChatWorkspace timeline", () => {
 					])}
 				/>,
 			);
-			expect(screen.getByRole("button", { name: /^Deleting build/ })).toBeInTheDocument();
+			// The row is the command itself, which claims nothing about the result.
+			expect(screen.getByRole("button", { name: /^rm -rf build/ })).toBeInTheDocument();
 			expect(screen.queryByRole("button", { name: /^Deleted build/ })).toBeNull();
 
 			// Of two reads at once, the newest is on the live row, and the other's own row
@@ -2106,9 +2107,10 @@ describe("ChatWorkspace timeline", () => {
 				<ChatWorkspace snapshot={live([command("test", 2, "npm test", "completed", { output: "42 passed" })])} />,
 			);
 			// Once its moment on the live row is over, its own row is still open on the output.
-			const landed = await waitFor(() => screen.getByRole("button", { name: /^Ran tests/ }), { timeout: 2_000 });
+			const landed = await waitFor(() => screen.getByRole("button", { name: /^npm test/ }), { timeout: 2_000 });
 			expect(landed).toHaveAttribute("aria-expanded", "true");
-			expect(screen.getByText("42 passed")).toBeInTheDocument();
+			// The live row's copy fades out as the row lands; one copy stays.
+			await waitFor(() => expect(screen.getAllByText("42 passed")).toHaveLength(1), { timeout: 2_000 });
 		});
 
 		it("moves a step that failed straight to its row", () => {
@@ -2116,7 +2118,7 @@ describe("ChatWorkspace timeline", () => {
 			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Running tests$/);
 
 			view.rerender(<ChatWorkspace snapshot={live([command("test", 2, "npm test", "failed", { exitCode: 1 })])} />);
-			expect(screen.getByRole("button", { name: /^Ran tests/ })).toHaveTextContent("exit 1");
+			expect(screen.getByRole("button", { name: /^npm test/ })).toHaveTextContent("exit 1");
 			expect(screen.getByTestId("live-working-task")).toHaveTextContent(/^Thinking$/);
 		});
 
@@ -2135,7 +2137,7 @@ describe("ChatWorkspace timeline", () => {
 				/>,
 			);
 			expect(screen.getByTestId("live-working-label")).toHaveTextContent("Reconnecting… 2/10");
-			expect(screen.getByRole("button", { name: /^Building project/ })).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: /^go build \.\/\.\.\./ })).toBeInTheDocument();
 		});
 	});
 
