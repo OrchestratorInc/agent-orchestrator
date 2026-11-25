@@ -1348,7 +1348,7 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_PROMPT_SUGGESTION_STALE", err.Error(), nil)
 
-	case errors.Is(err, chatsvc.ErrControllerHandoff), errors.Is(err, ports.ErrChatAccountMoveStarted):
+	case errors.Is(err, chatsvc.ErrControllerHandoff):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_INTERFACE_TRANSITION",
 			"the session is switching interfaces; send again after the handoff completes", nil)

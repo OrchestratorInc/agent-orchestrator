@@ -1221,11 +1221,6 @@ func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID) (ExitAgent
 // session or recreating its workspace.
 func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
-	if errors.Is(err, ports.ErrChatAccountMoveStarted) {
-		if rec, ok, readErr := s.store.GetSession(ctx, id); readErr == nil && ok {
-			res, err = sessionmanager.RestoreResult{Session: rec, Mode: sessionmanager.RestoreModeNative}, nil
-		}
-	}
 	if err != nil {
 		// Known conditions (open elsewhere, resume in progress, terminated) keep
 		// their codes; any other failure of a pending import is logged in full

@@ -166,16 +166,13 @@ func (s *Service) HandoffUsageLimitedTurns(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// noUsageLimitMove marks a wake for a provider switch, which leaves the account alone.
-type noUsageLimitMove struct{}
-
-// MoveUsageLimitedSession moves a session whose resume a usage limit refused to
-// the account with the most room, at most once per accountHandoffWindow.
+// MoveUsageLimitedSession starts moving a session whose resume a usage limit
+// refused to the account with the most room, reporting whether a move started.
 func (s *Service) MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool {
 	s.handoffMu.Lock()
 	deps := s.handoff
 	s.handoffMu.Unlock()
-	if ctx.Value(noUsageLimitMove{}) != nil || deps.enabled == nil || deps.accounts == nil || deps.mover == nil || !deps.enabled(ctx) {
+	if deps.enabled == nil || deps.accounts == nil || deps.mover == nil || !deps.enabled(ctx) {
 		return false
 	}
 	record, err := s.requireChatSession(ctx, id)
@@ -191,46 +188,12 @@ func (s *Service) MoveUsageLimitedSession(ctx context.Context, id domain.Session
 		s.log.Info("account handoff: usage-limited resume stays", "session", id, "error", err)
 		return false
 	}
-	s.handoffMu.Lock()
-	if s.now().Sub(s.resumeMoves[id]) < accountHandoffWindow {
-		s.handoffMu.Unlock()
-		return false
-	}
-	if s.resumeMoves == nil {
-		s.resumeMoves = map[domain.SessionID]time.Time{}
-	}
-	s.resumeMoves[id] = s.now()
-	s.handoffMu.Unlock()
-	transition, err := deps.mover.StartAccountTransition(ctx, id, target, domain.SessionInterfaceTransitionDrain)
-	if err != nil {
-		s.handoffMu.Lock()
-		delete(s.resumeMoves, id)
-		s.handoffMu.Unlock()
+	if _, err := deps.mover.StartAccountTransition(ctx, id, target, domain.SessionInterfaceTransitionDrain); err != nil {
 		s.log.Warn("account handoff: usage-limited resume could not move", "session", id, "target", target, "error", err)
 		return false
 	}
 	s.log.Info("account handoff: usage-limited resume moves", "session", id, "target", target)
-	go s.failQueueIfResumeMoveFails(id, transition.ID)
 	return true
-}
-
-func (s *Service) failQueueIfResumeMoveFails(id domain.SessionID, transitionID string) {
-	store, ok := s.store.(accountHandoffStore)
-	if !ok {
-		return
-	}
-	ctx := context.Background()
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-	for range tick.C {
-		transition, found, err := store.GetSessionInterfaceTransition(ctx, transitionID)
-		if err == nil && (!found || transition.Phase.Terminal()) {
-			if transition.Phase != domain.SessionInterfaceTransitionCompleted && !s.HasLiveChatController(id) {
-				s.failQueuedTurns(ctx, id, "could not wake the agent: its account is at its usage limit and the move to another account did not finish")
-			}
-			return
-		}
-	}
 }
 
 func (s *Service) claimAccountHandoffs(ctx context.Context, store accountHandoffStore, deps accountHandoffDeps) ([]*accountHandoff, error) {

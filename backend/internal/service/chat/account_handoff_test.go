@@ -527,69 +527,15 @@ func TestUsageLimitedResumeMovesToAnotherAccount(t *testing.T) {
 		t.Fatal("moved without a candidate")
 	}
 	hh.accounts.target = handoffTarget
-	if hh.svc.MoveUsageLimitedSession(chatsvc.ForProviderSwitch(ctx), testSession) {
-		t.Fatal("a provider switch's wake moved accounts")
+	hh.mover.err = errors.New("account is signed out")
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) {
+		t.Fatal("reported a move that did not start")
 	}
+	hh.mover.err = nil
 	if !hh.svc.MoveUsageLimitedSession(ctx, testSession) {
 		t.Fatal("did not move to the candidate")
 	}
 	if moves := hh.mover.moves(); len(moves) != 1 || moves[0].TargetAccountID != handoffTarget || moves[0].Policy != domain.SessionInterfaceTransitionDrain {
 		t.Fatalf("moves = %+v", moves)
 	}
-	hh.mover.finish(t, domain.SessionInterfaceTransitionFailed)
-	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || len(hh.mover.moves()) != 1 {
-		t.Fatal("moved twice inside the handoff window")
-	}
-	hh.advance(11 * time.Minute)
-	hh.mover.err = errors.New("account is signed out")
-	if hh.svc.MoveUsageLimitedSession(ctx, testSession) {
-		t.Fatal("reported a move that did not start")
-	}
-	hh.mover.err = nil
-	hh.advance(11 * time.Minute)
-	if !hh.svc.MoveUsageLimitedSession(ctx, testSession) || len(hh.mover.moves()) != 2 {
-		t.Fatal("did not move again after the window")
-	}
-}
-
-func TestUsageLimitedWakeKeepsQueueUntilTheMoveFails(t *testing.T) {
-	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
-	hh := handoffHarnessFor(t, h, domain.HarnessCodex)
-	ctx := context.Background()
-	if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || !hibernated {
-		t.Fatalf("hibernate = %v, %v", hibernated, err)
-	}
-	woke := make(chan struct{})
-	h.svc.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
-		defer close(woke)
-		if !h.svc.MoveUsageLimitedSession(ctx, id) {
-			return ports.ErrChatUsageLimited
-		}
-		return fmt.Errorf("resume agent %s: %w", id, ports.ErrChatAccountMoveStarted)
-	})
-	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "cold message", ClientMessageID: "cold-move-0"})
-	if err != nil || turn.State != domain.TurnStateQueued {
-		t.Fatalf("cold send = %+v, %v", turn, err)
-	}
-	<-woke
-	time.Sleep(50 * time.Millisecond)
-	if stored, err := h.st.TurnByID(ctx, turn.ID); err != nil || stored.State != domain.TurnStateQueued {
-		t.Fatalf("turn during the move = %+v, %v", stored, err)
-	}
-	hh.mover.finish(t, domain.SessionInterfaceTransitionFailed)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		stored, err := h.st.TurnByID(ctx, turn.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if stored.State == domain.TurnStateFailed {
-			if stored.ErrorMessage == "" {
-				t.Fatal("failed turn has no reason")
-			}
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatal("queued turn was not failed after the move failed")
 }

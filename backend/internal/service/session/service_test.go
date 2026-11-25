@@ -4305,21 +4305,6 @@ func TestResumeAgentMapsManagerModeToServiceView(t *testing.T) {
 	}
 }
 
-func TestResumeAgentAcceptsAStartedAccountMove(t *testing.T) {
-	st := newFakeStore()
-	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}
-	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", ports.ErrChatAccountMoveStarted)}
-	svc := &Service{manager: fc, store: st}
-
-	got, err := svc.ResumeAgent(context.Background(), "mer-1")
-	if err != nil {
-		t.Fatalf("ResumeAgent: %v", err)
-	}
-	if got.Session.ID != "mer-1" || got.Mode != RestoreModeViewNative {
-		t.Fatalf("resume outcome = %+v", got)
-	}
-}
-
 func TestExitAgentPreservesSessionAndMapsExitedReadModel(t *testing.T) {
 	st := newFakeStore()
 	rec := domain.SessionRecord{

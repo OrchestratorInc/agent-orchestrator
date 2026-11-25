@@ -704,10 +704,6 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			if s.versionSwitchFailed(ctx, id, err) {
 				return
 			}
-			if errors.Is(err, ports.ErrChatAccountMoveStarted) {
-				s.log.Info("chat session is moving to another account; the move delivers its queued messages", "session", id)
-				return
-			}
 			s.log.Warn("chat session could not wake; failing its queued messages", "session", id, "err", err)
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not wake the agent: %v", err))
 			return

@@ -3950,19 +3950,31 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // Unlike RestoreWithMode, it preserves the existing worktree and terminal
 // identity and never changes the durable terminated flag as an intermediate
 // step.
-func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
-	result, err = m.resumeAgentWithMode(ctx, id, false)
-	if !errors.Is(err, ports.ErrChatUsageLimited) {
+func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	result, err := m.resumeAgentWithMode(ctx, id, false)
+	mover, ok := m.chat.(ChatUsageLimitMover)
+	if !ok || !errors.Is(err, ports.ErrChatUsageLimited) || !mover.MoveUsageLimitedSession(ctx, id) {
 		return result, err
 	}
-	if mover, ok := m.chat.(ChatUsageLimitMover); ok && mover.MoveUsageLimitedSession(ctx, id) {
-		return result, fmt.Errorf("resume agent %s: %w", id, ports.ErrChatAccountMoveStarted)
+	m.transitionMu.Lock()
+	run := m.transitions[id]
+	m.transitionMu.Unlock()
+	if run != nil {
+		select {
+		case <-run.done:
+		case <-ctx.Done():
+			return result, err
+		}
 	}
-	return result, err
+	if !m.chat.HasLiveChatController(id) {
+		return result, err
+	}
+	rec, err := m.getRecord(ctx, id)
+	return RestoreResult{Session: rec, Mode: RestoreModeNative}, err
 }
 
-// ChatUsageLimitMover moves a Chat session whose resume a usage limit refused
-// to another account, reporting whether a move started.
+// ChatUsageLimitMover starts moving a Chat session whose resume a usage limit
+// refused to another account, reporting whether a move started.
 type ChatUsageLimitMover interface {
 	MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool
 }

@@ -119,7 +119,6 @@ type Service struct {
 	handoffSince       time.Time
 	handoffScanning    bool
 	handoffs           map[string]*accountHandoff
-	resumeMoves        map[domain.SessionID]time.Time
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool
