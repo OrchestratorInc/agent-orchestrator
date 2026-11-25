@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { flushSync } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ArrowDownUp, CalendarClock, Folder, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Repeat, Trash2, TriangleAlert, type AppIcon } from "@/components/app-icons";
-import { Button } from "./ui/button";
+import { ArrowDownUp, ArrowUpRight, CalendarClock, CircleAlert, Folder, ChevronDown, Clock, GitPullRequest, ListChecks, FileText, Filter, Pause, Pencil, Plus, Repeat, Trash2, TriangleAlert, type AppIcon } from "@/components/app-icons";
+import { Button, GHOST_PILL_CLASS } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { ResizeHandle } from "./ResizeHandle";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { FilterChip, ToolbarSearch } from "./PageToolbar";
 import {
@@ -33,6 +34,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Switch } from "./ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { formatDuration } from "./SessionMemoryPanel";
 import { AgentModelField } from "./settings/ProjectAgentRoleControls";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { switchEffort, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
@@ -40,8 +42,10 @@ import { TRIGGER_CLASS } from "./chat/TurnSettingsBar";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
+import { useResizable } from "../hooks/useResizable";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { CLOUD_PROJECT_KIND } from "../types/workspace";
+import { agentLabel } from "../lib/agent-options";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -91,22 +95,21 @@ type StarterTemplateID = Exclude<AutomationTemplateID, "custom">;
 
 const STATUS_FILTERS: StatusFilter[] = ["all", "enabled", "paused"];
 const SORT_ORDERS: SortOrder[] = ["nextRun", "name", "created"];
-// The quiet captions over the dialog's prompt and its Run in and Schedule groups.
+// The quiet captions over the form's and the details panel's sections.
 const FORM_CAPTION_CLASS = "text-xs font-medium text-muted-foreground";
-const TEMPLATE_ICONS = {daily_pr_review_v1: GitPullRequest, daily_issue_triage_v1: ListChecks, weekly_release_notes_v1: FileText };
+const TEMPLATE_ICONS = { daily_pr_review_v1: GitPullRequest, daily_issue_triage_v1: ListChecks, weekly_release_notes_v1: FileText };
 
-function displayTime(value?: string, locale?: string) {
-	if (!value) return "—";
-	return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-}
-
-/** "Tomorrow, 9:00 AM" while the run is today or tomorrow, the full date after that. */
-function displayNextRun(date: Date, t: TFunction, locale?: string) {
+/** "Yesterday, 9:15 AM" to "Tomorrow, …", then "Mon, 9:00 AM" within the coming week, "Fri, Nov 13, 9:15 AM" otherwise, and the year when it isn't this one. */
+function displayRelativeTime(date: Date, t: TFunction, locale?: string) {
 	const days = Math.round((new Date(date).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86_400_000);
-	if (days > 1) return displayTime(date.toISOString(), locale);
-	const day = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(days, "day");
-	const time = new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(date);
-	return t("automations.nextRunRelative", { day: day.charAt(0).toLocaleUpperCase(locale) + day.slice(1), time });
+	if (Math.abs(days) <= 1) {
+		const day = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(days, "day");
+		const time = new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(date);
+		return t("automations.relativeDayTime", { day: day.charAt(0).toLocaleUpperCase(locale) + day.slice(1), time });
+	}
+	const withinWeek = days > 1 && days < 7;
+	const otherYear = date.getFullYear() !== new Date().getFullYear();
+	return new Intl.DateTimeFormat(locale, { weekday: "short", ...(withinWeek ? {} : { month: "short", day: "numeric" }), ...(otherYear ? { year: "numeric" } : {}), hour: "numeric", minute: "2-digit" }).format(date);
 }
 
 function timestamp(value?: string) {
@@ -177,7 +180,7 @@ export function AutomationsView() {
 	}
 	const [editTarget, setEditTarget] = useState<Automation | null>(null);
 	const [deleteTarget, setDeleteTarget] = useState<Automation | null>(null);
-	const [expanded, setExpanded] = useState<string | null>(null);
+	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
 	const automations = useMemo(() => query.data ?? [], [query.data]);
 	const projectName = (id: string) => workspaces.find((workspace) => workspace.id === id)?.name ?? id;
@@ -192,6 +195,32 @@ export function AutomationsView() {
 		sort,
 	);
 	const hasAutomations = automations.length > 0;
+	// Details stay open only while their automation is in the visible list.
+	const selected = visibleAutomations.find((item) => item.id === selectedId);
+	// Forget a selection that left the list, so clearing a filter doesn't reopen it unasked.
+	useEffect(() => {
+		if (selectedId && !selected) setSelectedId(null);
+	}, [selectedId, selected]);
+	// Re-render when the day turns, so the rows' Today/Tomorrow labels stay true between refetches.
+	const [dayTick, setDayTick] = useState(0);
+	useEffect(() => {
+		const timer = window.setTimeout(() => setDayTick((tick) => tick + 1), new Date().setHours(24, 0, 0, 0) - Date.now() + 1000);
+		return () => window.clearTimeout(timer);
+	}, [dayTick]);
+	// Closing the details hands focus back to the row that opened them.
+	function closeDetails() {
+		const id = selectedId;
+		flushSync(() => setSelectedId(null));
+		if (id) document.getElementById(automationRowId(id))?.focus();
+	}
+	async function toggle(item: Automation, enabled: boolean) {
+		setActionError(null);
+		try {
+			await update.mutateAsync({ id: item.id, body: { enabled } });
+		} catch (error) {
+			setActionError(error instanceof Error ? error.message : t("automations.updateError"));
+		}
+	}
 	const clearFilters = () => {
 		setSearch("");
 		setStatus("all");
@@ -203,14 +232,15 @@ export function AutomationsView() {
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
 			<PageTopbar lead={<PageTopbarTitle as="h1" icon={<CalendarClock className="size-icon-md" aria-hidden="true" />}>{t("automations.title")}</PageTopbarTitle>} />
-			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
-			<main className="relative min-h-0 flex-1 overflow-hidden">
+			<main className="@container/automations relative flex min-h-0 flex-1 overflow-hidden">
+			{/* A narrow window shows the list or the open details, never both squeezed. */}
+			<ScrollArea.Root type="hover" scrollHideDelay={500} className={cn("relative min-h-0 min-w-0 flex-1 overflow-hidden", selected && "@max-3xl/automations:hidden")}>
 				<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
 				<div className="@container pt-4 pr-4 pb-4 pl-(--space-4_5)">
 					{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
 					{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
 					{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}
-					{!query.isLoading && !query.error ? (
+					{!query.isLoading && !query.error && !hasAutomations ? (
 						<section aria-labelledby="automation-templates">
 							<h2 id="automation-templates" className="text-control font-medium text-foreground">{t("automations.templates.title")}</h2>
 							<p className="mt-1 mb-3 text-xs text-muted-foreground">{t("automations.templates.description")}</p>
@@ -225,7 +255,7 @@ export function AutomationsView() {
 						</div>
 					) : null}
 					{hasAutomations ? (
-						<section aria-label={t("automations.title")} className="mt-6 border-t border-border pt-3">
+						<section aria-label={t("automations.title")}>
 							<div className="mb-2">
 								<div className="flex min-h-control-md items-center gap-2">
 									<div role="group" aria-label={t("automations.filter.status")} className="flex min-w-0 items-center gap-1">
@@ -291,9 +321,9 @@ export function AutomationsView() {
 								) : null}
 							</div>
 							{visibleAutomations.length > 0 ? (
-								<div className="divide-y divide-border">
+								<div className="flex flex-col gap-0.5">
 									{visibleAutomations.map((item) => (
-										<AutomationRow key={item.id} item={item} projectName={projectName(item.projectId)} busy={update.isPending} expanded={expanded === item.id} onExpand={() => setExpanded(expanded === item.id ? null : item.id)} onEdit={() => setEditTarget(item)} onDelete={() => setDeleteTarget(item)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: item.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
+										<AutomationRow key={item.id} item={item} projectName={projectName(item.projectId)} selected={item.id === selected?.id} onSelect={() => setSelectedId(item.id === selected?.id ? null : item.id)} />
 									))}
 								</div>
 							) : (
@@ -309,8 +339,12 @@ export function AutomationsView() {
 				<ScrollArea.Scrollbar orientation="vertical" className="z-10 flex w-2 touch-none select-none p-0.5">
 					<ScrollArea.Thumb className="relative flex-1 rounded-full bg-[color-mix(in_srgb,var(--color-scrollbar)_42%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-scrollbar)_56%,transparent)]" />
 				</ScrollArea.Scrollbar>
-			</main>
 			</ScrollArea.Root>
+			{selected ? (
+				<AutomationDetails key={selected.id} item={selected} projectName={projectName(selected.projectId)} busy={update.isPending}
+					onClose={closeDetails} onEdit={() => setEditTarget(selected)} onDelete={() => setDeleteTarget(selected)} onToggle={(enabled) => toggle(selected, enabled)} />
+			) : null}
+			</main>
 			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} busy={create.isPending} error={create.error?.message ?? null} onOpenChange={setCreateOpen} onSubmit={async (input) => { await create.mutateAsync(input as CreateAutomationInput); setCreateOpen(false); }} />
 			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async (input) => { if (!editTarget) return; await update.mutateAsync({ id: editTarget.id, body: input }); setEditTarget(null); }} />
 			<ConfirmDialog open={Boolean(deleteTarget)} title={t("automations.delete.title")} description={t("automations.delete.description", { name: deleteTarget?.displayName })} confirmLabel={t("automations.delete.confirm")} destructive busy={remove.isPending} error={remove.error?.message ?? null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }} onConfirm={() => { if (!deleteTarget) return; remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) }); }} />
@@ -378,56 +412,206 @@ function TemplateTile({ id, rrule, onSelect }: { id: StarterTemplateID; rrule: s
 	);
 }
 
-function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
-	const runs = useAutomationRuns(expanded ? item.id : null);
+/** An automation's or run's state at a glance: failed, paused, has run, or not run yet. */
+function StatusMark({ state }: { state: "failed" | "paused" | "ran" | "waiting" }) {
+	if (state === "failed") return <CircleAlert aria-hidden="true" className="size-icon-sm shrink-0 text-destructive" />;
+	if (state === "paused") return <Pause aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />;
+	return <StatusDot state={state} />;
+}
+
+/** A run's state as a dot: red when it failed, filled when it ran, hollow while it waits. */
+function StatusDot({ state }: { state: "failed" | "ran" | "waiting" }) {
+	return (
+		<span aria-hidden="true" className="flex size-icon-sm shrink-0 items-center justify-center">
+			<span className={cn("size-1.5 rounded-full", state === "failed" ? "bg-destructive" : state === "ran" ? "bg-muted-foreground" : "border border-muted-foreground")} />
+		</span>
+	);
+}
+
+function AutomationRow({ item, projectName, selected, onSelect }: { item: Automation; projectName: string; selected: boolean; onSelect: () => void }) {
+	const { t, i18n } = useTranslation();
+	const locale = i18n.resolvedLanguage;
+	const scheduleLabel = useScheduleLabel();
+	const failed = item.enabled && item.latestRun?.status === "failed";
+	const failedAt = item.latestRun?.finishedAt ?? item.latestRun?.scheduledFor;
+	return <article>
+		<Pressable id={automationRowId(item.id)} aria-label={t("automations.details.show", { name: item.displayName })} aria-expanded={selected} aria-controls={selected ? AUTOMATION_DETAILS_ID : undefined} onClick={onSelect}
+			className={cn("flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2.5 text-start", selected ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
+			<StatusMark state={!item.enabled ? "paused" : failed ? "failed" : item.latestRun ? "ran" : "waiting"} />
+			<div className="min-w-0 flex-1">
+				<h2 className="truncate text-control font-medium leading-5 text-foreground">{item.displayName}</h2>
+				<p className="flex min-w-0 items-center gap-1.5 text-caption leading-5 text-muted-foreground">
+					<span className="truncate">{scheduleLabel(item.rrule)}</span>
+					<span aria-hidden="true" className="text-passive">·</span>
+					<span className="truncate">{projectName}</span>
+				</p>
+			</div>
+			<span className={cn("hidden shrink-0 text-caption tabular-nums @md:block", failed ? "text-destructive" : item.enabled ? "text-foreground" : "text-muted-foreground")}>
+				{!item.enabled
+					? t("automations.paused")
+					: failed && failedAt
+						? t("automations.failedOn", { date: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(new Date(failedAt)) })
+						: item.nextRunAt ? displayRelativeTime(new Date(item.nextRunAt), t, locale) : null}
+			</span>
+		</Pressable>
+	</article>;
+}
+
+const AUTOMATION_DETAILS_ID = "automation-details";
+const automationRowId = (id: string) => `automation-row-${id}`;
+const DETAILS_WIDTH_VAR = "--automation-details-w";
+const DETAILS_DEFAULT_WIDTH_PX = 400;
+const DETAILS_MIN_WIDTH_PX = 340;
+const DETAILS_MAX_WIDTH_PX = 640;
+/** Room the list keeps beside the details: its whole toolbar, project filter included. The aside's max-w repeats it. */
+const DETAILS_LIST_MIN_WIDTH_PX = 480;
+/** Runs shown at first, and how many more each Show more adds. */
+const RUNS_PAGE_SIZE = 5;
+
+/** The selected automation beside the list: its actions, schedule, runs and prompt. */
+function AutomationDetails({ item, projectName, busy, onClose, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; busy: boolean; onClose: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
+	const runs = useAutomationRuns(item.id);
 	const navigate = useNavigate();
 	const { t, i18n } = useTranslation();
-	const reduceMotion = useReducedMotion();
+	const locale = i18n.resolvedLanguage;
 	const scheduleLabel = useScheduleLabel();
-	const historyId = `automation-history-${item.id}`;
-	return <article className="group">
-		<div className={cn("flex items-center gap-3 rounded-md px-2 py-2.5", expanded ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
-			<Pressable className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm" aria-label={t(expanded ? "automations.runs.hide" : "automations.runs.show", { name: item.displayName })} aria-expanded={expanded} aria-controls={historyId} onClick={onExpand}>
-				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", expanded && "rotate-90")} />
-				<div className="min-w-0">
-					<h2 className="truncate text-control font-medium leading-5 text-foreground">{item.displayName}</h2>
-					<p className="flex min-w-0 items-center gap-1.5 text-caption leading-5 text-muted-foreground">
-						<Clock aria-hidden="true" className="size-icon-xs shrink-0 text-passive" />
-						<span className="truncate">{scheduleLabel(item.rrule)}</span>
-						<span aria-hidden="true" className="text-passive">·</span>
-						<span className="truncate">{projectName}</span>
-					</p>
-				</div>
-			</Pressable>
-			<div className="hidden shrink-0 text-end text-caption leading-5 @lg:block">
-				<p className={cn("tabular-nums", item.enabled ? "text-foreground" : "text-muted-foreground")}>
-					{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : t("automations.paused")}
-				</p>
-				{item.latestRun ? <p className="text-muted-foreground">{t("automations.lastRun", { status: t(`automations.runStatus.${item.latestRun.status}`, { defaultValue: item.latestRun.status }) })}</p> : null}
-			</div>
-			<div className="flex shrink-0 items-center gap-1">
-				<Button variant="quiet" size="icon-sm" className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}><Pencil className="size-3.5" /></Button>
-				<Button variant="destructive-ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}><Trash2 className="size-3.5" /></Button>
-				<Switch checked={item.enabled} disabled={busy} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void onToggle(checked)} />
-			</div>
-		</div>
-		{item.latestRun?.errorMessage ? <p role="alert" className="mx-2 mb-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{item.latestRun.errorMessage}</p> : null}
-		<AnimatePresence initial={false}>
-			{expanded ? <motion.div id={historyId} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }} className="overflow-hidden">
-				<div className="px-2 pt-3 pb-4 pl-8">
-					<div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
-						<span className="@lg:hidden tabular-nums">{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : t("automations.paused")}</span>
-						<span>{t("automations.timezone", { timezone: item.timezone })}</span>
-						<span>{t("automations.agent")}: <span className="text-foreground">{item.harness || t("automations.projectDefault")}</span></span>
+	const asideRef = useRef<HTMLElement>(null);
+	const closeRef = useRef<HTMLButtonElement>(null);
+	// A narrow window hides the list, and the row that had focus with it, so focus moves into the panel.
+	useEffect(() => {
+		const list = asideRef.current?.previousElementSibling;
+		if (list && window.getComputedStyle(list).display === "none") closeRef.current?.focus();
+	}, []);
+	const getResizeTargets = useCallback(() => [asideRef.current], []);
+	// At most DETAILS_MAX_WIDTH_PX, and never so wide that the list loses its minimum.
+	const maxWidth = useCallback(() => {
+		const page = asideRef.current?.parentElement;
+		if (!page || page.clientWidth <= 0) return DETAILS_MAX_WIDTH_PX;
+		return Math.max(DETAILS_MIN_WIDTH_PX, Math.min(DETAILS_MAX_WIDTH_PX, page.clientWidth - DETAILS_LIST_MIN_WIDTH_PX));
+	}, []);
+	const { onPointerDown, onDoubleClick } = useResizable({
+		cssVar: DETAILS_WIDTH_VAR,
+		getCssTargets: getResizeTargets,
+		storageKey: "ao.automations.detailsWidthPx",
+		defaultWidth: DETAILS_DEFAULT_WIDTH_PX,
+		min: DETAILS_MIN_WIDTH_PX,
+		max: maxWidth,
+		edge: "left",
+		reclampOnWindowResize: true,
+	});
+	const [visibleRuns, setVisibleRuns] = useState(RUNS_PAGE_SIZE);
+	const promptRef = useRef<HTMLParagraphElement>(null);
+	const [promptOpen, setPromptOpen] = useState(false);
+	const [promptClipped, setPromptClipped] = useState(false);
+	// Offer the full prompt only when the four clamped lines cut it short.
+	useLayoutEffect(() => {
+		const prompt = promptRef.current;
+		if (prompt && !promptOpen) setPromptClipped(prompt.scrollHeight > prompt.clientHeight);
+	}, [item.prompt, promptOpen]);
+	return (
+		// Beside the list when there is room, at the width its handle sets; in its place in a narrow window, closed with its X.
+		<aside ref={asideRef} id={AUTOMATION_DETAILS_ID} aria-label={item.displayName}
+			className="relative flex min-h-0 flex-1 flex-col @3xl/automations:w-(--automation-details-w) @3xl/automations:max-w-[max(340px,calc(100%-480px))] @3xl/automations:flex-none @3xl/automations:border-s @3xl/automations:border-border">
+			<div className="min-h-0 flex-1 overflow-y-auto">
+			<div className="flex flex-col gap-6 p-4">
+				<header className="flex flex-col gap-3">
+					<div className="flex items-start gap-2">
+						<div className="min-w-0 flex-1">
+							<h2 className="truncate text-subtitle font-semibold leading-6 text-foreground">{item.displayName}</h2>
+							<p className="truncate text-xs text-muted-foreground">{projectName} · {item.harness ? agentLabel(item.harness) : t("automations.projectDefault")}</p>
+						</div>
+						<CloseButton ref={closeRef} aria-label={t("common.close")} onClick={onClose} />
 					</div>
-					<p className="mb-1 text-caption font-medium text-muted-foreground">{t("automations.field.prompt")}</p>
-					<p className="mb-4 whitespace-pre-wrap text-xs leading-5 text-foreground">{item.prompt}</p>
-					<h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium"><History className="size-3.5 text-muted-foreground" aria-hidden="true" />{t("automations.runs.title")}</h3>
-					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{runs.error.message}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium">{t(`automations.runStatus.${run.status}`, { defaultValue: run.status })}</span><span className="ml-3 text-caption tabular-nums text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.errorMessage ? <p className="mt-1 text-xs text-destructive">{run.errorMessage}</p> : null}</div>{run.sessionId ? <Button variant="secondary" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>)}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
-				</div>
-			</motion.div> : null}
-		</AnimatePresence>
-	</article>;
+					<div className="flex items-center gap-1">
+						<Button type="button" size="sm" variant="secondary" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}>
+							<Pencil aria-hidden="true" className="size-icon-sm" />
+							{t("automations.details.edit")}
+						</Button>
+						<Button type="button" size="sm" variant="quiet" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}>
+							<Trash2 aria-hidden="true" className="size-icon-sm" />
+							{t("automations.details.delete")}
+						</Button>
+						<span aria-hidden="true" className="ms-auto text-xs text-muted-foreground">{t(item.enabled ? "automations.details.on" : "automations.details.off")}</span>
+						<Switch checked={item.enabled} disabled={busy} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void onToggle(checked)} />
+					</div>
+				</header>
+				<section className="flex flex-col gap-1">
+					<h3 className={FORM_CAPTION_CLASS}>{t("automations.field.schedule")}</h3>
+					<p className="text-sm text-foreground">
+						{scheduleLabel(item.rrule)}
+						<span aria-hidden="true" className="text-passive"> · </span>
+						<span className="text-muted-foreground">{item.timezone}</span>
+					</p>
+					<p className="text-xs tabular-nums text-muted-foreground">
+						{item.enabled ? t("automations.nextRunAt", { time: item.nextRunAt ? displayRelativeTime(new Date(item.nextRunAt), t, locale) : "—" }) : t("automations.paused")}
+					</p>
+				</section>
+				<section className="flex flex-col gap-1">
+					<h3 className={FORM_CAPTION_CLASS}>{t("automations.runs.title")}</h3>
+					{runs.isLoading ? (
+						<p role="status" className="py-2 text-xs text-muted-foreground">{t("automations.runs.loading")}</p>
+					) : runs.error ? (
+						<p role="alert" className="py-2 text-xs text-destructive">{runs.error.message}</p>
+					) : runs.data?.length ? (
+						<>
+							<ul className="divide-y divide-border">
+								{runs.data.slice(0, visibleRuns).map((run) => {
+									const failed = run.status === "failed";
+									const duration = run.status === "completed" && run.startedAt && run.finishedAt ? formatDuration(Date.parse(run.finishedAt) - Date.parse(run.startedAt)) : null;
+									const status = duration ?? t(`automations.runStatus.${run.status}`, { defaultValue: run.status });
+									const statusClass = cn("shrink-0 text-xs tabular-nums", failed ? "text-destructive" : "text-muted-foreground");
+									return (
+										<li key={run.id} className="flex min-h-9 items-center gap-2.5 py-1.5">
+											<StatusDot state={failed ? "failed" : run.status === "completed" ? "ran" : "waiting"} />
+											<p className="min-w-0 flex-1 truncate text-sm tabular-nums text-foreground">{displayRelativeTime(new Date(run.scheduledFor), t, locale)}</p>
+											{run.errorMessage ? (
+												// The error stays one hover or focus away, so a long message never stretches the row.
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<button type="button" aria-label={`${status}: ${run.errorMessage}`} className={cn(GHOST_PILL_CLASS, statusClass, "-mx-1.5 inline-flex h-control-sm items-center gap-1 rounded-md px-1.5 outline-none")}>
+															{status}
+															<CircleAlert aria-hidden="true" className="size-icon-sm text-destructive" />
+														</button>
+													</TooltipTrigger>
+													<TooltipContent side="left" className="max-w-72">{run.errorMessage}</TooltipContent>
+												</Tooltip>
+											) : (
+												<span className={statusClass}>{status}</span>
+											)}
+											{run.sessionId ? (
+												<Button type="button" size="icon-xs" variant="quiet" aria-label={t("automations.runs.openSession")} onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>
+													<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+												</Button>
+											) : null}
+										</li>
+									);
+								})}
+							</ul>
+							{runs.data.length > visibleRuns ? (
+								<Button type="button" size="sm" variant="quiet" className="-ms-2.5 self-start" onClick={() => setVisibleRuns(visibleRuns + RUNS_PAGE_SIZE)}>
+									{t("automations.runs.showMore")}
+								</Button>
+							) : null}
+						</>
+					) : (
+						<p className="py-2 text-xs text-muted-foreground">{t("automations.runs.empty")}</p>
+					)}
+				</section>
+				<section className="flex flex-col gap-1">
+					<h3 className={FORM_CAPTION_CLASS}>{t("automations.field.prompt")}</h3>
+					<p ref={promptRef} className={cn("whitespace-pre-wrap text-sm leading-6 text-foreground", !promptOpen && "line-clamp-4")}>{item.prompt}</p>
+					{promptClipped ? (
+						<Button type="button" size="sm" variant="quiet" className="-ms-2.5 self-start" onClick={() => setPromptOpen(!promptOpen)}>
+							{t(promptOpen ? "automations.details.showLess" : "automations.details.showFullPrompt")}
+						</Button>
+					) : null}
+				</section>
+			</div>
+			</div>
+			{/* Outside the scroller so it spans the panel's full height; a narrow window has nothing beside it to resize against. */}
+			<ResizeHandle side="left" className="hidden @3xl/automations:block" data-testid="automation-details-resize-handle" onPointerDown={onPointerDown} onDoubleClick={onDoubleClick} />
+		</aside>
+	);
 }
 
 
@@ -976,7 +1160,7 @@ function AutomationFormDialog({
 						{nextRun ? (
 							<div className="mt-auto flex flex-col gap-1 rounded-lg border border-border px-4 py-3">
 								<span className="text-xs text-muted-foreground">{t("automations.nextRun")}</span>
-								<span className="text-sm text-foreground tabular-nums">{displayNextRun(nextRun, t, i18n.resolvedLanguage)}</span>
+								<span className="text-sm text-foreground tabular-nums">{displayRelativeTime(nextRun, t, i18n.resolvedLanguage)}</span>
 							</div>
 						) : null}
 					</div>
