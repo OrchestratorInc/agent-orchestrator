@@ -6480,6 +6480,13 @@ html:root[data-style-theme][data-theme="light"][data-window-translucent="true"] 
 	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 70%, transparent);
 }
 
+/* A custom theme (custom-theme.ts) may give the frame its own color, apart
+ * from the canvas. Its shell takes the sidebar color in both appearances, and
+ * its center panel stays solid (below) so content keeps the canvas color. */
+html:root[data-theme-custom][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 70%, transparent);
+}
+
 /* Chrome: clear canvases, overlay fills. Declared on body so the theme's
  * :root values stay intact for the solid copies above. */
 html[data-window-translucent="true"] body {
@@ -6524,14 +6531,15 @@ html[data-window-translucent="true"] :is(
 /* Light: the center panel keeps the solid surfaces, so content reads as it does
  * in an opaque window. It clears over a live browser page exactly as the
  * opaque panel does (the native browser rules above). Dark keeps the clear
- * single-tint panel. */
-html[data-theme="light"][data-window-translucent="true"] .center-panel-surface {
+ * single-tint panel, except under a custom theme, whose frame and canvas may
+ * differ. A custom theme may also set the terminal's own background. */
+html:is([data-theme="light"], [data-theme-custom])[data-window-translucent="true"] .center-panel-surface {
 	--color-bg-primary: var(--solid-bg-primary);
 	--color-bg-secondary: var(--solid-bg-secondary);
 	--color-bg-tertiary: var(--solid-bg-tertiary);
-	--color-bg-terminal: var(--background);
-	--color-bg-terminal-opaque: var(--background);
-	--term-bg: var(--background);
+	--color-bg-terminal: var(--theme-terminal-background, var(--background));
+	--color-bg-terminal-opaque: var(--theme-terminal-background, var(--background));
+	--term-bg: var(--theme-terminal-background, var(--background));
 	--muted: var(--solid-muted);
 	--secondary: var(--solid-secondary);
 	--accent: var(--solid-accent);

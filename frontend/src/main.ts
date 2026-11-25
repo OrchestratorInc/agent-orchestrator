@@ -1005,7 +1005,7 @@ function buildWindowsAppMenu(): Menu {
 	return Menu.buildFromTemplate(
 		buildWindowsAppMenuTemplate(() => {
 			void toggleAppDevTools(browserViewHost, getShellWebContents, isDev);
-		}, appMenuOptions()),
+		}, { ...appMenuOptions(), commands: appMenuCommands }),
 	);
 }
 
@@ -1013,7 +1013,7 @@ function buildLinuxAppMenu(): Menu {
 	return Menu.buildFromTemplate(
 		buildLinuxAppMenuTemplate(() => {
 			void toggleAppDevTools(browserViewHost, getShellWebContents, isDev);
-		}, appMenuOptions()),
+		}, { ...appMenuOptions(), commands: appMenuCommands }),
 	);
 }
 

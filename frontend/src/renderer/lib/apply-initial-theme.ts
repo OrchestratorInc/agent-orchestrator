@@ -11,6 +11,8 @@ import { applyWindowTranslucency, readStoredWindowTranslucency } from "./window-
 // reverse) would otherwise show its loader over the wrong material.
 const themePreference = readStoredThemePreference();
 applyDocumentTheme(resolveTheme(themePreference));
+// A custom theme (`ao theme`) paints from the copy saved when it last showed;
+// the shell swaps in the daemon's current one once it answers.
 applyDocumentThemeStyle(readStoredThemeStyle());
 applyWindowTranslucency(readStoredWindowTranslucency());
 void aoBridge.theme?.set(themePreference)?.catch(() => undefined);

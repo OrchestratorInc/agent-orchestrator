@@ -467,7 +467,11 @@
 	--size-import-folder-dialog: 640px;
 	--size-composer-prompt-min: 112px;
 	--size-composer-start-button: 7.25rem;
-	--radius-chat-composer: 20px;
+	/* Both follow the base radius (10px, so 20px and 10px by default): a theme
+	 * that sharpens or rounds --radius moves the composer and the user's
+	 * message bubble with it, and may still set either one alone. */
+	--radius-chat-composer: calc(var(--radius) * 2);
+	--radius-chat-bubble: var(--radius);
 	/* Task composer — inline toolbar values. Quieter than a filled control at rest
 	 * so the task field stays the only thing with visual weight. */
 	--color-bg-composer-chip: color-mix(in oklab, var(--input) 55%, transparent);

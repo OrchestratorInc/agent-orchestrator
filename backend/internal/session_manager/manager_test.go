@@ -6930,6 +6930,9 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"relative to the session workspace root",
 		"use `ao preview README.md`, not `../README.md`",
 		"existing confined loopback preview",
+		"## Restyling Orchestrator",
+		filepath.ToSlash(filepath.Join("skills", "using-ao", "commands", "theme.md")) + "` and use `ao theme`",
+		"Do not edit Orchestrator's source code for this",
 	} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)

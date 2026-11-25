@@ -450,8 +450,8 @@ export function shortcutBindingAccelerator(binding: ShortcutBinding): string | u
 		.join("+");
 }
 
-// Top bar commands that have a native menu item (macOS). Most are shortcuts and
-// travel on their shortcut channel; the two with no chord use the action channel.
+// Commands that have a native menu item (macOS). Most are shortcuts and travel
+// on their shortcut channel; those with no chord use the action channel.
 export const APP_MENU_COMMAND_IDS = [
 	"new-session",
 	"new-shell-terminal",
@@ -464,13 +464,16 @@ export const APP_MENU_COMMAND_IDS = [
 	"history-forward",
 	"open-orchestrator",
 	"toggle-notifications",
-] as const satisfies readonly (AppShortcutId | "open-in-file-manager" | "toggle-notifications")[];
+	// The way back from a custom theme whose CSS hid or broke the interface:
+	// a native menu item is out of any stylesheet's reach.
+	"use-default-theme",
+] as const satisfies readonly (AppShortcutId | "open-in-file-manager" | "toggle-notifications" | "use-default-theme")[];
 export type AppMenuCommandId = (typeof APP_MENU_COMMAND_IDS)[number];
 export type AppMenuActionId = Exclude<AppMenuCommandId, AppShortcutId>;
 export type AppMenuAvailability = Partial<Record<AppMenuCommandId, boolean>>;
 
 export function isAppMenuActionId(id: AppMenuCommandId): id is AppMenuActionId {
-	return id === "open-in-file-manager" || id === "toggle-notifications";
+	return id === "open-in-file-manager" || id === "toggle-notifications" || id === "use-default-theme";
 }
 
 /** The renderer reports which menu commands apply to what is on screen. */

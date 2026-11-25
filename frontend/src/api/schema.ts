@@ -5238,6 +5238,58 @@ export interface paths {
         patch: operations["updateSessionRetention"];
         trace?: never;
     };
+    "/api/v1/settings/theme-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Switch every window to a built-in or custom theme, an appearance, or both */
+        put: operations["switchTheme"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/themes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the desktop app's custom themes and the latest theme switch an agent asked for */
+        get: operations["listCustomThemes"];
+        put?: never;
+        /** Import a theme file, replacing the custom theme with the same id, and optionally switch every window to it */
+        post: operations["importCustomTheme"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/themes/{themeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a custom theme; windows showing it go back to the default theme */
+        delete: operations["deleteCustomTheme"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/version-refresh": {
         parameters: {
             query?: never;
@@ -7545,6 +7597,40 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        CustomThemeResponse: {
+            /**
+             * @description The appearance colors paints.
+             * @enum {string}
+             */
+            appearance: "dark" | "light";
+            /** @description Color roles (canvas, sidebar, text, accent, ...) as literal CSS colors, for the theme's own appearance. */
+            colors: {
+                [key: string]: string;
+            } | null;
+            /** @description CSS applied while the theme is showing. */
+            css: string;
+            /** @description Theme id, used in commands. */
+            id: string;
+            /** @description Name shown in the theme picker. */
+            name: string;
+            /**
+             * Format: date-time
+             * @description Last save.
+             */
+            updatedAt: string;
+            /** @description The other appearance's colors, keyed by its name; empty when the theme has one appearance. */
+            variants: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            } | null;
+        };
+        CustomThemesResponse: {
+            /** @description Latest theme or appearance an agent asked every window to show. */
+            switch: components["schemas"]["ThemeSwitchResponse"];
+            /** @description Custom themes, oldest first. */
+            themes: components["schemas"]["CustomThemeResponse"][];
+        };
         DegradedProject: {
             id: string;
             /** @enum {string} */
@@ -7829,6 +7915,35 @@ export interface components {
         IdentityResponse: {
             apiVersion: number;
             hostId: string;
+        };
+        ImportCustomThemeRequest: {
+            /** @description The theme file: version (1), name, appearance (dark or light), colors (role to literal CSS color), and optionally id, variants (the other appearance's colors) and css. */
+            file: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Theme id to store it under; defaults to the file's id, then one made from its name. */
+            id?: string;
+            /** @description Import only if the theme is as the caller last read it: its updatedAt, or an empty string for no theme with this id yet. Otherwise 409 CUSTOM_THEME_CHANGED. */
+            ifUpdatedAt?: null | string;
+            /** @description Refuse with 409 CUSTOM_THEME_EXISTS when a custom theme already has the id, instead of replacing it. */
+            keepExisting?: boolean;
+            /**
+             * @description With use, also switch every window to this appearance.
+             * @enum {string}
+             */
+            mode?: "light" | "dark" | "system";
+            /** @description Also switch every window to this theme. */
+            use?: boolean;
+        };
+        ImportCustomThemeResponse: {
+            /** @description Latest theme or appearance an agent asked every window to show. */
+            switch: components["schemas"]["ThemeSwitchResponse"];
+            /** @description The imported theme as stored. */
+            theme: components["schemas"]["CustomThemeResponse"];
+            /** @description Custom themes, oldest first. */
+            themes: components["schemas"]["CustomThemeResponse"][];
+            /** @description Parts of the file that were left out, such as an unknown color role. */
+            warnings: string[];
         };
         ImportReport: {
             dryRun: boolean;
@@ -9935,6 +10050,23 @@ export interface components {
             default: components["schemas"]["TerminalShellResponse"];
             /** @description Installed shells, one per real binary. */
             shells: components["schemas"]["TerminalShellResponse"][];
+        };
+        ThemeSwitchRequest: {
+            /**
+             * @description Appearance to switch to.
+             * @enum {string}
+             */
+            mode?: "light" | "dark" | "system";
+            /** @description Built-in or custom theme id. */
+            themeId?: string;
+        };
+        ThemeSwitchResponse: {
+            /** @description Changes with every request, so each window applies it once; empty when none. */
+            id: string;
+            /** @description light, dark or system; empty keeps the current one. */
+            mode: string;
+            /** @description Built-in or custom theme id; empty keeps the current one. */
+            themeId: string;
         };
         TrackerIntakeConfig: {
             assignee?: string;
@@ -29916,6 +30048,205 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    switchTheme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThemeSwitchRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomThemesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listCustomThemes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomThemesResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importCustomTheme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportCustomThemeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportCustomThemeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteCustomTheme: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Custom theme id, e.g. sumi. */
+                themeId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomThemesResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

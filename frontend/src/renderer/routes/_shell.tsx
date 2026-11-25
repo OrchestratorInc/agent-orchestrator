@@ -92,6 +92,7 @@ import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
 import { useHeldSession } from "../hooks/useHeldSession";
 import { useSwitchHistoryRead } from "../hooks/useSwitchHistoryRead";
 import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
+import { useApplyCustomTheme } from "../hooks/useCustomTheme";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
@@ -362,6 +363,7 @@ function ShellLayout() {
 	useSetupCheckedTelemetry();
 	useSessionSwitchSnap();
 	useLinkThisComputerOnSignIn();
+	useApplyCustomTheme();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();

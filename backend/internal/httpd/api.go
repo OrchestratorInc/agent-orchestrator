@@ -102,6 +102,8 @@ type APIDeps struct {
 	Installer  controllers.Installer
 	// ComputerUse is the Cua Driver integration behind Settings and the computer-use tools.
 	ComputerUse controllers.ComputerUse
+	// CustomTheme is the desktop app's custom themes (imported or agent-made theme files).
+	CustomTheme controllers.CustomThemeService
 	AgentAuth   controllers.AgentAuthService
 	// GitHub is the local GitHub PAT + repos surface.
 	GitHub controllers.GitHubPATService
@@ -184,6 +186,7 @@ type API struct {
 	cues          *controllers.CuesController
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
+	customTheme   *controllers.CustomThemeController
 	dev           *controllers.DevController
 	devices       *controllers.DevicesController
 	browser       *controllers.BrowserController
@@ -257,6 +260,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		cues:          &controllers.CuesController{Svc: deps.Cues},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch, UserMessages: userMessageRecorder(deps.Sessions), Models: deps.Agents},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
+		customTheme:   &controllers.CustomThemeController{Svc: deps.CustomTheme},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
 		devices:       &controllers.DevicesController{Svc: deps.Devices, Sessions: deps.Sessions, Capabilities: deps.SessionCapabilities},
@@ -434,6 +438,7 @@ func (a *API) Register(root chi.Router) {
 			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
 			a.computerUse.Register(r)
+			a.customTheme.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
 			a.prPreview.Register(r)

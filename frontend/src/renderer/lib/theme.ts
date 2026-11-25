@@ -1,9 +1,15 @@
-import { DEFAULT_THEME_STYLE, isThemeStyle, type ThemeStyle } from "./theme-palettes";
+import { isCustomThemeStyle, showCustomThemeStyle, type CustomThemeStyle } from "./custom-theme";
+import { DEFAULT_THEME_STYLE, isThemeStyle, type ThemeStyle as BuiltInThemeStyle } from "./theme-palettes";
 import { installThemeStylesheet } from "./theme-tokens";
 
 export type Theme = "light" | "dark";
 export type ThemePreference = Theme | "system";
-export type { ThemeStyle };
+/** A built-in theme id, or `custom:<id>` for a custom theme (custom-theme.ts). */
+export type ThemeStyle = BuiltInThemeStyle | CustomThemeStyle;
+
+export function isAppThemeStyle(value: unknown): value is ThemeStyle {
+	return isThemeStyle(value) || isCustomThemeStyle(value);
+}
 
 export const themeStorageKey = "ao.theme";
 export const themeStyleStorageKey = "ao.theme-style";
@@ -37,7 +43,7 @@ export function resolveTheme(preference: ThemePreference = readStoredThemePrefer
 export function readStoredThemeStyle(): ThemeStyle {
 	try {
 		const stored = getLocalStorage()?.getItem(themeStyleStorageKey);
-		if (isThemeStyle(stored)) return stored;
+		if (isAppThemeStyle(stored)) return stored;
 	} catch {
 		// ignore
 	}
@@ -55,9 +61,10 @@ export function applyDocumentThemeStyle(style: ThemeStyle): void {
 	if (style === DEFAULT_THEME_STYLE) {
 		delete document.documentElement.dataset.styleTheme;
 	} else {
-		installThemeStylesheet();
+		if (!isCustomThemeStyle(style)) installThemeStylesheet();
 		document.documentElement.dataset.styleTheme = style;
 	}
+	showCustomThemeStyle(style);
 }
 
 /** True when the document already shows `style`, e.g. because it is being previewed. */

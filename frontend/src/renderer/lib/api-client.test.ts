@@ -328,6 +328,8 @@ describe("normalizeApiOperation", () => {
 			"PUT /api/v1/sessions/:id/conversation/side-chats/:id/draft",
 		);
 		expect(normalizeApiOperation("DELETE", "/api/v1/shell-terminals/shellterm-60e83cc6a8c245d9")).toBe("DELETE /api/v1/shell-terminals/:id");
+		// A custom theme's id is made from the name the user gave it.
+		expect(normalizeApiOperation("DELETE", "/api/v1/settings/themes/my-secret-project")).toBe("DELETE /api/v1/settings/themes/:id");
 		expect(normalizeApiOperation("GET", "/api/v1/health")).toBe("GET /api/v1/health");
 	});
 	it("replaces identifier segments after resource collections", () => {

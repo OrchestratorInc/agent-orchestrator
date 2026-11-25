@@ -111,6 +111,7 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/agents/{agent}/auth/operations/{operationId}/code",
 	"/api/v1/agents/{agent}/logout",
 	"/api/v1/settings/harness-defaults/{agent}",
+	"/api/v1/settings/themes/{themeId}",
 	"/api/v1/agents/{agent}/install",
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/accounts/{accountId}",
@@ -205,6 +206,7 @@ const RESOURCE_SEGMENTS = new Set([
 	"workspaces",
 	"prs",
 	"orchestrators",
+	"themes",
 ]);
 
 // Match a path against one template. `{param}` matches any single segment

@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
 import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
+import { useCustomThemes } from "../../hooks/useCustomTheme";
+import { customThemeId, customThemePalette, customThemeStyle, isCustomThemeStyle } from "../../lib/custom-theme";
+import { ThemeFileRow } from "./ThemeFileRow";
 import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
@@ -368,12 +371,29 @@ export function GeneralSettingsSection({
 		{ value: "mod-enter", label: t("settings.chatSendKey.modEnter") },
 	] satisfies SettingsOption<ChatSendKeyMode>[];
 
+	// Custom themes (imported files, or made by an agent with `ao theme`)
+	// follow the built-in ones.
+	const customThemes = useCustomThemes().data?.themes ?? [];
+	const colorThemeOptions: SettingsOption<ThemeStyle>[] = [
+		...COLOR_THEME_OPTIONS,
+		...customThemes.map((theme) => ({ value: customThemeStyle(theme.id), label: theme.name })),
+	];
+	// Before the daemon answers, still name the custom theme on screen.
+	if (isCustomThemeStyle(themeStyle) && !colorThemeOptions.some((option) => option.value === themeStyle)) {
+		colorThemeOptions.push({ value: themeStyle, label: customThemeId(themeStyle) });
+	}
+	const themePalette = (style: ThemeStyle) => {
+		if (!isCustomThemeStyle(style)) return getThemeDefinition(style)[resolvedTheme];
+		const theme = customThemes.find((candidate) => customThemeStyle(candidate.id) === style);
+		return theme ? customThemePalette(theme, resolvedTheme) : getThemeDefinition("orchestrate")[resolvedTheme];
+	};
+
 	// Trigger and menu rows share one layout: name, then the palette on the right.
 	const renderColorTheme = (option: SettingsOption<ThemeStyle> | undefined, compact = false) =>
 		option ? (
 			<>
 				<span className="min-w-0 flex-1 truncate">{option.label}</span>
-				<ThemePaletteSwatch palette={getThemeDefinition(option.value)[resolvedTheme]} compact={compact} />
+				<ThemePaletteSwatch palette={themePalette(option.value)} compact={compact} />
 			</>
 		) : null;
 
@@ -405,7 +425,7 @@ export function GeneralSettingsSection({
 						<SettingsOptionMenu
 							aria-label={t("settings.colorTheme")}
 							value={themeStyle}
-							options={COLOR_THEME_OPTIONS}
+							options={colorThemeOptions}
 							onChange={setThemeStyle}
 							onHighlight={(previewed) => previewDocumentThemeStyle(previewed, useUiStore.getState().themeStyle)}
 							menuClassName="min-w-60"
@@ -420,6 +440,7 @@ export function GeneralSettingsSection({
 						/>
 					</div>
 				</SettingsRow>
+				<ThemeFileRow />
 				{isMacPlatform() && <WindowTranslucencyRow />}
 				<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
 					<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />

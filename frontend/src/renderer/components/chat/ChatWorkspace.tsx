@@ -2340,6 +2340,7 @@ function ChatWorkspaceContent({
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", (arrivingWithHistory || openedDocked) && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
+						data-workspace-area="conversation"
 					>
 						<ChatLinkProvider
 							sessionId={snapshot.sessionId}
@@ -2416,7 +2417,7 @@ function ChatWorkspaceContent({
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
 
-						<div ref={composerDockRef} className="cursor-chat-composer-dock shrink-0 px-4 pb-3">
+						<div ref={composerDockRef} className="cursor-chat-composer-dock shrink-0 px-4 pb-3" data-chat-composer-form="">
 							<div
 								data-empty={conversationEmpty || undefined}
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
@@ -5782,7 +5783,7 @@ export function Timeline({
 				}}
 				onKeyDown={onViewportKeyDown}
 				onPointerDown={onViewportPointerDown}
-				className="chat-scroll-viewport cursor-chat-timeline edge-fade [--edge-fade-end-size:var(--space-3)] min-h-0 min-w-0 flex-1 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
+				className="chat-scroll-viewport messages-timeline-scroll cursor-chat-timeline edge-fade [--edge-fade-end-size:var(--space-3)] min-h-0 min-w-0 flex-1 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"

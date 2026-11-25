@@ -68,6 +68,7 @@ import (
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/apptheme"
 	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
@@ -1342,6 +1343,7 @@ func Run(buildVersion string) (retErr error) {
 		SystemChecks:       systemChecks,
 		Installer:          systemInstall,
 		ComputerUse:        computerUse,
+		CustomTheme:        apptheme.New(store, nil),
 		Sessions:           sessionSvc,
 		Automations:        automationSvc,
 		DesktopWorkspaces:  sessionSvc,

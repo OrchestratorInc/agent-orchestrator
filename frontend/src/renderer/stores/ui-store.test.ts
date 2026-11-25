@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FINISHED_TASK_TABS_KEPT, failedTaskKey, rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
 import { previewDocumentThemeStyle } from "../lib/theme";
+import { setCustomThemeCatalog } from "../lib/custom-theme";
 import { aoBridge } from "../lib/bridge";
 
 describe("sidebar visibility", () => {
@@ -225,6 +226,69 @@ describe("color theme selection", () => {
 			Reflect.deleteProperty(document, "startViewTransition");
 			delete document.documentElement.dataset.styleTheme;
 		}
+	});
+});
+
+describe("custom theme selection", () => {
+	const theme = (id: string, variants: Record<string, Record<string, string>> | null) => ({
+		id,
+		name: id,
+		appearance: "dark" as const,
+		colors: { canvas: "#101012" },
+		variants,
+		css: "",
+		updatedAt: "2026-11-19T10:00:00Z",
+	});
+
+	beforeEach(() => {
+		window.localStorage.clear();
+		setCustomThemeCatalog([theme("night", null), theme("both", { light: { canvas: "#fafafa" } })]);
+		useUiStore.setState({ themeStyle: "orchestrate", themePreference: "light", resolvedTheme: "light" });
+		delete document.documentElement.dataset.styleTheme;
+	});
+
+	afterEach(() => {
+		setCustomThemeCatalog([]);
+		useUiStore.setState({ themeStyle: "orchestrate" });
+		delete document.documentElement.dataset.styleTheme;
+		delete document.documentElement.dataset.themeCustom;
+	});
+
+	it("switches to the appearance a one-appearance theme has colors for", () => {
+		const setThemePreference = vi.fn();
+		useUiStore.setState({ setThemePreference });
+
+		useUiStore.getState().setThemeStyle("custom:night");
+
+		expect(useUiStore.getState().themeStyle).toBe("custom:night");
+		expect(document.documentElement.dataset.styleTheme).toBe("custom:night");
+		expect(setThemePreference).toHaveBeenCalledWith("dark");
+	});
+
+	it("leaves the appearance alone for a theme that has colors for it", () => {
+		const setThemePreference = vi.fn();
+		useUiStore.setState({ setThemePreference });
+
+		useUiStore.getState().setThemeStyle("custom:both");
+
+		expect(useUiStore.getState().themeStyle).toBe("custom:both");
+		expect(setThemePreference).not.toHaveBeenCalled();
+	});
+
+	it("remembers the kept theme's stylesheet for the next launch, and forgets it for a built-in one", () => {
+		useUiStore.getState().setThemeStyle("custom:both");
+		const saved = JSON.parse(window.localStorage.getItem("ao.custom-theme-css") ?? "null");
+		expect(saved?.style).toBe("custom:both");
+		expect(saved?.css).toContain("--background: #fafafa;");
+
+		useUiStore.getState().setThemeStyle("nord");
+		expect(window.localStorage.getItem("ao.custom-theme-css")).toBeNull();
+	});
+
+	it("does not remember a theme that is only previewed", () => {
+		previewDocumentThemeStyle("custom:both", "orchestrate");
+		expect(window.localStorage.getItem("ao.custom-theme-css")).toBeNull();
+		previewDocumentThemeStyle(null, "orchestrate");
 	});
 });
 

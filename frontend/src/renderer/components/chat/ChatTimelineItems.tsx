@@ -1112,7 +1112,7 @@ export function formatMessageTimestamp(iso: string, now = new Date()): string {
 /** The user's bubble. A queued one reads as not-yet-sent rather than as sent-and-ignored. */
 export function humanBubbleClass(queued?: boolean): string {
 	return cn(
-		"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
+		"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[var(--radius-chat-bubble)] px-3 py-2.5 text-sm leading-[1.55]",
 		queued ? "border border-dashed border-border-strong bg-transparent text-muted-foreground" : "bg-raised text-foreground",
 	);
 }
@@ -1275,6 +1275,7 @@ export function HumanMessage({
 			data-find-message-id={!queued && !editing && message.origin !== "automation" && message.origin !== "daemon" && !message.continuation ? message.id : undefined}
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
+			data-message-role="user"
 		>
 			{message.authorName ? (
 				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
@@ -1330,6 +1331,7 @@ export function HumanMessage({
 							/* Themes draw sent and queued differently; light theme needs to tell them
 							   apart in CSS because it paints an enclosure only around a sent one. */
 							data-queued={queued ? "" : undefined}
+							data-user-message-bubble=""
 							className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 						>
 							<CollapsibleHumanBody stateKey={visibleMessageText}>
@@ -1500,6 +1502,7 @@ export function AssistantMessage({
 			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
 			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
 			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
+			data-message-role="assistant"
 		>
 			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
 			{showActions ? (
@@ -3669,7 +3672,7 @@ export function SteerMessage({
 						</AttachmentStrip>
 					) : null}
 					{body || (!annotationSummary && attachments.length === 0 && remainingContent.length === 0) ? (
-						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
+						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[var(--radius-chat-bubble)] bg-raised px-3 py-2.5 text-foreground">
 							{body ? (
 								<div className={USER_BODY_CLASS} onCopy={(event) => copyWholeMessageAsTyped(event, body)}>
 									<UserMarkdown text={body} renderText={renderText} />

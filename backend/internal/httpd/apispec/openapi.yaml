@@ -15941,6 +15941,152 @@ paths:
       summary: Choose how long archived sessions are kept before they are deleted
       tags:
       - settings
+  /api/v1/settings/theme-switch:
+    put:
+      operationId: switchTheme
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThemeSwitchRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomThemesResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Switch every window to a built-in or custom theme, an appearance, or
+        both
+      tags:
+      - settings
+  /api/v1/settings/themes:
+    get:
+      operationId: listCustomThemes
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomThemesResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the desktop app's custom themes and the latest theme switch an
+        agent asked for
+      tags:
+      - settings
+    post:
+      operationId: importCustomTheme
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportCustomThemeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportCustomThemeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Import a theme file, replacing the custom theme with the same id, and
+        optionally switch every window to it
+      tags:
+      - settings
+  /api/v1/settings/themes/{themeId}:
+    delete:
+      operationId: deleteCustomTheme
+      parameters:
+      - description: Custom theme id, e.g. sumi.
+        in: path
+        name: themeId
+        required: true
+        schema:
+          description: Custom theme id, e.g. sumi.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomThemesResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Delete a custom theme; windows showing it go back to the default theme
+      tags:
+      - settings
   /api/v1/settings/version-refresh:
     patch:
       operationId: updateVersionRefresh
@@ -21831,6 +21977,68 @@ components:
       - createdAt
       - updatedAt
       type: object
+    CustomThemeResponse:
+      properties:
+        appearance:
+          description: The appearance colors paints.
+          enum:
+          - dark
+          - light
+          type: string
+        colors:
+          additionalProperties:
+            type: string
+          description: Color roles (canvas, sidebar, text, accent, ...) as literal
+            CSS colors, for the theme's own appearance.
+          type:
+          - object
+          - "null"
+        css:
+          description: CSS applied while the theme is showing.
+          type: string
+        id:
+          description: Theme id, used in commands.
+          type: string
+        name:
+          description: Name shown in the theme picker.
+          type: string
+        updatedAt:
+          description: Last save.
+          format: date-time
+          type: string
+        variants:
+          additionalProperties:
+            additionalProperties:
+              type: string
+            type: object
+          description: The other appearance's colors, keyed by its name; empty when
+            the theme has one appearance.
+          type:
+          - object
+          - "null"
+      required:
+      - id
+      - name
+      - appearance
+      - colors
+      - variants
+      - css
+      - updatedAt
+      type: object
+    CustomThemesResponse:
+      properties:
+        switch:
+          $ref: '#/components/schemas/ThemeSwitchResponse'
+          description: Latest theme or appearance an agent asked every window to show.
+        themes:
+          description: Custom themes, oldest first.
+          items:
+            $ref: '#/components/schemas/CustomThemeResponse'
+          type: array
+      required:
+      - themes
+      - switch
+      type: object
     DegradedProject:
       properties:
         id:
@@ -22611,6 +22819,69 @@ components:
       required:
       - hostId
       - apiVersion
+      type: object
+    ImportCustomThemeRequest:
+      properties:
+        file:
+          additionalProperties: {}
+          description: 'The theme file: version (1), name, appearance (dark or light),
+            colors (role to literal CSS color), and optionally id, variants (the other
+            appearance''s colors) and css.'
+          type:
+          - object
+          - "null"
+        id:
+          description: Theme id to store it under; defaults to the file's id, then
+            one made from its name.
+          type: string
+        ifUpdatedAt:
+          description: 'Import only if the theme is as the caller last read it: its
+            updatedAt, or an empty string for no theme with this id yet. Otherwise
+            409 CUSTOM_THEME_CHANGED.'
+          type:
+          - "null"
+          - string
+        keepExisting:
+          description: Refuse with 409 CUSTOM_THEME_EXISTS when a custom theme already
+            has the id, instead of replacing it.
+          type: boolean
+        mode:
+          description: With use, also switch every window to this appearance.
+          enum:
+          - light
+          - dark
+          - system
+          type: string
+        use:
+          description: Also switch every window to this theme.
+          type: boolean
+      required:
+      - file
+      type: object
+    ImportCustomThemeResponse:
+      properties:
+        switch:
+          $ref: '#/components/schemas/ThemeSwitchResponse'
+          description: Latest theme or appearance an agent asked every window to show.
+        theme:
+          $ref: '#/components/schemas/CustomThemeResponse'
+          description: The imported theme as stored.
+        themes:
+          description: Custom themes, oldest first.
+          items:
+            $ref: '#/components/schemas/CustomThemeResponse'
+          type: array
+        warnings:
+          description: Parts of the file that were left out, such as an unknown color
+            role.
+          items:
+            type: string
+          type: array
+      required:
+      - themes
+      - switch
+      - theme
+      - warnings
       type: object
     ImportReport:
       properties:
@@ -27993,6 +28264,36 @@ components:
       required:
       - default
       - shells
+      type: object
+    ThemeSwitchRequest:
+      properties:
+        mode:
+          description: Appearance to switch to.
+          enum:
+          - light
+          - dark
+          - system
+          type: string
+        themeId:
+          description: Built-in or custom theme id.
+          type: string
+      type: object
+    ThemeSwitchResponse:
+      properties:
+        id:
+          description: Changes with every request, so each window applies it once;
+            empty when none.
+          type: string
+        mode:
+          description: light, dark or system; empty keeps the current one.
+          type: string
+        themeId:
+          description: Built-in or custom theme id; empty keeps the current one.
+          type: string
+      required:
+      - themeId
+      - mode
+      - id
       type: object
     TrackerIntakeConfig:
       properties:

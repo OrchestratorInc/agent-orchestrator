@@ -5011,6 +5011,61 @@ type ForkSessionResponse struct {
 	DisplayName string           `json:"displayName"`
 }
 
+// CustomThemeIDParam names a custom theme in the path.
+type CustomThemeIDParam struct {
+	ThemeID string `path:"themeId" description:"Custom theme id, e.g. sumi."`
+}
+
+// ImportCustomThemeRequest stores a theme file, replacing the custom theme
+// with the same id.
+type ImportCustomThemeRequest struct {
+	File         map[string]any `json:"file" description:"The theme file: version (1), name, appearance (dark or light), colors (role to literal CSS color), and optionally id, variants (the other appearance's colors) and css."`
+	ID           string         `json:"id,omitempty" description:"Theme id to store it under; defaults to the file's id, then one made from its name."`
+	KeepExisting bool           `json:"keepExisting,omitempty" description:"Refuse with 409 CUSTOM_THEME_EXISTS when a custom theme already has the id, instead of replacing it."`
+	IfUpdatedAt  *string        `json:"ifUpdatedAt,omitempty" description:"Import only if the theme is as the caller last read it: its updatedAt, or an empty string for no theme with this id yet. Otherwise 409 CUSTOM_THEME_CHANGED."`
+	Use          bool           `json:"use,omitempty" description:"Also switch every window to this theme."`
+	Mode         string         `json:"mode,omitempty" enum:"light,dark,system" description:"With use, also switch every window to this appearance."`
+}
+
+// ThemeSwitchRequest asks every window to show a theme, an appearance, or both.
+type ThemeSwitchRequest struct {
+	ThemeID string `json:"themeId,omitempty" description:"Built-in or custom theme id."`
+	Mode    string `json:"mode,omitempty" enum:"light,dark,system" description:"Appearance to switch to."`
+}
+
+// CustomThemeResponse is one custom theme, in the shape of its file.
+type CustomThemeResponse struct {
+	ID         string                       `json:"id" description:"Theme id, used in commands."`
+	Name       string                       `json:"name" description:"Name shown in the theme picker."`
+	Appearance string                       `json:"appearance" enum:"dark,light" description:"The appearance colors paints."`
+	Colors     map[string]string            `json:"colors" description:"Color roles (canvas, sidebar, text, accent, ...) as literal CSS colors, for the theme's own appearance."`
+	Variants   map[string]map[string]string `json:"variants" description:"The other appearance's colors, keyed by its name; empty when the theme has one appearance."`
+	CSS        string                       `json:"css" description:"CSS applied while the theme is showing."`
+	UpdatedAt  time.Time                    `json:"updatedAt" description:"Last save."`
+}
+
+// ThemeSwitchResponse is the latest theme or appearance an agent asked for.
+type ThemeSwitchResponse struct {
+	ThemeID string `json:"themeId" description:"Built-in or custom theme id; empty keeps the current one."`
+	Mode    string `json:"mode" description:"light, dark or system; empty keeps the current one."`
+	ID      string `json:"id" description:"Changes with every request, so each window applies it once; empty when none."`
+}
+
+// CustomThemesResponse lists the custom themes and the latest switch request.
+type CustomThemesResponse struct {
+	Themes []CustomThemeResponse `json:"themes" description:"Custom themes, oldest first."`
+	Switch ThemeSwitchResponse   `json:"switch" description:"Latest theme or appearance an agent asked every window to show."`
+}
+
+// ImportCustomThemeResponse is the library after an import, the theme as
+// stored, and what was left out of the file.
+type ImportCustomThemeResponse struct {
+	Themes   []CustomThemeResponse `json:"themes" description:"Custom themes, oldest first."`
+	Switch   ThemeSwitchResponse   `json:"switch" description:"Latest theme or appearance an agent asked every window to show."`
+	Theme    CustomThemeResponse   `json:"theme" description:"The imported theme as stored."`
+	Warnings []string              `json:"warnings" description:"Parts of the file that were left out, such as an unknown color role."`
+}
+
 // DevicePlatformStatus says whether this machine can run a platform's
 // simulators or emulators, and why not.
 type DevicePlatformStatus struct {
