@@ -382,11 +382,17 @@ describe("spawn draft", () => {
 	// Start to a machine the person never picked, with choices they never made.
 	it("stops choosing its machine once the form is edited by hand", () => {
 		const edited = between(spawn, "const edited = <A extends unknown[]>", "const clearModelOverride = ");
-		expect(edited).toContain("if (selectedHostId !== null) hostSettled.current = true;");
-		expectBefore(edited, "hostSettled.current = true;", "change(...args);");
+		expectBefore(edited, "formEdited.current = true;", "change(...args);");
 		for (const control of ["onSelectProject={edited(changeProject)}", "onSelectHarness={edited(selectAgent)}", "onSelectModel={edited(selectModel)}", "onChangePrompt={edited(setPrompt)}"]) {
 			expect(spawn).toContain(control);
 		}
+		// Dictation writes the prompt without `edited`, and its callback never
+		// sees a later selection, so it only marks the edit too.
+		expectBefore(between(spawn, "const voice = useVoiceInput({", "const listening ="), "formEdited.current = true;", "setPrompt((old) =>");
+		// The choosing effect reads the selection it is about to change, so an
+		// edit made before any machine was chosen never leaves it on none.
+		const choose = between(spawn, "if (hostSettled.current) return;", "const auto = autoSpawnHostId({");
+		expect(choose).toContain("if (formEdited.current && selectedHostId !== null) {\n\t\t\thostSettled.current = true;\n\t\t\treturn;\n\t\t}");
 	});
 
 	// Chosen while it reconnects, a machine's credential is not proven yet.
