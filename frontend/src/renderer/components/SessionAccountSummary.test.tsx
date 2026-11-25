@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, renderHook, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
 import { SessionAccountSummary, useSessionAccountSwitch } from "./SessionAccountSummary";
@@ -137,6 +137,37 @@ it("shows the chosen account's badge in the session account picker", async () =>
 	const badge = await findByRole("img", { name: "Cristian Account" });
 	expect(badge).toHaveTextContent("CA");
 	expect(badge.querySelector(".bg-\\(--account-color-blue\\)")).not.toBeNull();
+
+	await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+	unmount();
+	queryClient.clear();
+	await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+it("finds an account by its name when typing on the picker, past the badge letters", async () => {
+	putMock.mockReset();
+	putMock.mockResolvedValue({ data: {} });
+	getMock.mockImplementation((path: string) => Promise.resolve({ data:
+		path === "/api/v1/agents/accounts" ? { accounts: [
+			{ id: "acct-a", provider: "claude", name: "Cristian Account", email: "a@example.com", color: "blue", signedIn: true, default: true },
+			{ id: "acct-b", provider: "claude", name: "Company Account", email: "b@example.com", signedIn: true },
+			{ id: "acct-c", provider: "claude", name: "Cab Team", email: "c@example.com", signedIn: true },
+		] }
+		: path === "/api/v1/agents/accounts/sessions/{sessionId}" ? { claude: "acct-a" }
+		: {} }));
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const { findByRole, unmount } = render(<QueryClientProvider client={queryClient}>
+		<SessionAccountSummary session={session("s-type")} />
+	</QueryClientProvider>);
+
+	const trigger = await findByRole("combobox");
+	await findByRole("img", { name: "Cristian Account" });
+	trigger.focus();
+	// Matched on "CA" + name, "ca" would hit the current "CA·Cristian" row and
+	// "cab" nothing, so the move would stop at "Company Account".
+	for (const key of "cab") fireEvent.keyDown(trigger, { key });
+
+	await waitFor(() => expect(putMock).toHaveBeenLastCalledWith("/api/v1/agents/accounts/sessions/{sessionId}", expect.objectContaining({ body: expect.objectContaining({ accountId: "acct-c" }) })));
 
 	await waitFor(() => expect(queryClient.isFetching()).toBe(0));
 	unmount();

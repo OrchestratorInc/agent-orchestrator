@@ -127,7 +127,7 @@ function LocalSessionAccountSummary({ session, hostId }: { session: WorkspaceSes
 					: <Select value={choice.value ?? ""} disabled={choice.disabled} onValueChange={choice.onPick}>
 						<SelectTrigger size="sm" className="max-w-56" aria-label={t("settings.agentAccounts.sessionAccount")}><SelectValue /></SelectTrigger>
 						<SelectContent align="end">
-							{choice.options.map((option) => <SelectItem key={option.id} value={option.id} disabled={option.disabled}>
+							{choice.options.map((option) => <SelectItem key={option.id} value={option.id} textValue={option.label} disabled={option.disabled}>
 								<span className="flex min-w-0 items-center gap-2">
 									<AccountBadge provider={session.provider} accountProvider={agentAccountProviderFor(session.provider) ?? undefined} name={option.name} email={option.email} color={option.color} />
 									<span className="truncate">{option.label}</span>
