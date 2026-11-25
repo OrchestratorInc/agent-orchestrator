@@ -6,6 +6,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 
@@ -32,7 +33,7 @@ export function useStorageReport(enabled = true) {
 				signal: AbortSignal.any([signal, AbortSignal.timeout(storageReadTimeoutMs)]),
 			});
 			if (error) throw error;
-			if (!data) throw new Error("The daemon returned no storage report");
+			if (!data) throw new AoError("STORAGE_REPORT_EMPTY", "The daemon returned no storage report");
 			return data;
 		},
 	});
@@ -67,7 +68,7 @@ export function useStorageClean() {
 		mutationFn: async (body: StorageCleanRequest): Promise<StorageCleanResult> => {
 			const { data, error } = await apiClient.POST("/api/v1/storage/clean", { body });
 			if (error) throw error;
-			if (!data) throw new Error("The daemon returned no cleanup result");
+			if (!data) throw new AoError("STORAGE_CLEAN_RESULT_EMPTY", "The daemon returned no cleanup result");
 			return data;
 		},
 		onSuccess: (_data, body) => {
