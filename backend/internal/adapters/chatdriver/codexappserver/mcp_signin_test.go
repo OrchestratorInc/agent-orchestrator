@@ -34,6 +34,10 @@ func TestSignInMCPServerAsksCodexForThePage(t *testing.T) {
 	if !conv.Capabilities().Has(ports.ChatCapabilityMCPSignIn) {
 		t.Fatal("the driver does not declare the sign-in")
 	}
+	opened := nextEvent(t, conv.Events(), ports.ChatEventMCPServers)
+	if len(opened.MCPServers) != 1 || opened.MCPServers[0] != (ports.ChatMCPServer{Name: "tracker", Status: mcpNeedsSignIn}) {
+		t.Fatalf("a new sign-in must clear an earlier refusal, got %+v", opened.MCPServers)
+	}
 }
 
 func TestStartupOfAServerWithNoLoginReadsAsNeedsSignIn(t *testing.T) {
@@ -79,6 +83,11 @@ func TestACompletedSignInReloadsTheServersWhenNoTurnRuns(t *testing.T) {
 	}
 
 	srv.push(`{"method":"mcpServer/oauthLogin/completed","params":{"name":"tracker","success":false,"error":"timed out waiting for OAuth callback"}}`)
+	refused := nextEvent(t, conv.Events(), ports.ChatEventMCPServers)
+	want := ports.ChatMCPServer{Name: "tracker", Status: mcpNeedsSignIn, Error: "timed out waiting for OAuth callback", FailureReason: mcpSignInFailed}
+	if len(refused.MCPServers) != 1 || refused.MCPServers[0] != want {
+		t.Fatalf("a sign-in that did not complete = %+v, want %+v", refused.MCPServers, want)
+	}
 	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
 	nextEvent(t, conv.Events(), ports.ChatEventTurnStarted)
 	if srv.sentMethod(codexproto.MethodConfigMcpServerReload) {

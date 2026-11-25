@@ -68,7 +68,7 @@ import {
 	useVirtualizer,
 	type Virtualizer,
 } from "@tanstack/react-virtual";
-import { isShownAORender, mcpToolName } from "../../lib/mcp-tool";
+import { isShownAORender } from "../../lib/mcp-tool";
 import { isOrchestratorPlumbing } from "./activity-step";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
@@ -214,7 +214,7 @@ import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./T
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ChatConnectorsMenu } from "./ChatConnectorsMenu";
-import { ConnectorProposalDock, type ConnectorRestart } from "./ConnectorProposalDock";
+import { ConnectorProposalDock, connectorAskIn, type ConnectorRestart } from "./ConnectorProposalDock";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
@@ -1855,18 +1855,7 @@ function ChatWorkspaceContent({
 	const runningQuota = agentSwitch?.pending ? undefined : nearQuota;
 	const quotaSign = runningQuota ? <QuotaSign quota={runningQuota} /> : null;
 	const stableMcpServers = useStableValue(snapshot.mcpServers);
-	const connectorAsk = useMemo(() => {
-		let asked = false;
-		let waiting = false;
-		for (const item of snapshot.items) {
-			if (item.kind !== "activity" || item.activityKind !== "mcp_tool") continue;
-			const name = mcpToolName(item);
-			if (name.server !== "ao" || name.tool !== "connector_propose") continue;
-			asked = true;
-			waiting ||= item.status === "running" || item.status === "pending";
-		}
-		return { asked, waiting };
-	}, [snapshot.items]);
+	const connectorAsk = useMemo(() => connectorAskIn(snapshot.items), [snapshot.items]);
 	// A reroute describes the model it was recorded against; once the user picks a
 	// different model it no longer says anything about the next turn.
 	const currentModelReroute =
@@ -1879,6 +1868,8 @@ function ChatWorkspaceContent({
 	const stableModelReroute = useStableValue(currentModelReroute);
 	const stablePendingApproval = useStableValue(pendingApproval);
 	const stablePendingUserInput = useStableValue(pendingUserInput);
+	const ownSignIn = can(snapshot, "mcp_sign_in");
+	const offerConnectorRestart = connectorRestart?.offer;
 	const composerSettings = useMemo(
 		() =>
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
@@ -1888,7 +1879,7 @@ function ChatWorkspaceContent({
 					afterPicker={(
 						<>
 							{quotaSign}
-							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} hostId={activeRemoteHostId} agentName={agentLabel(snapshot.harness)} servers={stableMcpServers ?? NO_MCP_SERVERS} ownSignIn={can(snapshot, "mcp_sign_in")} onSignedIn={connectorRestart?.offer} /> : null}
+							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} hostId={activeRemoteHostId} agentName={agentLabel(snapshot.harness)} servers={stableMcpServers ?? NO_MCP_SERVERS} ownSignIn={ownSignIn} onSignedIn={offerConnectorRestart} /> : null}
 						</>
 					)}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
@@ -1927,6 +1918,8 @@ function ChatWorkspaceContent({
 			) : null,
 		[
 			stableMcpServers,
+			ownSignIn,
+			offerConnectorRestart,
 			uiSessionId,
 			activeRemoteHostId,
 			snapshot.harness,

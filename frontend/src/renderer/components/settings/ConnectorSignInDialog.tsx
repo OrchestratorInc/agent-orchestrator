@@ -30,7 +30,7 @@ function openPage(url: string) {
 export function ConnectorSignInDialog({ connector, hostId, own, onClose }: {
 	connector: Pick<Connector, "id" | "name" | "signedIn">;
 	hostId?: string;
-	own?: { sessionId: string; ready: boolean };
+	own?: { sessionId: string; ready: boolean; refused?: string };
 	onClose: (signedIn: boolean) => void;
 }) {
 	const { t } = useTranslation();
@@ -41,7 +41,7 @@ export function ConnectorSignInDialog({ connector, hostId, own, onClose }: {
 	const liveKey = [...connectorsQueryKey, connector.id];
 
 	const start = useMutation({
-		mutationFn: (): Promise<{ authorizationUrl?: string; callbackUrl?: string }> =>
+		mutationFn: (): Promise<{ authorizationUrl?: string; callbackUrl?: string; connector?: Pick<Connector, "signedIn"> }> =>
 			own ? connectorsApi.startOwnSignIn(own.sessionId, connector.id, hostId) : connectorsApi.startSignIn(connector.id, hostId),
 		onMutate: () => {
 			void queryClient.resetQueries({ queryKey: liveKey });
@@ -68,7 +68,7 @@ export function ConnectorSignInDialog({ connector, hostId, own, onClose }: {
 		enabled: !own && Boolean(page) && !finish.isSuccess,
 		refetchInterval: (query) => (query.state.data?.signedIn || refusal(query.state.data) ? false : 2000),
 	});
-	const refused = refusal(live.data);
+	const refused = own ? own.refused : refusal(live.data);
 	const done = finish.isSuccess || Boolean(own?.ready) || (start.isSuccess && (!page || Boolean(live.data?.signedIn)));
 	const error = start.error ?? finish.error;
 
@@ -86,7 +86,7 @@ export function ConnectorSignInDialog({ connector, hostId, own, onClose }: {
 						<>
 							<p className="flex items-center gap-2 text-sm text-settings-label" role="status">
 								<Check className="size-4 text-success" aria-hidden="true" />
-								{t(start.isSuccess && !page && !connector.signedIn ? "settings.connectors.signInDialog.notNeeded" : "settings.connectors.signInDialog.done")}
+								{t(start.isSuccess && !page && !connector.signedIn && !start.data.connector?.signedIn ? "settings.connectors.signInDialog.notNeeded" : "settings.connectors.signInDialog.done")}
 							</p>
 							<Button type="button" variant="primary" className="self-end" onClick={() => onClose(done)}>{t("settings.connectors.signInDialog.close")}</Button>
 						</>

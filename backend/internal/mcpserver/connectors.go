@@ -29,7 +29,7 @@ var connectorTools = []catalogTool{
 			"The call waits for the answer for up to 100 seconds. When the state is still pending, do not ask again: continue without the connector. " +
 			"An approved connector reaches sessions that start later. This session gets its tools after its agent restarts: the user restarts it from the chat, and a message then says that the connector is ready.",
 		props: map[string]any{
-			"key":        stringProp("Short name that starts each tool name: 1 to 32 lowercase letters, digits, hyphens or underscores."),
+			"key":        stringProp("Short name that starts each tool name: 1 to 32 lowercase letters, digits, hyphens or underscores. Not the name of a tool server that you already have: a connector with that name does not reach you."),
 			"url":        stringProp("Server URL, https only. Give this or command."),
 			"command":    stringProp("Program that runs the server on this computer, such as npx. Give this or url."),
 			"args":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Arguments of the command."},

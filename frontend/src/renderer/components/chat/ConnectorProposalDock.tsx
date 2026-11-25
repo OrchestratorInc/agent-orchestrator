@@ -4,7 +4,9 @@ import { useTranslation } from "react-i18next";
 import { connectorsApi, connectorsQueryKey, sessionProposalsQueryKey, type Connector, type ConnectorProposal } from "../../hooks/useConnectors";
 import { ConnectorSignInDialog } from "../settings/ConnectorSignInDialog";
 import { connectorTarget, needsSignIn } from "../settings/ConnectorsSection";
+import { mcpToolName } from "../../lib/mcp-tool";
 import type { ReadyConnector } from "../../stores/connector-restart-store";
+import type { ConversationItem } from "../../types/conversation";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -16,6 +18,18 @@ const authKeys = {
 	header: "settings.connectors.dialog.authHeader",
 	none: "settings.connectors.dialog.authNone",
 } as const;
+
+export function connectorAskIn(items: readonly ConversationItem[]): { asked: boolean; waiting: boolean } {
+	let asked = false;
+	let waiting = false;
+	for (const item of items) {
+		if (item.kind !== "activity") continue;
+		if (mcpToolName(item).tool !== "connector_propose" && !item.summary.includes("connector_propose")) continue;
+		asked = true;
+		waiting ||= item.status === "running" || item.status === "pending";
+	}
+	return { asked, waiting };
+}
 
 export type ConnectorRestart = { ready?: string; busy: boolean; offer: (connector?: ReadyConnector) => void; restart: () => Promise<unknown> };
 
@@ -36,6 +50,8 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting, resta
 	const reviewed = proposal?.transport !== "stdio" || (draft.id === proposal.id && draft.reviewed === true);
 	const settle = () => {
 		setDraft({ values: {} });
+		approve.reset();
+		decline.reset();
 		void queryClient.invalidateQueries({ queryKey: sessionProposalsQueryKey(sessionId, hostId) });
 	};
 	const approve = useMutation({

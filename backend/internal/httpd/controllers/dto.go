@@ -3044,7 +3044,7 @@ type ConnectorStatusDetail struct {
 	Error string `json:"error"`
 }
 
-// ConnectorResponse is one connector without its secret values.
+// ConnectorResponse is one connector without its environment and header values. Arguments of a command are returned as stored.
 type ConnectorResponse struct {
 	ID            string                 `json:"id"`
 	Key           string                 `json:"key" description:"Tool names start with this."`
@@ -3103,7 +3103,7 @@ type ListSessionConnectorsResponse struct {
 	Connectors []SessionConnectorResponse `json:"connectors"`
 }
 
-// ConnectorImportCandidateResponse is a tool server found in the configuration of another agent. Stored values never appear.
+// ConnectorImportCandidateResponse is a tool server found in the configuration of another agent. Environment and header values never appear; arguments of a command are shown as written.
 type ConnectorImportCandidateResponse struct {
 	ID         string   `json:"id"`
 	Agent      string   `json:"agent" description:"Claude Code, Codex or Cursor."`

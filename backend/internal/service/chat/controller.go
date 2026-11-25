@@ -343,8 +343,7 @@ type Controller struct {
 	mcpServerOrder        []string
 	mcpServerRevision     uint64
 	mcpServerSeenRevision map[string]uint64
-	// mcpSignIns holds, by server name, the address that an open sign-in of the provider returns to.
-	mcpSignIns map[string]string
+	mcpSignIns            map[string]string
 	// mcpPersistMu orders durable MCP replacements with individual notification
 	// writes. Reload runs outside the event pump, so c.mu alone cannot prevent an
 	// older notification write from landing after an authoritative replacement.

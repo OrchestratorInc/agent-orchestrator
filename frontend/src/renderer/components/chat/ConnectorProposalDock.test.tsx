@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import * as hostClients from "../../lib/host-clients";
-import { ConnectorProposalDock, type ConnectorRestart } from "./ConnectorProposalDock";
+import type { ConversationItem } from "../../types/conversation";
+import { ConnectorProposalDock, connectorAskIn, type ConnectorRestart } from "./ConnectorProposalDock";
 
 function renderDock(props: { asked: boolean; waiting: boolean; hostId?: string; restart?: ConnectorRestart }) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -28,6 +29,24 @@ const added = {
 	id: "c1", key: "sentry", name: "sentry", transport: "http", url: "https://mcp.sentry.dev/mcp", args: [], envKeys: [], headerKeys: [],
 	auth: "oauth", signedIn: false, enabled: true, status: "unchecked", tools: [], createdAt: stamp, updatedAt: stamp,
 };
+
+describe("connectorAskIn", () => {
+	const row = (fields: Record<string, unknown>) => ({ kind: "activity", id: "a", sequence: 1, activityKind: "mcp_tool", status: "completed", summary: "", ...fields }) as unknown as ConversationItem;
+
+	it("finds the request in the row shapes of Claude Code, Codex and other agents", () => {
+		expect(connectorAskIn([row({ detail: { providerToolName: "mcp__ao__connector_propose" } })])).toEqual({ asked: true, waiting: false });
+		expect(connectorAskIn([row({ summary: "Called ao/connector_propose", status: "running" })])).toEqual({ asked: true, waiting: true });
+		expect(connectorAskIn([row({ activityKind: "tool", summary: "connector_propose", status: "pending" })])).toEqual({ asked: true, waiting: true });
+	});
+
+	it("finds no request in other rows", () => {
+		expect(connectorAskIn([
+			row({ detail: { providerToolName: "mcp__ao__connector_list" } }),
+			row({ summary: "Called hf/hub_repo_search" }),
+			{ kind: "message", id: "m", role: "user", text: "connector_propose" } as unknown as ConversationItem,
+		])).toEqual({ asked: false, waiting: false });
+	});
+});
 
 describe("ConnectorProposalDock", () => {
 	afterEach(() => {
@@ -141,6 +160,22 @@ describe("ConnectorProposalDock", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Restart and continue" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Another app still has this chat open.");
 		expect(offer).not.toHaveBeenCalled();
+	});
+
+	it("does not show the error of one request under the next request", async () => {
+		let pending = [sentry, { ...paper, id: "p9" }];
+		vi.spyOn(apiClient, "GET").mockImplementation((async () => ({ data: { proposals: pending } })) as never);
+		vi.spyOn(apiClient, "POST").mockImplementation((async (path: string) => {
+			if (path.endsWith("/approve")) return { error: { code: "CONNECTOR_LOOPBACK_REQUIRED", message: "Add this connector on the computer that runs the chat." } };
+			pending = pending.slice(1);
+			return { data: { proposal: { ...sentry, state: "declined" } } };
+		}) as never);
+		renderDock({ asked: true, waiting: false });
+		fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Add this connector on the computer that runs the chat.");
+		fireEvent.click(screen.getByRole("button", { name: "Decline" }));
+		expect(await screen.findByRole("button", { name: "Review command" })).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
 	it("takes each value from the user before a command can be approved, and can decline", async () => {

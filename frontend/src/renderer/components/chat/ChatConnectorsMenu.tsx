@@ -84,7 +84,11 @@ export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers, ownS
 	if (total === 0) return null;
 	const reported = new Map(servers.map((server) => [server.name, server]));
 	const rows = connectors.map((connector) => ({ connector, report: reported.get(connector.key), state: connectorRowState(connector, reported.get(connector.key)) }));
-	const attention = rows.some((row) => row.state === "needsSignIn" || row.state === "failed");
+	const attention = rows.some((row) => row.state === "needsSignIn" || row.state === "failed") || (Boolean(ownSignIn) && own.some((server) => server.status === "needs-auth"));
+	const ownRefusal = (name: string) => {
+		const row = reported.get(name);
+		return row?.failureReason === "signInFailed" ? row.error : undefined;
+	};
 	const label = t("chat.connectors.chip", { count: total });
 	const fromOrchestrator = t("chat.connectors.fromOrchestrator");
 	const fromAgent = t("chat.connectors.fromAgent", { agent: agentName });
@@ -184,7 +188,7 @@ export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers, ownS
 			<ConnectorSignInDialog
 				connector={{ id: signingIn.key, name: signingIn.name, signedIn: false }}
 				hostId={hostId}
-				own={signingIn.own ? { sessionId, ready: reported.get(signingIn.key)?.status === "ready" } : undefined}
+				own={signingIn.own ? { sessionId, ready: reported.get(signingIn.key)?.status === "ready", refused: ownRefusal(signingIn.key) } : undefined}
 				onClose={(signedIn) => {
 					setSigningIn(null);
 					void refetch();

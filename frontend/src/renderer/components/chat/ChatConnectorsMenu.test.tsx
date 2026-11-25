@@ -139,6 +139,7 @@ describe("ChatConnectorsMenu", () => {
 		await user.type(await screen.findByLabelText("Page did not load after you approved? Paste its address."), "http://127.0.0.1:3011/oauth/mcp/callback?code=1");
 		await user.click(screen.getByRole("button", { name: "Finish" }));
 		expect(signedIn).not.toHaveBeenCalled();
+		expect(await screen.findByText("Signed in.")).toBeInTheDocument();
 		await user.click(await screen.findByRole("button", { name: "Done" }));
 		expect(signedIn).toHaveBeenCalledWith({ key: "sentry", name: "Sentry" });
 		expect(local).not.toHaveBeenCalled();
@@ -164,7 +165,9 @@ describe("ChatConnectorsMenu", () => {
 		expect(screen.queryByRole("button", { name: "Sign in to tracker" })).not.toBeInTheDocument();
 		expect(within(screen.getByRole("list", { name: "From Codex's own settings" })).getAllByRole("listitem").map((row) => row.textContent)).toEqual(["trackerNeeds sign-in", "notesFailed"]);
 		await user.keyboard("{Escape}");
+		expect(screen.getByRole("button", { name: "2 connectors in this chat" }).querySelector("svg")).not.toHaveClass("text-warning");
 		view.rerender(menu("needs-auth", true));
+		expect(screen.getByRole("button", { name: "2 connectors in this chat" }).querySelector("svg")).toHaveClass("text-warning");
 		await user.click(screen.getByRole("button", { name: "2 connectors in this chat" }));
 		expect(screen.queryByRole("button", { name: "Sign in to notes" })).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Sign in to tracker" }));
@@ -174,6 +177,17 @@ describe("ChatConnectorsMenu", () => {
 		const address = await screen.findByLabelText("Page did not load after you approved? Paste its address.");
 		expect(address).toHaveAttribute("placeholder", "http://127.0.0.1:52136/callback");
 		expect(screen.queryByText("Signed in.")).not.toBeInTheDocument();
+		view.rerender(
+			<QueryClientProvider client={client}>
+				<ChatConnectorsMenu sessionId="mer-1" agentName="Codex" servers={[{ name: "tracker", status: "needs-auth", error: "timed out waiting for OAuth callback", failureReason: "signInFailed" }]} ownSignIn />
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByRole("alert")).toHaveTextContent("timed out waiting for OAuth callback");
+		await user.click(screen.getByRole("button", { name: "Start again" }));
+		await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+		view.rerender(menu("needs-auth", true));
+		expect(await screen.findByLabelText("Page did not load after you approved? Paste its address.")).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		view.rerender(menu("ready", true));
 		expect(await screen.findByText("Signed in.")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Done" }));
@@ -201,6 +215,17 @@ describe("ChatConnectorsMenu", () => {
 			body: { server: "tracker", callbackUrl: "http://127.0.0.1:52136/callback?code=c1" },
 		}));
 		expect(await screen.findByText("Signed in.")).toBeInTheDocument();
+	});
+
+	it("says Signed in, not that no sign-in is needed, when the stored sign-in still works", async () => {
+		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: { connectors: [{ key: "sentry", name: "Sentry", transport: "http", auth: "oauth", status: "needs_signin", enabled: true, calls: 0 }] } } as never);
+		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: { connector: { signedIn: true } } } as never);
+		const user = userEvent.setup();
+		renderMenu();
+		await user.click(await screen.findByRole("button", { name: "1 connector in this chat" }));
+		await user.click(screen.getByRole("button", { name: "Sign in to Sentry" }));
+		expect(await screen.findByText("Signed in.")).toBeInTheDocument();
+		expect(screen.queryByText("This server needs no sign-in.")).not.toBeInTheDocument();
 	});
 
 	it("does not claim an agent loaded a server it has not reported", () => {

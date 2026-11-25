@@ -608,7 +608,6 @@ func (c *ConversationsController) setConfigOption(w http.ResponseWriter, r *http
 	envelope.WriteJSON(w, http.StatusOK, configOptionsPayload(options))
 }
 
-// signInMCPServer starts the agent's own sign-in for one of its tool servers.
 func (c *ConversationsController) signInMCPServer(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/mcp/sign-in")
@@ -627,7 +626,6 @@ func (c *ConversationsController) signInMCPServer(w http.ResponseWriter, r *http
 	envelope.WriteJSON(w, http.StatusOK, ConversationMCPSignInResponse{AuthorizationURL: out.AuthorizationURL, CallbackURL: out.CallbackURL})
 }
 
-// finishMCPSignIn takes the address of the page the browser opened after approval, for a browser on another device.
 func (c *ConversationsController) finishMCPSignIn(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/mcp/sign-in/finish")

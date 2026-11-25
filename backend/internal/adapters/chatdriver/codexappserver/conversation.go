@@ -91,8 +91,7 @@ type conversation struct {
 
 	// activeTurn is the most recent provider turn id, used when a caller asks to
 	// interrupt without naming one.
-	activeTurn string
-	// reloadAfterTurn holds a tool-server reload that a sign-in asked for while a turn ran.
+	activeTurn      string
 	reloadAfterTurn bool
 
 	// contextTokens is the conversation's latest position in the model's context,
@@ -999,11 +998,12 @@ func (c *conversation) refuseDynamicToolCall(params json.RawMessage) error {
 	return fmt.Errorf("client declares no tools; %q is not available", p.Tool)
 }
 
-// mcpNeedsSignIn is the status of a tool server that waits for the user's sign-in.
-const mcpNeedsSignIn = "needs-auth"
-
-// mcpSignInWait is how long Codex keeps its sign-in listener open.
-const mcpSignInWait = 10 * time.Minute
+const (
+	mcpNeedsSignIn   = "needs-auth"
+	mcpSignInFailed  = "signInFailed"
+	mcpSignInWait    = 10 * time.Minute
+	mcpSignInNoCause = "The sign-in did not complete."
+)
 
 // SignInMCPServer starts Codex's own sign-in for one of its tool servers and returns the page to open.
 func (c *conversation) SignInMCPServer(ctx context.Context, name string) (string, error) {
@@ -1014,6 +1014,7 @@ func (c *conversation) SignInMCPServer(ctx context.Context, name string) (string
 	if err := c.conn.request(ctx, codexproto.MethodMcpServerOauthLogin, params, &resp); err != nil {
 		return "", fmt.Errorf("%s: %w", codexproto.MethodMcpServerOauthLogin, err)
 	}
+	c.emit(ports.ChatEvent{Kind: ports.ChatEventMCPServers, MCPServers: []ports.ChatMCPServer{{Name: name, Status: mcpNeedsSignIn}}})
 	return resp.AuthorizationURL, nil
 }
 
@@ -1022,7 +1023,17 @@ func (c *conversation) observeMCPSignIn(n notification) {
 		return
 	}
 	var p codexproto.McpServerOauthLoginCompletedNotification
-	if err := json.Unmarshal(n.Params, &p); err != nil || !p.Success {
+	if err := json.Unmarshal(n.Params, &p); err != nil || p.Name == "" {
+		return
+	}
+	if !p.Success {
+		cause := mcpSignInNoCause
+		if p.Error != nil && *p.Error != "" {
+			cause = *p.Error
+		}
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventMCPServers, MCPServers: []ports.ChatMCPServer{
+			{Name: p.Name, Status: mcpNeedsSignIn, Error: cause, FailureReason: mcpSignInFailed},
+		}})
 		return
 	}
 	c.mu.Lock()
@@ -1312,8 +1323,6 @@ func decisionLabel(id string) string {
 	}
 }
 
-// toolApproval is Codex's question before it calls a tool of a tool server:
-// an MCP elicitation marked as a tool-call approval, with no form to fill.
 type toolApproval struct {
 	Mode string `json:"mode"`
 	Meta struct {
