@@ -355,8 +355,9 @@ func isASCIILetter(c byte) bool {
 // the absolute folder it ran ao artifact add in. A relative reference is read
 // from workingDir when that folder is inside dir and the file is there, so
 // `ao artifact add index.html` works from a subfolder of the artifact
-// directory. Anywhere else, or when the file is not there, it stays relative
-// to dir as before.
+// directory. Anywhere else, or when no file is there, it stays relative to
+// dir as before. A file there that cannot be inspected keeps the joined path,
+// so Registrable refuses it instead of a same-named file at dir's top.
 func FromWorkingDir(dir, workingDir, reference string) string {
 	if workingDir == "" || !filepath.IsAbs(workingDir) {
 		return reference
@@ -375,7 +376,7 @@ func FromWorkingDir(dir, workingDir, reference string) string {
 		return reference
 	}
 	joined := filepath.Join(workingDir, native)
-	if _, err := os.Lstat(joined); err != nil {
+	if _, err := os.Lstat(joined); errors.Is(err, fs.ErrNotExist) {
 		return reference
 	}
 	return joined

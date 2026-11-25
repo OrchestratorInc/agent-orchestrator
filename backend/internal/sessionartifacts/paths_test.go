@@ -3,6 +3,7 @@ package sessionartifacts
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -66,8 +67,12 @@ func TestRelUnderIgnoresLetterCaseOnlyWhereTheFileSystemDoes(t *testing.T) {
 	if got := relUnder(dir, reference, true); got != "report.html" {
 		t.Fatalf("folded = %q, want report.html", got)
 	}
-	if got := relUnder(dir, reference, false); got != ".." {
-		t.Fatalf("case-sensitive = %q, want ..", got)
+	// Windows' filepath.Rel already ignores case, so only elsewhere does a
+	// case-sensitive comparison refuse the path.
+	if runtime.GOOS != "windows" {
+		if got := relUnder(dir, reference, false); got != ".." {
+			t.Fatalf("case-sensitive = %q, want ..", got)
+		}
 	}
 	sibling := dir + "-other" + string(filepath.Separator) + "report.html"
 	if got := relUnder(dir, sibling, true); got != ".." {
@@ -144,6 +149,29 @@ func TestFromWorkingDir(t *testing.T) {
 	got, err := Registrable(dir, FromWorkingDir(dir, screens, "index.html"))
 	if err != nil || got.Path != "screens/index.html" {
 		t.Fatalf("Registrable = %q, %v", got.Path, err)
+	}
+}
+
+func TestFromWorkingDirKeepsAFileItCannotInspect(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test process cannot search")
+	}
+	dir := t.TempDir()
+	writeArtifact(t, dir, "screens/locked/report.html")
+	writeArtifact(t, dir, "locked/report.html")
+	screens := filepath.Join(dir, "screens")
+	locked := filepath.Join(screens, "locked")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	want := filepath.Join(screens, "locked", "report.html")
+	if got := FromWorkingDir(dir, screens, "locked/report.html"); got != want {
+		t.Fatalf("FromWorkingDir = %q, want %q, not the same-named file at the top", got, want)
+	}
+	if got, err := Registrable(dir, want); err == nil {
+		t.Fatalf("registered %q from a folder that cannot be searched", got.Path)
 	}
 }
 
