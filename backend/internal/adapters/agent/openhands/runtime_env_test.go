@@ -162,7 +162,9 @@ func TestOpenHandsAmbientEndpointDoesNotOverrideSavedSettings(t *testing.T) {
 	}
 }
 
-func TestOpenHandsImportedEndpointScope(t *testing.T) {
+// Endpoint routing is generic: an imported restore never injects a provider
+// endpoint, so the saved native settings or explicit session env decide it.
+func TestOpenHandsImportedRestoreNeverPinsAProviderEndpoint(t *testing.T) {
 	clearOpenHandsLLMEnv(t)
 	t.Setenv("OPENAI_BASE_URL", "https://ambient.invalid/v1")
 	for _, tc := range []struct {
@@ -212,8 +214,8 @@ func TestOpenHandsImportedEndpointScope(t *testing.T) {
 			ports.MetadataKeyAgentSessionID: "native", ports.MetadataKeyImportSourceNativeID: "source", ports.MetadataKeyImportConfigDir: t.TempDir(),
 		}}}
 		cmd, ok, err := testPlugin().GetRestoreCommand(t.Context(), cfg)
-		if err != nil || !ok || len(cmd) < 2 || cmd[0] != "env" || cmd[1] != "OPENAI_BASE_URL=https://api.openai.com/v1" {
-			t.Fatalf("native default restore = %q, %v, %v", cmd, ok, err)
+		if err != nil || !ok || strings.Contains(strings.Join(cmd, " "), "OPENAI_BASE_URL=") {
+			t.Fatalf("native default restore pinned an endpoint = %q, %v, %v", cmd, ok, err)
 		}
 	})
 }

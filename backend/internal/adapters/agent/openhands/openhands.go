@@ -112,7 +112,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	cmd = importedEndpointCommand(cmd, cfg)
 	appendTask(&cmd, cfg.Prompt)
 	return cmd, true, nil
 }

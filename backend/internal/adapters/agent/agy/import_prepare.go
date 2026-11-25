@@ -239,7 +239,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if err := os.WriteFile(filepath.Join(stage, importProofName), encoded, 0o600); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
-	if err := validatePreparedImport(ctx, ports.NativeSessionRef{NativeSessionID: ref.NativeSessionID, ConfigDir: stage, TranscriptPath: staged}, launch, &proof); err != nil {
+	if err := validateStagedImport(ctx, ports.NativeSessionRef{NativeSessionID: ref.NativeSessionID, ConfigDir: stage, TranscriptPath: staged}, launch, proof); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	if err := os.Rename(stage, ref.ConfigDir); err != nil {
@@ -330,7 +330,9 @@ func validatePreparedImport(ctx context.Context, ref ports.NativeSessionRef, cwd
 	if expected == nil && !preparedImportRootMatches(ref.ConfigDir, proof) {
 		return errors.New("agy: native preparation proof is not bound to this private root")
 	}
-	if proof.ID != ref.NativeSessionID || proof.CWD != cwd || proof.Version != supportedImportVersion || proof.Fingerprint == "" || (expected != nil && proof != *expected) {
+	// Any recorded version is accepted: the pin gates new copies only, and a
+	// prepared copy must stay openable after the pin moves or Agy updates.
+	if proof.ID != ref.NativeSessionID || proof.CWD != cwd || proof.Version == "" || proof.Fingerprint == "" || (expected != nil && proof != *expected) {
 		return errors.New("agy: prepared native identity/workspace proof mismatch")
 	}
 	if err := validatePreparedImportAssets(ctx, ref, proof); err != nil {
@@ -341,12 +343,28 @@ func validatePreparedImport(ctx context.Context, ref ports.NativeSessionRef, cwd
 			return errors.New("agy: prepared history must not share the source inode")
 		}
 	}
+	id, workspace, err := readPreparedIdentity(ctx, ref.ConfigDir, ref.TranscriptPath)
+	if err != nil {
+		return importUnavailable(err)
+	}
+	if id != ref.NativeSessionID || workspace != cwd {
+		return errors.New("agy: prepared native history is bound to another identity or workspace")
+	}
+	return nil
+}
+
+// validateStagedImport fully audits a freshly remapped copy before it is
+// published; reopen later uses the lighter validatePreparedImport only.
+func validateStagedImport(ctx context.Context, ref ports.NativeSessionRef, cwd string, proof agyImportProof) error {
+	if err := validatePreparedImport(ctx, ref, cwd, &proof); err != nil {
+		return err
+	}
 	a, err := readImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath, false)
 	if err != nil {
 		return importUnavailable(err)
 	}
 	if a.ID != ref.NativeSessionID || a.CWD != cwd {
-		return errors.New("agy: prepared native history is bound to another identity or workspace")
+		return errors.New("agy: staged native history is bound to another identity or workspace")
 	}
 	return nil
 }
@@ -362,7 +380,7 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 	if proofErr != nil && (preparedImportNamespace(ref.ConfigDir) || !errors.Is(proofErr, os.ErrNotExist)) {
 		return "", false, proofErr
 	}
-	if prepared && (!preparedImportRootMatches(ref.ConfigDir, proof) || proof.ID != ref.NativeSessionID || proof.Version != supportedImportVersion || !filepath.IsAbs(proof.CWD) || proof.Fingerprint == "") {
+	if prepared && (!preparedImportRootMatches(ref.ConfigDir, proof) || proof.ID != ref.NativeSessionID || proof.Version == "" || !filepath.IsAbs(proof.CWD) || proof.Fingerprint == "") {
 		return "", false, errors.New("agy: invalid private native history proof")
 	}
 	paths := []string{ref.TranscriptPath}
@@ -379,7 +397,7 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 				}
 				return "", false, err
 			}
-			a, err = readImportArchive(ctx, ref.ConfigDir, path, false)
+			a.ID, a.CWD, err = readPreparedIdentity(ctx, ref.ConfigDir, path)
 		} else {
 			a, err = ReadImportArchive(ctx, ref.ConfigDir, path)
 		}

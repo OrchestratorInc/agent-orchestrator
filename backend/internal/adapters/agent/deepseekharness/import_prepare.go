@@ -152,7 +152,9 @@ func validatePrivateImport(ctx context.Context, root, id, cwd string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if p.ID != id || p.CWD != launch || p.Version != supportedImportVersion || p.Fingerprint == "" || filepath.Base(root) != name {
+	// Any recorded version is accepted: the pin gates new copies only, so
+	// moving it must not make prepared imports unopenable.
+	if p.ID != id || p.CWD != launch || p.Version == "" || p.Fingerprint == "" || filepath.Base(root) != name {
 		return "", ports.ErrNativeHistoryUnavailable
 	}
 	if err := checkImportCredentialFormat(p.CredentialsPath); err != nil {

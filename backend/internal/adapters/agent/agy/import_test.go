@@ -390,3 +390,55 @@ func TestImportedReopenSurvivesCLIUpgradeButPreparationStaysPinned(t *testing.T)
 		t.Fatal("missing ACP history after CLI update accepted")
 	}
 }
+
+// Agy keeps writing the private DB after import and may migrate it after an
+// update. Reopen checks identity and workspace only, so later native formats,
+// subtrajectories, links and tables never make the import unopenable.
+func TestPrivateImportReopensAfterNativeFormatChanges(t *testing.T) {
+	ctx := context.Background()
+	root, path, cwd := importFixture(t)
+	fingerprint, err := ImportFingerprint(ctx, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New()
+	p.importVersion = func(context.Context) (string, error) { return supportedImportVersion, nil }
+	launch, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := p.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: launch, DataDir: t.TempDir(), Chat: true, SourceFingerprint: fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", ref.TranscriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		"INSERT INTO steps(idx,step_type,status,has_subtrajectory,step_payload,step_format) VALUES(90,15,3,1,x'00',2)",
+		"INSERT INTO parent_references DEFAULT VALUES",
+		"CREATE TABLE later_native_table(id INTEGER PRIMARY KEY)",
+		"PRAGMA user_version=2",
+	} {
+		if _, err := db.Exec(q); err != nil {
+			_ = db.Close()
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readImportArchive(ctx, ref.ConfigDir, ref.TranscriptPath, false); err == nil {
+		t.Fatal("fixture no longer exceeds the import-time audit")
+	}
+	if err := ValidateImportedACP(ctx, ref.ConfigDir, ref.NativeSessionID, launch, "agy"); err != nil {
+		t.Fatalf("ACP reopen after native format change: %v", err)
+	}
+	if found, ok, err := p.LocateTranscript(ctx, ref); err != nil || !ok || found != ref.TranscriptPath {
+		t.Fatalf("terminal lookup after native format change = %q, %v, %v", found, ok, err)
+	}
+	if again, err := p.PrepareImportedSession(ctx, ports.ImportedSessionRelocation{NativeSessionID: importTestID, ConfigDir: root, TranscriptPath: path, SourceCWD: cwd, LaunchCWD: launch, DataDir: filepath.Dir(filepath.Dir(filepath.Dir(ref.ConfigDir))), Chat: true, SourceFingerprint: fingerprint}); err != nil || again != ref {
+		t.Fatalf("prepared recovery after native format change = %+v, %v", again, err)
+	}
+}

@@ -171,6 +171,41 @@ func ReadImportArchive(ctx context.Context, root, path string) (ImportArchive, e
 	return a, nil
 }
 
+// readPreparedIdentity checks only what a reopen needs from AO's private DB:
+// one conversation with the expected ID, and its workspace. Agy keeps writing
+// this DB and may migrate it after an update, so the import-time schema,
+// step-format and linkage audits apply to the source and staged copy only.
+func readPreparedIdentity(ctx context.Context, root, path string) (string, string, error) {
+	root, rel, err := preparedImportPath(root, path)
+	if err != nil {
+		return "", "", err
+	}
+	id := strings.TrimSuffix(filepath.Base(rel), ".db")
+	db, err := sql.Open("sqlite", importFileURI(filepath.Join(root, rel))+"?mode=ro&_pragma=busy_timeout(2000)")
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = db.Close() }()
+	db.SetMaxOpenConns(1)
+	var count int
+	var native string
+	if err := db.QueryRowContext(ctx, "SELECT count(*),coalesce(min(cascade_id),'') FROM trajectory_meta").Scan(&count, &native); err != nil {
+		return "", "", err
+	}
+	if count != 1 || native != id {
+		return "", "", errors.New("agy: prepared native conversation identity mismatch")
+	}
+	var meta []byte
+	if err := db.QueryRowContext(ctx, "SELECT data FROM trajectory_metadata_blob WHERE id='main' AND length(data)<=8388608").Scan(&meta); err != nil {
+		return "", "", err
+	}
+	cwd, err := importMetadataCWD(meta)
+	if err != nil {
+		return "", "", err
+	}
+	return id, cwd, nil
+}
+
 func readImportArchive(ctx context.Context, root, path string, immutable bool) (ImportArchive, error) {
 	a := ImportArchive{}
 	resolve := preparedImportPath
