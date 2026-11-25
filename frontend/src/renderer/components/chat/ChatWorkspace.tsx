@@ -6343,7 +6343,13 @@ const TurnGroup = memo(function TurnGroup({
 		group.items.some((item) =>
 			item.kind === "activity" && isCompaction(item) && item.status === "failed" &&
 			item.detail?.error?.trim() === group.outcome?.error?.trim());
-	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !compactionToldFailure);
+	// So does a stopped /compact ("Couldn't compact conversation · Stopped"), when
+	// compacting was all the turn did.
+	const compactionToldStop = group.outcome?.state === "interrupted" &&
+		group.items.some((item) => item.kind === "activity" && isCompaction(item) && item.status === "cancelled") &&
+		group.items.every((item) => (item.kind === "activity" && isCompaction(item)) || (item.kind === "message" && item.role === "user"));
+	const compactionToldOutcome = compactionToldFailure || compactionToldStop;
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !compactionToldOutcome);
 	// Only the failure is told once: the turn can still be retried.
 	const compactionRetry = compactionToldFailure ? retry : undefined;
 	// A message refused for its login, in a turn that did nothing else, says what
@@ -6691,7 +6697,7 @@ const TurnGroup = memo(function TurnGroup({
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId && !compactionToldFailure ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId && !compactionToldOutcome ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}

@@ -1718,6 +1718,27 @@ func TestMidTurnCompactionReclaimsFromItsOwnStart(t *testing.T) {
 	}
 }
 
+// A compaction still under way when its turn ends normally never said how it
+// went: its row says so, rather than settling as a finished compaction.
+func TestCompactionTheTurnLeftOpenSaysNoResult(t *testing.T) {
+	d, srv := newTestDriver(t)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = conv.Close() }()
+
+	srv.push(`{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"inProgress","items":[]}}}`)
+	srv.push(`{"method":"item/started","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"turn-1"}}`)
+	srv.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","items":[]}}}`)
+
+	nextEvent(t, conv.Events(), ports.ChatEventCompacted) // running
+	settled := nextEvent(t, conv.Events(), ports.ChatEventCompacted)
+	if settled.ProviderItemID != "cc-1" || settled.ActivityStatus != domain.ActivityStatusFailed || settled.Summary != "No result reported" {
+		t.Fatalf("settled = %q %q on %q, want cc-1 failed with \"No result reported\"", settled.ActivityStatus, settled.Summary, settled.ProviderItemID)
+	}
+}
+
 // The deprecated notification names no item. It settles the compaction under
 // way, so its running row does not stay running beside a second, settled row.
 func TestDeprecatedCompactedNotificationSettlesTheRunningItem(t *testing.T) {

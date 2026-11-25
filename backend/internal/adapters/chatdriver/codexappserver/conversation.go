@@ -292,11 +292,20 @@ func (c *conversation) pump() {
 				if c.activeTurn == ev.ProviderTurnID {
 					c.activeTurn = ""
 				}
-				// A compaction still under way ended with its turn; the turn's
-				// settlement settles its row.
+				unreported, from, window := c.compactingItem, c.compactingFrom, c.contextWindow
 				c.compactingItem = ""
 				c.compactingFrom = 0
 				c.mu.Unlock()
+				if unreported != "" && ev.Err == nil && ev.TurnState == domain.TurnStateCompleted {
+					// A compaction still under way when its turn ended never said how it
+					// went. A stopped or failed turn settles its row as such; one that
+					// ended normally would settle it as a finished compaction.
+					c.emit(ports.ChatEvent{
+						Kind: ports.ChatEventCompacted, ProviderTurnID: ev.ProviderTurnID, ProviderItemID: unreported,
+						ActivityStatus: domain.ActivityStatusFailed, Summary: "No result reported",
+						Detail: compactionFigures(from, 0, window),
+					})
+				}
 			}
 			if ev.Kind == ports.ChatEventCompacted {
 				settled, ok := c.settleCompaction(ev)

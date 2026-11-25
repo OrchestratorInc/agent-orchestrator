@@ -1315,18 +1315,24 @@ func (c *conversation) finishPrompt(
 		c.settledCompaction = nil
 	}
 	settleFinished := false
+	var unreported *providerCompaction
 	if c.providerCompaction != nil && c.providerCompaction.turnID == turnID {
 		if c.providerCompaction.finished {
 			settleFinished = true
 		} else {
-			// A compaction still open when its turn ends never reported how it
-			// went. Settling the turn settles its row with the turn's outcome.
+			unreported = c.providerCompaction
 			c.providerCompaction = nil
 		}
 	}
 	c.mu.Unlock()
 	if settleFinished {
 		c.settleFinishedCompaction(c.emit)
+	}
+	if unreported != nil && turnErr == nil && state == domain.TurnStateCompleted {
+		// A compaction still open when its turn ends never reported how it went.
+		// A stopped or failed turn settles its row as such; one that ended
+		// normally would settle it as a finished compaction, so it says so here.
+		c.settleUnreportedCompaction(unreported, c.emit)
 	}
 	if isCompaction {
 		if state == domain.TurnStateCompleted {
@@ -1588,10 +1594,7 @@ type CompactionReport struct {
 // also sends a second "completed" with tokensBefore/tokensAfter, its own
 // figures, from the compaction's boundary.
 func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any, emit func(ports.ChatEvent)) {
-	compaction := nestedMap(meta, "ao/compaction")
-	if compaction == nil {
-		compaction = nestedMap(meta, "opencode/compaction")
-	}
+	compaction := compactionStatusMeta(meta)
 	if compaction == nil {
 		return
 	}
@@ -1614,6 +1617,15 @@ func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any,
 		return
 	}
 	c.reportCompaction(turnID, report, emit)
+}
+
+// compactionStatusMeta is the compaction status an update's `_meta` carries,
+// or nil.
+func compactionStatusMeta(meta map[string]any) map[string]any {
+	if compaction := nestedMap(meta, "ao/compaction"); compaction != nil {
+		return compaction
+	}
+	return nestedMap(meta, "opencode/compaction")
 }
 
 // reportCompaction applies one step of a compaction the agent reported.
@@ -1681,7 +1693,7 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 		window := c.contextWindow
 		c.mu.Unlock()
 		emit(ports.ChatEvent{
-			Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
+			Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(turnID), ProviderItemID: open.itemID,
 			ActivityStatus: domain.ActivityStatusRunning, Detail: compactionFigures(open.before, 0, window),
 		})
 		return true
@@ -1699,7 +1711,7 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 		window := c.contextWindow
 		c.mu.Unlock()
 		emit(ports.ChatEvent{
-			Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
+			Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(turnID), ProviderItemID: open.itemID,
 			ActivityStatus: domain.ActivityStatusFailed, Summary: "Nothing to compact",
 			Detail: compactionFigures(open.before, 0, window),
 		})
@@ -1762,14 +1774,14 @@ func (c *conversation) reportCompaction(turnID string, report CompactionReport, 
 	c.mu.Unlock()
 	if report.Status == "failed" {
 		emit(ports.ChatEvent{
-			Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
+			Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(turnID), ProviderItemID: open.itemID,
 			ActivityStatus: domain.ActivityStatusFailed, Summary: failure,
 			Detail: compactionFigures(before, 0, window),
 		})
 		return true
 	}
 	emit(ports.ChatEvent{
-		Kind: ports.ChatEventCompacted, ProviderTurnID: turnID, ProviderItemID: open.itemID,
+		Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(turnID), ProviderItemID: open.itemID,
 		Summary: compactionSummary(before, after),
 		Detail:  compactionFigures(before, after, window),
 	})
@@ -1789,6 +1801,25 @@ func (c *conversation) nextProviderCompactionIDLocked(turnID string) string {
 	}
 	c.providerCompactions++
 	return c.providerItemID(fmt.Sprintf("compaction:%s:%d", turnID, c.providerCompactions))
+}
+
+// unreportedCompaction is why a compaction whose agent never said how it went
+// did not settle as one.
+const unreportedCompaction = "No result reported"
+
+// settleUnreportedCompaction settles a compaction whose agent never said how it
+// went before its turn, or its cycle, ended. Left to the turn's settling, its row
+// would read as a finished compaction, though nothing marked the conversation
+// compacted.
+func (c *conversation) settleUnreportedCompaction(open *providerCompaction, emit func(ports.ChatEvent)) {
+	c.mu.Lock()
+	window := c.contextWindow
+	c.mu.Unlock()
+	emit(ports.ChatEvent{
+		Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(open.turnID), ProviderItemID: open.itemID,
+		ActivityStatus: domain.ActivityStatusFailed, Summary: unreportedCompaction,
+		Detail: compactionFigures(open.before, 0, window),
+	})
 }
 
 // contextDroppedSince reports whether the agent's context figure, measured in
@@ -1825,7 +1856,7 @@ func (c *conversation) settleFinishedCompaction(emit func(ports.ChatEvent)) {
 	}
 	c.mu.Unlock()
 	emit(ports.ChatEvent{
-		Kind: ports.ChatEventCompacted, ProviderTurnID: open.turnID, ProviderItemID: open.itemID,
+		Kind: ports.ChatEventCompacted, ProviderTurnID: compactionRowTurn(open.turnID), ProviderItemID: open.itemID,
 		Summary: compactionSummary(open.before, after),
 		Detail:  compactionFigures(open.before, after, window),
 	})

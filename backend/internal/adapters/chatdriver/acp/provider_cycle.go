@@ -3,6 +3,7 @@ package acp
 import (
 	"encoding/json"
 	"maps"
+	"strings"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -30,6 +31,20 @@ var (
 	providerCycleSettleGrace = 3 * time.Second
 	providerCycleQuietWait   = 30 * time.Second
 )
+
+// providerCyclePrefix starts every cycle id, so a compaction the agent ran in a
+// cycle, tracked by the cycle's id, keeps its row turn-less like the cycle's
+// other items.
+const providerCyclePrefix = "cycle-"
+
+// compactionRowTurn is the turn a compaction's row belongs to: the turn it ran
+// in, or none for one in a provider cycle.
+func compactionRowTurn(key string) string {
+	if strings.HasPrefix(key, providerCyclePrefix) {
+		return ""
+	}
+	return key
+}
 
 type providerCycle struct {
 	id       string
@@ -63,13 +78,18 @@ func (c *conversation) enterProviderCycleLocked(update acpsdk.SessionUpdate) (*p
 		// A tool AO never saw start is output of the cycle it belongs to.
 		output = true
 	}
+	if update.SessionInfoUpdate != nil && compactionStatusMeta(update.SessionInfoUpdate.Meta) != nil {
+		// So is a compaction the agent runs on its own, which it can start
+		// before it writes anything.
+		output = true
+	}
 	cycle := c.cycle
 	opened := false
 	if cycle == nil {
 		if !output || c.closed {
 			return nil, false
 		}
-		cycle = &providerCycle{id: "cycle-" + uuid.NewString(), items: map[string]bool{}, tools: map[string]bool{}}
+		cycle = &providerCycle{id: providerCyclePrefix + uuid.NewString(), items: map[string]bool{}, tools: map[string]bool{}}
 		c.cycle = cycle
 		opened = !c.providerReportsState
 	}
@@ -173,6 +193,10 @@ func (c *conversation) armProviderCycle(cycle *providerCycle, update acpsdk.Sess
 			return
 		}
 	}
+	if compaction := c.providerCompaction; compaction != nil && compaction.turnID == cycle.id && !compaction.finished {
+		// A compaction under way holds the cycle too; its outcome re-arms it.
+		return
+	}
 	// Only a usage_update that is the latest update ends the cycle early. One
 	// before a tool call closed the response that asked for the tool; once the
 	// tool completes the agent answers its result in a new response, which
@@ -233,8 +257,27 @@ func (c *conversation) emitEndedCycle(cycle *providerCycle) {
 	c.mu.Lock()
 	settled := &settledCycle{messages: maps.Clone(cycle.settled.messages),
 		thoughts: maps.Clone(cycle.settled.thoughts), nested: maps.Clone(cycle.settled.nested)}
+	// A compaction the cycle left open settles with it, as one a turn left open
+	// does when the turn ends.
+	compaction := c.providerCompaction
+	if compaction != nil && compaction.turnID != cycle.id {
+		compaction = nil
+	}
+	if compaction != nil && !compaction.finished {
+		c.providerCompaction = nil
+	}
+	if c.settledCompaction != nil && c.settledCompaction.turnID == cycle.id {
+		c.settledCompaction = nil
+	}
 	c.mu.Unlock()
 	c.emitSettledCycle(settled)
+	switch {
+	case compaction == nil:
+	case compaction.finished:
+		c.settleFinishedCompaction(c.emit)
+	default:
+		c.settleUnreportedCompaction(compaction, c.emit)
+	}
 }
 
 // detachProviderCycleLocked closes the open cycle and moves what it left open

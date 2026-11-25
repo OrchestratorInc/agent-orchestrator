@@ -245,6 +245,63 @@ func TestACPProviderCycleEndsOnTheProvidersOwnIdle(t *testing.T) {
 	}
 }
 
+// A compaction the agent runs between prompts, as when a background task wakes
+// it, gets a turn-less row like the rest of its cycle: it runs, then settles on
+// the agent's figures, or, left open when the next turn ends the cycle, says no
+// result came.
+func TestACPProviderCycleCompactionGetsATurnlessRow(t *testing.T) {
+	for name, test := range map[string]struct {
+		outcome map[string]any
+		want    string
+	}{
+		"reported":  {outcome: map[string]any{"status": "completed", "tokensBefore": 120000.0, "tokensAfter": 30000.0}},
+		"left open": {want: "No result reported"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			restore := setProviderCycleWaits(50*time.Millisecond, time.Minute)
+			defer restore()
+			agent, opened := compactionFailureTestDriver(t)
+			events := opened.Events()
+			push := func(value map[string]any) {
+				t.Helper()
+				if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+					SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+					Update: acpsdk.SessionUpdate{SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
+						SessionUpdate: "session_info_update",
+						Meta:          map[string]any{"opencode/compaction": value},
+					}},
+				}); err != nil {
+					t.Fatalf("session/update: %v", err)
+				}
+			}
+			isCompacted := func(e ports.ChatEvent) bool { return e.Kind == ports.ChatEventCompacted }
+
+			push(map[string]any{"status": "started"})
+			running := collectUntil(t, events, isCompacted)
+			first := running[len(running)-1]
+			if first.ActivityStatus != domain.ActivityStatusRunning || first.ProviderTurnID != "" {
+				t.Fatalf("first compaction event = %q in turn %q, want a running turn-less row", first.ActivityStatus, first.ProviderTurnID)
+			}
+			if test.outcome != nil {
+				push(test.outcome)
+			} else {
+				startTurn(t, opened, "next")
+			}
+			settled := collectUntil(t, events, isCompacted)
+			last := settled[len(settled)-1]
+			if last.ProviderItemID != first.ProviderItemID || last.ProviderTurnID != "" || last.ActivityStatus == domain.ActivityStatusRunning {
+				t.Fatalf("settled %q in turn %q on %q, want the same turn-less row settled", last.ActivityStatus, last.ProviderTurnID, last.ProviderItemID)
+			}
+			if last.Summary != test.want && test.want != "" {
+				t.Fatalf("settled summary = %q, want %q", last.Summary, test.want)
+			}
+			if test.want == "" && !strings.Contains(string(last.Detail), `"tokensReclaimed":90000`) {
+				t.Fatalf("settled detail = %s, want the agent's own figures", last.Detail)
+			}
+		})
+	}
+}
+
 func setProviderCycleWaits(grace, quiet time.Duration) func() {
 	oldGrace, oldQuiet := providerCycleSettleGrace, providerCycleQuietWait
 	providerCycleSettleGrace, providerCycleQuietWait = grace, quiet

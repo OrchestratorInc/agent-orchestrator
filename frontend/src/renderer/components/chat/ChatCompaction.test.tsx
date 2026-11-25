@@ -248,6 +248,39 @@ describe("a compaction under way", () => {
 		expect(screen.getAllByText("Conversation too long")).toHaveLength(1);
 	});
 
+	it("tells a stopped /compact once, on its row", () => {
+		const stoppedTurn = "compact-stopped";
+		const asked: ConversationItem = {
+			kind: "message", id: "asked-stop", turnId: stoppedTurn, sequence: 2, revision: 0,
+			role: "user", origin: "human", text: "/compact", streaming: false, createdAt: at,
+		};
+		const stopped = compaction({ id: "cc-stopped", turnId: stoppedTurn, sequence: 3, status: "cancelled", detail: { event: "compaction" } });
+		render(
+			<ChatWorkspace
+				snapshot={snapshot([assistantSaid, asked, stopped], [{
+					id: stoppedTurn, state: "interrupted", requestedAt: at, startedAt: at, completedAt: at,
+				}])}
+			/>,
+		);
+
+		expect(screen.getByTestId("compaction-row")).toHaveTextContent(/^Couldn't compact conversationStopped$/);
+		expect(screen.queryByText("The agent was interrupted by you")).not.toBeInTheDocument();
+	});
+
+	it("still says a turn that did other work was stopped", () => {
+		const stoppedTurn = "worked-stopped";
+		const stopped = compaction({ id: "cc-stopped", turnId: stoppedTurn, sequence: 3, status: "cancelled", detail: { event: "compaction" } });
+		render(
+			<ChatWorkspace
+				snapshot={snapshot([assistantSaid, { ...prompt, turnId: stoppedTurn }, { ...said, turnId: stoppedTurn }, stopped], [{
+					id: stoppedTurn, state: "interrupted", requestedAt: at, startedAt: at, completedAt: at,
+				}])}
+			/>,
+		);
+
+		expect(screen.getByText("The agent was interrupted by you")).toBeInTheDocument();
+	});
+
 	it("still offers Retry when the failure is told on its row", async () => {
 		const failedTurn = "compact-asked";
 		const asked: ConversationItem = {

@@ -895,6 +895,10 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 				}
 			}
 			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta, emit)
+		} else if cycle != nil {
+			// A compaction the agent runs between prompts, as when a background
+			// task wakes it: tracked by its cycle, its row turn-less like the rest.
+			c.trackCompactionStatus(cycle.id, update.SessionInfoUpdate.Meta, emit)
 		}
 	case update.ConfigOptionUpdate != nil:
 		// The update is a complete replacement, not a delta. Model changes can
@@ -906,7 +910,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		// when its configuration changes, so retaining absent entries is wrong.
 		c.replaceAvailableCommands(update.AvailableCommandsUpdate.AvailableCommands)
 	case update.UsageUpdate != nil:
-		c.trackContext(turnID, int64(update.UsageUpdate.Used), int64(update.UsageUpdate.Size))
+		c.trackContext(itemTurn, int64(update.UsageUpdate.Used), int64(update.UsageUpdate.Size))
 		c.settleFinishedCompaction(emit)
 		usage := &ports.ChatUsage{
 			ContextUsed: int64(update.UsageUpdate.Used), ContextWindow: int64(update.UsageUpdate.Size),

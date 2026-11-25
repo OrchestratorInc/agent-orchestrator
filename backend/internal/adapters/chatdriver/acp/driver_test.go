@@ -6045,6 +6045,32 @@ func TestACPCompactionPromptErrorReachesTheTimeline(t *testing.T) {
 	}
 }
 
+// A compaction still open when its turn ends normally never said how it went
+// (an older Qwen whose closing line AO does not recognize): its row says so,
+// rather than settling as a finished compaction.
+func TestACPCompactionTheTurnLeftOpenSaysNoResult(t *testing.T) {
+	agent, opened := compactionFailureTestDriver(t)
+	agent.mu.Lock()
+	agent.customPrompt = compactionStatusPrompt(agent, map[string]any{"status": "started"})
+	agent.mu.Unlock()
+
+	ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+	if err != nil {
+		t.Fatalf("SendTurn: %v", err)
+	}
+	if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	result := awaitCompactionTurn(t, opened)
+	if result.turn.TurnState != domain.TurnStateCompleted || result.compacted {
+		t.Fatalf("turn = %+v, want completed and not compacted", result)
+	}
+	if !result.running || len(result.rows) != 1 || result.failure != "No result reported" {
+		t.Fatalf("compaction = running %v, %d rows, failure %q; want one row that ran and says no result came",
+			result.running, len(result.rows), result.failure)
+	}
+}
+
 func TestACPAutomaticCompactionFailureLeavesANormalTurnCompleted(t *testing.T) {
 	agent, opened := compactionFailureTestDriver(t)
 	agent.mu.Lock()
