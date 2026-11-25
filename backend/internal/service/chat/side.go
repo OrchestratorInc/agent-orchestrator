@@ -1886,10 +1886,35 @@ func (s *Service) holdSideAttachments(ctx context.Context, session domain.Sessio
 		}
 		settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if err := leases.SettleChatAttachmentHolds(settleCtx, session, held, accepted); err != nil && s.log != nil {
+		err := settleSideAttachmentHolds(settleCtx, leases, session, held, accepted)
+		if err != nil && s.log != nil {
 			s.log.Warn("side question attachment holds could not be settled", "sessionID", session, "accepted", accepted, "error", err)
 		}
 	}, nil
+}
+
+// sideAttachmentSettleBackoff spaces the retries of a failed settle. A hold
+// that is never settled keeps its files until the session is deleted, so a
+// transient write failure is retried rather than only logged.
+var sideAttachmentSettleBackoff = []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
+
+// settleSideAttachmentHolds settles holds, retrying a failed write until ctx
+// ends. Each attempt is one transaction, so a failed attempt left nothing
+// half-settled.
+func settleSideAttachmentHolds(ctx context.Context, leases chatAttachmentLeaseHolder, session domain.SessionID, held []string, accepted bool) error {
+	err := leases.SettleChatAttachmentHolds(ctx, session, held, accepted)
+	for _, wait := range sideAttachmentSettleBackoff {
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		case <-time.After(wait):
+		}
+		err = leases.SettleChatAttachmentHolds(ctx, session, held, accepted)
+	}
+	return err
 }
 
 // EditQueuedSideQuestion replaces the text of a queued side question.
