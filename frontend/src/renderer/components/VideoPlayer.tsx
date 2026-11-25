@@ -67,8 +67,8 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 	const [speed, setSpeed] = useState(1);
 	const [fullscreen, setFullscreen] = useState(false);
 	// Whether the video may start on its own, when first shown or when a new file
-	// version replaces it. Pausing it, or letting it finish, turns this off, so an
-	// agent rewriting a recording does not restart one the person stopped.
+	// version replaces it. The person pausing it, or letting it finish, turns this
+	// off, so an agent rewriting a recording does not restart one they stopped.
 	const [autoplay, setAutoplay] = useState(true);
 	// A new file version gets a fresh element (see the video's key) that starts
 	// from the beginning; loop, speed, volume, and autoplay carry over to it.
@@ -242,7 +242,9 @@ export function VideoPlayer({ active = true, src, label, crossOrigin, onError, c
 					// The element a new file version replaced can still report its pause.
 					if (event.currentTarget !== videoRef.current) return;
 					setPlaying(false);
-					setAutoplay(false);
+					// Only a pause while the player is visible is the person's: hiding it
+					// pauses it for them, and its next version should still play when shown.
+					if (wasVisible.current) setAutoplay(false);
 				}}
 				onPlay={(event) => {
 					if (event.currentTarget !== videoRef.current) return;

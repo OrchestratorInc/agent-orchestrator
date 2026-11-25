@@ -276,17 +276,30 @@ describe("VideoPlayer", () => {
 		expect(play).not.toHaveBeenCalled();
 	});
 
-	it("keeps a stopped clip's new version paused when its pane is shown again", () => {
+	it("autoplays a new version on show when only hiding the pane paused the old one", () => {
 		const player = (active: boolean, version: number) => <VideoPlayer active={active} label="demo.mp4" src={`http://127.0.0.1:3001/demo.mp4?v=${version}`} />;
 		const view = render(player(true, 1));
 		const first = screen.getByLabelText("demo.mp4") as HTMLVideoElement;
 		fireEvent.play(first);
-		// Hidden while playing: it pauses. A rewrite then arrives while it is hidden.
+		// Hidden while playing: the player pauses it. A rewrite then arrives while it is hidden.
 		Object.defineProperty(first, "paused", { configurable: true, value: false });
 		view.rerender(player(false, 1));
 		expect(pause).toHaveBeenCalledTimes(1);
 		view.rerender(player(false, 2));
-		// Shown again: the new version has never played, but the person's clip was stopped.
+		// Shown again: the person never stopped it, so the new version starts.
+		view.rerender(player(true, 2));
+		expect(play).toHaveBeenCalledTimes(1);
+		expect(screen.getByLabelText("demo.mp4")).toHaveAttribute("autoplay");
+	});
+
+	it("keeps a new version paused on show when the person paused the old one before it was hidden", () => {
+		const player = (active: boolean, version: number) => <VideoPlayer active={active} label="demo.mp4" src={`http://127.0.0.1:3001/demo.mp4?v=${version}`} />;
+		const view = render(player(true, 1));
+		const first = screen.getByLabelText("demo.mp4");
+		fireEvent.play(first);
+		fireEvent.pause(first);
+		view.rerender(player(false, 1));
+		view.rerender(player(false, 2));
 		view.rerender(player(true, 2));
 		expect(play).not.toHaveBeenCalled();
 		expect(screen.getByLabelText("demo.mp4")).not.toHaveAttribute("autoplay");
