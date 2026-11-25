@@ -244,6 +244,7 @@ export const aoBridge: AoBridge =
 			getLifetimeSessions: async () => null,
 			takeLaunchStart: async () => null,
 			takeResourceSummary: async () => null,
+			launchSteps: async () => null,
 			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "preview", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false, reason: "environment_veto" }),

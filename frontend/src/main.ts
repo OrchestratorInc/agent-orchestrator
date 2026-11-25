@@ -74,7 +74,7 @@ import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
 import { createLaunchTiming } from "./main/launch-timing";
 import { createResourceSampler } from "./main/resource-sampler";
-import type { LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
+import type { LaunchSteps, LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import { readNativeAppIcon } from "./main/native-app-icon";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -380,6 +380,9 @@ const desktopLaunchWorkingDirectory = process.cwd();
 const processStartedAt = process.getCreationTime() ?? performance.timeOrigin;
 const launchTiming = createLaunchTiming(processStartedAt);
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
+// Read before the daemon can create it: no database means this launch is the
+// first run on this data directory, which ao.launches.timed reports apart.
+const firstRunAtLaunch = !existsSync(path.join(desktopDataDir, "ao.db"));
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
@@ -1155,7 +1158,9 @@ async function createWindowInternal(): Promise<void> {
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
 	shellLaunchStarts.set(
 		shellWebContents.id,
-		shellWindowsCreated++ === 0 ? { kind: "cold", startedAtMs: processStartedAt } : { kind: "warm", startedAtMs: windowRequestedAt },
+		shellWindowsCreated++ === 0
+			? { kind: "cold", startedAtMs: processStartedAt, ...(firstRunAtLaunch ? { firstRun: true } : {}) }
+			: { kind: "warm", startedAtMs: windowRequestedAt },
 	);
 	// The start belongs to the first document. A reload that lands before that
 	// page read it must not report a launch, so later documents get none.
@@ -2707,6 +2712,7 @@ async function startDaemonInner(startEpoch: number, autoRestartIntent: DaemonAut
 		...(autoRestartIntent ? { crashedPid: autoRestartIntent.crashedPid } : {}),
 	});
 	let child: ChildProcess;
+	launchTiming.mark("daemonSpawned");
 	try {
 		child = spawn(spawnLaunch.command, spawnLaunch.args, {
 			cwd: launch.cwd,
@@ -3750,6 +3756,22 @@ ipcMain.handle("telemetry:takeLaunchStart", (event): LaunchTimingStart | null =>
 	const start = shellLaunchStarts.get(event.sender.id) ?? null;
 	shellLaunchStarts.delete(event.sender.id);
 	return start;
+});
+// The cold launch's main-process steps, read when the renderer sends
+// ao.launches.timed. Marks keep their first time, so a later daemon restart
+// does not move them.
+ipcMain.handle("telemetry:launchSteps", (event): LaunchSteps | null => {
+	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;
+	const marks = launchTiming.marks();
+	const spawned = marks.daemonSpawned;
+	const ready = marks.daemonReady;
+	return {
+		appReadyMs: marks.appReady,
+		windowShownMs: marks.windowShown,
+		serverSpawnMs: spawned,
+		serverReadyMs: ready,
+		...(ready === undefined ? {} : { serverReused: spawned === undefined || spawned > ready }),
+	};
 });
 ipcMain.handle("telemetry:takeResourceSummary", (event): ResourceSummary | null => {
 	if (trustedShellWebContents.get(event.sender.id) !== event.sender) return null;
