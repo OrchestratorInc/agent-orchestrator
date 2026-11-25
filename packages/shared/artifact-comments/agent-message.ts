@@ -10,13 +10,12 @@ import { compactText, limitMessage, MAX_FILE_ANNOTATION_MESSAGE_LENGTH } from ".
 import { artifactCommentAuthorLabel, type ArtifactComment, type ArtifactCommentThread } from "./types";
 
 export const MAX_ARTIFACT_COMMENT_MESSAGE_LENGTH = MAX_FILE_ANNOTATION_MESSAGE_LENGTH;
-/** The Send to agent dialog's note limit. */
+/** The Send to agent dialog's note limit; a note this long reaches the agent whole. */
 export const MAX_ARTIFACT_COMMENT_NOTE_LENGTH = 2000;
 
 const MAX_PATH_LENGTH = 500;
 const MAX_EXCERPT_LENGTH = 120;
 const MAX_COMMENT_LENGTH = 1200;
-const MAX_NOTE_LENGTH = 1800;
 
 export type ArtifactCommentMessageArtifact = {
 	/** The file's path in the session, as the owner sees it. */
@@ -91,7 +90,7 @@ export function formatArtifactCommentMessage(
 	const path = compactText(artifact.path, MAX_PATH_LENGTH);
 	const selector = compactText(thread.anchor.path, MAX_PATH_LENGTH);
 	const where = `Where: <${thread.anchor.tag}>${excerpt ? ` "${excerpt}"` : ""}  [selector: ${selector}]`;
-	const ownerNote = note === undefined ? "" : compactText(note, MAX_NOTE_LENGTH);
+	const ownerNote = note === undefined ? "" : compactText(note, MAX_ARTIFACT_COMMENT_NOTE_LENGTH);
 
 	const before = [
 		"The owner forwarded a review comment on a shared artifact they published from this session.",

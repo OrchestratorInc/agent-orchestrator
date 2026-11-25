@@ -1,7 +1,8 @@
 // Element groups for the comments panel (design §7). Threads on the same
 // anchor path form one group; groups follow the element's position on the
 // page as the bridge reports it, which is document order; threads in a group
-// are oldest first; a marker's count is the group's open threads.
+// are newest first (the panel opens the newest and folds the rest); a
+// marker's count is the group's open threads.
 // Imports only sibling files so ao-landing can vendor the folder.
 
 import type { ArtifactCommentAnchor, ArtifactCommentThread } from "./types";
@@ -11,7 +12,7 @@ export type ArtifactCommentGroup = {
 	path: string;
 	/** The oldest thread's anchor. */
 	anchor: ArtifactCommentAnchor;
-	/** Oldest first. */
+	/** Newest first. */
 	threads: ArtifactCommentThread[];
 	openCount: number;
 	/** From the bridge; undefined until it reports (or when it cannot run). */
@@ -41,25 +42,28 @@ function build(threads: ArtifactCommentThread[], positions: ReadonlyMap<string, 
 		if (list === undefined) byPath.set(thread.anchor.path, [thread]);
 		else list.push(thread);
 	}
-	const groups: ArtifactCommentGroup[] = [];
+	const groups: (ArtifactCommentGroup & { oldest: ArtifactCommentThread })[] = [];
 	for (const [path, list] of byPath) {
 		const position = positions.get(path);
 		groups.push({
 			path,
 			anchor: list[0].anchor,
-			threads: list,
+			oldest: list[0],
+			threads: [...list].sort((a, b) => byCreated(b, a)),
 			openCount: list.filter((thread) => thread.status === "open").length,
 			top: position?.found === true ? position.top : undefined,
 		});
 	}
 	// Positioned groups top to bottom; groups not positioned yet (no bridge, or
 	// it has not reported) after them, by their oldest thread.
-	return groups.sort((a, b) => {
-		if (a.top !== undefined && b.top !== undefined && a.top !== b.top) return a.top - b.top;
-		if (a.top !== undefined && b.top === undefined) return -1;
-		if (a.top === undefined && b.top !== undefined) return 1;
-		return byCreated(a.threads[0], b.threads[0]);
-	});
+	return groups
+		.sort((a, b) => {
+			if (a.top !== undefined && b.top !== undefined && a.top !== b.top) return a.top - b.top;
+			if (a.top !== undefined && b.top === undefined) return -1;
+			if (a.top === undefined && b.top !== undefined) return 1;
+			return byCreated(a.oldest, b.oldest);
+		})
+		.map(({ oldest: _oldest, ...group }) => group);
 }
 
 /**

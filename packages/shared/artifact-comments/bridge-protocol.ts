@@ -8,8 +8,11 @@
 // end of a MessageChannel. The bridge accepts it only when event.source is
 // window.parent, keeps the port, and answers `ready` on it. Every later
 // message, both ways, goes through that port; nothing else is listened to.
-// If no `ready` arrives within ARTIFACT_COMMENTS_BRIDGE_READY_TIMEOUT_MS the
-// panel shows threads read-only with a notice.
+// A panel must not wait on the bridge forever: if no `ready` arrives within
+// ARTIFACT_COMMENTS_BRIDGE_READY_TIMEOUT_MS (for example, the page's own CSP
+// blocks the script), it still shows the threads, without picking or
+// highlighting, and says the page doesn't support pointing at its parts
+// (design §6). Both the web viewer and the desktop app owe this.
 //
 // Every message from the bridge may be forged by the page, so the panel parses
 // it with parseBridgeToViewerMessage and drops anything that does not fit.
@@ -17,6 +20,7 @@
 
 export const ARTIFACT_COMMENTS_BRIDGE_PATH = "/_ao/comments-bridge.js";
 export const ARTIFACT_COMMENTS_PROTOCOL_VERSION = 1;
+/** How long a panel waits for `ready` before showing threads without picking (design §6). */
 export const ARTIFACT_COMMENTS_BRIDGE_READY_TIMEOUT_MS = 3000;
 /** The `type` of the one window.postMessage that hands the bridge its port. */
 export const ARTIFACT_COMMENTS_CONNECT = "ao-comments:connect";

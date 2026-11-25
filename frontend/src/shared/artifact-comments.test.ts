@@ -13,6 +13,7 @@ import {
 	isArtifactCommentAnchor,
 	isArtifactCommentsConnectMessage,
 	MAX_ARTIFACT_COMMENT_MESSAGE_LENGTH,
+	MAX_ARTIFACT_COMMENT_NOTE_LENGTH,
 	parseArtifactCommentsEtag,
 	parseBridgeToViewerMessage,
 	parseViewerToBridgeMessage,
@@ -195,7 +196,7 @@ describe("groupArtifactCommentThreads", () => {
 		thread("f", "body>h1:1", "2026-11-23T09:00:00Z", "resolved"),
 	];
 
-	it("groups by element, orders groups by position and threads oldest first", () => {
+	it("groups by element, orders groups by position and threads newest first", () => {
 		const groups = groupArtifactCommentThreads(threads, [
 			{ path: "body>h1:1", top: 10, found: true },
 			{ path: "body>p:3", top: 300, found: true },
@@ -203,7 +204,7 @@ describe("groupArtifactCommentThreads", () => {
 		]);
 		expect(groups.open.map((group) => [group.path, group.threads.map((t) => t.id), group.openCount])).toEqual([
 			["body>h1:1", ["b"], 1],
-			["body>p:3", ["c", "a"], 2],
+			["body>p:3", ["a", "c"], 2],
 		]);
 		expect(groups.unanchored.map((group) => group.path)).toEqual(["body>table:1"]);
 		expect(groups.resolved.map((group) => [group.path, group.threads.map((t) => t.id)])).toEqual([
@@ -218,6 +219,9 @@ describe("groupArtifactCommentThreads", () => {
 		const groups = groupArtifactCommentThreads(threads);
 		expect(groups.open.map((group) => group.path)).toEqual(["body>p:3", "body>h1:1", "body>table:1"]);
 		expect(groups.unanchored).toEqual([]);
+		// The group keeps its oldest thread's anchor while listing the newest first.
+		expect(groups.open[0].threads.map((t) => t.id)).toEqual(["a", "c"]);
+		expect(groups.open[0].anchor).toBe(threads[2].anchor);
 	});
 
 	it("builds marker counts of open threads for every commented element", () => {
@@ -287,13 +291,21 @@ describe("formatArtifactCommentMessage", () => {
 		expect(message.endsWith("They will republish it.")).toBe(true);
 	});
 
+	it("passes a note at the dialog's limit to the agent whole", () => {
+		const note = `${"word ".repeat(399)}last!`;
+		expect(note.length).toBe(MAX_ARTIFACT_COMMENT_NOTE_LENGTH);
+		const message = formatArtifactCommentMessage(designThread, { path: "a.html", version: 1 }, note);
+		expect(message).toContain(`Owner's note: ${note}\n`);
+		expect(message).not.toContain("[truncated]");
+	});
+
 	it("shortens the first comment, not the latest, when a large frame leaves little room", () => {
 		const bigFrame = {
 			...designThread,
 			anchor: { path: `body${">p:1".repeat(99)}`, tag: "p", textHash: "9f2c00112233aabb", excerpt: "e".repeat(120) },
 		};
 		const artifact = { path: `docs/${"d".repeat(495)}`, version: 1 };
-		const note = "n".repeat(1800);
+		const note = "n".repeat(MAX_ARTIFACT_COMMENT_NOTE_LENGTH);
 		const message = formatArtifactCommentMessage(
 			{ ...bigFrame, comments: [comment("1", "f".repeat(1200)), comment("2", "latest", aditi)] },
 			artifact,
@@ -324,7 +336,7 @@ describe("formatArtifactCommentMessage", () => {
 			anchor: { path: `body${">p:1".repeat(99)}`, tag: "p", textHash: "9f2c00112233aabb", excerpt: "e".repeat(120) },
 		};
 		const artifact = { path: `docs/${"d".repeat(495)}`, version: 1 };
-		const note = "n".repeat(1800);
+		const note = "n".repeat(MAX_ARTIFACT_COMMENT_NOTE_LENGTH);
 		// The thread's room: the cap minus the frame, measured with a one-line thread.
 		const probe = formatArtifactCommentMessage({ ...bigFrame, comments: [comment("1", "x")] }, artifact, note);
 		const budget = MAX_ARTIFACT_COMMENT_MESSAGE_LENGTH - (probe.length - "- Sam: x".length);
