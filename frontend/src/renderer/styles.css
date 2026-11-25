@@ -2863,7 +2863,7 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 		pointer-events: auto;
 	}
 
-	.group\/session-row:hover [data-session-message-age] {
+	.group\/session-row:hover :is([data-session-message-age], [data-session-pin-mark]) {
 		opacity: 0;
 	}
 }

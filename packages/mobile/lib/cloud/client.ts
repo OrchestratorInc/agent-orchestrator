@@ -91,6 +91,15 @@ function buildUrl(baseUrl: string, path: string, query?: Query): string {
 	return url;
 }
 
+/** A Retry-After header (seconds, or an HTTP date) as milliseconds from `now`. */
+export function retryAfterMs(value: string | null, now = Date.now()): number | undefined {
+	const header = value?.trim();
+	if (!header) return undefined;
+	if (/^\d+$/.test(header)) return Number(header) * 1_000;
+	const at = Date.parse(header);
+	return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
+}
+
 async function errorFromResponse(response: Response): Promise<CloudError> {
 	let message = `Orchestrator Cloud request failed (${response.status}).`;
 	let code: string | undefined;
@@ -110,7 +119,7 @@ async function errorFromResponse(response: Response): Promise<CloudError> {
 		// Not JSON: keep the status message.
 	}
 	if (response.status === 401) return new CloudAuthError(message, { status: 401, code, requestId });
-	return new CloudError(message, { status: response.status, code, requestId, details, resetsAt });
+	return new CloudError(message, { status: response.status, code, requestId, details, resetsAt, retryAfterMs: retryAfterMs(response.headers.get("retry-after")) });
 }
 
 /**
