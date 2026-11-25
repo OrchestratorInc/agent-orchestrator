@@ -3009,10 +3009,10 @@ func parseSessionListFilter(r *http.Request) (sessionsvc.ListFilter, error) {
 	}
 	switch kind := domain.SessionKind(q.Get("kind")); kind {
 	case "":
-	case domain.KindWorker, domain.KindOrchestrator, domain.KindReviewer:
+	case domain.KindWorker, domain.KindOrchestrator:
 		filter.Kind = kind
 	default:
-		return sessionsvc.ListFilter{}, errors.New("kind must be worker, orchestrator, or reviewer")
+		return sessionsvc.ListFilter{}, errors.New("kind must be worker or orchestrator")
 	}
 	if raw := q.Get("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)

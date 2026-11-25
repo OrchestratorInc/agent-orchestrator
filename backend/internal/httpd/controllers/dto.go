@@ -380,7 +380,7 @@ type ListSessionsQuery struct {
 	Active           *bool  `query:"active,omitempty" description:"When true, return non-terminated sessions; when false, return terminated sessions."`
 	OrchestratorOnly *bool  `query:"orchestratorOnly,omitempty" description:"When true, return only orchestrator sessions."`
 	Fresh            *bool  `query:"fresh,omitempty" description:"When true, return only fresh non-terminated sessions."`
-	Kind             string `query:"kind,omitempty" enum:"worker,orchestrator,reviewer" description:"Session kind filter. worker keeps every session that is not an orchestrator or reviewer."`
+	Kind             string `query:"kind,omitempty" enum:"worker,orchestrator" description:"Session kind filter. worker keeps every session that is not an orchestrator."`
 	Limit            int    `query:"limit,omitempty" minimum:"1" maximum:"200" description:"Page size. When set, sessions are ordered pinned first, then most recently updated, and nextCursor resumes the list. When omitted, every match is returned."`
 	Cursor           string `query:"cursor,omitempty" description:"Opaque cursor returned by the previous page. Requires limit."`
 	PRState          string `query:"prState,omitempty" enum:"open,draft,merged,closed" description:"Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total."`
@@ -699,7 +699,7 @@ type SpawnSessionRequest struct {
 	// validates it before deriving inherited worker settings.
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
-	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator,reviewer"`
+	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
 	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,mastra-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau"`
 	Branch          string                 `json:"branch,omitempty"`
 	// BaseBranch starts the session's branch from this branch instead of the

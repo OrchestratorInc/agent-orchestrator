@@ -338,7 +338,7 @@ func (c *Coordinator) earlyFlushAt(ctx context.Context, projectID domain.Project
 		}
 	}
 	for _, rec := range recs {
-		if (rec.Kind != domain.KindWorker && rec.Kind != domain.KindReviewer) || rec.IsTaskPreparation {
+		if rec.Kind != domain.KindWorker || rec.IsTaskPreparation {
 			continue
 		}
 		if !rec.IsTerminated && (rec.Activity.State == domain.ActivityActive || rec.ProvisionState.IsProvisioning()) {

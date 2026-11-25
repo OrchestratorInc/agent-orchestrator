@@ -134,23 +134,3 @@ func TestCreateShowsEachReportedArtifactAfterTheReportIsStored(t *testing.T) {
 		t.Fatalf("unknown session: err = %v, recorded %q", err, calls)
 	}
 }
-
-func TestCreateAllowsReviewerSessionReport(t *testing.T) {
-	now := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
-	st := &fakeStore{ok: true, session: domain.SessionRecord{ID: "rev-1", ProjectID: "ao", Kind: domain.KindReviewer}}
-	s := New(Deps{Store: st, Now: func() time.Time { return now }, NewID: func() string { return "rpt_rev" }})
-	r, err := s.Create(context.Background(), CreateInput{
-		SessionID: "rev-1",
-		State:     domain.ReportDone,
-		Note:      "PR reviewed and approved",
-		Outputs: []domain.ReportOutput{
-			{Kind: domain.ReportOutputPRReviewed, Reference: "https://github.com/o/r/pull/42"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if r.ID != "rpt_rev" || r.SessionID != "rev-1" || r.State != domain.ReportDone || len(r.Outputs) != 1 || r.Outputs[0].Kind != domain.ReportOutputPRReviewed {
-		t.Fatalf("unexpected report: %+v", r)
-	}
-}

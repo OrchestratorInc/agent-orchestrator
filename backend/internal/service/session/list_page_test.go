@@ -408,11 +408,9 @@ func TestMatchesSessionFilterKind(t *testing.T) {
 	worker := domain.SessionRecord{ID: "w1", Kind: domain.KindWorker}
 	legacy := domain.SessionRecord{ID: "w0", Kind: ""}
 	orch := domain.SessionRecord{ID: "o1", Kind: domain.KindOrchestrator}
-	reviewer := domain.SessionRecord{ID: "r1", Kind: domain.KindReviewer}
 
 	workerFilter := ListFilter{Kind: domain.KindWorker}
 	orchFilter := ListFilter{Kind: domain.KindOrchestrator}
-	reviewerFilter := ListFilter{Kind: domain.KindReviewer}
 
 	if !matchesSessionFilter(worker, workerFilter) {
 		t.Fatal("worker must match worker filter")
@@ -423,27 +421,11 @@ func TestMatchesSessionFilterKind(t *testing.T) {
 	if matchesSessionFilter(orch, workerFilter) {
 		t.Fatal("orchestrator must not match worker filter")
 	}
-	if matchesSessionFilter(reviewer, workerFilter) {
-		t.Fatal("reviewer must not match worker filter")
-	}
 
 	if matchesSessionFilter(worker, orchFilter) || matchesSessionFilter(legacy, orchFilter) {
 		t.Fatal("worker must not match orchestrator filter")
 	}
 	if !matchesSessionFilter(orch, orchFilter) {
 		t.Fatal("orchestrator must match orchestrator filter")
-	}
-	if matchesSessionFilter(reviewer, orchFilter) {
-		t.Fatal("reviewer must not match orchestrator filter")
-	}
-
-	if matchesSessionFilter(worker, reviewerFilter) || matchesSessionFilter(legacy, reviewerFilter) {
-		t.Fatal("worker must not match reviewer filter")
-	}
-	if matchesSessionFilter(orch, reviewerFilter) {
-		t.Fatal("orchestrator must not match reviewer filter")
-	}
-	if !matchesSessionFilter(reviewer, reviewerFilter) {
-		t.Fatal("reviewer must match reviewer filter")
 	}
 }

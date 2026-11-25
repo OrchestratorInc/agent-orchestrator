@@ -110,8 +110,8 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (domain.ReportR
 	if !ok {
 		return domain.ReportRecord{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
-	if session.Kind != domain.KindWorker && session.Kind != domain.KindReviewer {
-		return domain.ReportRecord{}, apierr.Invalid("REPORT_WORKER_REQUIRED", "Reports can only be created by worker or reviewer sessions", nil)
+	if session.Kind != domain.KindWorker {
+		return domain.ReportRecord{}, apierr.Invalid("REPORT_WORKER_REQUIRED", "Reports can only be created by worker sessions", nil)
 	}
 
 	now := s.now().UTC()
