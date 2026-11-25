@@ -3355,7 +3355,7 @@ describe("Sidebar", () => {
 			screen.getByLabelText(`Open ${title}`).querySelector<SVGElement | HTMLElement>("[data-session-status]");
 
 		expect(marker("input task")).toHaveAttribute("data-session-marker", "input");
-		expect(marker("input task")).toHaveClass("icon-circle-help", "text-status-in-review");
+		expect(marker("input task")).toHaveClass("icon-question-mark", "text-status-in-review");
 		expect(marker("input task")).not.toHaveClass("text-destructive");
 		expect(marker("input task")).not.toHaveClass("rounded-full");
 		expect(marker("ci task")).toHaveAttribute("data-session-marker", "attention");
@@ -3410,7 +3410,7 @@ describe("Sidebar", () => {
 			expandedProjectIds: [],
 			workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }],
 		});
-		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="input"]')).toHaveClass("icon-circle-help", "text-status-in-review");
+		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="input"]')).toHaveClass("icon-question-mark", "text-status-in-review");
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
 	});
 
@@ -3459,7 +3459,7 @@ describe("Sidebar", () => {
 		cleanup();
 		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working, input] }] });
 		expect(projectMarker()).toHaveAttribute("data-project-marker", "input");
-		expect(projectMarker()).toHaveClass("icon-circle-help", "text-status-in-review");
+		expect(projectMarker()).toHaveClass("icon-question-mark", "text-status-in-review");
 	});
 
 	it("keeps the open session read while its project is collapsed", () => {

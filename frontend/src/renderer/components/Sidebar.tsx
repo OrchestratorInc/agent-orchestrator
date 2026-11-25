@@ -21,7 +21,6 @@ import {
 	CalendarClock,
 	ChevronRight,
 	CircleAlert,
-	CircleHelp,
 	Copy,
 	GitMerge,
 	GitPullRequest,
@@ -36,6 +35,7 @@ import {
 	Pin,
 	PinOff,
 	Plus,
+	QuestionMark,
 	Search,
 	Settings,
 	Smartphone,
@@ -626,7 +626,7 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 // not an error, so it never takes the red. A row's blue spinner (working) and
 // its dot are drawn by SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
-	input: { Icon: CircleHelp, tone: "text-status-in-review" },
+	input: { Icon: QuestionMark, tone: "text-status-in-review" },
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
 	review: { Icon: CircleAlert, tone: "text-status-in-review" },
