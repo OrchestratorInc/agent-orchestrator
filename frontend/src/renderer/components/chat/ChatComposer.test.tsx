@@ -326,6 +326,19 @@ describe("send keys", () => {
 		fireEvent.paste(field, { clipboardData: textClipboard(log) });
 		expect(await screen.findByRole("button", { name: "Remove pasted-text-2.txt" })).toBeInTheDocument();
 	});
+	it("holds a send made while a long paste stages when that paste fails", async () => {
+		let fail: (error: Error) => void = () => undefined;
+		const stage = vi.fn(() => new Promise<string[]>((_, reject) => { fail = reject; }));
+		const { field, onSend } = renderComposer({ draftSessionId: "composer-paste-fails", onStageAttachments: stage });
+		await typeInComposer(field, "what failed?");
+		fireEvent.paste(field, { clipboardData: textClipboard("line\n".repeat(1000)) });
+		await waitFor(() => expect(stage).toHaveBeenCalled());
+		fireEvent.keyDown(field, { key: "Enter" });
+		fail(new Error("disk full"));
+		expect(await screen.findByText(/Nothing was attached/)).toBeInTheDocument();
+		expect(onSend).not.toHaveBeenCalled();
+		expect(composerWireText(field)).toBe("what failed?");
+	});
 	it("attaches a long text that comes with an image as a file beside the image", async () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-a.png", ".ao/attachments/attachment-b.txt"]);
 		const { field } = renderComposer({ draftSessionId: "composer-sheet-paste", onStageAttachments: stage });

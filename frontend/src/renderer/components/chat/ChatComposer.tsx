@@ -669,6 +669,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 	const historyBrowse = useRef<{ entries: string[]; index: number; draft: string; shown: string } | null>(null);
 	const plainPasteShortcut = useRef(false);
+	const pendingTextPastes = useRef(new Set<Promise<boolean>>());
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
@@ -1912,9 +1913,11 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 
+		const textPastes = [...pendingTextPastes.current];
 		await fileAttachments.toSettledPayload();
 		// A replacement hook can still have staging work owned by the old surface.
 		if (fileAttachments.hasPendingReads()) return;
+		if ((await Promise.all(textPastes)).includes(false)) return;
 		const settledAttachments = fileAttachments.getAttachments();
 		const settledPaths = settledAttachments.flatMap((attachment) =>
 			attachment.stagedPath ? [attachment.stagedPath] : []);
@@ -2473,11 +2476,17 @@ export const ChatComposer = memo(function ChatComposer({
 		// text becomes a file.
 		if (text === "" || textAsFile) event.preventDefault();
 		uiUsage.attachmentAdded("paste");
-		void attachFiles(files).then((added) => {
+		const attached = attachFiles(files);
+		void attached.then((added) => {
 			if (added.length === 0 || !historyBrowse.current) return;
 			historyBrowse.current = null;
 			persistComposerText(textRef.current);
 		});
+		if (!textAsFile) return;
+		const pastedName = files[files.length - 1]!.name;
+		const landed = attached.then((added) => added.some((attachment) => attachment.name === pastedName));
+		pendingTextPastes.current.add(landed);
+		void landed.then(() => pendingTextPastes.current.delete(landed));
 	}
 
 	function acceptsDroppedFiles(): boolean {
