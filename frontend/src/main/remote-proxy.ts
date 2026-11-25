@@ -1,3 +1,4 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import {
 	createServer,
 	request as httpRequest,
@@ -55,8 +56,6 @@ export type ActiveProxy = {
 };
 
 const UNUSED_PORT = 1;
-
-class LoopbackPortRefused extends Error {}
 
 // "agent" is the host's agent browser (the Chromium the session's agent drives),
 // streamed through the daemon's agent-browser route. "render" is an agent page
@@ -548,9 +547,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	};
 
 	const openLoopbackTunnel = async (loopbackPort: number): Promise<Duplex> => {
-		if (closing) throw new Error("the host is disconnected");
 		await verifyUpstream();
-		if (closing) throw new Error("the host is disconnected");
+		if (closing) throw new AoError("LOOPBACK_TUNNEL_CLOSED", "the host is disconnected");
 		const socket = new WebSocket(`${secure ? "wss" : "ws"}://${upstream.host}${prefix}/api/v1/loopback-tunnel?port=${loopbackPort}`, {
 			headers: { authorization: `Bearer ${entry.password}`, ...(entry.hostId ? { "x-ao-expected-host-id": entry.hostId } : {}) },
 			perMessageDeflate: false,
@@ -569,7 +567,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 					response.resume();
 					request.destroy();
 					const message = `localhost tunnel to port ${loopbackPort} answered ${response.statusCode}`;
-					reject(response.headers["x-ao-loopback-refused"] === "1" ? new LoopbackPortRefused(message) : new Error(message));
+					reject(new AoError(response.headers["x-ao-loopback-refused"] === "1" ? "LOOPBACK_PORT_REFUSED" : "LOOPBACK_TUNNEL_UNAVAILABLE", message));
 				});
 				socket.once("error", reject);
 			});
@@ -584,7 +582,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		openLoopbackTunnel(UNUSED_PORT).then((tunnel) => {
 			tunnel.destroy();
 			return true;
-		}, (error: unknown) => error instanceof LoopbackPortRefused);
+		}, (error: unknown) => error instanceof AoError && error.code === "LOOPBACK_PORT_REFUSED");
 
 	const unmanagedPreview = async (res: ProxyResponse, path: string): Promise<string | undefined> => {
 		if (!(res.socket as Partial<TLSSocket> | null | undefined)?.encrypted) return undefined;

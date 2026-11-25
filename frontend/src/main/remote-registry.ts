@@ -1,3 +1,4 @@
+import { AoError } from "../../../packages/shared/telemetry/ao-error";
 import type { Duplex } from "node:stream";
 import type { ActiveProxy } from "./remote-proxy";
 import type { RemoteEntry } from "./remotes-store";
@@ -88,7 +89,7 @@ export class RemoteRegistry {
 
 	openLoopbackTunnel(hostId: string, port: number): Promise<Duplex> {
 		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
-		if (!connected) return Promise.reject(new Error(`Host ${hostId} is not connected`));
+		if (!connected) return Promise.reject(new AoError("LOOPBACK_TUNNEL_CLOSED", `Host ${hostId} is not connected`));
 		return connected.proxy.openLoopbackTunnel(port);
 	}
 
