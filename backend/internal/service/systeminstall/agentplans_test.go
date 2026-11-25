@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -125,8 +126,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 41 {
-		t.Fatalf("got %d plans, want 41", len(plans))
+	if len(plans) != 44 {
+		t.Fatalf("got %d plans, want 44", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -140,6 +141,9 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 		if plan.Available && (!plan.Automatic || plan.Command == "" || plan.Method == "") {
 			t.Fatalf("available plan %q is incomplete: %+v", plan.AgentID, plan)
 		}
+	}
+	if !seen["mastra-code"] {
+		t.Fatal("missing install plan for mastra-code")
 	}
 }
 
@@ -396,6 +400,30 @@ func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 			}
 			if len(plan.Command) != 0 {
 				t.Fatalf("remote plan exposed executable argv: %v", plan.Command)
+			}
+		})
+	}
+}
+
+func TestOpenInterpreterInstallerPinsInspectedRelease(t *testing.T) {
+	if openInterpreterInstallRelease != openinterpreter.InspectedRelease {
+		t.Fatalf("installer release %q differs from adapter release %q", openInterpreterInstallRelease, openinterpreter.InspectedRelease)
+	}
+	for _, tc := range []struct {
+		goos, shell, url string
+	}{
+		{"darwin", "sh", "https://www.openinterpreter.com/install"},
+		{"linux", "sh", "https://www.openinterpreter.com/install"},
+		{"windows", "pwsh.exe", "https://www.openinterpreter.com/install.ps1"},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			plan := newTestService(tc.goos, tc.shell).planAgent(TargetOpenInterpreter)
+			if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil || plan.Script.URL != tc.url {
+				t.Fatalf("install plan = %+v", plan)
+			}
+			want := "OPEN_INTERPRETER_RELEASE=" + openinterpreter.InspectedRelease
+			if !slices.Equal(plan.Script.Env, []string{want}) {
+				t.Fatalf("installer env = %v, want %q", plan.Script.Env, want)
 			}
 		})
 	}
@@ -839,5 +867,13 @@ func TestCodewhaleInstallPlanIsManualOnly(t *testing.T) {
 	}
 	if !strings.Contains(plan.Reason, "does not automatically install Codewhale") {
 		t.Fatalf("Codewhale reason = %q", plan.Reason)
+	}
+}
+
+func TestTauInstallUsesLatestRelease(t *testing.T) {
+	s := newTestService("darwin", "uv")
+	plan := s.planAgent(TargetTau)
+	if plan.Unsupported || plan.Method != "uv" || strings.Join(plan.Command, " ") != "uv tool install tau-ai" {
+		t.Fatalf("Tau plan = %+v", plan)
 	}
 }

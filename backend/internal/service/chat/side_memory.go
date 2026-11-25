@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -82,6 +83,9 @@ type SideRecoveryRecord struct {
 
 // SideRecoveryTurn pairs a recoverable side turn with its structured content.
 type SideRecoveryTurn struct {
+	Model             string               `json:"model,omitempty"`
+	Effort            string               `json:"effort,omitempty"`
+	SettingsFrozen    bool                 `json:"settingsFrozen,omitempty"`
 	DispatchAttempt   int                  `json:"dispatchAttempt,omitempty"`
 	ProviderTurnID    string               `json:"providerTurnId,omitempty"`
 	ReferenceContexts []string             `json:"referenceContexts"`
@@ -99,7 +103,7 @@ func (m *memorySideStore) export(runID string) []SideRecoveryRecord {
 		}
 		turns := make([]SideRecoveryTurn, 0, len(m.turns[id]))
 		for _, turn := range m.turns[id] {
-			turns = append(turns, SideRecoveryTurn{Turn: turn, DispatchAttempt: turn.DispatchAttempt, ProviderTurnID: turn.ProviderTurnID, Content: turn.Content, ReferenceContexts: sideReferenceContexts(turn.References)})
+			turns = append(turns, SideRecoveryTurn{Turn: turn, Model: turn.Model, Effort: turn.Effort, SettingsFrozen: turn.SettingsFrozen, DispatchAttempt: turn.DispatchAttempt, ProviderTurnID: turn.ProviderTurnID, Content: turn.Content, ReferenceContexts: sideReferenceContexts(turn.References)})
 		}
 		messageIDs, activityIDs, decisions := map[string]string{}, map[string]string{}, map[string][][]byte{}
 		for _, message := range m.messages[id] {
@@ -192,7 +196,10 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 			continue
 		}
 		side.SourceProviderID = record.SourceProviderID
-		side.LaunchConfig = record.LaunchConfig
+		side.LaunchConfig = bytes.TrimSpace(record.LaunchConfig)
+		if bytes.Equal(side.LaunchConfig, []byte("null")) {
+			side.LaunchConfig = nil
+		}
 		side.CreateKey = record.CreateKey
 		side.AppRunID = runID
 		side.ProviderHostID = record.ProviderHostID
@@ -206,13 +213,39 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		side.PolicyVersion = record.PolicyVersion
 		side.BoundaryTurnID = record.BoundaryTurnID
 		side.BoundaryState = record.BoundaryState
-		if side.ProviderForkID == "" {
+		unused := side.State == "draft" && side.OpeningTurnID == "" && len(record.Turns) == 0 && len(side.LaunchConfig) == 0
+		// A pre-dispatch receipt in an older snapshot may already have reached the
+		// lost daemon. Do not reinterpret it as a fresh Send with newer context.
+		var draft struct {
+			PendingDelivery json.RawMessage `json:"pendingDelivery"`
+		}
+		_ = json.Unmarshal([]byte(record.Draft), &draft)
+		uncertainOpening := false
+		if side.OpeningTurnID != "" {
+			// Electron's last snapshot can predate dispatch. Knowing the child
+			// identity alone does not prove its queued first question was unsent.
+			uncertainOpening = true
+			for _, item := range record.Turns {
+				if item.Turn.ID == side.OpeningTurnID {
+					uncertainOpening = item.Turn.State == "queued" || item.Turn.State == "running" && item.ProviderTurnID == ""
+					break
+				}
+			}
+		}
+		pendingDelivery := bytes.TrimSpace(draft.PendingDelivery)
+		if unused && (len(pendingDelivery) == 0 || bytes.Equal(pendingDelivery, []byte("null"))) {
+			side.State = "draft"
+		} else if side.ProviderForkID == "" {
 			side.State = "failed"
 			side.ErrorMessage = "Side opening was interrupted; close and reopen it."
+			if unused || side.OpeningTurnID != "" {
+				side.ErrorMessage = ErrSidePolicyRecreate.Error()
+				side.RecreateRequired = true
+			}
 		} else {
 			side.State = "recovering"
 		}
-		if side.RecreateRequired || side.PolicyVersion != sidePolicyVersion || side.BoundaryState == "uncertain" || side.BoundaryState == "pending" {
+		if uncertainOpening || side.RecreateRequired || side.PolicyVersion != sidePolicyVersion || side.BoundaryState == "uncertain" || side.BoundaryState == "pending" {
 			side.State = "failed"
 			side.ErrorMessage = ErrSidePolicyRecreate.Error()
 			side.RecreateRequired = true
@@ -221,6 +254,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		m.sides[side.ID] = side
 		m.turns[side.ID] = make([]domain.SideTurn, 0, len(record.Turns))
 		for _, item := range record.Turns {
+			item.Turn.Model, item.Turn.Effort, item.Turn.SettingsFrozen = item.Model, item.Effort, item.SettingsFrozen
 			item.Turn.DispatchAttempt = item.DispatchAttempt
 			item.Turn.Content = item.Content
 			item.Turn.ProviderTurnID = item.ProviderTurnID
@@ -324,26 +358,28 @@ func (m *memorySideStore) CreateSideConversation(_ context.Context, side domain.
 		return current, false, nil
 	}
 	for _, current := range m.sides {
-		if current.MainConversationID == side.MainConversationID && current.ClosedAt == nil && ((side.CreateKey != "" && current.CreateKey == side.CreateKey) || (!side.ForceNew && current.AnchorTurnID == side.AnchorTurnID)) {
+		if current.MainConversationID == side.MainConversationID && current.ClosedAt == nil && ((side.CreateKey != "" && current.CreateKey == side.CreateKey) || (side.State != "draft" && !side.ForceNew && current.AnchorTurnID == side.AnchorTurnID)) {
 			if side.CreateKey != "" && side.CreateKey != current.CreateKey {
 				m.createKeys[sideCreateIdentity{side.SessionID, side.CreateKey}] = current.ID
 			}
 			return current, false, nil
 		}
 	}
-	largest, open := 1, false
-	for _, current := range m.sides {
-		if current.SessionID == side.SessionID && current.ClosedAt == nil {
-			open = true
-			largest = max(largest, sideChatNumber(current.Label))
+	if !side.ManualLabel {
+		largest, open := 1, false
+		for _, current := range m.sides {
+			if current.SessionID == side.SessionID && current.ClosedAt == nil {
+				open = true
+				largest = max(largest, sideChatNumber(current.Label))
+			}
 		}
-	}
-	side.Label = "Side Chat"
-	if open {
-		if largest >= 99 {
-			return domain.SideConversation{}, false, ErrSideNameLimit
+		side.Label = "Side Chat"
+		if open {
+			if largest >= 99 {
+				return domain.SideConversation{}, false, ErrSideNameLimit
+			}
+			side.Label = fmt.Sprintf("Side Chat %d", largest+1)
 		}
-		side.Label = fmt.Sprintf("Side Chat %d", largest+1)
 	}
 	m.sides[side.ID] = side
 	return side, true, nil
@@ -494,8 +530,10 @@ func (m *memorySideStore) CloseSideConversation(_ context.Context, id string, no
 		return side, ErrSideClosed
 	}
 	m.closed[id] = true
-	m.hostCleanup[id] = side
-	m.cleanupEpoch[id]++
+	if side.State != "draft" || side.OpeningTurnID != "" {
+		m.hostCleanup[id] = side
+		m.cleanupEpoch[id]++
+	}
 	side.ClosedAt = &now
 	side.Generation = ""
 	delete(m.sides, id)
@@ -570,6 +608,36 @@ func (m *memorySideStore) SideProviderCleanupPending(_ context.Context) ([]domai
 func (m *memorySideStore) ReserveSideTurn(_ context.Context, turn domain.SideTurn, runID string) (domain.SideTurn, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.reserveSideTurn(turn, runID)
+}
+
+// Freeze the startup and accept its first turn under the same lock. Closing or
+// a competing submission cannot leave a partially prepared side behind.
+func (m *memorySideStore) ReserveSideStart(ctx context.Context, prepared domain.SideConversation, turn domain.SideTurn, runID string) (domain.SideTurn, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return domain.SideTurn{}, err
+	}
+	current, ok := m.sides[prepared.ID]
+	if !ok || current.Generation != prepared.Generation || current.AppRunID != runID || current.ClosedAt != nil {
+		return domain.SideTurn{}, ErrSideClosed
+	}
+	if current.State != "draft" || len(m.turns[current.ID]) != 0 {
+		return domain.SideTurn{}, ErrSideNotReady
+	}
+	prepared.Label, prepared.ManualLabel = current.Label, current.ManualLabel
+	prepared.OpeningTurnID, prepared.OpeningStartedAt = turn.ID, &turn.CreatedAt
+	m.sides[current.ID] = prepared
+	accepted, _, err := m.reserveSideTurn(turn, runID)
+	if err != nil {
+		m.sides[current.ID] = current
+	}
+	return accepted, err
+}
+
+// Caller holds m.mu.
+func (m *memorySideStore) reserveSideTurn(turn domain.SideTurn, runID string) (domain.SideTurn, bool, error) {
 	side, ok := m.sides[turn.SideID]
 	if !ok || side.ClosedAt != nil || side.AppRunID != runID {
 		return domain.SideTurn{}, false, ErrSideClosed
@@ -593,6 +661,7 @@ func (m *memorySideStore) ReserveSideTurn(_ context.Context, turn domain.SideTur
 	}
 	side.ReferencePending = false
 	m.sides[side.ID] = side
+	turn.Model, turn.Effort, turn.SettingsFrozen = side.Model, side.Effort, true
 	turn.State = "queued"
 	m.turns[turn.SideID] = append(m.turns[turn.SideID], turn)
 	m.messages[turn.SideID] = append(m.messages[turn.SideID], domain.SideMessage{

@@ -6,15 +6,22 @@ import { useUiStore } from "../../stores/ui-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { AgentAccountsPanel, type CliLoginControls } from "./AgentAccountsSection";
 
-const { deleteMock, getMock, patchMock, postMock, terminalState } = vi.hoisted(() => ({
-	deleteMock: vi.fn(), getMock: vi.fn(), patchMock: vi.fn(), postMock: vi.fn(),
+const { deleteMock, getMock, patchMock, postMock, putMock, terminalState } = vi.hoisted(() => ({
+	deleteMock: vi.fn(), getMock: vi.fn(), patchMock: vi.fn(), postMock: vi.fn(), putMock: vi.fn(),
 	terminalState: { value: undefined as ((state: "attached" | "exited" | "error") => void) | undefined },
 }));
 
 vi.mock("../../lib/api-client", () => ({
-	apiClient: { DELETE: deleteMock, GET: getMock, PATCH: patchMock, POST: postMock },
+	apiClient: { DELETE: deleteMock, GET: getMock, PATCH: patchMock, POST: postMock, PUT: putMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
+	apiErrorCode: (error: unknown) => (error as { code?: string } | undefined)?.code,
 	apiErrorDetails: (error: unknown) => (error as { details?: Record<string, unknown> } | undefined)?.details,
+}));
+
+// The harness's sign-in panel follows an account's background sign-in here.
+vi.mock("../../hooks/useAgentAuth", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAuth")>()),
+	getAgentUILogin: vi.fn(), cancelAgentUILogin: vi.fn(), startAgentUILogin: vi.fn(),
 }));
 
 vi.mock("../TerminalPane", () => ({
@@ -24,8 +31,8 @@ vi.mock("../TerminalPane", () => ({
 	},
 }));
 
-const device = { id: "device-claude", provider: "claude", device: true, default: true, signedIn: true, loggedIn: true, email: "a@example.com" };
-const saved = { id: "acct-b", provider: "claude", device: false, default: false, signedIn: false, loggedIn: false, email: "b@example.com" };
+const device = { id: "device-claude", provider: "claude", device: true, default: true, signedIn: true, loggedIn: true, email: "a@example.com", kind: "subscription" };
+const saved = { id: "acct-b", provider: "claude", device: false, default: false, signedIn: false, loggedIn: false, email: "b@example.com", kind: "subscription" };
 const login = { operationId: "login-1", provider: "claude", shellTerminal: { handleId: "shellterm-1", title: "Sign in to Claude account", createdAt: "2026-10-18T10:00:00Z" } };
 
 function renderPanel(cliLogin?: CliLoginControls) {
@@ -56,7 +63,7 @@ it("signs a signed-out saved account in again in its own folder", async () => {
 	renderPanel();
 	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
 
-	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } } });
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } }, body: {} });
 	expect(await screen.findByTestId("agent-account-login-terminal")).toBeInTheDocument();
 	// Only the signed-out saved account offers it; it cannot be made default while signed out.
 	expect(screen.getAllByRole("button", { name: "Sign in again" })).toHaveLength(1);
@@ -99,7 +106,7 @@ it("starts the sign-in a chat asked for, once", async () => {
 
 	expect(await screen.findByTestId("agent-account-login-terminal")).toBeInTheDocument();
 	expect(postMock.mock.calls.filter(([path]) => path === "/api/v1/agents/accounts/{accountId}/login")).toEqual([
-		["/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } } }],
+		["/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } }, body: {} }],
 	]);
 	expect(useUiStore.getState().accountLogin).toBeNull();
 	await user.click(screen.getByRole("button", { name: "Close sign-in" }));
@@ -450,4 +457,200 @@ it("turns the usage-limit handoff on through the daemon and shows what it stored
 
 	expect(patchMock).toHaveBeenCalledWith("/api/v1/settings/account-handoff", { body: { enabled: true } });
 	await waitFor(() => expect(toggle).toBeChecked());
+});
+
+const claudeMethods = [
+	{ id: "browser", label: "Claude subscription", secret: false },
+	{ id: "console", label: "Anthropic Console", secret: false },
+	{ id: "sso", label: "Organization SSO", secret: false },
+	{ id: "setup_token", label: "Setup token", secret: true },
+	{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true },
+];
+const keyAccount = { id: "acct-key", provider: "claude", device: false, default: false, signedIn: false, loggedIn: true, kind: "api_key", name: "Work", keyHint: "cdef" };
+
+function renderPanelWithMethods(cliLogin?: CliLoginControls) {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(<QueryClientProvider client={queryClient}><TooltipProvider><AgentAccountsPanel provider="claude" loginMethods={claudeMethods} cliLogin={cliLogin} /></TooltipProvider></QueryClientProvider>);
+}
+
+it("adds an account through the harness's own sign-in panel, offering every Claude method", async () => {
+	const user = userEvent.setup();
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+
+	for (const name of ["Claude subscription", "Anthropic Console", "Organization SSO", "Setup token", "Anthropic API key"]) {
+		expect(screen.getByRole("button", { name })).toBeInTheDocument();
+	}
+	// The account panel has no terminal: the in-app sign-in is the way in.
+	expect(screen.queryByTestId("agent-account-login-terminal")).not.toBeInTheDocument();
+});
+
+it("adds an Anthropic API key from the panel, checked by the daemon first", async () => {
+	const user = userEvent.setup();
+	postMock.mockImplementation((path: string) => {
+		if (path !== "/api/v1/agents/accounts/api-keys") return Promise.resolve({ data: {} });
+		return postMock.mock.calls.filter(([called]) => called === path).length === 1
+			? Promise.resolve({ error: { code: "AGENT_ACCOUNT_KEY_REJECTED", message: "rejected" } })
+			: Promise.resolve({ data: { accounts: [device, saved, keyAccount] } });
+	});
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Anthropic API key" }));
+
+	expect(screen.getByText(/billed per token to your API account/)).toBeInTheDocument();
+	await user.type(screen.getByLabelText("Name"), "Work");
+	await user.type(screen.getByLabelText("API key"), "sk-ant-api03-secret");
+	await user.click(screen.getByRole("button", { name: "Save and verify" }));
+	expect(await screen.findByText("The provider rejected this key.")).toBeInTheDocument();
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/api-keys", { body: { provider: "claude", name: "Work", apiKey: "sk-ant-api03-secret" } });
+
+	// The refused key stays typed, so a retry needs no retyping.
+	expect(screen.getByLabelText("API key")).toHaveValue("sk-ant-api03-secret");
+	await user.click(screen.getByRole("button", { name: "Save and verify" }));
+	await waitFor(() => expect(screen.queryByRole("button", { name: "Anthropic API key" })).not.toBeInTheDocument());
+	const row = document.querySelector<HTMLElement>('[data-agent-account="acct-key"]');
+	expect(row).toHaveTextContent("Key ending cdef · Billed per token");
+	expect(row).not.toHaveTextContent("secret");
+});
+
+it("signs a subscription in through the CLI in the background and saves the account once it finishes", async () => {
+	const user = userEvent.setup();
+	const { getAgentUILogin } = await import("../../hooks/useAgentAuth");
+	const running = { id: "auth-1", agentId: "claude-code", method: "browser", status: "running", expiresAt: "2026-11-17T10:00:00Z", loginUrl: "https://claude.ai/oauth" };
+	vi.mocked(getAgentUILogin).mockReset()
+		.mockResolvedValueOnce(running as never)
+		.mockResolvedValue({ ...running, status: "succeeded", loginUrl: undefined } as never);
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/login") return Promise.resolve({ data: { operationId: "acct-op", provider: "claude", authOperationId: "auth-1" } });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "complete", account: saved } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Claude subscription" }));
+
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login", { body: { provider: "claude", method: "browser" } });
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/verify", { params: { path: { operationId: "acct-op" } } }), { timeout: 4000 });
+	await waitFor(() => expect(screen.queryByRole("button", { name: "Claude subscription" })).not.toBeInTheDocument());
+	expect(postMock).not.toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/cancel", expect.anything());
+});
+
+it("shows an API key account with Replace key in the same panel instead of a sign-in", async () => {
+	const user = userEvent.setup();
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, keyAccount] },
+	}));
+	putMock.mockReset().mockResolvedValue({ data: { accounts: [device, { ...keyAccount, keyHint: "wxyz" }] } });
+	renderPanelWithMethods();
+
+	const row = await waitFor(() => {
+		const found = document.querySelector<HTMLElement>('[data-agent-account="acct-key"]');
+		if (!found) throw new Error("no API key row");
+		return found;
+	});
+	expect(within(row).queryByRole("button", { name: "Sign in again" })).not.toBeInTheDocument();
+	expect(within(row).getByRole("button", { name: "Make default" })).toBeEnabled();
+	// Only subscriptions move at a usage limit, so one of each shows no handoff switch.
+	expect(screen.queryByRole("switch", { name: "Move to another account at a usage limit" })).not.toBeInTheDocument();
+
+	await user.click(within(row).getByRole("button", { name: "Replace key" }));
+	// Only the key method, already open, and no name: the account keeps its own.
+	expect(screen.queryByRole("button", { name: "Claude subscription" })).not.toBeInTheDocument();
+	expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+	await user.type(screen.getByLabelText("API key"), "sk-ant-api03-new");
+	await user.click(screen.getByRole("button", { name: "Save and verify" }));
+
+	expect(putMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/api-key", { params: { path: { accountId: "acct-key" } }, body: { apiKey: "sk-ant-api03-new" } });
+	await waitFor(() => expect(row).toHaveTextContent("Key ending wxyz"));
+});
+
+it("shows the Windows Developer Mode notice when the sign-in panel cannot link a new account's folder", async () => {
+	const user = userEvent.setup();
+	postMock.mockImplementation((path: string) => path === "/api/v1/agents/accounts/login"
+		? Promise.resolve({ error: { code: "AGENT_ACCOUNT_UNSHARED", message: "server text", details: { windowsDeveloperMode: true } } })
+		: Promise.resolve({ data: {} }));
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Claude subscription" }));
+
+	// The panel closes; the card shows the localized warning and its help, as for a terminal sign-in.
+	await waitFor(() => expect(screen.queryByRole("button", { name: "Claude subscription" })).not.toBeInTheDocument());
+	const alert = screen.getByRole("alert");
+	expect(alert).toHaveTextContent("Turn on Windows Developer Mode to use this account.");
+	expect(alert).toHaveClass("text-warning");
+	expect(within(alert).getByRole("button", { name: "How to turn on Windows Developer Mode" })).toBeInTheDocument();
+});
+
+it("cancels an account's pending sign-in when the panel goes away mid sign-in", async () => {
+	const user = userEvent.setup();
+	const { getAgentUILogin } = await import("../../hooks/useAgentAuth");
+	vi.mocked(getAgentUILogin).mockReset().mockResolvedValue({ id: "auth-1", agentId: "claude-code", method: "browser", status: "running", expiresAt: "2026-11-17T10:00:00Z" } as never);
+	postMock.mockImplementation((path: string) => path === "/api/v1/agents/accounts/login"
+		? Promise.resolve({ data: { operationId: "acct-op", provider: "claude", authOperationId: "auth-1" } })
+		: Promise.resolve({ data: {} }));
+	const { unmount } = renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Claude subscription" }));
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login", expect.anything()));
+
+	unmount();
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId: "acct-op" } } }));
+});
+
+it("cancels an account sign-in that starts after the panel went away", async () => {
+	const user = userEvent.setup();
+	const { getAgentUILogin } = await import("../../hooks/useAgentAuth");
+	vi.mocked(getAgentUILogin).mockReset().mockResolvedValue({ id: "auth-1", agentId: "claude-code", method: "browser", status: "running", expiresAt: "2026-11-17T10:00:00Z" } as never);
+	let resolveStart: (value: unknown) => void = () => undefined;
+	postMock.mockImplementation((path: string) => path === "/api/v1/agents/accounts/login"
+		? new Promise((resolve) => { resolveStart = resolve; })
+		: Promise.resolve({ data: {} }));
+	const { unmount } = renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Claude subscription" }));
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login", expect.anything()));
+
+	unmount();
+	resolveStart({ data: { operationId: "acct-op", provider: "claude", authOperationId: "auth-1" } });
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId: "acct-op" } } }));
+});
+
+it("keeps the computer's own sign-in waiting while an account signs in", async () => {
+	const user = userEvent.setup();
+	const onSignIn = vi.fn();
+	renderPanelWithMethods({ disabled: false, canLogout: true, onSignIn, onLogout: vi.fn() });
+	const row = await findCliLoginRow();
+	expect(within(row).getByRole("button", { name: "Sign in again" })).toBeEnabled();
+
+	await user.click(screen.getByRole("button", { name: "Add account" }));
+	expect(within(row).getByRole("button", { name: "Sign in again" })).toBeDisabled();
+});
+
+it("adds an account in a terminal on a daemon from before sign-in methods", async () => {
+	const user = userEvent.setup();
+	const oldDevice = { ...device, kind: undefined };
+	const oldSaved = { ...saved, kind: undefined };
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [oldDevice, oldSaved] },
+	}));
+	postMock.mockImplementation((path: string) => Promise.resolve({ data: path === "/api/v1/agents/accounts/login" ? login : {} }));
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+
+	// Its older request takes no method, so the panel never opens.
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login", { body: { provider: "claude" } });
+	expect(screen.queryByRole("button", { name: "Claude subscription" })).not.toBeInTheDocument();
+});
+
+it("waits for the sign-in methods before replacing a key", async () => {
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, keyAccount] },
+	}));
+	renderPanel();
+	await waitFor(() => expect(document.querySelector('[data-agent-account="acct-key"]')).not.toBeNull());
+	const row = document.querySelector<HTMLElement>('[data-agent-account="acct-key"]')!;
+
+	// Without the panel's methods, a key has no terminal sign-in to fall back to.
+	expect(within(row).getByRole("button", { name: "Replace key" })).toBeDisabled();
+	expect(postMock).not.toHaveBeenCalled();
 });

@@ -14,7 +14,7 @@ import (
 const DefaultPollInterval = 250 * time.Millisecond
 
 type sessionPreviewSource interface {
-	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	ListPreviewSessions(ctx context.Context) ([]domain.SessionRecord, error)
 }
 
 type previewSetter interface {
@@ -25,6 +25,14 @@ type previewSetter interface {
 type PollerConfig struct {
 	Interval time.Duration
 	Logger   *slog.Logger
+	// Wake, when set, signals that a session changed (a preview may have been
+	// chosen). The poller then polls every Interval while it watches at least
+	// one preview, and every IdleInterval otherwise; a wake while it watches
+	// none polls at once, or one Interval after the previous poll if that is
+	// later. Without it (or with IdleInterval not above Interval) it polls
+	// every Interval, as before.
+	Wake         <-chan struct{}
+	IdleInterval time.Duration
 }
 
 // Poller watches explicitly selected workspace previews and persists refreshes
@@ -38,6 +46,10 @@ type Poller struct {
 	interval time.Duration
 	logger   *slog.Logger
 	seen     map[domain.SessionID]entryState
+
+	wake         <-chan struct{}
+	idleInterval time.Duration
+	lastPoll     time.Time
 }
 
 type entryState struct {
@@ -59,6 +71,9 @@ func NewPoller(source sessionPreviewSource, setter previewSetter, baseURL string
 		interval: cfg.Interval,
 		logger:   cfg.Logger,
 		seen:     map[domain.SessionID]entryState{},
+
+		wake:         cfg.Wake,
+		idleInterval: cfg.IdleInterval,
 	}
 	if p.interval <= 0 {
 		p.interval = DefaultPollInterval
@@ -75,25 +90,58 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.pollAndLog(ctx)
-		ticker := time.NewTicker(p.interval)
-		defer ticker.Stop()
+		watching := p.pollAndLog(ctx)
+		if p.wake == nil || p.idleInterval <= p.interval {
+			ticker := time.NewTicker(p.interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					p.pollAndLog(ctx)
+				}
+			}
+		}
+		// With nothing to watch, the fast interval only re-lists sessions that
+		// have no chosen preview: poll at the idle interval instead. A preview
+		// is chosen through a session write, so its session change polls at
+		// once, no sooner than one interval after the last poll.
+		timer := time.NewTimer(p.nextPoll(watching))
+		defer timer.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				p.pollAndLog(ctx)
+			case <-p.wake:
+				if !watching {
+					watching = true // poll now; the poll decides whether to stay fast
+					timer.Reset(max(0, time.Until(p.lastPoll.Add(p.interval))))
+				}
+			case <-timer.C:
+				watching = p.pollAndLog(ctx)
+				timer.Reset(p.nextPoll(watching))
 			}
 		}
 	}()
 	return done
 }
 
-func (p *Poller) pollAndLog(ctx context.Context) {
+func (p *Poller) nextPoll(watching bool) time.Duration {
+	if watching {
+		return p.interval
+	}
+	return p.idleInterval
+}
+
+// pollAndLog runs one poll and reports whether any preview is being watched:
+// a chosen workspace entry, or one the poller cleared and may restore.
+func (p *Poller) pollAndLog(ctx context.Context) bool {
+	p.lastPoll = time.Now()
 	if err := p.Poll(ctx); err != nil {
 		p.logger.Error("preview poller: poll failed", "err", err)
 	}
+	return len(p.seen) > 0
 }
 
 // Poll performs one deterministic scan of active worker sessions.
@@ -101,7 +149,11 @@ func (p *Poller) Poll(ctx context.Context) error {
 	if p.source == nil || p.setter == nil {
 		return nil
 	}
-	sessions, err := p.source.ListAllSessions(ctx)
+	// Not cancellable: a cancellable context makes the SQLite driver and
+	// database/sql each start a watcher goroutine for every query, and this runs
+	// four times a second. The loop still stops on ctx; one in-flight query simply
+	// finishes.
+	sessions, err := p.source.ListPreviewSessions(context.WithoutCancel(ctx))
 	if err != nil {
 		return fmt.Errorf("preview poller list sessions: %w", err)
 	}
@@ -122,6 +174,9 @@ func (p *Poller) Poll(ctx context.Context) error {
 			// the selected file temporarily disappeared. A blank fresh session
 			// or an explicit user clear must remain blank.
 			if !seenBefore || !previous.cleared || previous.path == "" {
+				// Nothing to restore: forget the session, so a poller left with
+				// nothing to watch can rest.
+				delete(p.seen, sess.ID)
 				continue
 			}
 			storedEntry = previous.path

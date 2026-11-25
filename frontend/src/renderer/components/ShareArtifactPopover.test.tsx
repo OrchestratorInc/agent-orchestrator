@@ -3,7 +3,7 @@ import { act, render, renderHook, screen, waitFor, within } from "@testing-libra
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudShareFile, CloudShareGrant, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import type { CloudShareFile, CloudShareGrant, CloudShareGrants, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
@@ -58,7 +58,7 @@ function stub(inspect: CloudShareInspection, list: CloudShareLinks, publish?: Cl
 	const inspectSpy = vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue(inspect);
 	const listSpy = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue(list);
 	const publishSpy = vi.spyOn(aoBridge.cloudShare, "publish").mockResolvedValue(publish ?? { status: "cancelled" });
-	const grantsSpy = vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue([]);
+	const grantsSpy = vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue({ people: [], teams: [], workspaces: [] });
 	return { inspectSpy, listSpy, publishSpy, grantsSpy };
 }
 
@@ -125,6 +125,28 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
 	});
 
+	it("says what a published page left out of the files it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 3, videos: 1, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("3 files this page uses weren't included, so the shared page won't show them. Videos can't be shared with a page yet.");
+	});
+
+	it("says a page's images were not included when Orchestrator Cloud cannot share them yet", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 0, skipped: 0, videos: 0, unsupported: true } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("This page's images weren't included: Orchestrator Cloud can't share them with a page yet.");
+	});
+
+	it("says nothing more when a page included every file it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 0, videos: 0, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).not.toContain("weren't included");
+		expect(popover.textContent).not.toContain("wasn't included");
+	});
+
 	it("names the file without its extension", async () => {
 		stub(inspection, links, { status: "published", replaced: false, share });
 		const popover = await openPopover(cloudFile);
@@ -151,13 +173,14 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("invites people on the live link at once, and removes them", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
-		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([maya]);
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [maya], teams: [], workspaces: [] });
 		const remove = vi.spyOn(aoBridge.cloudShare, "removeGrant").mockResolvedValue();
 		await openPopover(cloudFile, "report.html", "Published");
-		const field = await screen.findByRole("textbox", { name: "Add people by email" });
-		await userEvent.type(field, "Maya@acme.co,");
-		await userEvent.click(screen.getByRole("button", { name: "Add" }));
-		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, ["Maya@acme.co"]);
+		const field = await screen.findByRole("combobox", { name: "Add people by email" });
+		// Enter shares at once: there is no Add button.
+		await userEvent.type(field, "Maya@acme.co{Enter}");
+		expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { emails: ["maya@acme.co"] });
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(screen.getByText("Can view")).toBeTruthy();
 		// With someone invited, Only you reads Only people invited.
@@ -168,22 +191,18 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(screen.getByText("Only you")).toBeTruthy();
 	});
 
-	it("keeps Add disabled while a chip is not an email address, and says which", async () => {
+	it("shares nothing while what is typed is not an email address", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
-		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([]);
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [], teams: [], workspaces: [] });
 		await openPopover(cloudFile, "report.html", "Published");
-		const field = await screen.findByRole("textbox", { name: "Add people by email" });
-		await userEvent.type(field, "maya@acme.co ravi@acme ");
-		expect(screen.getByRole("alert").textContent).toBe("“ravi@acme” isn't an email address.");
-		expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
-		await userEvent.click(screen.getByRole("button", { name: "Remove ravi@acme" }));
-		expect(screen.getByRole("button", { name: "Add" })).toBeEnabled();
+		const field = await screen.findByRole("combobox", { name: "Add people by email" });
+		await userEvent.type(field, "ravi@acme{Enter}");
 		expect(invite).not.toHaveBeenCalled();
 	});
 
 	it("lists who the link is shared with when it opens", async () => {
 		const { grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, grantCount: 1 }] });
-		grantsSpy.mockResolvedValue([maya]);
+		grantsSpy.mockResolvedValue({ people: [maya], teams: [], workspaces: [] });
 		await openPopover(cloudFile, "report.html", "Published");
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(grantsSpy).toHaveBeenCalledWith("https://cp.test", SHARE_ID);
@@ -207,7 +226,7 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("unpublishes after an inline confirmation naming who it was shared with, then offers to publish again", async () => {
 		const { inspectSpy, listSpy, publishSpy, grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, grantCount: 2 }] });
-		grantsSpy.mockResolvedValue([maya, { ...maya, id: "7f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", email: "dev@acme.co" }]);
+		grantsSpy.mockResolvedValue({ people: [maya, { ...maya, id: "7f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", email: "dev@acme.co" }], teams: [], workspaces: [] });
 		let finish: () => void = () => undefined;
 		const unpublish = vi.spyOn(aoBridge.cloudShare, "unpublish").mockImplementation(() => new Promise((resolve) => {
 			finish = () => {
@@ -371,15 +390,16 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1", shareId: SHARE_ID });
 	});
 
-	it("says who can view it under the email field, without promising anyone is told", async () => {
+	it("offers the session share field, with no line under it about who can view", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		const popover = await openPopover(cloudFile, "report.html", "Published");
-		expect(await within(popover).findByText("People signed in with these emails can view it.")).toBeTruthy();
+		expect(await within(popover).findByRole("combobox", { name: "Add people by email" })).toBeTruthy();
+		expect(within(popover).queryByText("People signed in with these emails can view it.")).toBeNull();
 	});
 
 	it("says when who it is shared with can't be read, and reads it again on Try again", async () => {
 		const { grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, grantCount: 1 }] });
-		grantsSpy.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce([maya]);
+		grantsSpy.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ people: [maya], teams: [], workspaces: [] });
 		const popover = await openPopover(cloudFile, "report.html", "Published");
 		expect(await within(popover).findByText("Couldn't load who this link is shared with.")).toBeTruthy();
 		await userEvent.click(within(popover).getByRole("button", { name: "Try again" }));
@@ -389,16 +409,15 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("never lets an older list of who it is shared with replace an invite's answer", async () => {
 		const { grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
-		let answerRead: (grants: CloudShareGrant[]) => void = () => undefined;
+		let answerRead: (grants: CloudShareGrants) => void = () => undefined;
 		grantsSpy.mockImplementation(() => new Promise((resolve) => { answerRead = resolve; }));
 		const dev = { ...maya, id: "7f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", email: "dev@acme.co" };
-		vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([maya, dev]);
+		vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [maya, dev], teams: [], workspaces: [] });
 		const popover = await openPopover(cloudFile, "report.html", "Published");
-		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add people by email" }), "dev@acme.co{Enter}");
-		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
+		await userEvent.type(await within(popover).findByRole("combobox", { name: "Add people by email" }), "dev@acme.co{Enter}");
 		expect(await within(popover).findByText("dev@acme.co")).toBeTruthy();
 		// The read started on opening lands last, without dev.
-		act(() => answerRead([maya]));
+		act(() => answerRead({ people: [maya], teams: [], workspaces: [] }));
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(within(popover).getByText("dev@acme.co")).toBeTruthy();
 	});
@@ -417,9 +436,8 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		await openPopover(localFile);
 		expect(await screen.findByText("2 of 3 free links left")).toBeTruthy();
 		expect(publishSpy).not.toHaveBeenCalled();
-		// The button beside the field says Add; people added get access when it is published.
-		await userEvent.type(screen.getByRole("textbox", { name: "Add people by email" }), "dev@acme.co");
-		await userEvent.click(screen.getByRole("button", { name: "Add" }));
+		// Enter adds them; people added get access when it is published.
+		await userEvent.type(screen.getByRole("combobox", { name: "Add people by email" }), "dev@acme.co{Enter}");
 		expect(await screen.findByText("dev@acme.co")).toBeTruthy();
 		expect(screen.getByText("Gets access when you publish")).toBeTruthy();
 		expect(screen.getByText("Only people invited")).toBeTruthy();
@@ -527,15 +545,15 @@ describe("ShareArtifactButton on a file on this computer", () => {
 	it("refuses more people than one publish can share it with, before uploading", async () => {
 		const { publishSpy } = stub(inspection, links);
 		const popover = await openPopover(localFile);
-		const field = await within(popover).findByRole("textbox", { name: "Add people by email" });
-		const emails = Array.from({ length: 50 }, (_, index) => `p${index}@acme.co`).join(", ");
-		await userEvent.click(field);
-		await userEvent.paste(emails);
-		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
+		const field = await within(popover).findByRole("combobox", { name: "Add people by email" });
+		for (let index = 0; index < 50; index += 1) await userEvent.type(field, `p${index}@acme.co{Enter}`);
+		expect(await within(popover).findByText("p49@acme.co")).toBeTruthy();
 		await userEvent.type(field, "one-more@acme.co{Enter}");
-		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
 		expect(await within(popover).findByText("Add up to 50 people before publishing. You can add more once it's published.")).toBeTruthy();
-		expect(within(popover).queryByText("one-more@acme.co")).toBeTruthy();
+		// Refused, it stays in the field for another try, and is not added.
+		const held = within(popover).getAllByText("one-more@acme.co");
+		expect(held).toHaveLength(1);
+		expect(held[0].closest("[data-artifact-recipient-field]")).not.toBeNull();
 		expect(publishSpy).not.toHaveBeenCalled();
 	});
 
@@ -641,7 +659,7 @@ describe("ShareArtifactButton where links are public only", () => {
 		expect(await within(screen.getByRole("dialog")).findByText("Published")).toBeTruthy();
 		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1" });
 		expect(screen.getByText("Anyone with the link")).toBeTruthy();
-		expect(screen.queryByRole("textbox", { name: "Add people by email" })).toBeNull();
+		expect(screen.queryByRole("combobox", { name: "Add people by email" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Anyone with the link" })).toBeNull();
 	});
 
@@ -813,9 +831,14 @@ describe("ShareArtifactButton states", () => {
 		expect(screen.getByRole("button", { name: "Publish: report.html" })).toBeTruthy();
 	});
 
-	it("disables Publish for a video", async () => {
+	it.each(["clip.mkv", "clip.avi", "clip.ogv"])("disables Publish for %s, a video browsers cannot play", async (name) => {
+		renderButton({ ...localFile, path: name }, name);
+		expect(await screen.findByRole("button", { name: `Publish: ${name}` })).toBeDisabled();
+	});
+
+	it("offers Publish for a video browsers play", async () => {
 		renderButton({ ...localFile, path: "clip.mp4" }, "clip.mp4");
-		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Publish: clip.mp4" })).toBeEnabled();
 	});
 });
 
@@ -977,6 +1000,28 @@ describe("publish telemetry", () => {
 		await openPopover(cloudFile);
 		await waitFor(() => expect(sent("ao.artifacts.publish_blocked")).toEqual([{ reason: "limit", is_republish: false }]));
 		expect(sent("ao.artifacts.publish_failed")).toEqual([]);
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("says videos are coming soon when the control plane refuses a playable one", async () => {
+		const video = { ...cloudFile, path: "docs/clip.mp4" };
+		stub({ ...inspection, name: "clip.mp4" }, links, { status: "unsupported", message: "Sharing videos is coming soon." });
+		const dialog = await openPopover(video, "clip.mp4");
+		expect(await within(dialog).findByText("Publishing videos is coming soon.")).toBeInTheDocument();
+	});
+
+	it("says why a video format browsers cannot play is not published", async () => {
+		const video = { ...cloudFile, path: "docs/clip.mkv" };
+		const { publishSpy } = stub({ ...inspection, name: "clip.mkv", unsupported: true }, links);
+		render(
+			<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+				<ShareArtifactMenuPopover file={video} intent="publish" name="clip.mkv" open onOpenChange={() => undefined}>
+					<button type="button">menu</button>
+				</ShareArtifactMenuPopover>
+			</TooltipProvider></QueryClientProvider>,
+		);
+		const dialog = await screen.findByRole("dialog");
+		expect(await within(dialog).findByText("This video format can't be played in a browser. Use MP4, MOV or WebM.")).toBeInTheDocument();
 		expect(publishSpy).not.toHaveBeenCalled();
 	});
 

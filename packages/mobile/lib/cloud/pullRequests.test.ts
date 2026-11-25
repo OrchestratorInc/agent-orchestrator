@@ -59,7 +59,7 @@ it("says the reviewer is working while a review runs, idle once one has, and not
 
 it("leaves the model out of the reviewer section's footer where Cloud cannot choose one", async () => {
 	const { reviewerSectionFooter } = await import("../reviewer-picker.types");
-	const reviewer = { reviewers: [], selectedReviewer: "", effectiveReviewer: "codex", onSelectReviewer() {}, models: [], modelTitle: "Model" as const, selectedModel: "", onSelectModel() {}, busy: false };
+	const reviewer = { reviewers: [], selectedReviewer: "", effectiveReviewer: "codex", onSelectReviewer() {}, onSelectModel() {}, onSelectEffort() {}, busy: false };
 	expect(reviewerSectionFooter({ ...reviewer, modelChoice: false })).toBe("Choose who runs the next Orchestrator review.");
 	expect(reviewerSectionFooter(reviewer)).toContain("which model it uses");
 });

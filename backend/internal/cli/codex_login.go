@@ -7,11 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -92,6 +96,11 @@ func (c *commandContext) runCodexLogin(ctx context.Context, executable string, u
 			return fmt.Errorf("%s is required", label)
 		}
 		defer zeroBytes(secret)
+		if flag == "--with-api-key" {
+			if err := c.checkOpenAIKey(ctx, secret, out, style); err != nil {
+				return err
+			}
+		}
 		args = append(args, flag)
 		payload := append(append([]byte(nil), secret...), '\n')
 		defer zeroBytes(payload)
@@ -101,12 +110,145 @@ func (c *commandContext) runCodexLogin(ctx context.Context, executable string, u
 	}
 
 	if err := c.deps.RunInteractiveCommand(ctx, codex, "", args, childInput, out, stderr); err != nil {
+		if startErr := c.codexStartFailure(ctx, codex); startErr != nil {
+			return startErr
+		}
 		return fmt.Errorf("codex login failed: %w", err)
 	}
 	if _, err := fmt.Fprintf(out, "\n%s\n", style.success("Codex sign-in complete.")); err != nil {
 		return err
 	}
 	return nil
+}
+
+const (
+	defaultOpenAIRESTBase = "https://api.openai.com/v1"
+	openAIKeyCheckTimeout = 15 * time.Second
+)
+
+// checkOpenAIKey asks OpenAI whether it accepts key before Codex saves it.
+// `codex login --with-api-key` stores any string and reports success, so a
+// mistyped key failed only at a session's first model call (#5029). A refused
+// key (401) is not saved. A key Codex sends somewhere else (another
+// model_provider, an openai_base_url or OPENAI_BASE_URL, or a profile that may
+// pick either) is not OpenAI's to judge and is never sent to it. A 403 can mean
+// a restricted key without Models: Read, another org or region, and an
+// unreachable OpenAI is no verdict: those keys are saved unchecked, and the
+// output says so. The key never appears in output or errors.
+func (c *commandContext) checkOpenAIKey(ctx context.Context, key []byte, out io.Writer, style codexLoginStyle) error {
+	if codexKeyGoesElsewhere() || strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")) != "" {
+		_, err := fmt.Fprintln(out, style.dim("Saved without checking: Codex uses another provider than OpenAI for this key."))
+		return err
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, openAIKeyCheckTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(c.deps.OpenAIRESTBase, "/")+"/models", http.NoBody)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+string(key))
+	client := &http.Client{Timeout: openAIKeyCheckTimeout}
+	if c.deps.HTTPClient != nil {
+		client.Transport = c.deps.HTTPClient.Transport
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		_, writeErr := fmt.Fprintln(out, style.dim("Couldn't reach OpenAI to check the key, so Codex saves it unchecked."))
+		return writeErr
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	_ = resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("OpenAI refused this API key (HTTP %d), so it was not saved. Check the key and try again", resp.StatusCode)
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		_, err := fmt.Fprintln(out, style.success("OpenAI accepted the key."))
+		return err
+	default:
+		_, err := fmt.Fprintln(out, style.dim(fmt.Sprintf("OpenAI answered HTTP %d, so Codex saves the key unchecked.", resp.StatusCode)))
+		return err
+	}
+}
+
+// codexSystemConfig is the system-wide config.toml Codex also loads; a
+// variable so tests never read the host's.
+var codexSystemConfig = "/etc/codex/config.toml"
+
+// codexKeyGoesElsewhere reports whether Codex's user or system config.toml, at
+// its top level (before any [table]), selects another model_provider than
+// openai, points the built-in openai provider at another openai_base_url, or
+// picks a profile, which can do either. Either file is enough: the user file
+// can only override a system setting, so a key that might not reach OpenAI is
+// saved unchecked rather than judged by it.
+func codexKeyGoesElsewhere() bool {
+	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if home == "" {
+		if userHome, err := os.UserHomeDir(); err == nil {
+			home = filepath.Join(userHome, ".codex")
+		}
+	}
+	if home != "" && codexConfigRoutesElsewhere(filepath.Join(home, "config.toml")) {
+		return true
+	}
+	return codexConfigRoutesElsewhere(codexSystemConfig)
+}
+
+// codexConfigRoutesElsewhere decodes the config.toml at path, as TOML so every
+// string form counts, and reports whether a top-level model_provider other
+// than openai, an openai_base_url, or a profile is set.
+func codexConfigRoutesElsewhere(path string) bool {
+	data, err := os.ReadFile(path) //nolint:gosec // Codex's own config files.
+	if err != nil {
+		return false
+	}
+	var config struct {
+		ModelProvider string `toml:"model_provider"`
+		OpenAIBaseURL string `toml:"openai_base_url"`
+		Profile       string `toml:"profile"`
+	}
+	if toml.Unmarshal(data, &config) != nil {
+		return false
+	}
+	provider := strings.TrimSpace(config.ModelProvider)
+	return (provider != "" && provider != "openai") ||
+		strings.TrimSpace(config.OpenAIBaseURL) != "" ||
+		strings.TrimSpace(config.Profile) != ""
+}
+
+// codexStartProbeTimeout bounds the `codex --version` run that tells a Codex
+// that cannot start from a sign-in that failed.
+const codexStartProbeTimeout = 15 * time.Second
+
+// codexStartFailure reports a Codex that cannot start at all, after its login
+// failed. An npm launcher whose native binary is gone (macOS can quarantine
+// it) fails both runs with only a raw spawn error, which says nothing about
+// what to do (#7579). A Codex whose --version works failed the sign-in itself,
+// and is left to that error.
+func (c *commandContext) codexStartFailure(ctx context.Context, codex string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, codexStartProbeTimeout)
+	defer cancel()
+	var output bytes.Buffer
+	err := c.deps.RunInteractiveCommand(probeCtx, codex, "", []string{"--version"}, strings.NewReader(""), &output, &output)
+	if err == nil || ctx.Err() != nil {
+		return nil
+	}
+	reason := lastLine(output.String())
+	if reason == "" {
+		reason = err.Error()
+	}
+	return fmt.Errorf("the Codex CLI at %s could not start (%s). Reinstall or update Codex, then try again", codex, reason)
+}
+
+// lastLine is the last non-blank line of s, where a failed launcher leaves
+// its error, cut to a length an error message can carry.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	line := strings.TrimSpace(lines[len(lines)-1])
+	const limit = 300 // characters, so a cut never splits one
+	if runes := []rune(line); len(runes) > limit {
+		line = string(runes[:limit]) + "..."
+	}
+	return line
 }
 
 func resolveLoginExecutable(explicit, name string, lookPath func(string) (string, error)) (string, error) {
@@ -165,7 +307,7 @@ func writeCodexLoginMenu(out io.Writer, style codexLoginStyle) error {
 		fmt.Sprintf("  %s  %s %s", style.accent("2"), style.bold("Device code"), style.dim("· Sign in on another device")),
 		"",
 		style.dim("DEVELOPER CREDENTIALS"),
-		fmt.Sprintf("  %s  %s %s", style.accent("3"), style.bold("OpenAI API key"), style.dim("· Validated and saved by Codex")),
+		fmt.Sprintf("  %s  %s %s", style.accent("3"), style.bold("OpenAI API key"), style.dim("· Checked with OpenAI, then saved by Codex")),
 		fmt.Sprintf("  %s  %s %s", style.accent("4"), style.bold("Access token"), style.dim("· For advanced or managed environments")),
 		"",
 		style.bold("Enter 1-4 and press Return"),
@@ -212,6 +354,9 @@ func runInteractiveCommand(ctx context.Context, name, dir string, args []string,
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// A child the launcher started can keep a captured output pipe open after
+	// the context kills the launcher; stop waiting for it shortly after.
+	cmd.WaitDelay = 100 * time.Millisecond
 	return cmd.Run()
 }
 

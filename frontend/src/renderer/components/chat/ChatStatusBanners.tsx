@@ -15,7 +15,7 @@
 
 import { memo, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleArrowUp, Download, KeyRound, Plug, TriangleAlert } from "@/components/app-icons";
+import { CircleArrowUp, Download, KeyRound, Plug, RotateCcw, TriangleAlert } from "@/components/app-icons";
 import { agentAccountProviderFor, useSessionAgentAccounts } from "../../hooks/useAgentAccounts";
 import { useSettings } from "../../hooks/useSettings";
 import { versionLabel } from "../../hooks/useHarnessUpdates";
@@ -26,6 +26,8 @@ import { cn, truncateMiddle } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import type { SessionStaleBinary } from "../../types/workspace";
 import { Button } from "../ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import type { ConversationAccount, ConversationThreadState, McpServer } from "../../types/conversation";
 
 export function ImportedAgentBlocked({ agent, block }: { agent: string; block: AgentBlock }) {
@@ -263,51 +265,127 @@ export const McpServerBanner = memo(function McpServerBanner({
 });
 
 /**
- * A harness update replaced the release this session's agent runs. With
- * "move open sessions to new versions" on, the daemon restarts the agent on
- * the new release once it is idle, or before the next message; a failed
- * restart keeps the queued messages for a manual resume. A stopped agent is
- * never moved on its own: resuming it starts the new release.
+ * The routine side of a harness update, in the chat's topbar. With "move open
+ * sessions to new versions" on, the daemon restarts the agent on the new
+ * release once it is idle, or before the next message. That is ordinary
+ * state, not a problem, so it is one small chip rather than a strip across
+ * the conversation; its popover says what happened and why it waits. A
+ * stopped agent is never moved on its own: resuming it starts the new release.
+ *
+ * A failed move keeps the queued messages for a manual resume. It takes the
+ * same spot as a "Retry update" chip: clicking it resumes the agent, as the
+ * stopped-agent banner's Resume does, and hovering it says why.
  */
-export const VersionSwitchBanner = memo(function VersionSwitchBanner({
+export const VersionSwitchChip = memo(function VersionSwitchChip({
 	staleBinary,
 	hostId,
+	harness,
 	agentStopped,
+	onResume,
+	resuming,
 }: {
 	staleBinary?: SessionStaleBinary;
 	hostId?: string;
+	/** The session's harness, named in the popover title. */
+	harness: string;
 	/** The agent controller stopped and waits for the user to resume it. */
 	agentStopped?: boolean;
+	/** Resumes the agent after a failed switch; omitted when it cannot be resumed from here. */
+	onResume?: () => void | Promise<unknown>;
+	resuming?: boolean;
 }) {
+	const { t } = useTranslation();
 	// Most sessions are current; only a marked one reads the setting.
-	return staleBinary?.version ? <VersionSwitchNotice staleBinary={staleBinary} hostId={hostId} agentStopped={agentStopped} /> : null;
+	const waiting = staleBinary?.version && !staleBinary.switchFailedAt ? staleBinary : undefined;
+	const failedVersion = staleBinary?.version && staleBinary.switchFailedAt
+		? truncateMiddle(versionLabel(staleBinary.version))
+		: undefined;
+	return (
+		<>
+			{/* Mounted for every session, so a chip that appears mid-session is announced, not only drawn. */}
+			<span role="status" className="sr-only">
+				{waiting ? <VersionSwitchAnnouncement staleBinary={waiting} hostId={hostId} harness={harness} /> : null}
+				{failedVersion ? t("chat.versionSwitch.failedTitle", { version: failedVersion }) : null}
+			</span>
+			{waiting ? <VersionSwitchPopover staleBinary={waiting} hostId={hostId} harness={harness} agentStopped={agentStopped} /> : null}
+			{failedVersion ? <VersionSwitchRetry version={failedVersion} onResume={onResume} resuming={resuming} /> : null}
+		</>
+	);
 });
 
-function VersionSwitchNotice({ staleBinary, hostId, agentStopped }: { staleBinary: SessionStaleBinary; hostId?: string; agentStopped?: boolean }) {
+function VersionSwitchRetry({ version, onResume, resuming }: { version: string; onResume?: () => void | Promise<unknown>; resuming?: boolean }) {
+	const { t } = useTranslation();
+	const label = t("chat.versionSwitch.retry");
+	const title = t("chat.versionSwitch.failedTitle", { version });
+	const unavailable = !onResume || resuming;
+	return (
+		<div className="workspace-topbar-actions">
+			{/* No delay: the hover is the only place the reason lives. */}
+			<Tooltip delayDuration={0}>
+				<TooltipTrigger asChild>
+					<Button
+						type="button"
+						variant="secondary"
+						size="xs"
+						aria-label={`${label}: ${title}`}
+						// Not `disabled`: a disabled button never shows its tooltip.
+						aria-disabled={unavailable || undefined}
+						data-priority="secondary"
+						data-version-switch-chip=""
+						onClick={() => {
+							if (unavailable) return;
+							void Promise.resolve().then(() => onResume()).catch(() => {});
+						}}
+					>
+						<RotateCcw aria-hidden="true" className="size-icon-sm shrink-0 text-warning" />
+						<span data-compact-label="">{label}</span>
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent side="bottom" className="max-w-64">
+					{onResume ? t("chat.versionSwitch.failedTooltip", { version }) : title}
+				</TooltipContent>
+			</Tooltip>
+		</div>
+	);
+}
+
+function useVersionSwitchCopy(staleBinary: SessionStaleBinary, hostId: string | undefined, harness: string) {
 	const { t } = useTranslation();
 	const { settings } = useSettings(hostId);
-	const version = truncateMiddle(versionLabel(staleBinary.version));
-	if (staleBinary.switchFailedAt) {
-		return (
-			<div role="alert" className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5">
-				<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-warning" />
-				<div className="flex min-w-0 flex-col gap-0.5">
-					<strong className="text-xs font-medium text-warning">{t("chat.versionSwitch.failedTitle", { version })}</strong>
-					<span className="text-xs leading-snug text-muted-foreground">{t("chat.versionSwitch.failedBody")}</span>
-				</div>
-			</div>
-		);
-	}
 	if (!settings?.versionRefresh) return null;
+	const version = truncateMiddle(versionLabel(staleBinary.version));
+	return { chip: t("chat.versionSwitch.chip"), title: t("chat.versionSwitch.title", { agent: agentLabel(harness), version }) };
+}
+
+function VersionSwitchAnnouncement({ staleBinary, hostId, harness }: { staleBinary: SessionStaleBinary; hostId?: string; harness: string }) {
+	const copy = useVersionSwitchCopy(staleBinary, hostId, harness);
+	return copy ? `${copy.chip}: ${copy.title}` : null;
+}
+
+function VersionSwitchPopover({ staleBinary, hostId, harness, agentStopped }: { staleBinary: SessionStaleBinary; hostId?: string; harness: string; agentStopped?: boolean }) {
+	const { t } = useTranslation();
+	const copy = useVersionSwitchCopy(staleBinary, hostId, harness);
+	if (!copy) return null;
+	const { chip, title } = copy;
+	// Its own action group: the class gives it the topbar's no-drag region,
+	// control height and label compaction, like the session's other actions.
 	return (
-		<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-1.5">
-			<span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-caption text-muted-foreground">
-				<CircleArrowUp aria-hidden="true" className="size-3 shrink-0 text-settings-accent" />
-				{t(agentStopped ? "chat.versionSwitch.installed" : "chat.versionSwitch.pending", { version })}
-			</span>
-			<span className="min-w-0 truncate text-caption text-muted-foreground">
-				{t(agentStopped ? "chat.versionSwitch.stoppedHint" : "chat.versionSwitch.pendingHint")}
-			</span>
+		<div className="workspace-topbar-actions">
+			<Popover>
+				<PopoverTrigger asChild>
+					<Button type="button" variant="secondary" size="xs" aria-label={`${chip}: ${title}`} data-priority="secondary" data-version-switch-chip="">
+						<CircleArrowUp aria-hidden="true" className="size-icon-sm shrink-0" />
+						<span data-compact-label="">{chip}</span>
+					</Button>
+				</PopoverTrigger>
+				<PopoverContent align="end" aria-label={title} className="flex w-80 max-w-[calc(100vw-1rem)] flex-col gap-2 p-3.5">
+					<h2 className="text-control font-medium text-foreground">{title}</h2>
+					<p className="text-xs leading-normal text-muted-foreground">
+						{t(agentStopped ? "chat.versionSwitch.stoppedHint" : "chat.versionSwitch.pendingBody")}
+					</p>
+					{agentStopped ? null : <p className="text-xs leading-normal text-muted-foreground">{t("chat.versionSwitch.waitReason")}</p>}
+				</PopoverContent>
+			</Popover>
 		</div>
 	);
 }

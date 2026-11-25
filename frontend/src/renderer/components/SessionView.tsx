@@ -1,8 +1,10 @@
 import { apiErrorException } from "../lib/api-error-exception";
+import { DeviceRevealWatcher } from "./DeviceRevealWatcher";
+import { useDevicesEnabled } from "../lib/devices-enabled";
 import { getApiBaseUrl } from "../lib/api-client";
 import { baseUrlForHost } from "../lib/host-clients";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
-import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isCancelledError, useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, PanelRight, Plus, SquareTerminal } from "@/components/app-icons";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
@@ -94,7 +96,7 @@ import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
-import { SessionTopbarHost } from "./SessionTopbarPortal";
+import { SessionTopbarHost, SessionTopbarScope } from "./SessionTopbarPortal";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useAgentAccountLabel } from "../hooks/useAgentAccounts";
@@ -109,7 +111,7 @@ import {
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { SESSION_WORKSPACE_ID } from "../hooks/useHeldSession";
-import { canResumeAgent, resumeAgentOnOpen, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
+import { canResumeAgent, resumeAgentOnOpen, resumeMayRecover, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
 import { trackImportFirstOpen, useImportedAgentBlock } from "../lib/session-import";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
@@ -129,8 +131,10 @@ import {
 	useWorkspaceSession,
 	workspaceQueryKeyForHost,
 } from "../hooks/useWorkspaceQuery";
+import { withOptimisticSessionTitle } from "../hooks/optimistic-session-titles";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
-import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError, requestCloudWorkspaceCheckout, resumeCloudSession } from "../lib/cloud-lifecycle";
+import { cloudWorkerStartingWait, recordCloudWorkspaceStartupEvent } from "../lib/cloud-worker-starting";
 import { FREESTYLE_PROVIDER, SHARE_FEATURE } from "../lib/cloud-offering";
 import { useCloudSessionEventStream } from "../hooks/useCloudSessionEvents";
 import { latestScriptRun } from "../lib/cloud-script-runs";
@@ -366,6 +370,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 		resumeAfter: () => 0,
 		onEvent: (event) => {
 			if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
+			if (orgId) recordCloudWorkspaceStartupEvent(orgId, sessionId, event);
 			const occurredAt = Date.parse(event.createdAt);
 			if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
 			// sandbox.provisioning only marks the start of workspace creation;
@@ -547,10 +552,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const cloudSessionWorkspace = directCloudWorkspace ?? (isCloudRoute ? routedWorkspace : undefined);
 	const directCloudSession = routeCloudOrgId && cloudRouteSession.data && (!routedWorkspace || isCloudRoute) &&
 		projectId === cloudRouteSession.data.projectId
-		? toCloudWorkspaceSession(cloudRouteSession.data, {
+		? withOptimisticSessionTitle(toCloudWorkspaceSession(cloudRouteSession.data, {
 			id: cloudSessionWorkspace?.id ?? cloudRouteSession.data.projectId,
 			displayName: cloudSessionWorkspace?.name ?? "Cloud project",
-		}, routeCloudOrgId)
+		}, routeCloudOrgId))
 		: undefined;
 	const fallbackSession = !projectId || workspaceSessionQuery.data?.workspaceId === projectId
 		? workspaceSessionQuery.data : undefined;
@@ -637,12 +642,25 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const importBlock = useImportedAgentBlock(session, hostId);
 	const openedSession = useRef({ key: uiSessionId, checked: false });
 	const autoResume = useMutation({
-		mutationKey: ["resume-agent", "local", sessionId],
-		mutationFn: resumeAgentOnOpen,
+		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
+		mutationFn: async (id: string) => {
+			const opening = openedSession.current;
+			try {
+				await resumeAgentOnOpen(id, hostId);
+			} catch (error) {
+				if (!resumeMayRecover(error)) throw error;
+				await new Promise((resolve) => setTimeout(resolve, 3_000));
+				if (openedSession.current !== opening) throw error;
+				await resumeAgentOnOpen(id, hostId).catch((retryError: unknown) => {
+					const code = apiErrorCode(retryError);
+					if (code !== "AGENT_NOT_EXITED" && code !== "AGENT_RESUME_IN_PROGRESS") throw retryError;
+				});
+			}
+		},
 		onSettled: async (_data, _error, id) => {
 			await Promise.all([
 				refreshWorkspaces(),
-				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id) }),
+				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id, hostId) }),
 			]);
 		},
 	});
@@ -653,26 +671,42 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// already-resumed session no longer flashes "Resuming agent…" while the
 	// workspace query catches up with the new activity state.
 	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
-		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
+		(!usesPreviewWorkspaceData && !hostUnreachable && canResumeAgent(session, resumeStatus.transition) &&
 		!resumeStatus.statusError && !importBlock.block && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
-	const resumeOnOpen = autoResume.mutate;
+	const resumeOnOpen = autoResume.mutateAsync;
 	// This session's background resume failed; the chat shows why.
-	const autoResumeFailed = !hostId && autoResume.variables === sessionId && autoResume.isError;
+	const autoResumeFailed = autoResume.variables === sessionId && autoResume.isError;
+	const remoteConnection = useRef({ key: "", base: remoteBase, at: 0 });
+	const refetchRemoteSession = remoteSessionQuery.refetch;
+	const remoteReadAt = Math.max(remoteSessionQuery.dataUpdatedAt, remoteSessionQuery.errorUpdatedAt);
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
-		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
+		if (hostId && (remoteConnection.current.key !== uiSessionId || remoteConnection.current.base !== remoteBase)) {
+			const reconnected = remoteConnection.current.base !== remoteBase;
+			remoteConnection.current = { key: uiSessionId, base: remoteBase, at: remoteBase ? Date.now() : 0 };
+			if (remoteBase && !openedSession.current.checked) {
+				if (reconnected) void queryClient.cancelQueries({ queryKey: workspaceQueryKeyForHost(hostId), exact: true }).then(() => refetchRemoteSession());
+				else void refetchRemoteSession({ cancelRefetch: false });
+			}
+		}
+		if (usesPreviewWorkspaceData || session?.cloud || !session || (hostId ? hostUnreachable || remoteSessionQuery.isFetching || remoteReadAt < remoteConnection.current.at : daemonStatus.state !== "ready") ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
 		if (!session.needsResume && !sessionAgentExited(session)) {
+			if (hostId && remoteSessionQuery.isError) return;
 			openedSession.current.checked = true;
 			return;
 		}
 		if (!canResume || importBlock.block || importBlock.checking) return;
-		// One attempt per route opening; a failed resume or a later agent exit
+		// One resume per route opening; a failed resume or a later agent exit
 		// stays stopped rather than entering an automatic restart loop.
 		openedSession.current.checked = true;
-		if (session.needsResume) trackImportFirstOpen(session.provider, resumeAgentOnOpen(session.id));
-		resumeOnOpen(session.id);
-	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, resumeOnOpen, session, uiSessionId]);
+		const resuming = resumeOnOpen(session.id);
+		resuming.catch(() => {});
+		if (session.needsResume) trackImportFirstOpen(session.provider, resuming);
+	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, hostUnreachable, queryClient, refetchRemoteSession, remoteBase, remoteReadAt, remoteSessionQuery.isError, remoteSessionQuery.isFetching, resumeOnOpen, session, uiSessionId]);
+	useEffect(() => () => {
+		openedSession.current = { key: "", checked: true };
+	}, []);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);
@@ -896,7 +930,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const requestCloudResume = useCallback(async (prepareWorkspace: boolean) => {
 		if (!session?.cloud) return;
 		await resumeCloudSession(cloudCpClient, session.cloud.orgId, session.id);
-		if (prepareWorkspace) await cloudCpClient.requestWorkspaceCheckout(session.cloud.orgId, session.id);
+		// A worker that just said it is still preparing the workspace is already
+		// doing what this asks; the request would only wait on it. A recorded
+		// startup failure (a checkout or conversation restore) is not being
+		// prepared: it waits for this request, so it is always sent.
+		const startupFailed = cloudStartupProblem(session)?.phase === "failed";
+		if (prepareWorkspace && (startupFailed || !cloudWorkerStartingWait(session.cloud.orgId, session.id))) {
+			await requestCloudWorkspaceCheckout(cloudCpClient, session.cloud.orgId, session.id);
+		}
 		await refreshWorkspaces();
 	}, [cloudCpClient, refreshWorkspaces, session]);
 	useEffect(() => {
@@ -1040,6 +1081,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Split panes are a Developer mode preview; off, no split is shown and
 	// turning it off mid-split puts every tab back in the strip.
 	const splitPanes = useSplitPanesEnabled();
+	// Devices are a Developer mode preview: off, no Device tab opens on its own.
+	const devicesEnabled = useDevicesEnabled();
 	// Tabs can be shown together: they merge into one group tab in the strip and
 	// the screen splits into one pane per member, where any pane can split
 	// again. Every view stays mounted where it is and is only placed into its
@@ -1619,6 +1662,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button size="icon-sm"
+						data-telemetry-id="tab.new"
 						aria-label={t("shortcut.new-shell-terminal")}
 						data-terminal-focus-handoff="true"
 						onClick={addShellTerminal}
@@ -1735,6 +1779,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (hostId && remoteBase && browserSlotVisible) void remoteSessionQuery.refetch();
 	}, [hostId, remoteBase, browserSlotVisible, remoteSessionQuery.refetch]);
 	const terminated = session ? !sessionIsActive(session) : false;
+	// An agent's `ao device open` reveals the Device tab, as `ao preview` reveals
+	// Browser: a lease opened while this session is on screen opens the tab once;
+	// entering a session that already holds one does not.
+	const deviceAvailable = devicesEnabled && Boolean(session) && !session?.cloud && !hostId && !isOrchestrator;
+	// A maximized Files or Browser would cover the revealed tab, so both go back
+	// to the inspector first, as opening an artifact does.
+	const revealDevice = useCallback(() => {
+		setBrowserPopOutState({ sessionId, phase: "docked" });
+		setFilesPoppedOut(false);
+		transitionInspectorView("device");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.
@@ -2033,6 +2089,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				label: shell?.title ?? key,
 				icon: <SquareTerminal aria-hidden="true" className="size-icon-sm" />,
 				agentHandleId: tracksAgent ? key : undefined,
+				resumeHarness: shell?.resumeHarness,
 			};
 	}, [centerFileRequestsBySession, closePane, reviewerHarness, selectTab, sessionLabel, sessionProvider, shellTerminals, t, uiSessionId]);
 	// Pressing a file pane's title bar moves keyboard focus into that file.
@@ -2294,15 +2351,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				if (error) throw error;
 				if (active) renewedAt = Date.now();
 				// Remote conversations already refresh every two seconds. A ready or
-				// working chat hears every change through events, and a wake emits
-				// one, so only a chat still waking or stopped is refreshed here;
-				// refreshing a settled one reloaded every page it had on each return.
+				// working chat hears every change through events, so only a chat still
+				// waking or stopped is refreshed here; refreshing a settled one reloaded
+				// every page it had on each return.
 				if (active && !left && !refreshed && !hostId) {
 					refreshed = true;
 					if (!conversationSettled(queryClient, sessionId)) {
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 					}
-					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				}
 			} finally {
 				// Release a late registration too; leaving must not wait on wake.
@@ -2415,9 +2471,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [browserOnly, sessionId, uiSessionId, setFilesChangedOnly, setInspectorOpenForSession, transitionInspectorView]);
 
 	const fetchWorkspaceFiles = useCallback(async () => {
-		return queryClient.fetchQuery(
-			sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId),
-		);
+		const options = sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId);
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return await queryClient.fetchQuery(options);
+			} catch (error) {
+				if (!isCancelledError(error) || attempt === 3) throw error;
+			}
+		}
 	}, [hostId, queryClient, sessionId, t]);
 
 	const handleOpenArtifact = useCallback(
@@ -2549,8 +2610,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// changes, or its commits when the worktree is clean.
 		resetFilesSelection(uiSessionId);
 		prepareFilesInspector();
-		void fetchWorkspaceFiles();
-	}, [fetchWorkspaceFiles, prepareFilesInspector, resetFilesSelection, uiSessionId]);
+		void queryClient.prefetchQuery(sessionWorkspaceFilesQueryOptions(sessionId, t("files.error.loadWorkspace"), hostId));
+	}, [hostId, prepareFilesInspector, queryClient, resetFilesSelection, sessionId, t, uiSessionId]);
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
@@ -2803,7 +2864,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 		hasInspector,
 	);
-	useSessionShortcut("model-picker", openComposerModelPicker, hasInspector);
+	useSessionShortcut("model-picker", () => { openComposerModelPicker(); }, hasInspector);
 	useSessionShortcut("dictate", toggleComposerDictation, hasInspector);
 
 	const inspectorMotionReadyRef = useRef<string | null>(null);
@@ -2883,7 +2944,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
-			{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
+			<DeviceRevealWatcher enabled={deviceAvailable} onReveal={revealDevice} sessionId={sessionId} terminated={terminated} uiSessionId={uiSessionId} />
+			{!session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}
 				</p>
@@ -2983,6 +3045,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							    chat is dropped when it leaves Chat. */}
 							<KeepRecentAlive activeKey={uiSessionId} show={Boolean(showChatSurface && !session?.cloud)}>
 							{showChatSurface && !session?.cloud ? (
+								<SessionTopbarScope>
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
 									onSideChatsChange={onSideChatsChange}
@@ -3049,6 +3112,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
+								</SessionTopbarScope>
 							) : null}
 							</KeepRecentAlive>
 							{!showChatSurface ? (
@@ -3230,6 +3294,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							{session && !session.cloud ? prTabs.open.map((url) => (
 								<div className={cn("absolute inset-0 z-10", url !== activePRUrl && "invisible pointer-events-none [content-visibility:hidden]")} key={url}>
 									<PRTabPane
+										// Not on screen while a maximized Browser or Files covers the workspace.
+										active={url === activePRUrl && !browserPoppedOut && !filesPoppedOut}
 										hostId={hostId}
 										onViewInDiff={handleOpenReviewFile}
 										request={prTabs.request?.url === url ? prTabs.request : undefined}
@@ -3315,6 +3381,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
 						<Button type="button" size="icon-sm"
+							data-telemetry-id="topbar.inspector"
 							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {
