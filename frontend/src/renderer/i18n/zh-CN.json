@@ -5697,5 +5697,14 @@
 	"artifactComments.exitFullscreen": "退出全屏",
 	"artifactComments.timelinePoint": "{{time}} 的评论：{{n}} 条未解决",
 	"artifactComments.frameAt": "{{time}} 的画面",
-	"artifactComments.markerLabel": "{{label}}：{{n}} 条未解决"
+	"artifactComments.markerLabel": "{{label}}：{{n}} 条未解决",
+	"quickDetails.open": "打开会话详情",
+	"quickDetails.close": "关闭会话详情",
+	"quickDetails.aria": "会话快速详情",
+	"quickDetails.changes": "更改",
+	"quickDetails.noChanges": "无更改",
+	"quickDetails.filesChanged_one": "{{count}} 个文件",
+	"quickDetails.filesChanged_other": "{{count}} 个文件",
+	"quickDetails.viewAll": "查看全部",
+	"quickDetails.actions": "会话操作"
 }

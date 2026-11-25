@@ -3398,12 +3398,12 @@ const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
 /**
  * Space the minimap needs between the text column and its track. The hovered
- * dash grows 7px past the track's left edge; the rest keeps it off the text.
+ * dash grows 7px past the track's right edge; the rest keeps it off the text.
  */
 const MINIMAP_TEXT_CLEARANCE_PX = 16;
 
 /**
- * Whether the minimap, in the timeline's right gutter, would sit over the
+ * Whether the minimap, in the timeline's left gutter, would sit over the
  * centered text column: the chat is too narrow for both.
  */
 function minimapCrowdsText(track: HTMLElement, content: HTMLElement): boolean {
@@ -3411,7 +3411,7 @@ function minimapCrowdsText(track: HTMLElement, content: HTMLElement): boolean {
 	const contentRect = content.getBoundingClientRect();
 	// Not laid out yet: nothing on screen to overlap.
 	if (!trackRect.width || !contentRect.width) return false;
-	return trackRect.left - contentRect.right < MINIMAP_TEXT_CLEARANCE_PX;
+	return contentRect.left - trackRect.right < MINIMAP_TEXT_CLEARANCE_PX;
 }
 
 /**
@@ -6074,7 +6074,7 @@ export function Timeline({
 				onBlur={() => setHoveredMarker(null)}
 				onPointerLeave={() => setHoveredMarker(null)}
 					className={cn(
-						"group/scroll absolute inset-y-3 right-1 z-10 w-6 touch-none rounded-full outline-none focus-visible:ring-1 focus-visible:ring-logo-accent/60",
+						"group/scroll absolute inset-y-3 left-1 z-10 w-6 touch-none rounded-full outline-none focus-visible:ring-1 focus-visible:ring-logo-accent/60",
 						minimapRevealed && "transition-opacity",
 						minimapEnabled && !minimapCrowdedRef.current
 							? "cursor-pointer opacity-100"
@@ -6122,7 +6122,7 @@ export function Timeline({
 				previews[hoveredMarker] ? (
 					<div
 						role="tooltip"
-						className="chat-scroll-preview pointer-events-none absolute right-full z-20 mr-3 w-80 rounded-xl border border-(--color-border-overlay) bg-raised px-3.5 py-3 shadow-(--shadow-popover)"
+						className="chat-scroll-preview pointer-events-none absolute left-full z-20 ml-3 w-80 rounded-xl border border-(--color-border-overlay) bg-raised px-3.5 py-3 shadow-(--shadow-popover)"
 						style={{
 							top: `clamp(4rem, ${scrollbar.markers[hoveredMarker].top}px, calc(100% - 4rem))`,
 						}}

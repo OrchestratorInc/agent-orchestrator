@@ -208,7 +208,7 @@ function stubGeometry(
 /**
  * Lays out the minimap track and the centered text column as a chat `width()`
  * pixels wide would: a 768px column inside 16px padding, the 24px track 4px
- * from the right edge.
+ * from the left edge.
  */
 function stubMinimapRoom(width: () => number) {
 	const original = HTMLElement.prototype.getBoundingClientRect;
@@ -216,7 +216,7 @@ function stubMinimapRoom(width: () => number) {
 		({ left, right: left + rectWidth, width: rectWidth, x: left, top: 0, bottom: 800, height: 800, y: 0 }) as DOMRect;
 	return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
 		const chatWidth = width();
-		if (this.dataset.testid === "chat-conversation-minimap") return rect(chatWidth - 28, 24);
+		if (this.dataset.testid === "chat-conversation-minimap") return rect(4, 24);
 		if (this.parentElement?.getAttribute("role") === "log" && this.classList.contains("max-w-3xl")) {
 			const column = Math.min(768, chatWidth - 32);
 			return rect((chatWidth - column) / 2, column);

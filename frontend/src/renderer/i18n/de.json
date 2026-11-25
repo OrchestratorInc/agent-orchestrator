@@ -5715,5 +5715,14 @@
 	"artifactComments.exitFullscreen": "Vollbild beenden",
 	"artifactComments.timelinePoint": "Kommentare bei {{time}}: {{n}} offen",
 	"artifactComments.frameAt": "Bild bei {{time}}",
-	"artifactComments.markerLabel": "{{label}}: {{n}} offen"
+	"artifactComments.markerLabel": "{{label}}: {{n}} offen",
+	"quickDetails.open": "Sitzungsdetails öffnen",
+	"quickDetails.close": "Sitzungsdetails schließen",
+	"quickDetails.aria": "Sitzungs-Kurzdetails",
+	"quickDetails.changes": "Änderungen",
+	"quickDetails.noChanges": "Keine Änderungen",
+	"quickDetails.filesChanged_one": "{{count}} Datei",
+	"quickDetails.filesChanged_other": "{{count}} Dateien",
+	"quickDetails.viewAll": "Alle anzeigen",
+	"quickDetails.actions": "Sitzungsaktionen"
 }

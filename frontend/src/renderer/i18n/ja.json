@@ -5715,5 +5715,14 @@
 	"artifactComments.exitFullscreen": "全画面表示を終了",
 	"artifactComments.timelinePoint": "{{time}} のコメント: {{n}} 件未解決",
 	"artifactComments.frameAt": "{{time}} のフレーム",
-	"artifactComments.markerLabel": "{{label}}: {{n}} 件未解決"
+	"artifactComments.markerLabel": "{{label}}: {{n}} 件未解決",
+	"quickDetails.open": "セッションの詳細を開く",
+	"quickDetails.close": "セッションの詳細を閉じる",
+	"quickDetails.aria": "セッションのクイック詳細",
+	"quickDetails.changes": "変更",
+	"quickDetails.noChanges": "変更なし",
+	"quickDetails.filesChanged_one": "{{count}}件のファイル",
+	"quickDetails.filesChanged_other": "{{count}}件のファイル",
+	"quickDetails.viewAll": "すべて表示",
+	"quickDetails.actions": "セッション操作"
 }

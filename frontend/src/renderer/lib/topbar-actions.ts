@@ -6,6 +6,7 @@ export const TOPBAR_ACTIONS = [
 	"open_editor",
 	"editor_menu",
 	"run_cue",
+	"quick_details",
 	"inspector",
 	"notifications",
 ] as const;

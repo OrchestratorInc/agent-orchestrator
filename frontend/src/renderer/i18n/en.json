@@ -5695,5 +5695,14 @@
 	"artifactComments.exitFullscreen": "Exit full screen",
 	"artifactComments.timelinePoint": "Comments at {{time}}: {{n}} open",
 	"artifactComments.frameAt": "Frame at {{time}}",
-	"artifactComments.markerLabel": "{{label}}: {{n}} open"
+	"artifactComments.markerLabel": "{{label}}: {{n}} open",
+	"quickDetails.open": "Open session details",
+	"quickDetails.close": "Close session details",
+	"quickDetails.aria": "Session quick details",
+	"quickDetails.changes": "Changes",
+	"quickDetails.noChanges": "No changes",
+	"quickDetails.filesChanged_one": "{{count}} file",
+	"quickDetails.filesChanged_other": "{{count}} files",
+	"quickDetails.viewAll": "View all",
+	"quickDetails.actions": "Session actions"
 }

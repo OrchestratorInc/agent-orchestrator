@@ -142,6 +142,8 @@ export type CloudReviewUiState = {
 
 export type InspectorSessionState = {
 	isOpen: boolean;
+	/** Compact quick-details panel (docked right rail on wide viewports, popover on narrow ones). */
+	quickDetailsOpen?: boolean;
 	view: InspectorView;
 	/** The current non-empty browser content lifecycle has already been revealed. */
 	browserContentRevealed?: boolean;
@@ -431,6 +433,8 @@ export type UiState = {
 	toggleSidebar: () => void;
 	setInspectorOpen: (sessionId: string, isOpen: boolean) => void;
 	toggleInspector: (sessionId: string) => void;
+	setQuickDetailsOpen: (sessionId: string, isOpen: boolean, options?: { closeInspector?: boolean }) => void;
+	toggleQuickDetails: (sessionId: string, options?: { closeInspector?: boolean }) => void;
 	setInspectorView: (sessionId: string, view: InspectorView) => void;
 	/** Opens a background task in the side panel's Background tasks tab. */
 	openTaskTab: (sessionId: string, task: BackgroundTask) => void;
@@ -577,6 +581,10 @@ function inspectorState(sessions: Record<string, InspectorSessionState>, session
  *  reveal) opens it; read every open check through here so that default can't drift. */
 export function inspectorIsOpen(sessions: Record<string, InspectorSessionState>, sessionId: string): boolean {
 	return sessions[sessionId]?.isOpen ?? false;
+}
+
+export function quickDetailsIsOpen(sessions: Record<string, InspectorSessionState>, sessionId: string): boolean {
+	return sessions[sessionId]?.quickDetailsOpen ?? false;
 }
 
 /**
@@ -924,6 +932,40 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, isOpen: !current.isOpen },
+				},
+			};
+		}),
+	setQuickDetailsOpen: (sessionId, quickDetailsOpen, options) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const closeInspector = quickDetailsOpen && (options?.closeInspector ?? true);
+			if (Boolean(current.quickDetailsOpen) === quickDetailsOpen && (!closeInspector || !current.isOpen)) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, quickDetailsOpen, ...(closeInspector ? { isOpen: false } : {}) },
+				},
+			};
+		}),
+	toggleQuickDetails: (sessionId, options) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			// Quick Details stays paused behind an open Inspector; toggling while paused
+			// reveals Quick Details (closing the Inspector) rather than clearing the saved state.
+			const currentlyVisible = Boolean(current.quickDetailsOpen) && !current.isOpen;
+			if (currentlyVisible) {
+				return {
+					inspectorSessions: {
+						...state.inspectorSessions,
+						[sessionId]: { ...current, quickDetailsOpen: false },
+					},
+				};
+			}
+			const closeInspector = options?.closeInspector ?? true;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, quickDetailsOpen: true, ...(closeInspector ? { isOpen: false } : {}) },
 				},
 			};
 		}),

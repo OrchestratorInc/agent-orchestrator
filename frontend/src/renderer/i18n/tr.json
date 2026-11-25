@@ -5695,5 +5695,14 @@
 	"artifactComments.exitFullscreen": "Tam ekrandan çık",
 	"artifactComments.timelinePoint": "{{time}} anındaki yorumlar: {{n}} açık",
 	"artifactComments.frameAt": "{{time}} karesi",
-	"artifactComments.markerLabel": "{{label}}: {{n}} açık"
+	"artifactComments.markerLabel": "{{label}}: {{n}} açık",
+	"quickDetails.open": "Oturum ayrıntılarını aç",
+	"quickDetails.close": "Oturum ayrıntılarını kapat",
+	"quickDetails.aria": "Oturum hızlı ayrıntıları",
+	"quickDetails.changes": "Değişiklikler",
+	"quickDetails.noChanges": "Değişiklik yok",
+	"quickDetails.filesChanged_one": "{{count}} dosya",
+	"quickDetails.filesChanged_other": "{{count}} dosya",
+	"quickDetails.viewAll": "Tümünü gör",
+	"quickDetails.actions": "Oturum eylemleri"
 }

@@ -5715,5 +5715,14 @@
 	"artifactComments.exitFullscreen": "전체 화면 종료",
 	"artifactComments.timelinePoint": "{{time}}의 댓글: {{n}}개 열림",
 	"artifactComments.frameAt": "{{time}} 프레임",
-	"artifactComments.markerLabel": "{{label}}: {{n}}개 열림"
+	"artifactComments.markerLabel": "{{label}}: {{n}}개 열림",
+	"quickDetails.open": "세션 세부 정보 열기",
+	"quickDetails.close": "세션 세부 정보 닫기",
+	"quickDetails.aria": "세션 빠른 세부 정보",
+	"quickDetails.changes": "변경 사항",
+	"quickDetails.noChanges": "변경 사항 없음",
+	"quickDetails.filesChanged_one": "파일 {{count}}개",
+	"quickDetails.filesChanged_other": "파일 {{count}}개",
+	"quickDetails.viewAll": "모두 보기",
+	"quickDetails.actions": "세션 작업"
 }
