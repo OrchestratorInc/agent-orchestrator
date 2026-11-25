@@ -150,22 +150,24 @@ describe("optimistic message delivery", () => {
 	});
 
 	it("sends a file entered on its own during a restore right after the first message", async () => {
+		const sessionId = "optimistic-restore-file-only";
 		const pending = pendingSend();
 		let finishStaging!: (paths: string[]) => void;
 		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
 		render(
 			<TooltipProvider>
-				<ChatComposer draftSessionId="optimistic-restore-file-only" onSend={pending.onSend} onStageAttachments={stage} restoring />
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
 			</TooltipProvider>,
 		);
 		const field = await startSend(pending.onSend, "first message");
 		pasteImages(field, "next.png");
 		await waitFor(() => expect(stage).toHaveBeenCalledOnce());
 		fireEvent.keyDown(field, { key: "Enter" });
-		await act(async () => finishStaging([".ao/attachments/next.png"]));
+		await act(async () => pending.resolve());
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
 		expect(pending.onSend).toHaveBeenCalledOnce();
 
-		await act(async () => pending.resolve());
+		await act(async () => finishStaging([".ao/attachments/next.png"]));
 
 		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
 		expect(pending.onSend.mock.calls[1][0]).toContain(".ao/attachments/next.png");
