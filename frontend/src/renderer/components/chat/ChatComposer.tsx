@@ -196,6 +196,7 @@ type HeldSubmit = {
 	own: boolean;
 	/** The message in the unsent strip when this was held, if any. */
 	unsentId?: string;
+	files?: string;
 };
 
 /**
@@ -272,6 +273,7 @@ export const ChatComposer = memo(function ChatComposer({
 	typingLocked = false,
 	sendBlockedReason,
 	starting,
+	restoring = false,
 	holdAttachments,
 	onHeldAttachmentsChange,
 	attachmentsRefusal,
@@ -378,6 +380,7 @@ export const ChatComposer = memo(function ChatComposer({
 	typingLocked?: boolean;
 	sendBlockedReason?: string;
 	starting?: boolean;
+	restoring?: boolean;
 	/**
 	 * Files that cannot be staged yet (no workspace to write into) stay in the
 	 * composer with their bytes and go to `onSend` with the message, for a chat
@@ -695,6 +698,7 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 	);
 	const optimisticSend = Boolean(durableDelivery?.draft && composerMutation.pending);
+	const takesNextFiles = optimisticSend && restoring;
 	const chatReferences = draftScope
 		? readChatSessionDraft(draftScope).composer.excerpts ?? []
 		: [];
@@ -930,10 +934,13 @@ export const ChatComposer = memo(function ChatComposer({
 	const sendConcealed = sendInFlight && !concealExpired;
 	const nextDraftHasChanged = Boolean(durableDelivery?.draft && composerRevision.current > durableDelivery.revision + 1);
 	const stripConcealed = steerInFlight && sendConcealed;
-	const nextDraftHasFiles = (delivery?: ChatComposerDelivery) => fileAttachments.hasPendingReads() ||
-		unsentAttachments(fileAttachments.getAttachments(), delivery).length > 0;
+	const nextFiles = (delivery?: ChatComposerDelivery) =>
+		unsentAttachments(fileAttachments.getAttachments(), delivery).filter((attachment) => attachment.stagedPath);
+	const nextDraftHasFiles = (delivery?: ChatComposerDelivery) =>
+		fileAttachments.hasPendingReads() || nextFiles(delivery).length > 0;
+	const nextFilesKey = () => [...nextFiles(), ...pendingAttachments].map((file) => file.id).sort().join();
 	const stripAttachments = (stripConcealed ? [] : optimisticSend || nextDraftHasChanged
-		? unsentAttachments(fileAttachments.attachments, durableDelivery)
+		? nextFiles(durableDelivery)
 		: [...visibleRetainedAttachments, ...fileAttachments.attachments]).map((file) => {
 		const path = "stagedPath" in file ? file.stagedPath : "path" in file ? file.path : undefined;
 		const assetOrigin = remoteHost ? assetBaseUrl : assetBaseUrl ?? getApiBaseUrl();
@@ -958,7 +965,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const acceptedClearFailed = composerMutation.accepted?.result.ok === false;
 	const draftMutationPending =
 		submitting || composerMutation.pending || acceptedMutationWaiting || Boolean(durableDelivery);
-	const attachBlocked = fileAttachments.preparing || (draftMutationPending && !optimisticSend);
+	const attachBlocked = !takesNextFiles && (fileAttachments.preparing || draftMutationPending);
 	const canRecoverDelivery = Boolean(
 		durableDelivery &&
 			(!busy || durableDelivery.state === "accepted") &&
@@ -1776,7 +1783,7 @@ export const ChatComposer = memo(function ChatComposer({
 			) {
 				// A repeat Enter re-holds the same draft; count it only once.
 				const alreadyHeld = heldDuringSubmit.current?.text === textRef.current;
-				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false, unsentId: parkedUnsentId() };
+				heldDuringSubmit.current = { text: textRef.current, steer: Boolean(forceSteer), own: false, unsentId: parkedUnsentId(), files: nextFilesKey() };
 				if (!alreadyHeld) countSend();
 			}
 			return submitInFlight.current;
@@ -2282,6 +2289,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setHeldSubmit(null);
 		// Only the message the user entered; an edit made since waits for its own Enter.
 		if (textRef.current !== heldSubmit.text) return;
+		if (heldSubmit.files !== undefined && heldSubmit.files !== nextFilesKey()) return;
 		// A send that got no answer since this was held is parked in the unsent strip,
 		// whichever surface made it. Sending now would put this message ahead of it.
 		const parked = parkedUnsentId();
@@ -2451,7 +2459,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}
 
 	function acceptsFiles(): boolean {
-		return canAttach && !attachBlocked && !(submitInFlight.current && !optimisticSend);
+		return canAttach && !attachBlocked && !(submitInFlight.current && !takesNextFiles);
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
@@ -2515,7 +2523,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, []);
 
 	const attachmentError =
-		(sendError?.code === "SESSION_RESTORE_FAILED" ? sendError.message : null) ??
+		(sendError?.code === "SESSION_RESTORE_FAILED" && !draftPersistenceError ? sendError.message : null) ??
 		fileAttachments.error ??
 		draftPersistenceError ??
 		(optimisticSend ? null : deliveryRecoveryNotice) ??
@@ -2596,7 +2604,7 @@ export const ChatComposer = memo(function ChatComposer({
 			onSubmit={(event) => void submit(event, steersDraft, "button")}
 			data-telemetry-surface="composer"
 				onDragOver={(event) => {
-					if (!canAttach || (submitInFlight.current && !optimisticSend)) return;
+					if (!canAttach || (submitInFlight.current && !takesNextFiles)) return;
 					event.preventDefault();
 					setDragging(true);
 				}}
@@ -2687,7 +2695,7 @@ export const ChatComposer = memo(function ChatComposer({
 												if (event.button === 0) event.preventDefault();
 											}}
 											onClick={() => {
-											if (submitInFlight.current && !optimisticSend) return;
+											if (submitInFlight.current && !takesNextFiles) return;
 											if (path) {
 											editor.current?.removeImage(path);
 											removeImageFromSavedDraft(path);
@@ -2840,7 +2848,7 @@ export const ChatComposer = memo(function ChatComposer({
 									type="file"
 									multiple
 									hidden
-									disabled={Boolean(disabled) || (submitting && !optimisticSend)}
+									disabled={Boolean(disabled) || (submitting && !takesNextFiles)}
 									onChange={(event) => {
 										if (!disabled && acceptsFiles()) {
 											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
@@ -2863,7 +2871,7 @@ export const ChatComposer = memo(function ChatComposer({
 										<OptionMenuTrigger variant="ghost"
 											ref={addMenuTrigger}
 											showCaret={false}
-											disabled={Boolean(disabled) || (submitting && !optimisticSend)}
+											disabled={Boolean(disabled) || (submitting && !takesNextFiles)}
 											aria-label="Add"
 											title="Add files or change mode"
 											className={cn("size-7 shrink-0 justify-center rounded-full bg-transparent p-0 text-muted-foreground hover:text-foreground data-[state=open]:text-foreground", GHOST_PILL_CLASS)}

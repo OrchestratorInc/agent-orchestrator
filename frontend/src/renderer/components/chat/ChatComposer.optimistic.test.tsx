@@ -113,7 +113,7 @@ describe("optimistic message delivery", () => {
 		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finishStaging = resolve; }));
 		render(
 			<TooltipProvider>
-				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
 			</TooltipProvider>,
 		);
 		const field = await startSend(pending.onSend, "first message");
@@ -160,7 +160,7 @@ describe("optimistic message delivery", () => {
 		const chat = (mode: "visible" | "hidden") => (
 			<TooltipProvider>
 				<Activity mode={mode}>
-					<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={held.stage} />
+					<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={held.stage} restoring />
 				</Activity>
 			</TooltipProvider>
 		);
@@ -191,7 +191,7 @@ describe("optimistic message delivery", () => {
 		const stage = vi.fn(async (files: unknown[]) => files.map(() => `.ao/attachments/${stage.mock.calls.length}.png`));
 		const chat = () => (
 			<TooltipProvider>
-				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
 			</TooltipProvider>
 		);
 		const first = render(chat());
@@ -217,7 +217,7 @@ describe("optimistic message delivery", () => {
 		const stage = vi.fn(async (files: unknown[]) => files.map((_, index) => `.ao/attachments/${stage.mock.calls.length}-${index}.png`));
 		render(
 			<TooltipProvider>
-				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
 			</TooltipProvider>,
 		);
 		pasteImages(screen.getByLabelText("Message the agent"), ...Array.from({ length: 8 }, (_, index) => `sent-${index}.png`));
@@ -240,7 +240,7 @@ describe("optimistic message delivery", () => {
 		const stage = vi.fn().mockResolvedValue([".ao/attachments/next.png"]);
 		render(
 			<TooltipProvider>
-				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
 			</TooltipProvider>,
 		);
 		const field = await startSend(pending.onSend, "first message");
@@ -261,7 +261,7 @@ describe("optimistic message delivery", () => {
 		const stage = vi.fn(async (files: unknown[]) => files.map(() => `.ao/attachments/${stage.mock.calls.length}.png`));
 		render(
 			<TooltipProvider>
-				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
 			</TooltipProvider>,
 		);
 		pasteImages(screen.getByLabelText("Message the agent"), "sent.png");
@@ -285,7 +285,7 @@ describe("optimistic message delivery", () => {
 		const held = stagerHeldAfterFirst();
 		render(
 			<TooltipProvider>
-				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={held.stage} />
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={held.stage} restoring />
 			</TooltipProvider>,
 		);
 		pasteImages(screen.getByLabelText("Message the agent"), "sent.png");
@@ -301,6 +301,86 @@ describe("optimistic message delivery", () => {
 		});
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("Its branch is gone");
+	});
+
+	it("takes a second file while the first still waits for the restore", async () => {
+		const sessionId = "optimistic-second-file-waits";
+		const pending = pendingSend();
+		const finish: ((paths: string[]) => void)[] = [];
+		const stage = vi.fn(() => new Promise<string[]>((resolve) => { finish.push(resolve); }));
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
+			</TooltipProvider>,
+		);
+		const field = await startSend(pending.onSend, "first message");
+		pasteImages(field, "one.png");
+		await screen.findByLabelText("Attaching one.png");
+		pasteImages(field, "two.png");
+		await screen.findByLabelText("Attaching two.png");
+
+		await act(async () => finish[0]([".ao/attachments/one.png"]));
+		await waitFor(() => expect(stage).toHaveBeenCalledTimes(2));
+		await act(async () => finish[1]([".ao/attachments/two.png"]));
+
+		await screen.findByLabelText("Remove one.png");
+		await screen.findByLabelText("Remove two.png");
+		await act(async () => pending.resolve());
+	});
+
+	it("does not send a held message whose files changed after its Enter", async () => {
+		const sessionId = "optimistic-held-files-changed";
+		const pending = pendingSend();
+		const stage = vi.fn(async (files: unknown[]) => files.map(() => `.ao/attachments/${stage.mock.calls.length}.png`));
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} restoring />
+			</TooltipProvider>,
+		);
+		const field = await startSend(pending.onSend, "first message");
+		pasteImages(field, "wrong.png");
+		const wrong = await screen.findByLabelText("Remove wrong.png");
+		fireEvent.keyDown(field, { key: "Enter" });
+		await userEvent.click(wrong);
+		pasteImages(field, "right.png");
+		await screen.findByLabelText("Remove right.png");
+
+		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined());
+		await act(async () => {});
+		expect(pending.onSend).toHaveBeenCalledOnce();
+		expect(screen.getByLabelText("Remove right.png")).toBeInTheDocument();
+	});
+
+	it("takes no file during a send that restores nothing", async () => {
+		const sessionId = "optimistic-ordinary-send-no-files";
+		const pending = pendingSend();
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/next.png"]);
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} />
+			</TooltipProvider>,
+		);
+		const field = await startSend(pending.onSend, "first message");
+		expect(screen.getByRole("button", { name: "Attach a file" })).toBeDisabled();
+		pasteImages(field, "next.png");
+		await act(async () => pending.resolve());
+		expect(stage).not.toHaveBeenCalled();
+	});
+
+	it("keeps a sent file that could not be staged out of the strip during its send", async () => {
+		const pending = pendingSend();
+		render(
+			<TooltipProvider>
+				<ChatComposer draftSessionId="optimistic-held-file-strip" onSend={pending.onSend} holdAttachments />
+			</TooltipProvider>,
+		);
+		pasteImages(screen.getByLabelText("Message the agent"), "held.png");
+		await screen.findByLabelText("Remove held.png");
+		await startSend(pending.onSend, "brief");
+		expect(screen.queryByLabelText("Remove held.png")).not.toBeInTheDocument();
+		await act(async () => pending.resolve());
 	});
 
 	it("sends nothing extra when Enter is pressed again on the cleared box during a send", async () => {

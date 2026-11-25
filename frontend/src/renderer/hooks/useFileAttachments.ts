@@ -579,6 +579,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 				} catch {
 					if (generationRef.current !== generation) return [];
 					if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return [];
+					if (acceptedFresh.every((attachment) => cancelled(attachment.id))) return [];
 					errors.add("Files couldn’t be saved. Nothing was attached.");
 					const message = Array.from(errors).join(" ");
 					setError(message);

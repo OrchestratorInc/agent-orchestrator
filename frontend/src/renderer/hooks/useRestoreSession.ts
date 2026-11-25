@@ -140,9 +140,8 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 
 	return useCallback((sessionId: string, hostId?: string) => {
 		const key = `${hostId ?? "local"}:${sessionId}`;
-		const restore = restoreSession(sessionId, hostId).finally(() => {
-			if (restoresInFlight.get(key) === restore) restoresInFlight.delete(key);
-		});
+		if (restoresInFlight.has(key)) return restoreSession(sessionId, hostId);
+		const restore = restoreSession(sessionId, hostId).finally(() => restoresInFlight.delete(key));
 		restoresInFlight.set(key, restore);
 		return restore;
 	}, [restoreSession]);
