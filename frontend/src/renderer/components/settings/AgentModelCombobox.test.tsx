@@ -93,6 +93,20 @@ describe("AgentModelCombobox", () => {
 		expect(screen.getByText("only-here")).toHaveAttribute("title", "venice/only-here");
 	});
 
+	// Long names often differ only at the end ("…-large-flash", "…-large-v2"),
+	// which a narrow menu cuts off, so a compact row wraps instead.
+	it("wraps a long model name in a compact menu instead of cutting it off", async () => {
+		renderCombobox([
+			{ id: "venice/abliterated-model-large-flash", label: "abliterated-model-large-flash", provider: "venice" },
+		], { compact: true });
+
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+
+		const name = screen.getByText("abliterated-model-large-flash");
+		expect(name).toHaveClass("wrap-anywhere");
+		expect(name).not.toHaveClass("truncate");
+	});
+
 	it("disables a model the installed CLI is too old for and explains the fix", async () => {
 		const { onChange } = renderCombobox([
 			{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },

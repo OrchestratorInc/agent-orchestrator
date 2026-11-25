@@ -450,7 +450,7 @@ export function AgentModelCombobox({
 											aria-current={tuning && item.id === shownModel ? true : undefined}
 										>
 											<div className="min-w-0 flex-1">
-												<span className="block truncate text-settings-label" title={item.id}>{item.label}</span>
+												<span className="block wrap-anywhere text-settings-label" title={item.id}>{item.label}</span>
 												{sharedLabelDetails.has(item.id) && (
 													<p className="truncate text-xs text-settings-muted">{sharedLabelDetails.get(item.id)}</p>
 												)}
