@@ -561,11 +561,11 @@ const SummaryView = memo(function SummaryView({
 	const prView = usePRViewEnabled();
 	return (
 		<SessionInspectorSummaryView
-			// Activity section temporarily hidden — uncomment to restore:
+			// Activity is hidden for now. To restore it, uncomment these two props:
 			// activity={<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />}
 			// activityTitle={t("inspector.activity")}
 			footer={
-				<div className="min-w-0 px-3 empty:hidden [&>:first-child]:mt-0">
+				<>
 					<SessionAccountSummary session={session} hostId={hostId} />
 					<ResumeAgentControl
 						className="w-full"
@@ -573,7 +573,7 @@ const SummaryView = memo(function SummaryView({
 						hostId={hostId}
 						session={session}
 					/>
-				</div>
+				</>
 			}
 			artifactCards={
 				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} previewLive={inspectorVisible} session={session} /> : undefined

@@ -259,6 +259,33 @@ describe("portable inspector presentations", () => {
     expect(screen.getByText("setup log")).toBeInTheDocument();
   });
 
+  it("renders the footer rows after the sections, leaving an empty footer for the CSS to hide", () => {
+    const Nothing = () => null;
+    const { container, rerender } = render(
+      <SessionInspectorSummaryView
+        footer={<div>account</div>}
+        pullRequestCards={<div>pull request</div>}
+        pullRequestTitle="Pull request"
+      />,
+    );
+
+    const footer = container.querySelector("[data-inspector-footer]");
+    expect(footer).toContainElement(screen.getByText("account"));
+    expect(footer?.previousElementSibling).toBe(screen.getByTestId("inspector-section"));
+
+    rerender(
+      <SessionInspectorSummaryView
+        footer={<><Nothing /><Nothing /></>}
+        pullRequestCards={<div>pull request</div>}
+        pullRequestTitle="Pull request"
+      />,
+    );
+    expect(container.querySelector("[data-inspector-footer]")).toBeEmptyDOMElement();
+
+    rerender(<SessionInspectorSummaryView pullRequestCards={<div>pull request</div>} pullRequestTitle="Pull request" />);
+    expect(container.querySelector("[data-inspector-footer]")).toBeNull();
+  });
+
   it("omits the PR, artifacts, and commented-out Activity sections when no titles are given", () => {
     render(
       <SessionInspectorSummaryView
