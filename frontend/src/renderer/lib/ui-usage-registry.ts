@@ -20,6 +20,7 @@ export const UI_CONTROLS = [
 	"sidebar.project_row",
 	"sidebar.project_toggle",
 	"sidebar.project_new_session",
+	"sidebar.project_orchestrator",
 	"sidebar.project_menu",
 	"sidebar.project_unpin",
 	"sidebar.session_row",
@@ -48,6 +49,7 @@ export const UI_CONTROLS = [
 	"inspector.tab_summary",
 	"inspector.tab_reviews",
 	"inspector.tab_browser",
+	"inspector.tab_device",
 	"inspector.tab_files",
 	"inspector.tab_artifacts",
 	"inspector.tab_side_chat",
@@ -100,6 +102,7 @@ export const UI_FEATURES = [
 	"inspector_summary",
 	"inspector_reviews",
 	"inspector_browser",
+	"inspector_device",
 	"inspector_files",
 	"inspector_artifacts",
 	"inspector_subagents",
@@ -131,6 +134,7 @@ export const SURFACE_FEATURES: Partial<Record<UiSurface, UiFeature>> = {
 	inspector_summary: "inspector_summary",
 	inspector_reviews: "inspector_reviews",
 	inspector_browser: "inspector_browser",
+	inspector_device: "inspector_device",
 	inspector_files: "inspector_files",
 	inspector_artifacts: "inspector_artifacts",
 	inspector_subagents: "inspector_subagents",
@@ -176,6 +180,7 @@ export const ERROR_CODES = [
 	"DATADIR_UNWRITABLE",
 	"AUTH_REQUIRED",
 	"PROVIDER_KEY_MISSING",
+	"USAGE_LIMIT",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
