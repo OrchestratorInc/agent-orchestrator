@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { ChevronDown, ExternalLink, KeyRound, LoaderCircle, UserRound } from "@/components/app-icons";
 import { Trans, useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { agentLabel } from "../../lib/agent-options";
 import type { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import { cn } from "../../lib/utils";
 import { useCloudCp } from "../../hooks/useCloudCp";
@@ -10,6 +12,7 @@ import { cloudAgentAccountsQueryKey } from "../../hooks/useCloudAgentAccounts";
 import { providerConnectionsQueryKey } from "../../hooks/useProviderConnections";
 import { aoBridge } from "../../lib/bridge";
 import type { CloudCpAddAgentAccountRequest } from "../../lib/cloud-cp";
+import { KEY_FIELD_CLASS } from "./providerKeyUi";
 
 const BROWSER_LOGIN = "browser_login";
 const SETUP_TOKEN_STEPS = [
@@ -77,7 +80,7 @@ function loginMethodsFor(agent: CloudHarness, credentialType: string | undefined
 	return matching.length > 0 ? matching : methods;
 }
 
-// Logs one harness in for cloud sessions, expanded inline under its row on the
+// Logs one harness in for cloud sessions, in its Account card on the
 // Harness settings page (the only place cloud agent logins are made). Every
 // credential is personal: it runs the caller's cloud sessions in every org they
 // belong to. Without `account` the login replaces the harness's one login
@@ -86,27 +89,29 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
-	const panelRef = useRef<HTMLDivElement>(null);
+	const titleId = useId();
+	const panelRef = useRef<HTMLElement>(null);
 	const methods = loginMethodsFor(agent, account?.id === "new" ? undefined : account?.credentialType);
-	const [credentialType, setCredentialType] = useState<string>(methods[0].value);
+	// Like the local panel: a sign-in starts on click, a key or token opens its
+	// field under its row. With no sign-in to offer, the first key opens at once.
+	const [openMethod, setOpenMethod] = useState<string | null>(methods.some((method) => method.kind === "browser") ? null : methods[0].value);
 	const [secret, setSecret] = useState("");
 	const [busy, setBusy] = useState(false);
+	const [browserPending, setBrowserPending] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	// Set when the user cancels the browser login, so the resulting rejection is
 	// treated as a cancellation rather than shown as an error.
 	const loginCancelledRef = useRef(false);
 
-	const selectedMethod = methods.find((entry) => entry.value === credentialType) ?? methods[0];
 	const methodLabel = (method: LoginMethod) =>
 		method.kind === "browser"
 			? method.provider === "Anthropic" ? t("cloudCredential.loginWithAnthropic") : t("cloudCredential.loginWithChatGPT")
 			: method.kind === "setupToken" ? t("cloudCredential.method.setupToken") : t("cloudCredential.method.apiKey", { provider: method.provider });
-	const placeholder = selectedMethod.kind === "apiKey"
-		? t("cloudCredential.pasteApiKey", { provider: selectedMethod.provider })
+	const placeholder = (method: LoginMethod) => method.kind === "apiKey"
+		? t("cloudCredential.pasteApiKey", { provider: method.provider })
 		: t("cloudCredential.pasteSetupToken");
-	const needsSecret = credentialType !== BROWSER_LOGIN;
-	const browserLoginPending = busy && !needsSecret;
-	const canSubmit = !busy && needsSecret && secret.trim() !== "";
+	const browserHint = agent === "claude-code" ? t("cloudCredential.anthropicLoginDescription") : t("cloudCredential.chatgptLoginDescription");
+	const canSubmit = !busy && openMethod !== null && secret.trim() !== "";
 
 	useEffect(() => {
 		panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -120,7 +125,7 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 	// Closing mid-login abandons the login rather than leaving the agent CLI
 	// waiting in the background.
 	const close = () => {
-		if (browserLoginPending) cancelBrowserLogin();
+		if (browserPending) cancelBrowserLogin();
 		onClose();
 	};
 
@@ -134,15 +139,15 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 	};
 
 	const submit = async () => {
-		if (!canSubmit) return;
+		if (!canSubmit || openMethod === null) return;
 		setBusy(true);
 		setError(null);
 		try {
-			const input = { credentialType, secret: secret.trim() };
+			const input = { credentialType: openMethod, secret: secret.trim() };
 			const { validationState } = !account
 				? (await client.putUserAgentConnection(agent, input)).providerConnection
 				: account.id === "new"
-					? (await client.addAgentAccount({ agent, ...input, credentialType: credentialType as CloudCpAddAgentAccountRequest["credentialType"] })).agentAccount
+					? (await client.addAgentAccount({ agent, ...input, credentialType: openMethod as CloudCpAddAgentAccountRequest["credentialType"] })).agentAccount
 					: (await client.replaceAgentAccountCredential(account.id, input)).agentAccount;
 			if (validationState !== "valid") {
 				setError(t("cloudCredential.invalid", { state: validationState }));
@@ -160,6 +165,8 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 	const loginWithBrowser = async () => {
 		if (busy) return;
 		setBusy(true);
+		setBrowserPending(true);
+		setOpenMethod(null);
 		setError(null);
 		loginCancelledRef.current = false;
 		try {
@@ -179,124 +186,98 @@ export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: Clo
 			if (!loginCancelledRef.current) setError(err instanceof Error ? err.message : t("cloudCredential.failed"));
 		} finally {
 			setBusy(false);
+			setBrowserPending(false);
 		}
 	};
 
-	const otherMethods = methods.filter((entry) => entry.value !== credentialType);
-	const hintClass = "text-xs leading-5 text-settings-muted";
-	const cancelButton = (
-		<Button type="button" size="sm" variant="ghost" disabled={busy && needsSecret} onClick={browserLoginPending ? cancelBrowserLogin : close}>
-			{t("cloudCredential.cancel")}
-		</Button>
-	);
+	const choose = (method: LoginMethod) => {
+		if (method.kind === "browser") {
+			void loginWithBrowser();
+			return;
+		}
+		setOpenMethod(openMethod === method.value ? null : method.value);
+		setSecret("");
+		setError(null);
+	};
 
-	return (
-		<div ref={panelRef} className="flex scroll-my-3 flex-col gap-2 pb-1" data-settings-inline-edit="" data-testid="cloud-harness-login">
-			{needsSecret ? (
-				<>
-					{selectedMethod.kind === "apiKey" ? (
-						<p className={hintClass}>
-							<Trans
-								i18nKey="cloudCredential.apiKeyHelp"
-								components={{
-									link: (
-										<Button
-											type="button"
-											variant="link"
-											className="text-settings-label"
-											onClick={() => void aoBridge.app.openExternal(selectedMethod.help.url)}
-										>
-											{selectedMethod.help.site}
-										</Button>
-									),
-								}}
-							/>
-						</p>
-					) : null}
-					{agent === "claude-code" && credentialType === "oauth_token" ? (
-						<ol className={cn(hintClass, "list-decimal pl-4")}>
-							{SETUP_TOKEN_STEPS.map((key) => (
-								<li key={key}>
-									<Trans
-										i18nKey={key}
-										values={{ command: "claude setup-token", prefix: "sk-ant-oat" }}
-										components={{ code: <code className="rounded bg-muted px-1 py-px font-mono text-[11px] text-settings-label" /> }}
-									/>
-								</li>
-							))}
-						</ol>
-					) : null}
-					<div className="flex items-center gap-2">
-						<Input
-							aria-label={methodLabel(selectedMethod)}
-							type="password"
-							autoComplete="off"
-							spellCheck={false}
-							autoFocus
-							className="h-8 min-w-0 flex-1 text-[13px]"
-							placeholder={placeholder}
-							disabled={busy}
-							value={secret}
-							onChange={(e) => setSecret(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter") void submit();
-								if (e.key === "Escape") close();
-							}}
-						/>
-						{cancelButton}
-						<Button type="button" size="sm" disabled={!canSubmit} onClick={() => void submit()}>
-							{busy ? t("cloudCredential.connecting") : t("cloudCredential.connect")}
-						</Button>
-					</div>
-				</>
-			) : (
-				<div className="flex items-center justify-between gap-3">
-					<p className={hintClass}>
-						{agent === "claude-code"
-							? t("cloudCredential.anthropicLoginDescription")
-							: t("cloudCredential.chatgptLoginDescription")}
-					</p>
-					<div className="flex shrink-0 items-center gap-2">
-						{cancelButton}
-						<Button type="button" size="sm" disabled={busy} onClick={() => void loginWithBrowser()}>
-							{busy
-								? t("cloudCredential.waitingForBrowser")
-								: agent === "claude-code"
-									? t("cloudCredential.loginWithAnthropic")
-									: t("cloudCredential.loginWithChatGPT")}
-						</Button>
-					</div>
-				</div>
-			)}
+	// Account sign-ins and keys are separate lists, as on the local panel.
+	const methodGroups = [
+		{ id: "signIn", title: t("settings.harness.loginUi.groupSignIn"), items: methods.filter((method) => method.kind === "browser") },
+		{ id: "keys", title: t("settings.harness.loginUi.groupKeys"), items: methods.filter((method) => method.kind !== "browser") },
+	].filter((group) => group.items.length > 0);
+	const hintClass = "text-xs leading-4 text-settings-muted";
+	const fieldLabelClass = "block text-xs leading-4 text-settings-muted";
+	// While a key form is open its errors show inside it, next to the field.
+	const errorInForm = openMethod !== null && !browserPending;
 
-			{error ? (
-				<p role="alert" className="text-xs leading-5 text-error">
-					{error}
-				</p>
-			) : null}
-
-			{otherMethods.length > 0 && !busy ? (
-				<p className={hintClass}>
-					{t("cloudCredential.otherMethods")}{" "}
-					{otherMethods.map((entry, index) => (
-						<span key={entry.value}>
-							{index > 0 ? " · " : null}
-							<Button
-								type="button"
-								variant="link"
-								className="text-settings-label"
-								onClick={() => {
-									setCredentialType(entry.value);
-									setSecret("");
-									setError(null);
-								}}
-							>
-								{methodLabel(entry)}
-							</Button>
-						</span>
-					))}
-				</p>
-			) : null}
+	return <section ref={panelRef} aria-labelledby={titleId} className="@container min-w-0 scroll-my-3 space-y-3 px-3 py-3" data-settings-inline-edit="" data-testid="cloud-harness-login">
+		<div className={browserPending ? "space-y-1" : "sr-only"}>
+			<h4 id={titleId} className="text-sm leading-5 font-medium text-settings-label">{t("settings.harness.loginUi.title", { agent: agentLabel(agent) })}</h4>
 		</div>
-	);
+		{browserPending ? <div className="space-y-1">
+			<p role="status" aria-live="polite" className="flex items-center gap-2 text-[13px] leading-5 text-settings-label">
+				<LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
+				{t("cloudCredential.waitingForBrowser")}
+			</p>
+			<p className={cn(hintClass, "pl-5.5")}>{browserHint}</p>
+		</div> : <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+			<fieldset disabled={busy} className="space-y-3">
+				<legend className="sr-only">{t("settings.harness.loginUi.method")}</legend>
+				{methodGroups.map((group) => <div key={group.id} className="space-y-1.5">
+					{methodGroups.length > 1 && <p className={hintClass}>{group.title}</p>}
+					{/* Rows run flush to the card's edges with hairlines between them, like the local panel's. */}
+					<div className={cn("-mx-3 flex flex-col divide-y divide-border border-y border-border", methodGroups.length === 1 && "-mt-3 border-t-0")}>
+						{group.items.map((method) => {
+							const label = methodLabel(method);
+							const open = openMethod === method.value;
+							const MethodIcon = method.kind === "browser" ? UserRound : KeyRound;
+							return <div key={method.value}>
+								<button type="button" data-login-method="" aria-describedby={method.kind === "browser" ? titleId + "-" + method.value : undefined} aria-expanded={method.kind === "browser" ? undefined : open} onClick={() => choose(method)} className="group/method relative flex min-h-9 w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
+									<MethodIcon className="size-3.5 shrink-0 text-settings-muted group-aria-expanded/method:text-settings-label" aria-hidden="true" />
+									<span className="min-w-0 flex-1 truncate text-control leading-5 text-settings-label">{label}</span>
+									{method.kind === "browser"
+										? <ExternalLink className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />
+										: <ChevronDown className="size-3.5 shrink-0 text-settings-muted transition-transform group-aria-expanded/method:rotate-180" aria-hidden="true" />}
+								</button>
+								{method.kind === "browser" ? <span id={titleId + "-" + method.value} className="sr-only">{browserHint}</span> : null}
+								{open && method.kind !== "browser" ? <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2.5 pt-0.5 pr-3 pb-3.5 pl-9" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); close(); } }}>
+									<label htmlFor={titleId + "-secret"} className={fieldLabelClass}>{t(method.kind === "setupToken" ? "settings.harness.loginUi.setupToken" : "settings.harness.loginUi.apiKey")}</label>
+									<div className="flex min-w-0 items-center gap-2">
+										<Input id={titleId + "-secret"} className={cn(KEY_FIELD_CLASS, "min-w-0 flex-1")} type="password" autoComplete="off" spellCheck={false} autoFocus aria-invalid={error ? true : undefined} placeholder={placeholder(method)} value={secret} onChange={(event) => { setSecret(event.target.value); setError(null); }} />
+										<Button type="submit" disabled={!canSubmit}>
+											{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
+											{t("settings.harness.loginUi.save")}
+										</Button>
+									</div>
+									{method.kind === "apiKey" ? <p className={cn(hintClass, "col-start-2")}>
+										<Trans
+											i18nKey="cloudCredential.apiKeyHelp"
+											components={{
+												link: <Button type="button" variant="link" className="text-settings-label" onClick={() => void aoBridge.app.openExternal(method.help.url)}>{method.help.site}</Button>,
+											}}
+										/>
+									</p> : null}
+									{method.kind === "setupToken" ? <ol className={cn(hintClass, "col-start-2 list-decimal space-y-0.5 pl-4")}>
+										{SETUP_TOKEN_STEPS.map((key) => <li key={key}>
+											<Trans
+												i18nKey={key}
+												values={{ command: "claude setup-token", prefix: "sk-ant-oat" }}
+												components={{ code: <code className="rounded bg-muted px-1 py-px font-mono text-[11px] text-settings-label" /> }}
+											/>
+										</li>)}
+									</ol> : null}
+									{error ? <p role="alert" className="col-start-2 text-xs leading-4 text-error">{error}</p> : null}
+								</div> : null}
+							</div>;
+						})}
+					</div>
+				</div>)}
+			</fieldset>
+		</form>}
+		{error && !errorInForm ? <p role="alert" className="text-[13px] leading-5 text-error">{error}</p> : null}
+		{/* The panel's own actions sit together at the trailing edge, as on the local panel. */}
+		<div className="flex flex-wrap items-center justify-end gap-2">
+			<Button type="button" variant="outline" size="sm" disabled={busy && !browserPending} onClick={browserPending ? cancelBrowserLogin : close}>{t("settings.harness.loginUi.cancel")}</Button>
+		</div>
+	</section>;
 }

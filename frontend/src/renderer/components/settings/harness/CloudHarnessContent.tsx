@@ -109,16 +109,16 @@ function CloudHarnessPages({ connections, focusAgentId, onDetailChange, orgId, s
 	const accountTab = (agentId: CloudHarness) => {
 		// With accounts the list logs in: it opens on adding one while there is none.
 		if (agentAccounts) return <CloudAgentAccountsPanel key={agentId} agent={agentId} addFirst={!selectedConnected} />;
+		// As on the local Account card, the login takes the status row's place while it is open.
 		return <HarnessDetailGroup title={t("settings.harness.account")}>
-			<HarnessDetailRow
+			{loginAgent === agentId ? <CloudHarnessLoginPanel key={agentId} agent={agentId} onClose={() => setLoginAgent(null)} /> : <HarnessDetailRow
 				label={<HarnessStateText tone={selectedConnected ? "ok" : "off"}>{selectedConnected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</HarnessStateText>}
 				description={selectedVersion ? versionLabel(selectedVersion) : t("settings.harness.apiVersionNotReported")}
-				secondary={loginAgent === agentId ? <div className="basis-full pt-1"><CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /></div> : undefined}
 			>
-				{loginAgent === agentId ? null : <Button type="button" data-harness-primary-action="" size="default" variant={selectedConnected ? "secondary" : "default"} className="min-w-20" onClick={() => setLoginAgent(agentId)}>
+				<Button type="button" data-harness-primary-action="" size="default" variant={selectedConnected ? "secondary" : "default"} className="min-w-20" onClick={() => setLoginAgent(agentId)}>
 					{selectedConnected ? t("settings.harness.refreshLogin") : t("settings.harness.login")}
-				</Button>}
-			</HarnessDetailRow>
+				</Button>
+			</HarnessDetailRow>}
 		</HarnessDetailGroup>;
 	};
 

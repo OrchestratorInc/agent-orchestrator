@@ -102,7 +102,8 @@ describe("CloudHarnessLoginPanel", () => {
 		const user = userEvent.setup();
 		const { onClose } = renderPanel();
 		await user.click(screen.getByRole("button", { name: "Log in with Anthropic" }));
-		expect(screen.getByRole("button", { name: "Waiting for browser…" })).toBeDisabled();
+		expect(screen.getByRole("status")).toHaveTextContent("Waiting for browser…");
+		expect(screen.queryByRole("button", { name: "Log in with Anthropic" })).toBeNull();
 
 		await user.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -150,7 +151,7 @@ describe("CloudHarnessLoginPanel", () => {
 		expect(screen.getByPlaceholderText("Paste your OpenCode API key")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "OpenRouter API key" }));
 		await user.type(screen.getByPlaceholderText("Paste your OpenRouter API key"), "or-key");
-		await user.click(screen.getByRole("button", { name: "Connect" }));
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
 
 		expect(cloudMocks.putUserAgentConnection).toHaveBeenCalledWith("opencode", { credentialType: "openrouter_api_key", secret: "or-key" });
 	});
@@ -171,7 +172,7 @@ describe("CloudHarnessLoginPanel", () => {
 		const { onClose } = renderPanel("cursor");
 		expect(screen.queryByText("Or use")).toBeNull();
 		await user.type(screen.getByPlaceholderText("Paste your Cursor API key"), " cursor-key ");
-		await user.click(screen.getByRole("button", { name: "Connect" }));
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
 
 		expect(cloudMocks.putUserAgentConnection).toHaveBeenCalledWith("cursor", { credentialType: "api_key", secret: "cursor-key" });
 		await waitFor(() => expect(onClose).toHaveBeenCalled());
