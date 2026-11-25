@@ -805,6 +805,7 @@ var _ sessionmanager.ChatLauncher = chatLauncher{}
 // forward compiles but silently turns the feature off.
 var _ sessionmanager.ChatVersionRefresher = chatLauncher{}
 var _ sessionmanager.ChatUpdateHibernator = chatLauncher{}
+var _ sessionmanager.ChatUsageLimitMover = chatLauncher{}
 var _ interface {
 	RunBackgroundTask(context.Context, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
 	RunPromptSuggestionTask(context.Context, domain.SessionID, string, domain.AgentHarness, ports.ChatStartConfig, string) (string, error)
@@ -948,6 +949,10 @@ func (c chatLauncher) SwitchToInstalledRelease(ctx context.Context, id domain.Se
 
 func (c chatLauncher) HibernateChatForUpdate(ctx context.Context, id domain.SessionID) (bool, error) {
 	return c.svc.HibernateChatForUpdate(ctx, id)
+}
+
+func (c chatLauncher) MoveUsageLimitedSession(ctx context.Context, id domain.SessionID) bool {
+	return c.svc.MoveUsageLimitedSession(ctx, id)
 }
 
 // WaitForWake lets a version move hold its restart permit until the provider

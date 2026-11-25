@@ -1196,6 +1196,7 @@
 	"inspector.resumeAlreadyRunning": "The agent is already running. Refresh the session.",
 	"inspector.resumeInProgress": "The agent is already resuming. Wait for the session to refresh.",
 	"inspector.resumeSavedConversationFailed": "The saved conversation could not resume. Your Orchestrator history is available. Check the agent and try again.",
+	"inspector.resumeUsageLimited": "This account reached its usage limit. Switch the chat to another account, or resume after the limit resets.",
 	"inspector.resumeAuthRequired": "The agent needs sign-in. Open Agents settings, sign in, then try again.",
 	"inspector.resumeFailed": "Could not resume the agent. Refresh the session and try again.",
 	"inspector.resumeFallbackBody": "The native agent session could not be resumed, so a new conversation was started from the saved prompt.",

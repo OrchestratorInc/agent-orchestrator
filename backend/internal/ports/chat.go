@@ -46,6 +46,12 @@ var (
 	// resumed. Callers must surface a recovery choice, never silently start a
 	// new provider conversation.
 	ErrChatResumeFailed = errors.New("chat conversation resume failed")
+	// ErrChatUsageLimited means the provider refused the session's account for
+	// a usage limit while resuming the conversation.
+	ErrChatUsageLimited = errors.New("the agent's account is at its usage limit")
+	// ErrChatAccountMoveStarted means a usage-limited resume started a move to
+	// another account, which resumes the conversation there.
+	ErrChatAccountMoveStarted = errors.New("the session is moving to another account")
 	// ErrChatRecoveryInconclusive means a detached provider host may still own
 	// live work, but this daemon could not safely attach to it. Startup recovery
 	// must preserve the durable session and worktree rather than treating the

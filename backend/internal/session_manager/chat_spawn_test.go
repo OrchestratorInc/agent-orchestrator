@@ -986,6 +986,48 @@ func TestWakeHibernatedChatDoesNotRestoreMarkerAfterNativeResumeFailure(t *testi
 	}
 }
 
+type usageLimitMovingLauncher struct {
+	*recordingLauncher
+	moves []domain.SessionID
+	move  bool
+}
+
+func (l *usageLimitMovingLauncher) MoveUsageLimitedSession(_ context.Context, id domain.SessionID) bool {
+	l.moves = append(l.moves, id)
+	return l.move
+}
+
+func TestResumeChatUsageLimitMovesAccount(t *testing.T) {
+	limited := fmt.Errorf("%w: configure ACP session: %w: 429", ports.ErrChatResumeFailed, ports.ErrChatUsageLimited)
+	for _, tc := range []struct {
+		name string
+		err  error
+		move bool
+		want error
+	}{
+		{"move started", limited, true, ports.ErrChatAccountMoveStarted},
+		{"no account to move to", limited, false, ports.ErrChatUsageLimited},
+		{"other resume failure", ports.ErrChatResumeFailed, true, ports.ErrChatResumeFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launcher := &usageLimitMovingLauncher{recordingLauncher: &recordingLauncher{startErr: tc.err}, move: tc.move}
+			mgr, store, _ := newChatManager(launcher)
+			seedChatResumeSession(store, domain.ActivityExited)
+			_, err := mgr.ResumeAgentWithMode(context.Background(), "mer-1")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("resume error = %v, want %v", err, tc.want)
+			}
+			wantMoves := 0
+			if errors.Is(tc.err, ports.ErrChatUsageLimited) {
+				wantMoves = 1
+			}
+			if len(launcher.moves) != wantMoves {
+				t.Fatalf("move attempts = %v, want %d", launcher.moves, wantMoves)
+			}
+		})
+	}
+}
+
 func TestResumeChatRefusedLoginAsksForSignIn(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

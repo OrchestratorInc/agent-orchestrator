@@ -1221,6 +1221,11 @@ func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID) (ExitAgent
 // session or recreating its workspace.
 func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
+	if errors.Is(err, ports.ErrChatAccountMoveStarted) {
+		if rec, ok, readErr := s.store.GetSession(ctx, id); readErr == nil && ok {
+			res, err = sessionmanager.RestoreResult{Session: rec, Mode: sessionmanager.RestoreModeNative}, nil
+		}
+	}
 	if err != nil {
 		// Known conditions (open elsewhere, resume in progress, terminated) keep
 		// their codes; any other failure of a pending import is logged in full
@@ -2270,6 +2275,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, ports.ErrChatProviderSessionLost):
 		return apierr.Conflict("CHAT_PROVIDER_SESSION_LOST",
 			"The agent's process lost this conversation and was stopped. Resume the agent to continue; your history is kept.", nil)
+	case errors.Is(err, ports.ErrChatUsageLimited):
+		return apierr.Conflict("CHAT_USAGE_LIMITED",
+			"The agent's account reached its usage limit. Move the session to another account, or resume it after the limit resets.", nil)
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		return apierr.Conflict("CHAT_RESUME_FAILED",
 			"The agent could not resume its saved conversation. Your Orchestrator history is still available.", nil)

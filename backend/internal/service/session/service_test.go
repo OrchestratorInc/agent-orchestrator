@@ -3994,6 +3994,7 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"agent not exited", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrAgentNotExited), apierr.KindConflict, "AGENT_NOT_EXITED"},
 		{"resume in progress", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrResumeInProgress), apierr.KindConflict, "AGENT_RESUME_IN_PROGRESS"},
 		{"provider resume failed", fmt.Errorf("resume agent mer-1: %w", ports.ErrChatResumeFailed), apierr.KindConflict, "CHAT_RESUME_FAILED"},
+		{"provider usage limited", fmt.Errorf("resume agent mer-1: %w: %w", ports.ErrChatResumeFailed, ports.ErrChatUsageLimited), apierr.KindConflict, "CHAT_USAGE_LIMITED"},
 		{"chat permission unsupported", fmt.Errorf("spawn: %w", ports.ErrChatPermissionModeUnsupported), apierr.KindInvalid, "CHAT_PERMISSION_MODE_UNSUPPORTED"},
 		{"chat mode unsupported", fmt.Errorf("spawn: %w", ports.ErrChatUnsupported), apierr.KindConflict, "SESSION_MODE_UNSUPPORTED"},
 		{"chat recovery inconclusive with deadline", fmt.Errorf("resume agent mer-1: resume chat: %w: persistent ACP host: %w",
@@ -4293,6 +4294,21 @@ func TestResumeAgentMapsManagerModeToServiceView(t *testing.T) {
 			Mode:    sessionmanager.RestoreModeNative,
 		},
 	}
+	svc := &Service{manager: fc, store: st}
+
+	got, err := svc.ResumeAgent(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("ResumeAgent: %v", err)
+	}
+	if got.Session.ID != "mer-1" || got.Mode != RestoreModeViewNative {
+		t.Fatalf("resume outcome = %+v", got)
+	}
+}
+
+func TestResumeAgentAcceptsAStartedAccountMove(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode}
+	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", ports.ErrChatAccountMoveStarted)}
 	svc := &Service{manager: fc, store: st}
 
 	got, err := svc.ResumeAgent(context.Background(), "mer-1")

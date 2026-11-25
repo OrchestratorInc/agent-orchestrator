@@ -1196,6 +1196,7 @@
 	"inspector.resumeAlreadyRunning": "Aracı zaten çalışıyor. Oturumu yenileyin.",
 	"inspector.resumeInProgress": "Aracı zaten sürdürülüyor. Oturumun yenilenmesini bekleyin.",
 	"inspector.resumeSavedConversationFailed": "Kaydedilen konuşma sürdürülemedi. Orchestrator geçmişiniz kullanılabilir durumda. Aracıyı kontrol edip yeniden deneyin.",
+	"inspector.resumeUsageLimited": "Bu hesap kullanım sınırına ulaştı. Sohbeti başka bir hesaba geçirin veya sınır sıfırlandıktan sonra sürdürün.",
 	"inspector.resumeAuthRequired": "Ajan için oturum açmanız gerekiyor. Ajan ayarlarını açın, oturum açıp yeniden deneyin.",
 	"inspector.resumeFailed": "Aracı sürdürülemedi. Oturumu yenileyip tekrar deneyin.",
 	"inspector.resumeFallbackBody": "Aracının kendi oturumu sürdürülemediği için kaydedilen istemle yeni bir konuşma başlatıldı.",

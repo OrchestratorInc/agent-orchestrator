@@ -46,3 +46,25 @@ func TestNormalizeACPErrorLeavesProviderErrorsAlone(t *testing.T) {
 		})
 	}
 }
+
+func TestUsageLimitedOrMarksResume429s(t *testing.T) {
+	const details = "API error: 429 This request would exceed your account's rate limit. Please try again later · model not changed"
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"top level":         {&acpsdk.RequestError{Code: -32603, Message: "Internal error", Data: map[string]any{"details": details}}, true},
+		"wrapped by relay":  {&acpsdk.RequestError{Code: -32603, Message: "Internal error", Data: map[string]any{"providerData": map[string]any{"details": details}}}, true},
+		"other api error":   {&acpsdk.RequestError{Code: -32603, Message: "Internal error", Data: map[string]any{"details": "API error: 500 · model not changed"}}, false},
+		"429 on other code": {&acpsdk.RequestError{Code: -32602, Message: "bad params", Data: map[string]any{"details": details}}, false},
+		"plain error":       {errors.New(details), false},
+		"no data":           {&acpsdk.RequestError{Code: -32603, Message: "Internal error"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := usageLimitedOr(normalizeACPError("ACP session/set_config_option", tc.err))
+			if got := errors.Is(err, ports.ErrChatUsageLimited); got != tc.want {
+				t.Fatalf("usage limited = %v, want %v (%v)", got, tc.want, err)
+			}
+		})
+	}
+}

@@ -831,12 +831,12 @@ func (d *Driver) resumeSession(
 	conv.setSessionPreamble(d.sessionPreamble(launchCfg))
 	if err := d.applyLaunchSessionOptions(ctx, conv, launchCfg); err != nil {
 		conv.discard()
-		return nil, fmt.Errorf("%w: configure ACP session: %w", ports.ErrChatResumeFailed, err)
+		return nil, fmt.Errorf("%w: configure ACP session: %w", ports.ErrChatResumeFailed, usageLimitedOr(err))
 	}
 	if err := conv.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: cfg.Model, Effort: cfg.Effort, Approval: cfg.Permissions}); err != nil {
 		if !errors.Is(err, ErrACPSetterUnsupported) {
 			conv.discard()
-			return nil, fmt.Errorf("%w: configure ACP session: %w", ports.ErrChatResumeFailed, err)
+			return nil, fmt.Errorf("%w: configure ACP session: %w", ports.ErrChatResumeFailed, usageLimitedOr(err))
 		}
 	}
 	if historyConversation != nil {
@@ -1295,6 +1295,26 @@ func isACPPromptStalled(err error) bool {
 	provider, _ := data["providerData"].(map[string]any)
 	stalled, _ := provider[persistenthost.ACPPromptStalledDataKey].(bool)
 	return stalled
+}
+
+func isACPUsageLimit(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
+		return false
+	}
+	data, _ := requestErr.Data.(map[string]any)
+	if provider, ok := data["providerData"].(map[string]any); ok {
+		data = provider
+	}
+	details, _ := data["details"].(string)
+	return strings.Contains(details, "API error: 429")
+}
+
+func usageLimitedOr(err error) error {
+	if isACPUsageLimit(err) {
+		return fmt.Errorf("%w: %w", ports.ErrChatUsageLimited, err)
+	}
+	return err
 }
 
 // promptStalledError keeps the provider error's text and adds the

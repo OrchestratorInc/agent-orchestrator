@@ -1201,6 +1201,7 @@
 	"inspector.resumeAlreadyRunning": "Der Agent läuft bereits. Aktualisiere die Sitzung.",
 	"inspector.resumeInProgress": "Der Agent wird bereits fortgesetzt. Warte, bis die Sitzung aktualisiert ist.",
 	"inspector.resumeSavedConversationFailed": "Die gespeicherte Unterhaltung konnte nicht fortgesetzt werden. Dein Orchestrator-Verlauf ist verfügbar. Prüfe den Agenten und versuche es erneut.",
+	"inspector.resumeUsageLimited": "Dieses Konto hat sein Nutzungslimit erreicht. Wechsle den Chat zu einem anderen Konto oder setze ihn fort, sobald das Limit zurückgesetzt ist.",
 	"inspector.resumeAuthRequired": "Der Agent muss angemeldet werden. Öffne die Agenteneinstellungen, melde dich an und versuche es erneut.",
 	"inspector.resumeFallbackBody": "Die native Agent-Sitzung konnte nicht fortgesetzt werden, daher wurde eine neue Unterhaltung aus dem gespeicherten Prompt gestartet.",
 	"inspector.resumingAgent": "Agent wird fortgesetzt",

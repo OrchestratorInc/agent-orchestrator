@@ -1348,7 +1348,7 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_PROMPT_SUGGESTION_STALE", err.Error(), nil)
 
-	case errors.Is(err, chatsvc.ErrControllerHandoff):
+	case errors.Is(err, chatsvc.ErrControllerHandoff), errors.Is(err, ports.ErrChatAccountMoveStarted):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_INTERFACE_TRANSITION",
 			"the session is switching interfaces; send again after the handoff completes", nil)
@@ -1486,6 +1486,10 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 	case errors.Is(err, ports.ErrChatAuthRequired):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_AUTH_REQUIRED", "the agent is installed but not authenticated", nil)
+
+	case errors.Is(err, ports.ErrChatUsageLimited):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_USAGE_LIMITED", "the agent's account reached its usage limit", nil)
 
 	case errors.Is(err, ports.ErrChatResumeFailed):
 		// Deliberately not a silent recovery: the client must offer the user a

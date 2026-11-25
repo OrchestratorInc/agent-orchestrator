@@ -512,3 +512,39 @@ func TestAccountHandoffPendingRetrySurvivesHibernation(t *testing.T) {
 		t.Fatalf("handoff notes after retry = %d", notes)
 	}
 }
+
+func TestUsageLimitedResumeMovesToAnotherAccount(t *testing.T) {
+	ctx := context.Background()
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+
+	hh.enabled.Store(false)
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || hh.accounts.calls != 0 {
+		t.Fatal("moved with the setting off")
+	}
+	hh.enabled.Store(true)
+	hh.accounts.target = ""
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || len(hh.mover.moves()) != 0 {
+		t.Fatal("moved without a candidate")
+	}
+	hh.accounts.target = handoffTarget
+	if !hh.svc.MoveUsageLimitedSession(ctx, testSession) {
+		t.Fatal("did not move to the candidate")
+	}
+	if moves := hh.mover.moves(); len(moves) != 1 || moves[0].TargetAccountID != handoffTarget || moves[0].Policy != domain.SessionInterfaceTransitionDrain {
+		t.Fatalf("moves = %+v", moves)
+	}
+	hh.mover.finish(t, domain.SessionInterfaceTransitionFailed)
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) || len(hh.mover.moves()) != 1 {
+		t.Fatal("moved twice inside the handoff window")
+	}
+	hh.advance(11 * time.Minute)
+	hh.mover.err = errors.New("account is signed out")
+	if hh.svc.MoveUsageLimitedSession(ctx, testSession) {
+		t.Fatal("reported a move that did not start")
+	}
+	hh.mover.err = nil
+	hh.advance(11 * time.Minute)
+	if !hh.svc.MoveUsageLimitedSession(ctx, testSession) || len(hh.mover.moves()) != 2 {
+		t.Fatal("did not move again after the window")
+	}
+}

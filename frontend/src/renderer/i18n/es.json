@@ -1221,6 +1221,7 @@
 	"inspector.resumeAlreadyRunning": "El agente ya está en ejecución. Actualiza la sesión.",
 	"inspector.resumeInProgress": "El agente ya se está reanudando. Espera a que se actualice la sesión.",
 	"inspector.resumeSavedConversationFailed": "No se pudo reanudar la conversación guardada. Tu historial de Orchestrator sigue disponible. Revisa el agente e inténtalo de nuevo.",
+	"inspector.resumeUsageLimited": "Esta cuenta alcanzó su límite de uso. Cambia el chat a otra cuenta o reanúdalo cuando se restablezca el límite.",
 	"inspector.resumeAuthRequired": "El agente requiere iniciar sesión. Abre la configuración de agentes, inicia sesión e inténtalo de nuevo.",
 	"inspector.resumeFallbackBody": "No se pudo reanudar la sesión nativa del agente, por lo que se inició una nueva conversación a partir del prompt guardado.",
 	"inspector.resumingAgent": "Reanudando agente",

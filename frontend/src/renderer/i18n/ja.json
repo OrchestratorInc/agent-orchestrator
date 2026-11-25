@@ -1201,6 +1201,7 @@
 	"inspector.resumeAlreadyRunning": "エージェントはすでに実行中です。セッションを更新してください。",
 	"inspector.resumeInProgress": "エージェントは再開中です。セッションの更新を待ってください。",
 	"inspector.resumeSavedConversationFailed": "保存された会話を再開できませんでした。Orchestrator の履歴は利用できます。エージェントを確認して再試行してください。",
+	"inspector.resumeUsageLimited": "このアカウントは使用量の上限に達しました。チャットを別のアカウントに切り替えるか、上限がリセットされてから再開してください。",
 	"inspector.resumeAuthRequired": "エージェントへのサインインが必要です。エージェント設定を開いてサインインし、再試行してください。",
 	"inspector.resumeFallbackBody": "ネイティブのエージェントセッションを再開できなかったため、保存済みのプロンプトから新しい会話を開始しました。",
 	"inspector.resumingAgent": "エージェントを再開中",
