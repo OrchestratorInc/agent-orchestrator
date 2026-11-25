@@ -53,6 +53,7 @@ func TestLauncherEndpointEnvAppliesProjectValues(t *testing.T) {
 	spec.ProjectEnv = map[string]string{
 		harnessendpoint.CodexBaseURLEnv: "https://project.example.com",
 		harnessendpoint.CodexAPIKeyEnv:  "sk-project",
+		"OPENAI_API_KEY":                "sk-native",
 		"UNRELATED":                     "x",
 	}
 	env, err := l.endpointEnv(spec)
@@ -66,6 +67,9 @@ func TestLauncherEndpointEnvAppliesProjectValues(t *testing.T) {
 	// its model, which that gateway may not serve.
 	if _, ok := env[harnessendpoint.CodexModelEnv]; ok {
 		t.Fatalf("saved model followed the project's gateway: %v", env)
+	}
+	if value, found := env["OPENAI_API_KEY"]; !found || value != "" {
+		t.Fatal("the project must not restore a competing key beside a saved endpoint")
 	}
 	if _, ok := env["UNRELATED"]; ok {
 		t.Fatalf("only endpoint variables belong in the endpoint env: %v", env)
@@ -90,6 +94,42 @@ func TestLauncherEndpointEnvAppliesProjectValues(t *testing.T) {
 	empty := &agentLauncher{dataDir: t.TempDir()}
 	if env, err := empty.endpointEnv(launchSpec()); err != nil || env == nil || len(env) != 0 {
 		t.Fatalf("no stored or project endpoint: env = %v, err = %v, want a resolved empty env", env, err)
+	}
+}
+
+func TestLauncherSpawnClearsNativeCodexCredentialsForProjectEndpoint(t *testing.T) {
+	for _, name := range []string{"project endpoint", "native provider"} {
+		t.Run(name, func(t *testing.T) {
+			reviewer := &fakeReviewer{env: map[string]string{"CODEX_API_KEY": "sk-inherited"}}
+			rt := &fakeRuntime{}
+			launcher := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, rt, t.TempDir())
+			spec := launchSpec()
+			spec.Harness = domain.ReviewerCodex
+			spec.ProjectEnv = map[string]string{"OPENAI_API_KEY": "sk-native"}
+			if name == "project endpoint" {
+				spec.ProjectEnv[harnessendpoint.CodexBaseURLEnv] = "https://project.example.com"
+				spec.ProjectEnv[harnessendpoint.CodexAPIKeyEnv] = "sk-project"
+			}
+			if _, err := launcher.Spawn(t.Context(), spec); err != nil {
+				t.Fatal(err)
+			}
+			env := rt.createCfg.Env
+			if name == "native provider" {
+				if env["OPENAI_API_KEY"] != "sk-native" || env["CODEX_API_KEY"] != "sk-inherited" {
+					t.Fatal("native credentials must remain available without a custom endpoint")
+				}
+				return
+			}
+			if env[harnessendpoint.CodexBaseURLEnv] != "https://project.example.com" || env[harnessendpoint.CodexAPIKeyEnv] != "sk-project" {
+				t.Fatal("project endpoint URL and key must reach the reviewer process")
+			}
+			codex, _ := harnessendpoint.Lookup("codex")
+			for _, key := range codex.ClearEnv {
+				if value, found := env[key]; !found || value != "" {
+					t.Errorf("%s must be blank with an active custom endpoint", key)
+				}
+			}
+		})
 	}
 }
 

@@ -359,25 +359,7 @@ func (l *agentLauncher) endpointEnv(spec LaunchSpec) (map[string]string, error) 
 	if err != nil {
 		return nil, fmt.Errorf("load custom endpoint for %s reviewer: %w", spec.Harness, err)
 	}
-	env := make(map[string]string, len(stored))
-	for key, value := range stored {
-		env[key] = value
-	}
-	for _, name := range harnessSpec.EnvNames() {
-		if value, set := spec.ProjectEnv[name]; set {
-			env[name] = value
-			continue
-		}
-		if runtime.GOOS == "windows" {
-			for key, value := range spec.ProjectEnv {
-				if strings.EqualFold(key, name) {
-					env[name] = value
-					break
-				}
-			}
-		}
-	}
-	return env, nil
+	return harnessSpec.WithProjectEnv(stored, spec.ProjectEnv, runtime.GOOS == "windows"), nil
 }
 
 // prepareInvocation stores the full reviewer instructions outside the

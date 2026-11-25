@@ -7430,6 +7430,10 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 	if err != nil {
 		return nil, err
 	}
+	if endpointEnv != nil {
+		spec, _ := harnessendpoint.Lookup(string(harness))
+		endpointEnv = spec.WithProjectEnv(endpointEnv, projectEnv, caseInsensitive)
+	}
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
 	projectValue := func(key string) (string, bool) {
 		if value, ok := projectEnv[key]; ok || !caseInsensitive {
@@ -7492,13 +7496,8 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		env[EnvAgentBrowserToken] = m.agentBrowserToken
 	}
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
-	// The custom endpoint replaces any stored or account credential. Only
-	// the endpoint's own variables can be restored from the project, including
-	// Codex's AO-prefixed keys that the general project env filter strips.
+	// Apply the resolved endpoint after account and provider credentials.
 	for key, value := range endpointEnv {
-		if override, ok := projectValue(key); ok {
-			value = override
-		}
 		setProtectedEnv(env, key, value, caseInsensitive)
 	}
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)

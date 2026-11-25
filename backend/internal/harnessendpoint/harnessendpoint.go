@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"os"
@@ -113,8 +114,7 @@ var specs = map[string]Spec{
 	},
 }
 
-// EnvNames lists every variable the spec's endpoint sets or blanks.
-func (s Spec) EnvNames() []string {
+func (s Spec) envNames() []string {
 	names := []string{s.BaseURLEnv}
 	for _, style := range s.AuthStyles() {
 		names = append(names, s.KeyEnv[style])
@@ -123,6 +123,45 @@ func (s Spec) EnvNames() []string {
 		names = append(names, s.ModelEnv)
 	}
 	return append(names, s.ClearEnv...)
+}
+
+// WithProjectEnv resolves endpoint settings from the store and project. An
+// active endpoint always blanks competing credentials and provider switches.
+func (s Spec) WithProjectEnv(stored, project map[string]string, caseInsensitive bool) map[string]string {
+	env := make(map[string]string, len(stored))
+	maps.Copy(env, stored)
+	for _, name := range s.envNames() {
+		if value, ok := project[name]; ok {
+			env[name] = value
+			continue
+		}
+		if caseInsensitive {
+			for key, value := range project {
+				if strings.EqualFold(key, name) {
+					env[name] = value
+					break
+				}
+			}
+		}
+	}
+	if stored != nil || s.activeIn(env) {
+		for _, name := range s.ClearEnv {
+			env[name] = ""
+		}
+	}
+	return env
+}
+
+func (s Spec) activeIn(env map[string]string) bool {
+	if strings.TrimSpace(env[s.BaseURLEnv]) == "" {
+		return false
+	}
+	for _, name := range s.KeyEnv {
+		if strings.TrimSpace(env[name]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Lookup returns the spec for agentID.
@@ -347,8 +386,8 @@ func (s *Store) Configured(agentID string) (bool, error) {
 // configured endpoint, or nil when none is configured. The key variable of
 // every other auth style and each ClearEnv variable map to "" so a credential
 // from the daemon's environment or a bound account is not used instead of, or
-// sent alongside, the configured one. Callers
-// decide precedence: project configuration should still win.
+// sent alongside, the configured one. WithProjectEnv applies project overrides
+// while preserving the ClearEnv blanks.
 func (s *Store) Env(agentID string) (map[string]string, error) {
 	spec, ok := specs[agentID]
 	if !ok {

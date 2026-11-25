@@ -282,6 +282,10 @@ func TestRuntimeEnvCanonicalizesCodexEndpointOverridesOnWindows(t *testing.T) {
 	project := map[string]string{
 		strings.ToLower(harnessendpoint.CodexBaseURLEnv): "https://project.example.com",
 		strings.ToLower(harnessendpoint.CodexAPIKeyEnv):  "sk-project",
+		strings.ToLower(harnessendpoint.CodexModelEnv):   "project-model",
+		"openai_api_key":     "sk-native",
+		"codex_api_key":      "sk-native",
+		"codex_access_token": "native-token",
 	}
 	env, err := manager.runtimeEnvForHarness("session", "project", "", project, domain.HarnessCodex)
 	if err != nil {
@@ -289,6 +293,15 @@ func TestRuntimeEnvCanonicalizesCodexEndpointOverridesOnWindows(t *testing.T) {
 	}
 	if env[harnessendpoint.CodexBaseURLEnv] != "https://project.example.com" || env[harnessendpoint.CodexAPIKeyEnv] != "sk-project" {
 		t.Fatal("Codex must receive the project endpoint under canonical keys")
+	}
+	if env[harnessendpoint.CodexModelEnv] != "project-model" {
+		t.Fatal("Codex must receive the project model when the saved endpoint has no model")
+	}
+	spec, _ := harnessendpoint.Lookup("codex")
+	for _, key := range spec.ClearEnv {
+		if value, found := env[key]; !found || value != "" {
+			t.Errorf("%s must be blank with an active custom endpoint", key)
+		}
 	}
 	for key := range project {
 		if _, exists := env[key]; exists {
