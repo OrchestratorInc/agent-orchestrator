@@ -254,6 +254,7 @@ type ChatAttachmentLease struct {
 	ReleasedAtMs   sql.NullInt64
 	ReclaimingAtMs sql.NullInt64
 	ReclaimedAtMs  sql.NullInt64
+	Accepting      int64
 }
 
 type CodexAccountSwitch struct {

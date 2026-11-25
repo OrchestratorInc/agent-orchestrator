@@ -73,7 +73,7 @@ func TestChatAttachmentLeaseCommittedByDeliveryContent(t *testing.T) {
 }
 
 // Side chats accept messages outside the conversation tables and commit
-// explicitly, with the same effect.
+// explicitly (hold, then settle as accepted), with the same effect.
 func TestChatAttachmentLeaseExplicitCommit(t *testing.T) {
 	s, session, _ := conversationFixture(t)
 	ctx := context.Background()
@@ -82,12 +82,15 @@ func TestChatAttachmentLeaseExplicitCommit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	committed, err := s.CommitChatAttachmentLeases(ctx, session, []string{"see .ao/attachments/" + leasedSent, ""})
+	held, err := s.HoldChatAttachmentLeases(ctx, session, []string{"see .ao/attachments/" + leasedSent, "", leasedSent})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{leasedSent}; !reflect.DeepEqual(committed, want) {
-		t.Fatalf("committed = %v, want %v", committed, want)
+	if want := []string{leasedSent}; !reflect.DeepEqual(held, want) {
+		t.Fatalf("held = %v, want %v", held, want)
+	}
+	if err := s.SettleChatAttachmentHolds(ctx, session, held, true); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.ReleaseChatAttachmentLeases(ctx, session, []string{leasedSent, leasedDropped}, histClock); err != nil {
 		t.Fatal(err)
@@ -153,7 +156,7 @@ func TestChatAttachmentLeaseClaimRefusesAcceptance(t *testing.T) {
 	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", msg, "turn-1", histClock.Add(3*time.Second)); err == nil {
 		t.Fatal("a message naming a claimed file was accepted")
 	}
-	if _, err := s.CommitChatAttachmentLeases(ctx, session, []string{".ao/attachments/" + leasedDropped}); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
+	if _, err := s.HoldChatAttachmentLeases(ctx, session, []string{".ao/attachments/" + leasedDropped}); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
 		t.Fatalf("explicit commit = %v, want ErrChatAttachmentDiscarded", err)
 	}
 	if err := s.MarkChatAttachmentReclaimed(ctx, session, leasedDropped, histClock.Add(4*time.Second)); err != nil {
@@ -165,14 +168,14 @@ func TestChatAttachmentLeaseClaimRefusesAcceptance(t *testing.T) {
 	if claimed, err := s.ClaimChatAttachmentLease(ctx, session, leasedDropped, histClock.Add(5*time.Second)); err != nil || claimed {
 		t.Fatalf("claim after reclaim = %v, %v", claimed, err)
 	}
-	if _, err := s.CommitChatAttachmentLeases(ctx, session, []string{leasedDropped}); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
+	if _, err := s.HoldChatAttachmentLeases(ctx, session, []string{leasedDropped}); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
 		t.Fatalf("commit against tombstone = %v, want ErrChatAttachmentDiscarded", err)
 	}
 	// A tombstone reclaimed after the cutoff stays; one before it goes.
 	if err := s.PruneChatAttachmentTombstones(ctx, histClock); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CommitChatAttachmentLeases(ctx, session, []string{leasedDropped}); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
+	if _, err := s.HoldChatAttachmentLeases(ctx, session, []string{leasedDropped}); !errors.Is(err, sqlite.ErrChatAttachmentDiscarded) {
 		t.Fatalf("tombstone pruned too early: %v", err)
 	}
 	if err := s.PruneChatAttachmentTombstones(ctx, histClock.Add(time.Minute)); err != nil {
@@ -183,29 +186,91 @@ func TestChatAttachmentLeaseClaimRefusesAcceptance(t *testing.T) {
 	}
 }
 
-// A commit for a message that then fails to be recorded is undone by restoring
-// the leases, so the draft that still holds the files can give them up again.
-func TestChatAttachmentLeaseRestoreAfterFailedAcceptance(t *testing.T) {
+// While a side question holding a file is being recorded, reclamation cannot
+// claim it, even if the draft released it meanwhile. If the question is then
+// not recorded, dropping its hold leaves the release in force.
+func TestChatAttachmentHoldBlocksReclaimUntilSettled(t *testing.T) {
 	s, session, _ := conversationFixture(t)
 	ctx := context.Background()
 	if err := s.LeaseChatAttachment(ctx, session, leasedDropped, histClock); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := s.CommitChatAttachmentLeases(ctx, session, []string{leasedDropped})
+	held, err := s.HoldChatAttachmentLeases(ctx, session, []string{leasedDropped})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RestoreChatAttachmentLeases(ctx, session, committed, histClock.Add(time.Second)); err != nil {
+	if err := s.ReleaseChatAttachmentLeases(ctx, session, []string{leasedDropped}, histClock.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RestoreChatAttachmentLeases(ctx, session, committed, histClock.Add(time.Second)); err != nil {
-		t.Fatalf("restore is idempotent: %v", err)
+	if claimed, err := s.ClaimChatAttachmentLease(ctx, session, leasedDropped, histClock.Add(2*time.Second)); err != nil || claimed {
+		t.Fatalf("claim of a held file = %v, %v", claimed, err)
 	}
-	if err := s.ReleaseChatAttachmentLeases(ctx, session, []string{leasedDropped}, histClock.Add(2*time.Second)); err != nil {
+	if err := s.SettleChatAttachmentHolds(ctx, session, held, false); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := releasedNames(t, s, session), []string{leasedDropped}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("released = %v, want %v", got, want)
+	if claimed, err := s.ClaimChatAttachmentLease(ctx, session, leasedDropped, histClock.Add(3*time.Second)); err != nil || !claimed {
+		t.Fatalf("claim after the hold was dropped = %v, %v", claimed, err)
+	}
+}
+
+// A file another message accepts while a side question holds it stays
+// committed when that side question fails: dropping the hold must not
+// re-lease it.
+func TestChatAttachmentFailedHoldKeepsFileAcceptedMeanwhile(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	if err := s.LeaseChatAttachment(ctx, session, leasedSent, histClock); err != nil {
+		t.Fatal(err)
+	}
+	held, err := s.HoldChatAttachmentLeases(ctx, session, []string{leasedSent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := domain.ConversationMessage{ID: "m1", Text: ".ao/attachments/" + leasedSent, Origin: domain.MessageOriginHuman}
+	if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", msg, "turn-1", histClock.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleChatAttachmentHolds(ctx, session, held, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReleaseChatAttachmentLeases(ctx, session, []string{leasedSent}, histClock.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if got := releasedNames(t, s, session); len(got) != 0 {
+		t.Fatalf("released = %v: a failed side question re-leased an accepted file", got)
+	}
+}
+
+// Holds are counted: one of two concurrent side questions failing does not
+// drop the other's hold, and the one that is recorded commits the file.
+func TestChatAttachmentConcurrentHolds(t *testing.T) {
+	s, session, _ := conversationFixture(t)
+	ctx := context.Background()
+	if err := s.LeaseChatAttachment(ctx, session, leasedDropped, histClock); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.HoldChatAttachmentLeases(ctx, session, []string{leasedDropped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.HoldChatAttachmentLeases(ctx, session, []string{leasedDropped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleChatAttachmentHolds(ctx, session, first, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReleaseChatAttachmentLeases(ctx, session, []string{leasedDropped}, histClock.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := s.ClaimChatAttachmentLease(ctx, session, leasedDropped, histClock.Add(2*time.Second)); err != nil || claimed {
+		t.Fatalf("claim while the second hold is in flight = %v, %v", claimed, err)
+	}
+	if err := s.SettleChatAttachmentHolds(ctx, session, second, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := releasedNames(t, s, session); len(got) != 0 {
+		t.Fatalf("released = %v, want the accepted file committed", got)
 	}
 }
 

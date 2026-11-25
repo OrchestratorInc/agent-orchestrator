@@ -20,6 +20,13 @@
 -- reclamation has claimed a row, acceptance is refused instead, so an
 -- accepted message can never name a file that is being or has been deleted.
 --
+-- A side question is recorded outside the conversation tables, so it commits
+-- in two steps: it holds its files (accepting counts the holds in flight)
+-- before it is recorded, deletes the row once it is, and drops only its own
+-- hold if it is not. Reclamation never claims a held row, and any other
+-- acceptance deletes the row outright, so dropping a hold never re-leases a
+-- file another message accepted.
+--
 -- Times are Unix milliseconds. Names are 128-bit random per staged file, so a
 -- name appearing anywhere in a message is a reference to that file.
 CREATE TABLE chat_attachment_leases (
@@ -30,6 +37,7 @@ CREATE TABLE chat_attachment_leases (
     released_at_ms   INTEGER,
     reclaiming_at_ms INTEGER,
     reclaimed_at_ms  INTEGER,
+    accepting        INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, name)
 );
 -- +goose StatementEnd

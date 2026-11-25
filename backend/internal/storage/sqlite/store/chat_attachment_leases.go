@@ -33,21 +33,23 @@ VALUES (?, ?, ?, ?)`, string(id), name, at, at); err != nil {
 	return nil
 }
 
-// CommitChatAttachmentLeases is the explicit commit for accepted messages
-// that are not stored in conversation tables (side chats). It deletes the
-// unclaimed leases of id whose names appear in any of texts, including one a
-// racing release already released, and returns their names. If any named
-// file has already been claimed for reclamation it commits nothing and
-// returns ErrChatAttachmentDiscarded.
-func (s *Store) CommitChatAttachmentLeases(ctx context.Context, id domain.SessionID, texts []string) ([]string, error) {
+// HoldChatAttachmentLeases is the first step of the explicit commit for
+// messages accepted outside the conversation tables (side questions). It holds
+// the unclaimed leases of id whose names appear in any of texts, including one
+// a racing release already released, so reclamation cannot claim them while
+// the message is being recorded, and returns their names for
+// SettleChatAttachmentHolds. If any named file has already been claimed for
+// reclamation it holds nothing and returns ErrChatAttachmentDiscarded.
+func (s *Store) HoldChatAttachmentLeases(ctx context.Context, id domain.SessionID, texts []string) ([]string, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("commit chat attachment leases %s: %w", id, err)
+		return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var committed []string
+	held := map[string]bool{}
+	var names []string
 	for _, text := range texts {
 		if text == "" {
 			continue
@@ -56,60 +58,77 @@ func (s *Store) CommitChatAttachmentLeases(ctx context.Context, id domain.Sessio
 		if err := tx.QueryRowContext(ctx, `
 SELECT COUNT(*) FROM chat_attachment_leases
 WHERE session_id = ? AND reclaiming_at_ms IS NOT NULL AND instr(?, name) > 0`, string(id), text).Scan(&claimed); err != nil {
-			return nil, fmt.Errorf("commit chat attachment leases %s: %w", id, err)
+			return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
 		}
 		if claimed > 0 {
 			return nil, ErrChatAttachmentDiscarded
 		}
 		rows, err := tx.QueryContext(ctx, `
-DELETE FROM chat_attachment_leases
-WHERE session_id = ? AND reclaiming_at_ms IS NULL AND instr(?, name) > 0
-RETURNING name`, string(id), text)
+SELECT name FROM chat_attachment_leases
+WHERE session_id = ? AND reclaiming_at_ms IS NULL AND instr(?, name) > 0`, string(id), text)
 		if err != nil {
-			return nil, fmt.Errorf("commit chat attachment leases %s: %w", id, err)
+			return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
 		}
 		for rows.Next() {
 			var name string
 			if err := rows.Scan(&name); err != nil {
 				_ = rows.Close()
-				return nil, fmt.Errorf("commit chat attachment leases %s: %w", id, err)
+				return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
 			}
-			committed = append(committed, name)
+			if !held[name] {
+				held[name] = true
+				names = append(names, name)
+			}
 		}
 		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("commit chat attachment leases %s: %w", id, err)
+			return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
+		}
+	}
+	for _, name := range names {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE chat_attachment_leases SET accepting = accepting + 1
+WHERE session_id = ? AND name = ?`, string(id), name); err != nil {
+			return nil, fmt.Errorf("hold chat attachment lease %s/%s: %w", id, name, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit chat attachment leases %s: %w", id, err)
+		return nil, fmt.Errorf("hold chat attachment leases %s: %w", id, err)
 	}
-	return committed, nil
+	return names, nil
 }
 
-// RestoreChatAttachmentLeases re-leases names whose commit turned out not to
-// be an acceptance (the message it was for failed to be recorded), so a
-// draft that still holds them can give them up again.
-func (s *Store) RestoreChatAttachmentLeases(ctx context.Context, id domain.SessionID, names []string, now time.Time) error {
+// SettleChatAttachmentHolds finishes HoldChatAttachmentLeases. If the message
+// was recorded (accepted), the held files are committed for good: their rows
+// are deleted. If it was not, only this message's hold is dropped and each
+// file returns to whatever its draft did meanwhile (live, or released and
+// reclaimable). A row another message accepted in the meantime is already
+// gone, so dropping a hold never re-leases an accepted file.
+func (s *Store) SettleChatAttachmentHolds(ctx context.Context, id domain.SessionID, names []string, accepted bool) error {
 	if len(names) == 0 {
 		return nil
 	}
-	at := now.UnixMilli()
+	query := `
+UPDATE chat_attachment_leases SET accepting = accepting - 1
+WHERE session_id = ? AND name = ? AND accepting > 0`
+	if accepted {
+		query = `
+DELETE FROM chat_attachment_leases
+WHERE session_id = ? AND name = ? AND reclaiming_at_ms IS NULL`
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("restore chat attachment leases %s: %w", id, err)
+		return fmt.Errorf("settle chat attachment holds %s: %w", id, err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, name := range names {
-		if _, err := tx.ExecContext(ctx, `
-INSERT OR IGNORE INTO chat_attachment_leases (session_id, name, created_at_ms, renewed_at_ms)
-VALUES (?, ?, ?, ?)`, string(id), name, at, at); err != nil {
-			return fmt.Errorf("restore chat attachment lease %s/%s: %w", id, name, err)
+		if _, err := tx.ExecContext(ctx, query, string(id), name); err != nil {
+			return fmt.Errorf("settle chat attachment hold %s/%s: %w", id, name, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("restore chat attachment leases %s: %w", id, err)
+		return fmt.Errorf("settle chat attachment holds %s: %w", id, err)
 	}
 	return nil
 }
@@ -217,7 +236,8 @@ ORDER BY session_id, name`, string(id), string(id))
 
 // ClaimChatAttachmentLease takes a released lease for reclamation and reports
 // whether its files may now be deleted. It is false when an accepted message
-// rescued the file after the list of released leases was read. From the claim
+// rescued the file after the list of released leases was read, or while a
+// side question holding the file is being recorded. From the claim
 // on, any acceptance naming the file is refused. Re-claiming a row a previous
 // run claimed but did not finish succeeds.
 func (s *Store) ClaimChatAttachmentLease(ctx context.Context, id domain.SessionID, name string, now time.Time) (bool, error) {
@@ -225,7 +245,8 @@ func (s *Store) ClaimChatAttachmentLease(ctx context.Context, id domain.SessionI
 	defer s.writeMu.Unlock()
 	res, err := s.writeDB.ExecContext(ctx, `
 UPDATE chat_attachment_leases SET reclaiming_at_ms = COALESCE(reclaiming_at_ms, ?)
-WHERE session_id = ? AND name = ? AND released_at_ms IS NOT NULL AND reclaimed_at_ms IS NULL`,
+WHERE session_id = ? AND name = ? AND released_at_ms IS NOT NULL AND reclaimed_at_ms IS NULL
+  AND (accepting = 0 OR reclaiming_at_ms IS NOT NULL)`,
 		now.UnixMilli(), string(id), name)
 	if err != nil {
 		return false, fmt.Errorf("claim chat attachment lease %s/%s: %w", id, name, err)
