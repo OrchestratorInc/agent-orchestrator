@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -225,7 +226,7 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 		return result, errors.Join(err, os.RemoveAll(cfg.Dir))
 	}
 	stop := func(cause error) (Result, error) {
-		return result, errors.Join(cause, keepEarlier(root, skillsPath, taken, previous, next))
+		return result, errors.Join(cause, keepEarlier(root, skillsPath, taken, previous, next, cfg.Limits.TotalBytes-total))
 	}
 	candidates, err := listSkills(ctx, cfg.Sources)
 	if err != nil {
@@ -339,17 +340,25 @@ func removeForeign(root *os.Root, skillsPath string) error {
 
 // keepEarlier ends an interrupted Sync: the session keeps what this one copied
 // and what earlier ones left, except a copy of a skill it now has another way
-// or under another folder, and anything unknown.
-func keepEarlier(root *os.Root, skillsPath string, taken nameSet, previous, next manifest) error {
-	for folder, fingerprint := range previous.Skills {
+// or under another folder, anything unknown, and what no longer fits, taking
+// folders in name order.
+func keepEarlier(root *os.Root, skillsPath string, taken nameSet, previous, next manifest, budget int64) error {
+	for _, folder := range slices.Sorted(maps.Keys(previous.Skills)) {
 		if _, replaced := next.Skills[folder]; replaced {
 			continue
 		}
 		earlier, ok := readSkill(filepath.Join(root.Name(), skillsPath, folder))
-		if ok && !taken.has(earlier) {
-			taken.add(earlier)
-			next.Skills[folder] = fingerprint
+		if !ok || taken.has(earlier) {
+			continue
 		}
+		// The context has ended, so this scan of a copy must not use it.
+		contents, err := scanSkill(context.Background(), earlier.real, Limits{SkillBytes: budget, SkillFiles: DefaultLimits.SkillFiles})
+		if err != nil {
+			continue
+		}
+		budget -= contents.size
+		taken.add(earlier)
+		next.Skills[folder] = previous.Skills[folder]
 	}
 	if err := removeStale(root, skillsPath, next); err != nil {
 		return err

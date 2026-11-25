@@ -295,6 +295,24 @@ func TestSyncInterruptedKeepsOneCopyOfEachName(t *testing.T) {
 	}
 }
 
+func TestSyncInterruptedStaysWithinTheTotalLimit(t *testing.T) {
+	before, after := t.TempDir(), t.TempDir()
+	body := strings.Repeat("x", 600)
+	writeSkill(t, before, "b", "b", body)
+	writeSkill(t, before, "c", "c", body)
+	writeSkill(t, after, "a", "a", body)
+	limits := Limits{SkillBytes: 2048, SkillFiles: 10, TotalBytes: 1500}
+	for checks := range 40 {
+		dir := filepath.Join(t.TempDir(), "session")
+		sync(t, Config{Dir: dir, Sources: []string{before}, Limits: limits})
+		_, _ = Sync(&stopAfter{Context: context.Background(), checks: checks},
+			Config{Dir: dir, Layout: AgentsLayout, Sources: []string{after, before}, Limits: limits})
+		if got := bridged(t, dir); len(got) > 2 {
+			t.Fatalf("after %d checks: %v, over the total limit", checks, got)
+		}
+	}
+}
+
 func TestSyncRemovesWhatTheAgentAdded(t *testing.T) {
 	root, dir := t.TempDir(), filepath.Join(t.TempDir(), "session")
 	writeSkill(t, root, "a", "a", "")
