@@ -469,7 +469,7 @@ describe("provider error", () => {
 		expect(screen.getByText(/You have no credits remaining/i)).toBeInTheDocument();
 		expect(
 			screen.getByRole("link", {
-				name: "https://platform.openai.com/settings/organization/billing",
+				name: "platform.openai.com",
 			}),
 		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
 		// The raw envelope must not paint as the row label — that is what overflowed the column.
@@ -494,13 +494,13 @@ describe("provider error", () => {
 		expect(screen.getByText(/You have no credits remaining/i)).toBeInTheDocument();
 		expect(
 			screen.getByRole("link", {
-				name: "https://platform.openai.com/settings/organization/billing",
+				name: "platform.openai.com",
 			}),
 		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
 		expect(screen.queryByText(/codexErrorInfo/i)).not.toBeInTheDocument();
 	});
 
-	it("renders an arbitrary provider web URL literally and opens it externally", async () => {
+	it("renders an arbitrary provider web URL as its site's chip and opens it externally", async () => {
 		const user = userEvent.setup();
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		render(
@@ -517,14 +517,14 @@ describe("provider error", () => {
 			/>,
 		);
 
-		const link = screen.getByRole("link", { name: "http://billing.example.test/renew" });
+		const link = screen.getByRole("link", { name: "billing.example.test" });
 		expect(link).toHaveAttribute("href", "http://billing.example.test/renew");
 		await user.click(link);
 		expect(openExternal).toHaveBeenCalledWith("http://billing.example.test/renew");
 		openExternal.mockRestore();
 	});
 
-	it("renders a separate provider action URL literally", () => {
+	it("renders a separate provider action URL as its site's chip", () => {
 		render(
 			<ActivityRow
 				activity={activity({
@@ -543,7 +543,7 @@ describe("provider error", () => {
 		expect(screen.getByText(/You have no credits remaining/i)).toBeInTheDocument();
 		expect(
 			screen.getByRole("link", {
-				name: "https://platform.openai.com/settings/organization/billing",
+				name: "platform.openai.com",
 			}),
 		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
 	});
