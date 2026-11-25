@@ -322,6 +322,8 @@ describe("startRemoteProxy", () => {
 		expect(new URL(proxy.previewUrl("ao-2", "http://127.0.0.2:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
 		expect(new URL(proxy.previewUrl("ao-2", "http://[::ffff:127.0.0.1]:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
 		expect(new URL(proxy.previewUrl("ao-2", "http://localhost.:5173/")).hostname).toMatch(/^ao-preview-[0-9a-f]{32}\.localhost$/);
+		expect(proxy.previewUrl("ao-2", "https://localhost:8443/")).toBe("https://localhost:8443/");
+		expect(proxy.previewUrl("ao-2", "http://app.localhost:5173/")).toBe("http://app.localhost:5173/");
 		const changed = proxy.previewUrl("ao-1", `http://localhost:5173/`);
 		expect(changed).not.toBe(preview);
 		expect(proxy.resolvePreviewUrl("ao-1", preview)).toBe("");

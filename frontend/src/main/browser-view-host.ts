@@ -152,6 +152,7 @@ export type BrowserTabState = {
   // Set when the tab shows the agent's own browser: the agent browser tab it
   // shows ("" until its viewer first reports).
   remote?: { tabId: string };
+  preview?: boolean;
 };
 
 export type BrowserTabsState = {
@@ -521,7 +522,8 @@ export type BrowserViewHostOptions = {
   /** Which browser openInUserBrowser would use, to name the action. */
   describeUserBrowser?: () => Promise<UserBrowser>;
   // Configures a browser partition's session before its first page exists.
-  prepareBrowserPartition?: (partition: string, hostId?: string) => void | Promise<void>;
+  prepareBrowserPartition?: (partition: string) => void;
+  routeBrowserPartition?: (partition: string, hostId: string) => Promise<void>;
   // Electron 44 removed clipboard.writeImage; main.ts adapts the async
   // ClipboardItem API to this narrow image-only writer.
   clipboard?: { writeImage(image: Electron.NativeImage): void | Promise<void> };
@@ -617,6 +619,7 @@ type BrowserEntry = {
   // Set on a tab that shows the agent's own browser: the agent browser tab it
   // shows, for life ("" until its viewer first reports).
   agentTab?: string;
+  preview?: boolean;
   // The agent browser page this tab shows, as its viewer last reported it.
   remote?: RemoteTabReport;
   // An agent tab not shown yet: the viewer it loads when first shown
@@ -846,8 +849,7 @@ const SITE_CHALLENGE_LOOP_MS = 60_000;
 // up to 60s, so without a cap the switch would hang and block every other agent
 // command that long. After this, it fails with "still busy" and the user retries.
 const PROFILE_SWITCH_SETTLE_MS = 10_000;
-// A remote session's previews show on AO's own preview origins (remote-proxy.ts),
-// as the renderer's showPreview matches them.
+// A remote session's previews show on AO's own preview origins (remote-proxy.ts).
 const REMOTE_PREVIEW_URL = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
 
 function temporaryBrowserPartition(): string {
@@ -1232,8 +1234,7 @@ export function createBrowserViewHost(
       preload: options.annotatePreloadPath,
       sandbox: true,
     };
-    const partitionReady = Promise.resolve(options.prepareBrowserPartition?.(session.profilePartition, session.hostId))
-      .catch((error) => console.warn("Unable to route the browser partition through its host", error));
+    options.prepareBrowserPartition?.(session.profilePartition);
     const view = new options.WebContentsView({
       webPreferences,
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
@@ -1542,9 +1543,9 @@ export function createBrowserViewHost(
           // indefinitely. resolve is idempotent, so an earlier event still wins.
           setTimeout(done, entryReadyTimeoutMs);
         })
-      : partitionReady.then(() => loadEntryReady(view, entryReadyTimeoutMs, () => {
+      : loadEntryReady(view, entryReadyTimeoutMs, () => {
           entry.ready = Promise.resolve();
-        }));
+        });
     // Keep an unobserved tab initialization failure from becoming an unhandled
     // rejection; callers that need the target still await the original promise.
     void entry.ready.catch(() => undefined);
@@ -2962,6 +2963,7 @@ export function createBrowserViewHost(
     if (!isAllowedBrowserURL(normalized.href, options.rendererOrigin)) {
       throw new Error("Unsupported browser URL");
     }
+    entry.preview = REMOTE_PREVIEW_URL.test(normalized.href);
     return entry.driver().navigate(normalized.href, loadOptions);
   };
 
@@ -2979,6 +2981,7 @@ export function createBrowserViewHost(
     const pendingNavigation = { url: href };
     entry.pendingNavigation = pendingNavigation;
     try {
+      if (owner?.hostId) await options.routeBrowserPartition?.(owner.profilePartition, owner.hostId);
       if (loadOptions) await entry.view.webContents.loadURL(href, loadOptions);
       else await entry.view.webContents.loadURL(href);
     } catch (err) {
@@ -3024,9 +3027,10 @@ export function createBrowserViewHost(
         active.agentTab === undefined
           ? active
           : [...session.tabs.values()].find(
-              (tab) => tab.agentTab === undefined && REMOTE_PREVIEW_URL.test(tab.view.webContents.getURL()),
+              (tab) => tab.agentTab === undefined && tab.preview,
             );
       if (!entry) return pushNavState(options, active);
+      entry.preview = false;
       cancelAnnotation(options, entry, "navigation");
       if (entry === active) {
         if (session.devtools) destroyDevTools(session);
@@ -3265,6 +3269,7 @@ export function createBrowserViewHost(
       await entry.ready;
       assertCurrentSession();
       try {
+        if (session.hostId) await options.routeBrowserPartition?.(session.profilePartition, session.hostId);
         await entry.view.webContents.loadURL(saved.url);
       } catch (error) {
         entry.state = {
@@ -5712,6 +5717,7 @@ function tabResult(
     active,
     ...(entry.favicon ? { favicon: entry.favicon } : {}),
     ...(entry.agentTab !== undefined ? { remote: { tabId: entry.agentTab } } : {}),
+    ...(entry.preview ? { preview: true } : {}),
     untrustedExternalContent: true,
   };
 }

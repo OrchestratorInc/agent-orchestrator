@@ -1229,6 +1229,7 @@ function setupTabHost(
 	overrides?: {
 		entryReadyTimeoutMs?: number;
 		openInUserBrowser?: (url: string) => Promise<{ name: string; chrome: boolean }>;
+		routeBrowserPartition?: (partition: string, hostId: string) => Promise<void>;
 		/** Flip `destroyed` to model the BaseWindow closing under the host. */
 		window?: { destroyed: boolean };
 	},
@@ -1474,6 +1475,7 @@ function setupTabHost(
 		prepareBrowserPartition,
 		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
 		openInUserBrowser: overrides?.openInUserBrowser,
+		routeBrowserPartition: overrides?.routeBrowserPartition,
 		onNativeViewAdded,
 		onTabCloseFailure,
 		// Kept only as a regression tripwire: the removed auto-send path used
@@ -2686,16 +2688,15 @@ describe("browser profile partitions and replacement", () => {
 		expect(order.slice(0, 2)).toEqual([`prepare ${partition}`, `construct ${partition}`]);
 	});
 
-	it("still opens pages in a tab whose partition could not be routed", async () => {
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-		const prepare = vi.fn(() => Promise.reject(new Error("no proxy")));
-		const { invoke } = setupTabHost(undefined, false, undefined, undefined, undefined, undefined, prepare);
-		const state = (await invoke("browser:ensure", "worker-1")) as { viewId: string };
-		const loaded = (await invoke("browser:navigate", { viewId: state.viewId, url: "https://example.test/" })) as BrowserNavState;
-		expect(loaded.url).toBe("https://example.test/");
-		expect(loaded.error).toBeUndefined();
-		expect(warn).toHaveBeenCalledWith("Unable to route the browser partition through its host", expect.any(Error));
-		warn.mockRestore();
+	it("loads nothing in a remote session's tab until its partition is routed", async () => {
+		const route = vi.fn((_partition: string, _hostId: string) => Promise.resolve()).mockRejectedValueOnce(new Error("no proxy"));
+		const { invoke, views } = setupTabHost(undefined, false, undefined, undefined, undefined, { routeBrowserPartition: route });
+		const { viewId } = (await invoke("browser:ensure", "remote:h_box:ao-1")) as { viewId: string };
+		const go = async () => (await invoke("browser:navigate", { viewId, url: "http://localhost:3000/" })) as BrowserNavState;
+		expect((await go()).error).toBe("no proxy");
+		expect(views[0]!.webContents.getURL()).toBe("about:blank");
+		expect((await go()).url).toBe("http://localhost:3000/");
+		expect(route.mock.calls[0]![1]).toBe("h_box");
 	});
 
 	it("clears temporary persisted partitions when their browser session is destroyed", async () => {
@@ -4898,6 +4899,8 @@ describe("agent browser runtime", () => {
 		it("clears the person's preview tab behind an agent tab, never the agent's page", async () => {
 			const { invoke, agent, views, viewId, tabs } = await openAgent();
 			await invoke("browser:navigate", { viewId, url: "https://ao-preview-0123456789abcdef0123456789abcdef.localhost:47663/" });
+			await (views[0].webContents.loadURL as unknown as (url: string) => Promise<void>)("http://localhost:3000/");
+			expect((await tabs()).find((tab) => tab.id === "t1")).toMatchObject({ preview: true });
 			await invoke("browser:selectTab", { viewId, tabId: "a1" });
 			// `ao preview clear`, with the agent's page in front.
 			await invoke("browser:clear", viewId);

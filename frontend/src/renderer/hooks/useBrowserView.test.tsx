@@ -1878,7 +1878,7 @@ describe("useBrowserView", () => {
 			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
 			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(appPreview);
 			const agentTab = { id: "a1", url: "https://en.wikipedia.org/wiki/Starfish", title: "Starfish", active: true, remote: { tabId: "R1" } };
-			const previewTab = { id: "t1", url: "https://ao-preview-ffffffffffffffffffffffffffffffff.localhost:47663/", title: "Daybook", active: false };
+			const previewTab = { id: "t1", url: "http://localhost:5174/", title: "Daybook", active: false, preview: true };
 			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "a1", tabs: [previewTab, agentTab] });
 			renderHook(() => useBrowserView({ ...remote, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
 			await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({ viewId, url: appPreview }));

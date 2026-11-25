@@ -970,8 +970,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				(isIP(previewHost) === 6 && /^::ffff:7f[0-9a-f]{2}:/i.test(previewHost));
 			if (previewHost === previewHostForSession(sessionId)) kind = "static";
 			else if (parsed.protocol === "http:" && loopback) kind = "app";
-			else if (loopback) throw new Error("unsupported local preview protocol");
-			else if (previewHost.endsWith(".localhost")) throw new Error("preview does not belong to this session");
+			else if (/^ao-preview[-.].*\.localhost$/i.test(previewHost)) throw new Error("preview does not belong to this session");
 			else return sourceUrl;
 			// Per kind too: a static preview (HTML an agent wrote) must not share the app's storage.
 			const host = `ao-preview-${originMac(`${kind}\n${sessionId}`).toString("hex", 0, 16)}.localhost`;

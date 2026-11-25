@@ -144,7 +144,10 @@ func IsLANControlBlockedPathForTest(path string) bool { return isLANControlBlock
 // since it is unexported; this gives them a LANManager that owns one, and the
 // daemon rotates the connection password exclusively via SetPasswordHash.
 func NewMobileLAN(handler http.Handler, hostID string, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
-	return NewLANManager(expectedHostGuard(hostID)(handler), &authState{}, defaultPort, log, sink)
+	guard := expectedHostGuard(hostID)
+	m := NewLANManager(guard(handler), &authState{}, defaultPort, log, sink)
+	m.loopback = guard(m.loopback)
+	return m
 }
 
 // expectedHostGuard prevents a saved address from sending work to a different

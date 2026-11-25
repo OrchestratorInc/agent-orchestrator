@@ -1368,15 +1368,13 @@ async function createWindowInternal(): Promise<void> {
 		clearBrowserProfileData: clearElectronBrowserProfileData,
 		openInUserBrowser: (url) => userBrowser.open(url),
 		describeUserBrowser: () => userBrowser.describe(),
-		prepareBrowserPartition: (partition, hostId) => {
-			const browserSession = session.fromPartition(partition);
-			applyBrowserIdentity(browserSession, {
+		prepareBrowserPartition: (partition) =>
+			applyBrowserIdentity(session.fromPartition(partition), {
 				chromeVersion: process.versions.chrome,
 				platform: process.platform,
 				languages: acceptLanguages(app.getLocale(), app.getPreferredSystemLanguages()),
-			});
-			return hostId ? routeLoopback(browserSession, hostId) : undefined;
-		},
+			}),
+		routeBrowserPartition: (partition, hostId) => routeLoopback(session.fromPartition(partition), hostId),
 		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});

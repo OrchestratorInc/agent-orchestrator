@@ -1191,8 +1191,7 @@ export function useBrowserView({
 			const id = viewIdRef.current;
 			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
 			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
-			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
-			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
+			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || tab.preview));
 			if (!own) return openTab(url);
 			await selectTab(own.id);
 			return navigate(url);
