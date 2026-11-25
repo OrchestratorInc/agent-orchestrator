@@ -49,6 +49,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/hostupdate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
@@ -832,6 +833,10 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetTerminalInputGate(termMgr)
 	sessionImportSvc := sessionimport.New(store, cfg.DataDir, chatDrivers.SupportsChat)
 	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
+	// The Orchestrator attribution beta credits Orchestrator on new sessions'
+	// commits and PRs. Wired before tracker intake starts, so a session its
+	// first poll spawns already sees the setting.
+	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
 	// Lifecycle reactions deliberately do not hold Session Manager's input
@@ -844,7 +849,11 @@ func Run(buildVersion string) (retErr error) {
 	if githubRepos != nil {
 		sessionSvc.SetGitHubRepositoryResolver(githubRepos)
 	}
-	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), PreferredAgent: preferredProjectAgent(agentSvc), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
+	// Neither project creation nor session start saves an uninstalled fallback:
+	// when no launchable agent is found, empty roles stay empty so the next
+	// start fills them once an agent is installed.
+	sessionSvc.SetPreferredProjectAgent(preferredProjectAgent(agentSvc))
 	go projectSvc.WarmCanonicalRepos(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
@@ -1302,6 +1311,10 @@ func Run(buildVersion string) (retErr error) {
 	if usageHookQueue != nil {
 		usageHooks = usageHookQueue
 	}
+	deviceSvc := newDeviceService(cfg.DataDir, sessionSvc, log)
+	// Devices are a Developer mode preview: the desktop turns them on through
+	// PUT /devices/availability, and only then do new sessions hear of them.
+	sessMgr.SetDevicesOffered(deviceSvc.Offered)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
@@ -1309,6 +1322,7 @@ func Run(buildVersion string) (retErr error) {
 		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,
 		Endpoints:          bs,
+		HostUpdate:         hostupdate.New(cfg.Telemetry.AppVersion, cfg.DataDir, browserBroker),
 		Agents:             agentSvc,
 		CodexAccounts:      agentSvc,
 		AgentAccounts:      freshAccountUsage{agentAccountSvc, usagePipeline},
@@ -1379,11 +1393,15 @@ func Run(buildVersion string) (retErr error) {
 		PRPreview:                prPreview,
 		SessionSearch:            sessionSearchSvc,
 		PreviewServer:            managedPreview,
+		Devices:                  deviceSvc,
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
 	})
 	if err != nil {
 		stop()
+		if devErr := deviceSvc.Shutdown(); devErr != nil {
+			log.Error("device support shutdown", "err", devErr)
+		}
 		lcStack.Stop()
 		if cdcErr := cdcPipe.Stop(); cdcErr != nil {
 			log.Error("cdc pipeline shutdown", "err", cdcErr)
@@ -1683,6 +1701,9 @@ func Run(buildVersion string) (retErr error) {
 	}
 	codexSwitchCancel()
 	managedPreview.Close()
+	if err := deviceSvc.Shutdown(); err != nil {
+		log.Error("device support shutdown", "err", err)
+	}
 	<-previewDone
 	// Daemon replacement detaches providers. Desktop exit stops processes
 	// while keeping the sessions and worktrees available for resume.
@@ -1863,6 +1884,49 @@ type pluginBinaryCache struct {
 func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarness) {
 	if harness == c.harness {
 		c.plugin.InvalidateBinaryResolution()
+	}
+}
+
+// preferredProjectAgent ranks this machine's installed agents from the cached readiness snapshot,
+// running display checks first when the agent AO prefers most is not confirmed
+// yet or no agent has been found installed. When nothing launchable is installed,
+// cached not_installed and unauthorized entries are invalidated first so an agent
+// installed or signed in within the display TTL is seen immediately. It returns ""
+// when the checks have found no launchable agent installed, so a guess is never saved.
+func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domain.AgentHarness {
+	return func(ctx context.Context) domain.AgentHarness {
+		if agents == nil {
+			return ""
+		}
+		readiness, err := agents.CachedReadiness(ctx)
+		if err != nil {
+			return ""
+		}
+		snapshot := readiness.Agents
+		noInstalled := domain.PreferredInstalledProjectAgent(snapshot) == ""
+		if domain.PreferredProjectAgentNeedsChecks(snapshot) || noInstalled {
+			if noInstalled {
+				for _, item := range snapshot {
+					if item.Installation.State == domain.AgentInstallationNotInstalled {
+						agents.InvalidateAgentInstallation(item.ID)
+					} else if item.Installation.State == domain.AgentInstallationInstalled &&
+						item.Authentication.State == domain.AgentAuthenticationUnauthorized {
+						agents.InvalidateAgentAuthentication(item.ID)
+					}
+				}
+			}
+			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			checked, err := agents.EnsureReadiness(checkCtx, nil, domain.AgentReadinessPurposeDisplay)
+			cancel()
+			if err == nil && len(checked.Agents) > 0 {
+				snapshot = checked.Agents
+			} else if latest, latestErr := agents.CachedReadiness(ctx); latestErr == nil {
+				// The checks keep running after the wait ends and record each
+				// agent as it finishes, so rank what they found so far.
+				snapshot = latest.Agents
+			}
+		}
+		return domain.PreferredInstalledProjectAgent(snapshot)
 	}
 }
 

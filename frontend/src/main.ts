@@ -52,8 +52,10 @@ import {
 	setUpdateSettings,
 	setMacDifferentialUpdates,
 	returnToHome,
+	getMacInstallBlocker,
 	type UpdateCheckOptions,
 } from "./main/auto-updater";
+import { REMOTE_APP_UPDATE_ACTION, runRemoteAppUpdate } from "./main/remote-app-update";
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
 import { clearMainSentryCache, initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
@@ -2055,6 +2057,17 @@ function establishBrowserRuntimeLink(): void {
 			}
 			if (command.action === "__render-measure") {
 				return measureRender({ BrowserWindow }, command.args ?? {}, signal);
+			}
+			if (command.action === REMOTE_APP_UPDATE_ACTION) {
+				return runRemoteAppUpdate({
+					packaged: app.isPackaged,
+					hasUnsavedDrafts: () => chatDraftRisks.length > 0,
+					installBlocker: getMacInstallBlocker,
+					check: () => checkForUpdatesNow(path.dirname(rfp)),
+					download: () => downloadUpdateNow(),
+					status: getUpdateStatus,
+					install: quitAndInstallUpdate,
+				}, command.args ?? {});
 			}
 			const host = browserViewHost;
 			if (!host) {

@@ -95,6 +95,7 @@ vi.mock("../lib/api-client", () => ({
   getApiBaseUrl: () => "http://127.0.0.1:3001",
   hasTrustedApiBaseUrl: () => false,
   subscribeApiBaseUrl: () => () => {},
+  apiErrorCode: () => undefined,
   apiErrorMessage: (error: unknown, fallback = "Request failed") => {
     if (error instanceof Error) return error.message;
     if (typeof error === "object" && error !== null && "message" in error) {
@@ -423,6 +424,36 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByRole("tab", { name: "Browser" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
     expect(screen.getByTestId("session-account-summary")).toBeInTheDocument();
+  });
+
+  describe("background tasks", () => {
+    const devServer = { id: "task-1", kind: "shell" as const, state: "running" as const, description: "npm run dev", runId: "run-1" };
+    const respondWithTask = () => {
+      const respond = commonGetsResponder();
+      getMock.mockImplementation(async (path: string, ...rest: unknown[]) => {
+        if (path === "/api/v1/sessions/{sessionId}/background-tasks") {
+          return { data: { sessionId: "sess-1", availability: "ready", controllerGeneration: "g1", tasks: [devServer] } };
+        }
+        if (path === "/api/v1/sessions/{sessionId}/background-tasks/{taskId}/output") {
+          return { data: { sessionId: "sess-1", taskId: "task-1", availability: "ready", output: "" } };
+        }
+        return (respond as (path: string, ...rest: unknown[]) => Promise<unknown>)(path, ...rest);
+      });
+    };
+
+    it("opens an orchestrator's background task in its tab instead of falling back to Summary", async () => {
+      respondWithTask();
+      useUiStore.getState().openTaskTab(sessionUiKey("sess-1"), devServer);
+      renderWithQuery(<SessionInspector isInspectorVisible orchestrator session={session([], { kind: "orchestrator", mode: "chat" })} view="task" />);
+      expect(await screen.findByRole("tab", { name: "Background tasks" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("never polls this daemon for a session on another host", async () => {
+      respondWithTask();
+      renderWithQuery(<SessionInspector hostId="box-a" session={session([], { mode: "chat" })} />);
+      await screen.findByRole("tab", { name: "Summary" });
+      expect(getMock.mock.calls.some(([path]) => String(path).includes("/background-tasks"))).toBe(false);
+    });
   });
 
   it("shows an orchestrator's direct and rendered HTML artifacts beside Summary and Browser", async () => {
@@ -3528,6 +3559,15 @@ describe("SessionInspector tabs", () => {
 
     expect(await screen.findByText("Review controls")).toBeInTheDocument();
     expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+  });
+
+  it("offers the Device tab to local worker sessions only with Developer mode on", async () => {
+    mockCommonGets([], "", [reviewState(1, "needs_review")]);
+    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} />);
+    expect(screen.queryByRole("tab", { name: "Device" })).not.toBeInTheDocument();
+
+    act(() => useUiStore.setState({ developerMode: true }));
+    expect(screen.getAllByRole("tab").map((el) => el.textContent?.trim())).toEqual(["Summary", "Files", "Reviews", "Browser", "Device"]);
   });
 
   it("offers a Subagents tab after Side chat while the chat passes its panel", async () => {

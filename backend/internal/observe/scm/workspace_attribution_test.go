@@ -139,3 +139,42 @@ func TestMatchSession_WorkspaceOwnership(t *testing.T) {
 		})
 	}
 }
+
+// New sessions record orchestrator/ branches; sessions from before the rename
+// keep ao/ ones. Both must still own their PRs, and neither prefix may claim a
+// PR on the other.
+func TestMatchSession_OrchestratorAndLegacyPrefixes(t *testing.T) {
+	workspace := func(id, branch string) sessionRepo {
+		return sessionRepo{session: domain.SessionRecord{ID: domain.SessionID(id)}, branch: branch, workspace: true}
+	}
+	single := func(id, branch string) sessionRepo {
+		return sessionRepo{session: domain.SessionRecord{ID: domain.SessionID(id)}, branch: branch}
+	}
+	for _, tc := range []struct {
+		name, source string
+		candidates   []sessionRepo
+		want         domain.SessionID
+	}{
+		{"new root exact", "orchestrator/p-1/root", []sessionRepo{single("p-1", "orchestrator/p-1/root")}, "p-1"},
+		{"new root slash sibling", "orchestrator/p-1/fix", []sessionRepo{single("p-1", "orchestrator/p-1/root")}, "p-1"},
+		{"new dev namespace sibling", "orchestrator/dev/p-1/fix", []sessionRepo{single("p-1", "orchestrator/dev/p-1/root")}, "p-1"},
+		{"legacy root slash sibling", "ao/p-1/fix", []sessionRepo{single("p-1", "ao/p-1/root")}, "p-1"},
+		{"new workspace hyphen sibling", "orchestrator/p-1-fix", []sessionRepo{workspace("p-1", "orchestrator/p-1")}, "p-1"},
+		{"new workspace collision sibling", "orchestrator/p-1-2-fix", []sessionRepo{workspace("p-1", "orchestrator/p-1-2")}, "p-1"},
+		{"legacy workspace hyphen sibling", "ao/p-1-fix", []sessionRepo{workspace("p-1", "ao/p-1")}, "p-1"},
+		{"old and new sessions side by side", "ao/p-1/fix", []sessionRepo{single("p-1", "ao/p-1/root"), single("p-2", "orchestrator/p-2/root")}, "p-1"},
+		{"new session beside old", "orchestrator/p-2/fix", []sessionRepo{single("p-1", "ao/p-1/root"), single("p-2", "orchestrator/p-2/root")}, "p-2"},
+		{"new prefix does not claim legacy PR", "ao/p-1/fix", []sessionRepo{single("p-1", "orchestrator/p-1/root")}, ""},
+		{"legacy prefix does not claim new PR", "orchestrator/p-1/fix", []sessionRepo{single("p-1", "ao/p-1/root")}, ""},
+		{"new workspace does not claim legacy hyphen", "ao/p-1-fix", []sessionRepo{workspace("p-1", "orchestrator/p-1")}, ""},
+		{"new workspace topic hyphen excluded", "orchestrator/p-1-topic-fix", []sessionRepo{workspace("p-1", "orchestrator/p-1-topic")}, ""},
+		{"new workspace padded collision excluded", "orchestrator/p-1-02-fix", []sessionRepo{workspace("p-1", "orchestrator/p-1-02")}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := matchSession(tc.candidates, tc.source)
+			if ok != (tc.want != "") || (ok && got.session.ID != tc.want) {
+				t.Fatalf("matched %q (%v), want %q", got.session.ID, ok, tc.want)
+			}
+		})
+	}
+}

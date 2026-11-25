@@ -26,7 +26,9 @@ import (
 )
 
 const (
-	eventBuffer  = 4096
+	eventBuffer = 4096
+	// approvalWait bounds an unanswered permission request. Questions have no
+	// such bound (see requestInput).
 	approvalWait = 30 * time.Minute
 	// sessionCloseWait bounds the session/close sent before a provider is
 	// terminated (quickSessionCloseWait for a QuickStop provider).
@@ -70,6 +72,7 @@ type parkedPermission struct {
 
 type parkedInput struct {
 	request ports.ChatInputRequest
+	turnID  string
 	result  chan ports.ChatInputResponse
 	ready   chan struct{}
 }
@@ -677,7 +680,9 @@ func (c *conversation) checkOptionalModelOffered(model string) error {
 	if optionsFor == nil || legacyModel {
 		return nil
 	}
-	for _, option := range optionsFor(ports.ChatTurnSettings{Model: model}) {
+	// A variant id whose base model the session offers is applied as that base
+	// plus its reasoning level, so it is offered too.
+	for _, option := range c.expandModelVariant(optionsFor(ports.ChatTurnSettings{Model: model})) {
 		if option.ID != "model" || !option.Optional {
 			continue
 		}
@@ -763,7 +768,7 @@ func (c *conversation) expandModelVariant(options []SessionOption) []SessionOpti
 			if offered, _ := c.configOptionOffers("model", base); offered {
 				options[i].Value = base
 				options[i].Name = ""
-				options = append(options, variant)
+				options = append(options, c.variantOptionFor(variant))
 			}
 		}
 		break
@@ -849,7 +854,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			if !ok && c.splitModelVariant != nil {
 				if base, variant, split := c.splitModelVariant(model); split {
 					if resolved, ok = resolveModelChoice(c.harness, option.Choices, base); ok {
-						options = append(options, variant)
+						options = append(options, c.variantOptionFor(variant))
 					}
 				}
 			}
@@ -1551,10 +1556,29 @@ func (c *conversation) Interrupt(ctx context.Context, providerTurnID string) err
 	if err != nil {
 		return fmt.Errorf("ACP session/cancel: %w", err)
 	}
+	// Not every provider withdraws its open questions on session/cancel (ACP
+	// leaves answering them to the client), so close them here: otherwise
+	// Stop leaves the turn waiting on a question nobody can answer.
+	c.cancelTurnInputs(active)
 	// The provider owns the root Prompt until it returns a terminal result. Keep
 	// AO busy after accepting session/cancel so a restart cannot start a second
 	// root prompt while the first one is still executing downstream.
 	return nil
+}
+
+// turnInterruptedLocked reports whether session/cancel was sent for turnID.
+// The caller must hold c.mu.
+func (c *conversation) turnInterruptedLocked(turnID string) bool {
+	attempt := c.interrupt
+	if attempt == nil || attempt.turnID != turnID {
+		return false
+	}
+	select {
+	case <-attempt.done:
+		return attempt.err == nil
+	default:
+		return false
+	}
 }
 
 func (c *conversation) ResolveRequest(
@@ -1933,6 +1957,33 @@ func (c *conversation) failPendingPermissions() {
 	for _, request := range pending {
 		select {
 		case request.result <- "":
+		default:
+		}
+	}
+}
+
+// cancelTurnInputs answers the turn's open questions with Cancel.
+func (c *conversation) cancelTurnInputs(turnID string) {
+	c.mu.Lock()
+	var cancelled map[string]*parkedInput
+	for id, input := range c.pendingInputs {
+		if input.turnID != turnID {
+			continue
+		}
+		if cancelled == nil {
+			cancelled = make(map[string]*parkedInput)
+		}
+		cancelled[id] = input
+		delete(c.pendingInputs, id)
+	}
+	c.mu.Unlock()
+	for id, input := range cancelled {
+		// requestInput emits InputRequested after it registers the question;
+		// wait for that so the resolution never comes first.
+		<-input.ready
+		c.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: id})
+		select {
+		case input.result <- ports.ChatInputResponse{Action: ports.ChatInputActionCancel}:
 		default:
 		}
 	}

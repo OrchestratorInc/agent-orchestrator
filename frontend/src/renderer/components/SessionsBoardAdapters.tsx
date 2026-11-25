@@ -18,7 +18,7 @@ import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
-import { renameCloudSession, renameSession } from "../lib/rename-session";
+import { commitSessionRename } from "../lib/commit-session-rename";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
@@ -478,17 +478,12 @@ function SessionRenameDialog({
 	const queryClient = useQueryClient();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [draft, setDraft] = useState(session.title);
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
 	// Start each opening from the current title, but keep what is typed if the
 	// title changes while the dialog is open.
 	const [wasOpen, setWasOpen] = useState(open);
 	if (open !== wasOpen) {
 		setWasOpen(open);
-		if (open) {
-			setDraft(session.title);
-			setError(null);
-		}
+		if (open) setDraft(session.title);
 	}
 	useEffect(() => {
 		if (!open) return;
@@ -497,34 +492,18 @@ function SessionRenameDialog({
 		return () => cancelAnimationFrame(frame);
 	}, [open]);
 	const name = draft.trim();
-	const save = async () => {
-		if (name === session.title) {
-			onOpenChange(false);
-			return;
-		}
-		setBusy(true);
-		try {
-			if (session.cloud) {
-				await renameCloudSession(queryClient, { id: session.id, cloud: session.cloud }, name);
-			} else {
-				await renameSession(session.id, name, session.hostId);
-				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
-			}
-			onOpenChange(false);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(false);
-		}
+	// The card shows the new title as the dialog closes; a failure rolls it back
+	// and says so in a toast.
+	const save = () => {
+		onOpenChange(false);
+		void commitSessionRename(queryClient, session, name);
 	};
 	return (
 		<ConfirmDialog
-			busy={busy}
 			confirmDisabled={!name}
 			confirmLabel={t("shell.rename")}
 			description={null}
-			error={error}
-			onConfirm={() => void save()}
+			onConfirm={save}
 			onOpenChange={onOpenChange}
 			open={open}
 			title={t("shell.renameSession", { title: session.title })}
@@ -534,9 +513,9 @@ function SessionRenameDialog({
 				maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
-					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name || busy) return;
+					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name) return;
 					event.preventDefault();
-					void save();
+					save();
 				}}
 				ref={inputRef}
 				value={draft}
