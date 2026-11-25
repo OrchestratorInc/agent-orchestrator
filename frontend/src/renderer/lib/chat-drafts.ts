@@ -179,8 +179,7 @@ export type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 export type DraftWriteResult = { ok: true; draft: ChatSessionDraft } | { ok: false; draft: ChatSessionDraft };
 
 export type DraftClearResult =
-	// delivered: the attachments the accepted delivery took, when it recorded them.
-	| { ok: true; cleared: boolean; draft: ChatSessionDraft; delivered?: readonly string[] }
+	| { ok: true; cleared: boolean; draft: ChatSessionDraft }
 	| { ok: false; cleared: false; draft: ChatSessionDraft };
 
 export type DraftDeliveryResult<Mutation> =
@@ -1671,13 +1670,11 @@ export function clearAcceptedChatComposer(
 			},
 		};
 		const result = persistDraftProven(next, storage);
-		const delivered = current.composer.delivery.draft?.attachments.map((attachment) => attachment.id);
 		return result.ok
 			? {
 				ok: true,
 				cleared: Boolean(current.composer.delivery.draft) && next.composer.text === "" && next.composer.attachments.length === 0,
 				draft: result.draft,
-				...(delivered ? { delivered } : {}),
 			}
 			: { ok: false, cleared: false, draft: current };
 	}

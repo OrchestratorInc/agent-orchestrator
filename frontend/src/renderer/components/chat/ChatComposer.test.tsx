@@ -2638,19 +2638,6 @@ describe("attachments", () => {
 		expect(onSend.mock.calls[1]?.[1]).toEqual([{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" }]);
 	});
 
-	it("drops a held file once a new chat's launch takes it, so it cannot go with the next one", async () => {
-		const onSend = vi.fn().mockResolvedValue(undefined);
-		const { field } = renderComposer({ draftSessionId: "composer-held-accepted", holdAttachments: true, parkUnsentSends: false, onSend });
-		await typeInComposer(field, "read this file");
-		fireEvent.paste(field, { clipboardData: clipboardData([textFile()]) });
-		await screen.findByLabelText("Remove notes.txt");
-		await userEvent.click(field);
-		await userEvent.keyboard("{Enter}");
-		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
-		expect(onSend.mock.calls[0]?.[1]).toEqual([{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" }]);
-		await waitFor(() => expect(screen.queryByLabelText("Remove notes.txt")).not.toBeInTheDocument());
-	});
-
 	it("keeps held file bytes available after a definitive send rejection", async () => {
 		const onSend = vi.fn()
 			.mockRejectedValueOnce(Object.assign(new Error("Agent not installed"), { code: "TASK_CREATE_FAILED" }))

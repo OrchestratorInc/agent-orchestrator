@@ -105,42 +105,29 @@ describe("optimistic message delivery", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("keeps an image pasted while the previous message is still being sent, for the next message", async () => {
-		const sessionId = "optimistic-paste-during-send";
+	it("takes no files during a send, and takes them again once it is answered", async () => {
 		const pending = pendingSend();
-		renderComposer(sessionId, pending.onSend, true);
-		const field = await startSend(pending.onSend, "first message");
-		// Picking files follows the same rule as pasting them.
-		expect(screen.getByRole("button", { name: "Attach a file" })).toBeEnabled();
-		fireEvent.paste(field, {
-			clipboardData: { files: [new File([new Uint8Array([137, 80, 78, 71])], "next.png", { type: "image/png" })], items: [], getData: () => "", setData: () => undefined },
-		});
-		await waitFor(() => expect(readChatSessionDraft(sessionId).composer.attachments).toEqual([expect.objectContaining({ name: "next.png" })]));
-
-		await act(async () => pending.resolve());
-
-		expect(await screen.findByRole("button", { name: "Remove next.png" })).toBeInTheDocument();
-		expect(readChatSessionDraft(sessionId).composer.attachments).toEqual([expect.objectContaining({ name: "next.png" })]);
-		// The message already on its way went without it.
-		expect(pending.onSend.mock.calls[0][1]).toBeUndefined();
-	});
-
-	it("keeps attaching closed during a send another flow owns, which hands on only the text", async () => {
-		const sessionId = "optimistic-handoff-no-attach";
-		const pending = pendingSend();
-		const stage = vi.fn().mockResolvedValue([".ao/attachments/original.png"]);
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/after.png"]);
 		render(
 			<TooltipProvider>
-				<ChatComposer draftSessionId={sessionId} onSend={pending.onSend} onStageAttachments={stage} parkUnsentSends={false} />
+				<ChatComposer draftSessionId="optimistic-attach-during-send" onSend={pending.onSend} onStageAttachments={stage} />
 			</TooltipProvider>,
 		);
 		const field = await startSend(pending.onSend, "first message");
-		expect(screen.getByRole("button", { name: "Attach a file" })).toBeDisabled();
-		fireEvent.paste(field, {
-			clipboardData: { files: [new File([new Uint8Array([137, 80, 78, 71])], "next.png", { type: "image/png" })], items: [], getData: () => "", setData: () => undefined },
+		const paste = (name: string) => fireEvent.paste(field, {
+			clipboardData: { files: [new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" })], items: [], getData: () => "", setData: () => undefined },
 		});
-		expect(stage).not.toHaveBeenCalled();
+		expect(screen.getByRole("button", { name: "Attach a file" })).toBeDisabled();
+		paste("during.png");
+		// A file that was taken shows its tile at once, so it is never picked up and then lost.
+		expect(screen.queryByLabelText("Attaching during.png")).not.toBeInTheDocument();
+
 		await act(async () => pending.resolve());
+
+		await waitFor(() => expect(screen.getByRole("button", { name: "Attach a file" })).toBeEnabled());
+		paste("after.png");
+		expect(screen.getByLabelText("Attaching after.png")).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Remove after.png" })).toBeInTheDocument();
 	});
 
 	it("sends nothing extra when Enter is pressed again on the cleared box during a send", async () => {

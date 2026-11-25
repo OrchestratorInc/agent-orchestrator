@@ -1255,20 +1255,18 @@ export const ChatComposer = memo(function ChatComposer({
 			} else if (!unsavedText.current && editor.current?.getSnapshot().text !== "") {
 				clearEditorView();
 			}
-			// Only the files that went drop. A file pasted while the send was on its way
-			// belongs to the next message, even if it landed after this result was saved;
-			// clearing would also cancel one still uploading. Where attaching stays closed
-			// during a send (a new chat's launch), every file here went with it, held
-			// files too, which the delivery does not record.
-			for (const attachment of fileAttachments.getAttachments()) {
-				const went = result.delivered && parkUnsentSends
-					? result.delivered.includes(attachment.id)
-					: !result.draft.composer.attachments.some((kept) => kept.id === attachment.id);
-				if (went) fileAttachments.remove(attachment.id);
+			if (result.draft.composer.attachments.length === 0) {
+				fileAttachments.clear();
+			} else {
+				for (const attachment of fileAttachments.getAttachments()) {
+					if (!result.draft.composer.attachments.some((kept) => kept.id === attachment.id)) {
+						fileAttachments.remove(attachment.id);
+					}
+				}
 			}
 			return result.cleared && !unsavedText.current;
 		},
-		[clearEditorView, fileAttachments, parkUnsentSends],
+		[clearEditorView, fileAttachments],
 	);
 
 	const clearAcceptedDraft = useCallback(
@@ -2520,17 +2518,9 @@ export const ChatComposer = memo(function ChatComposer({
 		});
 	}
 
-	/**
-	 * Attaching waits only while a send is still gathering its files, which a new
-	 * one would join. Another file still uploading does not stop it (batches are
-	 * added one after another), and neither does a send already on its way: it
-	 * keeps the files it took, and a new one belongs to the next message. Where
-	 * another flow owns the send (a new chat's launch), only the typed text is
-	 * handed on afterwards, so files wait for the send to finish there.
-	 */
+	/** A file still uploading does not stop another one (batches are added one after another); a send does. */
 	function attachBlocked() {
-		return !canAttach || fileAttachments.hasForeignPendingWork() ||
-			((draftMutationPending || submitInFlight.current !== null) && (!optimisticSend || !parkUnsentSends));
+		return !canAttach || fileAttachments.hasForeignPendingWork() || draftMutationPending || submitInFlight.current !== null;
 	}
 
 	function onPaste(event: ClipboardEvent<HTMLDivElement>) {
@@ -2906,7 +2896,7 @@ export const ChatComposer = memo(function ChatComposer({
 									type="file"
 									multiple
 									hidden
-									disabled={Boolean(disabled) || attachBlocked()}
+									disabled={controlsDisabled}
 									onChange={(event) => {
 										if (!disabled && !attachBlocked()) {
 											attachFiles(Array.from(event.target.files ?? []));
@@ -2949,7 +2939,7 @@ export const ChatComposer = memo(function ChatComposer({
 												icon={Paperclip}
 												title="Files"
 												description="Attach files to this message"
-												disabled={queuedEditRecovery || attachBlocked()}
+												disabled={queuedEditRecovery || draftMutationPending || fileAttachments.hasForeignPendingWork()}
 												onSelect={() => filePicker.current?.click()}
 											/>
 											{addMenuItems}
@@ -2962,7 +2952,7 @@ export const ChatComposer = memo(function ChatComposer({
 										variant="quiet"
 										size="icon-sm"
 										shape="pill"
-										disabled={Boolean(disabled) || queuedEditRecovery || attachBlocked()}
+										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.hasForeignPendingWork()}
 										onClick={() => filePicker.current?.click()}
 										aria-label="Attach a file"
 										className="shrink-0"

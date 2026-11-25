@@ -472,6 +472,8 @@ describe("QueuedMessageDock attachments", () => {
 		// The local daemon cannot serve a Cloud reference: no broken picture, just "Image 2".
 		expect(images).toHaveLength(1);
 		expect(images[0]).toHaveAttribute("src", expect.stringContaining("/preview/files/.ao/attachments/attachment-1367e3e6.png"));
+		// A remote host's loopback proxy refuses a picture requested without its origin.
+		expect(images[0]).toHaveAttribute("crossorigin", "anonymous");
 		expect(screen.getByTestId("queued-message-queued-1")).toHaveTextContent("Image 2");
 	});
 

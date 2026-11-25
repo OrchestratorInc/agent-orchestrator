@@ -128,9 +128,8 @@ describe("optimistic composer drafts", () => {
 		const retry = prepareChatComposerDelivery("optimistic", { ...input, clientMessageId: "ignored" }, storage);
 		expect(retry).toMatchObject({ ok: true, recovered: true, mutation: prepared.mutation });
 		markChatComposerDeliveryAccepted("optimistic", input.clientMessageId, prepared.mutation.revision, storage);
-		// It names exactly what the delivery took, so a file attached since stays.
 		expect(clearAcceptedChatComposer("optimistic", prepared.mutation.revision, storage, [sent.id, next.id]))
-			.toMatchObject({ ok: true, cleared: false, delivered: [sent.id] });
+			.toMatchObject({ ok: true, cleared: false });
 		expect(readChatSessionDraft("optimistic", storage).composer).toMatchObject({ text: input.composerText, attachments: [next] });
 		expect(readChatSessionDraft("optimistic", storage).composer.delivery).toBeUndefined();
 	});
