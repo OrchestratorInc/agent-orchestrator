@@ -6234,6 +6234,30 @@ describe("SessionInspector Cloud reviews", () => {
     ).not.toBeInTheDocument();
     expect(onOpenReviewerTerminal).not.toHaveBeenCalled();
   });
+  it("shows the worker's own cloud reviewer as ready when no credentials are listed", async () => {
+    cloudCpMock.listSessionPullRequests.mockResolvedValue({
+      sessionId: "sess-1",
+      pullRequests: [{ url: "https://github.com/acme/repo/pull/7", number: 7, state: "open", updatedAt: "2026-06-15T00:00:00Z" }],
+    });
+    cloudCpMock.getSessionReviewState.mockResolvedValue({
+      sessionId: "sess-1",
+      reviewerHarness: "claude-code",
+      availableReviewerHarnesses: [],
+      reviews: [],
+      runs: [],
+    });
+
+    renderWithQuery(<SessionInspector session={session([], { cloud: { orgId: "org-1" } })} />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+    // The picker agrees with the review gate: the worker's agent runs, so it needs no setup.
+    const picker = await screen.findByRole("button", { name: /Select reviewer agent/ });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review now" })).toBeEnabled());
+    expect(picker).not.toHaveTextContent("Needs setup");
+    await userEvent.click(picker);
+    expect(await screen.findByRole("menuitemradio", { name: /^Claude Code/ })).not.toHaveTextContent("Needs setup");
+    expect(screen.getByRole("menuitemradio", { name: /^Codex/ })).toHaveTextContent("Needs setup");
+  });
   it("installs a missing cloud reviewer harness before selecting it", async () => {
     cloudCpMock.listSessionPullRequests.mockResolvedValue({
       sessionId: "sess-1",

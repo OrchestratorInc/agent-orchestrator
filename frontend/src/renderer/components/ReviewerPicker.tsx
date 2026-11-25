@@ -291,6 +291,7 @@ const CLOUD_REVIEWER_HARNESSES = ["claude-code", "codex", "cursor"];
 export function CloudReviewerPicker({
 	value,
 	credentialHarnesses,
+	workerHarness = "",
 	harnessStatuses,
 	disabled = false,
 	ariaLabel,
@@ -299,6 +300,11 @@ export function CloudReviewerPicker({
 	value: string;
 	/** Agents with a credential connected for the session owner. */
 	credentialHarnesses: string[];
+	/**
+	 * The worker's own agent. With no credentials listed the review gate still
+	 * runs it, so it does not show as needing setup either.
+	 */
+	workerHarness?: string;
 	/** The session runtime's report of each agent binary; empty until it answers. */
 	harnessStatuses: Array<{ harness: string; status: string }>;
 	disabled?: boolean;
@@ -311,7 +317,9 @@ export function CloudReviewerPicker({
 		if (disabled) setOpen(false);
 	}, [disabled]);
 	const statusFor = (harness: string) => {
-		if (!credentialHarnesses.includes(harness)) return t("agentSelector.needsSetup");
+		const credentialed = credentialHarnesses.includes(harness) ||
+			(credentialHarnesses.length === 0 && harness === workerHarness);
+		if (!credentialed) return t("agentSelector.needsSetup");
 		const installed = harnessStatuses.find((entry) => entry.harness === harness);
 		return installed && installed.status !== "ready" ? t("agentSwitch.notInstalled") : "";
 	};
