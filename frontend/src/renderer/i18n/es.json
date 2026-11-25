@@ -5611,6 +5611,7 @@
 	"move.sessionMoving": "Esta sesión se está moviendo a otro ordenador, así que no acepta mensajes y su agente sigue detenido. Reinicia su agente para mantenerla en Orchestrator Cloud.",
 	"move.workerTooOld": "El worker de Orchestrator Cloud de esta sesión es demasiado antiguo para moverla. Reinicia la sesión para actualizarlo y luego muévela.",
 	"move.agentStillRunning": "Orchestrator Cloud no pudo confirmar que el agente se detuvo: algunos de sus procesos seguían en ejecución, así que no se confirmó ni se envió nada. Vuelve a intentarlo.",
+	"move.turnsQueued": "Todavía hay mensajes en cola para esta sesión en Orchestrator Cloud. Deja que se ejecuten o elimínalos y luego muévela.",
 	"moveHere.menuItem": "Mover a este ordenador…",
 	"moveHere.title": "Mover {{title}} a este ordenador",
 	"moveHere.project": "Proyecto",

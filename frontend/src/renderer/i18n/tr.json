@@ -5463,6 +5463,7 @@
 	"move.sessionMoving": "Bu oturum başka bir bilgisayara taşınıyor, bu yüzden mesaj almıyor ve ajanı durdurulmuş kalıyor. Orchestrator Cloud'da tutmak için ajanını yeniden başlatın.",
 	"move.workerTooOld": "Bu oturumun Orchestrator Cloud worker'ı onu taşımak için çok eski. Güncellemek için oturumu yeniden başlatın, sonra taşıyın.",
 	"move.agentStillRunning": "Orchestrator Cloud ajanın durduğunu doğrulayamadı: bazı işlemleri hâlâ çalışıyordu, bu yüzden hiçbir şey commit edilmedi veya gönderilmedi. Yeniden deneyin.",
+	"move.turnsQueued": "Bu oturum için Orchestrator Cloud'da hâlâ sırada bekleyen mesajlar var. Çalışmalarını bekleyin veya onları kaldırın, sonra oturumu taşıyın.",
 	"moveHere.menuItem": "Bu bilgisayara taşı…",
 	"moveHere.title": "{{title}} oturumunu bu bilgisayara taşı",
 	"moveHere.project": "Proje",

@@ -5443,6 +5443,7 @@
 	"move.sessionMoving": "このセッションは別のコンピューターに移動中のため、メッセージを受け付けず、エージェントは停止したままです。Orchestrator Cloud に残すには、エージェントを再起動してください。",
 	"move.workerTooOld": "このセッションの Orchestrator Cloud ワーカーは古すぎるため移動できません。セッションを再起動して更新してから移動してください。",
 	"move.agentStillRunning": "Orchestrator Cloud はエージェントの停止を確認できませんでした。一部のプロセスがまだ実行中だったため、何もコミットもプッシュもされていません。再試行してください。",
+	"move.turnsQueued": "このセッションには Orchestrator Cloud で送信待ちのメッセージがまだあります。実行されるのを待つか削除してから移動してください。",
 	"moveHere.menuItem": "このコンピュータに移動…",
 	"moveHere.title": "{{title}} をこのコンピュータに移動",
 	"moveHere.project": "プロジェクト",

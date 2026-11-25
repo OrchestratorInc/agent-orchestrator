@@ -18,6 +18,11 @@ describe("withMoveStateText", () => {
 			code: "MOVE_AGENT_STILL_RUNNING",
 			message: "Orchestrator Cloud could not confirm the agent had stopped: some of its processes were still running, so nothing was committed or pushed. Try again.",
 		});
+		expect(withMoveStateText(new CloudCpError("turns queued (CP text)", { status: 409, code: "MOVE_TURNS_QUEUED" }))).toMatchObject({
+			status: 409,
+			code: "MOVE_TURNS_QUEUED",
+			message: "Messages are still queued for this session in Orchestrator Cloud. Let them run or remove them, then move it.",
+		});
 	});
 
 	it("leaves every other error as it is", () => {

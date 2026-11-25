@@ -5611,6 +5611,7 @@
 	"move.sessionMoving": "Cette session est en cours de déplacement vers un autre ordinateur : elle n'accepte aucun message et son agent reste arrêté. Redémarrez son agent pour la garder dans Orchestrator Cloud.",
 	"move.workerTooOld": "Le worker Orchestrator Cloud de cette session est trop ancien pour la déplacer. Redémarrez la session pour le mettre à jour, puis déplacez-la.",
 	"move.agentStillRunning": "Orchestrator Cloud n'a pas pu confirmer l'arrêt de l'agent : certains de ses processus tournaient encore, rien n'a donc été commité ni poussé. Réessayez.",
+	"move.turnsQueued": "Des messages sont encore en attente pour cette session dans Orchestrator Cloud. Laissez-les s'exécuter ou supprimez-les, puis déplacez-la.",
 	"moveHere.menuItem": "Déplacer vers cet ordinateur…",
 	"moveHere.title": "Déplacer {{title}} vers cet ordinateur",
 	"moveHere.project": "Projet",

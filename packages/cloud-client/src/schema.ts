@@ -2029,7 +2029,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description While a session's work is moving to another machine (after a move's export answered, until the session is deleted or agent/restart abandons the move), the ticket opens its terminal but its agent is not started again; a message is refused with 409 SESSION_MOVING. */
+        /** @description While a session's work is moving to another machine (while a move's export is in flight and after it answered, until the session is deleted or agent/restart abandons the move), the ticket opens its terminal but its agent is not started again; a message is refused with 409 SESSION_MOVING. */
         post: operations["createTerminalTicket"];
         delete?: never;
         options?: never;
@@ -8558,7 +8558,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description SESSION_MOVING: the session's work is moving to another machine. After a move's export answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
+            /** @description SESSION_MOVING: the session's work is moving to another machine. While a move's export is in flight, and after it answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8733,7 +8733,7 @@ export interface operations {
                     "application/json": components["schemas"]["SessionMoveExportRunning"];
                 };
             };
-            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). MOVE_TURNS_QUEUED: messages are still queued for the session in AO Cloud; let them run or remove them, then move. Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -8798,7 +8798,7 @@ export interface operations {
                     "application/json": components["schemas"]["SessionMoveExportRunning"];
                 };
             };
-            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
+            /** @description MOVE_WORKER_TOO_OLD: the session's worker is too old to move it; restarting the session updates it. Refused before the worker is asked, so nothing stopped, committed or pushed. MOVE_AGENT_STILL_RUNNING: some of the agent's processes could not be confirmed stopped, so nothing was committed or pushed; trying again is safe (it ends them first). MOVE_TURNS_QUEUED: messages are still queued for the session in AO Cloud; let them run or remove them, then move. Other refusals of the move (such as MOVE_WRONG_BRANCH or MOVE_DEFAULT_BRANCH) answer 409 too, with their code. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9524,7 +9524,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description SESSION_MOVING: the session's work is moving to another machine. After a move's export answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
+            /** @description SESSION_MOVING: the session's work is moving to another machine. While a move's export is in flight, and after it answered, AO Cloud refuses this until the move ends (the session deleted) or is abandoned (agent/restart): the session takes no messages, its worker claims no queued turn, its terminal agent is not started again and its interface does not switch. */
             409: {
                 headers: {
                     [name: string]: unknown;

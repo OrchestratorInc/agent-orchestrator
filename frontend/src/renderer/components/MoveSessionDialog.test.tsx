@@ -668,6 +668,22 @@ describe("moving a Cloud session to this computer", () => {
 		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
 	});
 
+	it("says messages are still queued on Cloud, with nothing moved, and offers Try again once they are handled", async () => {
+		cloud.exportSessionMove.mockRejectedValueOnce(new CloudCpError("turns queued (CP text)", { status: 409, code: "MOVE_TURNS_QUEUED" }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText(
+			"Messages are still queued for this session in Orchestrator Cloud. Let them run or remove them, then move it.",
+		)).toBeTruthy();
+		expect(screen.queryByText("turns queued (CP text)")).toBeNull();
+		expect(daemon.postCalls.filter((call) => call.path === "/api/v1/sessions/move/import")).toHaveLength(0);
+		expect(cloud.deleteSession).not.toHaveBeenCalled();
+		// Once the queued messages ran or were removed, trying again moves it.
+		await user.click(screen.getByRole("button", { name: "Try again" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+	});
+
 	it("keeps the Cloud session when it was used again after the move, and says so", async () => {
 		useUnfinishedMoveStore.setState({ moves: [] });
 		cloud.exportSessionMove.mockResolvedValue({ ...(await cloud.exportSessionMove.getMockImplementation()?.()), moveId: "exp-1" });
