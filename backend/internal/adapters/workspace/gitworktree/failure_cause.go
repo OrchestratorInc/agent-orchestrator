@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os/exec"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // FailureCause classifies a failed git command into the fixed vocabulary spawn
@@ -12,6 +14,19 @@ import (
 // exit state; nothing from the output leaves the daemon.
 func (e commandError) FailureCause() string {
 	return classifyGitFailure(e.output, e.err)
+}
+
+// notARepoAt reports err as a *ports.WorkspaceNotARepoError naming repo when
+// git refused to run in repo because it is not a Git repository. Callers pass
+// only a registered project repository folder (never a session worktree), so
+// the service layer can return project-level recovery guidance instead of
+// git's raw exit 128. Any other failure is returned unchanged.
+func notARepoAt(repo string, err error) error {
+	var cmd commandError
+	if errors.As(err, &cmd) && cmd.FailureCause() == "not_a_repo" {
+		return &ports.WorkspaceNotARepoError{Path: repo, Err: err}
+	}
+	return err
 }
 
 func classifyGitFailure(output string, err error) string {
