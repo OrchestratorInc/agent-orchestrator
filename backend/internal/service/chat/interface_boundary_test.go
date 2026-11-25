@@ -3,8 +3,10 @@ package chat_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
@@ -51,5 +53,23 @@ func TestRecordInterfaceTransitionBoundaryAddsOneTimelineRowAndNoPrompt(t *testi
 	h.conv.mu.Unlock()
 	if sent != 0 {
 		t.Fatalf("boundary notice reached the agent %d times, want 0", sent)
+	}
+}
+
+// A session with no Chat conversation has no timeline to mark: that is no
+// error, so the outbox acknowledges the notice, and nothing is created for it.
+func TestRecordInterfaceTransitionBoundaryWithoutAConversationIsANoOp(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	const other = domain.SessionID("session-without-chat")
+	if err := h.svc.RecordInterfaceTransitionBoundary(ctx, other, "transition-1", "notice"); err != nil {
+		t.Fatalf("RecordInterfaceTransitionBoundary = %v, want nil", err)
+	}
+	if _, err := h.st.ConversationForSession(ctx, other); !errors.Is(err, domain.ErrNoConversation) {
+		t.Fatalf("ConversationForSession = %v, want no conversation created", err)
+	}
+	snapshot := h.awaitSnapshot(t, func(store.ConversationSnapshot) bool { return true })
+	if len(snapshot.Activities) != 0 {
+		t.Fatalf("activities = %+v, want none", snapshot.Activities)
 	}
 }

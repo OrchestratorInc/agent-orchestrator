@@ -1696,7 +1696,7 @@ func (m *Manager) finishInterfaceTransition(
 func (m *Manager) deliverTransitionMessages(
 	ctx context.Context,
 	transition domain.SessionInterfaceTransition,
-) error {
+) (err error) {
 	m.transitionDeliveryAttemptMu.Lock()
 	defer m.transitionDeliveryAttemptMu.Unlock()
 	store, ok := m.store.(interfaceTransitionStore)
@@ -1713,19 +1713,23 @@ func (m *Manager) deliverTransitionMessages(
 	// agent: sending it would spend a model turn on AO's bookkeeping (and type it
 	// into a terminal target). Record it and acknowledge it here; every other
 	// message is input the user queued and is delivered below.
+	//
+	// The notice never holds up that input: a failure leaves it pending for the
+	// next attempt, and is reported once the input has had its turn.
 	boundaryID := domain.SessionInterfaceTransitionBoundaryMessageID(transition.ID)
+	var boundaryErr error
+	defer func() {
+		if boundaryErr != nil {
+			err = errors.Join(err, boundaryErr)
+		}
+	}()
 	var messages []domain.SessionInterfaceTransitionMessage
 	for _, message := range pending {
 		if message.ClientMessageID != boundaryID {
 			messages = append(messages, message)
 			continue
 		}
-		if err := m.recordTransitionBoundary(ctx, transition, message.Message); err != nil {
-			return fmt.Errorf("record transition %s boundary: %w", transition.ID, err)
-		}
-		if err := store.MarkSessionInterfaceTransitionMessageDelivered(ctx, message.ID, m.clock()); err != nil {
-			return fmt.Errorf("acknowledge transition %s message %d: %w", transition.ID, message.ID, err)
-		}
+		boundaryErr = m.deliverTransitionBoundary(ctx, store, transition, message)
 	}
 	if len(messages) == 0 {
 		return nil
@@ -1754,6 +1758,29 @@ func (m *Manager) deliverTransitionMessages(
 		if err := store.MarkSessionInterfaceTransitionMessageDelivered(ctx, message.ID, m.clock()); err != nil {
 			return fmt.Errorf("acknowledge transition %s message %d: %w", transition.ID, message.ID, err)
 		}
+	}
+	return nil
+}
+
+// transitionBoundaryLimit bounds recording a boundary notice, so one that hangs
+// can't use up the time the user's queued input has.
+const transitionBoundaryLimit = 5 * time.Second
+
+// deliverTransitionBoundary records a degraded handoff's boundary notice and
+// acknowledges it in the outbox.
+func (m *Manager) deliverTransitionBoundary(
+	ctx context.Context,
+	store interfaceTransitionStore,
+	transition domain.SessionInterfaceTransition,
+	message domain.SessionInterfaceTransitionMessage,
+) error {
+	ctx, cancel := context.WithTimeout(ctx, transitionBoundaryLimit)
+	defer cancel()
+	if err := m.recordTransitionBoundary(ctx, transition, message.Message); err != nil {
+		return fmt.Errorf("record transition %s boundary: %w", transition.ID, err)
+	}
+	if err := store.MarkSessionInterfaceTransitionMessageDelivered(ctx, message.ID, m.clock()); err != nil {
+		return fmt.Errorf("acknowledge transition %s message %d: %w", transition.ID, message.ID, err)
 	}
 	return nil
 }
