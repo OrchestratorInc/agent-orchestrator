@@ -3357,6 +3357,19 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 		detail?.rationale || detail?.command || detail?.cwd || detail?.host || paths.length,
 	);
 
+	// What was approved, one ruled row each.
+	const facts: { term: string; value: ReactNode; strong?: boolean }[] = [];
+	if (detail?.command) facts.push({ term: "command", value: detail.command, strong: true });
+	if (detail?.cwd) facts.push({ term: "cwd", value: shortenPaths(detail.cwd) });
+	if (detail?.host) facts.push({ term: "host", value: detail.host });
+	if (paths.length) facts.push({ term: "files", value: paths.map((path) => shortenPaths(path)).join(", ") });
+	if (detail?.decisionSource) {
+		// A model making the call is a materially different thing to be told than a
+		// policy rule matching, so the provider's own word for it is carried rather
+		// than flattened to "automatically".
+		const took = detail.durationMs !== undefined && detail.durationMs > 0 ? ` · ${formatDecisionDuration(detail.durationMs)}` : "";
+		facts.push({ term: "decided by", value: `${detail.decisionSource}${took}` });
+	}
 	const toggle = () => setOpen((prev) => !prev);
 	// Copy sits where the summary ends, as on a command row: a button cannot hold
 	// another, so the row is its button, then copy, then the rest of the line.
@@ -3428,63 +3441,28 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 			</div>
 
 			{open && hasBody ? (
-				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
-					{/* Said in full rather than implied by the label: "auto-approved" alone
-					    leaves it ambiguous whether the user set something up that did this. */}
-					<p className="text-xs leading-relaxed text-muted-foreground">
-						{denied
-							? "The agent asked to do this and the provider declined on your behalf. You were not asked."
-							: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
-					</p>
-					{detail?.rationale ? (
-						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
-							{detail.rationale}
+				// Lined up with the label, past the icon (11px inset, 15px icon, 9px gap).
+				<div className="flex flex-col gap-2 pr-[11px] pb-2.5 pl-[35px]">
+					<div className="flex flex-col gap-1.5 rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 text-xs leading-relaxed">
+						{/* Said in full rather than implied by the label: "auto-approved" alone
+						    leaves it ambiguous whether the user set something up that did this. */}
+						<p className="m-0 text-muted-foreground">
+							{denied
+								? "The agent asked to do this and the provider declined on your behalf. You were not asked."
+								: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
 						</p>
+						{detail?.rationale ? <p className="m-0 text-foreground">{detail.rationale}</p> : null}
+					</div>
+					{facts.length ? (
+						<dl className="m-0 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-background font-mono text-caption leading-relaxed">
+							{facts.map((fact) => (
+								<div key={fact.term} className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-baseline gap-x-3 border-t border-border px-3 py-2 first:border-t-0">
+									<dt className="text-muted-foreground/70">{fact.term}</dt>
+									<dd className={cn("m-0 min-w-0 break-all", fact.strong ? "text-foreground" : "text-muted-foreground")}>{fact.value}</dd>
+								</div>
+							))}
+						</dl>
 					) : null}
-					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-caption leading-relaxed">
-						{detail?.command ? (
-							<>
-								<dt className="text-muted-foreground/70">command</dt>
-								<dd className="min-w-0 break-all text-foreground">{detail.command}</dd>
-							</>
-						) : null}
-						{detail?.cwd ? (
-							<>
-								<dt className="text-muted-foreground/70">cwd</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{shortenPaths(detail.cwd)}
-								</dd>
-							</>
-						) : null}
-						{detail?.host ? (
-							<>
-								<dt className="text-muted-foreground/70">host</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">{detail.host}</dd>
-							</>
-						) : null}
-						{paths.length ? (
-							<>
-								<dt className="text-muted-foreground/70">files</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{paths.map((path) => shortenPaths(path)).join(", ")}
-								</dd>
-							</>
-						) : null}
-						{detail?.decisionSource ? (
-							<>
-								<dt className="text-muted-foreground/70">decided by</dt>
-								<dd className="text-muted-foreground">
-									{/* A model making the call is a materially different thing to be
-									    told than a policy rule matching, so the provider's own word
-									    for it is carried rather than flattened to "automatically". */}
-									{detail.decisionSource}
-									{detail.durationMs !== undefined && detail.durationMs > 0
-										? ` · ${formatDecisionDuration(detail.durationMs)}`
-										: ""}
-								</dd>
-							</>
-						) : null}
-					</dl>
 				</div>
 			) : null}
 		</div>
