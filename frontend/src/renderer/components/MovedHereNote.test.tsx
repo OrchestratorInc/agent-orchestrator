@@ -19,10 +19,13 @@ beforeEach(() => {
 it("says a Cloud session moved to this computer and opens it here", async () => {
 	useMovedHereStore.getState().record("org-1", "cloud-1", { projectId: "app", sessionId: "app-9" });
 	localWorkspaces.current = [{ id: "app", sessions: [{ id: "app-9" }] }];
-	render(<MovedHereNote session={movedAway} />);
+	// Inside an archived card, whose own click opens the Cloud copy.
+	const openCard = vi.fn();
+	render(<div onClick={openCard}><MovedHereNote session={movedAway} /></div>);
 	expect(screen.getByText("Moved to this computer")).toBeTruthy();
 	await userEvent.setup().click(screen.getByRole("button", { name: "Open session" }));
 	expect(navigate).toHaveBeenCalledWith("app", "app-9");
+	expect(openCard).not.toHaveBeenCalled();
 });
 
 it("says it continues on another computer when this one has no session of it", () => {

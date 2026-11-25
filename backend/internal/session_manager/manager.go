@@ -1853,6 +1853,14 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	}
 	if transferNativeID != "" {
 		metadata.AgentSessionID = transferNativeID
+		// The launch resumes that exact conversation (its restore command names
+		// it), as a native restore does, so the id is bound to this launch at
+		// once, under the same harnesses: a moved session can switch to Chat
+		// without waiting for the agent's SessionStart hook.
+		if cfg.Harness == domain.HarnessCodex || cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessAgy ||
+			m.terminalVersionRefreshSupported(cfg.Harness) {
+			metadata.AgentSessionIDLaunchID = launchID
+		}
 	}
 	if prompt != "" {
 		metadata.LatestUserPromptAt = m.clock()

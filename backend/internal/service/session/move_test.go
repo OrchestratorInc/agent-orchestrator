@@ -985,6 +985,8 @@ type chatMoveCommander struct {
 	switchPolicy  domain.SessionInterfaceTransitionPolicy
 	switchHistory domain.SessionInterfaceTransitionHistoryPolicy
 	switchErr     error
+	// switchErrs answer the first switches, before switchErr.
+	switchErrs []error
 }
 
 func (c *chatMoveCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
@@ -1008,6 +1010,11 @@ func (c *chatMoveCommander) StartInterfaceTransition(_ context.Context, id domai
 ) (domain.SessionInterfaceTransition, error) {
 	c.switches = append(c.switches, target)
 	c.switchedID, c.switchPolicy, c.switchHistory = id, policy, history
+	if len(c.switchErrs) > 0 {
+		err := c.switchErrs[0]
+		c.switchErrs = c.switchErrs[1:]
+		return domain.SessionInterfaceTransition{}, err
+	}
 	return domain.SessionInterfaceTransition{}, c.switchErr
 }
 
@@ -1031,11 +1038,16 @@ func TestImportMoveKeepsChat(t *testing.T) {
 	_ = zw.Close()
 	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f61"
 	refused := apierr.Conflict("SESSION_MODE_UNSUPPORTED", "claude-code does not support Chat UI", nil)
+	unconfirmed := fmt.Errorf("%w for claude-code", sessionmanager.ErrNativeConversationUnverified)
+	attempts, wait := moveChatSwitchAttempts, moveChatSwitchWait
+	moveChatSwitchAttempts, moveChatSwitchWait = 3, time.Millisecond
+	t.Cleanup(func() { moveChatSwitchAttempts, moveChatSwitchWait = attempts, wait })
 	for _, tc := range []struct {
 		name         string
 		mode         domain.SessionMode
 		conversation bool
 		spawnErrs    []error
+		switchErrs   []error
 		switchErr    error
 		wantModes    []domain.SessionMode
 		wantSwitches []domain.SessionMode
@@ -1048,13 +1060,17 @@ func TestImportMoveKeepsChat(t *testing.T) {
 			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat}},
 		{name: "chat with a conversation that cannot switch", mode: domain.SessionModeChat, conversation: true, switchErr: errors.New("chat unsupported"),
 			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat}, wantWarning: true},
+		{name: "chat with a conversation its launch confirms a moment later", mode: domain.SessionModeChat, conversation: true, switchErrs: []error{unconfirmed},
+			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat, domain.SessionModeChat}},
+		{name: "chat with a conversation its launch never confirms", mode: domain.SessionModeChat, conversation: true, switchErr: unconfirmed,
+			wantModes: []domain.SessionMode{domain.SessionModeTUI}, wantSwitches: []domain.SessionMode{domain.SessionModeChat, domain.SessionModeChat, domain.SessionModeChat}, wantWarning: true},
 		{name: "terminal", mode: domain.SessionModeTUI, conversation: true, wantModes: []domain.SessionMode{domain.SessionModeTUI}},
 		{name: "an unknown interface", mode: "terminal", wantModes: []domain.SessionMode{""}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newFakeStore()
 			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
-			fc := &chatMoveCommander{spawnErrs: tc.spawnErrs, switchErr: tc.switchErr, fakeCommander: &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+			fc := &chatMoveCommander{spawnErrs: tc.spawnErrs, switchErrs: tc.switchErrs, switchErr: tc.switchErr, fakeCommander: &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
 				rec := domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness, Mode: cfg.RequestedMode}
 				if cfg.Transfer != nil {
 					rec.Metadata.AgentSessionID = id

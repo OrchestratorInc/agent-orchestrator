@@ -131,6 +131,11 @@ func TestSpawnTransferResumesOrFallsBackToTheNote(t *testing.T) {
 				if rec.Metadata.AgentSessionID != want {
 					t.Fatalf("recorded conversation = %q, want %s", rec.Metadata.AgentSessionID, want)
 				}
+				// The launch names that conversation, so it is bound to the launch at
+				// once and Switch to Chat need not wait for the agent's hook.
+				if rec.Metadata.RuntimeLaunchID == "" || rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID {
+					t.Fatalf("conversation bound to launch %q, launch is %q; want the same", rec.Metadata.AgentSessionIDLaunchID, rec.Metadata.RuntimeLaunchID)
+				}
 				// The move's note reaches the resumed launch's system prompt, not a turn.
 				system := agent.lastRestore.SystemPrompt
 				if file := agent.lastRestore.SystemPromptFile; file != "" {

@@ -23,7 +23,16 @@ export function MovedHereNote({ session, className }: { session: Pick<WorkspaceS
 		<div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1", className)} data-testid="moved-away">
 			<span className="text-xs text-muted-foreground">{continuation ? t("moveHere.done") : t("restoreUnavailable.movedAway")}</span>
 			{continuation && here ? (
-				<Button type="button" variant="secondary" size="sm" onClick={() => navigateToSession(here.projectId, here.sessionId)}>
+				<Button
+					type="button"
+					variant="secondary"
+					size="sm"
+					onClick={(event) => {
+						// Inside an archived card, whose own click opens the Cloud copy.
+						event.stopPropagation();
+						navigateToSession(here.projectId, here.sessionId);
+					}}
+				>
 					{t("move.open")}
 				</Button>
 			) : null}

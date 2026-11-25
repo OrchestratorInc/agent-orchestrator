@@ -952,10 +952,28 @@ func (s *Service) switchMovedSessionToChat(ctx context.Context, id domain.Sessio
 	if !ok {
 		return errors.New("this build cannot switch session interfaces")
 	}
-	_, err := manager.StartInterfaceTransition(ctx, id, domain.SessionModeChat,
-		domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
-	return err
+	for attempt := 1; ; attempt++ {
+		_, err := manager.StartInterfaceTransition(ctx, id, domain.SessionModeChat,
+			domain.SessionInterfaceTransitionDrain, domain.SessionInterfaceTransitionHistoryStrict)
+		// An agent whose resume does not name its conversation confirms it from
+		// its own hook shortly after it starts: wait for that, a little while.
+		if err == nil || !errors.Is(err, sessionmanager.ErrNativeConversationUnverified) || attempt >= moveChatSwitchAttempts {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(moveChatSwitchWait):
+		}
+	}
 }
+
+// How long a moved session's switch to Chat waits for its terminal launch to
+// confirm the conversation it resumed. Tests shorten the wait.
+var (
+	moveChatSwitchAttempts = 15
+	moveChatSwitchWait     = time.Second
+)
 
 // chatUnavailable reports a spawn refused because Chat cannot run here: the
 // agent has no Chat on this computer, its driver is missing or incompatible,

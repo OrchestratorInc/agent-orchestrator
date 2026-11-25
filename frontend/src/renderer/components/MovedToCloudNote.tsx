@@ -20,7 +20,16 @@ export function MovedToCloudNote({ session, className }: { session: Pick<Workspa
 		<div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1", className)} data-testid="moved-to-cloud">
 			<span className="text-xs text-muted-foreground">{t("move.movedToCloudHelp")}</span>
 			{cloudSession ? (
-				<Button type="button" variant="secondary" size="sm" onClick={() => navigateToSession(cloudSession.projectId, cloudSession.id)}>
+				<Button
+					type="button"
+					variant="secondary"
+					size="sm"
+					onClick={(event) => {
+						// Inside an archived card, whose own click opens the session here.
+						event.stopPropagation();
+						navigateToSession(cloudSession.projectId, cloudSession.id);
+					}}
+				>
 					{t("move.openInCloud")}
 				</Button>
 			) : null}
