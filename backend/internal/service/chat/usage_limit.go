@@ -1,9 +1,13 @@
 package chat
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +22,8 @@ var ErrUsageLimitAutoResumeInvalid = errors.New("usage-limit auto-resume is unav
 var ErrUsageLimitResetUnknown = errors.New("the provider did not report a known usage-limit reset time")
 
 const usageLimitAutoResumeBackoff = 30 * time.Second
+
+const refusedRequestsBudget = 4 * continuationTextBudget
 
 // Bound provider processes and wakes without making one session block another.
 const usageLimitAutoResumeWorkers = 4
@@ -41,7 +47,7 @@ func (s *Service) SetUsageLimitAccounts(accounts usageLimitAccountReader) {
 	s.usageLimitAccounts = accounts
 }
 
-// SetTurnAutoResume arms one failed human prompt, rather than a session-wide
+// SetTurnAutoResume arms one failed prompt, rather than a session-wide
 // policy. Cancellation needs no live controller and remains available while busy.
 func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, turnID string, enabled bool) error {
 	store, ok := s.store.(usageLimitStore)
@@ -87,9 +93,44 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 	if err == nil {
 		s.autoResumeMu.Lock()
 		delete(s.autoResumeRetryAt, turnID)
+		s.noteAutoResumeArmedLocked()
 		s.autoResumeMu.Unlock()
 	}
 	return err
+}
+
+// noteAutoResumeArmedLocked records that a turn was armed: the resume loop is
+// no longer idle, a scan already running cannot mark it idle when it ends, and
+// the loop is woken to scan at once. The caller holds autoResumeMu.
+func (s *Service) noteAutoResumeArmedLocked() {
+	s.autoResumeIdle = false
+	s.autoResumeArms++
+	if s.autoResumeWake != nil {
+		select {
+		case s.autoResumeWake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// AutoResumeArmed signals, coalesced, that a turn was armed for auto-resume,
+// so a resume loop waiting out an idle interval scans again at once.
+func (s *Service) AutoResumeArmed() <-chan struct{} {
+	s.autoResumeMu.Lock()
+	defer s.autoResumeMu.Unlock()
+	if s.autoResumeWake == nil {
+		s.autoResumeWake = make(chan struct{}, 1)
+	}
+	return s.autoResumeWake
+}
+
+// AutoResumeIdle reports whether the last scan found no armed turn and none is
+// being resumed. Only SetTurnAutoResume arms a first turn, and it wakes the loop,
+// so an idle loop can scan rarely without missing a deadline.
+func (s *Service) AutoResumeIdle() bool {
+	s.autoResumeMu.Lock()
+	defer s.autoResumeMu.Unlock()
+	return s.autoResumeIdle && len(s.autoResumeInFlight) == 0
 }
 
 func validateUsageLimitSession(record domain.SessionRecord) error {
@@ -141,10 +182,10 @@ func validateUsageLimitSource(ctx context.Context, turns Store, store usageLimit
 	if source.UsageLimit.ResetsAt == nil {
 		return ErrUsageLimitResetUnknown
 	}
-	return validateUsageLimitRetry(ctx, turns, store, source)
+	return validateUsageLimitRetry(ctx, turns, store, source, true)
 }
 
-func validateUsageLimitRetry(ctx context.Context, turns Store, store usageLimitStore, source domain.ConversationTurn) error {
+func validateUsageLimitRetry(ctx context.Context, turns Store, store usageLimitStore, source domain.ConversationTurn, events bool) error {
 	prompt, err := turns.RetryPrompt(ctx, source.ConversationID, source.ID)
 	if err != nil {
 		return err
@@ -152,7 +193,7 @@ func validateUsageLimitRetry(ctx context.Context, turns Store, store usageLimitS
 	if !prompt.ActiveLineage {
 		return ErrRetryStaleBranch
 	}
-	if prompt.Origin != domain.MessageOriginHuman {
+	if prompt.Origin != domain.MessageOriginHuman && (!events || prompt.Origin != domain.MessageOriginAutomation) {
 		return ErrTurnNotRetryable
 	}
 	if source.ProviderTurnID == "" {
@@ -168,6 +209,9 @@ func validateUsageLimitRetry(ctx context.Context, turns Store, store usageLimitS
 		return err
 	}
 	if latest.ID != source.ID {
+		if prompt.Origin == domain.MessageOriginAutomation && latest.State == domain.TurnStateRunning {
+			return ErrTurnRunning
+		}
 		return fmt.Errorf("%w: a newer turn superseded this prompt", ErrUsageLimitAutoResumeInvalid)
 	}
 	return nil
@@ -200,6 +244,82 @@ func (c *Controller) retryUsageLimitTurn(ctx context.Context, turnID string) (do
 	return c.retryTurnLocked(ctx, turnID, true)
 }
 
+func (c *Controller) usageLimitEventContinuation(ctx context.Context, source domain.ConversationTurn) (domain.RetryPrompt, error) {
+	store, ok := c.store.(usageLimitStore)
+	if !ok || c.reviewID != "" {
+		return domain.RetryPrompt{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, source.ID)
+	}
+	latest, err := store.LatestAutoResumeTurn(ctx, c.conversation.ID)
+	if err != nil {
+		return domain.RetryPrompt{}, err
+	}
+	if latest.ID != source.ID {
+		return domain.RetryPrompt{}, fmt.Errorf("%w: a newer turn superseded %s", ErrTurnNotRetryable, source.ID)
+	}
+	if c.continuationReader == nil {
+		return domain.RetryPrompt{}, errors.New("prepare continuation: history reader is unavailable")
+	}
+	rows, err := c.continuationReader.LoadConversationSnapshot(ctx, c.conversation.ID)
+	if err != nil {
+		return domain.RetryPrompt{}, fmt.Errorf("read limited conversation: %w", err)
+	}
+	var requests, seen []string
+	var blocks []ports.ChatContent
+	var startID string
+	size := 0
+	for _, turn := range slices.Backward(rows.Turns) {
+		if turn.State == domain.TurnStateQueued || !continuationRelevantTurn(turn) {
+			continue
+		}
+		if turn.State != domain.TurnStateFailed || turn.UsageLimit == nil || (!turn.HasEventPrompt && !turn.HasHumanPrompt) {
+			break
+		}
+		refused, err := c.store.RetryPrompt(ctx, c.conversation.ID, turn.ID)
+		if err != nil {
+			return domain.RetryPrompt{}, fmt.Errorf("read refused event %s: %w", turn.ID, err)
+		}
+		if refused.Continuation && refused.Origin == domain.MessageOriginAutomation {
+			continue
+		}
+		request := cmp.Or(refused.ProviderInputText, refused.Text)
+		key := request + "\x00" + refused.DeliveryContentJSON
+		if slices.Contains(seen, key) {
+			continue
+		}
+		seen = append(seen, key)
+		size += len(request)
+		if len(requests) > 0 && size > refusedRequestsBudget {
+			break
+		}
+		startID = turn.ID
+		requests = append(requests, request)
+		if refused.DeliveryContentJSON != "" {
+			var content []ports.ChatContent
+			if err := json.Unmarshal([]byte(refused.DeliveryContentJSON), &content); err != nil {
+				return domain.RetryPrompt{}, fmt.Errorf("%w: attachments are not valid JSON", ErrRetryContentInvalid)
+			}
+			content = slices.DeleteFunc(content, func(block ports.ChatContent) bool { return block.Internal && block.Type == "text" })
+			blocks = append(content, blocks...)
+		}
+	}
+	if len(requests) == 0 {
+		return domain.RetryPrompt{}, ErrContinuationUnavailable
+	}
+	slices.Reverse(requests)
+	reminder := continuationContext(rows, source.ID, startID, strings.Join(requests, "\n\n"))
+	if reminder == "" {
+		return domain.RetryPrompt{}, ErrContinuationUnavailable
+	}
+	content, err := json.Marshal(append(blocks, ports.ChatContent{Type: "text", Text: reminder, Internal: true}))
+	if err != nil {
+		return domain.RetryPrompt{}, fmt.Errorf("encode continuation: %w", err)
+	}
+	return domain.RetryPrompt{
+		Text: continuationPrompt, Continuation: true, Origin: domain.MessageOriginAutomation,
+		DeliveryContentJSON: string(content), ActiveLineage: true,
+	}, nil
+}
+
 func permanentUsageLimitResumeError(err error) bool {
 	return errors.Is(err, ErrUsageLimitAutoResumeInvalid) ||
 		errors.Is(err, ErrUsageLimitResetUnknown) ||
@@ -213,6 +333,7 @@ func permanentUsageLimitResumeError(err error) bool {
 		errors.Is(err, ErrRetryDeliveryUncertain) ||
 		errors.Is(err, ErrRetryContentInvalid) ||
 		errors.Is(err, ErrRetryUnsupported) ||
+		errors.Is(err, ErrContinuationUnavailable) ||
 		errors.Is(err, ports.ErrAgentAccountChanged) ||
 		errors.Is(err, ports.ErrChatAuthRequired)
 }
@@ -233,6 +354,7 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 		return nil
 	}
 	s.autoResumeScanning = true
+	armsAtStart := s.autoResumeArms
 	s.autoResumeMu.Unlock()
 	sources, err := store.AutoResumeTurns(ctx)
 	armed := make(map[string]bool, len(sources))
@@ -245,6 +367,9 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 		s.autoResumeMu.Unlock()
 		return errors.Join(err, ctx.Err())
 	}
+	// A turn armed while this scan ran may be missing from sources; only a
+	// scan that started after the last arm can call the loop idle.
+	s.autoResumeIdle = len(sources) == 0 && s.autoResumeArms == armsAtStart
 	for id := range s.autoResumeRetryAt {
 		if !armed[id] {
 			delete(s.autoResumeRetryAt, id)

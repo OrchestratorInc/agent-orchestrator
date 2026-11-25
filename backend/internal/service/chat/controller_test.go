@@ -36,7 +36,7 @@ const (
 	testSession = domain.SessionID("p1-1")
 )
 
-func openStore(t *testing.T) *sqlite.Store {
+func openStore(t *testing.T, imports ...*domain.SessionImportSource) *sqlite.Store {
 	t.Helper()
 	dir := t.TempDir()
 	st := sqlitetest.MustOpenAt(t, dir)
@@ -49,7 +49,12 @@ func openStore(t *testing.T) *sqlite.Store {
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
+	var source *domain.SessionImportSource
+	if len(imports) > 0 {
+		source = imports[0]
+	}
 	if _, err := st.CreateSession(ctx, domain.SessionRecord{
+		Metadata:  domain.SessionMetadata{ImportSource: source},
 		ID:        testSession,
 		ProjectID: testProject,
 		Kind:      domain.KindOrchestrator,
@@ -395,6 +400,9 @@ type fakeDriver struct {
 	probe     func() error
 	start     func(ports.ChatStartConfig) (ports.ChatConversation, error)
 	resume    func(ports.ChatResumeConfig) (ports.ChatConversation, error)
+	// probeSandbox, when set, is what the reviewer preflight sees when it asks
+	// whether the read-only provider sandbox can start.
+	probeSandbox func(ports.ChatSandboxProbeConfig) error
 	// supports, when set, is the agent's answer to which permission modes it runs in.
 	supports func(ports.PermissionMode) bool
 }
@@ -430,6 +438,12 @@ func (d *sequenceDriver) Resume(context.Context, ports.ChatResumeConfig) (ports.
 }
 
 func (d fakeDriver) Harness() domain.AgentHarness { return domain.HarnessCodex }
+func (d fakeDriver) ProbeSandbox(_ context.Context, cfg ports.ChatSandboxProbeConfig) error {
+	if d.probeSandbox == nil {
+		return nil
+	}
+	return d.probeSandbox(cfg)
+}
 func (d fakeDriver) Probe(context.Context) (ports.ChatCapabilities, error) {
 	if d.probe != nil {
 		if err := d.probe(); err != nil {
@@ -3178,6 +3192,8 @@ type harness struct {
 	accountRechecks atomic.Int32
 	renders         *attachmentstore.Store
 	rendersDir      string
+	// workspace is the directory the controller was started in.
+	workspace string
 	// reconciled lists the sessions whose output type a save asked to update;
 	// reconcileErr is what that update returns.
 	reconciled   []domain.SessionID
@@ -3313,6 +3329,7 @@ func newHarnessInWorkspace(
 		},
 	})
 
+	h.workspace = workspace
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
 		SessionID:     testSession,
 		ProjectID:     testProject,
@@ -5004,7 +5021,9 @@ func TestChatHandoffInterruptAbortAfterPreflightFailureResumesFencedQueue(t *tes
 	// queue; there may be no later completion event to trigger this drain.
 	h.svc.AbortChatHandoff(testSession)
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued work survives preflight"] == domain.TurnStateRunning
+		// The asynchronous drain reserves the running turn before sending it.
+		return turnStateByText(t, s)["queued work survives preflight"] == domain.TurnStateRunning &&
+			len(h.conv.sentTexts()) >= 2
 	})
 	if got := h.conv.sentTexts(); len(got) != 2 || got[1] != "queued work survives preflight" {
 		t.Fatalf("provider received %v after abort, want preserved queue to resume", got)
@@ -5125,13 +5144,13 @@ func (s *failFirstQueueCancellationStore) CancelAllQueuedTurns(
 	ctx context.Context,
 	conversationID string,
 	now time.Time,
-) error {
+) (int, error) {
 	s.mu.Lock()
 	s.calls++
 	call := s.calls
 	s.mu.Unlock()
 	if call == 1 {
-		return errors.New("injected queue cancellation failure")
+		return 0, errors.New("injected queue cancellation failure")
 	}
 	return s.Store.CancelAllQueuedTurns(ctx, conversationID, now)
 }

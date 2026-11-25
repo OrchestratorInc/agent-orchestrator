@@ -12,14 +12,7 @@ export const Route = createRootRouteWithContext<{
 });
 
 function RootComponent() {
-	const location = useRouterState({ select: (state) => state.location });
 	const loadKeybindings = useKeybindingsStore((state) => state.load);
-
-	useEffect(() => {
-		void captureRendererEvent("ao.routes.viewed", {
-			surface: routeSurface(location.pathname),
-		});
-	}, [location.pathname]);
 
 	useEffect(() => {
 		void loadKeybindings();
@@ -27,7 +20,17 @@ function RootComponent() {
 
 	return (
 		<TooltipProvider>
+			<RouteViewed />
 			<Outlet />
 		</TooltipProvider>
 	);
+}
+
+// Its own component, so a navigation does not re-render the root and every tooltip under it.
+function RouteViewed() {
+	const pathname = useRouterState({ select: (state) => state.location.pathname });
+	useEffect(() => {
+		void captureRendererEvent("ao.routes.viewed", { surface: routeSurface(pathname) });
+	}, [pathname]);
+	return null;
 }

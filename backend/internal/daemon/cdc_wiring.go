@@ -23,7 +23,7 @@ type cdcPipeline struct {
 // when ctx is cancelled; Stop waits for it to drain.
 func startCDC(ctx context.Context, store *sqlite.Store, logger *slog.Logger) (*cdcPipeline, error) {
 	bcast := cdc.NewBroadcaster()
-	poller := cdc.NewPoller(store, bcast, cdc.PollerConfig{Logger: logger})
+	poller := cdc.NewPoller(store, bcast, cdc.PollerConfig{Logger: logger, Wake: store.WriteReleased()})
 	if err := poller.SeekToHead(ctx); err != nil {
 		return nil, err
 	}
@@ -43,4 +43,21 @@ func (p *cdcPipeline) Stop() error {
 		<-p.retentionDone
 	}
 	return nil
+}
+
+// sessionChanges signals, coalesced, each session created or updated as the
+// poller delivers it. Each call is its own subscription, for a loop that rests
+// while nothing changes and must wake as soon as a session does.
+func (p *cdcPipeline) sessionChanges() <-chan struct{} {
+	signal := make(chan struct{}, 1)
+	p.Broadcaster.Subscribe(func(e cdc.Event) {
+		if e.Type != cdc.EventSessionCreated && e.Type != cdc.EventSessionUpdated {
+			return
+		}
+		select {
+		case signal <- struct{}{}:
+		default:
+		}
+	})
+	return signal
 }

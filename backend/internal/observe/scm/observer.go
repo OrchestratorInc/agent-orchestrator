@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -789,7 +790,11 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 		if reviewModes[key] != ports.ReviewWritePreserve {
 			o.cacheSetTime(o.Cache.LastReviewPollAt, &o.Cache.lastReviewPollOrder, key, now)
 		}
-		o.cacheSetTime(o.Cache.LastPRFetchAt, &o.Cache.lastPRFetchOrder, key, now)
+		// A review-only refresh rebuilt the PR from stored data; only a real
+		// metadata fetch restarts the max-age clock, which queued PRs rely on.
+		if !localOnlyObservations[key] {
+			o.cacheSetTime(o.Cache.LastPRFetchAt, &o.Cache.lastPRFetchOrder, key, now)
+		}
 	}
 	// Per-ref monotonicity (finding #1): build a map of repoKey → candidate
 	// PR keys so the final cursor-advance loop can verify that every ref in
@@ -1200,7 +1205,8 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 		}
 		// Incremental discovery: request only MRs updated since the last
 		// successful cursor minus an overlap window. Zero cursor (first poll)
-		// requests a full listing
+		// requests a full listing. GitHub has no such filter and always lists
+		// every open PR, which terminal reconciliation below relies on.
 		repoKey := prKey(repo, 0)
 		cursor := o.Cache.LastSyncCursor[repoKey]
 		updatedAfter := time.Time{}
@@ -1291,6 +1297,12 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				headRepo = repoFullName(repo)
 			}
 			eligible := candidatesForHeadRepo(byRepo[repoKey], headRepo)
+			// Session IDs repeat across installations. GitHub reports whole seconds.
+			if !pr.CreatedAtProvider.IsZero() {
+				eligible = slices.DeleteFunc(eligible, func(sr sessionRepo) bool {
+					return pr.CreatedAtProvider.Before(sr.session.CreatedAt.Truncate(time.Second))
+				})
+			}
 			sr, ok := matchSession(eligible, pr.SourceBranch)
 			if !ok {
 				continue
@@ -1426,19 +1438,24 @@ func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
-	base := "ao/" + string(sr.session.ID)
-	if branch == base {
-		return true
+	// New sessions use "orchestrator/"; sessions created before the rename
+	// still own their "ao/" branches.
+	for _, prefix := range domain.SessionBranchPrefixes {
+		base := prefix + "/" + string(sr.session.ID)
+		if branch == base {
+			return true
+		}
+		suffix, ok := strings.CutPrefix(branch, base+"-")
+		if !ok {
+			continue
+		}
+		// workspaceProjectBranch appends -2, -3, ... when a ref already exists.
+		// Do not treat arbitrary topics, another session ID, or padded numbers as
+		// a generated branch and broaden their ownership.
+		n, err := strconv.Atoi(suffix)
+		return err == nil && n >= 2 && strconv.Itoa(n) == suffix
 	}
-	suffix, ok := strings.CutPrefix(branch, base+"-")
-	if !ok {
-		return false
-	}
-	// workspaceProjectBranch appends -2, -3, ... when a ref already exists.
-	// Do not treat arbitrary topics, another session ID, or padded numbers as
-	// a generated branch and broaden their ownership.
-	n, err := strconv.Atoi(suffix)
-	return err == nil && n >= 2 && strconv.Itoa(n) == suffix
+	return false
 }
 
 func sessionBranchPrefixes(branch string) []string {
@@ -1543,7 +1560,11 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 			// updated set are left to the terminal-reconciliation pass — do not
 			// promote them here or reconciliation will skip them (it checks
 			// candidateKeys to avoid double-fetching).
-			if !hasCursor || listedPRs == nil || listedPRs[key] {
+			// A queued PR is the exception: its place moves as other entries
+			// land or leave, which changes neither the PR listing nor its head
+			// checks, so it gets the same bounded refresh here.
+			queued := s.known.MergeQueue != nil && !s.known.Merged && !s.known.Closed
+			if !hasCursor || listedPRs == nil || listedPRs[key] || queued {
 				last := o.Cache.LastPRFetchAt[key]
 				if last.IsZero() || now.Sub(last) > DefaultPRMaxAge {
 					candidate = true
@@ -1761,7 +1782,11 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 	}
 	for i := range obs.CI.FailedChecks {
 		tail := obs.CI.FailedChecks[i].LogTail
-		if tail == "" && obs.CI.FailedChecks[i].ProviderID != "" {
+		// A current cancellation is listed for its link, not its log: it is
+		// never sent to the agent, and a job cancelled before it started has
+		// no log, so fetching one only costs a request and a fetch-failed tail.
+		cancelled := obs.CI.FailedChecks[i].Status == string(domain.PRCheckCancelled)
+		if tail == "" && obs.CI.FailedChecks[i].ProviderID != "" && !cancelled {
 			var err error
 			repo := ports.SCMRepo{Provider: obs.Provider, Host: obs.Host, Repo: obs.Repo, Owner: ownerOf(obs.Repo), Name: nameOf(obs.Repo)}
 			started := time.Now()
@@ -1926,9 +1951,30 @@ func (o *Observer) prepareForPersistence(obs ports.SCMObservation, local domain.
 	if opts.reviewFetched && obs.Review.Partial != local.ReviewPartial {
 		obs.Changed.Review = true
 	}
+	// Local queue actions write the queue entry but keep the last provider
+	// metadata hash, so a fresh read that undoes that write (GitHub ejected the
+	// PR, or the position moved back) can match the hash and be skipped.
+	if !opts.preserveLocalMetadataHash && mergeQueueChanged(obs.PR, local) {
+		obs.Changed.Metadata = true
+	}
 	obs.PR.State = firstNonEmpty(obs.PR.State, normalizePRState(obs.PR.Draft, obs.PR.Merged, obs.PR.Closed))
 	obs.ObservedAt = firstTime(obs.ObservedAt, now)
 	return obs
+}
+
+// mergeQueueChanged reports whether an observation's merge queue membership or
+// position differs from the stored PR's. The time estimate is left to the hash.
+func mergeQueueChanged(obs ports.SCMPRObservation, local domain.PullRequest) bool {
+	if obs.MergeQueueRequired != local.MergeQueueRequired {
+		return true
+	}
+	if (obs.MergeQueue == nil) != (local.MergeQueue == nil) {
+		return true
+	}
+	if obs.MergeQueue == nil {
+		return false
+	}
+	return obs.MergeQueue.State != local.MergeQueue.State || obs.MergeQueue.Position != local.MergeQueue.Position
 }
 
 func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.SessionRecord, obs ports.SCMObservation, local domain.PullRequest, opts persistenceOptions, now time.Time) (domain.PullRequest, []domain.PullRequestCheck, []domain.PullRequestReview, []domain.PullRequestReviewThread, []domain.PullRequestComment) {
@@ -1991,6 +2037,8 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 		ProviderID:               obs.PR.ProviderID,
 		SourceBranch:             obs.PR.SourceBranch,
 		TargetBranch:             obs.PR.TargetBranch,
+		HeadFromFork:             obs.PR.HeadFromFork,
+		HeadIsDefaultBranch:      obs.PR.HeadIsDefaultBranch,
 		HeadSHA:                  obs.PR.HeadSHA,
 		Title:                    obs.PR.Title,
 		Additions:                obs.PR.Additions,
@@ -2004,6 +2052,8 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 		ProviderMergeable:        obs.PR.ProviderMergeable,
 		ProviderMergeStateStatus: obs.PR.ProviderMergeStateStatus,
 		HTMLURL:                  obs.PR.HTMLURL,
+		MergeQueueRequired:       obs.PR.MergeQueueRequired,
+		MergeQueue:               obs.PR.MergeQueue,
 		CreatedAtProvider:        obs.PR.CreatedAtProvider,
 		UpdatedAtProvider:        obs.PR.UpdatedAtProvider,
 		MergedAtProvider:         obs.PR.MergedAtProvider,
@@ -2060,7 +2110,7 @@ func observationFromLocal(repo ports.SCMRepo, pr domain.PullRequest, checks []do
 		Provider:     firstNonEmpty(pr.Provider, repo.Provider),
 		Host:         firstNonEmpty(pr.Host, repo.Host),
 		Repo:         firstNonEmpty(pr.Repo, repoFullName(repo)),
-		PR:           ports.SCMPRObservation{URL: pr.URL, Number: pr.Number, State: normalizePRState(pr.Draft, pr.Merged, pr.Closed), Draft: pr.Draft, Merged: pr.Merged, Closed: pr.Closed, SourceBranch: pr.SourceBranch, TargetBranch: pr.TargetBranch, HeadSHA: pr.HeadSHA, Title: pr.Title, Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles, Author: pr.Author, AuthorAvatarURL: pr.AuthorAvatarURL, BaseSHA: pr.BaseSHA, MergeCommitSHA: pr.MergeCommitSHA, ProviderState: pr.ProviderState, ProviderMergeable: pr.ProviderMergeable, ProviderMergeStateStatus: pr.ProviderMergeStateStatus, HTMLURL: pr.HTMLURL, CreatedAtProvider: pr.CreatedAtProvider, UpdatedAtProvider: pr.UpdatedAtProvider, MergedAtProvider: pr.MergedAtProvider, ClosedAtProvider: pr.ClosedAtProvider},
+		PR:           ports.SCMPRObservation{URL: pr.URL, Number: pr.Number, State: normalizePRState(pr.Draft, pr.Merged, pr.Closed), Draft: pr.Draft, Merged: pr.Merged, Closed: pr.Closed, SourceBranch: pr.SourceBranch, TargetBranch: pr.TargetBranch, HeadFromFork: pr.HeadFromFork, HeadIsDefaultBranch: pr.HeadIsDefaultBranch, HeadSHA: pr.HeadSHA, Title: pr.Title, Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles, Author: pr.Author, AuthorAvatarURL: pr.AuthorAvatarURL, BaseSHA: pr.BaseSHA, MergeCommitSHA: pr.MergeCommitSHA, ProviderState: pr.ProviderState, ProviderMergeable: pr.ProviderMergeable, ProviderMergeStateStatus: pr.ProviderMergeStateStatus, HTMLURL: pr.HTMLURL, MergeQueueRequired: pr.MergeQueueRequired, MergeQueue: pr.MergeQueue, CreatedAtProvider: pr.CreatedAtProvider, UpdatedAtProvider: pr.UpdatedAtProvider, MergedAtProvider: pr.MergedAtProvider, ClosedAtProvider: pr.ClosedAtProvider},
 		CI:           ciObservationFromLocal(pr, checks),
 		Review:       ports.SCMReviewObservation{Decision: string(pr.Review)},
 		Mergeability: mergeabilityObservationFromLocal(pr),

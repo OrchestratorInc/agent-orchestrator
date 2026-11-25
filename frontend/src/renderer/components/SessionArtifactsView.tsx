@@ -20,6 +20,7 @@ import { aoBridge } from "../lib/bridge";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { artifactChangeError, canChangeSessionArtifacts, findHostShareLink, type ArtifactRow } from "../lib/artifacts";
+import { isArchivedSession } from "../lib/standalone-archive";
 import { LOCAL_HOST, sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -408,6 +409,7 @@ function ArtifactViewerFrame({
  * an edit in progress survives a look at an earlier version.
  */
 function ArtifactViewerBody({
+	active,
 	artifact,
 	artifactRoot,
 	cloud = false,
@@ -421,6 +423,7 @@ function ArtifactViewerBody({
 	onPreviewVersion,
 	previewVersion,
 	readOnly,
+	noFeedback = false,
 	save,
 	sendMessage,
 	sessionId,
@@ -429,6 +432,8 @@ function ArtifactViewerBody({
 	menuActions,
 	zoomController,
 }: {
+	/** False while the view is hidden: a video pauses then. */
+	active: boolean;
 	artifact: SessionArtifact;
 	/** A cloud file's access prefix, which relative links resolve against. */
 	artifactRoot?: string;
@@ -448,6 +453,8 @@ function ArtifactViewerBody({
 	onPreviewVersion: (version: number | null) => void;
 	previewVersion: number | null;
 	readOnly: boolean;
+	/** Offers no feedback to the worker, as for an archived session's files. */
+	noFeedback?: boolean;
 	/** Sends feedback to a cloud session's worker. */
 	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
@@ -482,6 +489,7 @@ function ArtifactViewerBody({
 				{previewing && media ? null : <div className={cn("h-full", (previewing || showingPage) && "hidden")}>
 					<ArtifactZoomContext.Provider value={previewing || showingPage ? null : zoomController}>
 					<ArtifactFileView
+						active={active}
 						artifactName={artifact.name}
 						initialEditing={initialEditing}
 						artifactRoot={artifactRoot}
@@ -493,6 +501,7 @@ function ArtifactViewerBody({
 						path={artifact.path}
 						rawUrl={artifact.rawUrl}
 						readOnly={readOnly}
+						noFeedback={noFeedback}
 						save={save}
 						sendMessage={sendMessage}
 						sessionId={sessionId}
@@ -502,7 +511,15 @@ function ArtifactViewerBody({
 					/>
 					</ArtifactZoomContext.Provider>
 				</div>}
-				{showingPage && page ? (
+				{showingPage && page && noFeedback ? (
+					<ArtifactZoomContext.Provider value={zoomController}>
+						{remotePage ? (
+							<HostArtifactPageFrame key={`${page}:${artifact.updatedAt}`} title={artifact.name} url={page} />
+						) : (
+							<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+						)}
+					</ArtifactZoomContext.Provider>
+				) : showingPage && page ? (
 					<ArtifactZoomContext.Provider value={zoomController}>
 						<ArtifactPageFeedback
 							feedbackRequestKey={feedbackRequestKey}
@@ -524,6 +541,7 @@ function ArtifactViewerBody({
 				) : null}
 				{previewing ? (
 					<ArtifactVersionPreview
+						active={active}
 						artifactOrigin={artifactOrigin}
 						cloud={cloudVersions}
 						hostId={hostId}
@@ -651,11 +669,14 @@ function CloudHtmlArtifactView({
  * with isolated inline HTML previews and an optional full-screen view.
  */
 export function SessionArtifactsView({
+	active = true,
 	hostId,
 	onRequestConsumed,
 	request,
 	session,
 }: {
+	/** False while the inspector is closed or on another tab: a video pauses then. */
+	active?: boolean;
 	hostId?: string;
 	onRequestConsumed?: (key: number) => void;
 	request?: ArtifactOpenRequest | null;
@@ -713,6 +734,10 @@ export function SessionArtifactsView({
 	// Another member's cloud session files open view only: no edit, restore,
 	// delete or copy of them (the control plane refuses the changes too).
 	const owner = canChangeSessionArtifacts(session.cloud, cloudUserId);
+	// An archived session's files are view only too: they can still be
+	// previewed, shared, downloaded or deleted, but not edited, restored to an
+	// older version, or sent to a worker that is no longer running.
+	const archived = isArchivedSession(session);
 	const queryClient = useQueryClient();
 	// A cloud session's artifacts are edited and versioned in the control plane,
 	// which hands a save to the session's worker.
@@ -812,8 +837,10 @@ export function SessionArtifactsView({
 		setHtmlSourcePath(null);
 		setSelectedPath(artifact.path);
 	};
-	// A file the agent rewrites while it is open shows the new content.
-	useArtifactFileChanges(session, Boolean(selected) && !hostId);
+	// Follow a requested file before it appears in the list too: the stream's
+	// ready event rereads files written before the view opened, and later file
+	// changes refresh the list so the pending path can resolve.
+	useArtifactFileChanges(session, Boolean(selected || (awaitedPath !== null && selectedPath === awaitedPath)) && !hostId);
 	// Versions are read back as text or, from a daemon that can, by the media
 	// viewers, so a cloud media file and any other binary file, such as an
 	// archive, get no History. This shares the viewer's cached read of the file, which for a
@@ -885,7 +912,7 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
+					<ArtifactActionsMenu artifact={selected} viewingHistoricalVersion={previewVersion !== null} downloadUrl={listed?.rawUrl} className="w-fit min-w-0 max-w-full shrink justify-start" hostId={hostId} key={selected.path} session={session}>
 						<ArtifactViewMenuItems
 							fileActions={fileMenuActions}
 							history={(fileMediaKind(selected.path) ? session.cloud || (hostId && !hostServesMediaVersions) : selectedFile.data?.binary) ? null : (
@@ -964,6 +991,7 @@ export function SessionArtifactsView({
 						</ArtifactZoomContext.Provider>
 					) : (
 						<ArtifactViewerBody
+							active={active}
 							artifact={selected}
 							htmlSource={showingHtmlSource}
 							initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated}
@@ -976,8 +1004,9 @@ export function SessionArtifactsView({
 							onFeedbackRequestConsumed={onRequestConsumed}
 							onPreviewVersion={setPreviewVersion}
 							previewVersion={previewVersion}
-							readOnly={!owner}
-							save={cloud && owner ? saveCloudArtifact : undefined}
+							readOnly={!owner || archived}
+							noFeedback={archived}
+							save={cloud && owner && !archived ? saveCloudArtifact : undefined}
 							sendMessage={cloud ? sendCloudFeedback : undefined}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}

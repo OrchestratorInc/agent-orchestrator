@@ -1,13 +1,13 @@
 ---
 title: 快速开始
 description: 添加项目，启动一个 worker，并从任务一路跟进到拉取请求。
-translatedFrom: ec341474c9bc
+translatedFrom: d26c004e3c54
 ---
 
 本指南将带你在桌面应用中完成第一个任务：添加仓库、启动 worker、跟进它的工作，并审查结果。
 
 <Callout type="info" title="开始之前">
-	安装 Orchestrator；如果你使用 GitHub 项目，请用 `gh` 登录。如果你选择外部编程代理，请安装它并完成登录。Orchestrator 把这些工具称为 harness。Unreal Agent 内置于 Orchestrator，可在 macOS 和 Linux 上用于 Chat。请参阅[安装](/installation)。
+	安装 Orchestrator；如果你使用 GitHub 项目，请用 `gh` 登录。如果你选择外部编程代理，请安装它，并在 **Settings → Agents**（**Install** 和 **Login**）中或用代理自己的登录命令完成登录。Orchestrator 把这些工具称为 harness。Unreal Agent 内置于 Orchestrator，可在 macOS 和 Linux 上用于 Chat。请参阅[安装](/installation)。
 </Callout>
 
 <span id="pick-a-safe-first-task" />
@@ -37,9 +37,9 @@ translatedFrom: ec341474c9bc
 <span id="create-a-worker" />
 ### 创建 worker
 
-在项目中新建一个任务，输入简短的名称和具体的提示词。选择一个可用的编程代理。外部代理在安装后才会出现；Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat。Orchestrator 在 Settings 的 **Harness** 下列出代理。
+在项目中点击 **New task** 打开新的对话，选择一个可用的编程代理，然后发送具体的提示词。发送后会话即开始。外部代理在安装后才会出现；Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat。Orchestrator 在 Settings 的 **Agents** 下列出代理。
 
-选择适合该任务的界面：
+新会话会以 **Settings → General** 中设置的界面打开；不支持 Chat 的代理会以 Terminal UI 启动：
 
 - **Chat**：适合结构化对话、活动、审批、计划和持久保存的历史。
 - **Terminal UI**：适合使用 harness 原生的交互式终端。
@@ -104,7 +104,7 @@ ao preview http://127.0.0.1:5173
 <span id="optional-cli" />
 ## 可选的 CLI
 
-CLI 是连接应用所管理的守护进程的轻量客户端。它适合脚本和以终端为主的工作流，但日常使用桌面应用时并不需要。
+CLI 是连接应用所管理的守护进程的轻量客户端。它适合脚本和以终端为主的工作流，但日常使用桌面应用时并不需要。应用自带 `ao`；Homebrew cask 会把它放进 `PATH`，其他情况下它的位置请参阅[安装](/installation#where-ao-is)。要让编程代理设置并操作 Orchestrator，请参阅[从你的编程代理使用 Orchestrator](/agent-setup)。
 
 ```bash
 ao status
@@ -112,7 +112,7 @@ ao session ls
 ao send --session <session-id> --message "Run the focused tests before you finish."
 ```
 
-在 **Settings → General** 中选择默认界面，或为新任务单独选择。项目的代理设置用于选择编程代理、模型、推理强度和提供方执行模式。它们不会设置全局默认使用 Chat 还是 Terminal UI。
+在 **Settings → General** 中选择默认界面。项目的代理设置用于选择编程代理、模型、推理强度和提供方执行模式。它们不会设置全局默认使用 Chat 还是 Terminal UI。
 
 <span id="next" />
 

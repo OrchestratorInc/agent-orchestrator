@@ -299,6 +299,9 @@ type Manager struct {
 	// adapter via WithUrgentNudgeGate; the default answers false, so an unknown
 	// harness never takes an urgent write while waiting_input.
 	urgentNudgeWaitingInputSafe func(domain.AgentHarness) bool
+	// reviewNoticeMu serializes "review done" deliveries so the submit path,
+	// a PR observation, and the sweep can never send the same notice twice.
+	reviewNoticeMu sync.Mutex
 }
 
 // New builds a Lifecycle Manager over the session store it writes and the messenger it uses for agent nudges.
@@ -975,10 +978,25 @@ retryProjection:
 	if nativeSessionChanged {
 		usageReactivator = m.usageReactivator
 	}
+	// Hooks post from their own processes and are stamped when they fire, so one
+	// can reach AO after a later one: a delivered prompt's user-prompt-submit
+	// landing after the Stop that ended its turn left the session active for
+	// good (#6686). Once a signal has made the session idle, one that fired
+	// before that idle keeps its metadata but cannot change the state. The
+	// spawn's seeded idle is not a signal, so an early first hook still lands,
+	// and an exited session stays resumable.
+	lateSignal := false
+	if s.Valid && s.State != domain.ActivityExited && !s.Timestamp.IsZero() &&
+		rec.Activity.State == domain.ActivityIdle && !rec.FirstSignalAt.IsZero() &&
+		s.Timestamp.Before(rec.Activity.LastActivityAt) {
+		s.Valid, lateSignal = false, true
+	}
 	if s.Valid {
 		s = m.applyToolPrecedenceLocked(id, rec.Harness, rec.Activity.State, s)
 	}
-	if !s.Valid && !metadataChanged {
+	// A late prompt was still submitted: its metadata-only projection is what
+	// records its delivery as accepted, so it is not skipped.
+	if !s.Valid && !metadataChanged && (!lateSignal || semanticDeliveryStore == nil) {
 		m.mu.Unlock()
 		return nil
 	}
@@ -1053,7 +1071,11 @@ retryProjection:
 	// A scoped, newer completion is fresh idle proof even when the durable
 	// state stayed idle; otherwise terminal input permanently outlives it.
 	// Keep ordinary same-state notifications and unowned callbacks deduplicated.
-	completedIdleTurn := s.State == domain.ActivityIdle && s.Event == "post-agent" &&
+	// A Claude Stop is the same proof: recording a later turn end on an already
+	// idle row is what lets the ordering fence above reject that turn's
+	// late-arriving prompt.
+	turnEnd := s.Event == "post-agent" || s.Event == "stop" || s.Event == "stop-failure"
+	completedIdleTurn := s.State == domain.ActivityIdle && turnEnd &&
 		s.LaunchID != "" && s.LaunchID == rec.Metadata.RuntimeLaunchID &&
 		s.AgentSessionID != "" && s.AgentSessionID == rec.Metadata.AgentSessionID &&
 		act.LastActivityAt.After(rec.Activity.LastActivityAt)

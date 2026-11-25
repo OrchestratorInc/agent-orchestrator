@@ -72,6 +72,7 @@ import { appI18n } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { StandaloneArchiveView } from "./StandaloneArchiveView";
 import { ArchivedSessionCardAdapter } from "./SessionsBoardAdapters";
+import { useContentExpiredSessionsStore } from "../stores/content-expired-sessions-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 function renderArchive() {
@@ -313,22 +314,64 @@ describe("archived session delete", () => {
 		}),
 	]);
 
-	it("deletes a released session permanently once confirmed", async () => {
+	// An empty list may be stale or a failed read, so files still on disk are kept.
+	it("deletes a released session permanently once confirmed, keeping files the list did not show", async () => {
 		workspaceQueryMock.mockReturnValue({ data: [archived({ workspaceCleanup: "removed" })], isError: false, isSuccess: true });
 		renderArchive();
 
 		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
 		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
-		expect(dialog).toHaveTextContent("Its conversation, attachments and artifacts are deleted for good.");
+		expect(dialog).toHaveTextContent("Its conversation and attachments are deleted for good.");
 		expect(dialog).not.toHaveTextContent("worktree");
+		expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
 		expect(deleteMock).not.toHaveBeenCalled();
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true, keepArtifacts: true } },
+		}));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	const withArtifacts = () => archived({
+		workspaceCleanup: "removed",
+		outputType: "artifact",
+		artifactFiles: [
+			{ kind: "html", name: "report.html", path: "report.html", size: 1, updatedAt: "2026-11-16T00:00:00Z", registered: true },
+			{ kind: "markdown", name: "notes.md", path: "notes.md", size: 1, updatedAt: "2026-11-16T00:00:00Z", registered: true },
+		],
+	});
+
+	it("keeps a deleted session's artifacts unless the person also deletes them", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [withArtifacts()], isError: false, isSuccess: true });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		const box = within(dialog).getByRole("checkbox", { name: "Also delete its 2 artifacts" });
+		expect(box).not.toBeChecked();
+		expect(dialog).toHaveTextContent("Otherwise they stay on the Artifacts page, view only.");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
+
+		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true, keepArtifacts: true } },
+		}));
+	});
+
+	it("deletes the artifacts with the session when the box is checked", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [withArtifacts()], isError: false, isSuccess: true });
+		renderArchive();
+
+		await userEvent.click(screen.getByRole("button", { name: "Delete archived ad hoc permanently" }));
+		const dialog = await screen.findByRole("dialog", { name: "Delete this session permanently?" });
+		await userEvent.click(within(dialog).getByRole("checkbox", { name: "Also delete its 2 artifacts" }));
+		expect(dialog).toHaveTextContent("They are deleted for good.");
 		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
 
 		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
 			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true } },
 		}));
-		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("warns that a worktree still on disk is cleaned up first, and keeps the dialog open when the delete is refused", async () => {
@@ -360,6 +403,31 @@ describe("archived session delete", () => {
 		);
 		expect(screen.getByRole("button", { name: "Restore cloud worker" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Delete cloud worker permanently" })).not.toBeInTheDocument();
+	});
+
+	it("offers no restore for a cloud session refused for its data retention, and says why", () => {
+		const session = terminatedSession({ title: "cloud worker", cloud: { orgId: "org-1" } });
+		useContentExpiredSessionsStore.getState().mark(session.id);
+		try {
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					<TooltipProvider>
+						<ArchivedSessionCardAdapter
+							isRestoreDisabled={false}
+							isRestoring={false}
+							restoreAction={vi.fn()}
+							session={session}
+						/>
+					</TooltipProvider>
+				</QueryClientProvider>,
+			);
+			expect(screen.queryByRole("button", { name: "Restore cloud worker" })).not.toBeInTheDocument();
+			expect(screen.getByRole("alert")).toHaveTextContent(
+				"This session is past its data retention period, so its content is being removed. It can't be restored.",
+			);
+		} finally {
+			useContentExpiredSessionsStore.setState({ ids: {} });
+		}
 	});
 });
 

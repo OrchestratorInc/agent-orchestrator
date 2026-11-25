@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { LANES, outputs, pickLanes } from './ci-lanes.mjs';
+import { LANES, TESTED_BASES, outputs, pickLanes } from './ci-lanes.mjs';
 
 const pr = (paths, extra = {}) => ({
   event: 'pull_request',
@@ -19,6 +19,20 @@ test('drafts and stacked PRs run no lanes, even with ci:full', () => {
   const none = { lanes: [], full: false, macos: false, vitest: '' };
   assert.deepEqual(pickLanes(pr(['backend/a.go'], { draft: true, labels: ['ci:full'] })), none);
   assert.deepEqual(pickLanes(pr(['backend/a.go'], { base: 'feat/parent' })), none);
+});
+
+test('a PR into stable runs every lane in full, whatever it changes', () => {
+  const full = { lanes: Object.keys(LANES), full: true, macos: true, vitest: 'all' };
+  assert.deepEqual(pickLanes(pr(['backend/a.go'], { base: 'stable' })), full);
+  assert.deepEqual(pickLanes(pr(['README.md'], { base: 'stable' })), full);
+  assert.deepEqual(pickLanes(pr(['backend/a.go'], { base: 'stable', fork: true })), full);
+  assert.deepEqual(pickLanes(pr(['backend/a.go'], { base: 'stable', draft: true })).lanes, []);
+});
+
+test('CI retarget re-runs a PR that moves to any tested base', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/ci-retarget.yml', import.meta.url), 'utf8');
+  assert.deepEqual(TESTED_BASES, ['main', 'stable']);
+  assert.ok(workflow.includes(`contains(fromJSON('${JSON.stringify(TESTED_BASES)}'), github.base_ref)`));
 });
 
 test('a docs-only PR runs no lanes', () => {
@@ -53,6 +67,14 @@ test('packages/shared reaches the frontend and mobile, with all vitest files', (
   const pick = pickLanes(pr(['packages/shared/theme/palette.ts']));
   assert.deepEqual(pick.lanes, ['frontend', 'boundary', 'mobile']);
   assert.equal(pick.vitest, 'all');
+});
+
+test('the desktop harness marks and the daemon harness list reach the mobile parity test', () => {
+  assert.ok(pickLanes(pr(['frontend/src/renderer/assets/agents/codex.svg'])).lanes.includes('mobile'));
+  assert.ok(pickLanes(pr(['frontend/src/renderer/components/AgentAvatar.tsx'])).lanes.includes('mobile'));
+  assert.ok(pickLanes(pr(['backend/internal/domain/harness.go'])).lanes.includes('mobile'));
+  assert.ok(!pickLanes(pr(['frontend/src/renderer/components/AgentAvatarStack.tsx'])).lanes.includes('mobile'));
+  assert.ok(!pickLanes(pr(['backend/internal/domain/session.go'])).lanes.includes('mobile'));
 });
 
 test('the renderer typechecks against cloud-client types', () => {

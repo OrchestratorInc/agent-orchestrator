@@ -183,9 +183,8 @@ describe("buildCommands grouping", () => {
 		expect(map.get("current-copy-branch")?.action).toEqual({ kind: "copy-branch", branch: "feature/w-pr" });
 	});
 
-	it("offers Open usage only in Developer Mode", () => {
-		expect(byId(buildCommands({ workspaces: workspaces() })).has("global-usage")).toBe(false);
-		expect(byId(buildCommands({ workspaces: workspaces(), developerMode: true })).has("global-usage")).toBe(true);
+	it("offers Open usage without Developer Mode", () => {
+		expect(byId(buildCommands({ workspaces: workspaces() })).has("global-usage")).toBe(true);
 	});
 
 	it("offers Archived sessions for the current project only when it has archived sessions", () => {
@@ -346,7 +345,7 @@ const reviewRun = (prNumber: number): ReviewRun => ({
 	prUrl: `https://github.com/o/r/pull/${prNumber}`,
 	reviewId: `review-${prNumber}`,
 	sessionId: "w-pr",
-	status: "delivered",
+	status: "completed",
 	targetSha: "sha",
 	verdict: "approved",
 });

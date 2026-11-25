@@ -52,6 +52,7 @@ export function PeopleField({
 	invalid,
 	className,
 	inputRef: externalInputRef,
+	commitOnBlur = true,
 }: {
 	orgId: string;
 	value: Recipient[];
@@ -75,6 +76,11 @@ export function PeopleField({
 	className?: string;
 	/** The text input, for a caller that moves focus back to the field. */
 	inputRef?: RefObject<HTMLInputElement | null>;
+	/**
+	 * Leaving the field picks a typed email. Off where a pick acts at once (an
+	 * artifact link shares on Enter), so a click elsewhere never shares.
+	 */
+	commitOnBlur?: boolean;
 }) {
 	const { t } = useTranslation();
 	const listId = useId();
@@ -312,10 +318,12 @@ export function PeopleField({
 							// with focus here would cover what it shows. A click, typing
 							// or an arrow key does.
 							onClick={() => setOpen(true)}
+							// Back in the field before the blur's close fires: keep the list.
+							onFocus={() => window.clearTimeout(blurCloseTimer.current)}
 							onBlur={() => {
 								window.clearTimeout(blurCloseTimer.current);
 								blurCloseTimer.current = window.setTimeout(() => setOpen(false), 120);
-								commitTyped();
+								if (commitOnBlur) commitTyped();
 							}}
 							onKeyDown={onKeyDown}
 							placeholder={value.length === 0 ? placeholder : ""}

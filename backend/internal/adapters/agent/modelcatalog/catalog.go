@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,9 +20,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
@@ -59,6 +64,25 @@ type commandSpec struct {
 	// retryEmpty reruns a listing that exits cleanly with no output once.
 	// OpenCode 2 prints nothing the first time it runs in a new folder.
 	retryEmpty bool
+	// env adds to the environment of the model command.
+	env map[string]string
+	// killTree stops the command's children too when it times out, for CLIs
+	// whose launcher waits on the real binary.
+	killTree bool
+}
+
+func (s commandSpec) command(ctx context.Context, binary, workingDir string, env map[string]string) *exec.Cmd {
+	merged := make(map[string]string, len(env)+len(s.env))
+	maps.Copy(merged, env)
+	agentbase.ApplyEnvOverrides(merged, s.env, runtime.GOOS == "windows")
+	cmd := modelCommand(ctx, binary, s.args, workingDir, merged)
+	if s.killTree {
+		aoprocess.ConfigureTreeCancellation(cmd)
+	}
+	if s.interruptOnCancel {
+		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
+	}
+	return cmd
 }
 
 // signInCheck confirms a login before a sign-in-prompting model command runs.
@@ -131,6 +155,7 @@ var commandSpecs = map[string]commandSpec{
 	"agy":         {args: []string{"models"}, parser: parseAgyModels},
 	"kilocode":    {args: []string{"models"}, parser: parseProviderIDLines},
 	"pi":          {args: []string{"--list-models"}, parser: parsePiModels},
+	"tau":         {args: []string{"providers"}, parser: parseTauModels},
 	"kimchi":      {args: []string{"--list-models"}, parser: parsePiModels},
 	"prime-agent": {args: []string{"model", "list"}, parser: parsePiModels},
 	"kimi":        {args: []string{"provider", "list", "--json"}, parser: parseJSONModels},
@@ -142,11 +167,20 @@ var commandSpecs = map[string]commandSpec{
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseProviderIDLines},
 	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
-	"mimo-code":   {args: []string{"models"}, parser: parseMiMoModels},
+	"mimo-code": {
+		args:   []string{"models"},
+		parser: parseMiMoModels,
+		// Every MiMo command but --version copies all Claude Code history into
+		// MiMo's database at startup, so a listing must not start that scan.
+		env: map[string]string{"MIMOCODE_DISABLE_CLAUDE_IMPORT": "1"},
+		// `mimo` is a Node wrapper that waits on the real binary.
+		killTree: true,
+	},
 	// `cmd --list-models` prints `provider/model` followed by a marketing
 	// description, not a display name — see parseCommandCodeModels.
-	"command-code": {args: []string{"--list-models"}, parser: parseCommandCodeModels},
-	"minimax-code": {args: []string{"provider", "list", "--json"}, parser: parseMiniMaxModels, interruptOnCancel: true},
+	"command-code":     {args: []string{"--list-models"}, parser: parseCommandCodeModels},
+	"minimax-code":     {args: []string{"provider", "list", "--json"}, parser: parseMiniMaxModels, interruptOnCancel: true},
+	"open-interpreter": {args: []string{"debug", "models"}, parser: parseOpenInterpreterModels},
 }
 
 // Accepts reports whether model may launch agentID. It rejects a model only
@@ -251,9 +285,9 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "stakpak":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "stakpak", "open-interpreter", "mastra-code":
 		return ports.CustomModelEntryDirect
-	case "docker-agent", "minimax-code", "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "docker-agent", "minimax-code", "continue", "cline", "kilocode", "vibe", "pi", "tau", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone
@@ -446,9 +480,10 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 			// Snapshots from before RunnableModels lack it.
 			return fingerprint + ":shared-providers-v1:runnable-v1"
 		}
-		if request.AgentID == "pi" || request.AgentID == "kimchi" {
-			// Snapshots from before Pi's thinking levels were read lack them.
-			return fingerprint + ":shared-providers-v1:thinking-v2"
+		if request.AgentID == "pi" || request.AgentID == "kimchi" || request.AgentID == "prime-agent" {
+			// Snapshots from before discovery kept Pi's thinking metadata and
+			// matched Pi's level rules lack those levels.
+			return fingerprint + ":shared-providers-v1:thinking-v3"
 		}
 		return fingerprint + ":shared-providers-v1"
 	}
@@ -493,16 +528,12 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
-	if spec.interruptOnCancel {
-		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
-	}
-	output, err := cmd.CombinedOutput()
+	output, err := spec.command(runCtx, binary, workingDir, env).CombinedOutput()
 	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
 		cancel()
 		runCtx, cancel = context.WithTimeout(ctx, commandTimeout)
 		defer cancel()
-		output, err = modelCommand(runCtx, binary, spec.args, workingDir, env).CombinedOutput()
+		output, err = spec.command(runCtx, binary, workingDir, env).CombinedOutput()
 	}
 	if err != nil {
 		return base, modelDiscoveryError(runCtx, agentID, err, output)
@@ -510,6 +541,10 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	models, err := spec.parser(output)
 	if err != nil {
 		return base, fmt.Errorf("%s model discovery: %w", agentID, err)
+	}
+	if agentID == "open-interpreter" {
+		models = pinOpenInterpreterOpenAIModels(models, env)
+		models = append(models, openInterpreterProviderModels(ctx, binary, workingDir, env)...)
 	}
 	base.Providers = reportedJSONProviders(output)
 	if includeLocal {
@@ -936,6 +971,32 @@ func CatalogFingerprint(ctx context.Context, agentID, binary, workingDir string,
 // discoveryConfigInputs returns the configuration an agent's discovery consults,
 // or "" when the catalog depends on the binary alone.
 func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env map[string]string) string {
+	if agentID == "tau" {
+		return "config=" + fingerprintConfigPaths(tauConfigPaths(env))
+	}
+	if agentID == "open-interpreter" {
+		// The native catalog follows the selected provider and account. Include
+		// a version marker to invalidate older binary-only manual catalogs.
+		// Generated providers are listed only when their key is present, so
+		// key presence (never the value) is part of the fingerprint.
+		providers := "providers=" + openInterpreterKeyedProviders(env)
+		root, err := nativeconfig.Resolve(env, "INTERPRETER_HOME", ".openinterpreter")
+		if err != nil {
+			return "native-debug-models-v2:" + providers
+		}
+		// The system layer can select the provider when the user layer names
+		// none, and any layer can name a model_catalog_json file.
+		layers := []string{openInterpreterSystemConfig(), filepath.Join(root, "config.toml")}
+		configs := append(append([]string{}, layers...), openInterpreterProjectConfigs(workingDir, openInterpreterRootMarkers(layers))...)
+		// model_catalog_json replaces the native catalog, so the file it names
+		// is a discovery input even when no config file changes.
+		catalogs := openInterpreterModelCatalogFiles(configs, env)
+		paths := make([]string, 0, len(configs)+1+len(catalogs))
+		paths = append(paths, configs...)
+		paths = append(paths, filepath.Join(root, "auth.json"))
+		paths = append(paths, catalogs...)
+		return "native-debug-models-v2:" + providers + ":" + root + ":" + fingerprintConfigPaths(paths) + fileStatSignature(catalogs)
+	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
 		return "provider=" + provider + ";model=" + selected
@@ -1365,6 +1426,120 @@ func looksLikeModelID(value string) bool {
 	}
 }
 
+// parseOpenInterpreterModels reads the effective catalog from `interpreter
+// debug models`. The bundled-only variant does not reflect the logged-in
+// provider. Model messages may contain large instructions, so decode only the
+// picker fields from top-level models and never propagate those messages.
+func parseOpenInterpreterModels(output []byte) ([]ports.AgentModelInfo, error) {
+	var catalog struct {
+		Models []struct {
+			Slug                  string `json:"slug"`
+			DisplayName           string `json:"display_name"`
+			Visibility            string `json:"visibility"`
+			DefaultReasoningLevel string `json:"default_reasoning_level"`
+			SupportedLevels       []struct {
+				Effort string `json:"effort"`
+			} `json:"supported_reasoning_levels"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(output, &catalog); err != nil {
+		return nil, err
+	}
+	models := make([]ports.AgentModelInfo, 0, len(catalog.Models))
+	for _, item := range catalog.Models {
+		if item.Visibility != "list" || strings.TrimSpace(item.Slug) == "" {
+			continue
+		}
+		model := ports.AgentModelInfo{
+			ID:            item.Slug,
+			Label:         item.DisplayName,
+			DefaultEffort: item.DefaultReasoningLevel,
+		}
+		for _, level := range item.SupportedLevels {
+			if level.Effort != "" {
+				model.Efforts = append(model.Efforts, level.Effort)
+			}
+		}
+		models = append(models, model)
+	}
+	return models, nil
+}
+
+// openInterpreterProviderModels lists the models of each generated provider
+// whose key the session would receive. `debug models` reports only the active
+// provider, so a saved DeepSeek key would otherwise offer no DeepSeek model.
+// IDs carry the provider so launch can select it; a provider that fails to
+// list is left out rather than failing the active provider's catalog.
+func openInterpreterProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) []ports.AgentModelInfo {
+	var models []ports.AgentModelInfo
+	for _, provider := range openinterpreter.GeneratedProviders {
+		if !provider.Usable() || !openInterpreterHasKey(env, provider.EnvKey) {
+			continue
+		}
+		runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+		output, err := modelCommand(runCtx, binary, []string{"debug", "models", "-c", "model_provider=" + strconv.Quote(provider.ID)}, workingDir, env).CombinedOutput()
+		cancel()
+		if err != nil {
+			continue
+		}
+		listed, err := parseOpenInterpreterModels(output)
+		if err != nil {
+			continue
+		}
+		for _, model := range listed {
+			label := model.Label
+			if label == "" {
+				label = model.ID
+			}
+			model.Label = label + " (" + provider.Label + ")"
+			model.ID = openinterpreter.ProviderModelID(provider.ID, model.ID)
+			model.Provider = provider.ID
+			models = append(models, model)
+		}
+	}
+	return models
+}
+
+// pinOpenInterpreterOpenAIModels gives the default OpenAI provider's models an
+// explicit provider. Without it, a provider chosen later inside Open
+// Interpreter (`/model`, which writes model_provider to the user config) would
+// receive an AO-selected GPT model it does not serve. Models of any other
+// configured provider keep following the native configuration.
+func pinOpenInterpreterOpenAIModels(models []ports.AgentModelInfo, env map[string]string) []ports.AgentModelInfo {
+	root, err := nativeconfig.Resolve(env, "INTERPRETER_HOME", ".openinterpreter")
+	if err != nil {
+		return models
+	}
+	if provider, ok := openinterpreter.ConfiguredProvider(root); !ok || provider != openinterpreter.OpenAIProvider {
+		return models
+	}
+	for i := range models {
+		models[i].ID = openinterpreter.ProviderModelID(openinterpreter.OpenAIProvider, models[i].ID)
+		models[i].Provider = openinterpreter.OpenAIProvider
+	}
+	return models
+}
+
+// openInterpreterHasKey reports whether the session environment carries name:
+// env overrides the daemon environment, and an empty override withholds it.
+func openInterpreterHasKey(env map[string]string, name string) bool {
+	value, set := env[name]
+	if !set {
+		value = os.Getenv(name)
+	}
+	return strings.TrimSpace(value) != ""
+}
+
+func openInterpreterKeyedProviders(env map[string]string) string {
+	var ids []string
+	for _, provider := range openinterpreter.GeneratedProviders {
+		if provider.Usable() && openInterpreterHasKey(env, provider.EnvKey) {
+			ids = append(ids, provider.ID)
+		}
+	}
+	return strings.Join(ids, ",")
+}
+
 func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {
 	var root any
 	if err := json.Unmarshal(output, &root); err != nil {
@@ -1524,4 +1699,35 @@ func normalize(models []ports.AgentModelInfo) []ports.AgentModelInfo {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// parseTauModels consumes the released provider/model TSV, retaining exact
+// provider-qualified selection even when multiple providers expose one model.
+func parseTauModels(output []byte) ([]ports.AgentModelInfo, error) {
+	var models []ports.AgentModelInfo
+	for _, provider := range tau.ParseProviders(output) {
+		for _, id := range provider.Models {
+			models = append(models, ports.AgentModelInfo{ID: provider.Name + "/" + id, Label: id, Provider: provider.Name, IsDefault: provider.Default && id == provider.DefaultModel})
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("tau providers returned no configured models")
+	}
+	return models, nil
+}
+
+func tauConfigPaths(env map[string]string) []string {
+	home := envValue(env, "TAU_HOME")
+	if home == "" {
+		homeKey := "HOME"
+		if runtime.GOOS == "windows" {
+			homeKey = "USERPROFILE"
+		}
+		userHome := envValue(env, homeKey)
+		if userHome == "" {
+			userHome, _ = os.UserHomeDir()
+		}
+		home = filepath.Join(userHome, ".tau")
+	}
+	return []string{filepath.Join(home, "providers.json"), filepath.Join(home, "catalog.toml"), filepath.Join(home, "models-store.json"), filepath.Join(home, "codex-models-store.json")}
 }

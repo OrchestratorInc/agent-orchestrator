@@ -29,6 +29,7 @@ vi.mock("../ThemeProvider", () => ({
 }));
 
 import { ChatLinkProvider, ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
+import { FilesNavigationContext } from "../files/navigation";
 import { parseBlocks } from "./markdownBlocks";
 import * as androidSelection from "./useAndroidResponseSelection";
 
@@ -86,18 +87,24 @@ it.each(["ios", "android"])("offers one continuous selection across all response
 	}
 });
 
-it.each(["ios", "android"])("renders the agent reply as one in-place selection across headings, bullets, and code on %s", (os) => {
+it.each(["ios", "android"])("renders the agent reply's prose as one in-place selection, with code in its own card, on %s", (os) => {
 	platform.OS = os;
+	const onAddToChat = vi.fn();
 	let renderer!: ReactTestRenderer;
 	try {
-		act(() => { renderer = create(<ChatMarkdown continuousSelection text={[
+		act(() => { renderer = create(<ChatLinkProvider onLinkOpen={vi.fn()} onAddToChat={onAddToChat}><ChatMarkdown continuousSelection selectionSource={{ conversationId: "c", messageId: "m", revision: 1 }} text={[
 			"# Release steps", "", "Build the app.", "", "- Check iOS", "- Check Android", "",
 			"```sh", "npm test", "```",
-		].join("\n")} />); });
-		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
-		expect(selectable).toHaveLength(1);
-		expect(selectable[0].props.uiTextView).toBe(true);
-		expect(textOf(selectable[0])).toBe("Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android\n\nsh\nnpm test");
+		].join("\n")} /></ChatLinkProvider>); });
+		const selectable = renderer.root.findAll((node) => node.props.selectable === true && node.props.uiTextView === true);
+		expect(selectable.map(textOf)).toEqual(["Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android", "npm test"]);
+		// The fence is a card with the desktop's controls, not monospace prose.
+		expect(renderer.root.findAll((node) => node.props.accessibilityLabel === "Copy code")).toHaveLength(1);
+		// Its text can still be quoted into the chat, with the message as its source.
+		const code = selectable[1];
+		expect(code.props.addToChatEnabled).toBe(true);
+		act(() => code.props.onAddToChat({ nativeEvent: { text: "npm test" } }));
+		expect(onAddToChat).toHaveBeenCalledWith("npm test", { conversationId: "c", messageId: "m", revision: 1 });
 		act(() => renderer.unmount());
 	} finally {
 		platform.OS = "ios";
@@ -326,6 +333,83 @@ it.each([false, true])("opens an orchestrator's ao://sessions links as sessions,
 	act(() => renderer.unmount());
 });
 
+it.each([false, true])("opens a file link at the line it cites (continuous: %s)", (continuousSelection) => {
+	const openFile = vi.fn();
+	const onLinkOpen = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<ChatLinkProvider onLinkOpen={onLinkOpen}>
+			<FilesNavigationContext.Provider value={{ openChanges: vi.fn(), openFile }}>
+				<ChatMarkdown continuousSelection={continuousSelection} text={"See [browser-view-host.ts:1748](frontend/src/main/browser-view-host.ts:1748) and [mail](mailto:a@example.com)."} />
+			</FilesNavigationContext.Provider>
+		</ChatLinkProvider>);
+	});
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	expect(links.map(textOf)).toEqual(["browser-view-host.ts:1748"]);
+	// Neither a page nor a file: the Markdown stays as written.
+	expect(textOf(renderer.root)).toContain("[mail](mailto:a@example.com)");
+	act(() => links[0]!.props.onPress());
+	expect(openFile).toHaveBeenCalledWith("frontend/src/main/browser-view-host.ts", undefined, 1748);
+	expect(onLinkOpen).not.toHaveBeenCalled();
+	act(() => renderer.unmount());
+});
+
+it("keeps a route group's parentheses in a file link", () => {
+	const openFile = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<FilesNavigationContext.Provider value={{ openChanges: vi.fn(), openFile }}>
+			<ChatMarkdown text={"See [index.tsx:12](app/(tabs)/index.tsx:12) here."} />
+		</FilesNavigationContext.Provider>);
+	});
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	expect(links.map(textOf)).toEqual(["index.tsx:12"]);
+	expect(textOf(renderer.root)).toContain("See index.tsx:12 here.");
+	act(() => links[0]!.props.onPress());
+	expect(openFile).toHaveBeenCalledWith("app/(tabs)/index.tsx", undefined, 12);
+	act(() => renderer.unmount());
+});
+
+it("links a bare file name only when the session has that file", () => {
+	const openFile = vi.fn();
+	const wantBareFile = vi.fn();
+	const files = (bareFile: (name: string) => string | null | undefined) => ({ openChanges: vi.fn(), openFile, bareFile, wantBareFile });
+	const text = "See [README.md:3](README.md:3) and [docs](example.com).";
+	const links = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	let renderer!: ReactTestRenderer;
+	// Until the file list loads, both stay words and the list is asked for.
+	act(() => { renderer = create(<FilesNavigationContext.Provider value={files(() => undefined)}><ChatMarkdown text={text} /></FilesNavigationContext.Provider>); });
+	expect(links(renderer)).toEqual([]);
+	expect(wantBareFile).toHaveBeenCalledWith("README.md");
+	act(() => renderer.update(<FilesNavigationContext.Provider value={files((name) => name === "README.md" ? "docs/README.md" : null)}><ChatMarkdown text={text} /></FilesNavigationContext.Provider>));
+	expect(links(renderer).map(textOf)).toEqual(["README.md:3"]);
+	expect(textOf(renderer.root)).toContain("and docs.");
+	act(() => links(renderer)[0]!.props.onPress());
+	expect(openFile).toHaveBeenCalledWith("docs/README.md", undefined, 3);
+	act(() => renderer.unmount());
+});
+
+it("keeps prose around an unopenable file link as one native text on iOS", () => {
+	platform.OS = "ios";
+	let renderer!: ReactTestRenderer;
+	// The Review screen, say: no session's files to open, so the link is words
+	// and the paragraphs stay one range to select, as before file links existed.
+	act(() => { renderer = create(<ChatMarkdown text={"First, [api.ts:12](lib/api.ts:12).\n\nSecond paragraph."} />); });
+	const selectable = renderer.root.findAll((node) => node.props.selectable === true);
+	expect(selectable).toHaveLength(1);
+	expect(selectable[0].props.uiTextView).toBe(true);
+	expect(textOf(selectable[0])).toBe("First, api.ts:12.\n\nSecond paragraph.");
+	act(() => renderer.unmount());
+});
+
+it("shows a file link's label as words where no session can open it", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text="See [api.ts:12](lib/api.ts:12) now" />); });
+	expect(renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link")).toEqual([]);
+	expect(textOf(renderer.root)).toContain("See api.ts:12 now");
+	act(() => renderer.unmount());
+});
+
 it("leaves an ao:// link as words where nothing knows which machine it is on", () => {
 	let renderer!: ReactTestRenderer;
 	act(() => { renderer = create(<ChatMarkdown text="See ao://sessions/proj/ao-259 now" />); });
@@ -383,4 +467,82 @@ describe("inline Markdown nested in emphasis", () => {
 		expect(links(renderer).map(textOf)).toEqual(["new"]);
 		act(() => renderer.unmount());
 	});
+});
+
+it("draws nested and numbered list items in a reply with their markers and the source's numbers", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection text={"6. Sixth\n7. Seventh\n   - detail\n     - finer"} />); });
+	const [text] = renderer.root.findAll((node) => node.props.selectable === true).map(textOf);
+	expect(text).toBe("6. Sixth\n7. Seventh\n ◦ detail\n  ▪ finer");
+	act(() => renderer.unmount());
+});
+
+it("gives a quote and a rule in a reply surfaces of their own between the prose", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection text={"Before.\n\n> Quoted **words**\n\n---\n\nAfter."} />); });
+	expect(renderer.root.findAll((node) => node.props.selectable === true).map(textOf)).toEqual(["Before.", "Quoted words", "After."]);
+	const quote = renderer.root.find((node) => (node.type as string) === "View" && [node.props.style].flat().some((style) => style?.borderLeftWidth));
+	expect(textOf(quote as never)).toBe("Quoted words");
+	act(() => renderer.unmount());
+});
+
+it("reads backslash escapes, bold italics, and ends a bare address before its sentence's punctuation", () => {
+	const onLinkOpen = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatLinkProvider onLinkOpen={onLinkOpen}><ChatMarkdown text={"Use \\*args and ***both***. See https://example.com/a_(b)."} /></ChatLinkProvider>); });
+	const selectable = renderer.root.find((node) => node.props.selectable === true);
+	expect(textOf(selectable)).toBe("Use *args and both. See https://example.com/a_(b).");
+	const link = renderer.root.find((node) => node.props.accessibilityRole === "link");
+	act(() => link.props.onPress());
+	expect(onLinkOpen).toHaveBeenCalledWith("https://example.com/a_(b)");
+	const both = renderer.root.find((node) => (node.type as string) === "UITextView" && node.children.includes("both"));
+	expect(both.props.style).toEqual([expect.objectContaining({ fontWeight: "600" }), expect.objectContaining({ fontStyle: "italic" })]);
+	act(() => renderer.unmount());
+});
+
+it("steps headings down by level, keeping ## and ### semibold at prose size", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection text={"# One\n\n## Two\n\n### Three\n\n#### Four"} />); });
+	const flat = (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+	const headings = ["One", "Two", "Three", "Four"].map((label) => flat(renderer.root.find((node) => (node.type as string) === "UITextView" && node.children.includes(label)).props.style));
+	expect(headings.map((style) => [style.fontSize, style.fontFamily])).toEqual([
+		[18, "DMSans_600SemiBold"], [16, "DMSans_600SemiBold"], [16, "DMSans_600SemiBold"], [14, "DMSans_600SemiBold"],
+	]);
+	act(() => renderer.unmount());
+});
+
+it("shows a streaming reply's unfinished bold as bold", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection streaming text={"Working on **the fix"} />); });
+	expect(textOf(renderer.root.find((node) => node.props.selectable === true))).toBe("Working on the fix");
+	act(() => renderer.unmount());
+});
+
+it("closes italics inside bold on the bold's own closing run", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text={"A **bold *italic*** end, and ***both***."} />); });
+	expect(textOf(renderer.root.find((node) => node.props.selectable === true))).toBe("A bold italic end, and both.");
+	const italic = renderer.root.find((node) => (node.type as string) === "UITextView" && node.children.includes("italic"));
+	expect(italic.props.style).toEqual(expect.objectContaining({ fontStyle: "italic" }));
+	act(() => renderer.unmount());
+});
+
+it.each([
+	["an unclosed ** before many italic spans", `**${"*x* ".repeat(25)}`],
+	["a note whose bold never closes", `**Note: ${"abcdefghijklmnopqrstuvwxy".split("").map((letter) => `*${letter}*`).join(" ")}`],
+])("renders %s without backtracking", (_name, text) => {
+	let renderer!: ReactTestRenderer;
+	const started = performance.now();
+	act(() => { renderer = create(<ChatMarkdown text={text} />); });
+	expect(performance.now() - started).toBeLessThan(250);
+	// The spans still render as italics; the unclosed ** stays as written.
+	expect(textOf(renderer.root.find((node) => node.props.selectable === true)).startsWith("**")).toBe(true);
+	act(() => renderer.unmount());
+});
+
+it("does not open or close italics beside a space", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text={"2 * 3 * 4 and *real italics*"} />); });
+	expect(textOf(renderer.root.find((node) => node.props.selectable === true))).toBe("2 * 3 * 4 and real italics");
+	act(() => renderer.unmount());
 });

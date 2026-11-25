@@ -1,6 +1,6 @@
 # Connecting a physical phone (LAN bridge)
 
-> **Note:** `ao-phone-proxy.js` is **superseded** by the built-in Connect Mobile feature (Settings → Connect Mobile in the desktop app). This script is retained for reference only and is no longer the recommended approach.
+> **Note:** `ao-phone-proxy.js` is **superseded** by the built-in Connect Mobile feature (Settings → Mobile in the desktop app). This script is retained for reference only and is no longer the recommended approach.
 
 The AO daemon binds to **localhost only** (`127.0.0.1:3001`) by design — it has no
 auth, so it never exposes itself to the network. That means a **physical phone**
