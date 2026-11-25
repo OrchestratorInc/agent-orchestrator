@@ -646,6 +646,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath, node, labelTe
 			}}
 			target="_blank"
 			rel="noreferrer noopener"
+			data-chat-chip={chip || site || sessionChip || worded ? "" : undefined}
 			className={chip || site || sessionChip ? PULL_REQUEST_CHIP_CLASS : worded ? cn(PULL_REQUEST_CHIP_CLASS, "max-w-full") : className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
 			{chip && href ? <PullRequestChipContent href={href} repo={chip.repo} number={chip.number} /> : site && href ? (

@@ -2958,9 +2958,29 @@ html.sidebar-reordering * {
 	color: var(--color-text-primary);
 }
 
+/* Markdown set in small text (a plan's explanation, the question dock's notes):
+   its chips shrink with it, so a link or path does not stand taller than its line. */
+.chat-md-small [data-chat-chip] {
+	height: 1.125rem;
+	gap: 0.1875rem;
+	padding-inline: 0.3125rem;
+	font-size: inherit;
+	line-height: 1.125rem;
+}
+.chat-md-small [data-chat-chip] :is(svg, img, [data-link-favicon]) {
+	width: 0.75rem;
+	height: 0.75rem;
+}
+/* As specific as the timeline's own code size, which it must win over. */
+.chat-md.chat-md-small :is(code, .font-mono),
+.cursor-chat-timeline .chat-md.chat-md-small :is(code, .font-mono) {
+	font-size: var(--font-size-caption);
+}
+
 /* A row lights all its text from anywhere on its line: its label, what it acted on,
    and, for a row titled with its command, past the command over copy and the chevron. */
 .activity-row-toggle:hover :is(.activity-row-label, .activity-row-target),
+.activity-summary-button:hover .activity-row-target,
 .group\/cmdrow:hover :is(.activity-row-label, .activity-row-target) {
 	color: var(--color-text-primary);
 }

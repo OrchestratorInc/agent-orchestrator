@@ -954,7 +954,7 @@ function humanize(value: string): string {
 function DockText({ text, className, size = "var(--text-xs)" }: { text: string; className?: string; size?: string }) {
 	return (
 		<div style={{ "--chat-readable-font-size": size } as CSSProperties}>
-			<ChatMarkdown text={text} className={cn("text-xs leading-relaxed text-inherit break-words", className)} />
+			<ChatMarkdown text={text} className={cn("text-xs leading-relaxed text-inherit break-words", size !== "var(--text-sm)" && "chat-md-small", className)} />
 		</div>
 	);
 }

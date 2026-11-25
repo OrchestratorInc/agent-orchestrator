@@ -147,7 +147,7 @@ export const TurnPlan = memo(function TurnPlan({
 						{plan.explanation ? (
 							// Markdown like the reply around it, so a path or link reads as its chip.
 							<div className="px-3.5 pb-1.5" style={{ "--chat-readable-font-size": "var(--text-xs)" } as CSSProperties}>
-								<ChatMarkdown text={plan.explanation} muted className="text-xs leading-relaxed" />
+								<ChatMarkdown text={plan.explanation} muted className="chat-md-small text-xs leading-relaxed" />
 							</div>
 						) : null}
 

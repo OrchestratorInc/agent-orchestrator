@@ -18,6 +18,7 @@ import { useContext, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2, RunKindEdit, RunKindExecute, RunKindFetch, RunKindOther, RunKindRead, RunKindSearch } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
+import { ToolImageThumbs } from "./ToolImageThumbs";
 import { Pressable } from "../ui/pressable";
 import { ActivityRail, ActivityRow, ActivityTransition, RevealedChatActivity } from "./ChatTimelineItems";
 import { useChatEntrance } from "./chat-entrance";
@@ -111,7 +112,7 @@ export function ActivityRun({
 					<ActivityTransition value={summary} inline enter={entering}>{summary}</ActivityTransition>
 				</span>
 				{nonzeroExits > 0 ? (
-					<span className="text-xs text-muted-foreground/70">
+					<span className="activity-row-target text-xs text-muted-foreground/70">
 						{nonzeroExits} exited
 					</span>
 				) : null}
@@ -121,7 +122,7 @@ export function ActivityRun({
 					</span>
 				) : null}
 				{cancelled > 0 ? (
-					<span className="text-xs text-muted-foreground/70">
+					<span className="activity-row-target text-xs text-muted-foreground/70">
 						{cancelled} stopped
 					</span>
 				) : null}
@@ -149,6 +150,8 @@ export function ActivityRun({
 						open && "rotate-90",
 					)}
 				/>
+				{/* The images the group's steps read, like a glance at what the agent looked at. */}
+				<ToolImageThumbs activities={activities} />
 			</Pressable>
 
 			<AnimatePresence initial={false}>
@@ -337,6 +340,7 @@ function ActivitySubgroup({
 					</ActivityTransition>
 				</span>
 				<ChevronRight aria-hidden="true" className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
+				<ToolImageThumbs activities={activities} />
 			</Pressable>
 			<AnimatePresence initial={false}>
 				{open ? (

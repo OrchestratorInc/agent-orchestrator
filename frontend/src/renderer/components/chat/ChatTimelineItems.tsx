@@ -13,6 +13,7 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 
 import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
+import { ToolImageThumbs } from "./ToolImageThumbs";
 import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
@@ -3075,6 +3076,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 						className={cn("size-3 shrink-0 self-center text-muted-foreground/40 transition-transform group-hover/run:text-muted-foreground", open && "rotate-90")}
 					/>
 				) : null}
+				<ToolImageThumbs activities={[activity]} className="self-center" />
 				</span>
 			</Pressable>
 
