@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { connectorsApi, connectorsQueryKey, sessionProposalsQueryKey, type Connector, type ConnectorProposal } from "../../hooks/useConnectors";
 import { ConnectorSignInDialog } from "../settings/ConnectorSignInDialog";
 import { connectorTarget, needsSignIn } from "../settings/ConnectorsSection";
+import type { ReadyConnector } from "../../stores/connector-restart-store";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -16,7 +17,9 @@ const authKeys = {
 	none: "settings.connectors.dialog.authNone",
 } as const;
 
-export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { sessionId: string; hostId?: string; asked: boolean; waiting: boolean }) {
+export type ConnectorRestart = { ready?: string; busy: boolean; offer: (connector?: ReadyConnector) => void; restart: () => Promise<unknown> };
+
+export function ConnectorProposalDock({ sessionId, hostId, asked, waiting, restart }: { sessionId: string; hostId?: string; asked: boolean; waiting: boolean; restart?: ConnectorRestart }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const [draft, setDraft] = useState<{ id?: string; values: Record<string, string>; scope?: string; reviewed?: boolean }>({ values: {} });
@@ -44,11 +47,50 @@ export function ConnectorProposalDock({ sessionId, hostId, asked, waiting }: { s
 			settle();
 			void queryClient.invalidateQueries({ queryKey: connectorsQueryKey });
 			if (needsSignIn(connector)) setSignIn(connector);
+			else restart?.offer({ key: connector.key, name: connector.name });
 		},
 	});
+	const restarting = useMutation({ mutationFn: async () => restart?.restart(), onSuccess: () => restart?.offer() });
 	const decline = useMutation({ mutationFn: (pending: ConnectorProposal) => connectorsApi.declineProposal(pending.id, hostId), onSuccess: settle });
-	const signInDialog = signIn ? <ConnectorSignInDialog connector={signIn} hostId={hostId} onClose={() => setSignIn(null)} /> : null;
-	if (!proposal) return signInDialog;
+	const signInDialog = signIn ? (
+		<ConnectorSignInDialog
+			connector={signIn}
+			hostId={hostId}
+			onClose={(signedIn) => {
+				setSignIn(null);
+				if (signedIn) restart?.offer({ key: signIn.key, name: signIn.name });
+			}}
+		/>
+	) : null;
+	if (!proposal) {
+		return (
+			<>
+				{restart?.ready ? (
+					<div
+						role="group"
+						aria-label={t("chat.connectorRestart.dock")}
+						data-connector-restart
+						className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200 mb-2 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface p-3 text-sm shadow-sm"
+					>
+						<div className="flex min-w-0 flex-col gap-0.5">
+							<p className="font-medium text-foreground">{t("chat.connectorRestart.title", { name: restart.ready })}</p>
+							<p className="text-xs leading-snug text-muted-foreground">{t(restart.busy && !restarting.isPending ? "chat.connectorRestart.busy" : "chat.connectorRestart.body")}</p>
+							{restarting.error ? <p role="alert" className="text-xs leading-snug text-destructive">{restarting.error.message}</p> : null}
+						</div>
+						<div className="flex items-center gap-2">
+							<Button type="button" variant="secondary" size="sm" disabled={restarting.isPending} onClick={() => restart.offer()}>
+								{t("chat.connectorRestart.later")}
+							</Button>
+							<Button type="button" variant="accent" size="sm" disabled={restart.busy || restarting.isPending} onClick={() => restarting.mutate()}>
+								{t(restarting.isPending ? "chat.connectorRestart.restarting" : "chat.connectorRestart.restart")}
+							</Button>
+						</div>
+					</div>
+				) : null}
+				{signInDialog}
+			</>
+		);
+	}
 
 	const needed = [...proposal.envKeys, ...proposal.headerKeys];
 	const busy = approve.isPending || decline.isPending;

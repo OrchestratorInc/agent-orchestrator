@@ -60,6 +60,7 @@ import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from 
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { SessionBackgroundTasks } from "../BackgroundTasks";
+import { useConnectorRestartStore, type ReadyConnector } from "../../stores/connector-restart-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useTranscriptTiming } from "../../lib/performance-telemetry";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, continuableTurnId, type ChatFindRequest } from "./ChatWorkspace";
@@ -322,6 +323,17 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const autoCompact = useMemo(
 		() => ({ value: autoCompactWindow, disabled: applyingAutoCompact || agentBusy, onChange: saveAutoCompact }),
 		[agentBusy, applyingAutoCompact, autoCompactWindow, saveAutoCompact],
+	);
+	const readyConnector = useConnectorRestartStore((state) => state.ready[uiSessionId]);
+	const readyConnectorLoaded = Boolean(readyConnector && snapshot?.mcpServers?.some((server) => server.name === readyConnector.key && server.status === "ready"));
+	const offerConnectorRestart = useCallback((connector?: ReadyConnector) => useConnectorRestartStore.getState().offer(uiSessionId, connector), [uiSessionId]);
+	const restartForConnector = useLatestCallback(async () => {
+		await commands.restartAgent();
+		if (readyConnector) await commands.send(`The ${readyConnector.key} connector is ready. Continue.`);
+	});
+	const connectorRestart = useMemo(
+		() => ({ ready: readyConnectorLoaded ? undefined : readyConnector?.name, busy: agentBusy, offer: offerConnectorRestart, restart: restartForConnector }),
+		[agentBusy, offerConnectorRestart, readyConnector, readyConnectorLoaded, restartForConnector],
 	);
 	const switchBlocked = agentBusy || providerSwitch.isPending;
 	// A new pick for the same agent keeps the permission mode picked for it.
@@ -888,6 +900,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onResumeAgent={() => {
 					void commands.resumeAgent().catch(() => {});
 				}}
+				connectorRestart={connectorRestart}
 				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
 				resumeOpenElsewhere={commands.resumeError ? commands.resumeOpenElsewhere : controllerResumeOpenElsewhere}

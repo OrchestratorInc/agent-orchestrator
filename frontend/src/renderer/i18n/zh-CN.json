@@ -5393,6 +5393,13 @@
 	"chat.connectorProposal.review": "检查命令",
 	"chat.connectorProposal.arguments": "参数（原样）",
 	"chat.connectorProposal.runs": "批准后，此命令会在运行此聊天的电脑上运行。",
+	"chat.connectorRestart.dock": "连接器已就绪",
+	"chat.connectorRestart.title": "{{name}} 已就绪",
+	"chat.connectorRestart.body": "智能体会重启以加载其工具，然后继续任务。",
+	"chat.connectorRestart.busy": "智能体正在工作。它停止后即可重启。",
+	"chat.connectorRestart.restart": "重启并继续",
+	"chat.connectorRestart.restarting": "正在重启…",
+	"chat.connectorRestart.later": "稍后",
 	"chat.connectorProposal.approve": "批准",
 	"chat.connectorProposal.decline": "拒绝"
 }

@@ -5567,6 +5567,13 @@
 	"chat.connectorProposal.review": "Revisar comando",
 	"chat.connectorProposal.arguments": "Argumentos (exatos)",
 	"chat.connectorProposal.runs": "A aprovação executa este comando no computador que executa este chat.",
+	"chat.connectorRestart.dock": "Conector pronto",
+	"chat.connectorRestart.title": "{{name}} está pronto",
+	"chat.connectorRestart.body": "O agente reinicia para carregar as ferramentas e depois continua a tarefa.",
+	"chat.connectorRestart.busy": "O agente está trabalhando. Você pode reiniciá-lo quando ele parar.",
+	"chat.connectorRestart.restart": "Reiniciar e continuar",
+	"chat.connectorRestart.restarting": "Reiniciando…",
+	"chat.connectorRestart.later": "Mais tarde",
 	"chat.connectorProposal.approve": "Aprovar",
 	"chat.connectorProposal.decline": "Recusar"
 }

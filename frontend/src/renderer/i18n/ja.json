@@ -5411,6 +5411,13 @@
 	"chat.connectorProposal.review": "コマンドを確認",
 	"chat.connectorProposal.arguments": "引数（そのまま）",
 	"chat.connectorProposal.runs": "承認すると、このチャットを実行しているコンピューターでこのコマンドが実行されます。",
+	"chat.connectorRestart.dock": "コネクタの準備完了",
+	"chat.connectorRestart.title": "{{name}} の準備ができました",
+	"chat.connectorRestart.body": "エージェントを再起動してツールを読み込み、その後タスクを続行します。",
+	"chat.connectorRestart.busy": "エージェントが作業中です。停止したら再起動できます。",
+	"chat.connectorRestart.restart": "再起動して続行",
+	"chat.connectorRestart.restarting": "再起動中…",
+	"chat.connectorRestart.later": "後で",
 	"chat.connectorProposal.approve": "承認",
 	"chat.connectorProposal.decline": "拒否"
 }

@@ -44,6 +44,6 @@ The `ao` tool server has two connector tools.
 - `connector_list` lists the connectors with their status, and says which ones this session started with.
 - `connector_propose` asks the user to add a connector. The user sees the request above the message box and approves or declines it. Nothing is added before they approve. Give a `key`, a `url` or a `command` with `args`, and a one-sentence `reason`. For a value the server needs, give only its name in `envKeys` or `headerKeys`; the user types the value. The call waits for the answer for up to 100 seconds. When it says the request is still pending, do not ask again.
 
-An approved connector reaches sessions that start later. This session keeps the tools it started with.
+An approved connector reaches sessions that start later. This session gets its tools after its agent restarts: after an approval the chat shows the user a "Restart and continue" button, and a message then tells you that the connector is ready.
 
 Add, remove or import a connector only when the user asks for it. Propose one only when the task needs it.

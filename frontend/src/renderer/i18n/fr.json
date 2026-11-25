@@ -5567,6 +5567,13 @@
 	"chat.connectorProposal.review": "Vérifier la commande",
 	"chat.connectorProposal.arguments": "Arguments (exacts)",
 	"chat.connectorProposal.runs": "L'approbation exécute cette commande sur l'ordinateur qui exécute ce chat.",
+	"chat.connectorRestart.dock": "Connecteur prêt",
+	"chat.connectorRestart.title": "{{name}} est prêt",
+	"chat.connectorRestart.body": "L'agent redémarre pour charger ses outils, puis poursuit la tâche.",
+	"chat.connectorRestart.busy": "L'agent travaille. Vous pourrez le redémarrer quand il aura terminé.",
+	"chat.connectorRestart.restart": "Redémarrer et continuer",
+	"chat.connectorRestart.restarting": "Redémarrage…",
+	"chat.connectorRestart.later": "Plus tard",
 	"chat.connectorProposal.approve": "Approuver",
 	"chat.connectorProposal.decline": "Refuser"
 }

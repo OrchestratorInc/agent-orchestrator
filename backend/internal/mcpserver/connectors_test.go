@@ -39,7 +39,7 @@ func TestConnectorProposeWaitsForTheUsersAnswer(t *testing.T) {
 		"key": "sentry", "url": "https://mcp.sentry.dev/mcp", "reason": "To read the crash report.",
 	})
 	if isError || !strings.Contains(text, `"state":"approved"`) || !strings.Contains(text, `"connectorKey":"sentry"`) ||
-		!strings.Contains(text, "This session keeps the tools it started with") {
+		!strings.Contains(text, "This session gets them after its agent restarts") {
 		t.Fatalf("connector_propose = %s", text)
 	}
 	sent := daemon.last(t, http.MethodPost, "/api/v1/connectors/proposals").body

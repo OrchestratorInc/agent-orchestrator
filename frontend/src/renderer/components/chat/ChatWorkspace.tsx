@@ -214,7 +214,7 @@ import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./T
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ChatConnectorsMenu } from "./ChatConnectorsMenu";
-import { ConnectorProposalDock } from "./ConnectorProposalDock";
+import { ConnectorProposalDock, type ConnectorRestart } from "./ConnectorProposalDock";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
@@ -546,6 +546,7 @@ export interface ChatWorkspaceProps {
 	onContinueTurn?: () => Promise<unknown> | void;
 	commandError?: string;
 	onResumeAgent?: () => void | Promise<unknown>;
+	connectorRestart?: ConnectorRestart;
 	resumingAgent?: boolean;
 	resumeError?: string;
 	/** resumeError says another app still holds this chat. */
@@ -921,6 +922,7 @@ function ChatWorkspaceContent({
 	onContinueTurn,
 	commandError,
 	onResumeAgent,
+	connectorRestart,
 	resumingAgent,
 	resumeError,
 	resumeOpenElsewhere,
@@ -1886,7 +1888,7 @@ function ChatWorkspaceContent({
 					afterPicker={(
 						<>
 							{quotaSign}
-							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} hostId={activeRemoteHostId} agentName={agentLabel(snapshot.harness)} servers={stableMcpServers ?? NO_MCP_SERVERS} /> : null}
+							{uiSessionId ? <ChatConnectorsMenu sessionId={uiSessionId} hostId={activeRemoteHostId} agentName={agentLabel(snapshot.harness)} servers={stableMcpServers ?? NO_MCP_SERVERS} onSignedIn={connectorRestart?.offer} /> : null}
 						</>
 					)}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
@@ -2463,7 +2465,7 @@ function ChatWorkspaceContent({
 											{welcomeHeading ?? t(artifactSession ? "chat.welcome.artifactHeading" : "chat.welcome.heading")}
 										</h1>
 									) : null}
-									{uiSessionId ? <ConnectorProposalDock sessionId={uiSessionId} hostId={activeRemoteHostId} asked={connectorAsk.asked} waiting={connectorAsk.waiting} /> : null}
+									{uiSessionId ? <ConnectorProposalDock sessionId={uiSessionId} hostId={activeRemoteHostId} asked={connectorAsk.asked} waiting={connectorAsk.waiting} restart={connectorRestart} /> : null}
 									<McpServerBanner
 										key={draftScopeKey}
 										sessionId={uiSessionId}

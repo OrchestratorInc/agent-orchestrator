@@ -27,7 +27,7 @@ var connectorTools = []catalogTool{
 			"Give a server URL, or a command with its arguments. Never put a token, a key or a password in any field: " +
 			"list the names of the values in envKeys or headerKeys, and the user types them. " +
 			"The call waits for the answer for up to 100 seconds. When the state is still pending, do not ask again: continue without the connector. " +
-			"An approved connector reaches sessions that start later. This session keeps the tools it started with.",
+			"An approved connector reaches sessions that start later. This session gets its tools after its agent restarts: the user restarts it from the chat, and a message then says that the connector is ready.",
 		props: map[string]any{
 			"key":        stringProp("Short name that starts each tool name: 1 to 32 lowercase letters, digits, hyphens or underscores."),
 			"url":        stringProp("Server URL, https only. Give this or command."),
@@ -126,7 +126,7 @@ func proposalResult(proposal map[string]any) map[string]any {
 	out := keep(proposal, "state", "key", "connectorKey")
 	switch proposal["state"] {
 	case "approved":
-		out["next"] = "The user approved. Sessions that start from now get its tools. This session keeps the tools it started with."
+		out["next"] = "The user approved. Sessions that start from now get its tools. This session gets them after its agent restarts: the user restarts it from the chat, and a message then says that the connector is ready. Stop here and wait for that message."
 	case "declined":
 		out["next"] = "The user declined. Do not ask again for this connector. Continue without it."
 	case "pending":

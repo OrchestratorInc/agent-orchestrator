@@ -5715,6 +5715,13 @@
 	"chat.connectorProposal.review": "Проверить команду",
 	"chat.connectorProposal.arguments": "Аргументы (точно)",
 	"chat.connectorProposal.runs": "После одобрения эта команда выполнится на компьютере, где работает этот чат.",
+	"chat.connectorRestart.dock": "Коннектор готов",
+	"chat.connectorRestart.title": "{{name}} готов",
+	"chat.connectorRestart.body": "Агент перезапустится, чтобы загрузить инструменты, и затем продолжит задачу.",
+	"chat.connectorRestart.busy": "Агент работает. Его можно перезапустить, когда он остановится.",
+	"chat.connectorRestart.restart": "Перезапустить и продолжить",
+	"chat.connectorRestart.restarting": "Перезапуск…",
+	"chat.connectorRestart.later": "Позже",
 	"chat.connectorProposal.approve": "Одобрить",
 	"chat.connectorProposal.decline": "Отклонить"
 }

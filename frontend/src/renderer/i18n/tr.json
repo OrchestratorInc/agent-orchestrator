@@ -5391,6 +5391,13 @@
 	"chat.connectorProposal.review": "Komutu incele",
 	"chat.connectorProposal.arguments": "Argümanlar (tam)",
 	"chat.connectorProposal.runs": "Onay, bu komutu bu sohbeti çalıştıran bilgisayarda çalıştırır.",
+	"chat.connectorRestart.dock": "Bağlayıcı hazır",
+	"chat.connectorRestart.title": "{{name}} hazır",
+	"chat.connectorRestart.body": "Aracı, araçlarını yüklemek için yeniden başlar ve ardından göreve devam eder.",
+	"chat.connectorRestart.busy": "Aracı çalışıyor. Durduğunda yeniden başlatabilirsiniz.",
+	"chat.connectorRestart.restart": "Yeniden başlat ve devam et",
+	"chat.connectorRestart.restarting": "Yeniden başlatılıyor…",
+	"chat.connectorRestart.later": "Sonra",
 	"chat.connectorProposal.approve": "Onayla",
 	"chat.connectorProposal.decline": "Reddet"
 }

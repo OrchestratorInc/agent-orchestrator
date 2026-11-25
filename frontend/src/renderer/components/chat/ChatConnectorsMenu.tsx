@@ -5,6 +5,7 @@ import { Plug, Settings2 } from "@/components/app-icons";
 import { cn } from "@/lib/utils";
 import { connectorsApi, sessionConnectorsQueryKey, type SessionConnector } from "../../hooks/useConnectors";
 import { ConnectorSignInDialog } from "../settings/ConnectorSignInDialog";
+import type { ReadyConnector } from "../../stores/connector-restart-store";
 import { useUiStore } from "../../stores/ui-store";
 import type { McpServer } from "../../types/conversation";
 import { Button } from "../ui/button";
@@ -53,7 +54,7 @@ function RowStateLabel({ state, error }: { state: RowState; error?: string }) {
 	);
 }
 
-export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers }: { sessionId: string; hostId?: string; agentName: string; servers: readonly McpServer[] }) {
+export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers, onSignedIn }: { sessionId: string; hostId?: string; agentName: string; servers: readonly McpServer[]; onSignedIn?: (connector: ReadyConnector) => void }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const [signingIn, setSigningIn] = useState<SessionConnector | null>(null);
@@ -159,9 +160,10 @@ export function ChatConnectorsMenu({ sessionId, hostId, agentName, servers }: { 
 			<ConnectorSignInDialog
 				connector={{ id: signingIn.key, name: signingIn.name, signedIn: false }}
 				hostId={hostId}
-				onClose={() => {
+				onClose={(signedIn) => {
 					setSigningIn(null);
 					void refetch();
+					if (signedIn && reported.get(signingIn.key)?.status !== "ready") onSignedIn?.({ key: signingIn.key, name: signingIn.name });
 				}}
 			/>
 		) : null}

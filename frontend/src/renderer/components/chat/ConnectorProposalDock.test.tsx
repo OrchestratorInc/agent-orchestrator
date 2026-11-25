@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import * as hostClients from "../../lib/host-clients";
-import { ConnectorProposalDock } from "./ConnectorProposalDock";
+import { ConnectorProposalDock, type ConnectorRestart } from "./ConnectorProposalDock";
 
-function renderDock(props: { asked: boolean; waiting: boolean; hostId?: string }) {
+function renderDock(props: { asked: boolean; waiting: boolean; hostId?: string; restart?: ConnectorRestart }) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<QueryClientProvider client={client}>
@@ -98,6 +98,49 @@ describe("ConnectorProposalDock", () => {
 		}));
 		expect(await screen.findByRole("heading", { name: "Sign in to sentry" })).toBeInTheDocument();
 		await waitFor(() => expect(screen.queryByRole("group", { name: "Connector request" })).not.toBeInTheDocument());
+	});
+
+	it("offers a restart of the agent after an approval that needs no sign-in", async () => {
+		let pending = [paper];
+		vi.spyOn(apiClient, "GET").mockImplementation((async () => ({ data: { proposals: pending } })) as never);
+		vi.spyOn(apiClient, "POST").mockImplementation((async () => {
+			pending = [];
+			return { data: { proposal: { ...paper, state: "approved" }, connector: { ...added, id: "c2", key: "paper", name: "paper", transport: "stdio", auth: "none" } } };
+		}) as never);
+		const offer = vi.fn();
+		renderDock({ asked: true, waiting: true, restart: { busy: true, offer, restart: vi.fn() } });
+		fireEvent.click(await screen.findByRole("button", { name: "Review command" }));
+		fireEvent.change(screen.getByLabelText("Value for PAPER_KEY"), { target: { value: "typed" } });
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+		await waitFor(() => expect(offer).toHaveBeenCalledWith({ key: "paper", name: "paper" }));
+	});
+
+	it("restarts and continues from the notice only while the agent is not working, and can wait", async () => {
+		const offer = vi.fn();
+		const restart = vi.fn(async () => undefined);
+		const busy = renderDock({ asked: false, waiting: false, restart: { ready: "paper", busy: true, offer, restart } });
+		const notice = screen.getByRole("group", { name: "Connector ready" });
+		expect(notice).toHaveTextContent("paper is ready");
+		expect(notice).toHaveTextContent("The agent is working. You can restart it when it stops.");
+		expect(screen.getByRole("button", { name: "Restart and continue" })).toBeDisabled();
+		fireEvent.click(screen.getByRole("button", { name: "Later" }));
+		expect(offer).toHaveBeenCalledWith();
+		expect(restart).not.toHaveBeenCalled();
+		busy.unmount();
+		offer.mockClear();
+		renderDock({ asked: false, waiting: false, restart: { ready: "paper", busy: false, offer, restart } });
+		expect(screen.getByRole("group", { name: "Connector ready" })).toHaveTextContent("The agent restarts to get its tools, then continues the task.");
+		fireEvent.click(screen.getByRole("button", { name: "Restart and continue" }));
+		await waitFor(() => expect(offer).toHaveBeenCalledWith());
+		expect(restart).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows why a restart failed and keeps the notice", async () => {
+		const offer = vi.fn();
+		renderDock({ asked: false, waiting: false, restart: { ready: "paper", busy: false, offer, restart: async () => { throw new Error("Another app still has this chat open."); } } });
+		fireEvent.click(screen.getByRole("button", { name: "Restart and continue" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Another app still has this chat open.");
+		expect(offer).not.toHaveBeenCalled();
 	});
 
 	it("takes each value from the user before a command can be approved, and can decline", async () => {

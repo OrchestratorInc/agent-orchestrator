@@ -10,6 +10,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { agentReadinessQueryKey } from "../../hooks/useAgentReadinessQuery";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
+import type { ConnectorRestart } from "./ConnectorProposalDock";
 import { useConversationConfigOptions, useConversationModels, useConversationSkills } from "../../hooks/useConversation";
 
 // Background-task queries have their own hook/component and browser coverage.
@@ -60,6 +61,7 @@ const {
 	conversationCommandState: {
 		busy: false,
 		send: vi.fn(),
+		restartAgent: vi.fn(),
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
 		acknowledgeAcceptedTurn: vi.fn(),
@@ -104,6 +106,7 @@ const sideMocks = vi.hoisted(() => ({
 	agentSwitch: undefined as AgentSwitchProps | undefined,
 	stageAttachments: undefined as unknown,
 	settingsReady: undefined as boolean | undefined,
+	connectorRestart: undefined as ConnectorRestart | undefined,
 	workspaceSend: undefined as
 		| undefined
 		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<unknown>),
@@ -190,11 +193,13 @@ vi.mock("./ChatWorkspace", async () => {
 			onSend,
 			onStageAttachments,
 			settingsReady,
+			connectorRestart,
 			composerNotice,
 			importBlock,
 			findRequest,
 			onFindRequestHandled,
 		}: {
+			connectorRestart?: ConnectorRestart;
 			importBlock?: string;
 			onSend: typeof sideMocks.workspaceSend;
 			onStageAttachments?: unknown;
@@ -223,6 +228,7 @@ vi.mock("./ChatWorkspace", async () => {
 			sideMocks.workspaceSend = onSend;
 			sideMocks.stageAttachments = onStageAttachments;
 			sideMocks.settingsReady = settingsReady;
+			sideMocks.connectorRestart = connectorRestart;
 			sideMocks.attach = onAddToSideChat;
 			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);
@@ -325,6 +331,7 @@ beforeEach(() => {
 	conversationState.isLoadingOlder = false;
 	conversationState.loadOlder = vi.fn();
 	conversationCommandState.send = vi.fn().mockResolvedValue({});
+	conversationCommandState.restartAgent = vi.fn().mockResolvedValue(undefined);
 	conversationCommandState.busy = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
@@ -377,6 +384,35 @@ describe("SessionChatSurface recovery", () => {
 		};
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		expect(conversationCommandArgs.at(-1)).toEqual([session.id, undefined, false, true, "turn-1"]);
+	});
+});
+
+describe("SessionChatSurface connector restart", () => {
+	it("restarts the agent, tells it the connector is ready, and drops the notice once the agent has the connector", async () => {
+		const client = new QueryClient();
+		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.connectorRestart?.ready).toBeUndefined();
+		act(() => sideMocks.connectorRestart?.offer({ key: "hf", name: "Hugging Face" }));
+		expect(sideMocks.connectorRestart?.ready).toBe("Hugging Face");
+		view.unmount();
+		const again = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
+		expect(sideMocks.connectorRestart?.ready).toBe("Hugging Face");
+		await act(async () => { await sideMocks.connectorRestart?.restart(); });
+		expect(conversationCommandState.send).toHaveBeenCalledWith("The hf connector is ready. Continue.");
+		expect(conversationCommandState.restartAgent.mock.invocationCallOrder[0]).toBeLessThan(conversationCommandState.send.mock.invocationCallOrder[0] as number);
+		conversationState.snapshot = { capabilities: [], mcpServers: [{ name: "hf", status: "ready" }] };
+		again.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
+		expect(sideMocks.connectorRestart?.ready).toBeUndefined();
+		act(() => sideMocks.connectorRestart?.offer());
+	});
+
+	it("sends nothing when the restart fails", async () => {
+		conversationCommandState.restartAgent = vi.fn().mockRejectedValue(new Error("Another app still has this chat open."));
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		act(() => sideMocks.connectorRestart?.offer({ key: "hf", name: "hf" }));
+		await expect(sideMocks.connectorRestart?.restart()).rejects.toThrow("Another app still has this chat open.");
+		expect(conversationCommandState.send).not.toHaveBeenCalled();
+		act(() => sideMocks.connectorRestart?.offer());
 	});
 });
 

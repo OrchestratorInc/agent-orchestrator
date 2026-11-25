@@ -1263,6 +1263,14 @@ export function useConversationCommands(
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 		},
 	});
+	const restartAgent = async () => {
+		const { error } = await clientForSessionHost(hostId).POST(
+			"/api/v1/sessions/{sessionId}/exit-agent",
+			{ params: { path: { sessionId: sessionId as string } } },
+		);
+		if (error) throw apiErrorException(error);
+		await resume.mutateAsync();
+	};
 
 	/**
 	 * Summarize earlier history to reclaim context.
@@ -1748,13 +1756,9 @@ export function useConversationCommands(
 		/** Saves settings the agent only reads when it starts, then restarts it. The conversation is resumed, not replaced. */
 		chooseStartSettings: async (settings: TurnSettings) => {
 			await chooseSettings.mutateAsync({ targetSessionId: sessionId as string, settings });
-			const { error } = await clientForSessionHost(hostId).POST(
-				"/api/v1/sessions/{sessionId}/exit-agent",
-				{ params: { path: { sessionId: sessionId as string } } },
-			);
-			if (error) throw apiErrorException(error);
-			await resume.mutateAsync();
+			await restartAgent();
 		},
+		restartAgent,
 		/** A compaction is in flight provider-side and takes seconds, so it reads as
 		 *  its own state rather than folding into the generic busy flag, which also
 		 *  gates the composer. */

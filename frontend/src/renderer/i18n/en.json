@@ -5391,6 +5391,13 @@
 	"chat.connectorProposal.review": "Review command",
 	"chat.connectorProposal.arguments": "Arguments (exact)",
 	"chat.connectorProposal.runs": "Approval runs this command on the computer that runs this chat.",
+	"chat.connectorRestart.dock": "Connector ready",
+	"chat.connectorRestart.title": "{{name}} is ready",
+	"chat.connectorRestart.body": "The agent restarts to get its tools, then continues the task.",
+	"chat.connectorRestart.busy": "The agent is working. You can restart it when it stops.",
+	"chat.connectorRestart.restart": "Restart and continue",
+	"chat.connectorRestart.restarting": "Restarting…",
+	"chat.connectorRestart.later": "Later",
 	"chat.connectorProposal.approve": "Approve",
 	"chat.connectorProposal.decline": "Decline"
 }

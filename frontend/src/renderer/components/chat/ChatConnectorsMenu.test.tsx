@@ -114,16 +114,21 @@ describe("ChatConnectorsMenu", () => {
 		vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined as never);
 		const user = userEvent.setup();
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const signedIn = vi.fn();
 		render(
 			<QueryClientProvider client={client}>
-				<ChatConnectorsMenu sessionId="mer-1" hostId="air" agentName="Codex" servers={[]} />
+				<ChatConnectorsMenu sessionId="mer-1" hostId="air" agentName="Codex" servers={[{ name: "sentry", status: "failed" }]} onSignedIn={signedIn} />
 			</QueryClientProvider>,
 		);
 		await user.click(await screen.findByRole("button", { name: "1 connector in this chat" }));
 		await user.click(screen.getByRole("button", { name: "Sign in to Sentry" }));
 		expect(await screen.findByRole("heading", { name: "Sign in to Sentry" })).toBeInTheDocument();
 		await vi.waitFor(() => expect(remote.POST).toHaveBeenCalledWith("/api/v1/connectors/{connectorId}/connect", { params: { path: { connectorId: "sentry" } } }));
-		expect(await screen.findByLabelText("Page did not load after you approved? Paste its address.")).toBeInTheDocument();
+		await user.type(await screen.findByLabelText("Page did not load after you approved? Paste its address."), "http://127.0.0.1:3011/oauth/mcp/callback?code=1");
+		await user.click(screen.getByRole("button", { name: "Finish" }));
+		expect(signedIn).not.toHaveBeenCalled();
+		await user.click(await screen.findByRole("button", { name: "Done" }));
+		expect(signedIn).toHaveBeenCalledWith({ key: "sentry", name: "Sentry" });
 		expect(local).not.toHaveBeenCalled();
 	});
 

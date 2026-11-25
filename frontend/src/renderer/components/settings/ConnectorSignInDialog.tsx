@@ -27,7 +27,7 @@ function openPage(url: string) {
 	void Promise.resolve().then(() => aoBridge.app.openExternal(url)).catch(() => undefined);
 }
 
-export function ConnectorSignInDialog({ connector, hostId, onClose }: { connector: Pick<Connector, "id" | "name" | "signedIn">; hostId?: string; onClose: () => void }) {
+export function ConnectorSignInDialog({ connector, hostId, onClose }: { connector: Pick<Connector, "id" | "name" | "signedIn">; hostId?: string; onClose: (signedIn: boolean) => void }) {
 	const { t } = useTranslation();
 	const [address, setAddress] = useState("");
 	const [copied, setCopied] = useState(false);
@@ -64,7 +64,7 @@ export function ConnectorSignInDialog({ connector, hostId, onClose }: { connecto
 	const error = start.error ?? finish.error;
 
 	return (
-		<Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+		<Dialog open onOpenChange={(open) => { if (!open) onClose(done); }}>
 			<DialogContent showCloseButton={false} className={cn(settingsDialogContentClass, "w-[min(480px,calc(100vw-24px))]")} data-connector-sign-in aria-describedby={undefined}>
 				<DialogClose asChild>
 					<CloseButton floating aria-label={t("confirm.close")} />
@@ -79,7 +79,7 @@ export function ConnectorSignInDialog({ connector, hostId, onClose }: { connecto
 								<Check className="size-4 text-success" aria-hidden="true" />
 								{t(start.isSuccess && !page && !connector.signedIn ? "settings.connectors.signInDialog.notNeeded" : "settings.connectors.signInDialog.done")}
 							</p>
-							<Button type="button" variant="primary" className="self-end" onClick={onClose}>{t("settings.connectors.signInDialog.close")}</Button>
+							<Button type="button" variant="primary" className="self-end" onClick={() => onClose(done)}>{t("settings.connectors.signInDialog.close")}</Button>
 						</>
 					) : start.isPending || !page ? (
 						start.isPending ? (

@@ -5411,6 +5411,13 @@
 	"chat.connectorProposal.review": "Befehl prüfen",
 	"chat.connectorProposal.arguments": "Argumente (exakt)",
 	"chat.connectorProposal.runs": "Die Genehmigung führt diesen Befehl auf dem Computer aus, auf dem dieser Chat läuft.",
+	"chat.connectorRestart.dock": "Konnektor bereit",
+	"chat.connectorRestart.title": "{{name}} ist bereit",
+	"chat.connectorRestart.body": "Der Agent startet neu, um die Tools zu laden, und setzt dann die Aufgabe fort.",
+	"chat.connectorRestart.busy": "Der Agent arbeitet. Du kannst ihn neu starten, wenn er fertig ist.",
+	"chat.connectorRestart.restart": "Neu starten und fortfahren",
+	"chat.connectorRestart.restarting": "Wird neu gestartet…",
+	"chat.connectorRestart.later": "Später",
 	"chat.connectorProposal.approve": "Genehmigen",
 	"chat.connectorProposal.decline": "Ablehnen"
 }
