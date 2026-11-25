@@ -5463,6 +5463,7 @@
 	"artifactComments.newPlaceholder": "添加评论…",
 	"artifactComments.comment": "评论",
 	"artifactComments.cancel": "取消",
+	"artifactComments.reply": "回复",
 	"artifactComments.replyPlaceholder": "回复…",
 	"artifactComments.sendReply": "发送回复",
 	"artifactComments.resolve": "解决",

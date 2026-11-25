@@ -5820,6 +5820,7 @@
 	"artifactComments.newPlaceholder": "Добавить комментарий…",
 	"artifactComments.comment": "Комментировать",
 	"artifactComments.cancel": "Отмена",
+	"artifactComments.reply": "Ответить",
 	"artifactComments.replyPlaceholder": "Ответить…",
 	"artifactComments.sendReply": "Отправить ответ",
 	"artifactComments.resolve": "Решено",

@@ -144,8 +144,12 @@ function NewCommentBox({ compact, draft, onCancel, onChange, onSubmit }: {
 	);
 }
 
-/** The chat-style reply box: Enter sends, Shift+Enter adds a line, and the accent arrow sends. */
-function ReplyBox({ onSubmit }: { onSubmit: (body: string, clientId: string) => Promise<unknown> }) {
+/**
+ * The chat-style reply box, opened by Reply: Enter sends, Shift+Enter adds a
+ * line, and the accent arrow sends. It closes once the reply is posted, or on
+ * Esc while empty; a failed post keeps it open with the text and Retry.
+ */
+function ReplyBox({ onClose, onSubmit }: { onClose: () => void; onSubmit: (body: string, clientId: string) => Promise<unknown> }) {
 	const { t } = useTranslation();
 	const [text, setText] = useState("");
 	const [failed, setFailed] = useState(false);
@@ -160,6 +164,7 @@ function ReplyBox({ onSubmit }: { onSubmit: (body: string, clientId: string) => 
 		try {
 			await onSubmit(body, clientId.current);
 			clientId.current = crypto.randomUUID();
+			onClose();
 		} catch {
 			setText(body);
 			setFailed(true);
@@ -171,6 +176,10 @@ function ReplyBox({ onSubmit }: { onSubmit: (body: string, clientId: string) => 
 		if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
 			event.preventDefault();
 			void submit();
+		} else if (event.key === "Escape" && !text.trim()) {
+			// Closes the box, not the popover.
+			event.preventDefault();
+			onClose();
 		}
 	};
 	return (
@@ -178,6 +187,7 @@ function ReplyBox({ onSubmit }: { onSubmit: (body: string, clientId: string) => 
 			<div className="flex items-end gap-1 rounded-md border border-border bg-background py-1 pr-1 pl-2.5 focus-within:border-logo-accent">
 				<textarea
 					aria-label={t("artifactComments.replyPlaceholder")}
+					autoFocus
 					className="board-scrollbar max-h-32 min-h-6 w-full resize-none border-0 bg-transparent py-0.5 text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
 					maxLength={ARTIFACT_COMMENT_MAX_BODY_LENGTH}
 					onChange={(event) => setText(event.target.value)}
@@ -337,6 +347,7 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 	const authorLabel = useArtifactCommentAuthorLabel();
 	const [sendOpen, setSendOpen] = useState(false);
 	const [statusError, setStatusError] = useState(false);
+	const [replying, setReplying] = useState(false);
 	const pending = isPendingId(thread.id);
 	const resolved = thread.status === "resolved";
 	// Send to agent: the app's owner only, and only when the session that made the file is here.
@@ -364,11 +375,14 @@ function ThreadView({ comments, sendTarget, thread, viewer, version }: {
 			{visibleComments(thread).map((comment, index) => (
 				<CommentItem aside={index === 0 ? aside : undefined} comment={comment} comments={comments} key={comment.id} reply={index > 0} viewer={viewer} />
 			))}
-			{!resolved && !pending ? (
-				<ReplyBox onSubmit={(body, clientId) => comments.reply(thread.id, body, clientId)} />
+			{replying && !resolved && !pending ? (
+				<ReplyBox onClose={() => setReplying(false)} onSubmit={(body, clientId) => comments.reply(thread.id, body, clientId)} />
 			) : null}
 			{!pending ? (
 				<div className="flex items-center gap-1">
+					{!resolved && !replying ? (
+						<Button onClick={() => setReplying(true)} size="xs" type="button" variant="secondary">{t("artifactComments.reply")}</Button>
+					) : null}
 					{resolved ? (
 						<Button onClick={() => setStatus("open")} size="xs" type="button" variant="secondary">
 							<RotateCcw aria-hidden="true" className="size-3" />{t("artifactComments.reopen")}

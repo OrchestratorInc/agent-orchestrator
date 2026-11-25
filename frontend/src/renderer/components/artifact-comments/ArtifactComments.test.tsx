@@ -289,12 +289,37 @@ describe("ArtifactCommentsWorkspace", () => {
 		expect(screen.queryByTestId("published-frame")).not.toBeInTheDocument();
 	});
 
+	it("opens the reply box from Reply, and closes it on Esc while empty or once the reply posts", async () => {
+		const client = fakeClient();
+		client.replyArtifactShareThread.mockResolvedValue({ id: "c9", threadId: "t1", clientId: "k9", author: aditi, body: "Done", createdAt: "2026-11-23T11:00:00Z", editedAt: null, deleted: false });
+		const { port } = await ready(client);
+		const popover = await openElement(port);
+		await within(popover).findByText("Yes, will add.");
+		expect(within(popover).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
+
+		await userEvent.click(within(popover).getByRole("button", { name: "Reply" }));
+		expect(within(popover).getByRole("textbox", { name: "Reply…" })).toHaveFocus();
+		expect(within(popover).queryByRole("button", { name: "Reply" })).not.toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(within(popover).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
+		// Esc closed the box only: the popover stays.
+		expect(screen.getByRole("complementary", { name: "Comments" })).toBeInTheDocument();
+
+		await userEvent.click(within(popover).getByRole("button", { name: "Reply" }));
+		await userEvent.type(within(popover).getByRole("textbox", { name: "Reply…" }), "Done{Enter}");
+		await waitFor(() => expect(within(popover).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument());
+		expect(client.replyArtifactShareThread).toHaveBeenCalledWith("cf-staging-x7", "t1", { body: "Done", clientId: expect.any(String) });
+		expect(within(popover).getByRole("button", { name: "Reply" })).toBeInTheDocument();
+		port.close();
+	});
+
 	it("shows a reply at once and keeps the text with Retry when it fails", async () => {
 		const client = fakeClient();
 		client.replyArtifactShareThread.mockRejectedValue(new Error("offline"));
 		const { port } = await ready(client);
 		const popover = await openElement(port);
-		const box = await within(popover).findByRole("textbox", { name: "Reply…" });
+		await userEvent.click(await within(popover).findByRole("button", { name: "Reply" }));
+		const box = within(popover).getByRole("textbox", { name: "Reply…" });
 		await userEvent.type(box, "On it{Enter}");
 		expect(await within(popover).findByText("Couldn't post.")).toBeInTheDocument();
 		expect(box).toHaveValue("On it");
@@ -362,7 +387,7 @@ describe("ArtifactCommentsPanel: one element's comments", () => {
 		const popover = await openElement(port);
 		const threadIds = () => [...popover.querySelectorAll("[data-thread-id]")].map((node) => [node.getAttribute("data-thread-id"), node.hasAttribute("data-thread-folded")]);
 		await waitFor(() => expect(threadIds()).toEqual([["t2", false], ["t1", true]]));
-		expect(within(popover).getAllByRole("textbox", { name: "Reply…" })).toHaveLength(1);
+		expect(within(popover).getAllByRole("button", { name: "Reply" })).toHaveLength(1);
 		const folded = within(popover).getByRole("button", { expanded: false, name: /staging only/ });
 		expect(within(folded).getByText("1 reply")).toBeInTheDocument();
 		await userEvent.click(folded);
@@ -398,7 +423,7 @@ describe("ArtifactCommentsPanel: one element's comments", () => {
 		expect(within(popover).getByText("Resolved by Aditi")).toBeInTheDocument();
 		expect(within(popover).getByRole("button", { name: "Reopen" })).toBeInTheDocument();
 		expect(within(popover).queryByRole("button", { name: /Send to agent|Send again/ })).not.toBeInTheDocument();
-		expect(within(popover).queryByRole("textbox", { name: "Reply…" })).not.toBeInTheDocument();
+		expect(within(popover).queryByRole("button", { name: "Reply" })).not.toBeInTheDocument();
 		port.close();
 	});
 

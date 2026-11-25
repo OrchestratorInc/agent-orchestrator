@@ -5461,6 +5461,7 @@
 	"artifactComments.newPlaceholder": "Add a comment…",
 	"artifactComments.comment": "Comment",
 	"artifactComments.cancel": "Cancel",
+	"artifactComments.reply": "Reply",
 	"artifactComments.replyPlaceholder": "Reply…",
 	"artifactComments.sendReply": "Send reply",
 	"artifactComments.resolve": "Resolve",

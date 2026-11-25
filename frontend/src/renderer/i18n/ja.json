@@ -5481,6 +5481,7 @@
 	"artifactComments.newPlaceholder": "コメントを追加…",
 	"artifactComments.comment": "コメント",
 	"artifactComments.cancel": "キャンセル",
+	"artifactComments.reply": "返信",
 	"artifactComments.replyPlaceholder": "返信…",
 	"artifactComments.sendReply": "返信を送信",
 	"artifactComments.resolve": "解決",

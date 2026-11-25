@@ -5481,6 +5481,7 @@
 	"artifactComments.newPlaceholder": "댓글 추가…",
 	"artifactComments.comment": "댓글",
 	"artifactComments.cancel": "취소",
+	"artifactComments.reply": "답글",
 	"artifactComments.replyPlaceholder": "답글…",
 	"artifactComments.sendReply": "답글 보내기",
 	"artifactComments.resolve": "해결",

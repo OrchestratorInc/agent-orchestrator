@@ -5656,6 +5656,7 @@
 	"artifactComments.newPlaceholder": "Añadir un comentario…",
 	"artifactComments.comment": "Comentar",
 	"artifactComments.cancel": "Cancelar",
+	"artifactComments.reply": "Responder",
 	"artifactComments.replyPlaceholder": "Responder…",
 	"artifactComments.sendReply": "Enviar respuesta",
 	"artifactComments.resolve": "Resolver",
