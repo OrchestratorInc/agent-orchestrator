@@ -59,8 +59,15 @@ func verifyKimiRuntimeHistory(ctx context.Context, root *os.Root, proof kimiImpo
 	if err != nil {
 		return "", err
 	}
+	// Kimi records every subagent the conversation starts in state.json, so a
+	// continued import may hold more agents than it was copied with. Only the
+	// main agent carries the imported history this proof covers.
 	var state kimiImportState
-	if json.Unmarshal(data, &state) != nil || state.ID != proof.ID || state.Version != 2 || state.Archived || state.CWD != proof.CWD || len(state.Agents) != 1 || state.Agents["main"].Type != "main" {
+	if json.Unmarshal(data, &state) != nil || state.ID != proof.ID || state.Version != 2 || state.Archived || state.CWD != proof.CWD {
+		return "", fail
+	}
+	mainAgent, ok := state.Agents["main"]
+	if !ok || mainAgent.Type != "main" {
 		return "", fail
 	}
 	agentDir := filepath.Join(base, "agents", "main")
@@ -68,7 +75,7 @@ func verifyKimiRuntimeHistory(ctx context.Context, root *os.Root, proof kimiImpo
 	if err != nil {
 		return "", err
 	}
-	recordedHome, err := filepath.EvalSymlinks(state.Agents["main"].Home)
+	recordedHome, err := filepath.EvalSymlinks(mainAgent.Home)
 	if err != nil || recordedHome != expectedHome {
 		return "", fail
 	}

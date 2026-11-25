@@ -207,3 +207,68 @@ func TestKimiRuntimeRecoversLegacyPrefixProof(t *testing.T) {
 		})
 	}
 }
+
+// Kimi adds each subagent a conversation starts to state.json. An imported chat
+// that has used one must still reopen, while the main agent stays required.
+func TestKimiImportedRuntimeReopensAfterSubagentUse(t *testing.T) {
+	r := kimiImportFixture(t)
+	ref, err := prepareKimiImport(t.Context(), r, "2.4.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Dir(filepath.Dir(filepath.Dir(ref.TranscriptPath)))
+	statePath := filepath.Join(sessionDir, "state.json")
+	original, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrite := func(edit func(agents map[string]any)) {
+		t.Helper()
+		var state map[string]any
+		if err := json.Unmarshal(original, &state); err != nil {
+			t.Fatal(err)
+		}
+		agents, ok := state["agents"].(map[string]any)
+		if !ok {
+			t.Fatalf("state has no agents map: %s", original)
+		}
+		edit(agents)
+		data, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(statePath, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reopen := func() error {
+		_, _, err := ImportedRuntimeEnv(t.Context(), ref.ConfigDir, r.DataDir, r.NativeSessionID, r.LaunchCWD, "", nil)
+		return err
+	}
+
+	subagentHome := filepath.Join(sessionDir, "agents", "subagent-1")
+	if err := os.MkdirAll(subagentHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rewrite(func(agents map[string]any) {
+		agents["subagent-1"] = map[string]any{"homedir": subagentHome, "type": "subagent"}
+	})
+	if err := reopen(); err != nil {
+		t.Fatalf("imported chat with a subagent could not reopen: %v", err)
+	}
+
+	rewrite(func(agents map[string]any) {
+		agents["subagent-1"] = map[string]any{"homedir": subagentHome, "type": "subagent"}
+		delete(agents, "main")
+	})
+	if err := reopen(); err == nil || !strings.Contains(err.Error(), "binding changed") {
+		t.Fatalf("state without its main agent reopened: %v", err)
+	}
+
+	rewrite(func(agents map[string]any) {
+		agents["main"].(map[string]any)["type"] = "subagent"
+	})
+	if err := reopen(); err == nil || !strings.Contains(err.Error(), "binding changed") {
+		t.Fatalf("state whose main agent changed type reopened: %v", err)
+	}
+}
