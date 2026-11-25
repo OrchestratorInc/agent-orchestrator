@@ -46,6 +46,17 @@ test("starts on Cancel while it can't be confirmed yet, so focus never stays beh
 	opener.remove();
 });
 
+test("starts on Cancel when asked, so a repeated Enter cancels instead of confirming", async () => {
+	const user = userEvent.setup();
+	const onConfirm = vi.fn();
+	const onOpenChange = vi.fn();
+	render(<ConfirmDialog open initialFocus="cancel" title="Switch profile?" description="Pages reload." confirmLabel="Switch profile" onConfirm={onConfirm} onOpenChange={onOpenChange} />);
+	await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+	await user.keyboard("{Enter}");
+	expect(onConfirm).not.toHaveBeenCalled();
+	expect(onOpenChange).toHaveBeenCalledWith(false);
+});
+
 test("ignores Escape while busy", () => {
 	const onOpenChange = vi.fn();
 	render(<ConfirmDialog open busy title="Kill?" description="Sure?" confirmLabel="Kill it" onConfirm={vi.fn()} onOpenChange={onOpenChange} />);

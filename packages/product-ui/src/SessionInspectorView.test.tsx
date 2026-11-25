@@ -238,11 +238,12 @@ describe("portable inspector presentations", () => {
     expect(Boolean(context.compareDocumentPosition(pullRequest) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
-  it("places the Setup and Cleanup sections before the activity and lets a section start collapsed", () => {
+  it("places the Setup and Cleanup sections before the footer and lets a section start collapsed", () => {
     render(
       <SessionInspectorSummaryView
         activity={<div>activity</div>}
         activityTitle="Activity"
+        footer={<div>account</div>}
         scripts={<InspectorSection defaultOpen={false} surface={false} title="Setup"><div>setup log</div></InspectorSection>}
       />,
     );
@@ -250,13 +251,42 @@ describe("portable inspector presentations", () => {
     const setup = screen.getByRole("button", { name: "Setup" });
     expect(setup).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("setup log")).toBeNull();
-    expect(Boolean(setup.compareDocumentPosition(screen.getByText("activity")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
+    expect(screen.queryByText("activity")).not.toBeInTheDocument();
+    expect(Boolean(setup.compareDocumentPosition(screen.getByText("account")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     fireEvent.click(setup);
     expect(setup).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("setup log")).toBeInTheDocument();
   });
 
-  it("omits the PR/artifacts section entirely when no title is given", () => {
+  it("renders the footer rows after the sections, leaving an empty footer for the CSS to hide", () => {
+    const Nothing = () => null;
+    const { container, rerender } = render(
+      <SessionInspectorSummaryView
+        footer={<div>account</div>}
+        pullRequestCards={<div>pull request</div>}
+        pullRequestTitle="Pull request"
+      />,
+    );
+
+    const footer = container.querySelector("[data-inspector-footer]");
+    expect(footer).toContainElement(screen.getByText("account"));
+    expect(footer?.previousElementSibling).toBe(screen.getByTestId("inspector-section"));
+
+    rerender(
+      <SessionInspectorSummaryView
+        footer={<><Nothing /><Nothing /></>}
+        pullRequestCards={<div>pull request</div>}
+        pullRequestTitle="Pull request"
+      />,
+    );
+    expect(container.querySelector("[data-inspector-footer]")).toBeEmptyDOMElement();
+
+    rerender(<SessionInspectorSummaryView pullRequestCards={<div>pull request</div>} pullRequestTitle="Pull request" />);
+    expect(container.querySelector("[data-inspector-footer]")).toBeNull();
+  });
+
+  it("omits the PR, artifacts, and commented-out Activity sections when no titles are given", () => {
     render(
       <SessionInspectorSummaryView
         activity={<div>activity</div>}
@@ -264,7 +294,8 @@ describe("portable inspector presentations", () => {
       />,
     );
 
-    expect(screen.queryAllByTestId("inspector-section")).toHaveLength(1);
+    expect(screen.queryAllByTestId("inspector-section")).toHaveLength(0);
+    expect(screen.queryByText("Activity")).not.toBeInTheDocument();
   });
 
   it("drops the frame, title and number when the host draws its own header", () => {
@@ -1162,5 +1193,11 @@ describe("commentTextLines", () => {
     expect(commentTextLines("```suggestion\nconst x = 1;\n```")).toEqual(["const x = 1;"]);
     expect(commentTextLines("_⚠️ Potential issue_\n\n**Rename `snake_case_name`.**\n\n___")).toEqual(["⚠️ Potential issue", "Rename snake_case_name."]);
     expect(commentTextLines("Keep my_var and `_private_` as written.")).toEqual(["Keep my_var and _private_ as written."]);
+  });
+
+  it("previews a GitHub alert by its text, not its [!NOTE] marker", () => {
+    expect(commentTextLines("> [!NOTE]\n> Free review of this PR on us.")).toEqual(["Free review of this PR on us."]);
+    expect(commentTextLines("[!warning]\nCheck the migration.")).toEqual(["Check the migration."]);
+    expect(commentTextLines("> [!NOTE]\n> ## Reviews paused\n> - Resume with a comment")).toEqual(["Reviews paused", "Resume with a comment"]);
   });
 });

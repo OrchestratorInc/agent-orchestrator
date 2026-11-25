@@ -744,3 +744,28 @@ func TestAccountHandoffAbortedMoveKeepsTheQueueHeld(t *testing.T) {
 		t.Fatalf("provider received %v, want nothing more on the limited account", got)
 	}
 }
+
+func TestAccountHandoffLeavesEventTurnsOnTheirAccount(t *testing.T) {
+	hh := newHandoffHarness(t, domain.HarnessClaudeCode)
+	source := failUsageLimitedEvent(t, hh.harness, "CI is failing on PR 12", usageLimitMessage(domain.HarnessClaudeCode, true, hh.now()))
+	hh.tick(t)
+	hh.tick(t)
+	if moves := hh.mover.moves(); len(moves) != 0 {
+		t.Fatalf("moves = %+v, want none", moves)
+	}
+	if after, err := hh.st.TurnByID(context.Background(), source.ID); err != nil || after.UsageLimit.AutoResume {
+		t.Fatalf("source limit = %+v, %v, want no consent the user did not give", after.UsageLimit, err)
+	}
+	resumed, err := hh.svc.RetryTurn(context.Background(), testSession, source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hh.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: resumed.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New(usageLimitMessage(domain.HarnessClaudeCode, true, hh.now()))})
+	failedTurnSnapshot(t, hh.harness, resumed.ID)
+	hh.tick(t)
+	hh.tick(t)
+	if moves := hh.mover.moves(); len(moves) != 0 {
+		t.Fatalf("moves after a refused continue = %+v, want none", moves)
+	}
+}

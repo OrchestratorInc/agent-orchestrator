@@ -418,7 +418,7 @@ func actionableUsageLimitTurn(ctx context.Context, turns Store, source domain.Co
 	if source.State != domain.TurnStateFailed || source.RolledBackAt != nil || source.UsageLimit == nil {
 		return fmt.Errorf("%w: this turn is not an actionable usage-limit failure", ErrUsageLimitAutoResumeInvalid)
 	}
-	return validateUsageLimitRetry(ctx, turns, store, source)
+	return validateUsageLimitRetry(ctx, turns, store, source, false)
 }
 
 func (c *Controller) retryAccountHandoffTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {

@@ -133,6 +133,7 @@ export interface ConversationTurn {
 	hasRetryAttempt?: boolean;
 	/** Durable human-prompt fact, independent of the loaded history page. */
 	hasHumanPrompt?: boolean;
+	hasEventPrompt?: boolean;
 	/**
 	 * Where the turn's group sorts when that is not its first loaded item: a
 	 * turn whose prompt is above the loaded part of a history began before

@@ -3399,37 +3399,6 @@ func (q *Queries) SelectConversationEditDelivery(ctx context.Context, arg Select
 	return i, err
 }
 
-const selectConversationHumanPromptTurnIDs = `-- name: SelectConversationHumanPromptTurnIDs :many
-SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id
-FROM conversation_messages
-WHERE conversation_id = ?1
-  AND turn_id IS NOT NULL AND role = 'user' AND origin = 'human'
-`
-
-// Prompt eligibility must survive the original message falling outside a page.
-func (q *Queries) SelectConversationHumanPromptTurnIDs(ctx context.Context, conversationID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, selectConversationHumanPromptTurnIDs, conversationID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var turn_id string
-		if err := rows.Scan(&turn_id); err != nil {
-			return nil, err
-		}
-		items = append(items, turn_id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const selectConversationMessageByClientID = `-- name: SelectConversationMessageByClientID :one
 SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation, authored_by_user FROM conversation_messages
 WHERE conversation_id = ? AND client_message_id = ? AND client_message_id <> ''
@@ -3753,6 +3722,42 @@ func (q *Queries) SelectConversationNativeForkAvailableAfterSequence(ctx context
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const selectConversationPromptOrigins = `-- name: SelectConversationPromptOrigins :many
+SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id, origin
+FROM conversation_messages
+WHERE conversation_id = ?1
+  AND turn_id IS NOT NULL AND role = 'user' AND origin IN ('human', 'automation')
+`
+
+type SelectConversationPromptOriginsRow struct {
+	TurnID string
+	Origin domain.MessageOrigin
+}
+
+// Prompt eligibility must survive the original message falling outside a page.
+func (q *Queries) SelectConversationPromptOrigins(ctx context.Context, conversationID string) ([]SelectConversationPromptOriginsRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationPromptOrigins, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectConversationPromptOriginsRow{}
+	for rows.Next() {
+		var i SelectConversationPromptOriginsRow
+		if err := rows.Scan(&i.TurnID, &i.Origin); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const selectConversationProviderEvents = `-- name: SelectConversationProviderEvents :many
@@ -4948,6 +4953,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.authored_by_user,
        conversation_messages.continuation,
        conversation_messages.delivery_content_json,
        conversation_turns.provider_input_text,
@@ -4975,6 +4981,7 @@ type SelectRetryableConversationPromptParams struct {
 type SelectRetryableConversationPromptRow struct {
 	Text                string
 	Origin              domain.MessageOrigin
+	AuthoredByUser      int64
 	Continuation        int64
 	DeliveryContentJson string
 	ProviderInputText   string
@@ -4990,6 +4997,7 @@ func (q *Queries) SelectRetryableConversationPrompt(ctx context.Context, arg Sel
 	err := row.Scan(
 		&i.Text,
 		&i.Origin,
+		&i.AuthoredByUser,
 		&i.Continuation,
 		&i.DeliveryContentJson,
 		&i.ProviderInputText,
@@ -5091,6 +5099,40 @@ func (q *Queries) SelectSpanningPlanCopiesOnActivePath(ctx context.Context, conv
 		return nil, err
 	}
 	return items, nil
+}
+
+const selectSupersededArmedEventTurn = `-- name: SelectSupersededArmedEventTurn :one
+SELECT armed.id, armed.usage_limit_resets_at FROM conversation_turns AS armed
+JOIN conversation_turns AS newer ON newer.id = ?1
+WHERE armed.id = (
+    SELECT previous.id FROM conversation_turns AS previous
+    WHERE previous.conversation_id = newer.conversation_id AND previous.branch_id = newer.branch_id
+      AND previous.id <> newer.id AND previous.state NOT IN ('queued', 'cancelled')
+      AND previous.promoted_to_turn_id IS NULL AND previous.rolled_back_at IS NULL
+    ORDER BY previous.requested_at DESC, previous.rowid DESC LIMIT 1)
+  AND (armed.requested_at < newer.requested_at OR (armed.requested_at = newer.requested_at AND armed.rowid < newer.rowid))
+  AND armed.usage_limit_auto_resume = 1 AND armed.state = 'failed'
+  AND armed.handled_by_session_id = newer.handled_by_session_id
+  AND EXISTS (SELECT 1 FROM conversation_messages AS m
+      WHERE m.turn_id = armed.id AND m.role = 'user' AND m.origin = 'automation' AND m.authored_by_user = 0)
+  AND EXISTS (SELECT 1 FROM conversation_messages AS m
+      WHERE m.turn_id = newer.id AND m.role = 'user' AND m.origin = 'automation')
+  AND NOT EXISTS (SELECT 1 FROM conversation_messages AS m
+      JOIN conversation_turns AS member ON member.id = m.turn_id
+      WHERE (member.id = newer.id OR member.promoted_to_turn_id = newer.id)
+        AND m.role = 'user' AND (m.origin = 'human' OR m.authored_by_user = 1))
+`
+
+type SelectSupersededArmedEventTurnRow struct {
+	ID                 string
+	UsageLimitResetsAt sql.NullTime
+}
+
+func (q *Queries) SelectSupersededArmedEventTurn(ctx context.Context, newerID string) (SelectSupersededArmedEventTurnRow, error) {
+	row := q.db.QueryRowContext(ctx, selectSupersededArmedEventTurn, newerID)
+	var i SelectSupersededArmedEventTurnRow
+	err := row.Scan(&i.ID, &i.UsageLimitResetsAt)
+	return i, err
 }
 
 const selectVerifiedAuthenticationTurn = `-- name: SelectVerifiedAuthenticationTurn :one

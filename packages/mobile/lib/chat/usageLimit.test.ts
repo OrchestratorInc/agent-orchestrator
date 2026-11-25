@@ -30,6 +30,10 @@ describe("usageLimitedTurn", () => {
 		expect(usageLimitedTurn({ turns: [limited(), { id: "t3", state: "running", requestedAt: "x" }] })).toBeUndefined();
 	});
 
+	it("picks a limited turn an event started", () => {
+		expect(usageLimitedTurn({ turns: [done, limited({ hasHumanPrompt: false, hasEventPrompt: true })] })?.id).toBe("t2");
+	});
+
 	it("offers nothing for a turn that cannot be resumed", () => {
 		expect(usageLimitedTurn({ turns: [limited({ usageLimit: undefined })] })).toBeUndefined();
 		expect(usageLimitedTurn({ turns: [limited({ providerTurnId: undefined })] })).toBeUndefined();
