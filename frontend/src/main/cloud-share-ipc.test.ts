@@ -897,6 +897,30 @@ describe("cloudShare IPC for a remote host's file", () => {
 		expect(await snapshots()).toEqual([]);
 	});
 
+	it("offers to republish a host page when a file it uses changes, is pointed elsewhere or appears, though the page did not", async () => {
+		const hostFiles = hostPage(`<img src="a.png"><img src="later.png">`, { "a.png": { body: "png" } });
+		const { invoke, publish, hostFile, records } = setup({ files: true, hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1 } });
+		const inspect = () => invoke("cloudShare:inspect", hostFile) as Promise<{ pageFilesChanged?: boolean }>;
+		expect((await inspect()).pageFilesChanged).toBeUndefined();
+		// The record names each file by the path the page uses, with where it resolved and its version; a missing one as "".
+		const recorded = await records.publishedPageFiles(artifactRecordKey("https://cp.test", `host:${HOST_ID}/sess-1`, "art-7"));
+		expect(recorded).toEqual({ "docs/a.png": `docs/a.png\n3:${MTIME_NS / 1_000_000n}`, "docs/later.png": "" });
+
+		// The image is rewritten on the host.
+		hostFiles.set("sess-1/docs/a.png", { body: "png2", mtimeNs: MTIME_NS + 1_000_000_000n });
+		expect((await inspect()).pageFilesChanged).toBe(true);
+		hostFiles.set("sess-1/docs/a.png", { body: "png", mtimeNs: MTIME_NS });
+		expect((await inspect()).pageFilesChanged).toBeUndefined();
+		// A symlink is pointed at another file of the same version.
+		hostFiles.set("sess-1/docs/a.png", { body: "png", mtimeNs: MTIME_NS, resolvesTo: "docs/b.png" });
+		expect((await inspect()).pageFilesChanged).toBe(true);
+		hostFiles.set("sess-1/docs/a.png", { body: "png", mtimeNs: MTIME_NS });
+		// A file the page used that was missing appears.
+		hostFiles.set("sess-1/docs/later.png", { body: "png", mtimeNs: MTIME_NS });
+		expect((await inspect()).pageFilesChanged).toBe(true);
+	});
+
 	it("publishes nothing when the host stops answering while a page's files are found", async () => {
 		const { publish, hostFile, requests } = setup({
 			files: true,
