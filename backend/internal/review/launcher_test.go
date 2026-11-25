@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1121,6 +1122,143 @@ func TestLauncherWaitsForReviewerPromptMarkerBeforeInitialMessage(t *testing.T) 
 	}
 	if rt.outputReads == 0 || rt.sentMsg != "task ref" {
 		t.Fatalf("output reads = %d, sent = %q", rt.outputReads, rt.sentMsg)
+	}
+}
+
+type fakeStyledRuntime struct {
+	*fakeRuntime
+	styled      string
+	styledErr   error
+	styledReads int
+}
+
+func (f *fakeStyledRuntime) GetStyledOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+	f.styledReads++
+	return f.styled, f.styledErr
+}
+
+func TestLauncherReadsRenderedScreenForReviewerPromptMarker(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{
+		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},
+		hints: ports.PromptReadinessHints{
+			Patterns: []string{"Ao-Review-"}, PollInterval: time.Millisecond, Timeout: time.Second, Lines: 20,
+			RenderedScreen: true,
+		},
+	}
+	// The marker is styled per cell on the rendered screen and absent from
+	// the raw completed-line output.
+	rt := &fakeStyledRuntime{fakeRuntime: &fakeRuntime{output: "banner"}, styled: "\x1b[1mAo\x1b[0m\x1b[1m-Review-\x1b[0mMer-1"}
+	l := newTestLauncher(t, reviewer, rt)
+	if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if rt.styledReads == 0 || rt.outputReads != 0 || rt.sentMsg != "task ref" {
+		t.Fatalf("styled reads = %d, raw reads = %d, sent = %q", rt.styledReads, rt.outputReads, rt.sentMsg)
+	}
+}
+
+func TestLauncherFallsBackToRawOutputWithoutRenderedScreen(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{
+		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},
+		hints: ports.PromptReadinessHints{
+			Patterns: []string{"READY>"}, PollInterval: time.Millisecond, Timeout: time.Second, Lines: 20,
+			RenderedScreen: true,
+		},
+	}
+	rt := &fakeStyledRuntime{fakeRuntime: &fakeRuntime{output: "READY>"}, styledErr: ports.ErrStyledTerminalOutputUnavailable}
+	l := newTestLauncher(t, reviewer, rt)
+	if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if rt.outputReads == 0 || rt.sentMsg != "task ref" {
+		t.Fatalf("raw reads = %d, sent = %q", rt.outputReads, rt.sentMsg)
+	}
+}
+
+// lateReadyRuntime shows its readiness marker only once ready is set, and
+// records messages under a lock because delivery may run in the background.
+type lateReadyRuntime struct {
+	*fakeRuntime
+	mu    sync.Mutex
+	ready bool
+	sent  []string
+}
+
+func (f *lateReadyRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ready {
+		return "READY>", nil
+	}
+	return "starting", nil
+}
+
+func (f *lateReadyRuntime) SendMessage(_ context.Context, _ ports.RuntimeHandle, msg string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, msg)
+	return nil
+}
+
+func (f *lateReadyRuntime) setReady() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ready = true
+}
+
+func (f *lateReadyRuntime) messages() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.sent...)
+}
+
+func TestLauncherFinishesReadinessAfterCallerDeadline(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{
+		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},
+		hints: ports.PromptReadinessHints{
+			Patterns: []string{"READY>"}, PollInterval: time.Millisecond, Timeout: time.Minute, Lines: 20,
+		},
+	}
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: true}}
+	l := newTestLauncher(t, reviewer, rt)
+	// The caller's deadline leaves no time to wait, as a trigger request does
+	// when the reviewer TUI starts slowly.
+	ctx, cancel := context.WithTimeout(context.Background(), reviewerReadinessDeadlineReserve)
+	defer cancel()
+	if _, err := l.Spawn(ctx, launchSpec()); err != nil {
+		t.Fatalf("Spawn: %v, want the launch to return before the caller's deadline", err)
+	}
+	if sent := rt.messages(); len(sent) != 0 {
+		t.Fatalf("sent %q before the reviewer was ready", sent)
+	}
+	rt.setReady()
+	deadline := time.Now().Add(5 * time.Second)
+	for len(rt.messages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sent := rt.messages(); len(sent) != 1 || sent[0] != "task ref" {
+		t.Fatalf("sent = %q, want the task once the reviewer is ready", sent)
+	}
+}
+
+func TestLauncherDropsLateTaskForReplacedReviewer(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{
+		spec: ports.ReviewCommandSpec{Argv: []string{"agent"}, InitialMessage: "task ref"},
+		hints: ports.PromptReadinessHints{
+			Patterns: []string{"READY>"}, PollInterval: time.Millisecond, Timeout: 200 * time.Millisecond, Lines: 20,
+		},
+	}
+	rt := &lateReadyRuntime{fakeRuntime: &fakeRuntime{alive: false}}
+	l := newTestLauncher(t, reviewer, rt)
+	ctx, cancel := context.WithTimeout(context.Background(), reviewerReadinessDeadlineReserve)
+	defer cancel()
+	if _, err := l.Spawn(ctx, launchSpec()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	rt.setReady()
+	time.Sleep(300 * time.Millisecond)
+	if sent := rt.messages(); len(sent) != 0 {
+		t.Fatalf("sent %q to a reviewer that is no longer running", sent)
 	}
 }
 

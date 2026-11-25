@@ -59,9 +59,14 @@ func TestReviewCommandAppliesFinalReadOnlyAgentPermissions(t *testing.T) {
 	if slicesContain(spec.Argv, "--auto") || slicesContain(spec.Argv, "--dangerously-skip-permissions") {
 		t.Fatalf("reviewer used permissive CLI flag: %#v", spec.Argv)
 	}
-	if !slicesContain(spec.Argv, "--prompt=Review this task.") {
-		t.Fatalf("argv missing task prompt: %#v", spec.Argv)
+	// The task waits for the reviewer agent instead of racing OpenCode's config
+	// load through --prompt.
+	if argvHasPrompt(spec.Argv) || spec.InitialMessage != "Review this task." {
+		t.Fatalf("task delivery = argv %#v, InitialMessage %q; want InitialMessage only", spec.Argv, spec.InitialMessage)
 	}
+	// A release-highlights dialog would cover the agent marker and swallow
+	// the typed task.
+	assertHighlightsOff(t, spec)
 
 	content := inlineConfig(t, spec)
 	var config struct {
@@ -155,10 +160,14 @@ func TestReviewRestoreCommandReappliesReadOnlyPolicy(t *testing.T) {
 	if !spec.NativeResumed || spec.AgentSessionID != "ses_native" {
 		t.Fatalf("restore metadata = %+v", spec)
 	}
-	wantTail := []string{binary, "--standalone", "--session", "ses_native", "--prompt=Resume review."}
+	wantTail := []string{binary, "--standalone", "--session", "ses_native"}
 	if !reflect.DeepEqual(spec.Argv[len(spec.Argv)-len(wantTail):], wantTail) {
 		t.Fatalf("restore argv = %#v, want tail %#v", spec.Argv, wantTail)
 	}
+	if argvHasPrompt(spec.Argv) || spec.InitialMessage != "Resume review." {
+		t.Fatalf("restore task delivery = argv %#v, InitialMessage %q; want InitialMessage only", spec.Argv, spec.InitialMessage)
+	}
+	assertHighlightsOff(t, spec)
 	var config struct {
 		DefaultAgent string `json:"default_agent"`
 		Agents       map[string]struct {
@@ -194,6 +203,48 @@ func TestWrongMajorRejectedBeforeLaunchOrRestore(t *testing.T) {
 	}
 }
 
+func TestIdleRestoreSendsNoTask(t *testing.T) {
+	fakeOpenCode(t, "2.0.0")
+	spec, ok, err := opencodev2.New().ReviewRestoreCommand(context.Background(), ports.ReviewInvocation{
+		ReviewerID:     "review-w1",
+		AgentSessionID: "ses_native",
+		Prompt:         "Reviewer terminal restored; wait for the next task.",
+		SystemPrompt:   "Read only.",
+	})
+	if err != nil || !ok {
+		t.Fatalf("ReviewRestoreCommand = ok %v, err %v", ok, err)
+	}
+	if argvHasPrompt(spec.Argv) || spec.InitialMessage != "" {
+		t.Fatalf("idle restore delivered a task: argv %#v, InitialMessage %q", spec.Argv, spec.InitialMessage)
+	}
+}
+
+func TestReviewPromptReadinessWaitsForReviewerAgent(t *testing.T) {
+	var provider ports.ReviewerPromptReadinessProvider = opencodev2.New()
+	hints, err := provider.ReviewPromptReadinessHints(context.Background())
+	if err != nil {
+		t.Fatalf("ReviewPromptReadinessHints: %v", err)
+	}
+	// OpenCode 2 renders the selected agent ao-review-<worker> as
+	// Ao-Review-<Worker> once the inline config is active.
+	if !reflect.DeepEqual(hints.Patterns, []string{"Ao-Review-"}) {
+		t.Fatalf("patterns = %#v, want the reviewer agent marker", hints.Patterns)
+	}
+	if hints.Timeout < time.Minute || hints.PollInterval <= 0 || hints.Lines <= 0 {
+		t.Fatalf("hints = %+v, want a bounded poll long enough for a slow OpenCode 2 start", hints)
+	}
+	// The marker is drawn in the footer, which raw completed-line output
+	// never contains.
+	if !hints.RenderedScreen {
+		t.Fatalf("hints = %+v, want the rendered screen", hints)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := provider.ReviewPromptReadinessHints(ctx); err == nil {
+		t.Fatal("ReviewPromptReadinessHints ignored a cancelled context")
+	}
+}
+
 func TestReviewMessageAndCancellation(t *testing.T) {
 	reviewer := opencodev2.New()
 	message, err := reviewer.ReviewMessage(context.Background(), ports.ReviewInvocation{Prompt: "next review"})
@@ -225,6 +276,14 @@ func fakeOpenCode(t *testing.T, version string) (string, string) {
 	return binary, logPath
 }
 
+func assertHighlightsOff(t *testing.T, spec ports.ReviewCommandSpec) {
+	t.Helper()
+	var cli map[string]any
+	if err := json.Unmarshal([]byte(spec.Env["OPENCODE_CLI_CONFIG_CONTENT"]), &cli); err != nil || cli["highlights"] != false {
+		t.Fatalf("OPENCODE_CLI_CONFIG_CONTENT = %q, want release highlights off", spec.Env["OPENCODE_CLI_CONFIG_CONTENT"])
+	}
+}
+
 func inlineConfig(t *testing.T, spec ports.ReviewCommandSpec) string {
 	t.Helper()
 	const prefix = "OPENCODE_CONFIG_CONTENT="
@@ -239,6 +298,15 @@ func inlineConfig(t *testing.T, spec ports.ReviewCommandSpec) string {
 	}
 	t.Fatalf("argv has no %s assignment: %#v", prefix, spec.Argv)
 	return ""
+}
+
+func argvHasPrompt(argv []string) bool {
+	for _, arg := range argv {
+		if arg == "--prompt" || strings.HasPrefix(arg, "--prompt=") {
+			return true
+		}
+	}
+	return false
 }
 
 func slicesContain(values []string, want string) bool {

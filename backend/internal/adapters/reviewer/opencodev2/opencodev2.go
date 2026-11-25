@@ -17,6 +17,15 @@ import (
 
 const configContentPrefix = "OPENCODE_CONFIG_CONTENT="
 
+// cliConfigEnv carries OpenCode 2's terminal (TUI) settings, merged over the
+// user's global cli.json. The reviewer turns off release highlights: after an
+// OpenCode update, the first TUI to start opens a "What's new" dialog that
+// hides the reviewer agent marker and swallows the typed task, so the review
+// would never start.
+const cliConfigEnv = "OPENCODE_CLI_CONFIG_CONTENT"
+
+const reviewerCLIConfig = `{"highlights":false}`
+
 // Reviewer is the OpenCode 2 code-review adapter.
 type Reviewer struct {
 	agent ports.Agent
@@ -30,6 +39,17 @@ func New() *Reviewer {
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
+var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)
+
+// reviewerAgentMarker is how the OpenCode 2 TUI renders AO's reviewer agent
+// (ao-review-<worker>) once the inline config has loaded. Before that, the TUI
+// shows its built-in default agent and model.
+const reviewerAgentMarker = "Ao-Review-"
+
+// reviewerReadinessTimeout bounds the wait for the reviewer agent. A busy
+// machine can take tens of seconds to start OpenCode 2; the launcher caps the
+// wait below the caller's deadline and still delivers the task when it expires.
+const reviewerReadinessTimeout = 2 * time.Minute
 
 // Harness identifies this reviewer in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness {
@@ -48,12 +68,17 @@ func (r *Reviewer) InvalidateBinaryResolution() {
 // Accept-edits only forces the worker adapter to materialize its selected AO
 // agent when a direct caller supplies no system prompt; the edit allow is
 // replaced before the command can be launched.
+//
+// The task is delivered as InitialMessage, not --prompt. OpenCode 2 submits a
+// --prompt as soon as its TUI starts, which can be before the inline config
+// has loaded; the session then runs on OpenCode's default agent and model,
+// silently dropping the configured reviewer model and this read-only policy.
+// The launcher instead waits for ReviewPromptReadinessHints' agent marker.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config:           inv.Config,
 		SessionID:        inv.ReviewerID,
 		WorkspacePath:    inv.WorkspacePath,
-		Prompt:           inv.Prompt,
 		SystemPrompt:     inv.SystemPrompt,
 		SystemPromptFile: inv.SystemPromptFile,
 		Permissions:      ports.PermissionModeAcceptEdits,
@@ -66,8 +91,28 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 		return ports.ReviewCommandSpec{}, err
 	}
 	return ports.ReviewCommandSpec{
-		Argv: argv,
-		Env:  map[string]string{"OPENCODE_CONFIG_CONTENT": content},
+		Argv:           argv,
+		Env:            reviewerEnv(content),
+		InitialMessage: inv.Prompt,
+	}, nil
+}
+
+// ReviewPromptReadinessHints holds the task until the TUI shows AO's reviewer
+// agent, which proves the inline config — agent, model, and permissions — is
+// active for the session the task creates.
+func (r *Reviewer) ReviewPromptReadinessHints(ctx context.Context) (ports.PromptReadinessHints, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.PromptReadinessHints{}, err
+	}
+	return ports.PromptReadinessHints{
+		InitialDelay: 500 * time.Millisecond,
+		Patterns:     []string{reviewerAgentMarker},
+		PollInterval: 250 * time.Millisecond,
+		Timeout:      reviewerReadinessTimeout,
+		Lines:        200,
+		// The marker sits in the TUI footer, which never ends with a newline,
+		// so only the rendered screen shows it.
+		RenderedScreen: true,
 	}, nil
 }
 
@@ -77,19 +122,32 @@ func (r *Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) 
 }
 
 // ReviewRestoreCommand resumes the native conversation and reapplies the same
-// final agent-level policy used for a fresh reviewer.
+// final agent-level policy used for a fresh reviewer. A pending run's task is
+// delivered after readiness, as in ReviewCommand, never as --prompt.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
-	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{Permissions: ports.PermissionModeAcceptEdits})
+	restoreInv := inv
+	restoreInv.Prompt = ""
+	cmd, ok, err := agentrestore.Command(ctx, r.agent, restoreInv, agentrestore.Options{Permissions: ports.PermissionModeAcceptEdits})
 	if err != nil || !ok {
 		return cmd, ok, err
+	}
+	if strings.TrimSpace(inv.RunID) != "" {
+		cmd.InitialMessage = inv.Prompt
 	}
 	var content string
 	cmd.Argv, content, err = applyReviewerPolicy(cmd.Argv, inv.TaskPromptRoot)
 	if err != nil {
 		return ports.ReviewCommandSpec{}, false, err
 	}
-	cmd.Env = map[string]string{"OPENCODE_CONFIG_CONTENT": content}
+	cmd.Env = reviewerEnv(content)
 	return cmd, true, nil
+}
+
+func reviewerEnv(configContent string) map[string]string {
+	return map[string]string{
+		"OPENCODE_CONFIG_CONTENT": configContent,
+		cliConfigEnv:              reviewerCLIConfig,
+	}
 }
 
 // ReviewCancel stops the active OpenCode turn while preserving its pane.

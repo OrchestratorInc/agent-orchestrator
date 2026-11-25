@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -21,6 +23,14 @@ import (
 const cancelInterruptDelay = 150 * time.Millisecond
 
 const defaultReviewerInitialDelay = 500 * time.Millisecond
+
+// reviewerReadinessDeadlineReserve is the part of the caller's deadline a
+// readiness wait leaves for finishing the launch.
+const reviewerReadinessDeadlineReserve = 5 * time.Second
+
+// readinessOutputEscape strips CSI and OSC sequences so a marker drawn with
+// styling (rendered screens, colored footers) still matches as plain text.
+var readinessOutputEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
 
 const reviewerTaskMessagePrefix = "Read and follow the AO review task in `"
 
@@ -589,11 +599,8 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 		return LaunchResult{}, fmt.Errorf("reviewer runtime: %w", agentlaunch.RedactError(err, spec.ProjectEnv))
 	}
 	if cmd.InitialMessage != "" && !spec.DeferInitialMessage {
-		if err := l.waitForPromptReadiness(ctx, reviewer, handle); err != nil {
-			return LaunchResult{}, fmt.Errorf("reviewer prompt readiness: %w", err)
-		}
-		if err := l.runtime.SendMessage(ctx, handle, cmd.InitialMessage); err != nil {
-			return LaunchResult{}, fmt.Errorf("reviewer initial message: %w", err)
+		if err := l.deliverInitialMessage(ctx, reviewer, handle, strings.TrimSpace(spec.LaunchID), cmd.InitialMessage); err != nil {
+			return LaunchResult{}, err
 		}
 	}
 	agentSessionID := strings.TrimSpace(cmd.AgentSessionID)
@@ -603,27 +610,67 @@ func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec
 	return LaunchResult{HandleID: handle.ID, LaunchID: strings.TrimSpace(spec.LaunchID), AgentSessionID: agentSessionID, NativeResumed: nativeResumed}, nil
 }
 
-func (l *agentLauncher) waitForPromptReadiness(ctx context.Context, reviewer ports.Reviewer, handle ports.RuntimeHandle) error {
+// deliverInitialMessage types the review task once the reviewer's readiness
+// marker shows. Readiness is best-effort: when the reviewer's own wait
+// expires, the task is sent anyway. When the caller's deadline would end the
+// wait first, the launch returns and the wait continues in the background:
+// a task typed into a TUI that has not finished starting is silently lost.
+func (l *agentLauncher) deliverInitialMessage(ctx context.Context, reviewer ports.Reviewer, handle ports.RuntimeHandle, launchID, message string) error {
 	hints := ports.PromptReadinessHints{InitialDelay: defaultReviewerInitialDelay}
 	if provider, ok := reviewer.(ports.ReviewerPromptReadinessProvider); ok {
 		provided, err := provider.ReviewPromptReadinessHints(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("reviewer prompt readiness: %w", err)
 		}
 		hints = provided
 	}
-	if hints.InitialDelay > 0 {
-		timer := time.NewTimer(hints.InitialDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
+	if err := sleepContext(ctx, hints.InitialDelay); err != nil {
+		return fmt.Errorf("reviewer prompt readiness: %w", err)
+	}
+	if len(hints.Patterns) > 0 && hints.Timeout > 0 {
+		started := time.Now()
+		wait := hints.Timeout
+		capped := false
+		if callerDeadline, ok := ctx.Deadline(); ok {
+			if remaining := time.Until(callerDeadline) - reviewerReadinessDeadlineReserve; remaining < wait {
+				wait, capped = max(remaining, 0), true
+			}
+		}
+		ready, err := l.waitForPromptReadiness(ctx, handle, hints, wait)
+		if err != nil {
+			return fmt.Errorf("reviewer prompt readiness: %w", err)
+		}
+		if !ready && capped {
+			go l.deliverWhenReady(context.WithoutCancel(ctx), handle, hints, hints.Timeout-time.Since(started), launchID, message)
+			return nil
 		}
 	}
-	if len(hints.Patterns) == 0 || hints.Timeout <= 0 {
-		return nil
+	if err := l.runtime.SendMessage(ctx, handle, message); err != nil {
+		return fmt.Errorf("reviewer initial message: %w", err)
 	}
+	return nil
+}
+
+// deliverWhenReady finishes a readiness wait the caller's deadline cut short.
+// The reviewer handle is stable per worker, so the task is typed only while
+// the pane still runs this launch, never into a replacement reviewer.
+func (l *agentLauncher) deliverWhenReady(ctx context.Context, handle ports.RuntimeHandle, hints ports.PromptReadinessHints, wait time.Duration, launchID, message string) {
+	if _, err := l.waitForPromptReadiness(ctx, handle, hints, wait); err != nil {
+		return
+	}
+	alive, err := l.Alive(ctx, handle.ID, launchID)
+	if err != nil || !alive {
+		slog.Default().WarnContext(ctx, "reviewer exited before its review task was delivered", "handle", handle.ID, "launch", launchID, "err", err)
+		return
+	}
+	if err := l.runtime.SendMessage(ctx, handle, message); err != nil {
+		slog.Default().WarnContext(ctx, "deliver reviewer review task", "handle", handle.ID, "launch", launchID, "err", err)
+	}
+}
+
+// waitForPromptReadiness polls for a readiness marker for at most wait and
+// reports whether it appeared.
+func (l *agentLauncher) waitForPromptReadiness(ctx context.Context, handle ports.RuntimeHandle, hints ports.PromptReadinessHints, wait time.Duration) (bool, error) {
 	poll := hints.PollInterval
 	if poll <= 0 {
 		poll = 200 * time.Millisecond
@@ -632,31 +679,59 @@ func (l *agentLauncher) waitForPromptReadiness(ctx context.Context, reviewer por
 	if lines <= 0 {
 		lines = 80
 	}
-	deadline := time.NewTimer(hints.Timeout)
+	deadline := time.NewTimer(max(wait, 0))
 	defer deadline.Stop()
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	for {
-		output, err := l.runtime.GetOutput(ctx, handle, lines)
+		output, err := l.readinessOutput(ctx, handle, lines, hints.RenderedScreen)
 		if err == nil && outputContainsAny(output, hints.Patterns) {
-			return nil
+			return true, nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-deadline.C:
-			// Readiness is best-effort: never block a review forever when a CLI
-			// changes its prompt marker. The startup delay still prevents an
-			// immediate write into process initialization.
-			return nil
+			return false, nil
 		case <-ticker.C:
 		}
 	}
 }
 
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// readinessOutput reads the rendered viewport when the hints ask for it.
+// Full-screen TUIs rarely end a line, so their current screen never reaches
+// the raw ring's completed lines; runtimes without a rendered view fall back
+// to raw output.
+func (l *agentLauncher) readinessOutput(ctx context.Context, handle ports.RuntimeHandle, lines int, rendered bool) (string, error) {
+	if rendered {
+		if reader, ok := l.runtime.(ports.StyledTerminalOutputReader); ok {
+			output, err := reader.GetStyledOutput(ctx, handle, lines)
+			if !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+				return output, err
+			}
+		}
+	}
+	return l.runtime.GetOutput(ctx, handle, lines)
+}
+
 func outputContainsAny(output string, patterns []string) bool {
+	plain := readinessOutputEscape.ReplaceAllString(output, "")
 	for _, pattern := range patterns {
-		if pattern != "" && strings.Contains(output, pattern) {
+		if pattern != "" && (strings.Contains(output, pattern) || strings.Contains(plain, pattern)) {
 			return true
 		}
 	}
