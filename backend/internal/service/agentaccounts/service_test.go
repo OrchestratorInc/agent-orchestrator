@@ -534,6 +534,12 @@ func TestNewTaskOnAKnownBadDefaultStartsOnAnotherAccount(t *testing.T) {
 	if err := svc.BindSession(ctx, "none", domain.HarnessClaudeCode, ""); !errors.Is(err, ports.ErrAgentAccountDefaultUnusable) {
 		t.Fatalf("bind with every account signed out: %v", err)
 	}
+	// A custom endpoint sends its own key, not an account's sign-in, so the
+	// same cached signed-out default with no fallback still starts the task.
+	svc.SetCustomEndpoint(func(p domain.AgentAccountProvider) bool { return p == domain.AgentAccountProviderClaude })
+	if err := svc.BindSession(ctx, "endpoint", domain.HarnessClaudeCode, ""); err != nil || store.bindings["endpoint"] != "device-claude" {
+		t.Fatalf("bind on a custom endpoint with every account signed out: %q %v", store.bindings["endpoint"], err)
+	}
 }
 
 // A signed-out reading of the default that is older than the cache window is

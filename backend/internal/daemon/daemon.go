@@ -49,6 +49,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/harnessendpoint"
 	"github.com/aoagents/agent-orchestrator/backend/internal/hostupdate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -2101,6 +2102,16 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},
 	}
 	accounts := agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
+	// A harness on a custom endpoint sends its key, not an account's sign-in.
+	accounts.SetCustomEndpoint(func(p domain.AgentAccountProvider) bool {
+		for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {
+			if provider, ok := domain.AgentAccountProviderFor(harness); ok && provider == p {
+				configured, err := harnessendpoint.ForDataDir(cfg.DataDir).Configured(string(harness))
+				return err == nil && configured
+			}
+		}
+		return false
+	})
 	// An account's API key is checked with its provider before it is saved.
 	accounts.SetKeyCheck(func(ctx context.Context, p domain.AgentAccountProvider, key string) error {
 		name := map[domain.AgentAccountProvider]string{domain.AgentAccountProviderClaude: "ANTHROPIC_API_KEY", domain.AgentAccountProviderCodex: "OPENAI_API_KEY"}[p]

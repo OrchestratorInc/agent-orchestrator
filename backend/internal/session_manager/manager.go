@@ -7432,11 +7432,13 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		}
 		// A custom endpoint the user set for this harness goes last, so its
 		// base URL and key replace any AO-stored or withheld provider key;
-		// project configuration still wins.
+		// project configuration still wins. A project that points the harness
+		// at another endpoint origin gets none of it, so the saved key never
+		// travels to a gateway it was not saved for.
 		if harness != "" {
-			endpointEnv, err = harnessendpoint.ForDataDir(m.dataDir).Env(string(harness))
+			endpointEnv, err = harnessendpoint.ForDataDir(m.dataDir).ProjectEnv(string(harness), projectEnv, caseInsensitive)
 			if err != nil {
-				m.logger.Warn("custom harness endpoint unavailable; launching with native credentials", "harness", harness, "error", err)
+				m.logger.Warn("custom harness endpoint not applied; launching with the project's or native credentials", "harness", harness, "error", err)
 			}
 			for key, value := range endpointEnv {
 				if !overridden(key) {
