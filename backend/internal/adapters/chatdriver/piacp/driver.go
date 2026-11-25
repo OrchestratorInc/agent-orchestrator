@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -102,8 +103,14 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 			// prevents one project's first-start environment (notably
 			// PI_CODING_AGENT_DIR and provider keys) leaking into another.
 			env["PI_ACP_SOCKET_DIR"] = sessionRunDir(cfg)
-			// AO's Pi extension listens here for steers (see steer.go).
-			env[steerDirEnv] = sessionRunDir(cfg)
+			if runtime.GOOS != "windows" {
+				// AO's steering extension listens here (see steer.go).
+				if err := installSteerExtension(cfg.WorkspacePath); err == nil {
+					env[steerDirEnv] = sessionRunDir(cfg)
+				} else if log != nil {
+					log.Warn("Pi chat cannot steer a running turn", "session", cfg.SessionID, "error", err)
+				}
+			}
 			if err := prepareStandingInstructions(ctx, cfg); err != nil {
 				return acpdriver.Launch{}, err
 			}

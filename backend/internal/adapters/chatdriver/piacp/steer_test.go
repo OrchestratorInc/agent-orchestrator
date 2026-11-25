@@ -15,7 +15,7 @@ import (
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
-// fakeExtension answers steers the way AO's Pi extension does.
+// fakeExtension answers steers the way the steering extension does.
 func fakeExtension(t *testing.T, dir string, answer func(map[string]string) map[string]string) <-chan map[string]string {
 	t.Helper()
 	listener, err := net.Listen("unix", steerSocketPath(dir))
@@ -115,7 +115,7 @@ func TestSteerChannelWithoutTheExtensionIsARefusal(t *testing.T) {
 }
 
 func TestSteerSocketPathMatchesTheExtension(t *testing.T) {
-	// agent/pi's extension listens on <AO_PI_STEER_DIR>/ao-steer.sock.
+	// The steering extension listens on <AO_PI_STEER_DIR>/ao-steer.sock.
 	if got, want := steerSocketPath("/run"), "/run/ao-steer.sock"; got != want {
 		t.Fatalf("socket path = %q, want %q", got, want)
 	}

@@ -922,7 +922,9 @@ func (c *conversation) steerByChannel(
 }
 
 // externalSteerReady waits briefly for an external steering channel to reach
-// the session. Steer stays off for a session whose channel never comes up.
+// the session. Steer stays off for a session whose channel never comes up, and
+// its start or resume takes the whole wait (a second by default): for Pi, a
+// project Pi doesn't trust never loads AO's extension.
 func (c *conversation) externalSteerReady(sessionID string) bool {
 	if c.steerChannel == nil {
 		return false

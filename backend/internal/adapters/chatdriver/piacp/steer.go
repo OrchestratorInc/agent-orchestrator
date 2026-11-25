@@ -3,28 +3,79 @@ package piacp
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
-// steerDirEnv names the folder where AO's Pi extension (agent/pi/hooks.go)
-// listens for steers, one socket per Pi session. It is the session-private
-// folder that already holds pi-acp's daemon socket.
+// steerDirEnv names the folder where AO's steering extension listens for
+// steers, one socket per Pi process. It is the session-private folder that
+// already holds pi-acp's daemon socket. Only the process AO launches gets it:
+// the extension removes it from its own environment, so a pi started from
+// there stays inert.
 const steerDirEnv = "AO_PI_STEER_DIR"
+
+// steerExtension is the Pi extension that takes AO's steers. It is separate
+// from AO's activity extension (agent/pi/hooks.go), which Chat does not run:
+// Chat's own events carry the activity.
+//
+//go:embed steer_extension.ts
+var steerExtension []byte
+
+const (
+	steerExtensionSentinel = "agent-orchestrator: managed pi steering extension"
+	steerExtensionFile     = "index.ts"
+)
+
+// steerExtensionDir is the extension's folder. pi-acp loads only extensions Pi
+// discovers in the workspace. A folder of its own lets AO's .gitignore sit
+// beside the file: Pi skips a file its extensions folder's .gitignore lists,
+// but reads no .gitignore inside an extension's folder.
+func steerExtensionDir(workspacePath string) string {
+	return filepath.Join(workspacePath, ".pi", "extensions", "ao-steer")
+}
+
+// installSteerExtension writes the steering extension into the workspace,
+// ignored by git. Files in its folder that aren't AO's are left alone, and
+// Steer stays off.
+func installSteerExtension(workspacePath string) error {
+	dir := steerExtensionDir(workspacePath)
+	for name, sentinel := range map[string]string{
+		steerExtensionFile: steerExtensionSentinel,
+		".gitignore":       hookutil.GitignoreSentinel,
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // path built from the session's workspace
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err == nil && !strings.Contains(string(data), sentinel) {
+			return fmt.Errorf("%s is not Orchestrator's", filepath.Join(dir, name))
+		}
+	}
+	// The ignore file comes first, so git never sees the extension.
+	if err := hookutil.EnsureWorkspaceGitignore(dir, steerExtensionFile); err != nil {
+		return err
+	}
+	return hookutil.AtomicWriteFile(filepath.Join(dir, steerExtensionFile), steerExtension, 0o600)
+}
 
 // steerTimeout bounds one steer: connecting, and the extension's answer. The
 // extension answers at once; it only queues the message.
 const steerTimeout = 3 * time.Second
 
-// steerExternal steers Pi through AO's own Pi extension rather than ACP:
+// steerExternal steers Pi through AO's steering extension rather than ACP:
 // pi-acp queues a second prompt until the turn ends, while Pi's extension API
 // delivers a steer after the running tool calls (pi.sendMessage with
 // deliverAs "steer"). Steer is offered only when the session's socket is up.
@@ -45,7 +96,7 @@ func sessionRunDir(cfg acpdriver.LaunchConfig) string {
 
 type steerChannel struct{ dir string }
 
-// steerSocketPath matches the socket AO's Pi extension opens: one per Pi
+// steerSocketPath matches the socket the steering extension opens: one per Pi
 // process, and pi-acp runs one process per AO session.
 func steerSocketPath(dir string) string {
 	return filepath.Join(dir, "ao-steer.sock")
