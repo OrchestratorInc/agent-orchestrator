@@ -249,6 +249,74 @@ func TestSyncKeepsEarlierCopiesWhenInterrupted(t *testing.T) {
 	}
 }
 
+// The agent can write in its own folder. Links it leaves there must not lead
+// the next sync to the user's skills.
+func TestSyncNeverFollowsLinksTheAgentLeft(t *testing.T) {
+	for _, at := range []string{".agents", filepath.Join(".agents", "skills"), filepath.Join(".agents", "skills", "a")} {
+		t.Run(filepath.ToSlash(at), func(t *testing.T) {
+			root, home, dir := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "session")
+			writeSkill(t, root, "a", "a", "")
+			user := filepath.Join(home, ".claude")
+			mine := writeSkill(t, filepath.Join(user, "skills"), "mine", "mine", "")
+			cfg := Config{Dir: dir, Sources: []string{root}}
+			sync(t, cfg)
+			if err := os.RemoveAll(filepath.Join(dir, at)); err != nil {
+				t.Fatal(err)
+			}
+			target := user
+			if at != ".agents" {
+				target = filepath.Join(user, "skills")
+			}
+			symlink(t, target, filepath.Join(dir, at))
+			result := sync(t, cfg)
+			if _, err := os.Stat(filepath.Join(mine, "SKILL.md")); err != nil {
+				t.Fatalf("the user's skill was touched: %v", err)
+			}
+			entries, err := os.ReadDir(filepath.Join(user, "skills"))
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("the user's folder holds %v, %v, want only their skill", entries, err)
+			}
+			if !reflect.DeepEqual(result.Skills, []string{"a"}) || !reflect.DeepEqual(bridged(t, dir), []string{"a"}) {
+				t.Fatalf("skills = %v, on disk %v", result.Skills, bridged(t, dir))
+			}
+		})
+	}
+}
+
+func TestSyncSkipsASkillWhoseSkillFileLinksElsewhere(t *testing.T) {
+	root, other, dir := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "session")
+	writeSkill(t, other, "x", "x", "")
+	writeFile(t, filepath.Join(root, "x", "notes.md"), "n")
+	symlink(t, filepath.Join(other, "x", "SKILL.md"), filepath.Join(root, "x", "SKILL.md"))
+	writeSkill(t, root, "y", "y", "")
+	result := sync(t, Config{Dir: dir, Sources: []string{root}})
+	if !reflect.DeepEqual(result.Skills, []string{"y"}) || len(result.Skipped) != 1 {
+		t.Fatalf("result = %+v, want x skipped", result)
+	}
+}
+
+func TestProjectRootsReachTheRepositoryRootAndNoFurther(t *testing.T) {
+	outer := t.TempDir()
+	repo := filepath.Join(outer, "repo")
+	nested := filepath.Join(repo, "services", "api")
+	writeFile(t, filepath.Join(repo, ".git"), "gitdir: elsewhere")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var folders []string
+	for _, root := range ProjectRoots(nested) {
+		if filepath.Base(filepath.Dir(root)) == ".agents" {
+			folders = append(folders, filepath.Dir(filepath.Dir(root)))
+		}
+	}
+	if want := []string{nested, filepath.Join(repo, "services"), repo}; !reflect.DeepEqual(folders, want) {
+		t.Fatalf("folders = %v, want %v", folders, want)
+	}
+	if got := ProjectRoots(outer); len(got) != 4 {
+		t.Fatalf("outside a repository: %v, want only the folder itself", got)
+	}
+}
+
 func TestAttachedOnlyOnceThereAreSkillsAndRemoveDeletesThem(t *testing.T) {
 	data, root := t.TempDir(), t.TempDir()
 	dir := SessionDir(data, "agy", "s-1")

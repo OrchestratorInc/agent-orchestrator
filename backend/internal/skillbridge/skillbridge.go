@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -43,6 +44,9 @@ type Limits struct {
 	SkillFiles int
 	TotalBytes int64
 }
+
+// skillsPath is where agents look inside an added directory.
+var skillsPath = filepath.Join(".agents", "skills")
 
 // DefaultLimits leave out a skill that carries a build or a dataset (one real
 // skill was 385 MB) while keeping ordinary ones whole.
@@ -140,18 +144,40 @@ func UserRoots(home string) []string {
 	}
 }
 
-// ProjectRoots are the folders a repository keeps its own skills in. A project
-// skill wins over a user skill of the same name, whichever agent it was
-// written for.
+// ProjectRoots are the folders a project keeps its own skills in, in dir and,
+// for a dir inside a repository, in each folder up to the repository's root. A
+// project skill wins over a user skill of the same name, whichever agent it
+// was written for.
 func ProjectRoots(dir string) []string {
 	if strings.TrimSpace(dir) == "" {
 		return nil
 	}
-	return []string{
-		filepath.Join(dir, ".agents", "skills"),
-		filepath.Join(dir, ".agent", "skills"),
-		filepath.Join(dir, ".claude", "skills"),
-		filepath.Join(dir, ".codex", "skills"),
+	var roots []string
+	for _, folder := range repositoryFolders(filepath.Clean(dir)) {
+		roots = append(roots,
+			filepath.Join(folder, ".agents", "skills"),
+			filepath.Join(folder, ".agent", "skills"),
+			filepath.Join(folder, ".claude", "skills"),
+			filepath.Join(folder, ".codex", "skills"),
+		)
+	}
+	return roots
+}
+
+// repositoryFolders is dir and its parents up to the repository root, or dir
+// alone outside a repository: the user's own folders are not a project's.
+func repositoryFolders(dir string) []string {
+	folders := []string{dir}
+	for current := dir; ; {
+		if _, err := os.Lstat(filepath.Join(current, ".git")); err == nil {
+			return folders
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return []string{dir}
+		}
+		current = parent
+		folders = append(folders, current)
 	}
 }
 
@@ -166,10 +192,11 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 	if cfg.Limits == (Limits{}) {
 		cfg.Limits = DefaultLimits
 	}
-	skillsDir := filepath.Join(cfg.Dir, ".agents", "skills")
-	if err := os.MkdirAll(skillsDir, 0o700); err != nil {
+	root, err := openFolder(cfg.Dir)
+	if err != nil {
 		return Result{}, err
 	}
+	defer func() { _ = root.Close() }()
 	removeLeftovers(cfg.Dir)
 	previous := readManifest(cfg.Dir)
 	next := manifest{Owner: "orchestrator", Skills: map[string]string{}}
@@ -204,9 +231,9 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 			skip("the session's skill folder is full")
 			continue
 		}
-		target := filepath.Join(skillsDir, candidate.folder)
-		if previous.Skills[candidate.folder] != contents.fingerprint || !isDir(target) {
-			if err := replaceSkill(ctx, contents, cfg.Dir, target); err != nil {
+		target := filepath.Join(skillsPath, candidate.folder)
+		if previous.Skills[candidate.folder] != contents.fingerprint || !isDir(root, target) {
+			if err := replaceSkill(ctx, contents, root, target); err != nil {
 				if ctx.Err() != nil {
 					return stopEarly(cfg.Dir, previous, next, result, ctx.Err())
 				}
@@ -221,12 +248,41 @@ func Sync(ctx context.Context, cfg Config) (Result, error) {
 		result.Skills = append(result.Skills, candidate.folder)
 	}
 	if len(next.Skills) == 0 {
+		_ = root.Close()
 		return result, os.RemoveAll(cfg.Dir)
 	}
-	if err := removeStale(skillsDir, next); err != nil {
+	if err := removeStale(root, next); err != nil {
 		return result, err
 	}
 	return result, writeManifest(cfg.Dir, next)
+}
+
+// openFolder opens the session's folder with its skills directory in place.
+// The agent can write here, so a link it left in place of a directory is
+// removed, and everything is replaced and deleted through an os.Root, which
+// refuses to leave the folder. Following such a link would delete what it
+// points at: the user's own skills, say.
+func openFolder(dir string) (*os.Root, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range []string{filepath.Dir(skillsPath), skillsPath} {
+		if !isDir(root, path) {
+			err = root.Remove(path)
+			if err == nil || errors.Is(err, fs.ErrNotExist) {
+				err = root.Mkdir(path, 0o700)
+			}
+		}
+		if err != nil {
+			_ = root.Close()
+			return nil, err
+		}
+	}
+	return root, nil
 }
 
 // stopEarly keeps what an interrupted Sync copied and what earlier ones left.
@@ -404,31 +460,33 @@ func scanSkill(root string, limits Limits) (skillContents, error) {
 	if err != nil {
 		return skillContents{}, err
 	}
+	if !slices.ContainsFunc(contents.files, func(file skillEntry) bool { return file.rel == skillFile }) {
+		return skillContents{}, errors.New("SKILL.md is a link out of the skill")
+	}
 	contents.fingerprint = hex.EncodeToString(hash.Sum(nil))
 	return contents, nil
 }
 
 // replaceSkill copies a skill aside, then swaps it in, so the agent never sees
 // half of one.
-func replaceSkill(ctx context.Context, contents skillContents, dir, target string) error {
-	staging, err := os.MkdirTemp(dir, ".staging-")
+func replaceSkill(ctx context.Context, contents skillContents, root *os.Root, target string) error {
+	staging, err := os.MkdirTemp(root.Name(), ".staging-")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
-	copied := filepath.Join(staging, "skill")
 	for _, file := range contents.files {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := copyFile(file, filepath.Join(copied, file.rel)); err != nil {
+		if err := copyFile(file, filepath.Join(staging, "skill", file.rel)); err != nil {
 			return err
 		}
 	}
-	if err := os.RemoveAll(target); err != nil {
+	if err := root.RemoveAll(target); err != nil {
 		return err
 	}
-	return os.Rename(copied, target)
+	return root.Rename(filepath.Join(filepath.Base(staging), "skill"), target)
 }
 
 func copyFile(file skillEntry, target string) error {
@@ -454,15 +512,15 @@ func copyFile(file skillEntry, target string) error {
 	return errors.Join(err, out.Close())
 }
 
-func removeStale(skillsDir string, keep manifest) error {
-	entries, err := os.ReadDir(skillsDir)
+func removeStale(root *os.Root, keep manifest) error {
+	entries, err := fs.ReadDir(root.FS(), filepath.ToSlash(skillsPath))
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, entry := range entries {
 		if _, kept := keep.Skills[entry.Name()]; !kept {
-			errs = append(errs, os.RemoveAll(filepath.Join(skillsDir, entry.Name())))
+			errs = append(errs, root.RemoveAll(filepath.Join(skillsPath, entry.Name())))
 		}
 	}
 	return errors.Join(errs...)
@@ -506,8 +564,8 @@ func writeManifest(dir string, m manifest) error {
 	return err
 }
 
-func isDir(path string) bool {
-	info, err := os.Lstat(path)
+func isDir(root *os.Root, path string) bool {
+	info, err := root.Lstat(path)
 	return err == nil && info.IsDir()
 }
 

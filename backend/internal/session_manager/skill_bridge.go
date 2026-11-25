@@ -82,6 +82,7 @@ func (m *Manager) syncSkillBridge(ctx context.Context, agent ports.Agent, id dom
 	})
 	if err != nil {
 		m.logger.Warn("skill bridge: some skills are missing", "session", id, "err", err)
+		return
 	}
 	for _, skipped := range result.Skipped {
 		m.logger.Debug("skill bridge: skill skipped", "session", id, "path", skipped.Path, "reason", skipped.Reason)
