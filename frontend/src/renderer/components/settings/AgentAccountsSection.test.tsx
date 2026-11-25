@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
@@ -47,6 +47,7 @@ const findCliLoginRow = () => waitFor(() => {
 });
 
 beforeEach(() => {
+	patchMock.mockReset();
 	useUiStore.setState({ accountLogin: null });
 	getMock.mockReset().mockImplementation((path: string) => Promise.resolve({
 		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, saved] },
@@ -705,6 +706,21 @@ it("clears a color by sending an empty string", async () => {
 	await user.click(within(dialog).getByRole("radio", { name: "None" }));
 	await user.click(within(dialog).getByRole("button", { name: "Save" }));
 	await waitFor(() => expect(patchMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId: "acct-b" } }, body: { name: "Work", color: "" } }));
+});
+
+it("does not save on the Enter that confirms an IME composition", async () => {
+	const user = userEvent.setup();
+	renderForEdit([device, saved]);
+	patchMock.mockResolvedValue({ data: { ...saved, name: "仕事" } });
+	await user.click(within(await rowOf("acct-b")).getByRole("button", { name: "Edit" }));
+	const dialog = await screen.findByRole("dialog");
+	const input = within(dialog).getByLabelText("Name");
+	fireEvent.change(input, { target: { value: "仕事" } });
+	fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+	fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+	expect(patchMock).not.toHaveBeenCalled();
+	fireEvent.keyDown(input, { key: "Enter" });
+	await waitFor(() => expect(patchMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}", { params: { path: { accountId: "acct-b" } }, body: { name: "仕事", color: "" } }));
 });
 
 it("shows the API error inside the edit dialog and keeps it open", async () => {
