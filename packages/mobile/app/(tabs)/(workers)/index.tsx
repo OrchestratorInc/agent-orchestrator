@@ -225,10 +225,17 @@ export default function FleetScreen() {
 							: "idle";
 	const [boardEmpty, setBoardEmpty] = useState(false);
 	const failureKind = useBoardFailureKind();
+	// The selected machine's own state, classified as WorkerMachineState does;
+	// reconnecting is not shown as a failure.
+	const selectedLink = emptyView === "machine" && selectedHost
+		? classifyLink(selectedHost.linkTracker ?? EMPTY_LINK_TRACKER, phoneNetwork, Date.now())
+		: null;
 	useErrorShown(!boardEmpty ? null
 		: emptyView === "cloud" ? "cloud_unavailable"
 			: emptyView === "error" ? (hostStates.length > 1 ? "unreachable" : failureKind)
-				: null);
+				: selectedLink === "unreachable" ? "unreachable"
+					: selectedLink === "phone-offline" ? "phone_offline"
+						: null);
 	// The one machine every row is on, when it is a paired machine: the line under
 	// the title speaks for it, since a dot on every row would say the same thing.
 	// With several machines on the board their chips and rows carry the dots.

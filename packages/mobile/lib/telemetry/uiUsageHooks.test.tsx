@@ -10,6 +10,7 @@ vi.mock("expo-router", async () => {
 import { useToast } from "../useToast";
 import type { UiUsageTracker } from "./uiUsage";
 import { setUiUsageTracker } from "./uiUsageRegistry";
+import { useErrorShown } from "./useErrorShown";
 import { useSessionSurface } from "./useSessionSurface";
 
 let renderer: ReactTestRenderer | undefined;
@@ -41,6 +42,22 @@ describe("useToast", () => {
 		expect(tracker.errorShown).not.toHaveBeenCalled();
 		act(() => toast.show("Couldn't merge acme/private#12", { tone: "warning" }));
 		expect(tracker.errorShown).toHaveBeenCalledWith("toast", "action_failed");
+	});
+});
+
+describe("useErrorShown", () => {
+	function Probe({ kind }: { kind: "unreachable" | "auth" | null }) {
+		useErrorShown(kind);
+		return null;
+	}
+
+	it("reports a shown error, and again when its kind changes", () => {
+		act(() => { renderer = create(<Probe kind={null} />); });
+		expect(tracker.errorShown).not.toHaveBeenCalled();
+		act(() => renderer!.update(<Probe kind="unreachable" />));
+		act(() => renderer!.update(<Probe kind="unreachable" />));
+		act(() => renderer!.update(<Probe kind="auth" />));
+		expect(tracker.errorShown.mock.calls).toEqual([["screen", "unreachable"], ["screen", "auth"]]);
 	});
 });
 

@@ -31,6 +31,8 @@ import { setUiUsageTracker } from "./uiUsageRegistry";
 let telemetry: MobileTelemetry | null = null;
 let connectedConfigs: ServerConfig[] = [];
 let uiUsageTracker: UiUsageTracker | null = null;
+// Bumped on every opt-out change, so a saved window read across one is not restored.
+let consentGeneration = 0;
 
 const UI_USAGE_STORAGE_KEY = "ao.telemetry.uiUsage";
 const LAST_LAUNCH_STORAGE_KEY = "ao.telemetry.lastLaunch";
@@ -123,6 +125,7 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		onOptOutChange: (optedOut) => {
 			setMobileSentryConsent(!optedOut);
 			uiUsageTracker?.setEnabled(!optedOut);
+			consentGeneration += 1;
 			if (!optedOut && connectedConfigs.length) void syncDesktopTelemetryIdentity(connectedConfigs).catch(() => {});
 			void (optedOut
 				? AsyncStorage.setItem(OPT_OUT_STORAGE_KEY, "1")
@@ -272,6 +275,8 @@ async function sendLaunch(outcome: LaunchOutcome): Promise<void> {
 	if (launchSent || !telemetry || !launchHistory) return;
 	launchSent = true;
 	if (launchTimer) clearTimeout(launchTimer);
+	// Before the waits below, so navigating meanwhile does not change it.
+	const landingSurface = uiUsageTracker?.current() ?? undefined;
 	await preferenceReady;
 	const { previous, everActive } = await launchHistory;
 	void AsyncStorage.setItem(LAST_LAUNCH_STORAGE_KEY, launchIdentity).catch(() => {});
@@ -282,12 +287,13 @@ async function sendLaunch(outcome: LaunchOutcome): Promise<void> {
 		marks,
 		visibleAt: launchVisibleAt,
 		usableAt: launchUsableAt,
-		landingSurface: uiUsageTracker?.current() ?? undefined,
+		landingSurface,
 	}));
 }
 
 async function restoreUiUsage(): Promise<void> {
 	if (!uiUsageTracker) return;
+	const generation = consentGeneration;
 	let saved: PersistedUiUsage | null = null;
 	try {
 		const raw = await AsyncStorage.getItem(UI_USAGE_STORAGE_KEY);
@@ -295,5 +301,7 @@ async function restoreUiUsage(): Promise<void> {
 	} catch {
 		/* unreadable: start a fresh window */
 	}
+	// An opt-out (even one undone) during the read discarded what was saved.
+	if (generation !== consentGeneration) return;
 	uiUsageTracker.restore(saved);
 }

@@ -129,6 +129,18 @@ describe("usage summary", () => {
 		expect(next.of(UI_EVENTS.summary)[0].props).toMatchObject({ surface_prs_seconds: 30, foreground_count: 2 });
 	});
 
+	// A process that ends without backgrounding keeps its foreground time.
+	it("saves foreground time with the surface times, without counting it twice", () => {
+		const t = setup();
+		t.tracker.setRoute("board");
+		t.advance(61_000);
+		t.tracker.setRoute("prs");
+		expect(t.saved.at(-1)!.window.activeMs).toBe(61_000);
+		t.advance(UI_WINDOW_MS);
+		t.tracker.setForeground(false);
+		expect(t.of(UI_EVENTS.summary)[0].props.active_seconds).toBe(Math.round((61_000 + UI_WINDOW_MS) / 1000));
+	});
+
 	it("ignores a saved window in an unexpected shape", () => {
 		const t = setup();
 		t.tracker.restore({ window: { startedAt: "x" }, viewedDay: "", viewed: [] } as unknown as PersistedUiUsage);

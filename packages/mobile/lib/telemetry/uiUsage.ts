@@ -199,6 +199,12 @@ export function createUiUsageTracker(deps: UiUsageDeps): UiUsageTracker {
 
 	const save = (now: number) => {
 		if (!enabled) return;
+		// Bank the foreground time so far, so a window saved before the process
+		// ends carries it with the surface times.
+		if (foreground) {
+			window.activeMs += Math.max(0, now - activeSince);
+			activeSince = now;
+		}
 		lastSaveAt = now;
 		window.updatedAt = now;
 		deps.save({ window, viewedDay, viewed: [...viewed] });

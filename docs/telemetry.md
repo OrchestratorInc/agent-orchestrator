@@ -1093,7 +1093,7 @@ screenshot. There is no session replay.
 | Property | Meaning |
 | --- | --- |
 | `measurement_schema_version` | `1` |
-| `window_seconds` | Wall time from the window's start to the send |
+| `window_seconds` | Wall time from the window's start to the send, or, for a window sent at the next launch, to its last save while the app was open (time the app was closed is not counted) |
 | `active_seconds` | Time the app was in the foreground |
 | `flush_reason` | `background`, or `startup` for a window that ended while the app was closed |
 | `foreground_count` | Launches and returns to the foreground |
