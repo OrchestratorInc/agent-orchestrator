@@ -3865,14 +3865,44 @@ func (q *Queries) SelectConversationProviderInputContent(ctx context.Context, ar
 }
 
 const selectConversationQueueHoldTurn = `-- name: SelectConversationQueueHoldTurn :one
-SELECT queue_held_turn_id FROM conversations WHERE id = ?
+SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id, conversation_turns.handled_by_review_id, conversation_turns.usage_limit_resets_at, conversation_turns.usage_limit_auto_resume, conversation_turns.usage_limit_resume_error, conversation_turns.batched_input, conversation_turns.provider_input_text, conversation_turns.failure_code, conversation_turns.batch_delivery_kind, conversation_turns.batch_delivery_steer_id, conversation_turns.artifacts_json FROM conversation_turns
+JOIN conversations ON conversations.queue_held_turn_id = conversation_turns.id
+WHERE conversations.id = ?
 `
 
-func (q *Queries) SelectConversationQueueHoldTurn(ctx context.Context, id string) (sql.NullString, error) {
+func (q *Queries) SelectConversationQueueHoldTurn(ctx context.Context, id string) (ConversationTurn, error) {
 	row := q.db.QueryRowContext(ctx, selectConversationQueueHoldTurn, id)
-	var queue_held_turn_id sql.NullString
-	err := row.Scan(&queue_held_turn_id)
-	return queue_held_turn_id, err
+	var i ConversationTurn
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.HandledBySessionID,
+		&i.ProviderTurnID,
+		&i.ControllerGeneration,
+		&i.State,
+		&i.ErrorMessage,
+		&i.RequestedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.DiffJson,
+		&i.RolledBackAt,
+		&i.PlanJson,
+		&i.BranchID,
+		&i.PromotionStartedAt,
+		&i.PromotedToTurnID,
+		&i.RetryOfTurnID,
+		&i.HandledByReviewID,
+		&i.UsageLimitResetsAt,
+		&i.UsageLimitAutoResume,
+		&i.UsageLimitResumeError,
+		&i.BatchedInput,
+		&i.ProviderInputText,
+		&i.FailureCode,
+		&i.BatchDeliveryKind,
+		&i.BatchDeliverySteerID,
+		&i.ArtifactsJson,
+	)
+	return i, err
 }
 
 const selectConversationQueuedEditDelivery = `-- name: SelectConversationQueuedEditDelivery :one

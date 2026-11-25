@@ -43,7 +43,7 @@ export function UsageLimitNotice({
 	const ready = resetAt === undefined || now >= resetAt;
 	const actionError = error ?? usageLimit.resumeError;
 	const scheduled = usageLimit.autoResume;
-	const showResume = onResume && ready && !scheduled;
+	const showResume = onResume && resetAt === undefined && !scheduled;
 	const showAutoResume = onAutoResumeChange && (scheduled || (resetAt !== undefined && !ready));
 
 	useEffect(() => {

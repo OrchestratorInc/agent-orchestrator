@@ -8,7 +8,7 @@ for (const { harness, providerLabel } of [
 	test.describe(`${providerLabel} usage-limit recovery @P0`, () => {
 		test.beforeEach(async ({ page }) => { await installFakeBridge(page); });
 
-		test("offers opt-in, cancellation, then Resume when reset time arrives", async ({ page }) => {
+		test("offers opt-in and cancellation until the reset time arrives", async ({ page }) => {
 			await page.clock.install();
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&delay=60000`);
 			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
@@ -23,8 +23,6 @@ for (const { harness, providerLabel } of [
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
 			await expect(page.getByRole("button", { name: "Auto-resume at reset" })).toBeVisible();
 			await page.clock.fastForward(61_000);
-			await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeEnabled();
-			await page.getByRole("button", { name: "Resume", exact: true }).click();
 			await expect(recoveryNotice).toHaveCount(0);
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
 			await expect(page.getByRole("button", { name: "Auto-resume at reset" })).toHaveCount(0);
@@ -32,7 +30,7 @@ for (const { harness, providerLabel } of [
 			await expect(page.getByText("The agent ran into a problem")).toHaveCount(0);
 		});
 
-		test("keeps overdue auto-resume cancellable on a narrow screen before manual recovery", async ({ page }) => {
+		test("keeps overdue auto-resume cancellable on a narrow screen", async ({ page }) => {
 			await page.setViewportSize({ width: 390, height: 844 });
 			await page.clock.install();
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&delay=60000`);
@@ -57,17 +55,8 @@ for (const { harness, providerLabel } of [
 			expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
 			await cancel.click();
-			await expect(cancel).toHaveCount(0);
-			const resume = page.getByRole("button", { name: "Resume", exact: true });
-			await expect(resume).toBeEnabled();
-			await expect(resume).toBeInViewport({ ratio: 1 });
-			await expect(recoveryNotice).toBeVisible();
-			expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-
-			await resume.click();
 			await expect(recoveryNotice).toHaveCount(0);
-			await expect(cancel).toHaveCount(0);
-			await expect(resume).toHaveCount(0);
+			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
 			await expect(page.getByRole("button", { name: "Auto-resume at reset" })).toHaveCount(0);
 		});
 
@@ -75,7 +64,7 @@ for (const { harness, providerLabel } of [
 			await page.setViewportSize({ width: 390, height: 844 });
 			// The chat is too short to scroll, so it asks for the older page holding the
 			// prompt on its own. That page stays loading here: recovery must not need it.
-			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&paginated=1&olderPending=1&armed=1&delay=-1000`);
+			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&paginated=1&olderPending=1&armed=1&unknown=1`);
 			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			const prompt = page.getByText("Continue improving the session experience.", { exact: true });
 			await expect(prompt).toHaveCount(0);

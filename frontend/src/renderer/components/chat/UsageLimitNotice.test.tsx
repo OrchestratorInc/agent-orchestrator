@@ -13,7 +13,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("UsageLimitNotice", () => {
-	it("shows only controls and reveals Resume when the reset time passes", () => {
+	it("shows only controls, and nothing once the reset time passes", () => {
 		const onResume = vi.fn();
 		const onAutoResumeChange = vi.fn();
 		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
@@ -27,13 +27,9 @@ describe("UsageLimitNotice", () => {
 
 		act(() => vi.advanceTimersByTime(65_000));
 
-		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
-		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).not.toBeInTheDocument();
+		expect(screen.queryByTestId("usage-limit-notice")).not.toBeInTheDocument();
 		expect(onResume).not.toHaveBeenCalled();
 		expect(onAutoResumeChange).not.toHaveBeenCalled();
-		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
-		expect(onResume).toHaveBeenCalledOnce();
 	});
 
 	it("opts into automatic resume and lets the user cancel it", () => {
@@ -78,10 +74,8 @@ describe("UsageLimitNotice", () => {
 		expect(onAutoResumeChange).toHaveBeenLastCalledWith(false);
 
 		view.rerender(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} />);
-		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).not.toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
-		expect(onResume).toHaveBeenCalledOnce();
+		expect(screen.queryByTestId("usage-limit-notice")).not.toBeInTheDocument();
+		expect(onResume).not.toHaveBeenCalled();
 	});
 
 	it.each([undefined, "not-a-date"])("offers only manual resume when the reset time is %s", (resetsAt) => {
@@ -95,7 +89,7 @@ describe("UsageLimitNotice", () => {
 		expect(onResume).toHaveBeenCalledOnce();
 	});
 
-	it.each([{ pending: true }, { disabled: true }])("prevents scheduling and manual resume while unavailable: %j", (props) => {
+	it.each([{ pending: true }, { disabled: true }])("prevents scheduling while unavailable: %j", (props) => {
 		const onResume = vi.fn();
 		const onAutoResumeChange = vi.fn();
 		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={onResume} onAutoResumeChange={onAutoResumeChange} {...props} />);
@@ -103,9 +97,6 @@ describe("UsageLimitNotice", () => {
 		expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Auto-resume at reset" })).toBeDisabled();
 		fireEvent.click(screen.getByRole("button", { name: "Auto-resume at reset" }));
-		act(() => vi.advanceTimersByTime(65_000));
-		expect(screen.getByRole("button", { name: "Resume" })).toBeDisabled();
-		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
 		expect(onAutoResumeChange).not.toHaveBeenCalled();
 		expect(onResume).not.toHaveBeenCalled();
 	});
@@ -165,20 +156,20 @@ describe("UsageLimitNotice", () => {
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
-	it("renders nothing before the reset when only manual resume is offered", () => {
+	it("renders nothing before or after the reset when only manual resume is offered", () => {
 		const { container } = render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={vi.fn()} />);
 
 		expect(container).toBeEmptyDOMElement();
 		act(() => vi.advanceTimersByTime(65_000));
-		expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
+		expect(container).toBeEmptyDOMElement();
 	});
 
 	it("refreshes an expired reset immediately when returning to the window", () => {
-		render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={vi.fn()} />);
+		const { container } = render(<UsageLimitNotice usageLimit={{ resetsAt, autoResume: false }} onResume={vi.fn()} onAutoResumeChange={vi.fn()} />);
 		vi.setSystemTime(new Date(resetsAt));
 
 		fireEvent.focus(window);
 
-		expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
+		expect(container).toBeEmptyDOMElement();
 	});
 });

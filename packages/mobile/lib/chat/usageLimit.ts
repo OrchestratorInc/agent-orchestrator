@@ -36,15 +36,16 @@ export type UsageLimitNoticeView = {
 };
 
 /**
- * What the notice offers, as on the desktop: Resume once the limit has reset,
- * and before it, a way to have the daemon resume at the reset. The daemon owns
- * the resuming, so the phone need not be open when it happens.
+ * What the notice offers, as on the desktop: a way to have the daemon resume at
+ * the reset, or Resume when the reset time is unknown. Nothing is offered once
+ * the limit has reset. The daemon owns the resuming, so the phone need not be
+ * open when it happens.
  */
 export function usageLimitNoticeView(limit: ConversationUsageLimit, now: number): UsageLimitNoticeView {
 	const resetAt = usageLimitResetAt(limit);
 	const ready = resetAt === undefined || now >= resetAt;
 	const scheduled = limit.autoResume;
-	const showResume = ready && !scheduled;
+	const showResume = resetAt === undefined && !scheduled;
 	const showAutoResume = scheduled || (resetAt !== undefined && !ready);
 	let status: string | undefined;
 	if (scheduled) status = ready ? "Auto-resume is waiting to retry." : `Resumes automatically ${resetTimeCopy(resetAt!, now)}.`;

@@ -1200,7 +1200,9 @@ WHERE conversations.id = sqlc.arg(conversation_id)
   );
 
 -- name: SelectConversationQueueHoldTurn :one
-SELECT queue_held_turn_id FROM conversations WHERE id = ?;
+SELECT conversation_turns.* FROM conversation_turns
+JOIN conversations ON conversations.queue_held_turn_id = conversation_turns.id
+WHERE conversations.id = ?;
 
 -- name: SelectQueuedConversationBatch :many
 SELECT conversation_turns.id,

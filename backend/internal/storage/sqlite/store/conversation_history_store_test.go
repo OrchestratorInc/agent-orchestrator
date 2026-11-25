@@ -1239,7 +1239,7 @@ func TestReplacementOrchestratorDoesNotInheritTheQueueHold(t *testing.T) {
 	if err := s.SettleTurnByID(ctx, "limited-turn", domain.TurnStateFailed, refusal, histClock.Add(2*time.Second)); err != nil {
 		t.Fatalf("settle limited prompt: %v", err)
 	}
-	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || !held {
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID, histClock); err != nil || !held {
 		t.Fatalf("queue held = %v, %v after the usage limit", held, err)
 	}
 	if _, err := s.CreateProjectConversationWithContextReset(ctx, "unused-same-owner", "project-held", first.ID,
@@ -1250,7 +1250,7 @@ func TestReplacementOrchestratorDoesNotInheritTheQueueHold(t *testing.T) {
 		}, histClock.Add(2*time.Second)); err != nil {
 		t.Fatalf("rebind to the same orchestrator: %v", err)
 	}
-	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || !held {
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID, histClock); err != nil || !held {
 		t.Fatalf("queue held = %v, %v after the same orchestrator rebound", held, err)
 	}
 
@@ -1269,7 +1269,7 @@ func TestReplacementOrchestratorDoesNotInheritTheQueueHold(t *testing.T) {
 		}, histClock.Add(3*time.Second)); err != nil {
 		t.Fatalf("rebind to replacement: %v", err)
 	}
-	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || held {
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID, histClock); err != nil || held {
 		t.Fatalf("queue held = %v, %v after a replacement orchestrator took over", held, err)
 	}
 }

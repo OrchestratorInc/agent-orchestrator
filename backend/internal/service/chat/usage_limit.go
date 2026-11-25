@@ -31,7 +31,7 @@ type usageLimitStore interface {
 }
 
 type queueHoldStore interface {
-	ConversationQueueHeld(context.Context, string) (bool, error)
+	ConversationQueueHeld(context.Context, string, time.Time) (bool, error)
 	ReleaseConversationQueue(context.Context, string) error
 	ReleaseConversationQueueHeldBy(ctx context.Context, conversationID, turnID string) error
 	ReleaseConversationQueueAfterTurn(ctx context.Context, conversationID, providerTurnID string) error
@@ -43,7 +43,7 @@ func (c *Controller) queueHeld(ctx context.Context) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	return store.ConversationQueueHeld(ctx, c.conversation.ID)
+	return store.ConversationQueueHeld(ctx, c.conversation.ID, c.now())
 }
 
 func releaseHeldQueue(ctx context.Context, store Store, conversationID string) error {

@@ -214,7 +214,7 @@ func TestNativeChatHandoffAtomicPublication(t *testing.T) {
 					t.Fatalf("predecessor request status = %s, want %s: %+v", activity.Status, wantRequest, activity)
 				}
 			}
-			held, err := f.store.ConversationQueueHeld(ctx, conversation.ID)
+			held, err := f.store.ConversationQueueHeld(ctx, conversation.ID, f.now)
 			if wantHeld := scenario != "success" && scenario != "owner_changed"; err != nil || held != wantHeld {
 				t.Fatalf("queue held = %v, %v, want %v", held, err, wantHeld)
 			}

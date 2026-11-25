@@ -95,10 +95,15 @@ describe("UsageLimitNotice", () => {
 		expect(value.setAutoResume).toHaveBeenCalledWith("t1", false);
 	});
 
-	it("turns into Resume when the reset passes", async () => {
-		const value = recovery();
-		const root = render(<UsageLimitNotice turn={turn({ autoResume: false, resetsAt: RESET })} />, value);
+	it("offers nothing once the reset passes", () => {
+		const root = render(<UsageLimitNotice turn={turn({ autoResume: false, resetsAt: RESET })} />);
 		act(() => { vi.advanceTimersByTime(60 * 60_000); });
+		expect(buttons(root)).toEqual([]);
+	});
+
+	it("offers Resume when the reset is unknown", async () => {
+		const value = recovery();
+		const root = render(<UsageLimitNotice turn={turn({ autoResume: false, resetsAt: null })} />, value);
 		expect(buttons(root)).toEqual(["Resume"]);
 		await act(async () => root.findByProps({ title: "Resume" }).props.onPress());
 		expect(value.resume).toHaveBeenCalledWith("t1");
@@ -111,7 +116,7 @@ describe("UsageLimitNotice", () => {
 		act(() => { vi.advanceTimersByTime(60 * 60_000); });
 		expect(buttons(root)).toEqual(["Auto-resume at reset"]);
 		act(() => { vi.advanceTimersByTime(10 * 60_000); });
-		expect(buttons(root)).toEqual(["Resume"]);
+		expect(buttons(root)).toEqual([]);
 	});
 
 	it("rechecks the reset when the app comes back to the foreground", () => {
@@ -119,7 +124,7 @@ describe("UsageLimitNotice", () => {
 		// A suspended app's timer never fired; the clock moved on regardless.
 		vi.setSystemTime(Date.parse(RESET) + 1);
 		act(() => fixtures.appState.forEach((listener) => listener("active")));
-		expect(buttons(root)).toEqual(["Resume"]);
+		expect(buttons(root)).toEqual([]);
 	});
 
 	it("shows a failed request in place", async () => {

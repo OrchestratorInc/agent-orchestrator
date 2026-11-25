@@ -75,12 +75,12 @@ func TestUsageLimitHoldIsNotRestoredByAReplay(t *testing.T) {
 	mustNoError(t, s.BindTurnToProvider(ctx, "turn-limited", "provider-limited", testNow))
 	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
 	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, refusal, testNow))
-	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || !held {
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || !held {
 		t.Fatalf("queue held = %v, %v after a usage-limit failure", held, err)
 	}
 	mustNoError(t, s.ReleaseConversationQueue(ctx, conversation.ID))
 	mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-limited", domain.TurnStateFailed, "", testNow.Add(time.Minute)))
-	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || held {
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || held {
 		t.Fatalf("queue held = %v, %v after replaying the released failure", held, err)
 	}
 }
@@ -91,7 +91,7 @@ func TestUsageLimitRefusedAtSendHoldsTheQueue(t *testing.T) {
 	appendBranchPrompt(t, s, session, conversation, "generation-root", "limited", "finish this task")
 	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
 	mustNoError(t, s.SettleTurnByID(ctx, "turn-limited", domain.TurnStateFailed, refusal, testNow))
-	if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || !held {
+	if held, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || !held {
 		t.Fatalf("queue held = %v, %v after a usage limit refused at send", held, err)
 	}
 }
@@ -114,7 +114,7 @@ func TestOnlyAUsageLimitFailureHoldsTheQueue(t *testing.T) {
 			appendBranchPrompt(t, s, session, conversation, "generation-root", "prompt", "finish this task")
 			mustNoError(t, s.BindTurnToProvider(ctx, "turn-prompt", "provider-prompt", testNow))
 			mustNoError(t, s.SettleTurn(ctx, conversation.ID, "provider-prompt", tc.state, tc.message, testNow))
-			if held, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || held != tc.held {
+			if held, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || held != tc.held {
 				t.Fatalf("queue held = %v, %v, want %v", held, err, tc.held)
 			}
 		})
@@ -167,7 +167,7 @@ func TestQueueHoldFollowsTheTurnThatOwnsIt(t *testing.T) {
 	const refusal = "You've hit your session limit · resets 12pm (Asia/Calcutta)"
 	held := func(want bool, step string) {
 		t.Helper()
-		if got, err := s.ConversationQueueHeld(ctx, conversation.ID); err != nil || got != want {
+		if got, err := s.ConversationQueueHeld(ctx, conversation.ID, testNow); err != nil || got != want {
 			t.Fatalf("queue held = %v, %v after %s, want %v", got, err, step, want)
 		}
 	}

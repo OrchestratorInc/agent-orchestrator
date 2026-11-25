@@ -219,7 +219,7 @@ func TestUsageLimitHoldQueuesAgentSendsOnAnIdleChat(t *testing.T) {
 		}
 		return false
 	})
-	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID()); err != nil || !held {
+	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID(), h.now()); err != nil || !held {
 		t.Fatalf("queue held = %v, %v after a child thread completed", held, err)
 	}
 
@@ -245,6 +245,80 @@ func TestUsageLimitHoldQueuesAgentSendsOnAnIdleChat(t *testing.T) {
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["agent note"] == domain.TurnStateRunning
 	})
+}
+
+func TestUsageLimitHoldEndsAtTheReset(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	failUsageLimitedTurnBehindQueue(t, h, "queued note")
+	agentSend := func(text string) {
+		t.Helper()
+		if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+			Text: text, ClientMessageID: text, Origin: domain.MessageOriginAutomation,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	h.advance(time.Minute - time.Second)
+	agentSend("before the reset")
+	assertTurnStaysQueued(t, h, "before the reset")
+
+	h.advance(time.Second)
+	assertTurnStaysQueued(t, h, "queued note")
+	agentSend("after the reset")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return turnStateByText(t, s)["queued note"] == domain.TurnStateRunning
+	})
+}
+
+func TestUsageLimitResetLetsAgentsReachAnIdleChat(t *testing.T) {
+	for _, steer := range []bool{false, true} {
+		t.Run(fmt.Sprintf("steer %v", steer), func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			failUsageLimitedTurn(t, h, timedUsageLimit)
+			h.advance(time.Minute)
+
+			msg := ports.ChatUserMessage{Text: "agent note", ClientMessageID: "c-agent", Origin: domain.MessageOriginAutomation}
+			var err error
+			if steer {
+				msg.Origin, msg.SenderSessionID = domain.MessageOriginHuman, "worker-1"
+				_, err = h.svc.SteerOrSend(ctx, testSession, msg, false)
+			} else {
+				_, err = h.svc.Send(ctx, testSession, msg)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				return turnStateByText(t, s)["agent note"] == domain.TurnStateRunning
+			})
+		})
+	}
+}
+
+func TestUsageLimitHoldOutlastsTheResetForAnArmedAutoResume(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	source := failUsageLimitedTurnBehindQueue(t, h, "queued note")
+	if err := h.svc.SetTurnAutoResume(ctx, testSession, source.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	h.advance(time.Minute)
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "another note", ClientMessageID: "c-agent", Origin: domain.MessageOriginAutomation,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertTurnStaysQueued(t, h, "queued note")
+
+	if err := h.svc.ResumeUsageLimitedTurns(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.conv.sentTexts(); len(got) != 2 || got[1] != "finish this task" {
+		t.Fatalf("provider received %v, want the limited prompt sent again first", got)
+	}
 }
 
 func TestUsageLimitOnAutomationPromptLeavesTheQueueUnheld(t *testing.T) {
@@ -362,7 +436,7 @@ func TestInterfaceHandoffDrainsPastANewUsageLimit(t *testing.T) {
 		states := turnStateByText(t, s)
 		return states["note 1"] == domain.TurnStateFailed && states["note 2"] == domain.TurnStateCompleted
 	})
-	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID()); err != nil || held {
+	if held, err := h.st.ConversationQueueHeld(ctx, h.ctrl.ConversationID(), h.now()); err != nil || held {
 		t.Fatalf("queue held = %v, %v after a terminal switch drained it", held, err)
 	}
 }

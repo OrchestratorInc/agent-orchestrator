@@ -567,7 +567,7 @@ func TestAccountHandoffKeepsTheHeldQueueWhenTheAgentStopsDuringPreflight(t *test
 		t.Fatal(err)
 	}
 	assertTurnStaysQueued(t, hh.harness, "queued note")
-	if held, err := hh.st.ConversationQueueHeld(ctx, hh.ctrl.ConversationID()); err != nil || !held {
+	if held, err := hh.st.ConversationQueueHeld(ctx, hh.ctrl.ConversationID(), hh.now()); err != nil || !held {
 		t.Fatalf("queue held = %v, %v after the agent stopped during the move", held, err)
 	}
 	if got := hh.conv.sentTexts(); len(got) != 1 {
@@ -622,7 +622,7 @@ func TestAccountHandoffRetriesThePromptBeforeTheHeldQueue(t *testing.T) {
 		t.Fatalf("handoff note retry = %q", retry)
 	}
 	assertTurnStaysQueued(t, hh.harness, "queued note")
-	if held, err := hh.st.ConversationQueueHeld(ctx, source.ConversationID); err != nil || !held {
+	if held, err := hh.st.ConversationQueueHeld(ctx, source.ConversationID, hh.now()); err != nil || !held {
 		t.Fatalf("queue held = %v, %v while the retry runs", held, err)
 	}
 
@@ -705,7 +705,7 @@ func TestAccountHandoffSkippedRetryKeepsAHoldItDoesNotOwn(t *testing.T) {
 	hh.tick(t)
 
 	assertTurnStaysQueued(t, hh.harness, "queued note")
-	if held, err := hh.st.ConversationQueueHeld(ctx, source.ConversationID); err != nil || !held {
+	if held, err := hh.st.ConversationQueueHeld(ctx, source.ConversationID, hh.now()); err != nil || !held {
 		t.Fatalf("queue held = %v, %v after the handoff skipped its retry", held, err)
 	}
 }

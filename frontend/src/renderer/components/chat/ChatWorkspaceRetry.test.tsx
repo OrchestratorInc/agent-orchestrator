@@ -70,7 +70,7 @@ describe("ChatWorkspace retry", () => {
 		{ autoResume: true, action: "Cancel auto-resume" },
 	])("keeps $action available when pagination omits the prompt", async ({ autoResume, action }) => {
 		const snapshot = limitedSnapshot(autoResume);
-		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		snapshot.turns[0]!.usageLimit!.resetsAt = autoResume ? new Date(Date.now() - 1_000).toISOString() : undefined;
 		snapshot.items = snapshot.items.filter((item) => item.kind !== "message" || item.role !== "user");
 		snapshot.hasMoreBefore = true;
 		snapshot.oldestSequence = 2;
@@ -89,7 +89,7 @@ describe("ChatWorkspace retry", () => {
 	it("does not offer usage-limit recovery without a durable human prompt", () => {
 		const snapshot = limitedSnapshot();
 		snapshot.turns[0]!.hasHumanPrompt = false;
-		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		snapshot.turns[0]!.usageLimit!.resetsAt = undefined;
 		snapshot.items = snapshot.items.map((item): ConversationItem => item.kind === "message" && item.role === "user"
 			? { ...item, origin: "automation" } : item);
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn(), setAutoResume: vi.fn() }} />);
@@ -101,7 +101,7 @@ describe("ChatWorkspace retry", () => {
 
 	it("keeps an earlier limited turn resumable when pagination omits its prompt", async () => {
 		const snapshot = limitedSnapshot();
-		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		snapshot.turns[0]!.usageLimit!.resetsAt = undefined;
 		snapshot.items = snapshot.items.filter((item) => item.kind !== "message" || item.role !== "user");
 		snapshot.hasMoreBefore = true;
 		snapshot.oldestSequence = 2;
@@ -134,9 +134,17 @@ describe("ChatWorkspace retry", () => {
 		expect(setAutoResume).toHaveBeenCalledWith("turn-1", false);
 	});
 
-	it("resumes the original prompt when the reset has passed", async () => {
+	it("leaves a chat whose limit has reset to its composer", () => {
 		const snapshot = limitedSnapshot();
 		snapshot.turns[0]!.usageLimit!.resetsAt = new Date(Date.now() - 1_000).toISOString();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn(), setAutoResume: vi.fn() }} />);
+		expect(screen.queryByTestId("usage-limit-notice")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+	});
+
+	it("resumes the original prompt when the reset is unknown", async () => {
+		const snapshot = limitedSnapshot();
+		snapshot.turns[0]!.usageLimit!.resetsAt = undefined;
 		const retry = vi.fn();
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry, error: "The previous resume request failed", turnId: "turn-1" }} />);
 		expect(screen.getByRole("alert")).toHaveTextContent("The previous resume request failed");
@@ -145,10 +153,10 @@ describe("ChatWorkspace retry", () => {
 	});
 
 	it.each([
-		{ resetInMs: -1_000, ready: true },
-		{ resetInMs: 60_000, ready: false },
-		{ resetInMs: undefined, ready: true },
-	])("preserves older limited-prompt recovery and refusal after later work: %j", async ({ resetInMs, ready }) => {
+		{ resetInMs: -1_000, resumable: false },
+		{ resetInMs: 60_000, resumable: false },
+		{ resetInMs: undefined, resumable: true },
+	])("preserves older limited-prompt recovery and refusal after later work: %j", async ({ resetInMs, resumable }) => {
 		const snapshot = limitedSnapshot();
 		snapshot.turns[0]!.usageLimit!.resetsAt = resetInMs === undefined ? undefined : new Date(Date.now() + resetInMs).toISOString();
 		snapshot.turns.push({ id: "later", state: "completed", requestedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
@@ -158,7 +166,7 @@ describe("ChatWorkspace retry", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("Could not retry the earlier prompt");
 		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Cancel auto-resume" })).toBeNull();
-		if (ready) {
+		if (resumable) {
 			await userEvent.click(screen.getByRole("button", { name: "Resume" }));
 			expect(retry).toHaveBeenCalledWith("turn-1");
 		} else {

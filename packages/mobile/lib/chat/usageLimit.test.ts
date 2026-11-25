@@ -59,9 +59,9 @@ describe("usageLimitNoticeView", () => {
 		expect(view.status).toMatch(/^Resumes automatically /);
 	});
 
-	it("offers Resume after the reset", () => {
+	it("offers nothing after the reset", () => {
 		const view = usageLimitNoticeView({ autoResume: false, resetsAt: "2026-11-17T17:00:00Z" }, reset);
-		expect(view).toMatchObject({ ready: true, showResume: true, showAutoResume: false, status: undefined });
+		expect(view).toMatchObject({ ready: true, showResume: false, showAutoResume: false, status: undefined });
 	});
 
 	it("says it is waiting when the reset passed with auto-resume armed", () => {

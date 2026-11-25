@@ -2731,16 +2731,18 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 	}, nil
 }
 
-// ConversationQueueHeld reports whether the conversation's queue is held.
-func (s *Store) ConversationQueueHeld(ctx context.Context, conversationID string) (bool, error) {
-	heldBy, err := s.conversationReader(ctx).SelectConversationQueueHoldTurn(ctx, conversationID)
+// ConversationQueueHeld reports whether a usage limit that has not reset holds the conversation's queue.
+func (s *Store) ConversationQueueHeld(ctx context.Context, conversationID string, now time.Time) (bool, error) {
+	row, err := s.conversationReader(ctx).SelectConversationQueueHoldTurn(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("read queue hold of %s: %w", conversationID, err)
 	}
-	return heldBy.Valid, nil
+	limit := turnToDomain(row).UsageLimit
+	reset := limit != nil && !limit.AutoResume && limit.ResetsAt != nil && !limit.ResetsAt.After(now)
+	return !reset, nil
 }
 
 // ReleaseConversationQueue lets the conversation's queued turns dispatch again.
