@@ -109,6 +109,11 @@ func (m *Manager) storeKimiChildLocked(id domain.SessionID, st kimiChildState) {
 // a session's screen now even though its activity is not yet stale: a Kimi
 // StopFailure was attributed to a child, and the screen can tell whether the
 // parent is still working or its own turn failed.
+//
+// The window bounds only the early reads. The failure itself is kept until a
+// new turn, an owner change, the parent's own failure, termination, or the
+// screen read that proves the parent idle, so a later ordinary stale read
+// still closes the failed turn.
 func (m *Manager) TerminalActivityRecheckDue(id domain.SessionID, now time.Time) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -117,11 +122,5 @@ func (m *Manager) TerminalActivityRecheckDue(id domain.SessionID, now time.Time)
 		return false
 	}
 	since := now.Sub(st.childFailureAt)
-	if since > kimiChildFailureRecheckWindow {
-		// The observer's ordinary stale-activity read takes over.
-		st.childFailureAt = time.Time{}
-		m.storeKimiChildLocked(id, st)
-		return false
-	}
-	return since >= kimiChildFailureRecheckSettle
+	return since >= kimiChildFailureRecheckSettle && since <= kimiChildFailureRecheckWindow
 }

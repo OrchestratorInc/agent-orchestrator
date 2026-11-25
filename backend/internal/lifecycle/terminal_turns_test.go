@@ -283,14 +283,16 @@ func TestKimiUnreportedChildEndRechecksTheScreen(t *testing.T) {
 }
 
 // The early read is bounded: after the window the observer's ordinary
-// stale-activity read takes over.
+// stale-activity read takes over. The failure outlives the window, so that
+// later read still closes the failed turn.
 func TestKimiChildFailureRecheckExpires(t *testing.T) {
 	start := time.Unix(1_000, 0).UTC()
+	now := start
 	store := &turnRecordingStore{fakeStore: newFakeStore()}
 	store.sessions["s-1"] = domain.SessionRecord{ID: "s-1", Harness: domain.HarnessKimi, Mode: domain.SessionModeTUI,
 		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch", AgentSessionID: "kimi-1", AgentSessionIDLaunchID: "launch"}}
 	manager := New(store, nil)
-	manager.clock = func() time.Time { return start }
+	manager.clock = func() time.Time { return now }
 	for _, signal := range []ports.ActivitySignal{
 		{Event: "user-prompt-submit", State: domain.ActivityActive, TurnUserRequest: "map the importer"},
 		{Event: "subagent-start"},
@@ -305,8 +307,17 @@ func TestKimiChildFailureRecheckExpires(t *testing.T) {
 	if manager.TerminalActivityRecheckDue("s-1", start.Add(kimiChildFailureRecheckWindow+time.Second)) {
 		t.Fatal("recheck due after its window")
 	}
-	if manager.TerminalActivityRecheckDue("s-1", start.Add(kimiChildFailureRecheckSettle)) {
-		t.Fatal("an expired recheck came back")
+
+	// The ordinary stale read finds Kimi idle after the window.
+	now = start.Add(3 * time.Minute)
+	if err := manager.ApplyActivitySignal(context.Background(), "s-1", ports.ActivitySignal{
+		Event: "terminal-idle", State: domain.ActivityIdle, Valid: true, LaunchID: "launch", Timestamp: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"request:kimi:kimi-1:map the importer", "response:"}
+	if !reflect.DeepEqual(store.calls, want) {
+		t.Fatalf("recorded %q, want %q", store.calls, want)
 	}
 }
 
