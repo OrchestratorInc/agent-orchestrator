@@ -83,6 +83,14 @@ if (typeof window !== "undefined") {
 		});
 	}
 
+	// jsdom does not implement Element.scrollTo. Chat find repaints from a
+	// timer, so a test that finishes first would otherwise see an unhandled
+	// "scrollTo is not a function" after it has passed.
+	// On Element, where tests that need a spy install it, so theirs replaces this one.
+	if (typeof Element.prototype.scrollTo !== "function") {
+		Object.defineProperty(Element.prototype, "scrollTo", { configurable: true, writable: true, value: () => {} });
+	}
+
 	Object.defineProperty(window, "matchMedia", {
 		configurable: true,
 		writable: true,
@@ -133,6 +141,11 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		triage: { launch: async () => ({ ok: true }) },
+		awake: {
+			pushes: false,
+			onState: () => () => undefined,
+		},
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -144,16 +157,25 @@ if (typeof window !== "undefined") {
 			chooseDirectory: async () => null,
 			checkGitRepository: async () => true,
 			openExternal: async () => undefined,
+			showPrivacyGuide: async () => undefined,
+			updatePrivacyGuide: async () => false,
+			closePrivacyGuide: async () => undefined,
+			getAppPrivacy: async () => undefined,
+			requestAppPrivacy: async () => undefined,
+			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
 			getRepositoryBranch: async () => undefined,
 			getGitHubLogin: async (_repoPath?: string) => "",
+			findArtifactIssues: async () => [],
+			publishIssueArtifact: async () => { throw new Error("GitHub is unavailable in this test."); },
 			listGitHubRepos: async () => [],
 		getCachedGitHubOwners: async () => [],
 			refreshGitHubOwners: async () => [],
 			checkGitHubRepositoryAvailability: async () => ({ available: true }),
 			getPathForFile: () => "",
 			onOpenFolderPath: () => () => undefined,
+			onOpenSessionDeepLink: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onQuitConfirmRequest: () => () => undefined,
@@ -168,12 +190,20 @@ if (typeof window !== "undefined") {
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+			onShortcutPressed: () => () => undefined,
+			reportSessionsShown: () => undefined,
+			setMenuAvailability: () => undefined,
+			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
 			setFocused: () => undefined,
 			onFontSizeShortcut: () => () => undefined,
+		},
+		artifactZoom: {
+			setEngaged: () => undefined,
+			onShortcut: () => () => undefined,
 		},
 		window: {
 			getZoomFactor: async () => 1,
@@ -185,6 +215,7 @@ if (typeof window !== "undefined") {
 		},
 		theme: {
 			set: async () => undefined,
+			systemAppearance: async (): Promise<"light" | "dark"> => (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
 			setWindowTranslucent: async () => undefined,
@@ -202,19 +233,34 @@ if (typeof window !== "undefined") {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
 		},
+		sessionShareUrls: {
+			remember: async () => undefined,
+			recall: async () => ({}),
+			forget: async () => undefined,
+		},
 		cloudShare: {
 			available: async () => true,
-			inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
-			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+			inspect: async () => ({ name: "", size: 0, unsupported: false, fingerprint: "" }),
+			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
+			hostLinks: async () => [],
 			publish: async () => ({ status: "cancelled" as const }),
 			cancel: async () => undefined,
 			unpublish: async () => undefined,
+			setAccess: async () => {
+				throw new Error("not stubbed");
+			},
+			grants: async () => ({ people: [], teams: [], workspaces: [] }),
+			invite: async () => ({ people: [], teams: [], workspaces: [] }),
+			removeGrant: async () => undefined,
 			onProgress: () => () => undefined,
 		},
 		cloudArtifact: {
 			fetch: async () => new Uint8Array(),
 			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
+		},
+		artifactSnapshot: {
+			request: async () => false,
 		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
@@ -224,8 +270,14 @@ if (typeof window !== "undefined") {
 			onStatus: () => () => undefined,
 		},
 		agentLogin: { request: async () => null },
-		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
+		sideChats: {
+			protocolVersion: 1, mode: "desktop", capture: async () => undefined,
+			requestClose: async () => { throw new Error("Install a close fixture before requesting deletion"); },
+			getCloseState: async (sessionId: string) => ({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId, sides: [] }),
+			onCloseStateChanged: () => () => {},
+		},
 	editorHandoff: {
+			pathAction: async () => undefined,
 			getState: async () => ({
 				targets: [
 					{ id: "cursor", name: "Cursor", kind: "editor" },
@@ -245,6 +297,7 @@ if (typeof window !== "undefined") {
 			openArtifacts: async ({ targetId }) => targetId === "terminal"
 				? { id: "terminal", name: "Terminal", kind: "terminal" }
 				: { id: "file-manager", name: "Finder", kind: "file_manager" },
+			openArtifactInBrowser: async () => undefined,
 			copyWorkspacePath: async () => undefined,
 		},
 		telemetry: {
@@ -254,6 +307,11 @@ if (typeof window !== "undefined") {
 			onAnalyticsOptOut: () => () => undefined,
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
+			getLifetimeSessions: async () => null,
+			takeLaunchStart: async () => null,
+			takeResourceSummary: async () => null,
+			launchSteps: async () => null,
+			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			onPolicy: () => () => false,
@@ -285,6 +343,8 @@ if (typeof window !== "undefined") {
 			}),
 			historySuggestions: async () => [],
 			historyFavicon: async () => undefined,
+			userBrowser: async () => null,
+			openInUserBrowser: async () => ({ name: "", chrome: false }),
 			clear: async (viewId: string) => ({
 				viewId,
 				url: "",
@@ -373,6 +433,8 @@ if (typeof window !== "undefined") {
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,
 			onProfileManage: () => () => undefined,
+			onProfileSwitchConfirm: () => () => undefined,
+			onProfileSwitchFailed: () => () => undefined,
 			onAnnotationSubmit: () => () => undefined,
 			onAnnotationCancel: () => () => undefined,
 			onAnnotationState: () => () => undefined,
@@ -421,6 +483,11 @@ if (typeof window !== "undefined") {
 			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "unavailable" }),
 		},
+		cliShadow: {
+			inspect: async () => ({ kind: "unknown" as const }),
+			replace: async () => ({ ok: false as const, code: "io" as const, message: "Not available in this environment." }),
+			reveal: async () => undefined,
+		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),
 			set: async () => undefined,
@@ -452,14 +519,16 @@ if (typeof window !== "undefined") {
 		},
 		remotes: {
 			list: async () => [],
-			importAccountHost: async () => undefined,
-			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => ({ token: "" }),
+			syncAccountHosts: async () => undefined,
+			linkAccountHost: async () => undefined,
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
+			hostUpdate: async () => null,
+			checkHostUpdate: async () => { throw new Error("no remote hosts in test bridge"); },
+			startHostUpdate: async () => { throw new Error("no remote hosts in test bridge"); },
 			computerName: async () => "Test computer",
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
@@ -482,6 +551,12 @@ if (typeof window !== "undefined") {
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			onOpenSharedArtifact: () => () => undefined,
+			takePendingSharedArtifact: async () => null,
+			openSharedArtifactWindow: async () => undefined,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "not available in tests" }),
+			previewFolderUpload: async () => ({ status: "ok", source: "import", leftOut: [] }),
+			takePendingSignIn: async () => null,
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),

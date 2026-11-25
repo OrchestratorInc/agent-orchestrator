@@ -66,6 +66,9 @@ function treeStyle(flushTop: boolean): React.CSSProperties {
 		"--trees-icon-width-override": "14px",
 		"--trees-font-family-override": "inherit",
 		"--trees-font-size-override": "var(--font-size-base)",
+		// The tree's :host asks for `light dark`, which follows the OS. Inherit
+		// AO's theme instead, so icon colours match the chat's file chips.
+		colorScheme: "inherit",
 		paddingTop: flushTop ? 0 : 4,
 	} as React.CSSProperties;
 }
@@ -75,7 +78,7 @@ function treeStyle(flushTop: boolean): React.CSSProperties {
 // expanded state picks which is visible through inherited custom properties.
 const FOLDER_SPRITE = `<svg data-icon-sprite aria-hidden="true" width="0" height="0">
   <symbol id="ao-folder" viewBox="0 0 24 24">
-    <g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
       <path style="display:var(--ao-folder-closed,inline)" d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
       <path style="display:var(--ao-folder-open,none)" d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
     </g>

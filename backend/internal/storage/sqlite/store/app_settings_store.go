@@ -30,9 +30,13 @@ type AppSettings struct {
 	// ComputerUse gives new chat sessions tools to drive desktop apps through
 	// Cua Driver.
 	ComputerUse bool
+	// CommitAttribution is the Orchestrator attribution beta: new sessions
+	// credit Orchestrator on their commits and PRs.
+	CommitAttribution bool
 	// SessionRetentionDays is how long an archived session is kept before the
 	// daemon deletes it; 0 keeps it.
 	SessionRetentionDays int
+	AccountHandoff       bool
 	UpdatedAt            time.Time
 }
 
@@ -53,7 +57,9 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		DefaultSessionMode:   domain.NormalizeSessionMode(row.DefaultSessionMode),
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
+		CommitAttribution:    row.CommitAttribution,
 		SessionRetentionDays: int(row.SessionRetentionDays),
+		AccountHandoff:       row.AccountHandoff,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -100,6 +106,19 @@ func (s *Store) SetComputerUse(ctx context.Context, enabled bool, now time.Time)
 	return nil
 }
 
+// SetCommitAttribution persists the Orchestrator attribution beta switch.
+func (s *Store) SetCommitAttribution(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetCommitAttribution(ctx, gen.SetCommitAttributionParams{
+		CommitAttribution: enabled,
+		UpdatedAt:         now,
+	}); err != nil {
+		return fmt.Errorf("set commit attribution: %w", err)
+	}
+	return nil
+}
+
 // SetSessionRetentionDays persists how long archived sessions are kept.
 func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error {
 	s.writeMu.Lock()
@@ -109,6 +128,19 @@ func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.
 		UpdatedAt:            now,
 	}); err != nil {
 		return fmt.Errorf("set session retention: %w", err)
+	}
+	return nil
+}
+
+// SetAccountHandoff stores the usage-limit account handoff setting.
+func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetAccountHandoff(ctx, gen.SetAccountHandoffParams{
+		AccountHandoff: enabled,
+		UpdatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("set account handoff: %w", err)
 	}
 	return nil
 }

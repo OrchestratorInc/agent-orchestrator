@@ -460,11 +460,12 @@ func (r *gitConfigRewriter) relocate(source, dest string) error {
 	if err != nil {
 		return err
 	}
-	return writePrivateFile(dest, []byte(r.rewrite(string(contents), filepath.Dir(source))))
+	return writePrivateFile(dest, []byte(r.rewrite(string(contents), source)))
 }
 
 // rewrite changes include paths and gitdir conditions while retaining other raw lines.
-func (r *gitConfigRewriter) rewrite(contents, sourceDir string) string {
+func (r *gitConfigRewriter) rewrite(contents, source string) string {
+	sourceDir := filepath.Dir(source)
 	var out strings.Builder
 	section := ""
 	for _, line := range splitGitConfigLines(contents) {
@@ -472,7 +473,7 @@ func (r *gitConfigRewriter) rewrite(contents, sourceDir string) string {
 		if header {
 			section = name
 			if name == "includeif" {
-				if condition, ok := r.anchorCondition(subsection, sourceDir); ok {
+				if condition, ok := r.anchorCondition(subsection, source); ok {
 					out.WriteString("[includeIf " + gitConfigString(condition) + "]\n")
 					continue
 				}
@@ -494,17 +495,26 @@ func (r *gitConfigRewriter) rewrite(contents, sourceDir string) string {
 	return out.String()
 }
 
-// anchorCondition rebases gitdir and gitdir/i patterns only.
-func (r *gitConfigRewriter) anchorCondition(condition, sourceDir string) (string, bool) {
+// anchorCondition rebases gitdir and gitdir/i patterns only. Git expands "./"
+// from the config file's real path and "~/" from the real HOME.
+func (r *gitConfigRewriter) anchorCondition(condition, source string) (string, bool) {
 	prefix, pattern, ok := gitConditionPattern(condition)
 	if !ok {
 		return "", false
 	}
-	anchored, ok := anchorConfigPattern(pattern, sourceDir, r.realHome)
+	anchored, ok := anchorConfigPattern(pattern, filepath.Dir(physicalPath(source)), physicalPath(r.realHome))
 	if !ok {
 		return "", false
 	}
 	return prefix + anchored, true
+}
+
+// physicalPath resolves symlinks, or returns path unchanged when it cannot.
+func physicalPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }
 
 // gitConditionPattern preserves the condition keyword and its case sensitivity.

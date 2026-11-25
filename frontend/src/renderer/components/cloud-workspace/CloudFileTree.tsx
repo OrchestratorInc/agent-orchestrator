@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, File, Folder } from "lucide-react";
+import { ChevronDown, ChevronRight, File, Folder } from "@/components/app-icons";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cloudWorkspaceReviewSearchQueryOptions, cloudWorkspaceReviewTreeQueryOptions } from "../../hooks/useCloudWorkspaceReview";
@@ -16,6 +16,8 @@ type CloudFileTreeProps = {
 	filterText?: string;
 	onOpenFile: (path: string) => void;
 	selectedPath?: string | null;
+	/** False while the session's workspace cannot answer yet (useCloudWorkspaceReady): reads wait, and what was read before stays. */
+	ready?: boolean;
 };
 
 const statusLabel: Partial<Record<CloudCpWorkspaceReviewStatus, string>> = {
@@ -31,7 +33,7 @@ export function CloudFileTree(props: CloudFileTreeProps) {
 function CloudTreeLevel(props: CloudFileTreeProps & { path: string; depth: number }) {
 	const { t } = useTranslation();
 	const query = useQuery(cloudWorkspaceReviewTreeQueryOptions({
-		client: props.client, baseUrl: props.baseUrl, orgId: props.orgId, sessionId: props.sessionId, path: props.path || undefined,
+		client: props.client, baseUrl: props.baseUrl, orgId: props.orgId, sessionId: props.sessionId, path: props.path || undefined, enabled: props.ready,
 	}));
 	if (query.isPending) return props.depth === 0 ? <PanelMessage>{t("files.loading")}</PanelMessage> : null;
 	if (query.isError) return props.depth === 0 ? <PanelMessage action={<RetryButton onClick={() => void query.refetch()} />}>{query.error.message}</PanelMessage> : null;
@@ -83,7 +85,7 @@ function CloudFileSearchResults(props: CloudFileTreeProps & { filterText: string
 	const query = useQuery({
 		...cloudWorkspaceReviewSearchQueryOptions({
 			client: props.client, baseUrl: props.baseUrl, orgId: props.orgId, sessionId: props.sessionId,
-			query: { query: props.filterText, limit: 100 },
+			query: { query: props.filterText, limit: 100 }, enabled: props.ready,
 		}),
 	});
 	if (query.isPending) return <PanelMessage>{t("files.loading")}</PanelMessage>;

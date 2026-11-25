@@ -67,6 +67,66 @@ describe("useSessionScmSummary cloud source", () => {
 		unmount();
 	});
 
+	// A stream that opens with nothing to resume from replays the session's
+	// history: one scm.updated per refresh of every pull request it held.
+	// 2026-11-16 one orchestrator view turned such a replay into 1,873 reads
+	// in 3 s and stalled the control plane.
+	it("folds a replayed burst of SCM events into one refresh", async () => {
+		listSessionPullRequestsMock.mockReset().mockResolvedValue({ sessionId: "session-1", pullRequests: [] });
+		subscribeSessionEventsMock.mockReset().mockImplementation(() => new Promise<void>(() => undefined));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		// Two views of the same session, as the board and the inspector are.
+		const { unmount } = renderHook(() => {
+			useSessionScmSummary("session-1", true, "org-1");
+			return useSessionScmSummary("session-1", true, "org-1");
+		}, { wrapper });
+		await waitFor(() => expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalledTimes(1));
+		const onEvent = subscribeSessionEventsMock.mock.calls[0][0].onEvent;
+		act(() => {
+			for (let sequence = 1; sequence <= 1000; sequence++) onEvent({ type: "scm.updated", sequence });
+		});
+		await waitFor(() => expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(2));
+		await new Promise((resolve) => setTimeout(resolve, 1200));
+		expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(2);
+		unmount();
+	});
+
+	it("never overlaps reads, and reads once more after events that arrive during one", async () => {
+		let release: (() => void) | undefined;
+		listSessionPullRequestsMock.mockReset()
+			.mockResolvedValueOnce({ sessionId: "session-1", pullRequests: [] })
+			.mockImplementationOnce(() => new Promise((resolve) => {
+				release = () => resolve({ sessionId: "session-1", pullRequests: [] });
+			}))
+			.mockResolvedValue({ sessionId: "session-1", pullRequests: [] });
+		subscribeSessionEventsMock.mockReset().mockImplementation(() => new Promise<void>(() => undefined));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const { unmount } = renderHook(() => useSessionScmSummary("session-1", true, "org-1"), { wrapper });
+		await waitFor(() => expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(subscribeSessionEventsMock).toHaveBeenCalledTimes(1));
+		const onEvent = subscribeSessionEventsMock.mock.calls[0][0].onEvent;
+		act(() => onEvent({ type: "scm.updated", sequence: 1 }));
+		await waitFor(() => expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(2));
+		// The second read is slow; a burst arrives while it runs.
+		act(() => {
+			for (let sequence = 2; sequence <= 500; sequence++) onEvent({ type: "pull_request.claimed", sequence });
+		});
+		await new Promise((resolve) => setTimeout(resolve, 800));
+		expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(2);
+		act(() => release?.());
+		await waitFor(() => expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(3), { timeout: 2000 });
+		await new Promise((resolve) => setTimeout(resolve, 1200));
+		expect(listSessionPullRequestsMock).toHaveBeenCalledTimes(3);
+		unmount();
+	});
+
 	it("maps Cloud PR details into the exact local inspector model", async () => {
 		listSessionPullRequestsMock.mockResolvedValue({
 			sessionId: "session-1",

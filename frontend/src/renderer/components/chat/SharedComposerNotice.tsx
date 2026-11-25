@@ -1,4 +1,4 @@
-import { Users } from "lucide-react";
+import { Users } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import type { CloudCpSessionLive } from "../../lib/cloud-cp";
 import type { ComposerLeaseState } from "../../hooks/useComposerLease";

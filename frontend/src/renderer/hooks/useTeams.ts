@@ -55,6 +55,11 @@ export function teamImpactQueryKey(baseUrl: string, orgId: string, teamId: strin
 	return ["cloud-team-impact", baseUrl, orgId, teamId, kind, memberId] as const;
 }
 
+/** The people in a workspace. */
+export function workspaceMembersQueryKey(baseUrl: string, orgId: string) {
+	return ["cloud-workspace-members", baseUrl, orgId] as const;
+}
+
 /**
  * Everything a change to a team or a share can make stale: the teams lists,
  * the team pages, the share dialogs, the session participants, and the
@@ -110,6 +115,22 @@ export function useShareCandidates(orgId: string, query: string, enabled: boolea
 		queryFn: async (): Promise<CloudCpShareCandidate[]> => (await client.listShareCandidates(orgId, query)).candidates,
 		staleTime: 30_000,
 		placeholderData: (previous) => previous,
+		retry: retryCloudRead,
+	});
+}
+
+/**
+ * How many people are in a workspace, you included, from its members list,
+ * which every member can read. Undefined while it loads or when it couldn't
+ * be read.
+ */
+export function useWorkspaceMemberCount(orgId: string, enabled: boolean) {
+	const { client, baseUrl, ready } = useCloudCp();
+	return useQuery({
+		queryKey: workspaceMembersQueryKey(baseUrl, orgId),
+		enabled: enabled && ready && Boolean(orgId),
+		queryFn: async ({ signal }): Promise<number> => (await client.listOrgMembers(orgId, { signal })).members.length,
+		staleTime: 30_000,
 		retry: retryCloudRead,
 	});
 }

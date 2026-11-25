@@ -2,10 +2,12 @@ package opencodev2_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -81,24 +83,46 @@ func TestReviewCommandAppliesFinalReadOnlyAgentPermissions(t *testing.T) {
 	if permissionEffect(append(config.Permissions, agent.Permissions...), "edit", "src/main.go") != "deny" {
 		t.Fatalf("edit remained allowed after caller and agent rules: global=%#v agent=%#v", config.Permissions, agent.Permissions)
 	}
+	// The shell sees only base64 characters, even when quoted review prose
+	// contains a quote followed by whitespace and a redirect character.
+	encoded := base64.StdEncoding.EncodeToString([]byte(`{"event":"COMMENT","body":"Use 'x' > 0"}`))
 	for _, command := range []string{
 		"gh api repos/o/r/pulls/1",
 		"git diff HEAD^ HEAD",
 		"git log --oneline",
 		"git show HEAD",
 		"git status --short",
-		"ao review submit --run run-1",
-		"gh api --method POST repos/o/r/pulls/1/reviews --input -",
-		"gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id'",
-		"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"a > b\", \"comments\": [] }'",
+		"ao review post-github",
+		"printf '%s' '" + encoded + "'",
+		"base64 --decode",
+		"base64 -D",
 		"printf '%s' '{ \"reviews\": [] }'",
-		"ao review submit --session ao-1 --reviews -",
+		"ao review submit --session ao-1 --run run-1 --verdict approved --body -",
 	} {
 		if permissionEffect(agent.Permissions, "shell", command) != "allow" {
 			t.Errorf("allowed shell command %q was denied", command)
 		}
 	}
-	for _, command := range []string{"printf '%s' '{}' > README.md", "gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id' > f", "gh api --method PUT repos/o/r/pulls/1/merge", "gh api -fbody=x repos/o/r/issues/1/comments", "gh api repos/o/r/issues/1/comments -Fbody=x", "gh api repos/o/r/pulls/1 --method=PUT", "gh api repos/o/r/pulls/1; gh pr merge 1", "gh api graphql", "gh api -XPUT repos/o/r/pulls/1/merge", "gh api repos/o/r/issues/1/comments -f body=x", "printf x | gh api --method PUT repos/o/r/pulls/1/merge --input -", "git diff --output=x.txt HEAD", "git show HEAD > README.md", "gh api repos/o/r/pulls/1 > README.md", "gh api repos/o/r/pulls/1 >README.md", "git diff HEAD >README.md", "git log | tee f", "git show HEAD; rm -rf x", "ao review submit --run r > f", "printf x | ao review submit --reviews - > f", "printf x | gh api --method POST repos/o/r/pulls/1/reviews --input - > f", "git show --output=x HEAD", "git push origin main", "rm -rf /", "gh pr merge 1", "ao session kill worker-1"} {
+	for _, command := range []string{"printf '%s' '{}' > README.md", "gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id' > f", "gh api --method PUT repos/o/r/pulls/1/merge", "gh api -fbody=x repos/o/r/issues/1/comments", "gh api repos/o/r/issues/1/comments -Fbody=x", "gh api repos/o/r/pulls/1 --method=PUT", "gh api repos/o/r/pulls/1; gh pr merge 1", "gh api graphql", "gh api -XPUT repos/o/r/pulls/1/merge", "gh api repos/o/r/issues/1/comments -f body=x", "printf x | gh api --method PUT repos/o/r/pulls/1/merge --input -", "git diff --output=x.txt HEAD", "git show HEAD > README.md", "gh api repos/o/r/pulls/1 > README.md", "gh api repos/o/r/pulls/1 >README.md", "git diff HEAD >README.md", "git log | tee f", "git show HEAD; rm -rf x", "ao review submit --run r > f", "printf x | ao review submit --reviews - > f", "printf x | gh api --method POST repos/o/r/pulls/1/reviews --input - > f", "git show --output=x HEAD", "git push origin main", "rm -rf /", "gh pr merge 1", "ao session kill worker-1",
+		"gh api --method POST repos/o/r/pulls/1/reviews --input -",
+		"gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id'",
+		"ao review post-github --extra",
+		"gh api --method POST repos/o/r/pulls/1 --preview sample/reviews --input - --jq '.id'",
+		"gh api --method POST repos/o/r/pulls/1/extra/path/reviews --input - --jq '.id'",
+
+		"ao review submit --run run-1",
+		"ao review submit --session ao-1 --reviews -",
+		"gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id' <<'AO_REVIEW_EOF'\n{ \"event\": \"COMMENT\", \"body\": \"it's a > b; c | d & $(e) `f` < g\" }\nAO_REVIEW_EOF",
+		"ao review submit --session ao-1 --run run-1 --verdict changes_requested --review-id 42 --body - <<'AO_REVIEW_EOF'\n## Review\nThe worker's check doesn't run; a > b.\nAO_REVIEW_EOF",
+
+		"ao review submit --session ao-1 --run run-1 --verdict approved --body - > f <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF",
+		"ao review submit --session ao-1 --run run-1 --verdict approved --body - < f <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF",
+		"gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id' >f <<'AO_REVIEW_EOF'\n{}\nAO_REVIEW_EOF",
+		"gh api --method PUT repos/o/r/pulls/1/merge --input - <<'AO_REVIEW_EOF'\n{}\nAO_REVIEW_EOF",
+		"ao review submit --session ao-1 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\nmore text\nAO_REVIEW_EOF",
+		"ao review submit --session ao-1 --body - <<EOF\nok\nEOF",
+		"git log <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF",
+	} {
 		if permissionEffect(agent.Permissions, "shell", command) != "deny" {
 			t.Errorf("unlisted shell command %q was allowed", command)
 		}
@@ -237,25 +261,10 @@ func permissionEffect(rules []permissionRule, action, resource string) string {
 }
 
 func globMatches(pattern, value string) bool {
-	parts := strings.Split(pattern, "*")
-	if len(parts) == 1 {
-		return pattern == value
-	}
-	if !strings.HasPrefix(value, parts[0]) {
-		return false
-	}
-	remaining := value[len(parts[0]):]
-	for i, part := range parts[1:] {
-		if part == "" {
-			continue
-		}
-		index := strings.Index(remaining, part)
-		if index < 0 || i == len(parts)-2 && !strings.HasSuffix(remaining, part) {
-			return false
-		}
-		remaining = remaining[index+len(part):]
-	}
-	return true
+	expr := regexp.QuoteMeta(pattern)
+	expr = strings.ReplaceAll(expr, `\*`, ".*")
+	expr = strings.ReplaceAll(expr, `\?`, ".")
+	return regexp.MustCompile("(?s)^" + expr + "$").MatchString(value)
 }
 
 func dropDataHome(argv []string) []string {

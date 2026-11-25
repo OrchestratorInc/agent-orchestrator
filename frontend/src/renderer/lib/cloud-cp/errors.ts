@@ -3,6 +3,8 @@
 // `status`/`code`/`requestId` (from the control plane's error envelope) off
 // any `CloudCpError` for everything else.
 
+import { markApiError } from "../reported-errors";
+
 export interface CloudCpErrorOptions {
 	/** HTTP status of the failed response; 0 when the request never produced one (network failure). */
 	status: number;
@@ -16,6 +18,7 @@ export interface CloudCpErrorOptions {
 }
 
 export class CloudCpError extends Error {
+	readonly telemetryCode: string = "CLOUD_CP_ERROR";
 	readonly status: number;
 	readonly code?: string;
 	readonly requestId?: string;
@@ -24,6 +27,9 @@ export class CloudCpError extends Error {
 	constructor(message: string, options: CloudCpErrorOptions) {
 		super(message, options.cause === undefined ? undefined : { cause: options.cause });
 		this.name = "CloudCpError";
+		// Control-plane failures have their own monitoring. A client bug thrown
+		// outside this typed API boundary still reaches the renderer reporter.
+		markApiError(this);
 		this.status = options.status;
 		this.code = options.code;
 		this.requestId = options.requestId;
@@ -37,6 +43,7 @@ export class CloudCpError extends Error {
  * never as a retryable request failure.
  */
 export class CloudCpAuthError extends CloudCpError {
+	override readonly telemetryCode: string = "CLOUD_CP_AUTH_ERROR";
 	constructor(message: string, options: CloudCpErrorOptions) {
 		super(message, options);
 		this.name = "CloudCpAuthError";
