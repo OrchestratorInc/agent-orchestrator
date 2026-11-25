@@ -5,6 +5,15 @@ import path from "node:path";
 
 /** Same file the daemon's telemetry Identity reads (adapters/telemetry/identity.go). */
 export const TELEMETRY_OPT_OUT_FILE = "telemetry_opt_out";
+/**
+ * Present only while "Include my GitHub username" is on (off by default). The
+ * daemon reads it before attaching github_actor or github_org to any export
+ * (adapters/telemetry.ShareGitHubLoginFile).
+ */
+export const TELEMETRY_SHARE_GITHUB_LOGIN_FILE = "telemetry_share_github_login";
+
+/** What the daemon resolved about GitHub: the login only when sharing is on. */
+export type TelemetryGithubIdentity = { login: string | null; signedIn: boolean };
 
 type Fetcher = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -53,7 +62,24 @@ export class TelemetryIdentityController {
 		private readonly origin: () => string | null,
 		private readonly fetcher: Fetcher = fetch,
 		private readonly broadcast: (optedOut: boolean) => void = () => undefined,
+		private readonly broadcastShareGithubLogin: (share: boolean) => void = () => undefined,
 	) {}
+
+	isSharingGithubLogin(): boolean {
+		return existsSync(path.join(this.dataDir, TELEMETRY_SHARE_GITHUB_LOGIN_FILE));
+	}
+
+	async setShareGithubLogin(share: boolean): Promise<boolean> {
+		const file = path.join(this.dataDir, TELEMETRY_SHARE_GITHUB_LOGIN_FILE);
+		if (share) {
+			await mkdir(this.dataDir, { recursive: true });
+			await writeFile(file, "1\n", { mode: 0o600 });
+		} else {
+			await rm(file, { force: true });
+		}
+		this.broadcastShareGithubLogin(share);
+		return share;
+	}
 
 	isOptedOut(): boolean {
 		return existsSync(path.join(this.dataDir, TELEMETRY_OPT_OUT_FILE));
@@ -201,17 +227,23 @@ export class TelemetryIdentityController {
 		}
 	}
 
-	/** The GitHub login the daemon resolved from the authenticated account, or null. */
-	async githubLogin(): Promise<string | null> {
+	/**
+	 * What the daemon resolved from the authenticated GitHub account. The daemon
+	 * returns the login only while sharing it is on; signedIn alone tells
+	 * onboarding that GitHub sign-in is done.
+	 */
+	async githubIdentity(): Promise<TelemetryGithubIdentity> {
+		const none = { login: null, signedIn: false };
 		const base = this.origin();
-		if (!base) return null;
+		if (!base) return none;
 		try {
 			const response = await this.request(base, "/api/v1/telemetry/identity", { method: "GET" });
-			if (!response.ok) return null;
-			const body = (await response.json()) as { githubLogin?: unknown };
-			return typeof body.githubLogin === "string" && body.githubLogin !== "" ? body.githubLogin : null;
+			if (!response.ok) return none;
+			const body = (await response.json()) as { githubLogin?: unknown; githubSignedIn?: unknown };
+			const login = typeof body.githubLogin === "string" && body.githubLogin !== "" ? body.githubLogin : null;
+			return { login, signedIn: login !== null || body.githubSignedIn === true };
 		} catch {
-			return null;
+			return none;
 		}
 	}
 

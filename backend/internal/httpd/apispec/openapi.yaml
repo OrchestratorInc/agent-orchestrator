@@ -28009,6 +28009,8 @@ components:
           type: string
         githubLogin:
           type: string
+        githubSignedIn:
+          type: boolean
         installId:
           type: string
         isSignedIn:

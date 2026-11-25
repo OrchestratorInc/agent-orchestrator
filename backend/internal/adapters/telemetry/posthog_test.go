@@ -628,7 +628,10 @@ func TestDaemonStartupPayloadAllowlistCoversEveryStep(t *testing.T) {
 // operator's GitHub handle, the sink mirrors it into $set and flips this one
 // event to identified so a breakdown by github_actor is possible.
 func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
-	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(*http.Request) (*http.Response, error) {
+	dir := t.TempDir()
+	// Sharing the GitHub username is opt-in; this test covers the shared path.
+	shareGitHub(t, dir, true)
+	sink, err := NewPostHogSink(dir, "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
 	}), nil)
 	if err != nil {
@@ -706,8 +709,11 @@ func TestSanitizeRemotePayloadKeepsWriteLockHolder(t *testing.T) {
 // refreshed them, so a profile kept showing a months-old version. The one
 // identified update clears them on the wire; later events stay anonymous.
 func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
+	dir := t.TempDir()
+	// Sharing the GitHub username is opt-in; this test covers the shared path.
+	shareGitHub(t, dir, true)
 	requests := make(chan map[string]any, 2)
-	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "0.13.1-nightly.202609232348", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+	sink, err := NewPostHogSink(dir, "phc_test", "https://us.i.posthog.com", "0.13.1-nightly.202609232348", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
 		defer req.Body.Close()
 		var body map[string]any
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -278,5 +279,38 @@ func TestDaemonLauncher(t *testing.T) {
 		if got := daemonLauncher(func(string) string { return owner }); got != want {
 			t.Errorf("AO_OWNER=%q launcher = %q, want %q", owner, got, want)
 		}
+	}
+}
+
+type resolverTestIdentity struct {
+	usageTestIdentity
+	checks atomic.Int32
+	logins atomic.Int32
+}
+
+func (i *resolverTestIdentity) OptedOut() bool {
+	i.checks.Add(1)
+	return true
+}
+func (i *resolverTestIdentity) SetGitHubLogin(string) { i.logins.Add(1) }
+
+// An opted-out install never runs the GitHub account lookup at all, so the
+// username is not even resolved locally for telemetry.
+func TestGitHubLoginResolverSkipsLookupWhileOptedOut(t *testing.T) {
+	prev := gitHubLoginRetryDelays
+	gitHubLoginRetryDelays = []time.Duration{0, 0}
+	t.Cleanup(func() { gitHubLoginRetryDelays = prev })
+	ident := &resolverTestIdentity{}
+	cfg := config.Config{Telemetry: config.TelemetryConfig{Events: true, Remote: config.TelemetryRemotePostHog}}
+	startGitHubLoginResolver(t.Context(), cfg, ident, slog.New(slog.DiscardHandler))
+	deadline := time.Now().Add(5 * time.Second)
+	for ident.checks.Load() < int32(len(gitHubLoginRetryDelays)) {
+		if time.Now().After(deadline) {
+			t.Fatal("resolver did not check the opt-out before each attempt")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if ident.logins.Load() != 0 {
+		t.Fatal("resolver resolved a GitHub login while opted out")
 	}
 }

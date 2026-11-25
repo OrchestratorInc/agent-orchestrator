@@ -324,7 +324,7 @@ describe("PostHog identity and opt-out", () => {
 		const capture = vi.fn(async () => true);
 		vi.doMock("./bridge", () => ({
 			aoBridge: {
-				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), getLifetimeSessions: vi.fn(async () => null), claimFirstOpen, capture },
+				telemetry: { getBootstrap, getGithubIdentity: vi.fn(async () => ({ login: null, signedIn: false })), getShareGithubLogin: vi.fn(async () => false), getLifetimeSessions: vi.fn(async () => null), claimFirstOpen, capture },
 				updateSettings: { get: vi.fn(async () => ({})) },
 			},
 		}));
@@ -382,7 +382,7 @@ describe("PostHog identity and opt-out", () => {
 		const getLifetimeSessions = vi.fn(async () => 1);
 		vi.doMock("./bridge", () => ({
 			aoBridge: {
-				telemetry: { getBootstrap: vi.fn(async () => ({ ...bootstrap, lifetimeSessions: 0 })), getGithubLogin: vi.fn(async () => null), getLifetimeSessions, claimFirstOpen: vi.fn(async () => "ineligible") },
+				telemetry: { getBootstrap: vi.fn(async () => ({ ...bootstrap, lifetimeSessions: 0 })), getGithubIdentity: vi.fn(async () => ({ login: null, signedIn: false })), getShareGithubLogin: vi.fn(async () => false), getLifetimeSessions, claimFirstOpen: vi.fn(async () => "ineligible") },
 				updateSettings: { get: vi.fn(async () => ({})) },
 			},
 		}));
@@ -464,7 +464,7 @@ describe("PostHog identity and opt-out", () => {
 			const getLifetimeSessions = vi.fn().mockResolvedValueOnce(null).mockResolvedValue(7);
 			vi.doMock("./bridge", () => ({
 				aoBridge: {
-					telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null), getLifetimeSessions },
+					telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubIdentity: vi.fn(async () => ({ login: null, signedIn: false })), getShareGithubLogin: vi.fn(async () => false), getLifetimeSessions },
 					updateSettings: { get: vi.fn(async () => ({})) },
 				},
 			}));
@@ -653,7 +653,7 @@ describe("PostHog identity and opt-out", () => {
 		mockPosthog();
 		vi.doMock("./bridge", () => ({
 			aoBridge: {
-				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null) },
+				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubIdentity: vi.fn(async () => ({ login: null, signedIn: false })), getShareGithubLogin: vi.fn(async () => false) },
 				updateSettings: { get: vi.fn(async () => { await settingsGate; return {}; }) },
 			},
 		}));
@@ -680,7 +680,7 @@ describe("PostHog identity and opt-out", () => {
 		});
 		vi.doMock("./bridge", () => ({
 			aoBridge: {
-				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubLogin: vi.fn(async () => null) },
+				telemetry: { getBootstrap: vi.fn(async () => bootstrap), getGithubIdentity: vi.fn(async () => ({ login: null, signedIn: false })), getShareGithubLogin: vi.fn(async () => false) },
 				updateSettings: { get: vi.fn(async () => ({})) },
 			},
 		}));
@@ -708,7 +708,7 @@ describe("linking a website visit at sign-in", () => {
 		mockPosthog();
 		vi.doMock("./bridge", () => ({
 			aoBridge: {
-				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), capture: vi.fn(async () => true) },
+				telemetry: { getBootstrap, getGithubIdentity: vi.fn(async () => ({ login: null, signedIn: false })), getShareGithubLogin: vi.fn(async () => false), capture: vi.fn(async () => true) },
 				updateSettings: { get: vi.fn(async () => ({})) },
 			},
 		}));

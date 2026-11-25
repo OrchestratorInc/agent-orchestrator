@@ -2,7 +2,7 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TELEMETRY_OPT_OUT_FILE, TelemetryIdentityController } from "./telemetry-identity";
+import { TELEMETRY_OPT_OUT_FILE, TELEMETRY_SHARE_GITHUB_LOGIN_FILE, TelemetryIdentityController } from "./telemetry-identity";
 
 const ORIGIN = "http://127.0.0.1:4010";
 
@@ -209,21 +209,43 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		const { ctl, fetcher } = await controller(undefined, "http://example.com:4010");
 		await ctl.setCloudUser("user_1");
 		expect(fetcher).not.toHaveBeenCalled();
-		expect(await ctl.githubLogin()).toBeNull();
+		expect(await ctl.githubIdentity()).toEqual({ login: null, signedIn: false });
 	});
 });
 
-describe("TelemetryIdentityController githubLogin", () => {
-	it("reads the daemon-resolved login", async () => {
-		const fetcher = vi.fn(async () => new Response(JSON.stringify({ githubLogin: "octocat" }), { status: 200 }));
+describe("TelemetryIdentityController githubIdentity", () => {
+	it("reads the daemon-resolved login when sharing is on", async () => {
+		const fetcher = vi.fn(async () => new Response(JSON.stringify({ githubLogin: "octocat", githubSignedIn: true }), { status: 200 }));
 		const { ctl } = await controller(fetcher);
-		expect(await ctl.githubLogin()).toBe("octocat");
+		expect(await ctl.githubIdentity()).toEqual({ login: "octocat", signedIn: true });
 		expect((fetcher.mock.calls[0] as unknown as [string])[0]).toBe(`${ORIGIN}/api/v1/telemetry/identity`);
 	});
 
-	it("is null when unresolved or the daemon is down", async () => {
-		expect(await (await controller(vi.fn(async () => new Response("{}", { status: 200 })))).ctl.githubLogin()).toBeNull();
-		expect(await (await controller(vi.fn(async () => { throw new Error("down"); }))).ctl.githubLogin()).toBeNull();
+	it("reports sign-in without a login while sharing is off", async () => {
+		const fetcher = vi.fn(async () => new Response(JSON.stringify({ githubSignedIn: true }), { status: 200 }));
+		expect(await (await controller(fetcher)).ctl.githubIdentity()).toEqual({ login: null, signedIn: true });
+	});
+
+	it("is empty when unresolved or the daemon is down", async () => {
+		const none = { login: null, signedIn: false };
+		expect(await (await controller(vi.fn(async () => new Response("{}", { status: 200 })))).ctl.githubIdentity()).toEqual(none);
+		expect(await (await controller(vi.fn(async () => { throw new Error("down"); }))).ctl.githubIdentity()).toEqual(none);
+	});
+});
+
+describe("TelemetryIdentityController GitHub username sharing", () => {
+	it("is off by default and writes and clears the marker the daemon reads", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+		const broadcastShare = vi.fn();
+		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, vi.fn() as never, vi.fn(), broadcastShare);
+		expect(ctl.isSharingGithubLogin()).toBe(false);
+		expect(await ctl.setShareGithubLogin(true)).toBe(true);
+		expect(ctl.isSharingGithubLogin()).toBe(true);
+		await expect(stat(path.join(dir, TELEMETRY_SHARE_GITHUB_LOGIN_FILE))).resolves.toBeTruthy();
+		await ctl.setShareGithubLogin(false);
+		expect(ctl.isSharingGithubLogin()).toBe(false);
+		await expect(readFile(path.join(dir, TELEMETRY_SHARE_GITHUB_LOGIN_FILE))).rejects.toThrow();
+		expect(broadcastShare.mock.calls).toEqual([[true], [false]]);
 	});
 });
 

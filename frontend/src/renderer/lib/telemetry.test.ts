@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { PostHog } from "posthog-js/dist/module.full.no-external";
 import {
 	automationPromptLengthBucket,
@@ -25,7 +25,36 @@ import {
 	releaseChannelFrom,
 	versionChannelFrom,
 } from "./telemetry";
+import { hmacTelemetryID, setTelemetryHashSaltForTest } from "./telemetry";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
+
+beforeAll(() => setTelemetryHashSaltForTest("0".repeat(64)));
+
+describe("hashed project and session ids", () => {
+	it("matches the daemon's keyed hash for the same salt and id", async () => {
+		// Same vector as backend TestHashTelemetryIDMatchesDesktopVector.
+		expect(await hmacTelemetryID("0".repeat(64), "agent-orchestrator")).toBe("e91bc9bcb2b92ea19add18a42c95c4d9c0f882c6f953c4438d86d9c5644bb34f");
+	});
+
+	it("is not the unkeyed SHA-256 of the id", async () => {
+		const props = await sanitizeRendererProperties("ao.projects.added", { project_id: "agent-orchestrator" });
+		const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("agent-orchestrator"));
+		const unkeyed = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+		expect(props.project_id_hash).toMatch(/^[0-9a-f]{64}$/);
+		expect(props.project_id_hash).not.toBe(unkeyed);
+	});
+
+	it("omits the hash without the private salt", async () => {
+		setTelemetryHashSaltForTest("");
+		try {
+			const props = await sanitizeRendererProperties("ao.projects.added", { project_id: "agent-orchestrator" });
+			expect(props).not.toHaveProperty("project_id_hash");
+			expect(props).not.toHaveProperty("project_id");
+		} finally {
+			setTelemetryHashSaltForTest("0".repeat(64));
+		}
+	});
+});
 
 function memoryStorage(initial: Record<string, string> = {}) {
 	const values = new Map(Object.entries(initial));

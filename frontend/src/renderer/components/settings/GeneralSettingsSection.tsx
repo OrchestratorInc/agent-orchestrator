@@ -9,6 +9,7 @@ import { useSoundNotificationsStore } from "../../stores/sound-notifications-sto
 import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
+import { useShareGithubLoginStore } from "../../stores/share-github-login-store";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { CliShadowSettingsRow } from "./CliShadowSettingsRow";
 import { openChromeAgentsSettings } from "./BrowserChromeSection";
@@ -508,6 +509,7 @@ export function GeneralSettingsSection({
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
 				<AnalyticsRow />
+				<ShareGithubLoginRow />
 			</SettingsSection>
 
 			{/* Advanced */}
@@ -566,6 +568,44 @@ function AnalyticsRow() {
 				disabled={saving || !loaded}
 				onCheckedChange={(share) => {
 					void setOptedOut(!share);
+				}}
+			/>
+		</SettingsRow>
+	);
+}
+
+/**
+ * Opt-in GitHub username on analytics events (github_actor, github_org). Off by
+ * default, and moot while usage analytics is off, so the switch is disabled then.
+ */
+function ShareGithubLoginRow() {
+	const { t } = useTranslation();
+	const share = useShareGithubLoginStore((state) => state.share);
+	const loaded = useShareGithubLoginStore((state) => state.loaded);
+	const saving = useShareGithubLoginStore((state) => state.saving);
+	const loadError = useShareGithubLoginStore((state) => state.loadError);
+	const saveError = useShareGithubLoginStore((state) => state.saveError);
+	const load = useShareGithubLoginStore((state) => state.load);
+	const setShare = useShareGithubLoginStore((state) => state.setShare);
+	const analyticsOptedOut = useAnalyticsOptOutStore((state) => state.optedOut);
+	useEffect(() => {
+		void load();
+	}, [load]);
+	return (
+		<SettingsRow
+			label={t("settings.shareGithubLogin.label")}
+			description={
+				<span className={cn((loadError || saveError) && "text-error")} role={loadError || saveError ? "alert" : undefined}>
+					{t(loadError ? "settings.shareGithubLogin.loadFailed" : saveError ? "settings.shareGithubLogin.saveFailed" : "settings.shareGithubLogin.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.shareGithubLogin.label")}
+				checked={share && !analyticsOptedOut}
+				disabled={saving || !loaded || analyticsOptedOut}
+				onCheckedChange={(next) => {
+					void setShare(next);
 				}}
 			/>
 		</SettingsRow>

@@ -210,7 +210,7 @@ import { clearFolderImports, isChosenFolder, registerCloudFolderPushIpc, remembe
 import { createControlPlaneUrlResolver } from "./main/cloud-control-plane-url";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
-import { boundCloudUserId, buildTelemetryBootstrap, claimFirstOpen, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
+import { boundCloudUserId, buildTelemetryBootstrap, claimFirstOpen, doNotTrack, loadOrAssignExperimentCohort, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
 import { detectInstallSource } from "./shared/install-environment";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -387,6 +387,7 @@ let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
 // daemon) and the loopback hand-off of the signed-in AO Cloud user ID.
 const ANALYTICS_OPT_OUT_CHANGED_CHANNEL = "telemetry:analyticsOptOutChanged";
+const SHARE_GITHUB_LOGIN_CHANGED_CHANNEL = "telemetry:shareGithubLoginChanged";
 const telemetryIdentity = new TelemetryIdentityController(
 	desktopDataDir,
 	() => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
@@ -394,6 +395,9 @@ const telemetryIdentity = new TelemetryIdentityController(
 	(url, init) => fetch(url, init),
 	(optedOut) => {
 		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(ANALYTICS_OPT_OUT_CHANGED_CHANNEL, optedOut);
+	},
+	(share) => {
+		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(SHARE_GITHUB_LOGIN_CHANGED_CHANNEL, share);
 	},
 );
 const trustedShellWebContents = new Map<number, WebContents>();
@@ -1667,6 +1671,17 @@ const configuredLoginShell = process.platform === "darwin" ? (os.userInfo().shel
 // events and inflate install/DAU counts. Set AO_TELEMETRY_REMOTE explicitly to
 // exercise the export path from a dev build.
 function telemetryOverrides(): Record<string, string> {
+	// DO_NOT_TRACK in the app's environment silences the daemon too, and is
+	// stamped explicitly so a login-shell env without it cannot turn it back on.
+	if (doNotTrack(process.env)) {
+		return {
+			AO_TELEMETRY_EVENTS: process.env.AO_TELEMETRY_EVENTS ?? "on",
+			AO_TELEMETRY_REMOTE: "off",
+			AO_SENTRY_DSN: "",
+			AO_TELEMETRY_APP_VERSION: process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(),
+			DO_NOT_TRACK: "1",
+		};
+	}
 	return {
 		AO_TELEMETRY_EVENTS: process.env.AO_TELEMETRY_EVENTS ?? "on",
 		AO_TELEMETRY_REMOTE: process.env.AO_TELEMETRY_REMOTE ?? (isDev ? "off" : "posthog"),
@@ -3736,7 +3751,13 @@ ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 	if (trustedSender !== event.sender || (userId !== null && typeof userId !== "string")) throw new Error("invalid cloud user request");
 	return telemetryIdentity.setCloudUser(userId);
 });
-ipcMain.handle("telemetry:getGithubLogin", () => telemetryIdentity.githubLogin());
+ipcMain.handle("telemetry:getGithubIdentity", () => telemetryIdentity.githubIdentity());
+ipcMain.handle("telemetry:getShareGithubLogin", () => telemetryIdentity.isSharingGithubLogin());
+ipcMain.handle("telemetry:setShareGithubLogin", (event, share: unknown) => {
+	const trustedSender = trustedShellWebContents.get(event.sender.id);
+	if (trustedSender !== event.sender || typeof share !== "boolean") throw new Error("invalid GitHub username sharing request");
+	return telemetryIdentity.setShareGithubLogin(share);
+});
 ipcMain.handle("telemetry:getLifetimeSessions", () => daemonLifetimeSessions());
 // Performance telemetry: the launch start (once per shell page) and the
 // resource use since the previous read. Neither carries an identifier.

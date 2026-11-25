@@ -38,6 +38,7 @@ func (c *TelemetryIdentityController) get(w http.ResponseWriter, r *http.Request
 		resp.DistinctID = snap.DistinctID()
 		resp.InstallID = snap.InstallID
 		resp.CloudUserID, resp.GitHubLogin = snap.CloudUserID, snap.GitHubLogin
+		resp.GitHubSignedIn = snap.GitHubSignedIn
 		if snap.CloudUserKnown {
 			signedIn := snap.CloudUserID != ""
 			resp.IsSignedIn = &signedIn

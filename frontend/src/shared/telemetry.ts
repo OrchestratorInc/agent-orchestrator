@@ -1,7 +1,7 @@
 import { access, link, lstat, mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { randomInt, randomUUID } from "node:crypto";
+import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import type { TelemetryPolicySnapshot } from "./telemetry-policy";
 import { detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
 
@@ -23,6 +23,13 @@ export type TelemetryInstallContext = {
 export type TelemetryBootstrap = {
 	distinctId: string;
 	installId: string;
+	/**
+	 * This install's private key for hashed IDs (project_id_hash,
+	 * session_id_hash), shared with the daemon through telemetry_hash_salt.
+	 * Used locally only and never sent. Absent when unreadable; hashed IDs are
+	 * then omitted.
+	 */
+	hashSalt?: string;
 	daysSinceInstall?: number;
 	/** Install ID file mtime, used to refresh event age in a long-lived renderer. */
 	installTimestampMs?: number;
@@ -94,16 +101,28 @@ export function parseDisabledEvents(raw: string | undefined): string[] {
 }
 
 /**
+ * Whether `DO_NOT_TRACK` (consoledonottrack.com) asks for no telemetry: 1,
+ * true, yes or on. It turns off PostHog and Sentry on every desktop surface and
+ * is forwarded to the daemon, and it wins over every `AO_TELEMETRY_*` value.
+ * The daemon applies the same rule (config.DoNotTrack).
+ */
+export function doNotTrack(env: Record<string, string | undefined>): boolean {
+	return ["1", "true", "yes", "on"].includes((env.DO_NOT_TRACK ?? "").trim().toLowerCase());
+}
+
+/**
  * Whether the renderer may export to PostHog.
  *
  * Unpackaged builds are off by default so a developer's ordinary session does
  * not land in the production project as a real install. Setting
  * `AO_TELEMETRY_RENDERER=on` opts a dev build back in for deliberate testing.
+ * `DO_NOT_TRACK` overrides both.
  */
 export function rendererTelemetryEnabled(
 	env: Record<string, string | undefined>,
 	isPackaged: boolean,
 ): boolean {
+	if (doNotTrack(env)) return false;
 	const explicit = env.AO_TELEMETRY_RENDERER?.trim().toLowerCase();
 	if (explicit === "on") return true;
 	if (explicit === "off") return false;
@@ -149,6 +168,40 @@ export async function loadOrAssignExperimentCohort(dataDir: string): Promise<num
 			await writeFile(temporary, `${cohort}\n`, { mode: 0o600, flag: "wx" });
 			await link(temporary, file);
 			return cohort;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
+		} finally {
+			await unlink(temporary).catch(() => {});
+		}
+	}
+	return undefined;
+}
+
+const HASH_SALT_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * This install's private hash key, created once by the desktop or the daemon,
+ * whichever gets there first (backend/internal/adapters/telemetry/hashsalt.go).
+ * It is never exported: the install ID rides every event, so keying hashes
+ * with it would let anyone recompute a project hash from a repo name. Never
+ * throws: an unreadable or unwritable key is absent and hashes are omitted.
+ */
+export async function loadOrCreateTelemetryHashSalt(dataDir: string): Promise<string | undefined> {
+	const file = path.join(dataDir, "telemetry_hash_salt");
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			const value = (await readFile(file, "utf8")).trim();
+			return HASH_SALT_PATTERN.test(value) ? value : undefined;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+		}
+		const salt = randomBytes(32).toString("hex");
+		const temporary = path.join(dataDir, `.telemetry_hash_salt_${randomUUID()}`);
+		try {
+			await mkdir(dataDir, { recursive: true });
+			await writeFile(temporary, `${salt}\n`, { mode: 0o600, flag: "wx" });
+			await link(temporary, file);
+			return salt;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
 		} finally {
@@ -327,6 +380,7 @@ export async function buildTelemetryBootstrap(
 	const eventsEnabled = policy.eventsEnabled && policy.acknowledged;
 	const experimentCohort = await loadOrAssignExperimentCohort(dataDir);
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
+	const hashSalt = await loadOrCreateTelemetryHashSalt(dataDir);
 	let daysSinceInstall: number | undefined;
 	let installTimestampMs: number | undefined;
 	try {
@@ -341,6 +395,7 @@ export async function buildTelemetryBootstrap(
 	return {
 		distinctId: await bootstrapDistinctId(dataDir),
 		installId,
+		...(hashSalt ? { hashSalt } : {}),
 		...(daysSinceInstall === undefined ? {} : { daysSinceInstall }),
 		...(installTimestampMs === undefined ? {} : { installTimestampMs }),
 		appVersion,

@@ -668,7 +668,16 @@ const api = {
 			};
 		},
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
-		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
+		getGithubIdentity: () => ipcRenderer.invoke("telemetry:getGithubIdentity") as Promise<{ login: string | null; signedIn: boolean }>,
+		getShareGithubLogin: () => ipcRenderer.invoke("telemetry:getShareGithubLogin") as Promise<boolean>,
+		setShareGithubLogin: (share: boolean) => ipcRenderer.invoke("telemetry:setShareGithubLogin", share) as Promise<boolean>,
+		onShareGithubLogin: (listener: (share: boolean) => void) => {
+			const wrapped = (_event: unknown, share: boolean) => listener(share);
+			ipcRenderer.on("telemetry:shareGithubLoginChanged", wrapped);
+			return () => {
+				ipcRenderer.off("telemetry:shareGithubLoginChanged", wrapped);
+			};
+		},
 		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
 		takeLaunchStart: () => ipcRenderer.invoke("telemetry:takeLaunchStart") as Promise<LaunchTimingStart | null>,
 		takeResourceSummary: () => ipcRenderer.invoke("telemetry:takeResourceSummary") as Promise<ResourceSummary | null>,

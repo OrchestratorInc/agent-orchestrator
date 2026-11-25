@@ -33,7 +33,10 @@ vi.mock("@sentry/electron/main", () => ({
 }));
 // sha256("ins_sampled_5") % 10 == 0: this install is in the 1-in-10 error sample.
 const installId = vi.hoisted(() => ({ value: "ins_sampled_5" }));
-vi.mock("../shared/telemetry", () => ({ loadOrCreateTelemetryInstallId: vi.fn(async () => installId.value) }));
+vi.mock("../shared/telemetry", () => ({
+	loadOrCreateTelemetryInstallId: vi.fn(async () => installId.value),
+	doNotTrack: (env: Record<string, string | undefined>) => ["1", "true", "yes", "on"].includes((env.DO_NOT_TRACK ?? "").trim().toLowerCase()),
+}));
 
 let dataDir = "";
 beforeEach(() => {
@@ -58,6 +61,14 @@ describe("Electron main Sentry configuration", () => {
 		expect(electronMainSentryDsn("1.0.0", true)).toBe("https://electron.example/2");
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "");
 		expect(electronMainSentryDsn("1.0.0", false)).toBe("");
+	});
+
+	it("returns no Electron DSN under DO_NOT_TRACK, even with an explicit override", () => {
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "https://electron.example/2");
+		vi.stubEnv("DO_NOT_TRACK", "1");
+		expect(electronMainSentryDsn("1.0.0", false)).toBe("");
+		vi.stubEnv("DO_NOT_TRACK", "0");
+		expect(electronMainSentryDsn("1.0.0", false)).toBe("https://electron.example/2");
 	});
 
 	it("creates an offline client with consent-owned crash integrations and an install user", async () => {

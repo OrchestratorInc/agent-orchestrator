@@ -766,13 +766,26 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 	if ev.RequestID != "" {
 		props["request_id"] = ev.RequestID
 	}
-	if ev.ProjectID != nil && s.ident != nil {
-		props["project_id_hash"] = sha256String(s.ident.InstallID() + ":" + string(*ev.ProjectID))
+	// Keyed with the install's private salt, never the exported install ID: a
+	// project ID is a lowercased folder name and a session ID embeds it, so a
+	// hash anyone can recompute would reveal repository names. No salt, no hash.
+	if ev.ProjectID != nil {
+		if h, ok := s.ident.HashID(string(*ev.ProjectID)); ok {
+			props["project_id_hash"] = h
+		}
 	}
 	if ev.SessionID != nil {
-		props["session_id_hash"] = sha256String(string(*ev.SessionID))
+		if h, ok := s.ident.HashID(string(*ev.SessionID)); ok {
+			props["session_id_hash"] = h
+		}
 	}
+	shareGitHub := s.ident != nil && s.ident.SharesGitHubLogin()
 	for k, v := range sanitizeRemotePayload(ev.Name, ev.Payload) {
+		// The GitHub username and org are opt-in (Settings > General > Privacy,
+		// "Include my GitHub username"); off by default.
+		if !shareGitHub && gitHubIdentityProperties[k] {
+			continue
+		}
 		props[k] = v
 	}
 	s.stampIdentity(props)
@@ -810,14 +823,22 @@ func (s *PostHogSink) stampIdentity(props map[string]any) {
 		// installation ID remains an event property.
 		props["$process_person_profile"] = true
 	}
-	if actor == "" && uid == "" {
-		return
-	}
 	key := personSetKey(actor, uid)
 	s.setMu.Lock()
-	changed := key != s.setKey
+	prev := s.setKey
 	s.setMu.Unlock()
-	if !changed {
+	if key == prev {
+		return
+	}
+	// Nothing to set, unless this process last set a GitHub login and sharing
+	// has since been turned off: then the person update below clears it.
+	if actor == "" && uid == "" && !strings.HasPrefix(prev, "|") && prev != "" {
+		props["$set"] = map[string]any{}
+		props["$unset"] = append(append([]string{}, stalePersonProperties...), "github_actor", "github_login")
+		props["$process_person_profile"] = true
+		return
+	}
+	if actor == "" && uid == "" {
 		return
 	}
 	set := map[string]any{}
@@ -831,10 +852,19 @@ func (s *PostHogSink) stampIdentity(props map[string]any) {
 	}
 	props["$set"] = set
 	props["$unset"] = stalePersonProperties
+	if actor == "" {
+		// Sharing is off: a login an earlier build or setting put on the person
+		// is removed rather than left behind.
+		props["$unset"] = append(append([]string{}, stalePersonProperties...), "github_actor", "github_login")
+	}
 	props["$process_person_profile"] = true
 }
 
 var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", "platform", "surface"}
+
+// gitHubIdentityProperties name who the user is on GitHub. They are exported
+// only when the user opted in to sharing their GitHub username.
+var gitHubIdentityProperties = map[string]bool{"github_actor": true, "github_org": true}
 
 func personSetKey(actor, uid string) string { return actor + "|" + uid }
 

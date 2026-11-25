@@ -17,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon"
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -237,6 +238,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			if shouldEmitCLIInvocation(cmd) {
+				maybeShowTelemetryNotice(cmd.ErrOrStderr(), os.Getenv, telemetryNoticeDataDir(), stderrIsTerminal(cmd.ErrOrStderr()))
 				ctx.emitCLIInvoked(cmd.Context(), cmd)
 			}
 			return nil
@@ -318,6 +320,11 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 }
 
 func (c *commandContext) emitCLIInvoked(ctx context.Context, cmd *cobra.Command) {
+	// DO_NOT_TRACK in this shell keeps the command out of the daemon's
+	// telemetry even when the daemon itself was started without it.
+	if config.DoNotTrack(os.Getenv) {
+		return
+	}
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	_ = c.postLoopbackJSON(reqCtx, "/internal/telemetry/cli-invoked", map[string]string{
@@ -338,6 +345,9 @@ func cliInvocationActorType(cmd *cobra.Command) string {
 }
 
 func (c *commandContext) emitCLIUsageError(ctx context.Context, args []string, err error) {
+	if config.DoNotTrack(os.Getenv) {
+		return
+	}
 	command, commandPath := usageErrorCommand(args)
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()

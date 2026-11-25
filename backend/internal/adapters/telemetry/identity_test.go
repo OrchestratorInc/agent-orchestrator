@@ -37,7 +37,10 @@ func newTestSink(t *testing.T, dir string, requests chan map[string]any, hits *a
 }
 
 func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
-	sink := newTestSink(t, t.TempDir(), nil, nil)
+	dir := t.TempDir()
+	// Sharing the GitHub username is opt-in; this test covers the shared path.
+	shareGitHub(t, dir, true)
+	sink := newTestSink(t, dir, nil, nil)
 	defer func() { _ = sink.Close(context.Background()) }()
 	stableInstallID := sink.Identity().InstallID()
 

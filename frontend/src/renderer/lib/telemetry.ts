@@ -84,6 +84,8 @@ let errorHandlersBound = false;
 let telemetryContext: TelemetryProperties = {};
 let installTimestampMs: number | undefined;
 let installId = "";
+// Private per-install key for hashed IDs, from the bootstrap. Never sent.
+let hashSalt = "";
 let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
 let fallbackRouteViewSurfaces = new Set<string>();
@@ -543,23 +545,49 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 // A fresh install often has no GitHub token yet, so the daemon-resolved login is
 // polled on a short bounded schedule rather than read once.
 const GITHUB_LOGIN_RETRY_MS = [2_000, 30_000, 120_000, 600_000];
+// "Include my GitHub username" (Settings > General > Privacy), off by default.
+// The daemon withholds the login while it is off; this flag also covers a
+// toggle that lands while a read is in flight.
+let shareGithubLogin = false;
+let githubSyncRunning = false;
 
 async function syncGithubLogin(): Promise<void> {
-	for (const delay of GITHUB_LOGIN_RETRY_MS) {
-		await new Promise((resolve) => setTimeout(resolve, delay));
-		if (analyticsOptedOut) return;
-		const login = await Promise.resolve()
-			.then(() => aoBridge.telemetry.getGithubLogin())
-			.catch(() => null);
-		if (!login) continue;
-		githubLogin = login;
-		// A resolved login means GitHub sign-in is done, even when it happened
-		// outside the app or after the onboarding step was closed.
-		void import("./onboarding-telemetry").then((onboarding) => onboarding.completeOnboardingStepIfViewed("github_auth"));
-		registerBaseProperties();
-		if (identifiedId) posthog.setPersonProperties({ github_login: login });
+	if (githubSyncRunning) return;
+	githubSyncRunning = true;
+	try {
+		for (const delay of GITHUB_LOGIN_RETRY_MS) {
+			await new Promise((resolve) => setTimeout(resolve, delay));
+			if (analyticsOptedOut) return;
+			const identity = await Promise.resolve()
+				.then(() => aoBridge.telemetry.getGithubIdentity())
+				.catch(() => null);
+			if (!identity?.signedIn) continue;
+			// A resolved account means GitHub sign-in is done, even when it happened
+			// outside the app or after the onboarding step was closed.
+			void import("./onboarding-telemetry").then((onboarding) => onboarding.completeOnboardingStepIfViewed("github_auth"));
+			if (!identity.login || !shareGithubLogin || analyticsOptedOut) return;
+			githubLogin = identity.login;
+			registerBaseProperties();
+			if (identifiedId) posthog.setPersonProperties({ github_login: identity.login });
+			return;
+		}
+	} finally {
+		githubSyncRunning = false;
+	}
+}
+
+/**
+ * Applies "Include my GitHub username". Off drops github_actor from every later
+ * renderer event at once; on resolves the login again.
+ */
+export function applyShareGithubLogin(share: boolean): void {
+	shareGithubLogin = share;
+	if (!share) {
+		githubLogin = null;
+		if (posthogReady) posthog.unregister("github_actor");
 		return;
 	}
+	if (posthogReady && !analyticsOptedOut) void syncGithubLogin();
 }
 
 // The bootstrap usually runs before the daemon is ready, which leaves
@@ -622,7 +650,9 @@ export function setCloudTelemetryContext(context: { orgId?: string; orgKind?: st
 		cloud_billing_mode: enumValue(context.billingMode, CLOUD_BILLING_MODES),
 	};
 	cloudContext = { ...cloudContext, ...next };
-	void hashedTelemetryID(context.orgId).then((hash) => {
+	// The org ID is a random Cloud ID, not a name, so it keeps an unkeyed hash:
+	// installs in one org must group together.
+	void unkeyedTelemetryHash(context.orgId).then((hash) => {
 		cloudContext = hash ? { ...cloudContext, cloud_org_id_hash: hash } : omitKey(cloudContext, "cloud_org_id_hash");
 	});
 }
@@ -666,6 +696,11 @@ export function isDeniedEvent(event: string, denied: string[] = disabledEventMat
 		}
 		return candidates.includes(rule);
 	});
+}
+
+/** Test seam: the real salt arrives with the bootstrap in initTelemetry. */
+export function setTelemetryHashSaltForTest(salt: string): void {
+	hashSalt = salt;
 }
 
 /** Test seam: the real value arrives with the bootstrap in initTelemetry. */
@@ -836,19 +871,35 @@ export function automationPromptLengthBucket(prompt: string): string {
 	return "xl";
 }
 
-async function sha256Hex(raw: string): Promise<string> {
+/**
+ * HMAC-SHA256(salt, value) in hex, the same keyed hash the daemon computes
+ * (adapters/telemetry/hashsalt.go), so a project hashes identically on renderer
+ * and daemon events.
+ */
+export async function hmacTelemetryID(salt: string, value: string): Promise<string | undefined> {
 	const subtle = globalThis.crypto?.subtle;
-	if (!subtle) return "redacted";
-	const bytes = new TextEncoder().encode(raw);
-	const digest = await subtle.digest("SHA-256", bytes);
+	if (!subtle) return undefined;
+	const encoder = new TextEncoder();
+	const key = await subtle.importKey("raw", encoder.encode(salt), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+	const signature = await subtle.sign("HMAC", key, encoder.encode(value));
+	return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function unkeyedTelemetryHash(value: unknown): Promise<string | undefined> {
+	const subtle = globalThis.crypto?.subtle;
+	if (typeof value !== "string" || !value.trim() || !subtle) return undefined;
+	const digest = await subtle.digest("SHA-256", new TextEncoder().encode(value.trim()));
 	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+// Project IDs are lowercased folder names and session IDs embed them, so an
+// unkeyed hash (or one keyed with the exported install_id) could be reversed
+// from a list of repo names. Without the private salt the hash is omitted.
 async function hashedTelemetryID(value: unknown): Promise<string | undefined> {
-	if (typeof value !== "string") return undefined;
+	if (typeof value !== "string" || !hashSalt) return undefined;
 	const trimmed = value.trim();
 	if (!trimmed) return undefined;
-	return sha256Hex(trimmed);
+	return hmacTelemetryID(hashSalt, trimmed);
 }
 
 function isLocalURL(value: string): boolean {
@@ -1508,6 +1559,7 @@ export async function initTelemetry(): Promise<boolean> {
 		// unpackaged build that has not opted in. The client is never created.
 		if (!bootstrap) return false;
 		installId = bootstrap.installId;
+		hashSalt = bootstrap.hashSalt ?? "";
 		disabledEventMatchers = bootstrap.disabledEvents ?? [];
 		const channel = releaseChannelFrom(await readUpdateSettingsForTelemetry());
 		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
@@ -1536,6 +1588,9 @@ export async function initTelemetry(): Promise<boolean> {
 		posthog.opt_in_capturing({ captureEventName: false });
 		posthogReady = true;
 		registerBaseProperties();
+		shareGithubLogin = await Promise.resolve()
+			.then(() => aoBridge.telemetry.getShareGithubLogin())
+			.catch(() => false);
 		void syncGithubLogin();
 		if (bootstrap.lifetimeSessions === undefined) void syncLifetimeSessions();
 		// Typed renderer fault intake has its own main-owned policy gate. PostHog

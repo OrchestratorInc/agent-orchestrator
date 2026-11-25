@@ -129,9 +129,11 @@ func standaloneIdentity(cfg config.Config, log *slog.Logger) ports.TelemetryIden
 var gitHubLoginRetryDelays = []time.Duration{0, 30 * time.Second, 2 * time.Minute, 10 * time.Minute}
 
 // startGitHubLoginResolver resolves the authenticated human GitHub login in the
-// background and stores it on the telemetry identity, so every exported daemon
-// event carries github_actor, not just ao.sessions.spawned. The provider is
-// rebuilt per attempt because it reads the token at construction. Only the
+// background and stores it on the telemetry identity. The login is exported as
+// github_actor only when the user turned on "Include my GitHub username"
+// (off by default); otherwise it only tells onboarding that GitHub sign-in is
+// done. No lookup runs while telemetry is opted out. The provider is rebuilt
+// per attempt because it reads the token at construction. Only the
 // authenticated GitHub account is used, never git config.
 func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident ports.TelemetryIdentityStore, log *slog.Logger) {
 	if ident == nil || !cfg.Telemetry.Events || cfg.Telemetry.Remote != config.TelemetryRemotePostHog {
@@ -144,6 +146,9 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 			case <-ctx.Done():
 				return
 			case <-time.After(delay):
+			}
+			if ident.OptedOut() {
+				continue
 			}
 			scm := newMultiSCMProvider(cfg.GitLab, log)
 			if scm == nil {

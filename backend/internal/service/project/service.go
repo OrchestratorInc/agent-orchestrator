@@ -727,7 +727,8 @@ func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord
 		payload["scm_provider"] = provider
 	}
 	// Tag the GitHub org so usage can be attributed/ranked by organisation. Only
-	// the owner is derived — never the repo name or full URL.
+	// the owner is derived — never the repo name or full URL. The remote sink
+	// drops it unless the user opted in to sharing their GitHub username.
 	if owner := githubOwner(row.RepoOriginURL); owner != "" {
 		payload["github_org"] = owner
 	}

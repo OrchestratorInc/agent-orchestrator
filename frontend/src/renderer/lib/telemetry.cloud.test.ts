@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	resetCloudTelemetryContextForTest,
+	setTelemetryHashSaltForTest,
 	sanitizeRendererExceptionProperties,
 	sanitizeRendererProperties,
 	setCloudTelemetryContext,
 	withTelemetryContext,
 } from "./telemetry";
 
+beforeAll(() => setTelemetryHashSaltForTest("0".repeat(64)));
 afterEach(() => resetCloudTelemetryContextForTest());
 
 describe("cloud funnel event allowlist", () => {
