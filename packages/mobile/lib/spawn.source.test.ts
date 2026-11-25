@@ -395,6 +395,20 @@ describe("spawn draft", () => {
 		expect(choose).toContain("if (formEdited.current && selectedHostId !== null) {\n\t\t\thostSettled.current = true;\n\t\t\treturn;\n\t\t}");
 	});
 
+	// The choosing effect runs before the project seed in the same commit. After
+	// a move, the seed still sees the old machine and its last project, and its
+	// write would replace the reset's: the new machine would start with the old
+	// machine's project id.
+	it("does not seed the old machine's project in the commit that moves the machine", () => {
+		expect(spawn).toContain("const selectHost = (hostId: string | null) => {\n\t\tselectionTarget.current = hostId;\n\t\tsetSelectedHostId(hostId);\n\t};");
+		const choose = between(spawn, "const auto = autoSpawnHostId({", "}, [cloud, cloudResolved");
+		expect(choose).toContain("selectHost(auto.hostId);");
+		expect(choose).not.toContain("setSelectedHostId(");
+		expect(spawn).toContain("void selectSpawnHost(nextHostId, { select: selectHost, persistDefault:");
+		const seed = between(spawn, "const lastProject = useLastProject(selectedHostId);", "const resolved = resolveSpawnProject(");
+		expect(seed).toContain("if (selectionTarget.current !== selectedHostId) return;");
+	});
+
 	// Chosen while it reconnects, a machine's credential is not proven yet.
 	it("sends its requests only through a connection the machine has answered on", () => {
 		expect(spawn).toContain("const config = provenSpawnConfig(provenConfig.current, liveConfig, selectedHost?.connection ?? \"closed\");");

@@ -79,6 +79,13 @@ function SpawnPage() {
 	// out, or failed. A Cloud draft's page waits for it before picking.
 	const cloudResolved = Boolean(cloud) || (cloudState.status !== "loading" && cloudState.status !== "connecting");
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
+	// The machine the page last asked for. Until a render shows it, effects later
+	// in the same commit still see the machine being left (see the project seed).
+	const selectionTarget = useRef<string | null>(null);
+	const selectHost = (hostId: string | null) => {
+		selectionTarget.current = hostId;
+		setSelectedHostId(hostId);
+	};
 	const hostSelectionInitialized = useRef(false);
 	// Set once a machine is picked by hand, or the one chosen for the person can
 	// be used: until then the page keeps choosing (see autoSpawnHostId).
@@ -171,7 +178,7 @@ function SpawnPage() {
 		hostSelectionInitialized.current = true;
 		if (auto.hostId !== selectedHostId) {
 			if (selectedHostId !== null) resetHostChoice();
-			setSelectedHostId(auto.hostId);
+			selectHost(auto.hostId);
 		}
 		// Usable now: kept from here on, so a later blip never moves the page.
 		if (isCloudHost(auto.hostId) || machineHosts.some((host) => host.id === auto.hostId)) hostSettled.current = true;
@@ -424,6 +431,9 @@ function SpawnPage() {
 	// seeded first would stick.
 	const lastProject = useLastProject(selectedHostId);
 	useEffect(() => {
+		// Moved this commit by the choosing effect: these values are still the
+		// machine being left, and its project would replace the reset's.
+		if (selectionTarget.current !== selectedHostId) return;
 		if (!lastProject.loaded) return;
 		const resolved = resolveSpawnProject(
 			// Standalone holds only where it is offered: a machine always, Cloud when its control plane says so.
@@ -812,7 +822,7 @@ function SpawnPage() {
 		hostSettled.current = true;
 		resetHostChoice();
 		// Cloud is never the default machine: choosing it here leaves that alone.
-		void selectSpawnHost(nextHostId, { select: setSelectedHostId, persistDefault: isCloudHost(nextHostId) ? async () => {} : switchHost })
+		void selectSpawnHost(nextHostId, { select: selectHost, persistDefault: isCloudHost(nextHostId) ? async () => {} : switchHost })
 			.catch(() => setError("Could not make that machine the default. Try again."));
 	};
 	const changeProject = (nextProjectId: string | null) => {
