@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { apiClient } from "../lib/api-client";
+import { apiErrorException } from "../lib/api-error-exception";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 import { moveKey, useMoveStore } from "../lib/move-runner";
@@ -28,6 +30,20 @@ function useTransferState(session: WorkspaceSession | undefined) {
 	}).data;
 }
 
+/** This computer's machine ID, which is how a moved session records it. */
+function useMachineId(enabled: boolean): string | undefined {
+	return useQuery({
+		queryKey: ["machine-id"],
+		enabled,
+		staleTime: Infinity,
+		queryFn: async () => {
+			const res = await apiClient.GET("/api/v1/identity");
+			if (!res.data) throw apiErrorException(res.error, "Could not read this computer's ID");
+			return res.data.hostId;
+		},
+	}).data;
+}
+
 /**
  * Where a session moved to another computer, if it did, and how to open it
  * there. open is absent when that computer is not connected.
@@ -37,11 +53,12 @@ export function useSessionMovedTo(session: WorkspaceSession | undefined) {
 	const local = useWorkspaceQuery().data ?? [];
 	const remote = useRemoteWorkspaces().data ?? [];
 	const movedTo = useTransferState(session)?.movedTo;
+	const machineId = useMachineId(Boolean(movedTo));
 	if (!movedTo) return undefined;
-	const host = movedTo.hostId || LOCAL_HOST;
-	const workspaces = host === LOCAL_HOST ? local : remote.filter((workspace) => workspace.hostId === host);
+	const here = movedTo.hostId === machineId;
+	const workspaces = here ? local : remote.filter((workspace) => workspace.hostId === movedTo.hostId);
 	const project = workspaces.find((workspace) => workspace.sessions.some((each) => each.id === movedTo.sessionId));
-	const open = project ? () => void navigate(sessionNavigateTarget(project.id, movedTo.sessionId, host)) : undefined;
+	const open = project ? () => void navigate(sessionNavigateTarget(project.id, movedTo.sessionId, here ? LOCAL_HOST : movedTo.hostId)) : undefined;
 	return { ...movedTo, open };
 }
 
@@ -55,13 +72,14 @@ export function usePendingMove(session: WorkspaceSession | undefined) {
 	const pending = useTransferState(session)?.pending;
 	// Only an unfinished move needs the other computers' projects.
 	const { targets } = useMoveTargets(session, Boolean(pending));
+	const machineId = useMachineId(Boolean(pending));
 	const move = useMoveSession(session);
 	const [keeping, setKeeping] = useState(false);
 	// The banner already shows this session's move, with its own way to finish it.
 	const inBanner = useMoveStore((store) => Boolean(session && store.moves[moveKey(session.hostId, session.id)]));
 	if (!pending || !session || session.isTerminated || inBanner) return undefined;
 	const source = { client: clientForSessionHost(session.hostId), hostId: session.hostId ?? LOCAL_HOST, sessionId: session.id, label: "" };
-	const target = targets.find((each) => each.hostId === (pending.hostId || LOCAL_HOST));
+	const target = targets.find((each) => (each.hostId === LOCAL_HOST ? machineId : each.hostId) === pending.hostId);
 	return {
 		label: pending.label,
 		keeping,

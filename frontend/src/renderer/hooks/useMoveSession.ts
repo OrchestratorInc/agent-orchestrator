@@ -129,7 +129,7 @@ export function useMoveSession(session: WorkspaceSession | undefined) {
 			if (!picked || !result) return;
 			const from = connected(sourceLabel(), source);
 			if (!from) return;
-			const commitError = await commitMove(from, { hostId: picked.hostId, label: result.destinationLabel }, result.transferId, result.sessionId);
+			const commitError = await commitMove(from, result.destination, result.transferId, result.sessionId);
 			if (commitError) {
 				useMoveStore.setState((state) => ({ moves: { ...state.moves, [key]: { ...state.moves[key], result: { ...result, commitError } } } }));
 				return;

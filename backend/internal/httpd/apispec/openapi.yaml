@@ -23991,9 +23991,6 @@ components:
       type: object
     ReceiveTransferResponse:
       properties:
-        hostLabel:
-          description: This machine's hostname, for the source's moved marker.
-          type: string
         resumed:
           description: True when the agent resumed its moved conversation; false when
             it started from the handoff note.
@@ -24007,7 +24004,6 @@ components:
       required:
       - session
       - warnings
-      - hostLabel
       - resumed
       type: object
     RecordAgentSignInResponse:

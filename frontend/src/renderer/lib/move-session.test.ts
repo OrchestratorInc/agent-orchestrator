@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { aoBridge } from "./bridge";
 import { MOVE_PART_BYTES, MoveError, moveSession } from "./move-session";
 import { hostsWithRepo } from "./repo-hosts";
 import type { WorkspaceSummary } from "../types/workspace";
@@ -22,7 +23,7 @@ const transfer = { transferId: "tr1", branch: "feat/x", headSha: "abc", native: 
 
 const received = { data: { session: { id: "web-9" }, warnings: [], resumed: true } };
 
-function hosts(archive = new ArrayBuffer(MOVE_PART_BYTES + 10), receive: Handler = () => received) {
+function hosts(archive = new ArrayBuffer(MOVE_PART_BYTES + 10), receive: Handler = () => received, identity?: { hostId: string; apiVersion: number }) {
 	const source = fakeClient({
 		"POST /api/v1/sessions/{sessionId}/transfer/prepare": () => ({ data: { transfer } }),
 		"GET /api/v1/sessions/{sessionId}/transfer/{transferId}/native": () => ({ data: archive }),
@@ -30,6 +31,7 @@ function hosts(archive = new ArrayBuffer(MOVE_PART_BYTES + 10), receive: Handler
 	});
 	// An empty body is the preflight, which a current daemon refuses as incomplete.
 	const target = fakeClient({
+		"GET /api/v1/identity": () => ({ data: identity }),
 		"POST /api/v1/sessions/transfer/receive": (options) =>
 			(options.body as { transfer?: unknown }).transfer ? receive(options) : { error: { code: "TRANSFER_INCOMPLETE", message: "incomplete" } },
 	});
@@ -47,7 +49,7 @@ describe("moveSession", () => {
 		const steps: string[] = [];
 		const result = await moveSession({ ...input, onStep: (step) => steps.push(step) });
 
-		expect(result).toEqual({ sessionId: "web-9", warnings: [], committed: true, commitError: undefined, transferId: "tr1", destinationLabel: "MacBook B", resumed: true });
+		expect(result).toEqual({ sessionId: "web-9", warnings: [], committed: true, commitError: undefined, transferId: "tr1", destination: { hostId: "host-b", label: "MacBook B" }, resumed: true });
 		expect(steps).toEqual(["prepare", "copy", "receive", "commit"]);
 		expect(source.calls).toEqual([
 			"POST /api/v1/sessions/{sessionId}/transfer/prepare",
@@ -63,14 +65,27 @@ describe("moveSession", () => {
 	});
 
 	it("names this computer by hostname on the other daemon, not as This computer", async () => {
-		const { source, input } = hosts(undefined, () => ({ data: { ...received.data, hostLabel: "studio" } }));
+		const { source, input } = hosts();
 		await moveSession({ ...input, source: { ...input.source, hostId: "local", label: "This computer" } });
 		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/prepare"]).toMatchObject({ sourceLabel: "" });
+	});
 
-		const back = hosts(undefined, () => ({ data: { ...received.data, hostLabel: "studio" } }));
-		const result = await moveSession({ ...back.input, target: { ...back.input.target, hostId: "local", label: "This computer" } });
-		expect(result.destinationLabel).toBe("studio");
-		expect(back.source.bodies["POST /api/v1/sessions/{sessionId}/transfer/commit"]).toMatchObject({ destination: { hostId: "local", label: "studio" } });
+	it("records a move to this computer by its machine ID and name", async () => {
+		vi.spyOn(aoBridge.remotes, "computerName").mockResolvedValue("Studio");
+		const { source, target, input } = hosts(undefined, undefined, { hostId: "h_studio", apiVersion: 1 });
+		const result = await moveSession({ ...input, target: { ...input.target, hostId: "local", label: "This computer" } });
+		const destination = { hostId: "h_studio", label: "Studio" };
+		expect(result.destination).toEqual(destination);
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/prepare"]).toMatchObject({ destination });
+		expect(source.bodies["POST /api/v1/sessions/{sessionId}/transfer/commit"]).toMatchObject({ destination: { ...destination, sessionId: "web-9" } });
+		expect(target.calls).toContain("GET /api/v1/identity");
+	});
+
+	it("leaves the source alone when this computer's machine ID cannot be read", async () => {
+		const { source, input } = hosts();
+		const error = (await moveSession({ ...input, target: { ...input.target, hostId: "local", label: "This computer" } }).catch((e: unknown) => e)) as MoveError;
+		expect([error.step, error.resumedSource, error.message]).toEqual(["prepare", true, "This computer is not reachable"]);
+		expect(source.calls).toEqual([]);
 	});
 
 	it("cancels the move and resumes the source agent when the destination refuses", async () => {

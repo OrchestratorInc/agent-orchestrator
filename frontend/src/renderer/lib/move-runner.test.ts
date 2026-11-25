@@ -4,7 +4,7 @@ import { cancelWaitingMove, moveKey, runMove, useMoveStore } from "./move-runner
 
 vi.mock("./move-session", async (importOriginal) => ({ ...(await importOriginal<typeof import("./move-session")>()), moveSession: vi.fn() }));
 
-const result: MoveResult = { sessionId: "web-9", warnings: [], committed: true, transferId: "tr1", destinationLabel: "MacBook B", resumed: true };
+const result: MoveResult = { sessionId: "web-9", warnings: [], committed: true, transferId: "tr1", destination: { hostId: "host-b", label: "MacBook B" }, resumed: true };
 
 function input(states: string[]): MoveInput {
 	let i = 0;

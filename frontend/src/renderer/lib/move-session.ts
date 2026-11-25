@@ -1,11 +1,13 @@
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "./api-client";
 import { apiErrorException } from "./api-error-exception";
+import { aoBridge } from "./bridge";
 import type { clientForSessionHost } from "./host-clients";
 import { HOST_UNREACHABLE_CODES, LOCAL_HOST } from "./hosts";
 
 type Client = ReturnType<typeof clientForSessionHost>;
 type Transfer = components["schemas"]["SessionTransfer"];
+type Destination = { hostId: string; label: string };
 
 /** Archive parts stay well under a tunnel's request size limit. */
 export const MOVE_PART_BYTES = 8 * 1024 * 1024;
@@ -30,8 +32,8 @@ export type MoveResult = {
 	committed: boolean;
 	commitError?: string;
 	transferId: string;
-	/** The destination's name as the source records it. */
-	destinationLabel: string;
+	/** The destination as the source records it. */
+	destination: Destination;
 	/** False when no conversation was copied or it could not be resumed, so the agent started from a summary. */
 	resumed: boolean;
 };
@@ -62,10 +64,10 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 	let step: MoveStep = "prepare";
 	let sessionId: string;
 	let warnings: string[];
-	let hostLabel: string;
 	let resumed: boolean;
 	input.onStep?.("prepare");
 	await checkDestination(target);
+	const destination = await recordedDestination(target);
 	try {
 		const prepared = await reach(source.label, source.client.POST("/api/v1/sessions/{sessionId}/transfer/prepare", {
 			params: { path: { sessionId: source.sessionId } },
@@ -73,7 +75,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 			body: {
 				transferId,
 				sourceLabel: source.hostId === LOCAL_HOST ? "" : source.label,
-				destination: { hostId: target.hostId, label: target.label, sessionId: "" },
+				destination: { ...destination, sessionId: "" },
 				...(input.stopTurn ? { stopTurn: true } : {}),
 			},
 		}));
@@ -88,7 +90,7 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		}
 		step = "receive";
 		input.onStep?.("receive");
-		({ sessionId, warnings, hostLabel, resumed } = await receive(target.client, target.projectId, transfer, target.label));
+		({ sessionId, warnings, resumed } = await receive(target.client, target.projectId, transfer, target.label));
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		const code = error instanceof Error ? apiErrorCode(error.cause) : undefined;
@@ -98,9 +100,8 @@ export async function moveSession(input: MoveInput): Promise<MoveResult> {
 		throw new MoveError(message, step, await cancelMove(source, transferId), code, transferId);
 	}
 	input.onStep?.("commit");
-	const destinationLabel = target.hostId === LOCAL_HOST && hostLabel ? hostLabel : target.label;
-	const commitError = await commitMove(source, { hostId: target.hostId, label: destinationLabel }, transferId, sessionId);
-	return { sessionId, warnings, committed: !commitError, commitError, transferId, destinationLabel, resumed };
+	const commitError = await commitMove(source, destination, transferId, sessionId);
+	return { sessionId, warnings, committed: !commitError, commitError, transferId, destination, resumed };
 }
 
 /** Refuses a destination whose AO has no receive route, before the source agent stops. */
@@ -111,6 +112,20 @@ async function checkDestination(target: MoveInput["target"]): Promise<void> {
 		? `${target.label} runs an AO version that cannot receive sessions; update AO there first`
 		: `${target.label} is not reachable`;
 	throw new MoveError(message, "prepare", true);
+}
+
+/**
+ * The source keeps the destination's machine ID and name: "local" and "This
+ * computer" would point at whichever computer opens the old session.
+ */
+async function recordedDestination(target: MoveInput["target"]): Promise<Destination> {
+	if (target.hostId !== LOCAL_HOST) return { hostId: target.hostId, label: target.label };
+	const [identity, name] = await Promise.all([
+		target.client.GET("/api/v1/identity").catch(() => undefined),
+		aoBridge.remotes.computerName().catch(() => ""),
+	]);
+	if (!identity?.data) throw new MoveError(`${target.label} is not reachable`, "prepare", true);
+	return { hostId: identity.data.hostId, label: name || target.label };
 }
 
 /** Forgets the move on the source and resumes its agent. True when the agent runs there again. */
@@ -160,12 +175,12 @@ async function copyArchive(source: MoveInput["source"], target: MoveInput["targe
 
 /** Receive is idempotent per transfer, so a dropped response is retried once
  *  before the source is resumed; otherwise both computers could run it. */
-async function receive(target: Client, projectId: string, transfer: Transfer, label: string): Promise<{ sessionId: string; warnings: string[]; hostLabel: string; resumed: boolean }> {
+async function receive(target: Client, projectId: string, transfer: Transfer, label: string): Promise<{ sessionId: string; warnings: string[]; resumed: boolean }> {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			const res = await reach(label, target.POST("/api/v1/sessions/transfer/receive", { body: { projectId, transfer } }));
 			if (res.error || !res.data) throw apiErrorException(res.error, "The other computer could not start the session");
-			return { sessionId: res.data.session.id, warnings: res.data.warnings ?? [], hostLabel: res.data.hostLabel ?? "", resumed: res.data.resumed ?? false };
+			return { sessionId: res.data.session.id, warnings: res.data.warnings ?? [], resumed: res.data.resumed ?? false };
 		} catch (error) {
 			if (attempt >= 1 || !(error instanceof Unreachable)) throw error;
 		}
@@ -175,14 +190,14 @@ async function receive(target: Client, projectId: string, transfer: Transfer, la
 /** Marks the source session as moved. Returns the error message, or undefined. */
 export async function commitMove(
 	source: MoveInput["source"],
-	target: Pick<MoveInput["target"], "hostId" | "label">,
+	destination: Destination,
 	transferId: string,
 	sessionId: string,
 ): Promise<string | undefined> {
 	try {
 		const res = await source.client.POST("/api/v1/sessions/{sessionId}/transfer/commit", {
 			params: { path: { sessionId: source.sessionId } },
-			body: { transferId, destination: { hostId: target.hostId, label: target.label, sessionId } },
+			body: { transferId, destination: { ...destination, sessionId } },
 		});
 		return res.error ? apiErrorMessage(res.error, "Could not mark the old session as moved") : undefined;
 	} catch (error) {

@@ -8395,8 +8395,6 @@ export interface components {
             transfer: components["schemas"]["SessionTransfer"];
         };
         ReceiveTransferResponse: {
-            /** @description This machine's hostname, for the source's moved marker. */
-            hostLabel: string;
             /** @description True when the agent resumed its moved conversation; false when it started from the handoff note. */
             resumed: boolean;
             session: components["schemas"]["ControllersSessionView"];

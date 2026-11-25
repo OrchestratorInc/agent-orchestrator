@@ -13,7 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 )
 
 // maxTransferPartBytes caps one uploaded part of a conversation archive. The
@@ -75,7 +74,6 @@ type ReceiveTransferRequest struct {
 type ReceiveTransferResponse struct {
 	Session   SessionView `json:"session"`
 	Warnings  []string    `json:"warnings"`
-	HostLabel string      `json:"hostLabel" description:"This machine's hostname, for the source's moved marker."`
 	Resumed   bool        `json:"resumed" description:"True when the agent resumed its moved conversation; false when it started from the handoff note."`
 }
 
@@ -189,7 +187,7 @@ func (c *SessionsController) receiveTransfer(w http.ResponseWriter, r *http.Requ
 	if warnings == nil {
 		warnings = []string{}
 	}
-	envelope.WriteJSON(w, http.StatusOK, ReceiveTransferResponse{Session: sessionView(r, sess), Warnings: warnings, HostLabel: sessionsvc.MachineName(), Resumed: resumed})
+	envelope.WriteJSON(w, http.StatusOK, ReceiveTransferResponse{Session: sessionView(r, sess), Warnings: warnings, Resumed: resumed})
 }
 
 func (c *SessionsController) commitTransfer(w http.ResponseWriter, r *http.Request) {

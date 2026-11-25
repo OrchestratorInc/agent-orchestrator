@@ -111,7 +111,7 @@ func TestSessionsAPI_Transfer(t *testing.T) {
 	}
 	var received controllers.ReceiveTransferResponse
 	mustJSON(t, body, &received)
-	if received.Session.ID != "ao-1" || received.Warnings == nil || received.HostLabel == "" || !received.Resumed || svc.receivedProject != "web" || svc.received.Branch != "feat/x" {
+	if received.Session.ID != "ao-1" || received.Warnings == nil || !received.Resumed || svc.receivedProject != "web" || svc.received.Branch != "feat/x" {
 		t.Fatalf("receive response = %+v, service got %s %+v", received, svc.receivedProject, svc.received)
 	}
 
