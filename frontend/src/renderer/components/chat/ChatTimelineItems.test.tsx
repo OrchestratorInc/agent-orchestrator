@@ -157,6 +157,19 @@ describe("TurnOutcome", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("Stop the current turn before retrying this one");
 	});
 
+	it("draws Retry as an icon button sized like copy and roll back beside it", () => {
+		render(<TurnOutcome state="failed" retry={{ onRetry: vi.fn() }} copyText="Edited the file" onRollback={vi.fn()} />);
+		const retry = screen.getByTestId("retry-turn");
+		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
+		const rollback = screen.getByRole("button", { name: "Roll back to here" });
+		// No word beside the icon; its name is for screen readers and the tooltip.
+		expect(retry).toHaveTextContent(/^$/);
+		expect(retry).toHaveAccessibleName("Retry this turn");
+		expect(retry).not.toHaveAttribute("title");
+		for (const button of [retry, copy, rollback]) expect(button.className).toContain("size-control-md");
+		expect(retry.querySelector("svg")).toHaveClass("size-3.5");
+	});
+
 	it("shows a refused login with no way to log in as the plain failure", () => {
 		render(<TurnOutcome state="failed" failureCode="auth_required" error="Not logged in · Please run /login" />);
 		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
@@ -181,7 +194,7 @@ describe("TurnOutcome", () => {
 		expect(screen.getByText("Usage limit reached")).toBeInTheDocument();
 		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "https://example.com/billing" })).toHaveAttribute("href", "https://example.com/billing");
+		expect(screen.getByRole("link", { name: "example.com" })).toHaveAttribute("href", "https://example.com/billing");
 	});
 
 	it("resumes an eligible limited prompt after its reset", () => {
@@ -227,7 +240,7 @@ describe("TurnOutcome", () => {
 
 		expect(screen.getByText(/Usage limit reached/)).toBeInTheDocument();
 		expect(screen.getByText(/Manage billing at/)).toBeInTheDocument();
-		expect(screen.getByRole("link", { name: "https://example.com/billing" })).toHaveAttribute(
+		expect(screen.getByRole("link", { name: "example.com" })).toHaveAttribute(
 			"href",
 			"https://example.com/billing",
 		);

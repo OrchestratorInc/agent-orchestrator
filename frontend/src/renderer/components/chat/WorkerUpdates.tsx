@@ -9,7 +9,7 @@
  * with where each one is now.
  */
 
-import { Bot, ChevronDown, ChevronRight, CircleAlert, FileText, GitPullRequest, Layers, LoaderCircle, Split, Tag } from "@/components/app-icons";
+import { Bot, ChevronDown, ChevronRight, CircleAlert, GitPullRequest, Layers, LoaderCircle, Split, Tag } from "@/components/app-icons";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
@@ -19,6 +19,7 @@ import { cn } from "../../lib/utils";
 import { isSteer, type BatchedDelivery, type ConversationItem } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
+import { ChatFileIcon } from "./ChatFileIcon";
 import { formatMessageTimestamp, formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
 import { AgentAvatar } from "../AgentAvatar";
 import { Pressable } from "../ui/pressable";
@@ -398,7 +399,7 @@ function WorkerUpdateRow({ update, initiallyOpen = false }: { update: WorkerUpda
 			</div>
 			{artifacts.map((path) => (
 				<p key={path} className="ml-6 flex h-6 min-w-0 items-center gap-1.5 text-muted-foreground">
-					<FileText aria-hidden="true" className="size-3.5 shrink-0" />
+					<ChatFileIcon path={path} className="shrink-0" />
 					{/* A listed artifact links to its preview; one the session no longer lists stays a name. */}
 					<span className="min-w-0 truncate" title={path}>
 						<ArtifactPathCode text={artifactReference(path, update.sessionId)}>{path.split("/").at(-1)}</ArtifactPathCode>

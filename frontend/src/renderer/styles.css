@@ -2314,11 +2314,10 @@ textarea,
 .chat-md-stream [data-markdown="th"] { @apply border-b border-border px-2.5 py-1.5 text-left font-medium text-muted-foreground; }
 .chat-md-stream [data-markdown="td"] { @apply border-b border-border/60 px-2.5 py-1.5 align-top; }
 .chat-md-stream :not(pre) > [data-markdown="code"] { @apply rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code; }
-.chat-md-stream [data-markdown="code-block"] { @apply my-2.5 overflow-hidden rounded-lg border border-border bg-surface; }
-.chat-md-stream [data-markdown="code-header"] { @apply flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1 text-caption text-muted-foreground; min-height: calc(var(--size-control-md) + 0.5rem + 1px); }
-.chat-md-stream [data-markdown="code-block"] pre { @apply scrollbar-none m-0 overflow-x-auto px-3 py-2.5; }
-.chat-md-stream [data-markdown="code-header"] > span:last-child { @apply ml-auto flex items-center opacity-0 transition-opacity duration-150; }
-.chat-md-stream [data-markdown="code-block"]:is(:hover, :focus-within) [data-markdown="code-header"] > span:last-child { @apply opacity-100; }
+.chat-md-stream [data-markdown="code-block"] { @apply my-2.5 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-background; }
+.chat-md-stream [data-markdown="code-header"] { @apply flex min-h-10 items-center gap-2.5 pt-1 pr-2 pl-3 text-control leading-5 text-muted-foreground; }
+.chat-md-stream [data-markdown="code-block"] pre { @apply scrollbar-none m-0 overflow-x-auto px-3 pt-1 pb-3; }
+.chat-md-stream [data-markdown="code-header"] > span:last-child { @apply ml-auto flex items-center; }
 .chat-md-stream pre > [data-markdown="code"] { @apply font-mono text-xs leading-[1.6] text-foreground; }
 .chat-md-stream [data-animated="true"] { animation: stream-char-in 300ms ease backwards; }
 .chat-md-stream :is(pre, [data-markdown="code"]) [data-animated="true"] { animation: none; }
@@ -2955,11 +2954,34 @@ html.sidebar-reordering * {
 	color: var(--color-text-primary);
 }
 
-.activity-summary-button:hover > .activity-summary-label {
+.activity-summary-button:hover .activity-summary-label {
 	color: var(--color-text-primary);
 }
 
-.activity-row-toggle:hover > .activity-row-label {
+/* Markdown set in small text (a plan's explanation, the question dock's notes):
+   its chips shrink with it, so a link or path does not stand taller than its line. */
+.chat-md-small [data-chat-chip] {
+	height: 1.125rem;
+	gap: 0.1875rem;
+	padding-inline: 0.3125rem;
+	font-size: inherit;
+	line-height: 1.125rem;
+}
+.chat-md-small [data-chat-chip] :is(svg, img, [data-link-favicon]) {
+	width: 0.75rem;
+	height: 0.75rem;
+}
+/* As specific as the timeline's own code size, which it must win over. */
+.chat-md.chat-md-small :is(code, .font-mono),
+.cursor-chat-timeline .chat-md.chat-md-small :is(code, .font-mono) {
+	font-size: var(--font-size-caption);
+}
+
+/* A row lights all its text from anywhere on its line: its label, what it acted on,
+   and, for a row titled with its command, past the command over copy and the chevron. */
+.activity-row-toggle:hover :is(.activity-row-label, .activity-row-target),
+.activity-summary-button:hover .activity-row-target,
+.group\/cmdrow:hover :is(.activity-row-label, .activity-row-target) {
 	color: var(--color-text-primary);
 }
 
@@ -2970,6 +2992,170 @@ html.sidebar-reordering * {
 
 .activity-subgroup {
 	min-width: 0;
+}
+
+/* A thread, like a comment thread: the line drops from an opened row's icon and curves
+   into each child's icon (a file row's first letter), ending at the last child. Every
+   child's first line is a 28px row, so its icon sits 14px down. */
+.activity-thread,
+.activity-step-line,
+.subagent-thread,
+[data-thread-parent] {
+	/* Stronger than border-strong, which is too faint to follow down a long thread. Opaque,
+	   mixed over the canvas's solid colour, so where a curve leaves the line the overlap
+	   does not show brighter (a translucent window keeps the solid copy on :root). */
+	--thread-line: color-mix(in oklch, var(--color-text-primary) 22%, var(--solid-bg-primary, var(--color-bg-primary)));
+	--thread-stroke: 1.5px;
+}
+/* A step opened on its own: a straight line under its icon, in the thread's stroke and
+   colour, with its details where the step's text starts (22px). A row whose icon sits
+   further in (an auto-approval's) sets the icon's centre and the gap to its text. */
+.activity-step-line {
+	position: relative;
+	margin-left: calc(var(--step-line-x, 7px) - var(--thread-stroke) / 2);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	padding-left: calc(var(--step-line-gap, 15px) - var(--thread-stroke) / 2);
+}
+/* Like a thread's, the line starts 3px under the opened row's icon: down the rest of the
+   row from its button, then up through any space above the details (cut off by the
+   details' own frame, so it never reaches past the row). */
+.activity-step-line::before {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-stroke));
+	top: calc(-1 * var(--step-line-lead, 12px));
+	height: var(--step-line-lead, 12px);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+:is(
+	div:has(> div > .activity-step-line, > .activity-step-line) > .activity-row-toggle,
+	div:has(> div > .activity-step-line, > .activity-step-line) > div > .activity-row-toggle
+)[aria-expanded="true"] {
+	--thread-line: color-mix(in oklch, var(--color-text-primary) 22%, var(--solid-bg-primary, var(--color-bg-primary)));
+	--thread-stroke: 1.5px;
+	position: relative;
+}
+:is(
+	div:has(> div > .activity-step-line, > .activity-step-line) > .activity-row-toggle,
+	div:has(> div > .activity-step-line, > .activity-step-line) > div > .activity-row-toggle
+)[aria-expanded="true"]::after {
+	content: "";
+	position: absolute;
+	left: calc(var(--step-line-x, 7px) - var(--thread-stroke) / 2);
+	top: calc(50% + 10px);
+	bottom: 0;
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+.activity-thread {
+	--thread-indent: 19px;
+	--thread-row: 14px;
+	--thread-radius: 10px;
+	position: relative;
+	margin-left: calc(7px - var(--thread-stroke) / 2);
+	padding-left: var(--thread-indent);
+}
+.activity-thread > :not(ul),
+.activity-thread > ul > li {
+	position: relative;
+}
+/* The curve into a child, stopping just short of it. A file row's text starts 10px in. */
+.activity-thread > :not(ul)::before,
+.activity-thread > ul > li::before {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-indent));
+	top: 0;
+	width: calc(var(--thread-indent) - 3px);
+	height: var(--thread-row);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	border-bottom: var(--thread-stroke) solid var(--thread-line);
+	border-bottom-left-radius: var(--thread-radius);
+	pointer-events: none;
+}
+.activity-thread > ul > li::before {
+	width: calc(var(--thread-indent) + 0.625rem - 3px);
+}
+/* Past every child but the last, the line runs straight on, through the gap, to the next. */
+.activity-thread > :not(ul):not(:last-child)::after,
+.activity-thread > ul > li:not(:last-child)::after {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-indent));
+	top: calc(var(--thread-row) - var(--thread-radius));
+	bottom: calc(-1 * var(--thread-gap, 0px));
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+/* The line's start: from just under the opened row's icon, across any space above the thread. */
+.activity-thread::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: calc(-1 * var(--thread-lead, 0px));
+	height: var(--thread-lead, 0px);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+[data-thread-parent] {
+	position: relative;
+}
+[data-thread-parent]::after {
+	content: "";
+	position: absolute;
+	/* From 3px under the row's icon: its centre (--thread-x) and half its height plus 3. */
+	left: calc(var(--thread-x, 7px) - var(--thread-stroke) / 2);
+	top: calc(50% + var(--thread-drop, 10px));
+	bottom: 0;
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+/* A team's subagents, threaded the same way from the first (18px) mark in the team's row. Each
+   agent's row is two lines tall, so its curve lands on the row's middle, at its mark. */
+.subagent-thread {
+	--thread-indent: 19px;
+	position: relative;
+	margin-left: calc(9px - var(--thread-stroke) / 2);
+	padding-left: var(--thread-indent);
+}
+.subagent-thread::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: calc(-1 * var(--thread-lead, 0px));
+	height: var(--thread-lead, 0px);
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+.subagent-thread > li {
+	position: relative;
+}
+.subagent-thread > li:not(:last-child)::after {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-indent));
+	top: 0;
+	bottom: 0;
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	pointer-events: none;
+}
+.subagent-thread > li > [data-thread-anchor],
+.subagent-thread > li > div > [data-thread-anchor] {
+	position: relative;
+}
+.subagent-thread > li > [data-thread-anchor]::before,
+.subagent-thread > li > div > [data-thread-anchor]::before {
+	content: "";
+	position: absolute;
+	left: calc(-1 * var(--thread-indent));
+	top: 0;
+	width: calc(var(--thread-indent) - 3px);
+	height: 50%;
+	border-left: var(--thread-stroke) solid var(--thread-line);
+	border-bottom: var(--thread-stroke) solid var(--thread-line);
+	border-bottom-left-radius: 10px;
+	pointer-events: none;
 }
 
 /* Keep Worked disclosure motion in lockstep with tool-call accordions. Radix
@@ -3613,31 +3799,18 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	background: color-mix(in srgb, var(--color-bg-secondary) 62%, transparent);
 }
 
-/* Explore / command expansion: one soft chat card; command and output share
-   the surface and split on a hairline — no nested near-black wells. */
-.cursor-chat-explore-box {
-	border-color: color-mix(in oklch, var(--color-border-strong) 55%, transparent);
-	background: color-mix(in srgb, var(--color-bg-elevated) 42%, var(--color-bg-secondary));
-}
-
-.cursor-chat-explore-command {
-	background: color-mix(in srgb, var(--color-bg-elevated) 28%, transparent);
-	color: color-mix(in oklch, var(--color-text-primary) 88%, transparent);
-}
-
+/* An opened command's output, inside its Shell card. */
 .cursor-chat-explore-output {
 	background: transparent;
 	color: color-mix(in oklch, var(--color-text-muted) 96%, var(--color-text-primary));
 }
 
-/* Long shell lines scroll horizontally; hide the native track so the explore card
+/* Long output lines scroll horizontally; hide the native track so the Shell card
    stays visually flat (wheel/trackpad scrolling still works). */
-.cursor-chat-explore-command,
 .cursor-chat-explore-output {
 	scrollbar-width: none;
 }
 
-.cursor-chat-explore-command::-webkit-scrollbar,
 .cursor-chat-explore-output::-webkit-scrollbar {
 	width: 0;
 	height: 0;
@@ -3712,15 +3885,6 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	border-color: color-mix(in oklch, var(--color-text-primary) 12%, transparent);
 }
 
-:root[data-theme="light"] .cursor-chat-explore-box {
-	border-color: color-mix(in oklch, var(--color-text-primary) 12%, transparent);
-	background: color-mix(in srgb, var(--color-bg-secondary) 82%, var(--color-bg-tertiary));
-}
-
-:root[data-theme="light"] .cursor-chat-explore-command {
-	background: color-mix(in srgb, var(--color-bg-tertiary) 55%, transparent);
-	color: color-mix(in oklch, var(--color-text-primary) 86%, transparent);
-}
 
 :root[data-theme="light"] .cursor-chat-explore-output {
 	background: transparent;

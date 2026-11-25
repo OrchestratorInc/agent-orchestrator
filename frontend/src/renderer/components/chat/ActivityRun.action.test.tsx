@@ -1,10 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import type { ReactElement } from "react";
 import type { ConversationActivity } from "../../types/conversation";
 import { ActivityRun } from "./ActivityRun";
 import { ActivityRow } from "./ChatTimelineItems";
 import { ChatLinkProvider } from "./ChatMarkdown";
+import { TooltipProvider } from "../ui/tooltip";
+
+/** Command rows carry a copy button, whose tooltip needs the app's provider. */
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
 function action(id: string, actionName: string, detail: ConversationActivity["detail"] = {}): ConversationActivity {
 	return {

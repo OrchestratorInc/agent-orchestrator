@@ -197,19 +197,25 @@ describe("auto review", () => {
 	it("reads as a decision taken for the user, not one they made", async () => {
 		render(<ActivityRow activity={review} />);
 		expect(screen.getByText("Auto-approved")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button"));
+		await userEvent.click(screen.getByRole("button", { expanded: false }));
 		expect(screen.getByText(/You were not asked/)).toBeInTheDocument();
+	});
+
+	it("hangs its boxes on the step line under its icon when opened on its own", async () => {
+		render(<ActivityRow activity={review} />);
+		await userEvent.click(screen.getByRole("button", { expanded: false }));
+		expect(screen.getByText(/You were not asked/).closest(".activity-step-line")).not.toBeNull();
 	});
 
 	it("makes the rationale reachable", async () => {
 		render(<ActivityRow activity={review} />);
-		await userEvent.click(screen.getByRole("button"));
+		await userEvent.click(screen.getByRole("button", { expanded: false }));
 		expect(screen.getByText("Read-only request to an allow-listed host.")).toBeInTheDocument();
 	});
 
 	it("carries the provider's own word for who decided", async () => {
 		render(<ActivityRow activity={review} />);
-		await userEvent.click(screen.getByRole("button"));
+		await userEvent.click(screen.getByRole("button", { expanded: false }));
 		// "agent" means a model made the call, which is materially different from a
 		// policy rule matching — so it is not flattened to "automatically".
 		expect(screen.getByText("agent · 812ms")).toBeInTheDocument();
@@ -217,7 +223,7 @@ describe("auto review", () => {
 
 	it("shows the risk the provider assessed", () => {
 		render(<ActivityRow activity={review} />);
-		expect(screen.getByTitle("Risk assessed as low")).toBeInTheDocument();
+		expect(screen.getByText("low")).toBeInTheDocument();
 	});
 
 	it("calls a denial a denial", () => {
@@ -469,7 +475,7 @@ describe("provider error", () => {
 		expect(screen.getByText(/You have no credits remaining/i)).toBeInTheDocument();
 		expect(
 			screen.getByRole("link", {
-				name: "https://platform.openai.com/settings/organization/billing",
+				name: "platform.openai.com",
 			}),
 		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
 		// The raw envelope must not paint as the row label — that is what overflowed the column.
@@ -494,13 +500,13 @@ describe("provider error", () => {
 		expect(screen.getByText(/You have no credits remaining/i)).toBeInTheDocument();
 		expect(
 			screen.getByRole("link", {
-				name: "https://platform.openai.com/settings/organization/billing",
+				name: "platform.openai.com",
 			}),
 		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
 		expect(screen.queryByText(/codexErrorInfo/i)).not.toBeInTheDocument();
 	});
 
-	it("renders an arbitrary provider web URL literally and opens it externally", async () => {
+	it("renders an arbitrary provider web URL as its site's chip and opens it externally", async () => {
 		const user = userEvent.setup();
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		render(
@@ -517,14 +523,14 @@ describe("provider error", () => {
 			/>,
 		);
 
-		const link = screen.getByRole("link", { name: "http://billing.example.test/renew" });
+		const link = screen.getByRole("link", { name: "billing.example.test" });
 		expect(link).toHaveAttribute("href", "http://billing.example.test/renew");
 		await user.click(link);
 		expect(openExternal).toHaveBeenCalledWith("http://billing.example.test/renew");
 		openExternal.mockRestore();
 	});
 
-	it("renders a separate provider action URL literally", () => {
+	it("renders a separate provider action URL as its site's chip", () => {
 		render(
 			<ActivityRow
 				activity={activity({
@@ -543,7 +549,7 @@ describe("provider error", () => {
 		expect(screen.getByText(/You have no credits remaining/i)).toBeInTheDocument();
 		expect(
 			screen.getByRole("link", {
-				name: "https://platform.openai.com/settings/organization/billing",
+				name: "platform.openai.com",
 			}),
 		).toHaveAttribute("href", "https://platform.openai.com/settings/organization/billing");
 	});
@@ -678,7 +684,11 @@ describe("file changes", () => {
 		render(<ActivityRow activity={edit} />);
 		await userEvent.click(screen.getByRole("button", { name: /Edited 2 files/ }));
 		await userEvent.click(screen.getByRole("button", { name: /src\/a\.ts/ }));
-		expect(screen.getByText(/@@ -1 \+1,2 @@/)).toBeInTheDocument();
+		// The card numbers the lines from the hunk's range instead of printing it.
+		const card = document.querySelector('[data-chat-file-card="edit"]');
+		expect(card).toHaveTextContent("src/a.ts");
+		expect(card?.querySelectorAll("[data-tool-diff-row]").length).toBeGreaterThan(0);
+		expect(screen.queryByText(/@@ -1 \+1,2 @@/)).not.toBeInTheDocument();
 	});
 
 	it("opens a single-file edit straight onto its patch without listing the file again", async () => {
@@ -702,9 +712,12 @@ describe("file changes", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button", { name: /Edited/ }));
-		expect(screen.getByText(/@@ -1 \+1 @@/)).toBeInTheDocument();
-		// Header already shows the basename; do not repeat "Edited FAQ.tsx" in the body.
-		expect(screen.getAllByText("FAQ.tsx")).toHaveLength(1);
+		// Straight onto the file's card, not a one-item "Edited FAQ.tsx" list.
+		const card = document.querySelector('[data-chat-file-card="edit"]');
+		expect(card).toHaveTextContent("src/FAQ.tsx");
+		expect(card?.querySelector('[data-kind="del"]')).toHaveTextContent("1old");
+		expect(card?.querySelector('[data-kind="add"]')).toHaveTextContent("1new");
+		expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
 	});
 
 	// A file with no patch is not a button: a control that does nothing when pressed
@@ -762,11 +775,13 @@ describe("file changes", () => {
 		expect(screen.getByText("modified")).toBeInTheDocument();
 	});
 
-	it("shows the full path when hovering an edited basename", async () => {
+	it("keeps an edited file's chip free of a hover tooltip", async () => {
 		const user = userEvent.setup();
 		render(<ActivityRow activity={edit} />);
 		await user.click(screen.getByRole("button", { name: /Edited 2 files/ }));
 		await user.hover(screen.getByText("a.ts"));
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("src/a.ts");
+		// A row is there to scan; its text opens no tooltip.
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		expect(screen.queryByRole("tooltip")).toBeNull();
 	});
 });

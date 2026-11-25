@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
-import {
-	activityCommandStep,
-	activityToolStep,
-	describeCommandStep,
-	isExploratoryTool,
-	isOrchestratorPlumbing,
-	type CommandStep,
-} from "./activity-step";
+import { activityCommandStep, activityToolStep, describeCommandStep, isExploratoryTool, isOrchestratorPlumbing, type CommandStep, isFileStepCommand, ranCommand, unwrapShellCommand } from "./activity-step";
 
 /** The finished row's text, as it reads: verb, then target. */
 function done(command: string): string {
@@ -441,5 +434,78 @@ describe("activityToolStep", () => {
 		expect(isExploratoryTool(toolActivity("WebSearch", "fetch", {}))).toBe(true);
 		expect(isExploratoryTool(toolActivity("ToolSearch", "other", {}))).toBe(false);
 		expect(isExploratoryTool(commandActivity({ summary: "cat a.ts", detail: { command: "cat a.ts" } }))).toBe(false);
+	});
+});
+
+describe("isFileStepCommand", () => {
+	it("names a command by its files only when every stage reads, searches, lists or writes", () => {
+		for (const command of [
+			"cat package.json",
+			"cat -n src/lib/money.ts && echo ==== && cat -n supabase/migrations/0001_init.sql",
+			"sed -n '1,140p' supabase/migrations/0001_init.sql",
+			"head -60 README.md | wc -l",
+			"grep -rn \"TODO\" src --exclude-dir=node_modules",
+			"rg -n policy supabase",
+			"find src -name '*.test.ts'",
+			"ls -la src/components",
+			"cd src && tree app",
+			"tree -L 2 src",
+			"cat > notes.md <<'EOF'\nhello\nEOF",
+			"echo hi > notes.md",
+			"sed -i 's/a/b/' a.ts",
+			"/bin/zsh -lc 'cat a.ts'",
+		]) {
+			expect(isFileStepCommand(command), command).toBe(true);
+		}
+	});
+
+	it("shows anything else as the command", () => {
+		for (const command of [
+			"npm run typecheck",
+			"node --version",
+			"git status --short",
+			"uname -a",
+			"go test ./...",
+			"cat a.ts && npm install",
+			"grep TODO src | python3 -c 'print(1)'",
+			"find src -type f | sort",
+			"find . -name '*.log' -delete",
+			"for f in a.ts b.ts; do cat -n \"$f\"; done",
+			"cat $(git ls-files)",
+			"echo hi",
+			// A read or list naming no file or folder has nothing to name the row by.
+			"ls -la",
+			"ls",
+			"tree -L 2",
+			"cd src && ls",
+			"curl -s https://example.com > page.html",
+		]) {
+			expect(isFileStepCommand(command), command).toBe(false);
+		}
+	});
+});
+
+describe("unwrapShellCommand", () => {
+	it("drops a login-shell wrapper around one whole script", () => {
+		expect(unwrapShellCommand("/bin/zsh -lc 'npm run typecheck'")).toBe("npm run typecheck");
+		expect(unwrapShellCommand('bash -c "echo \\"hi\\""')).toBe('echo "hi"');
+		expect(unwrapShellCommand("bash -lc 'echo '\\''x'\\'''")).toBe("echo 'x'");
+	});
+
+	it("keeps a wrapper it cannot read whole", () => {
+		expect(unwrapShellCommand("bash -lc 'a' && b")).toBe("bash -lc 'a' && b");
+		expect(unwrapShellCommand("npm test")).toBe("npm test");
+	});
+});
+
+describe("ranCommand", () => {
+	it("gives the command as it ran, unescaping the wrapper's quoting from the original", () => {
+		// The backend drops the wrapper but keeps the quoting inside it in `command`.
+		const script = "echo 'hi'";
+		const quoted = script.replace(/'/g, "'\\''");
+		expect(ranCommand({ command: quoted, rawCommand: `/bin/zsh -lc '${quoted}'` })).toBe(script);
+		expect(ranCommand({ command: "npm test" })).toBe("npm test");
+		expect(ranCommand({ command: "npm test", rawCommand: "npm test" })).toBe("npm test");
+		expect(ranCommand({})).toBeUndefined();
 	});
 });

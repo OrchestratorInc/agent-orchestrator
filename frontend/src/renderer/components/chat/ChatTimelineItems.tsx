@@ -13,10 +13,11 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 
 import { stagedAttachmentParts, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
+import { ToolImageThumbs } from "./ToolImageThumbs";
 import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
+import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
@@ -25,6 +26,9 @@ import { recordedModelName } from "../../lib/agent-model-choices";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import { useChatArtifactFiles, useChatSessionId } from "./chat-image-source";
 import { ArtifactThumbnail } from "../ArtifactThumbnail";
+import { ArtifactHoverPreview, artifactTypeLabel } from "../ArtifactHoverPreview";
+import { HoverCard, HoverCardTrigger } from "../ui/hover-card";
+import { useOpenArtifacts } from "./open-artifacts";
 import { splitTurnArtifacts, type TurnArtifact } from "../../lib/turn-artifacts";
 import type { ArtifactRow } from "../../lib/artifacts";
 import { useChatEntrance, useRequestedEntrance } from "./chat-entrance";
@@ -33,6 +37,8 @@ import { fetchActivityOutput } from "../../hooks/useConversation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
+	ToolBoxJson,
+	ToolBoxText,
 	Bot,
 	ArrowRight,
 	ArrowRightLeft,
@@ -79,6 +85,7 @@ import {
 	ShieldQuestion,
 	ShieldX,
 	SquareTerminal,
+	ToolQuestion,
 	Trash2,
 	Undo2,
 	User,
@@ -135,10 +142,14 @@ import { readArtifactRef, readRenderRef } from "../../lib/render-frame";
 import { aoToolView, mcpToolArguments, mcpToolName, type AOToolView } from "../../lib/mcp-tool";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { useComposerTokenRenderer } from "./sentComposerTokens";
-import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText, UserMarkdown } from "./ChatMarkdown";
+import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, UserMarkdown } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
+import { CHAT_BOX_CLASS, ChatBoxHeader, FileDiffCard, FileReadCard, fileCardPath, readFileLines } from "./ChatFileCard";
+import { ChatFileIcon } from "./ChatFileIcon";
+import { LinkSiteChipContent, MESSAGE_LINKS_MIN, MessageLinksButton, MessageLinksList, messageWebLinks } from "./MessageLinks";
+import { PULL_REQUEST_CHIP_CLASS } from "./PullRequestLink";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
@@ -153,7 +164,7 @@ import {
 	commandBinaryLabel,
 	isNonzeroCommandExit,
 } from "./activity-command";
-import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFailure, type CommandStep, type StepIcon } from "./activity-step";
+import { activityCommandStep, activityToolStep, fileBasename, pastTenseHoldsOnFailure, ranCommand, type CommandStep, type StepIcon } from "./activity-step";
 import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -843,24 +854,31 @@ export function useFreshFailureReport(state: string | undefined, failedAt: strin
 }
 
 function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
+	// Icon-only like copy and roll back beside it; the tooltip names it the same way.
+	const tip = retry.pending ? "Retrying…" : retry.disabled ? "Wait for the current turn to finish" : "Retry this turn";
 	return (
-		<Button
-			type="button"
-			variant="quiet"
-			size="sm"
-			onClick={retry.onRetry}
-			disabled={retry.pending || retry.disabled}
-			aria-label="Retry this turn"
-			data-telemetry-id="chat.retry"
-			title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
-			data-testid="retry-turn"
-		>
-			<RotateCw
-				aria-hidden="true"
-				className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
-			/>
-			{retry.pending ? "Retrying…" : "Retry"}
-		</Button>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					type="button"
+					variant="quiet"
+					size="icon-sm"
+					onClick={retry.onRetry}
+					disabled={retry.pending || retry.disabled}
+					aria-label="Retry this turn"
+					aria-busy={retry.pending || undefined}
+					data-telemetry-id="chat.retry"
+					data-testid="retry-turn"
+				>
+					<RotateCw
+						aria-hidden="true"
+						className={cn("size-3.5", retry.pending && "animate-spin motion-reduce:animate-none")}
+					/>
+					{retry.pending ? <span className="sr-only">Retrying…</span> : null}
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{tip}</TooltipContent>
+		</Tooltip>
 	);
 }
 
@@ -878,8 +896,9 @@ interface TurnActionsProps {
 }
 
 /**
- * The row a turn closes on: retry, copy, roll back, then the time on hover. How
- * long the turn ran heads it instead, in "Worked for".
+ * The row a turn closes on: retry, copy, roll back, fork, the "N links" button when
+ * the answer cites two or more web pages (its list opens under the row), then the
+ * time on hover. How long the turn ran heads it instead, in "Worked for".
  *
  * Every ending shares it — a finished answer, a tool-only turn, a stopped or failed
  * one — so the controls are always in the same place. The negative margin is on the
@@ -894,8 +913,11 @@ export function TurnActions({
 	timestamp,
 	className,
 }: TurnActionsProps & { className?: string }) {
+	const links = useMemo(() => (copyText ? messageWebLinks(copyText) : []), [copyText]);
+	const [linksOpen, setLinksOpen] = useState(false);
 	if (!retry && copyText === undefined && !onRollback) return null;
 	const time = timestamp ? formatMessageTimestamp(timestamp) : "";
+	const showLinks = links.length >= MESSAGE_LINKS_MIN;
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
 			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
@@ -927,6 +949,7 @@ export function TurnActions({
 					</Tooltip>
 				) : null}
 				<TurnForkButton />
+				{showLinks ? <MessageLinksButton links={links} open={linksOpen} onToggle={() => setLinksOpen((open) => !open)} /> : null}
 				{time ? (
 					<span
 						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
@@ -936,6 +959,7 @@ export function TurnActions({
 					</span>
 				) : null}
 			</div>
+			{showLinks && linksOpen ? <MessageLinksList links={links} /> : null}
 			{retry?.error ? (
 				<p role="alert" className="text-pretty text-xs leading-snug text-destructive">
 					{retry.error}
@@ -1908,13 +1932,13 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
 				aria-label={descriptor?.ariaLabel ?? label}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
 			>
-				<Bot aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
-				<span className="activity-row-label shrink-0 text-xs font-normal text-muted-foreground">{label}</span>
+				<Bot aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
+				<span className="activity-row-label min-w-0 truncate text-control font-normal text-muted-foreground">{label}</span>
 				{descriptor?.state === "failed" ? (
 					<span className="text-xs text-destructive">{t("chat.action.status.failed")}</span>
 				) : null}
 				{descriptor?.state === "cancelled" ? (
-					<span className="text-xs text-muted-foreground/70">{t("chat.action.status.cancelled")}</span>
+					<span className="activity-row-target shrink-0 text-xs text-muted-foreground/70">{t("chat.action.status.cancelled")}</span>
 				) : null}
 				{descriptor?.state === "running" ? (
 					<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60" />
@@ -1938,12 +1962,14 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
-							{lines.map((line, index) => <span key={index}>{line}</span>)}
-							{href && descriptor?.linkLabelKey ? (
-								<SessionLabelLink href={href}>{t(descriptor.linkLabelKey)}</SessionLabelLink>
-							) : null}
-						</div>
+						<ActivityStepBody text>
+							<div className="flex flex-col items-start gap-1 pb-1.5 text-xs text-muted-foreground">
+								{lines.map((line, index) => <span key={index}>{line}</span>)}
+								{href && descriptor?.linkLabelKey ? (
+									<SessionLabelLink href={href}>{t(descriptor.linkLabelKey)}</SessionLabelLink>
+								) : null}
+							</div>
+						</ActivityStepBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -1957,6 +1983,49 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
  * A `running` activity with no completion is a real terminal state here, not a
  * spinner that hangs forever — a provider can start a command and supersede it.
  */
+/** True under a thread: an opened step's details hang under its row instead of drawing a line of their own. */
+const InsideActivityRail = createContext(false);
+
+/**
+ * The thread a row's children hang from: a run's steps, or an edit's files. The line
+ * drops from the row's icon and curves into each child, ending at the last one
+ * (`.activity-thread` in styles.css). One rule for every level, so nesting reads the same.
+ */
+export function ActivityRail({ children, className }: { children: ReactNode; className?: string }) {
+	return (
+		<InsideActivityRail.Provider value={true}>
+			<div data-activity-rail="" className={cn("activity-thread", className)}>
+				{children}
+			</div>
+		</InsideActivityRail.Provider>
+	);
+}
+
+/**
+ * An opened step's details. Inside a thread nothing is drawn beside them: a box (output,
+ * a diff) starts under the step's icon, and plain text lines up with the step's label.
+ * A step on its own keeps a straight line under its icon.
+ */
+function ActivityStepBody({ children, list = false, text = false, className }: {
+	children: ReactNode;
+	/** A list of its own (an edit's files): it hangs on a thread of its own. */
+	list?: boolean;
+	/** Plain text rather than a box: it lines up with the step's label. */
+	text?: boolean;
+	className?: string;
+}) {
+	const insideRail = useContext(InsideActivityRail);
+	if (list) return <ActivityRail>{children}</ActivityRail>;
+	if (insideRail) return <div className={cn(text && "pl-[22px]", className)}>{children}</div>;
+	return (
+		<InsideActivityRail.Provider value={true}>
+			<div data-activity-rail="" className="activity-step-line">
+				{children}
+			</div>
+		</InsideActivityRail.Provider>
+	);
+}
+
 function GenericActivityRow({
 	activity,
 	repeats = [],
@@ -1985,9 +2054,11 @@ function GenericActivityRow({
 	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
 	const files = fileChangeFiles(activity);
-	const hasBody = genericActivityHasBody(activity);
-	const { label, path, pathTitle, icon: stepIconName } = splitSummary(activity);
-	const StepMark = stepIcon[stepIconName ?? "run"];
+	const { label, path, pathTitle, icon: stepIconName, command: commandTitle } = splitSummary(activity);
+	const commandTitled = Boolean(commandTitle);
+	const hasBody = genericActivityHasBody(activity, commandTitled);
+	// A command that is not a file step reads as itself, with the terminal mark.
+	const StepMark = stepIcon[commandTitle ? "run" : stepIconName ?? "run"];
 	// Commands and file edits share the explore-style summary line: a small mark for
 	// what the step did, muted label, always-visible chevron. Everything else keeps
 	// the denser bordered activity row.
@@ -2015,10 +2086,15 @@ function GenericActivityRow({
 						: "group/activity border-t border-border first:border-t-0",
 			)}
 		>
+			{/* A row titled with its command keeps copy beside the command: a button
+			    cannot hold another, so the row is its button, then copy, then the
+			    chevron and the rest of the line, which toggle it too. */}
+			<div className={commandTitle ? "group/cmdrow flex min-w-0 items-center" : "contents"}>
 			<Pressable
 				onClick={() => toggle(!open)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
+				data-thread-parent={open && files.length > 1 ? "" : undefined}
 				className={cn(
 					compactSummary
 						? ACTIVITY_SUMMARY_BUTTON_CLASS
@@ -2026,12 +2102,13 @@ function GenericActivityRow({
 							? "flex min-h-7 w-full min-w-0 select-none items-center gap-2 py-1 text-left text-xs"
 							: "flex min-h-[35px] w-full min-w-0 select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
 					"activity-row-toggle",
+					commandTitle && "w-auto min-w-0 flex-initial",
 					hasBody && !compactSummary && "hover:text-foreground",
 					!hasBody && "cursor-default",
 				)}
 			>
 				{compactSummary ? (
-					<StepMark aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
+					<StepMark aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
 				) : (
 					<Icon
 						aria-hidden="true"
@@ -2042,41 +2119,51 @@ function GenericActivityRow({
 						size={14}
 					/>
 				)}
+				{/* A compact row's label and its state ("exit 1", "failed") share a baseline:
+				    they are different sizes, and centring each sets the smaller one high. */}
+				<span className={compactSummary ? "flex min-w-0 items-baseline gap-2" : "contents"}>
 				{singleEdit ? (
-					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
-						<span className="shrink-0 text-muted-foreground">
+					<span className="flex min-w-0 items-center gap-1 text-control font-normal">
+						<span className="activity-row-label shrink-0 text-muted-foreground">
 							{stepTense(activity) === "live"
 								? liveFileChangeVerb(singleEdit.status ?? "modified")
 								: fileChangeVerb(singleEdit.status ?? "modified")}
 						</span>
-						<FileLocationLabel path={singleEdit.path} oldPath={singleEdit.oldPath} />
+						<FileLocationLabel path={singleEdit.path} oldPath={singleEdit.oldPath} chip />
 						{singleEdit.additions > 0 ? (
-							<span className="shrink-0 font-mono text-micro tabular-nums text-success">
+							<span className="shrink-0 font-mono text-xs tabular-nums text-success">
 								+{singleEdit.additions}
 						</span>
 						) : null}
 						{singleEdit.deletions > 0 ? (
-							<span className="shrink-0 font-mono text-micro tabular-nums text-destructive">
+							<span className="shrink-0 font-mono text-xs tabular-nums text-destructive">
 								&minus;{singleEdit.deletions}
 							</span>
 						) : null}
+					</span>
+				) : compactSummary && commandTitle ? (
+					<span
+						data-command-title=""
+						className="activity-row-label min-w-0 truncate font-mono text-xs text-muted-foreground"
+					>
+						{commandTitle}
 					</span>
 				) : compactSummary && path ? (
 					// Verb and target sit as close together as a file edit's verb and name.
 					// The space is not drawn in the flex row, but it keeps the accessible
 					// name "Read README.md" rather than "ReadREADME.md".
-					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
-						<strong className="activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground">
+					<span className="flex min-w-0 items-center gap-1 text-control font-normal">
+						<strong className="activity-row-label shrink-0 text-control font-normal text-muted-foreground group-hover/activity:text-foreground">
 							<ActivityTitle text={label} />
 						</strong>
 						{" "}
-						<StepTarget text={path} title={pathTitle} />
+						<StepTarget text={path} file={stepTargetFile(stepIconName, path, pathTitle)} />
 					</span>
 				) : (
 					<strong
 						className={cn(
 							compactSummary
-								? "activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground"
+								? "activity-row-label shrink-0 text-control font-normal text-muted-foreground group-hover/activity:text-foreground"
 								: "min-w-0 truncate font-medium",
 							!compactSummary &&
 								(activity.status === "failed"
@@ -2085,19 +2172,17 @@ function GenericActivityRow({
 										? "font-normal text-muted-foreground"
 										: "text-foreground"),
 						)}
-						title={compactSummary ? undefined : noticeLabel ?? label}
 					>
 						<ActivityTitle text={noticeLabel ?? label} />
 					</strong>
 				)}
 				{noticeDetail ? (
-					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70" title={noticeDetail}>
+					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70">
 						{noticeDetail}
 					</span>
 				) : path && !singleEdit && !compactSummary ? (
 					<span
 						className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground group-hover/activity:text-foreground"
-						title={path}
 					>
 						{path}
 					</span>
@@ -2111,7 +2196,8 @@ function GenericActivityRow({
 					inlineFileStats={Boolean(singleEdit)}
 					showDisclosure={!compactSummary}
 				/>
-				{compactSummary && hasBody ? (
+				</span>
+				{compactSummary && hasBody && !commandTitle ? (
 					<ChevronRight
 						aria-hidden="true"
 						className={cn(
@@ -2121,6 +2207,29 @@ function GenericActivityRow({
 					/>
 				) : null}
 			</Pressable>
+			{commandTitle ? (
+				<>
+					<CommandCopyReveal text={commandTitle} scope="row" />
+					<Pressable
+						tabIndex={-1}
+						aria-hidden="true"
+						onClick={() => toggle(!open)}
+						disabled={!hasBody}
+						className={cn("flex min-h-7 flex-1 items-center self-stretch pl-2", !hasBody && "cursor-default")}
+					>
+						{hasBody ? (
+							<ChevronRight
+								aria-hidden="true"
+								className={cn(
+									"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/cmdrow:text-muted-foreground",
+									open && "rotate-90",
+								)}
+							/>
+						) : null}
+					</Pressable>
+				</>
+			) : null}
+			</div>
 
 			<AnimatePresence initial={false}>
 				{open && hasBody ? (
@@ -2131,21 +2240,22 @@ function GenericActivityRow({
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						{repeats.length > 0 ? (
-							<div className="flex flex-col gap-1">
-								{/* The row itself is the last call's target; each earlier call's
-								    output is its own, so a reveal finds and marks that call. */}
-								{repeats.map((each) => (
-									<div key={each.id} className="min-w-0" data-chat-activity-id={each.id}>
-										<GenericActivityBody activity={each} />
-									</div>
-								))}
-								<GenericActivityBody activity={activity} />
-
-							</div>
-						) : (
-							<GenericActivityBody activity={activity} />
-						)}
+						<ActivityStepBody list={files.length > 1}>
+							{repeats.length > 0 ? (
+								<div className="flex flex-col gap-1">
+									{/* The row itself is the last call's target; each earlier call's
+									    output is its own, so a reveal finds and marks that call. */}
+									{repeats.map((each) => (
+										<div key={each.id} className="min-w-0" data-chat-activity-id={each.id}>
+											<GenericActivityBody activity={each} commandTitled={commandTitled} />
+										</div>
+									))}
+									<GenericActivityBody activity={activity} commandTitled={commandTitled} />
+								</div>
+							) : (
+								<GenericActivityBody activity={activity} commandTitled={commandTitled} />
+							)}
+						</ActivityStepBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -2158,12 +2268,18 @@ function GenericActivityRow({
  * with no patch has nothing: the header already named the file. Multi-file edits
  * open onto a list, and a lone patch onto the diff itself.
  */
-function genericActivityHasBody(activity: ConversationActivity): boolean {
+function genericActivityHasBody(activity: ConversationActivity, commandTitled = false): boolean {
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const isFileChange = activity.activityKind === "file_change";
 	const hasFileBody =
 		files.length > 1 || (files.length === 1 && Boolean(fileChangePatch(files[0])));
+	// A row titled with its command has said it already; it opens only onto more.
+	if (commandTitled) {
+		const command = detail?.command?.trim();
+		const reason = (detail?.reason ?? detail?.text)?.trim();
+		return Boolean(detail?.output || detail?.terminalInput || (reason && reason !== command));
+	}
 	return Boolean(
 		detail?.command ||
 		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
@@ -2171,7 +2287,11 @@ function genericActivityHasBody(activity: ConversationActivity): boolean {
 }
 
 /** What a step's row opens onto: the command and its output, a patch, or a file list. */
-function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
+function GenericActivityBody({ activity, commandTitled = false }: {
+	activity: ConversationActivity;
+	/** The row above already shows the command, so the body leaves its `$` line out. */
+	commandTitled?: boolean;
+}) {
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const isFileChange = activity.activityKind === "file_change";
@@ -2179,28 +2299,34 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 		activity.activityKind === "command" &&
 		(detail?.command || detail?.output || detail?.terminalInput)
 	) {
-		return <CommandExploreBody activity={activity} />;
+		const read = commandFileRead(activity);
+		if (read) return <FileReadCard path={read.path} label={read.label} file={read.file} />;
+		return <CommandExploreBody activity={activity} showCommand={!commandTitled} />;
+	}
+	// Several files: their own list, hung on the row's rail by the caller.
+	if (files.length > 1) return <FileChangeList files={files} cwd={detail?.cwd} />;
+	// One file: open straight onto its card, which names the file. Listing the same
+	// name again under "Edited name" is noise.
+	if (isFileChange && files.length === 1 && fileChangePatch(files[0])) {
+		return <FileChangePatchCard file={files[0]!} hints={{ cwd: detail?.cwd, summary: activity.summary }} />;
 	}
 	return (
 		<div className="flex flex-col gap-1.5 px-1 pb-1 pt-0.5">
-			{/* One file: open straight onto its patch. Listing the same
-			    basename again under "Edited name" is noise. */}
-			{files.length === 1 && fileChangePatch(files[0]) ? (
-				<Patch patch={fileChangePatch(files[0])!} truncated={files[0].patchTruncated} />
-			) : null}
-			{files.length > 1 ? <FileChangeList files={files} /> : null}
 			{!isFileChange && detail?.command ? (
 				// Said explicitly rather than implied by the label: "Ran command"
 				// alone never tells the reader what ran, and the collapsed row
 				// deliberately keeps only the category.
-				<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
-					{detail.command}
-				</pre>
+				<div className={cn(CHAT_BOX_CLASS, "my-0")}>
+					<ChatBoxHeader label="Command" copyText={ranCommand(detail) ?? detail.command} copyLabel="Copy command" />
+					<pre data-no-swipe-nav="" className="scrollbar-none m-0 overflow-x-auto px-3 pt-1 pb-3 font-mono text-xs leading-normal text-foreground">
+						{ranCommand(detail) ?? detail.command}
+					</pre>
+				</div>
 			) : null}
 			{!isFileChange && (detail?.reason || detail?.text) ? (
-				<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
-					{detail.reason ?? detail.text}
-				</p>
+				<div className="px-1" style={{ "--chat-readable-font-size": "var(--text-caption)" } as CSSProperties}>
+					<ChatMarkdown text={detail.reason ?? detail.text ?? ""} muted className="text-caption leading-relaxed" />
+				</div>
 			) : null}
 			{!isFileChange && detail?.terminalInput ? (
 				<TerminalInput
@@ -2211,6 +2337,68 @@ function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
 			{!isFileChange && detail?.output ? <CommandOutput activity={activity} /> : null}
 		</div>
 	);
+}
+
+type FileRead = { path: string; label: string; file: NonNullable<ReturnType<typeof readFileLines>> };
+
+/**
+ * A finished command that printed one file and nothing else (`cat`, `cat -n`, `nl`,
+ * `head`, `sed -n 'A,Bp'`), as that file. Anything with a pipe, a redirect, a
+ * second command or a cut output keeps the command card: its output is not the file.
+ */
+function commandFileRead(activity: ConversationActivity): FileRead | undefined {
+	const detail = activity.detail;
+	if (activity.status !== "completed" || typeof detail?.output !== "string") return undefined;
+	// Only an exit the harness reported as clean: one that reports none may have
+	// failed, and its error message must not read as the file.
+	if (detail.exitCode !== 0 || detail.outputTruncated || detail.outputBytes !== undefined || detail.terminalInput) return undefined;
+	const command = ranCommand(detail);
+	if (!command) return undefined;
+	if (/[|;&<>$`\n]/.test(command)) return undefined;
+	const words = command.split(/\s+/).map((word) => word.replace(/^(['"])(.*)\1$/, "$2"));
+	const [binary, ...args] = words;
+	const file = args.at(-1);
+	// A quoted name with a space in it split above; it is not this word.
+	if (!file || file.startsWith("-") || /['"]/.test(file)) return undefined;
+	const flags = args.slice(0, -1).join(" ");
+	let start: number | undefined;
+	if (binary === "cat" && (flags === "" || flags === "-n")) start = 1;
+	// nl numbers its own lines, which readFileLines takes as given.
+	else if (binary === "nl" && /^(?:|-ba|-b a)$/.test(flags)) start = undefined;
+	else if (binary === "head" && /^(?:|-\d+|-n ?\d+)$/.test(flags)) start = 1;
+	else if (binary === "sed") {
+		const range = /^-n (\d+)(?:,\d+)?p$/.exec(flags);
+		if (!range) return undefined;
+		start = Number(range[1]);
+	} else return undefined;
+	const lines = readFileLines(detail.output, start);
+	if (!lines) return undefined;
+	return { path: file, label: fileCardPath(file, { cwd: detail.cwd }), file: lines };
+}
+
+/** Claude Code's Read tool, finished: the lines it returned, as the file. */
+function toolFileRead(activity: ConversationActivity): FileRead | undefined {
+	const detail = activity.detail;
+	if (activity.status !== "completed" || !detail || detail.error || detail.success === false) return undefined;
+	const claudeRead = detail.providerToolName === "Read";
+	// Another ACP agent names no tool; its read says so by kind.
+	const agentRead = !detail.providerToolName && detail.toolKind === "read";
+	if (!claudeRead && !agentRead) return undefined;
+	const input = detail.input && typeof detail.input === "object" ? (detail.input as Record<string, unknown>) : {};
+	const locations = (detail as { locations?: unknown }).locations;
+	const located = Array.isArray(locations) ? (locations[0] as { path?: unknown } | undefined)?.path : undefined;
+	const path = [input.file_path, input.path, input.filePath, input.absolute_path, input.absolutePath, located].find((value): value is string => typeof value === "string" && value !== "");
+	if (!path) return undefined;
+	// An image read keeps its card: there is no text to show.
+	if (Array.isArray(detail.content) && JSON.stringify(detail.content).includes('"type":"image"')) return undefined;
+	let raw = typeof detail.output === "string" && detail.output ? detail.output : normalizeToolCode(toolContentText(detail.content));
+	// OpenCode wraps a read in <file>…</file> with a closing note after it.
+	if (agentRead) raw = raw.replace(/^<file>\n/, "").replace(/\n?<\/file>[\s\S]*$/, "");
+	const lines = readFileLines(raw);
+	if (!lines) return undefined;
+	// Claude's Read numbers every line it returns; anything else from it (a notice) keeps its card.
+	if (claudeRead && lines.lines.every((line) => line.no === undefined)) return undefined;
+	return { path, label: fileCardPath(path, { cwd: detail.cwd, summary: activity.summary }), file: lines };
 }
 
 /**
@@ -2240,61 +2428,79 @@ const LiveStepDetail = memo(function LiveStepDetail({ activity }: { activity: Co
 });
 
 /**
- * Expanded command / explore body: one soft chat-surface card with the shell
- * line nested in its own chip, then muted monospace output underneath — the
- * same anatomy as the Cursor explore block, restated in AO chat tokens.
+ * Expanded command body: the command as one `$` line with its own copy button,
+ * then what it printed in a "Shell" card that copies its output. A long or
+ * multi-line command stays one line and ends in an ellipsis; its title holds the
+ * whole of it.
  */
-function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
+function CommandExploreBody({ activity, showCommand = true }: { activity: ConversationActivity; showCommand?: boolean }) {
 	const detail = activity.detail;
-	const command = detail?.command?.trim();
+	const command = ranCommand(detail);
 	const reason = (detail?.reason ?? detail?.text)?.trim();
 	const binary = command ? commandBinaryLabel(command) : undefined;
 	const showPrompt = Boolean(reason && reason !== command);
+	const hasShell = Boolean(detail?.output || detail?.terminalInput);
+	const outputText = () => stripAnsi(commandOutputText(detail?.output as unknown));
 
 	return (
-		<div className="cursor-chat-explore-box mt-1 flex min-w-0 flex-col overflow-hidden rounded-lg border">
+		<div className="mt-1 flex min-w-0 flex-col gap-1.5">
 			{showPrompt ? (
-				<div className="flex min-w-0 items-start gap-2 border-b border-border/60 px-3 py-2">
-					<span
-						aria-hidden="true"
-						className="shrink-0 select-none pt-px font-mono text-caption leading-relaxed text-muted-foreground/70"
-					>
-						&gt;_
-					</span>
-					<div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-						<span className="min-w-0 break-words text-xs leading-relaxed text-foreground/90">
-							{reason}
-						</span>
-						{binary ? (
-							<span className="shrink-0 font-mono text-caption text-muted-foreground/55">
-								{binary}
-							</span>
-						) : null}
-					</div>
+				<p className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs leading-relaxed text-foreground/90">
+					<span className="min-w-0 break-words">{reason}</span>
+					{binary ? <span className="shrink-0 font-mono text-caption text-muted-foreground/55">{binary}</span> : null}
+				</p>
+			) : null}
+
+			{command && showCommand ? (
+				<div data-command-line="" className="group/cmdline flex min-w-0 items-center">
+					<pre data-no-swipe-nav="" className="min-w-0 truncate font-mono text-xs leading-normal text-muted-foreground">
+						<span aria-hidden="true" className="select-none text-passive">$ </span>
+						{command}
+					</pre>
+					<CommandCopyReveal text={command} scope="line" />
 				</div>
 			) : null}
 
-			{command ? (
-				<pre data-no-swipe-nav=""
-					className={cn(
-						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
-						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
-					)}
-				>
-					{command}
-				</pre>
-			) : null}
-
-			{detail?.terminalInput ? (
-				<div className={cn("px-3 py-2", detail?.output && "border-b border-border/60")}>
-					<TerminalInput
-						text={detail.terminalInput}
-						truncated={detail.terminalInputTruncated}
+			{hasShell ? (
+				<div data-command-shell="" className={cn(CHAT_BOX_CLASS, "my-0")}>
+					<ChatBoxHeader
+						label="Shell"
+						copyText={detail?.output ? outputText : undefined}
+						copyLabel="Copy output"
 					/>
+					{detail?.terminalInput ? (
+						<div className={cn("px-3 py-2", detail?.output && "pb-0")}>
+							<TerminalInput
+								text={detail.terminalInput}
+								truncated={detail.terminalInputTruncated}
+							/>
+						</div>
+					) : null}
+					{detail?.output ? <CommandOutput activity={activity} embedded /> : null}
 				</div>
 			) : null}
-			{detail?.output ? <CommandOutput activity={activity} embedded /> : null}
 		</div>
+	);
+}
+
+/**
+ * A command's copy button, shown while its row or line is hovered, or while it has
+ * keyboard focus. It sits where the command ends: beside a short command, and over
+ * the end of a long one, which gives up that much of its line.
+ */
+function CommandCopyReveal({ text, scope }: { text: string; scope: "row" | "line" }) {
+	return (
+		<span
+			data-command-copy=""
+			className={cn(
+				"flex w-0 shrink-0 justify-end overflow-hidden opacity-0 transition-[width,opacity] duration-150 focus-within:w-7 focus-within:opacity-100 motion-reduce:transition-none",
+				scope === "row"
+					? "group-hover/cmdrow:w-7 group-hover/cmdrow:opacity-100"
+					: "group-hover/cmdline:w-7 group-hover/cmdline:opacity-100",
+			)}
+		>
+			<CopyButton compact size="icon-xs" text={text} label="Copy command" className="shrink-0 [&_svg]:size-3" />
+		</span>
 	);
 }
 
@@ -2315,13 +2521,12 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 	const shown = useMemo(() => caretNotation(text), [text]);
 	return (
 		<div className="flex flex-col gap-1">
-			<span className="flex items-center gap-1.5 text-caption text-muted-foreground/70">
-				<Keyboard aria-hidden="true" className="size-3" />
-				Agent typed
-			</span>
-			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
-				{shown}
-			</pre>
+			<div className={cn(CHAT_BOX_CLASS, "my-0")}>
+				<ChatBoxHeader icon={<Keyboard aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />} label="Agent typed" />
+				<pre data-no-swipe-nav="" className="scrollbar-none m-0 overflow-x-auto px-3 pt-1 pb-3 font-mono text-xs leading-normal text-accent">
+					{shown}
+				</pre>
+			</div>
 			{truncated ? (
 				<p className="text-micro text-muted-foreground/70">
 					Orchestrator stopped recording keystrokes at its cap; more were sent.
@@ -2403,10 +2608,10 @@ function CommandOutput({
 				ref={pre}
 				aria-live={streaming ? "polite" : undefined}
 				className={cn(
-					"scrollbar-none max-h-64 overflow-auto font-mono leading-relaxed text-muted-foreground",
+					"scrollbar-none max-h-64 overflow-auto font-mono text-xs leading-normal text-muted-foreground",
 					embedded
-						? "cursor-chat-explore-output px-3 py-2 text-caption"
-						: "border border-border bg-background px-2.5 py-2 text-caption",
+						? "cursor-chat-explore-output px-3 pt-1 pb-3"
+						: "rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5",
 				)}
 			>
 				{preview}
@@ -2459,10 +2664,10 @@ function commandOutputText(raw: unknown): string {
  * A step still in progress says it in the present tense ("Reading"). Anything
  * without a natural split keeps its whole label.
  */
-function splitSummary(activity: ConversationActivity): { label: string; path?: string; pathTitle?: string; icon?: StepIcon } {
+function splitSummary(activity: ConversationActivity): { label: string; path?: string; pathTitle?: string; icon?: StepIcon; command?: string } {
 	if (activity.activityKind === "command") {
 		const step = activityCommandStep(activity);
-		return { label: step[stepTense(activity, step)], path: step.target, pathTitle: step.targetTitle ?? step.target, icon: step.icon };
+		return { label: step[stepTense(activity, step)], path: step.target, pathTitle: step.targetTitle ?? step.target, icon: step.icon, command: step.command };
 	}
 	const tense = stepTense(activity);
 	const files = fileChangeFiles(activity);
@@ -2513,7 +2718,7 @@ function ActivityState({
 		const additions = files.reduce((sum, file) => sum + file.additions, 0);
 		const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
 		return (
-			<span className="shrink-0 font-mono text-micro tabular-nums text-muted-foreground/70">
+			<span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/70">
 				<span className="text-success">+{additions}</span>{" "}
 				<span className="text-destructive">&minus;{deletions}</span>
 			</span>
@@ -2523,8 +2728,8 @@ function ActivityState({
 		return (
 			<span
 				className={cn(
-					"shrink-0 font-mono text-micro tabular-nums",
-					isNonzeroCommandExit(activity) ? "text-muted-foreground/70" : "text-destructive",
+					"shrink-0 font-mono text-xs tabular-nums",
+					isNonzeroCommandExit(activity) ? "activity-row-target text-muted-foreground/70" : "text-destructive",
 				)}
 			>
 				{detail?.exitCode !== undefined ? `exit ${detail.exitCode}` : "failed"}
@@ -2533,14 +2738,14 @@ function ActivityState({
 	}
 	if (status === "recovered") {
 		return (
-			<span className="shrink-0 font-mono text-micro text-muted-foreground/70">
+			<span className="activity-row-target shrink-0 font-mono text-xs text-muted-foreground/70">
 				outcome unknown
 			</span>
 		);
 	}
 	if (status === "cancelled") {
 		return (
-			<span className="shrink-0 font-mono text-micro text-muted-foreground/70">
+			<span className="activity-row-target shrink-0 font-mono text-xs text-muted-foreground/70">
 				stopped
 			</span>
 		);
@@ -2569,18 +2774,18 @@ function ActivityState({
  * expanded edit reads the same as the turn-level changed-files list. Hovering the
  * basename shows the full location; a file that carries a patch can still open it.
  */
-export function FileChangeList({ files }: { files: FileChangeFile[] }) {
+export function FileChangeList({ files, cwd }: { files: FileChangeFile[]; cwd?: string }) {
 	if (!files.length) return null;
 	return (
 		<ul className="flex flex-col">
 			{files.map((file) => (
-				<FileChangeRow key={`${file.oldPath ?? ""}→${file.path}`} file={file} />
+				<FileChangeRow key={`${file.oldPath ?? ""}→${file.path}`} file={file} cwd={cwd} />
 			))}
 		</ul>
 	);
 }
 
-function FileChangeRow({ file }: { file: FileChangeFile }) {
+function FileChangeRow({ file, cwd }: { file: FileChangeFile; cwd?: string }) {
 	const [open, setOpen] = useState(false);
 	const status = diffStatusMark[file.status ?? "modified"] ?? diffStatusMark.modified;
 	const hasPatch = Boolean(file.patch);
@@ -2589,14 +2794,14 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 	const line = (
 		<>
 			<span className="sr-only">{status.label}</span>
-			<span className="shrink-0 text-xs text-muted-foreground">
+			<span className="shrink-0 text-control text-muted-foreground">
 				{fileChangeVerb(file.status ?? "modified")}
 			</span>
-			<FileLocationLabel path={file.path} oldPath={file.oldPath} />
-			<span className="shrink-0 font-mono text-micro tabular-nums text-success">
+			<FileLocationLabel path={file.path} oldPath={file.oldPath} chip />
+			<span className="shrink-0 font-mono text-xs tabular-nums text-success">
 				+{file.additions}
 			</span>
-			<span className="shrink-0 font-mono text-micro tabular-nums text-destructive">
+			<span className="shrink-0 font-mono text-xs tabular-nums text-destructive">
 				&minus;{file.deletions}
 			</span>
 		</>
@@ -2606,7 +2811,7 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 	// nothing when pressed is worse than plain text.
 	if (!hasPatch) {
 		return (
-			<li className="flex items-center gap-1.5 py-0.5 pr-1" aria-label={accessibleName}>
+			<li className="flex min-h-7 items-center gap-1.5 py-0.5 pr-1 pl-2.5" aria-label={accessibleName}>
 				{line}
 			</li>
 		);
@@ -2618,7 +2823,7 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 				onClick={() => setOpen((prev) => !prev)}
 				aria-expanded={open}
 				aria-label={accessibleName}
-				className="flex items-center gap-1.5 rounded-sm py-0.5 pr-1 text-left"
+				className="flex min-h-7 items-center gap-1.5 rounded-sm py-0.5 pr-1 pl-2.5 text-left"
 			>
 				{line}
 				<ChevronRight
@@ -2629,7 +2834,12 @@ function FileChangeRow({ file }: { file: FileChangeFile }) {
 					)}
 				/>
 			</Pressable>
-			{open ? <Patch patch={file.patch!} truncated={file.patchTruncated} /> : null}
+			{/* The diff starts where the row's text does, under "Edited". */}
+			{open ? (
+				<ActivityStepBody className="pl-2.5">
+					<FileChangePatchCard file={file} hints={{ cwd }} />
+				</ActivityStepBody>
+			) : null}
 		</li>
 	);
 }
@@ -2659,19 +2869,20 @@ function fileChangePatch(file: FileChangeFile | undefined): string | undefined {
 	].join("\n");
 }
 
-function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
+function FileChangePatchCard({ file, hints }: { file: FileChangeFile; hints: { cwd?: string; summary?: string } }) {
+	const patch = fileChangePatch(file);
+	if (!patch) return null;
 	return (
-		// `chat-code` is what the token colours are scoped to, so a patch without it
-		// tokenizes correctly and renders in one flat colour.
-			<div className="mb-1 mt-0.5 overflow-hidden bg-background">
-			<ToolDiffCode text={patch} />
-			{truncated ? (
-				<p className="border-t border-border px-2.5 py-1.5 text-xs leading-relaxed text-warning">
-					This patch is longer than Orchestrator stores, so it stops early. The whole change is in the
-					worktree and in the turn&rsquo;s diff.
-				</p>
-			) : null}
-		</div>
+		<FileDiffCard
+			path={file.path}
+			oldPath={file.oldPath}
+			label={fileCardPath(file.path, hints)}
+			patch={patch}
+			status={file.status}
+			additions={file.additions}
+			deletions={file.deletions}
+			truncated={file.patchTruncated}
+		/>
 	);
 }
 
@@ -2753,6 +2964,36 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	return <GenericMcpToolRow activity={activity} />;
 }
 
+/** A tool call that asks the user a question: Claude's AskUserQuestion, or any call carrying questions. */
+function isQuestionTool(activity: ConversationActivity): boolean {
+	const detail = activity.detail;
+	if (detail?.providerToolName === "AskUserQuestion") return true;
+	const input = detail?.input;
+	return Boolean(input && typeof input === "object" && Array.isArray((input as { questions?: unknown }).questions));
+}
+
+/** A tool's mark by the kind its harness gives it (ACP's read, edit, execute…); a call with none a wrench. */
+function toolKindMark(kind: string | undefined): typeof SquareTerminal {
+	switch (kind) {
+		case "read":
+			return FileText;
+		case "edit":
+			return FilePen;
+		case "delete":
+			return Trash2;
+		case "move":
+			return ArrowRightLeft;
+		case "search":
+			return Search;
+		case "execute":
+			return SquareTerminal;
+		case "fetch":
+			return Globe;
+		default:
+			return Wrench;
+	}
+}
+
 function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	// A choice made on the live row carries over when the call moves up from there.
 	const stepChoices = useContext(LiveStepChoices);
@@ -2770,7 +3011,9 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 	// An agent's built-in tool (a read, a web search) is named like a command step;
 	// a call to an MCP server keeps its tool and server name.
 	const step = activityToolStep(activity);
-	const StepMark = step ? stepIcon[step.icon] : undefined;
+	// Every tool row has a mark, so none reads as plain text: a built-in step its own,
+	// a question the question mark, and any other call what its kind says it does.
+	const StepMark = step ? stepIcon[step.icon] : isQuestionTool(activity) ? ToolQuestion : toolKindMark(detail?.toolKind);
 	const name = mcpToolName(activity);
 	const tool = step ? step[stepTense(activity, step)] : name.tool;
 	const sourceLabel = step
@@ -2795,54 +3038,59 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 					!hasBody && "cursor-default",
 				)}
 			>
-				{StepMark ? <StepMark aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" /> : null}
+				{StepMark ? <StepMark aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" /> : null}
+				{/* Label and status share a baseline, as in a step row. */}
+				<span className="flex min-w-0 flex-1 items-baseline gap-2">
 				{step?.target ? (
 					// Laid out like a command step: verb, then what it acted on.
-					<span className="flex min-w-0 items-center gap-1 text-xs font-normal">
+					<span className="flex min-w-0 items-center gap-1 text-control font-normal">
 						<strong
 							className={cn(
-								"activity-row-label shrink-0 text-xs font-normal",
+								"activity-row-label shrink-0 text-control font-normal",
 								failed ? "text-destructive" : "text-muted-foreground group-hover/activity:text-foreground",
 							)}
 						>
 							{tool}
 						</strong>
 						{" "}
-						<StepTarget text={step.target} title={step.targetTitle} />
+						<StepTarget text={step.target} file={stepTargetFile(step.icon, step.target, step.targetTitle)} />
 					</span>
 				) : (
 					<strong
 						className={cn(
-							"activity-row-label min-w-0 truncate text-xs font-normal",
+							"activity-row-label min-w-0 truncate text-control font-normal",
 							failed ? "text-destructive" : "text-muted-foreground",
 						)}
-						title={tool}
 					>
 						<span>{tool}</span>
 					</strong>
 				)}
 				{sourceLabel ? (
-					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground group-hover/activity:text-foreground">
+					<span className="activity-row-target min-w-0 flex-1 truncate text-control text-muted-foreground">
 						{sourceLabel}
 					</span>
 				) : null}
 				{activity.status === "running" ? (
 					<Loader2
 						aria-label="running"
-						className="size-3 shrink-0 animate-spin text-muted-foreground/60"
+						className="size-3 shrink-0 animate-spin self-center text-muted-foreground/60"
 					/>
 				) : failed ? (
 					<span className="shrink-0 text-xs text-destructive">failed</span>
 				) : activity.status === "recovered" ? (
-					<span className="shrink-0 text-xs text-muted-foreground/70">outcome unknown</span>
+					<span className="activity-row-target shrink-0 text-xs text-muted-foreground/70">outcome unknown</span>
 				) : activity.status === "cancelled" ? (
-					<span className="shrink-0 text-xs text-muted-foreground/70">stopped</span>
-				) : hasBody ? (
+					<span className="activity-row-target shrink-0 text-xs text-muted-foreground/70">stopped</span>
+				) : null}
+				{/* Anything that opens shows it, whatever its state says. */}
+				{hasBody ? (
 					<ChevronRight
 						aria-hidden="true"
-						className={cn("size-3 shrink-0 text-muted-foreground/40 transition-transform", open && "rotate-90")}
+						className={cn("size-3 shrink-0 self-center text-muted-foreground/40 transition-transform group-hover/run:text-muted-foreground", open && "rotate-90")}
 					/>
 				) : null}
+				<ToolImageThumbs activities={[activity]} className="self-center" />
+				</span>
 			</Pressable>
 
 			<AnimatePresence initial={false}>
@@ -2854,13 +3102,16 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						<McpToolBody activity={activity} />
+						<ActivityStepBody>
+							<McpToolBody activity={activity} />
+						</ActivityStepBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
 		</div>
 	);
 }
+
 
 function mcpToolHasBody(activity: ConversationActivity): boolean {
 	const detail = activity.detail;
@@ -2877,6 +3128,14 @@ function mcpToolHasBody(activity: ConversationActivity): boolean {
 function McpToolBody({ activity }: { activity: ConversationActivity }) {
 	const detail = activity.detail;
 	const args = mcpToolArguments(activity);
+	const read = toolFileRead(activity);
+	if (read) {
+		return (
+			<div className="pb-1.5">
+				<FileReadCard path={read.path} label={read.label} file={read.file} />
+			</div>
+		);
+	}
 	return (
 		<div className="flex flex-col gap-2 pb-2.5">
 			{detail?.error ? (
@@ -2890,11 +3149,12 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
 			) : null}
 			{present(detail?.content) ? <ToolContent value={detail?.content} /> : null}
 			{detail?.progress ? (
-				<div className="flex flex-col gap-1">
-					<span className="text-caption text-muted-foreground/70">
-						Progress
-					</span>
-					<pre className="scrollbar-none max-h-40 overflow-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-muted-foreground">
+				<div data-tool-box="progress" className={cn(CHAT_BOX_CLASS, "my-0")}>
+					<ChatBoxHeader
+						icon={<ToolBoxText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+						label="Progress"
+					/>
+					<pre className="scrollbar-none max-h-40 overflow-auto px-3 pt-1 pb-3 font-mono text-xs leading-normal text-muted-foreground">
 						{detail.progress}
 					</pre>
 				</div>
@@ -2922,12 +3182,12 @@ function AOToolRow({ view }: { view: AOToolView }) {
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
 			>
+				<Bot aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
 				<strong
 					className={cn(
-						"activity-row-label min-w-0 truncate text-xs font-normal",
+						"activity-row-label min-w-0 truncate text-control font-normal",
 						failed ? "text-destructive" : "text-muted-foreground",
 					)}
-					title={view.label}
 				>
 					<span>{view.label}</span>
 				</strong>
@@ -2953,7 +3213,8 @@ function AOToolRow({ view }: { view: AOToolView }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 pb-2.5">
+						<ActivityStepBody text>
+						<div className="flex flex-col gap-1 pb-1">
 							{failed && view.error ? (
 								<p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-destructive">
 									{view.error}
@@ -2971,11 +3232,12 @@ function AOToolRow({ view }: { view: AOToolView }) {
 								</p>
 							))}
 							{view.text ? (
-								<pre className="scrollbar-none max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-caption leading-relaxed text-muted-foreground">
+								<pre className="scrollbar-none m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground">
 									{view.text}
 								</pre>
 							) : null}
 						</div>
+						</ActivityStepBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -2985,23 +3247,24 @@ function AOToolRow({ view }: { view: AOToolView }) {
 
 function ToolContent({ value }: { value: unknown }) {
 	const text = normalizeToolCode(toolContentText(value));
-	if (text) {
-		if (looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
-		return (
-			<pre data-no-swipe-nav="" className="chat-code max-h-64 overflow-auto whitespace-pre rounded-lg border border-border bg-background px-2.5 py-1.5">
-				<code className="block whitespace-pre font-mono text-caption leading-relaxed text-muted-foreground">
-					{ text }
+	if (text && looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
+	const json = text ? undefined : truncationNote(value) ?? formatJson(value);
+	return (
+		<div data-tool-box="output" className={cn(CHAT_BOX_CLASS, "my-0")}>
+			<ChatBoxHeader
+				icon={text
+					? <ToolBoxText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+					: <ToolBoxJson aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+				label="Output"
+				copyText={text || json}
+				copyLabel="Copy output"
+			/>
+			<pre data-no-swipe-nav="" className="scrollbar-none max-h-64 overflow-auto whitespace-pre px-3 pt-1 pb-3">
+				<code className={cn("block whitespace-pre font-mono text-xs leading-normal", text ? "text-muted-foreground" : "text-foreground")}>
+					{text || json}
 				</code>
 			</pre>
-		);
-	}
-	const truncated = truncationNote(value);
-	return (
-		<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
-			<code className="font-mono text-caption leading-[1.55] text-foreground">
-				{truncated ?? formatJson(value)}
-			</code>
-		</pre>
+		</div>
 	);
 }
 
@@ -3021,35 +3284,43 @@ function looksLikeUnifiedDiff(text: string): boolean {
 
 function ToolDiffCode({ text }: { text: string }) {
 	return (
-		<div className="chat-code max-h-64 overflow-auto rounded-lg border border-border bg-background px-0 py-1 font-mono text-caption leading-[1.55]">
-			{ text.split("\n").map((line, index) => {
-				const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "context";
-				const marker = kind === "add" ? "+" : kind === "del" ? "-" : " ";
-				const content = kind === "context" ? line : line.slice(1);
-				return (
-					<div
-						key={`${index}-${line}`}
-						data-tool-diff-row=""
-						className={cn(
-							"flex min-w-max whitespace-pre px-2.5",
-							kind === "add" && "bg-success/10",
-							kind === "del" && "bg-error/10",
-						)}
-					>
-						<span
-							aria-hidden="true"
+		<div data-tool-box="output" className={cn(CHAT_BOX_CLASS, "my-0")}>
+			<ChatBoxHeader
+				icon={<ToolBoxText aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+				label="Output"
+				copyText={text}
+				copyLabel="Copy output"
+			/>
+			<div className="max-h-64 overflow-auto px-0 pt-1 pb-3 font-mono text-caption leading-[1.55]">
+				{ text.split("\n").map((line, index) => {
+					const kind = line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "context";
+					const marker = kind === "add" ? "+" : kind === "del" ? "-" : " ";
+					const content = kind === "context" ? line : line.slice(1);
+					return (
+						<div
+							key={`${index}-${line}`}
+							data-tool-diff-row=""
 							className={cn(
-								"w-4 shrink-0 select-none text-center",
-								kind === "add" && "text-success",
-								kind === "del" && "text-error",
+								"flex min-w-max whitespace-pre px-2.5",
+								kind === "add" && "bg-success/10",
+								kind === "del" && "bg-error/10",
 							)}
 						>
-							{marker}
-						</span>
-						<span className="whitespace-pre text-foreground/90">{content}</span>
-					</div>
-				);
-			})}
+							<span
+								aria-hidden="true"
+								className={cn(
+									"w-4 shrink-0 select-none text-center",
+									kind === "add" && "text-success",
+									kind === "del" && "text-error",
+								)}
+							>
+								{marker}
+							</span>
+							<span className="whitespace-pre text-foreground/90">{content}</span>
+						</div>
+					);
+				})}
+			</div>
 		</div>
 	);
 }
@@ -3078,17 +3349,18 @@ function JsonPayload({ label, value }: { label: string; value: unknown }) {
 	const text = useMemo(() => (capped ? "" : formatJson(value)), [capped, value]);
 
 	return (
-		<div className="flex flex-col gap-1">
-			<span className="text-caption text-muted-foreground/70">
-				{label}
-			</span>
+		<div data-tool-box="json" className={cn(CHAT_BOX_CLASS, "my-0")}>
+			<ChatBoxHeader
+				icon={<ToolBoxJson aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />}
+				label={label}
+				copyText={capped ? undefined : text}
+				copyLabel={`Copy ${label.toLowerCase()}`}
+			/>
 			{capped ? (
-				<p className="border border-border bg-background px-2.5 py-1.5 text-caption leading-relaxed text-muted-foreground">
-					{capped}
-				</p>
+				<p className="px-3 pt-1 pb-3 text-xs leading-relaxed text-muted-foreground">{capped}</p>
 			) : (
-				<pre data-no-swipe-nav="" className="chat-code max-h-56 overflow-auto rounded-lg border border-border bg-background px-2.5 py-1.5">
-					<code className="font-mono text-caption leading-[1.55] text-foreground">
+				<pre data-no-swipe-nav="" className="scrollbar-none max-h-56 overflow-auto px-3 pt-1 pb-3">
+					<code className="font-mono text-xs leading-normal text-foreground">
 						<HighlightedCode code={text} language="json" />
 					</code>
 				</pre>
@@ -3148,6 +3420,7 @@ const RISK_TONE: Record<string, string> = {
  * because a denial is why something the user expected did not happen.
  */
 function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
+	const insideRail = useContext(InsideActivityRail);
 	const [open, setOpen] = useState(false);
 	const detail = activity.detail;
 	const denied = (detail?.status ?? "").toLowerCase().includes("den");
@@ -3157,14 +3430,58 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 		detail?.rationale || detail?.command || detail?.cwd || detail?.host || paths.length,
 	);
 
+	// What was approved, one ruled row each.
+	const facts: { term: string; value: ReactNode; strong?: boolean }[] = [];
+	const command = ranCommand(detail);
+	if (command) facts.push({ term: "command", value: command, strong: true });
+	// The summary names the command as the backend kept it, escapes and all; it reads as it ran.
+	const summary = command && detail?.command && command !== detail.command ? activity.summary.replace(detail.command, command) : activity.summary;
+	if (detail?.cwd) facts.push({ term: "cwd", value: shortenPaths(detail.cwd) });
+	if (detail?.host) facts.push({ term: "host", value: detail.host });
+	if (paths.length) facts.push({ term: "files", value: paths.map((path) => shortenPaths(path)).join(", ") });
+	if (detail?.decisionSource) {
+		// A model making the call is a materially different thing to be told than a
+		// policy rule matching, so the provider's own word for it is carried rather
+		// than flattened to "automatically".
+		const took = detail.durationMs !== undefined && detail.durationMs > 0 ? ` · ${formatDecisionDuration(detail.durationMs)}` : "";
+		facts.push({ term: "decided by", value: `${detail.decisionSource}${took}` });
+	}
+	const toggle = () => setOpen((prev) => !prev);
+	// Copy sits where the summary ends, as on a command row: a button cannot hold
+	// another, so the row is its button, then copy, then the rest of the line.
+	const copyText = command;
+	const riskTone = detail?.riskLevel ? RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground" : undefined;
+	const tail = (
+		<>
+			{detail?.riskLevel ? (
+				<span className={cn("shrink-0 text-xs", riskTone, riskTone === "text-muted-foreground" && "activity-row-target")}>
+					{detail.riskLevel}
+				</span>
+			) : null}
+			{hasBody ? (
+				<ChevronRight
+					aria-hidden="true"
+					className={cn(
+						"size-3 shrink-0 text-muted-foreground/50 transition-all",
+						open ? "rotate-90 opacity-100" : "opacity-0 group-hover/activity:opacity-100",
+					)}
+				/>
+			) : null}
+		</>
+	);
+
 	return (
-		<div className="group/activity border-t border-border first:border-t-0">
+		// Its icon sits 11px in, so its step line runs under that icon (18.5px), its details
+		// line up with the label, and the line needs no lead: the details follow the row.
+		<div className="group/activity border-t border-border first:border-t-0 [--step-line-gap:16.5px] [--step-line-lead:0px] [--step-line-x:18.5px]">
+			<div className={copyText ? "group/cmdrow flex min-w-0 items-center" : "contents"}>
 			<Pressable
-				onClick={() => setOpen((prev) => !prev)}
+				onClick={toggle}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
 				className={cn(
 					"activity-row-toggle flex min-h-[35px] w-full select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
+					copyText && "w-auto min-w-0 flex-initial pr-0",
 					hasBody && "hover:text-foreground",
 					!hasBody && "cursor-default",
 				)}
@@ -3180,92 +3497,52 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 				<strong className="shrink-0 font-medium text-foreground">
 					{denied ? "Auto-declined" : "Auto-approved"}
 				</strong>
-				<span
-					className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground"
-					title={activity.summary}
-				>
-					<ActivityTitle text={shortenPaths(activity.summary)} />
+				<span className={cn("activity-row-label min-w-0 truncate font-mono text-caption text-muted-foreground", !copyText && "flex-1")}>
+					<ActivityTitle text={shortenPaths(summary)} />
 				</span>
-				{detail?.riskLevel ? (
-					<span
-						className={cn(
-							"shrink-0 text-xs",
-							RISK_TONE[detail.riskLevel.toLowerCase()] ?? "text-muted-foreground",
-						)}
-						title={`Risk assessed as ${detail.riskLevel}`}
-					>
-						{detail.riskLevel}
-					</span>
-				) : null}
-				{hasBody ? (
-					<ChevronRight
-						aria-hidden="true"
-						className={cn(
-							"size-3 shrink-0 text-muted-foreground/50 transition-all",
-							open ? "rotate-90 opacity-100" : "opacity-0 group-hover/activity:opacity-100",
-						)}
-					/>
-				) : null}
+				{copyText ? null : tail}
 			</Pressable>
+			{copyText ? (
+				<>
+					<CommandCopyReveal text={copyText} scope="row" />
+					<Pressable
+						tabIndex={-1}
+						aria-hidden="true"
+						onClick={toggle}
+						disabled={!hasBody}
+						className={cn("flex min-h-[35px] flex-1 items-center justify-end gap-[9px] self-stretch pr-[11px] pl-2", !hasBody && "cursor-default")}
+					>
+						{tail}
+					</Pressable>
+				</>
+			) : null}
+			</div>
 
 			{open && hasBody ? (
-				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
-					{/* Said in full rather than implied by the label: "auto-approved" alone
-					    leaves it ambiguous whether the user set something up that did this. */}
-					<p className="text-xs leading-relaxed text-muted-foreground">
-						{denied
-							? "The agent asked to do this and the provider declined on your behalf. You were not asked."
-							: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
-					</p>
-					{detail?.rationale ? (
-						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
-							{detail.rationale}
+				// Like any opened step: inside a thread the boxes start under the row's icon with
+				// nothing beside them; a row on its own hangs them on a straight line under its
+				// icon (11px inset, 15px icon), lined up with the label.
+				<div className={cn("flex flex-col gap-2 pr-[11px] pb-2.5", insideRail ? "pl-[11px]" : "activity-step-line")}>
+					<div className="flex flex-col gap-1.5 rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 text-xs leading-relaxed">
+						{/* Said in full rather than implied by the label: "auto-approved" alone
+						    leaves it ambiguous whether the user set something up that did this. */}
+						<p className="m-0 text-muted-foreground">
+							{denied
+								? "The agent asked to do this and the provider declined on your behalf. You were not asked."
+								: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
 						</p>
+						{detail?.rationale ? <p className="m-0 text-foreground">{detail.rationale}</p> : null}
+					</div>
+					{facts.length ? (
+						<dl className="m-0 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-background font-mono text-caption leading-relaxed">
+							{facts.map((fact) => (
+								<div key={fact.term} className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-baseline gap-x-3 border-t border-border px-3 py-2 first:border-t-0">
+									<dt className="text-muted-foreground/70">{fact.term}</dt>
+									<dd className={cn("m-0 min-w-0 break-all", fact.strong ? "text-foreground" : "text-muted-foreground")}>{fact.value}</dd>
+								</div>
+							))}
+						</dl>
 					) : null}
-					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-caption leading-relaxed">
-						{detail?.command ? (
-							<>
-								<dt className="text-muted-foreground/70">command</dt>
-								<dd className="min-w-0 break-all text-foreground">{detail.command}</dd>
-							</>
-						) : null}
-						{detail?.cwd ? (
-							<>
-								<dt className="text-muted-foreground/70">cwd</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{shortenPaths(detail.cwd)}
-								</dd>
-							</>
-						) : null}
-						{detail?.host ? (
-							<>
-								<dt className="text-muted-foreground/70">host</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">{detail.host}</dd>
-							</>
-						) : null}
-						{paths.length ? (
-							<>
-								<dt className="text-muted-foreground/70">files</dt>
-								<dd className="min-w-0 break-all text-muted-foreground">
-									{paths.map((path) => shortenPaths(path)).join(", ")}
-								</dd>
-							</>
-						) : null}
-						{detail?.decisionSource ? (
-							<>
-								<dt className="text-muted-foreground/70">decided by</dt>
-								<dd className="text-muted-foreground">
-									{/* A model making the call is a materially different thing to be
-									    told than a policy rule matching, so the provider's own word
-									    for it is carried rather than flattened to "automatically". */}
-									{detail.decisionSource}
-									{detail.durationMs !== undefined && detail.durationMs > 0
-										? ` · ${formatDecisionDuration(detail.durationMs)}`
-										: ""}
-								</dd>
-							</>
-						) : null}
-					</dl>
 				</div>
 			) : null}
 		</div>
@@ -3336,9 +3613,10 @@ function ProviderErrorLink({ href }: { href: string }) {
 				event.preventDefault();
 				void openLinkInSystemBrowser(href);
 			}}
-			className="text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"
+			// A bare address reads as its site's chip, as it does in a reply.
+			className={PULL_REQUEST_CHIP_CLASS}
 		>
-			{href}
+			<LinkSiteChipContent url={href} />
 		</AppLink>
 	);
 }
@@ -3518,7 +3796,7 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 			</div>
 			{hint ? <p className="pl-6 text-xs text-muted-foreground">{hint}</p> : null}
 			{output && expanded ? (
-				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground select-text">{output}</pre>
+				<pre className="m-0 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground select-text">{output}</pre>
 			) : null}
 		</div>
 	);
@@ -3615,9 +3893,10 @@ export function SteerMessage({
 			{longReport && expanded ? (
 				<ChatMarkdown text={body} muted />
 			) : body ? (
-				<p className={cn("whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground", longReport && "line-clamp-3")}>
-					<SessionLinkedText text={preview} />
-				</p>
+				// Markdown like the reply, so a link, path or code reads as its chip before it is opened.
+				<div className={cn(longReport && "line-clamp-3")}>
+					<ChatMarkdown text={preview} muted className="whitespace-pre-wrap text-sm leading-relaxed" />
+				</div>
 			) : null}
 				{annotationSummary ? <div className={cn(body && "mt-2")}>{annotationSummary}</div> : null}
 				<StagedAttachmentItems
@@ -3791,13 +4070,15 @@ export function ApprovalCard({
 			}}
 		>
 			<div className="flex flex-col">
-				<p className="whitespace-pre-wrap text-sm leading-[1.4] text-foreground/90">
-					{detail?.reason ?? approvalPrompt(subjectKind)}
-				</p>
+				{/* Markdown like the reply, so its code, paths and links read as their chips. */}
+				<ChatMarkdown text={detail?.reason ?? approvalPrompt(subjectKind)} className="text-sm leading-[1.4] text-foreground/90" />
 
-				<pre className="mt-2 scrollbar-none max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/45 px-2.5 py-1.5 font-mono text-xs leading-[1.45] text-muted-foreground">
-					{detail?.rawCommand ?? command}
-				</pre>
+				<div className={cn(CHAT_BOX_CLASS, "mt-2 mb-0")}>
+					<ChatBoxHeader label="Command" copyText={detail?.rawCommand ?? command} copyLabel="Copy command" />
+					<pre className="scrollbar-none m-0 max-h-32 overflow-auto whitespace-pre-wrap break-words px-3 pt-1 pb-3 font-mono text-xs leading-normal text-muted-foreground">
+						{detail?.rawCommand ?? command}
+					</pre>
+				</div>
 
 				<div className="mt-2 flex flex-wrap justify-end gap-1.5">
 					{denyDecision ? (
@@ -3974,14 +4255,20 @@ function ResolvedApprovalRow({
 	const decision = typeof detail?.decision === "string" ? detail.decision : undefined;
 	const decisionKind = activity.decisions?.find((option) => option.id === decision)?.kind;
 	const outcome = resolvedApprovalOutcome(activity.status, decision, detail?.resolvedBy, decisionKind);
-	const title = detail?.cwd ? `${command}\n${detail.cwd}` : command;
 
+	const Mark = outcome.success ? ShieldCheck : ShieldX;
+	// A step row like a command's: its mark, what was decided, the command, and
+	// copy beside the command on hover.
 	return (
-		<div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-md border border-border/80 bg-surface/45 px-2.5 py-1.5 text-xs text-muted-foreground">
-			<strong className="shrink-0 font-medium text-foreground">{outcome.label}</strong>
-			<span className="min-w-0 truncate text-right font-mono" title={title}>
-				{command}
-			</span>
+		<div className="group/cmdrow flex min-w-0 items-center">
+			<div className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "w-auto min-w-0 flex-initial cursor-default")}>
+				<Mark aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground/70" />
+				<span className="flex min-w-0 items-baseline gap-2">
+					<span className="activity-row-label shrink-0 text-control text-muted-foreground">{outcome.label}</span>
+					<span className="activity-row-target min-w-0 truncate font-mono text-xs text-muted-foreground">{command}</span>
+				</span>
+			</div>
+			<CommandCopyReveal text={command} scope="row" />
 		</div>
 	);
 }
@@ -4108,7 +4395,10 @@ export function TurnResults({
 	);
 }
 
-/** Preview cards for the deliverables one turn created or edited. */
+/**
+ * The deliverables one turn created or edited, as a list: each row opens its
+ * artifact, and hovering it previews the artifact above the row.
+ */
 export function TurnArtifacts({
 	artifacts,
 	sessionId,
@@ -4121,45 +4411,58 @@ export function TurnArtifacts({
 	/**
 	 * Opens the artifact by its artifact path. Not the workspace-file opener: a
 	 * cloud chat resolves that against workspace files, which never holds the
-	 * artifact, so a card would open the wrong file or none.
+	 * artifact, so a row would open the wrong file or none.
 	 */
 	onOpenArtifact?: (target: { path: string }) => void;
 }) {
+	const openArtifacts = useOpenArtifacts();
+	const count = artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`;
 	return (
-		<section aria-label={artifacts.length === 1 ? "Artifact" : `${artifacts.length} Artifacts`} className="flex min-w-0 flex-col gap-2">
-			<span className="text-xs text-muted-foreground">
-				{artifacts.length === 1 ? "1 Artifact" : `${artifacts.length} Artifacts`}
-			</span>
-			<ul className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2.5">
+		// The same card as the turn's changed files: its header, its button and its row size.
+		<section aria-label={count} className="flex min-w-0 flex-col overflow-hidden rounded-lg bg-surface">
+			<div className="flex items-center gap-2 px-3 py-2">
+				<span className="shrink-0 text-xs text-muted-foreground">{count}</span>
+				<span className="flex-1" />
+				{openArtifacts ? (
+					<Button type="button" variant="quiet" size="xs" onClick={openArtifacts}>
+						Open Artifacts
+					</Button>
+				) : null}
+			</div>
+			<ul className="m-0 flex list-none flex-col px-1.5 pb-1.5">
 				{artifacts.map(({ artifact, status }) => {
 					const row: ArtifactRow = { ...artifact, sessionId, sessionTitle: "", cloud };
-					const verb = fileChangeVerb(status);
-					const body = (
+					const verb = status === "added" ? "Created" : "Updated";
+					const type = artifactTypeLabel(artifact.path, artifact.kind);
+					const line = (
 						<>
-							<span className="relative block aspect-[5/4] overflow-hidden rounded-md bg-[var(--solid-muted,var(--muted))] ring-1 ring-border transition-shadow group-hover:ring-foreground/20 group-focus-visible:ring-foreground/20">
+							<span className="relative size-4 shrink-0 overflow-hidden rounded-[3px] bg-[var(--solid-muted,var(--muted))] ring-1 ring-border">
 								<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} pageHeight={TURN_ARTIFACT_PAGE_HEIGHT} row={row} />
 							</span>
-							<span className="flex min-w-0 flex-col">
-								<span className="truncate text-caption font-medium leading-4 text-foreground">{artifact.name}</span>
-								<span className="truncate text-caption leading-4 text-passive">{verb}</span>
-							</span>
+							<span className="min-w-0 truncate text-xs text-foreground/80">{artifact.name}</span>
+							<span className="shrink-0 text-xs text-muted-foreground/70">{type}</span>
+							<span className="ml-auto shrink-0 pl-3 text-caption text-muted-foreground">{verb}</span>
 						</>
 					);
-					const tileClass = "group flex w-full min-w-0 flex-col gap-1.5 rounded-md text-left focus-visible:ring-1 focus-visible:ring-ring";
+					const rowClass = "flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left";
 					return (
 						<li key={artifact.path} className="min-w-0">
-							{onOpenArtifact ? (
-								<Pressable
-									aria-label={`Open ${artifact.name}, ${verb.toLowerCase()} in this turn`}
-									className={tileClass}
-									onClick={() => onOpenArtifact({ path: artifact.path })}
-									title={artifact.path}
-								>
-									{body}
-								</Pressable>
-							) : (
-								<div className={tileClass} title={artifact.path}>{body}</div>
-							)}
+							<HoverCard openDelay={250} closeDelay={100}>
+								<HoverCardTrigger asChild>
+									{onOpenArtifact ? (
+										<Pressable
+											aria-label={`Open ${artifact.name}, ${verb.toLowerCase()} in this turn`}
+											className={cn(rowClass, "transition-colors hover:bg-interactive-hover focus-visible:bg-interactive-hover focus-visible:outline-none")}
+											onClick={() => onOpenArtifact({ path: artifact.path })}
+										>
+											{line}
+										</Pressable>
+									) : (
+										<div className={rowClass}>{line}</div>
+									)}
+								</HoverCardTrigger>
+								<ArtifactHoverPreview row={row} detail={`${type} · ${verb} in this turn`} side="top" align="end" sideOffset={8} />
+							</HoverCard>
 						</li>
 					);
 				})}
@@ -4352,10 +4655,13 @@ function FileLocationLabel({
 	locationPath,
 	locationOldPath,
 	showFullPath,
+	chip,
 	className,
 }: {
 	path: string;
 	oldPath?: string;
+	/** Drawn as a step's file chip, with the file's icon. */
+	chip?: boolean;
 	/** Absolute/worktree path for the tooltip when `path` is only a basename. */
 	locationPath?: string;
 	locationOldPath?: string;
@@ -4363,6 +4669,15 @@ function FileLocationLabel({
 	className?: string;
 }) {
 	const location = fileLocationLabel(locationPath ?? path, locationOldPath ?? oldPath);
+	// A row's chip is there to scan, so it gets no tooltip.
+	if (chip) {
+		return (
+			<span className={cn(STEP_FILE_CHIP_CLASS, className)} data-step-file-chip="" title="">
+				<ChatFileIcon path={path} />
+				<span className="min-w-0 truncate">{fileBasename(path)}</span>
+			</span>
+		);
+	}
 
 	return (
 		<Tooltip>
@@ -4371,12 +4686,16 @@ function FileLocationLabel({
 				    worktree path tooltip below appears. */}
 				<span
 					className={cn(
-						showFullPath ? "flex min-w-0 text-xs outline-none" : "min-w-0 truncate text-xs text-foreground/65 outline-none",
+						chip
+							? STEP_FILE_CHIP_CLASS
+							: showFullPath ? "flex min-w-0 text-xs outline-none" : "min-w-0 truncate text-xs text-foreground/65 outline-none",
 						className,
 					)}
+					data-step-file-chip={chip ? "" : undefined}
 					title=""
 				>
-					{showFullPath ? <WorkspacePathSegments path={path} nameClassName="text-foreground/80" /> : fileBasename(path)}
+					{chip ? <ChatFileIcon path={path} /> : null}
+					{showFullPath ? <WorkspacePathSegments path={path} nameClassName="text-foreground/80" /> : chip ? <span className="min-w-0 truncate">{fileBasename(path)}</span> : fileBasename(path)}
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
@@ -4390,18 +4709,31 @@ function FileLocationLabel({
  * What a command step acted on, after its verb: a file, a pattern, a PR number.
  * Styled like a file edit's name. A shortened target keeps the whole one in a tooltip.
  */
-function StepTarget({ text, title }: { text: string; title?: string }) {
-	const label = <span className="min-w-0 truncate text-xs text-foreground/65 outline-none" title="">{text}</span>;
-	// A short target that is shown whole needs no tooltip repeating it.
-	if ((!title || title === text) && text.length <= 48) return label;
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>{label}</TooltipTrigger>
-			<TooltipContent side="top" className="max-w-[min(28rem,90vw)] font-mono text-caption font-normal">
-				{shortenPaths(title ?? text)}
-			</TooltipContent>
-		</Tooltip>
+/**
+ * A step's file target as a small neutral chip with its Files-panel icon. It opens
+ * nothing, so it never takes the file tint that marks a chip you can click; its
+ * tooltip holds the whole path.
+ */
+const STEP_FILE_CHIP_CLASS =
+	"activity-row-target inline-flex min-w-0 items-center gap-[5px] rounded bg-surface py-[2px] pr-[5px] pl-1 text-xs text-foreground/65 outline-none";
+
+function StepTarget({ text, file }: { text: string; /** Set when the target is one file: the path its icon comes from. */ file?: string }) {
+	const label = file ? (
+		<span data-step-file-chip="" className={STEP_FILE_CHIP_CLASS} title="">
+			<ChatFileIcon path={file} />
+			<span className="min-w-0 truncate">{text}</span>
+		</span>
+	) : (
+		<span className="activity-row-target min-w-0 truncate text-control text-foreground/65 outline-none" title="">{text}</span>
 	);
+	// No tooltip: a row's text is there to scan, and copy has the whole of it.
+	return label;
+}
+
+/** The path a step's target names when it is exactly one file, for its chip. */
+function stepTargetFile(icon: StepIcon | undefined, target: string | undefined, title: string | undefined): string | undefined {
+	if ((icon !== "read" && icon !== "write") || !target || target.includes(", ")) return undefined;
+	return title ?? target;
 }
 
 function fileLocationLabel(path: string, oldPath?: string): string {

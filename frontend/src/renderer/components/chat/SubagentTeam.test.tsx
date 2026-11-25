@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
 import type { ConversationActivity } from "../../types/conversation";
 import {
 	subagentCommand as command,
@@ -8,6 +9,10 @@ import {
 	subagentLaunch as launch,
 } from "../../test/subagent-fixtures";
 import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
+import { TooltipProvider } from "../ui/tooltip";
+
+/** Command rows carry a copy button, whose tooltip needs the app's provider. */
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
 function team(live = true) {
 	const pages = launch("pages", "Audit: info pages");
@@ -93,7 +98,7 @@ describe("SubagentTeam", () => {
 		expect(screen.getByText("Sent by the parent agent")).toBeInTheDocument();
 		expect(screen.getByText("Read-only. Audit: testing gaps.")).toBeInTheDocument();
 		// The child's one command renders as an ordinary activity row.
-		expect(screen.getByText("Checked repository")).toBeInTheDocument();
+		expect(screen.getByText("cd /repo/app; git ls-files")).toBeInTheDocument();
 	});
 
 	it("opens a child in the chat's Subagents panel instead of inline when there is one", async () => {

@@ -530,7 +530,7 @@ export function RenderFrame(props: ({ render: RenderRef } | { artifact: Artifact
 			{folded || unavailable ? null : (
 				<div
 					className={cn(
-						"absolute end-1 flex gap-1 opacity-0 transition-opacity group-hover/render:opacity-100 focus-within:opacity-100",
+						"absolute end-1 flex gap-1",
 						"artifact" in props ? "top-9" : "top-1",
 					)}
 				>

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor, type RenderOptions } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,16 @@ import { useUiStore } from "../../stores/ui-store";
 import { ActivityTitle, ArtifactPathCode, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
 import { WorkerUpdateRows } from "./WorkerUpdates";
 import { ChatImageSourceProvider } from "./chat-image-source";
+import { TooltipProvider } from "../ui/tooltip";
+
+/** Code blocks carry icon buttons, whose tooltips need the app's provider. */
+function render(ui: ReactElement, options?: RenderOptions) {
+	const Outer = options?.wrapper;
+	return rtlRender(ui, {
+		...options,
+		wrapper: ({ children }) => <TooltipProvider>{Outer ? <Outer>{children}</Outer> : children}</TooltipProvider>,
+	});
+}
 
 const sessionPreview = vi.hoisted(() => vi.fn());
 vi.mock("../SessionLinkPreviewCard", () => ({
@@ -195,22 +205,22 @@ describe("ChatMarkdown", () => {
 		expect(code).toHaveClass("text-markdown-code");
 	});
 
-	it("uses the AO logo colour for file paths and inline notation", () => {
+	it("gives a folder path its icon and keeps inline notation in the code colour", () => {
 		render(
 			<ChatMarkdown
 				text={"See `backend/internal/adapters/agent/` and then pass `--resume` to `ao`."}
 			/>,
 		);
 
-		expect(screen.getByText("backend/internal/adapters/agent/")).toHaveClass("text-markdown-code");
+		expect(screen.getByText("backend/internal/adapters/agent/").closest("[data-named-path]")).toHaveAttribute("data-named-path", "dir");
 		expect(screen.getByText("--resume")).toHaveClass("text-markdown-code");
 		expect(screen.getByText("ao")).toHaveClass("text-markdown-code");
 	});
 
 	it("recognizes standalone filenames and paths with line locations", () => {
 		render(<ChatMarkdown text={"Compare `README.md` with `backend/service.go:42`."} />);
-		expect(screen.getByText("README.md")).toHaveClass("text-markdown-code");
-		expect(screen.getByText("backend/service.go:42")).toHaveClass("text-markdown-code");
+		expect(screen.getByText("README.md").closest("[data-named-path]")?.querySelector("[data-file-icon]")).toHaveAttribute("data-file-icon", "markdown");
+		expect(screen.getByText("backend/service.go:42").closest("[data-named-path]")?.querySelector("[data-file-icon]")).toHaveAttribute("data-file-icon", "go");
 	});
 
 	it("opens a known inline-code file path in Files", async () => {
@@ -232,9 +242,29 @@ describe("ChatMarkdown", () => {
 		renderWithLinkHandler("Open `backend/service.go:42` but keep `--resume` as code.", vi.fn(), ["backend/service.go"], vi.fn());
 
 		const button = screen.getByRole("button", { name: "Open backend/service.go in Files" });
-		expect(button.querySelector("code")).toHaveClass("text-chat-file-foreground");
+		// Primary text at rest; the file tint comes back on hover.
+		expect(button.querySelector("code")).toHaveClass("text-card-foreground", "group-hover:text-chat-file-foreground");
 		expect(button.querySelector("svg")).toHaveAttribute("data-file-icon", "go");
 		expect(screen.getByText("--resume")).toHaveClass("text-markdown-code");
+	});
+
+	it("gives a file or folder name its icon even when it opens nothing", () => {
+		renderWithLinkHandler(
+			"`client.ts` opens; `middleware.ts` is two files, `error.tsx` is missing, `photo-1416…jpg` is cut short, `src/lib/supabase/` and `public/catalog` are folders, `process.env` is code.",
+			vi.fn(),
+			["src/lib/supabase/client.ts", "src/middleware.ts", "src/lib/supabase/middleware.ts", "public/catalog/a.jpg"],
+			vi.fn(),
+		);
+		expect(screen.getByRole("button", { name: "Open src/lib/supabase/client.ts in Files" })).toBeInTheDocument();
+		for (const name of ["middleware.ts", "error.tsx", "photo-1416…jpg"]) {
+			const chip = screen.getByText(name).closest("[data-named-path]");
+			expect(chip).toHaveAttribute("data-named-path", "file");
+			expect(chip?.querySelector("[data-file-icon]")).not.toBeNull();
+			expect(screen.getByText(name).closest("button")).toBeNull();
+		}
+		expect(screen.getByText("src/lib/supabase/").closest("[data-named-path]")).toHaveAttribute("data-named-path", "dir");
+		expect(screen.getByText("public/catalog").closest("[data-named-path]")).toHaveAttribute("data-named-path", "dir");
+		expect(screen.getByText("process.env").closest("[data-named-path]")).toBeNull();
 	});
 
 	it("reveals filename matches in clickable inline code using the same offsets as search", () => {
@@ -320,7 +350,9 @@ describe("ChatMarkdown", () => {
 		const link = screen.getByRole("link", { name: "the issue" });
 		expect(link).toHaveAttribute("href", "https://example.com/i/1");
 		expect(link).toHaveAttribute("target", "_blank");
-		expect(link).toHaveClass("text-markdown-link", "hover:text-markdown-link-hover");
+		// A worded web link is its site's chip, keeping its own words.
+		expect(link).toHaveClass("inline-flex");
+		expect(link.querySelector("[data-link-words]")).toHaveTextContent("the issue");
 		// Without noreferrer the opened page gets a handle on the renderer.
 		expect(link.getAttribute("rel")).toContain("noreferrer");
 	});
@@ -581,7 +613,7 @@ describe("ChatMarkdown", () => {
 		const onLinkOpen = vi.fn();
 		const { container } = renderWithQueries(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen} onLinkOpen={onLinkOpen}><ChatMarkdown streaming text="[open](ao://sessions/project/session), ao://sessions/project/other and [site](https://example.com)" /></ChatLinkProvider>);
 		expect(screen.getByRole("link", { name: "site" })).toHaveAttribute("href", "https://example.com");
-		expect(container.querySelector("[data-link-favicon]")).toBeInTheDocument();
+		expect(container.querySelector("[data-link-words]")).toHaveTextContent("site");
 		expect(screen.getByRole("link", { name: "ao://sessions/project/other" })).toHaveAttribute("href", "ao://sessions/project/other");
 		const user = userEvent.setup();
 		await user.click(screen.getByRole("link", { name: "open" }));
@@ -639,6 +671,23 @@ describe("ChatMarkdown", () => {
 		expect(link).toHaveAttribute("href", href);
 		await userEvent.setup().click(link);
 		expect(onSessionLinkOpen).toHaveBeenCalledWith(href);
+	});
+
+	it("chips a listed artifact's path by the file's name, and keeps a link's own words", () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plans/q3.md" }] }] }];
+		renderWithSessionLinkHandler("Guide: `/tmp/ao/artifacts/worker-1/plans/q3.md`, and [the plan](/tmp/ao/artifacts/worker-1/plans/q3.md).", vi.fn());
+		const [bare, worded] = screen.getAllByRole("link");
+		expect(bare).toHaveAttribute("data-chat-chip", "");
+		expect(bare).toHaveTextContent(/^q3\.md$/);
+		expect(worded).toHaveAttribute("data-chat-chip", "");
+		expect(worded).toHaveTextContent(/^the plan$/);
+	});
+
+	it("chips a link into an artifacts folder the session doesn't list, named by its file", () => {
+		renderWithSessionLinkHandler("[/tmp/ao/artifacts/worker-9/notes.md](/tmp/ao/artifacts/worker-9/notes.md)", vi.fn());
+		const link = screen.getByRole("link");
+		expect(link).toHaveAttribute("data-chat-chip", "");
+		expect(link).toHaveTextContent(/^notes\.md$/);
 	});
 
 	it("offers path actions on an absolute artifact reference while preserving its artifact link", async () => {
@@ -882,7 +931,8 @@ describe("ChatMarkdown", () => {
 				body: "Filed it\nartifact: issue#42.md", createdAt: "2026-10-28T12:00:00Z",
 			}]} />
 		</ChatLinkProvider>);
-		expect(screen.getByRole("link", { name: "worker-1/why?.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/why%3F.md");
+		// Inline code reads as the artifact's chip, named by its file.
+		expect(screen.getByRole("link", { name: "why?.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/why%3F.md");
 		expect(screen.getByRole("link", { name: "issue#42.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/issue%2342.md");
 	});
 

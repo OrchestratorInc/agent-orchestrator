@@ -22,6 +22,8 @@ import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import { LOCAL_HOST } from "../lib/hosts";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
+import { ArtifactHoverPreview, artifactTypeLabel } from "./ArtifactHoverPreview";
+import type { ArtifactRow } from "../lib/artifacts";
 import { HoverCardContent, useHoverCardDismiss } from "./ui/hover-card";
 import { Skeleton } from "./ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
@@ -398,11 +400,21 @@ export function ArtifactLinkPreviewCard({
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
 	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
 	const artifact = target ? artifactAtPath(session?.artifactFiles, target.path) : undefined;
-	if (session && artifact) return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className="w-80 p-3">
-			<ArtifactCardBody artifact={artifact} session={session} remote={sourceKind === "cloud" || Boolean(sourceHostId && sourceHostId !== LOCAL_HOST)} />
-		</HoverCardContent>
-	);
+	if (session && artifact) {
+		// The same preview the chat's artifact list opens: its picture, name, and what it is.
+		// Another host's or Cloud's page is never framed from a link: its URL carries
+		// a proxy capability the page could read. Its picture falls back instead.
+		const remote = sourceKind === "cloud" || Boolean(sourceHostId && sourceHostId !== LOCAL_HOST);
+		const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title, cloud: session.cloud, hostId: session.hostId ?? sourceHostId };
+		return (
+			<ArtifactHoverPreview
+				row={remote ? { ...row, inlineUrl: undefined } : row}
+				previewLive={!remote}
+				detail={`${artifactTypeLabel(artifact.path, artifact.kind)} · ${relativeTime(artifact.updatedAt, t)}`}
+				sideOffset={6}
+			/>
+		);
+	}
 	if (session) return (
 		<HoverCardContent collisionPadding={8} sideOffset={6} className="p-3">
 			<p role="status" className="text-sm font-medium text-foreground">{t("artifactLink.unavailable")}</p>

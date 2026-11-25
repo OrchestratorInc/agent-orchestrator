@@ -21,7 +21,6 @@ import {
 	ArrowUpFromLine,
 	ClipboardCheck,
 	CircleX,
-	FileText,
 	GitCommitHorizontal,
 	GitMerge,
 	GitPullRequest,
@@ -42,6 +41,7 @@ import type { SessionGitActionKind } from "../../stores/session-git-action-store
 import { Pressable } from "../ui/pressable";
 import type { ConversationActivity, ConversationItem, ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
+import { ChatFileIcon } from "./ChatFileIcon";
 import { formatMessageTimestamp, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
 import { cachedBy, Folded } from "./WorkerUpdates";
 
@@ -416,14 +416,15 @@ function UserActionBody({ action }: { action: UserAction }) {
 	}
 }
 
-const chip = "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md bg-foreground/[0.06] px-1.5 py-0.5 text-xs text-muted-foreground transition-colors enabled:hover:text-foreground";
+// The chat's file chip: the file's own icon, its name on the plain code surface.
+const chip = "inline-flex min-w-0 max-w-full items-center gap-[5px] rounded bg-surface py-[2px] pr-[5px] pl-1 text-xs text-card-foreground transition-colors enabled:hover:bg-chat-file enabled:hover:text-chat-file-foreground";
 
 function FileChip({ path, line, end }: { path: string; line?: number; end?: number }) {
 	const name = path.slice(path.lastIndexOf("/") + 1);
 	const at = line ? (end && end !== line ? `:${line}–${end}` : `:${line}`) : "";
 	return (
 		<FileReference path={path} line={line} className={chip}>
-			<FileText aria-hidden="true" className="size-3 shrink-0" />
+			<ChatFileIcon path={path} className="shrink-0" />
 			<span className="truncate font-mono">{name}{at}</span>
 		</FileReference>
 	);
@@ -758,7 +759,7 @@ function FailedCheckLine({ check }: { check: FailedCheck }) {
 				) : null}
 			</div>
 			{open && check.log ? (
-				<pre className="mt-1.5 max-h-64 overflow-auto rounded-md bg-surface p-2 font-mono text-caption leading-relaxed text-muted-foreground">{check.log}</pre>
+				<pre className="mt-1.5 mb-0 max-h-64 overflow-auto rounded-[var(--radius-panel)] border border-border bg-background px-3 py-2.5 font-mono text-xs leading-normal text-muted-foreground">{check.log}</pre>
 			) : null}
 		</li>
 	);

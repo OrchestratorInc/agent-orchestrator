@@ -8,6 +8,8 @@ import {
 	workspaceFileOpenTarget,
 	normalizeWorkspaceFileReference,
 	workspaceFileReferenceLine,
+	createWorkspaceDirLookup,
+	namedPath,
 } from "./workspace-file-path";
 
 describe("workspace file lookup for a catalog", () => {
@@ -168,5 +170,33 @@ describe("matchWorkspaceFilePath", () => {
 		expect(workspaceFileReferenceLine("src/app.ts#L12-L18")).toBe(12);
 		expect(workspaceFileReferenceLine("file:///repo/src/app.ts%3A27")).toBe(27);
 		expect(workspaceFileReferenceLine("src/app.ts")).toBeUndefined();
+	});
+});
+
+describe("namedPath", () => {
+	const isDir = createWorkspaceDirLookup(["public/catalog/a.jpg", "src/lib/supabase/client.ts"]);
+
+	it("names files by extension, whether or not they open", () => {
+		expect(namedPath("middleware.ts")).toEqual({ kind: "file", iconPath: "middleware.ts" });
+		expect(namedPath("global-error.tsx")).toEqual({ kind: "file", iconPath: "global-error.tsx" });
+		expect(namedPath("src/app/page.tsx:12")).toEqual({ kind: "file", iconPath: "page.tsx" });
+		expect(namedPath(".env.local")).toEqual({ kind: "file", iconPath: ".env.local" });
+		expect(namedPath("tasks/b6x6u8ikl.output")).toEqual({ kind: "file", iconPath: "b6x6u8ikl.output" });
+	});
+
+	it("keeps a shortened name's extension for its icon", () => {
+		expect(namedPath("photo-1416879595882-…jpg")).toEqual({ kind: "file", iconPath: "photo-1416879595882-….jpg" });
+	});
+
+	it("names folders by a trailing slash or by the workspace", () => {
+		expect(namedPath("src/lib/supabase/", isDir)).toEqual({ kind: "dir", name: "supabase" });
+		expect(namedPath("public/catalog", isDir)).toEqual({ kind: "dir", name: "catalog" });
+		expect(namedPath("public/nothing", isDir)).toBeUndefined();
+	});
+
+	it("leaves code alone", () => {
+		for (const code of ["process.env", "arr.map", "--resume", "user.name", "npm run dev", "fn()", "https://a.b/c.ts", "..", "./"]) {
+			expect(namedPath(code, isDir)).toBeUndefined();
+		}
 	});
 });

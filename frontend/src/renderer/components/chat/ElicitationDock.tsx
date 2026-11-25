@@ -1,7 +1,8 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, Loader2 } from "@/components/app-icons";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
+import { ChatMarkdown, SessionLabelLink } from "./ChatMarkdown";
 import type { ConversationActivity } from "../../types/conversation";
 import { Button } from "../ui/button";
 import { CloseButton } from "../ui/close-button";
@@ -93,19 +94,17 @@ export function ElicitationHistory({ activity, harness }: { activity: Conversati
 				const question = group[0];
 				if (!question) return null;
 				return (
-					<div key={question[0]} className="space-y-1">
-						<p className="whitespace-pre-wrap break-words font-medium text-foreground">
-							{questionFormPrompt(form, question, activity.detail?.message)}
-						</p>
+					<div key={question[0]} data-history-question="" className="space-y-1">
+						<DockText text={questionFormPrompt(form, question, activity.detail?.message)} className="font-medium text-foreground" />
 						{showsAnswers ? <HistoryAnswers properties={group} content={content} /> : index === groups.length - 1 ? ending : null}
 					</div>
 				);
 			}) : (
-				<div className="space-y-1">
-					<p className="whitespace-pre-wrap break-words font-medium text-foreground">{message}</p>
-					{schema?.description ? <p className="whitespace-pre-wrap break-words">{schema.description}</p> : null}
+				<div data-history-question="" className="space-y-1">
+					<DockText text={message} className="font-medium text-foreground" />
+					{schema?.description ? <DockText text={schema.description} /> : null}
 					{activity.detail?.inputMode === "url" && activity.detail.url ? (
-						<p className="break-all text-muted-foreground">{activity.detail.url}</p>
+						<p className="m-0"><SessionLabelLink href={activity.detail.url}>{activity.detail.url}</SessionLabelLink></p>
 					) : null}
 					{showsAnswers ? <HistoryAnswers properties={properties} content={content} labelled /> : ending}
 				</div>
@@ -136,7 +135,7 @@ function HistoryAnswers({ properties, content, labelled = false }: {
 		return (
 			<>
 				{answers.map(([name, property]) => (
-					<p key={name} className="whitespace-pre-wrap break-words text-muted-foreground">{answerText(property, content?.[name])}</p>
+					<DockText key={name} text={answerText(property, content?.[name])} className="text-muted-foreground" />
 				))}
 			</>
 		);
@@ -146,7 +145,7 @@ function HistoryAnswers({ properties, content, labelled = false }: {
 			{answers.map(([name, property]) => (
 				<div key={name} className="min-w-0">
 					<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
-					<dd className="mt-0.5 whitespace-pre-wrap break-words text-foreground">{answerText(property, content?.[name])}</dd>
+					<dd className="mt-0.5"><DockText text={answerText(property, content?.[name])} className="text-foreground" /></dd>
 				</div>
 			))}
 		</dl>
@@ -192,13 +191,13 @@ function DockHeader({
 					Question{pager ? <span className="tabular-nums"> · {pager}</span> : null}
 				</p>
 				{/* A long question scrolls inside its own cap so the answers and actions below keep their room. */}
-				<p
+				<div
 					id={id}
 					data-testid="elicitation-question"
-					className="chat-composer-scrollbar mt-0.5 max-h-[min(25vh,8rem)] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-sm font-medium leading-snug text-foreground"
+					className="chat-composer-scrollbar mt-0.5 max-h-[min(25vh,8rem)] overflow-y-auto overscroll-contain break-words text-sm font-medium leading-snug text-foreground"
 				>
-					{title}
-				</p>
+					<DockText text={title} size="var(--text-sm)" className="text-sm font-medium leading-snug text-foreground" />
+				</div>
 			</div>
 			{onToggleCollapsed ? (
 				<Pressable
@@ -464,7 +463,7 @@ function FormRequest({
 					className="chat-composer-scrollbar min-h-0 flex-1 scroll-py-2 overflow-y-auto overscroll-contain py-1"
 				>
 					{!questionGroups && schema?.description ? (
-						<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
+						<DockText text={schema.description} size="var(--text-caption)" className="px-3 pb-1 text-caption text-muted-foreground" />
 					) : null}
 					<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3")}>
 						{visibleProperties.map(([name, property], index) => (
@@ -632,7 +631,7 @@ function FormField({
 					</legend>
 				)}
 				{description && !labelledBy ? (
-					<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{description}</p>
+					<DockText text={description} size="var(--text-caption)" className="px-3 pb-1 text-caption text-muted-foreground" />
 				) : null}
 				<div className="flex flex-col gap-0.5 px-2">
 					{options.map((option, index) => {
@@ -946,4 +945,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function humanize(value: string): string {
 	return value.replace(/_/g, " ").replace(/^./, (letter) => letter.toUpperCase());
+}
+
+/**
+ * An agent's words in the dock, as markdown like the reply around it: code,
+ * paths and links read as their chips. Sized by its spot, not the reply's.
+ */
+function DockText({ text, className, size = "var(--text-xs)" }: { text: string; className?: string; size?: string }) {
+	return (
+		<div style={{ "--chat-readable-font-size": size } as CSSProperties}>
+			<ChatMarkdown text={text} className={cn("text-xs leading-relaxed text-inherit break-words", size !== "var(--text-sm)" && "chat-md-small", className)} />
+		</div>
+	);
 }
