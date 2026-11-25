@@ -149,7 +149,7 @@ export async function uploadCloudTranscript(
 		headers: { "Content-Type": "application/gzip" },
 		body: gzip,
 	}, { timeoutMs: uploadTimeoutMs(gzip.byteLength) });
-	if (response.status !== 204) throw new Error(errorMessage(response.body, response.status));
+	if (response.status !== 204) throw new AoError("CLOUD_TRANSCRIPT_UPLOAD_FAILED", errorMessage(response.body, response.status));
 }
 
 /** Upload a moving conversation's sidecar folder, a gzipped tar, to its import. */
@@ -161,7 +161,7 @@ export async function uploadCloudTranscriptSidecar(baseUrl: string, orgId: strin
 		headers: { "Content-Type": "application/gzip" },
 		body: gzip,
 	}, { timeoutMs: uploadTimeoutMs(gzip.byteLength) });
-	if (response.status !== 204) throw new Error(errorMessage(response.body, response.status));
+	if (response.status !== 204) throw new AoError("CLOUD_TRANSCRIPT_SIDECAR_UPLOAD_FAILED", errorMessage(response.body, response.status));
 }
 
 /** Read an attachment's bytes as a Blob of its content type. */

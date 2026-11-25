@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Check, CircleAlert, Loader2 } from "@/components/app-icons";
+import { AoError } from "../../../../packages/shared/telemetry/ao-error";
 import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -223,7 +224,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 					? { moveId, orgId: target.orgId, request: cloudRequest.current, pushed: cloudRequest.pushed, projectId: createdProject.current }
 					: undefined,
 			);
-			setError(failure instanceof Error ? failure : new Error(String(failure)));
+			setError(failure instanceof Error ? failure : new AoError("SESSION_MOVE_FAILED", String(failure)));
 		} finally {
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(sourceHost) });
 			void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
@@ -538,7 +539,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 			const body = [t("moveHere.doneBody", { title: session.title, project: target?.name ?? repoName.split("/").at(-1) }), ...(moved.keptInCloud ? [t("moveHere.doneKeptInCloud")] : []), ...moved.warnings];
 			showGlobalToast(t("moveHere.done"), body.join(" "), { tone: "success" });
 		} catch (failure) {
-			setError(failure instanceof Error ? failure : new Error(String(failure)));
+			setError(failure instanceof Error ? failure : new AoError("SESSION_MOVE_FAILED", String(failure)));
 		} finally {
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(LOCAL_HOST) });
 			void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
