@@ -4983,6 +4983,8 @@ describe("ChatWorkspace timeline", () => {
 		expect(composerBox).not.toBeNull();
 		expect(composerBox).toContainElement(screen.getByRole("heading", { name: "What do you want to work on?" }));
 		expect(composerBox).toContainElement(screen.getByRole("list", { name: "Sample requests" }));
+		// The dock keeps the stack's room above the composer, at least the one-row height.
+		expect(composerBox?.closest(".cursor-chat-composer-dock")).toHaveStyle({ paddingTop: "max(6.5rem, 0px)" });
 	});
 
 	it("docks the composer once the conversation has content", () => {

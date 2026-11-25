@@ -2128,6 +2128,8 @@ function ChatWorkspaceContent({
 	const composerBoxRef = useRef<HTMLDivElement>(null);
 	const wasConversationEmpty = useRef(conversationEmpty);
 	const [welcomeLeaving, setWelcomeLeaving] = useState(false);
+	// The open welcome stack's height, so wrapped sample prompts get their room too.
+	const [welcomeRoom, setWelcomeRoom] = useState(0);
 	const composerCenteredTopRef = useRef<number | null>(null);
 	const composerFlipDyRef = useRef<number | null>(null);
 	const composerSessionRef = useRef(uiSessionId);
@@ -2434,8 +2436,13 @@ function ChatWorkspaceContent({
 
 						{/* An empty chat centers the composer on its own; the heading and sample
 						    prompts stand in a stack above it. The top padding is that stack's
-						    room, so the composer sits where the centered group used to put it. */}
-						<div ref={composerDockRef} className={cn("cursor-chat-composer-dock shrink-0 px-4 pb-3", conversationEmpty && "pt-[6.5rem]")}>
+						    room, measured with the prompts shown so it holds while they come and
+						    go, and so the composer sits where the centered group used to put it. */}
+						<div
+							ref={composerDockRef}
+							className="cursor-chat-composer-dock shrink-0 px-4 pb-3"
+							style={conversationEmpty ? { paddingTop: `max(6.5rem, ${welcomeRoom}px)` } : undefined}
+						>
 							<div
 								data-empty={conversationEmpty || undefined}
 								className="mx-auto flex w-full max-w-3xl flex-col gap-2 transition-[max-width] duration-500 ease-out data-[empty]:max-w-2xl"
@@ -2472,6 +2479,7 @@ function ChatWorkspaceContent({
 											artifact={artifactSession}
 											unavailable={newWorkDisabled || pendingInPlaceStart}
 											onPick={(text) => { if (!newWorkDisabled && !pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
+											onRoom={setWelcomeRoom}
 										/>
 									) : null}
 									{welcomeLeaving ? (
@@ -8229,7 +8237,7 @@ const WELCOME_SETTLE = { duration: 0.34, ease: [0.32, 0.72, 0, 1] } as const;
  * an opacity, so the animation that starts on the first keystroke never relays out
  * the page while the user types.
  */
-function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onPick }: { heading: string; promptsOpen: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void }) {
+function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onPick, onRoom }: { heading: string; promptsOpen: boolean; artifact: boolean; unavailable?: boolean; onPick: (text: string) => void; onRoom: (height: number) => void }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
@@ -8247,8 +8255,20 @@ function WelcomeStack({ heading, promptsOpen, artifact, unavailable = false, onP
 		observer.observe(node);
 		return () => observer.disconnect();
 	}, [promptsOpen]);
+	// The stack's height with the prompts shown is the room the composer keeps above
+	// it. Measured only then, so typing never changes it and the composer stays put.
+	const stackRef = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		const node = stackRef.current;
+		if (!promptsOpen || !node) return;
+		const report = () => onRoom(node.offsetHeight);
+		report();
+		const observer = new ResizeObserver(report);
+		observer.observe(node);
+		return () => observer.disconnect();
+	}, [promptsOpen, onRoom]);
 	return (
-		<div className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center [clip-path:inset(-100vh_-100vw_0_-100vw)]">
+		<div ref={stackRef} className="pointer-events-none absolute inset-x-0 bottom-full flex flex-col items-center [clip-path:inset(-100vh_-100vw_0_-100vw)]">
 			<motion.h1
 				layout={reducedMotion ? false : "position"}
 				transition={{ layout: WELCOME_SETTLE }}
