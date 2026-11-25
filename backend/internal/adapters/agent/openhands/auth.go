@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
@@ -16,14 +17,16 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
 // AuthStatus reports whether OpenHands has a usable LLM configuration.
 //
-// Without agent_settings.json the TUI opens its first-run settings wizard
-// instead of working, so a missing or model-less file is unauthorized. A
-// configured model is authorized: local models legitimately have no API key,
-// and AO does not launch with --override-with-envs, so LLM_* environment
-// variables are not consulted.
+// A complete process environment (LLM_API_KEY and LLM_MODEL) can create the
+// native agent without saved settings when --override-with-envs is enabled.
+// Otherwise a saved model is required; local models need no API key.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
+	}
+	if strings.TrimSpace(authprobe.Getenv(ctx, "LLM_MODEL")) != "" && strings.TrimSpace(authprobe.Getenv(ctx, "LLM_API_KEY")) != "" {
+		authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "LLM_API_KEY")
+		return ports.AgentAuthStatusAuthorized, nil
 	}
 	path := settingsPath()
 	status, err := settingsAuthStatus(path)

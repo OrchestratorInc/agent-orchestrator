@@ -15,6 +15,7 @@ import (
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/agentbase"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/providerenv"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
@@ -66,7 +67,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 	cmd = append(cmd, "--fresh")
-	return cmd, nil
+	return providerenv.Command(cmd, cfg.Env), nil
 }
 
 // GetPromptDeliveryStrategy keeps the TUI alive while AO sends its first task.
@@ -110,8 +111,19 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
+	if root := cfg.Session.Metadata[ports.MetadataKeyImportConfigDir]; root != "" {
+		_, err := readNativeResumeSnapshot(ctx, root, nativeID)
+		if err != nil {
+			return nil, false, err
+		}
+	}
 	cmd = append(cmd, "--resume", nativeID)
-	return cmd, true, nil
+	return providerenv.Command(cmd, cfg.Env), true, nil
+}
+
+// AugmentRuntimeEnv preserves explicit provider overrides across shell startup.
+func (p *Plugin) AugmentRuntimeEnv(env map[string]string, _ string) {
+	providerenv.Capture(env)
 }
 
 func (p *Plugin) baseCommand(ctx context.Context, workspace string, cfg ports.AgentConfig, permissions ports.PermissionMode) ([]string, error) {

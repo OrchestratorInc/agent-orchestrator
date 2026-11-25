@@ -238,6 +238,8 @@ func (c *conversation) pump() {
 			if threadID == "" {
 				threadID = c.threadID
 			}
+			var threadStatus *ports.ChatEvent
+			ev, threadStatus = usageLimits.threadStatus(ev, threadID)
 			var visible bool
 			ev, visible = citations.formatEvent(threadID, ev)
 			if !visible {
@@ -312,6 +314,9 @@ func (c *conversation) pump() {
 				c.mu.Unlock()
 			}
 			c.emit(ev)
+			if threadStatus != nil {
+				c.emit(*threadStatus)
+			}
 		}
 	}
 	// The connection ended. Say so explicitly rather than letting the stream go

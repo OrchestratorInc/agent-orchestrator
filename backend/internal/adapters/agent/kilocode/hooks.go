@@ -73,6 +73,10 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return errors.New("kilocode.GetAgentHooks: WorkspacePath is required")
 	}
 
+	if err := validateKiloImportedWorkspace(cfg); err != nil {
+		return err
+	}
+
 	pluginPath := kilocodePluginPath(cfg.WorkspacePath)
 	// Guard against clobbering a user file at our path: overwrite only when the
 	// target is absent or already AO-managed. A foreign file is a loud error,

@@ -11,6 +11,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/deepseekharness"
 	acpdriver "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
@@ -28,6 +29,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:              domain.HarnessDeepSeek,
 		Configure:            configure,
+		NativeHistoryReplay:  nativeHistoryReplay,
 		SessionOptions:       sessionOptions,
 		PromptFailureCode:    promptFailureCode,
 		SessionPreamble:      SessionPreamble,
@@ -54,7 +56,10 @@ func promptFailureCode(err error) domain.ConversationFailureCode {
 	return domain.ConversationFailureProviderKeyMissing
 }
 
-func configure(_ context.Context, _ acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+	if err := deepseekharness.ValidateImportedACP(ctx, cfg.Env["DSH_HOME"], cfg.ProviderConversationID, cfg.WorkspacePath); err != nil {
+		return nil, nil, err
+	}
 	return []string{"--profile", acpProfile}, nil, nil
 }
 

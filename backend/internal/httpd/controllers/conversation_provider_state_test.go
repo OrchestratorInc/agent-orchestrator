@@ -200,6 +200,7 @@ func TestSnapshotExposesThreadState(t *testing.T) {
 	archived := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 	body := conversationSnapshotBody(t, chatsvc.Snapshot{
 		SessionID: domain.SessionID("p1-1"),
+		Harness:   domain.HarnessCodex,
 		Mode:      domain.SessionModeChat,
 		Conversation: domain.ConversationRecord{
 			ThreadState: &domain.ConversationThreadState{
@@ -226,6 +227,50 @@ func TestSnapshotExposesThreadState(t *testing.T) {
 	}
 	if _, present := state["closedAt"]; present {
 		t.Error("a thread that was never closed reported a closedAt")
+	}
+}
+
+// A conversation outlives its provider thread. After an agent switch, what the
+// previous agent said about its own thread must not be served as the new
+// agent's state: a Codex system_error would otherwise sit over a working
+// claude-code chat as "the agent's thread hit an internal error".
+func TestSnapshotNeverServesAnotherThreadsState(t *testing.T) {
+	broken := func(harness domain.AgentHarness, thread string) *domain.ConversationThreadState {
+		return &domain.ConversationThreadState{
+			Status: domain.ThreadStatusSystemError, Harness: harness, ProviderConversationID: thread,
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		harness domain.AgentHarness
+		active  string
+		state   *domain.ConversationThreadState
+		served  bool
+	}{
+		{"unstamped state after switching away from Codex", domain.HarnessClaudeCode, "claude-1", broken("", ""), false},
+		{"Codex state under claude-code", domain.HarnessClaudeCode, "claude-1", broken(domain.HarnessCodex, "thread-1"), false},
+		{"an earlier Codex thread", domain.HarnessCodex, "thread-2", broken(domain.HarnessCodex, "thread-1"), false},
+		{"the current Codex thread", domain.HarnessCodex, "thread-1", broken(domain.HarnessCodex, "thread-1"), true},
+		{"unstamped state on Codex", domain.HarnessCodex, "thread-1", broken("", ""), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := conversationSnapshotBody(t, chatsvc.Snapshot{
+				SessionID:    domain.SessionID("p1-1"),
+				Harness:      tc.harness,
+				Mode:         domain.SessionModeChat,
+				ActiveBranch: domain.ConversationBranch{ProviderConversationID: tc.active},
+				Conversation: domain.ConversationRecord{ThreadState: tc.state},
+			})
+			state, served := body["threadState"].(map[string]any)
+			if served != tc.served {
+				t.Fatalf("threadState = %#v, want served=%v", body["threadState"], tc.served)
+			}
+			if served {
+				if _, leaked := state["harness"]; leaked {
+					t.Errorf("thread scope leaked onto the wire: %#v", state)
+				}
+			}
+		})
 	}
 }
 

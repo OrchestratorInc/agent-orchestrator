@@ -238,9 +238,18 @@ func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, che
 	if err := q.RecordWorkerPRUsage(ctx, gen.RecordWorkerPRUsageParams{PRURL: pr.URL, ExportAllowed: exportAllowed}); err != nil {
 		slog.Warn("record worker pr usage failed", "error", err)
 	}
-	for _, c := range checks {
-		if err := q.UpsertPRCheck(ctx, genCheckParams(pr.URL, c)); err != nil {
-			return err
+	// The table has one row per PR, job name, and head. If two workflows use
+	// the same job name, retain an actionable check (and its link) over a
+	// passing sibling; the next all-passing observation replaces it normally.
+	for _, actionable := range []bool{false, true} {
+		for _, c := range checks {
+			isActionable := c.Status == domain.PRCheckFailed || c.Status == domain.PRCheckCancelled
+			if isActionable != actionable {
+				continue
+			}
+			if err := q.UpsertPRCheck(ctx, genCheckParams(pr.URL, c)); err != nil {
+				return err
+			}
 		}
 	}
 	if replaceLegacyComments {

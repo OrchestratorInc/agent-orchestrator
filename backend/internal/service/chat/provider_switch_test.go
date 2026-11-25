@@ -405,6 +405,56 @@ func TestProviderSwitchFromClaudeToCodexClearsPreviousModelReroute(t *testing.T)
 	}
 }
 
+// Codex marks its thread system_error on a failure such as a usage limit. That is
+// a fact about the Codex thread, so switching to claude-code must clear it rather
+// than leave "the agent's thread hit an internal error" over a working chat, and
+// the new agent's controller must not inherit any of it.
+func TestProviderSwitchFromCodexToClaudeClearsThreadState(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	archived := true
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventThreadState, ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusSystemError}},
+		ports.ChatEvent{Kind: ports.ChatEventThreadState, ThreadState: &ports.ChatThreadState{Archived: &archived}},
+	)
+	before := h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		state := snapshot.Conversation.ThreadState
+		return state != nil && state.ArchivedAt != nil
+	})
+	if state := before.Conversation.ThreadState; state.Status != domain.ThreadStatusSystemError ||
+		state.Harness != domain.HarnessCodex || state.ProviderConversationID != "thread-1" {
+		t.Fatalf("Codex thread state = %+v; want system_error stamped with its harness and thread", state)
+	}
+
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := h.svc.Snapshot(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Harness != domain.HarnessClaudeCode {
+		t.Fatalf("switched harness = %q", snapshot.Harness)
+	}
+	if got := snapshot.Conversation.ThreadState; got != nil {
+		t.Fatalf("thread state after switching to claude-code = %+v; want the Codex thread's state cleared", got)
+	}
+
+	// The new controller starts from nothing: a report about its own thread does
+	// not carry the old thread's archive mark along.
+	driver.fresh.emit(ports.ChatEvent{Kind: ports.ChatEventThreadState,
+		ThreadState: &ports.ChatThreadState{Status: domain.ThreadStatusIdle}})
+	after := h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		return snapshot.Conversation.ThreadState != nil
+	})
+	if state := after.Conversation.ThreadState; state.Status != domain.ThreadStatusIdle || state.ArchivedAt != nil ||
+		state.Harness != domain.HarnessClaudeCode || state.ProviderConversationID != "thread-fresh" {
+		t.Fatalf("claude-code thread state = %+v; want only its own idle report", state)
+	}
+}
+
 func TestProviderSwitchCommitsTheTargetsSettingsAndKeepsItsLaunchWrites(t *testing.T) {
 	ctx := context.Background()
 	var h *harness

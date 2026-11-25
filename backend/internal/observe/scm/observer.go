@@ -1782,7 +1782,11 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 	}
 	for i := range obs.CI.FailedChecks {
 		tail := obs.CI.FailedChecks[i].LogTail
-		if tail == "" && obs.CI.FailedChecks[i].ProviderID != "" {
+		// A current cancellation is listed for its link, not its log: it is
+		// never sent to the agent, and a job cancelled before it started has
+		// no log, so fetching one only costs a request and a fetch-failed tail.
+		cancelled := obs.CI.FailedChecks[i].Status == string(domain.PRCheckCancelled)
+		if tail == "" && obs.CI.FailedChecks[i].ProviderID != "" && !cancelled {
 			var err error
 			repo := ports.SCMRepo{Provider: obs.Provider, Host: obs.Host, Repo: obs.Repo, Owner: ownerOf(obs.Repo), Name: nameOf(obs.Repo)}
 			started := time.Now()

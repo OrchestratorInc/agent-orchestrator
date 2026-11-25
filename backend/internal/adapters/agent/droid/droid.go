@@ -135,6 +135,12 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if agentSessionID == "" {
 		return nil, false, nil
 	}
+	if err := p.validateImportedRuntime(ctx, ports.WorkspaceHookConfig{
+		DataDir: cfg.DataDir, Env: cfg.Env, WorkspacePath: cfg.Session.WorkspacePath,
+		NativeSessionID: agentSessionID, ImportConfigDir: cfg.Session.Metadata[ports.MetadataKeyImportConfigDir],
+	}); err != nil {
+		return nil, false, err
+	}
 
 	binary, err := p.droidBinary(ctx)
 	if err != nil {

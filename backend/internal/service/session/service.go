@@ -2087,6 +2087,7 @@ func toAPIError(err error) error {
 
 func mapSessionError(err error) error {
 	var relaunchErr *sessionmanager.RelaunchError
+	var importRefusedErr *ports.ImportRefusedError
 	var cleanupRefused *sessionmanager.CleanupRefusedError
 	switch {
 	case err == nil:
@@ -2289,6 +2290,11 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):
 		return err
+	case errors.As(err, &importRefusedErr):
+		// An import refused for a reason the user can fix, such as an agent
+		// CLI that changed between import and first open; the adapter's fixed
+		// message says what to do.
+		return apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", importRefusedErr.Message, nil)
 	case errors.As(err, &relaunchErr):
 		return apierr.Conflict("AGENT_RESUME_FAILED",
 			"Orchestrator could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",

@@ -19,6 +19,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	kimiadapter "github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/kimi"
+
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/httpd/apierr"
@@ -103,6 +105,16 @@ type Service struct {
 	selections   map[string]selection
 	cache        map[string]parsed
 	now          func() time.Time
+	// importVersion reports whether harness's installed CLI can prepare a new
+	// import; nil skips the check. It is late-bound by the daemon.
+	importVersion func(context.Context, domain.AgentHarness) error
+}
+
+// SetImportVersionCheck late-binds the installed-CLI version gate for import.
+func (s *Service) SetImportVersionCheck(check func(context.Context, domain.AgentHarness) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.importVersion = check
 }
 
 // New uses the same provider homes as ordinary native AO launches. AO's own
@@ -673,18 +685,41 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 // RefreshArchive rereads an imported conversation just before its first open,
 // so turns added in another app since the import stay in the visible history.
 // Once native preparation is checkpointed, retain the matching archive on
-// retries: later source turns need not exist in the pinned native copy.
+// retries: later source turns need not exist in the pinned native copy. Kilo
+// and CodeWhale refresh their verified prepared copies until adoption.
 func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) error {
 	source := rec.Metadata.ImportSource
-	if source == nil || source.Adopted || source.ResumeNativeID != "" || source.ResumeCwd != "" {
+	if source == nil || source.Adopted {
 		return nil
+	}
+	preparedKilo := rec.Harness == domain.HarnessKilocode && source.ResumeNativeID != ""
+	preparedCodewhale := rec.Harness == domain.HarnessCodewhale && source.ResumeNativeID != ""
+	preparedNative := preparedKilo || preparedCodewhale
+	if !preparedNative && (source.ResumeNativeID != "" || source.ResumeCwd != "") {
+		return nil
+	}
+	root, nativeID, cwd := source.ConfigDir, source.NativeID, source.CWD
+	paths := []string{rec.Metadata.NativeTranscriptPath}
+	if preparedNative {
+		if source.ResumeConfigDir == "" || source.ResumeCwd == "" {
+			return errors.New("prepared native history has an incomplete binding")
+		}
+		root, nativeID, cwd = source.ResumeConfigDir, source.ResumeNativeID, source.ResumeCwd
+		if preparedKilo {
+			// Kilo's reader takes the row ID, not its db/id locator path.
+			paths = []string{nativeID}
+		} else {
+			if source.ResumeTranscriptPath == "" {
+				return errors.New("prepared CodeWhale history has no snapshot path")
+			}
+			paths = []string{source.ResumeTranscriptPath}
+		}
 	}
 	dests, err := s.destinations(ctx)
 	if err != nil {
 		return err
 	}
 	projects := s.registeredDiscoveryRoots(dests)
-	paths := []string{rec.Metadata.NativeTranscriptPath}
 	if rec.Harness == domain.HarnessCodex {
 		// Long Codex threads continue in later segment files.
 		segments, err := codexThreadSegments(ctx, source.ConfigDir, source.NativeID)
@@ -695,15 +730,18 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 			paths = segments
 		}
 	}
-	fresh, err := readTranscriptForProjects(ctx, rec.Harness, source.ConfigDir, projects, paths...)
+	fresh, err := readTranscriptForProjects(ctx, rec.Harness, root, projects, paths...)
 	if err != nil {
 		return err
 	}
-	if fresh.nativeID != source.NativeID {
+	if fresh.nativeID != nativeID {
 		return errors.New("the source no longer holds this conversation")
 	}
+	if preparedNative && canonical(fresh.cwd) != canonical(cwd) {
+		return errors.New("prepared native history no longer matches its workspace")
+	}
 	if len(fresh.messages) == 0 {
-		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == source.CWD {
+		if !preparedNative && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI && fresh.cwd == cwd {
 			return nil // A native server-side conversation need not expose a transcript.
 		}
 		return errors.New("the source no longer holds readable conversation history")
@@ -712,7 +750,7 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 }
 
 // importOne registers one selected conversation from its fresh read. s.mu is held.
-func (s *Service) importOne(ctx context.Context, dests *destinations, id string, source transcript, readErr error) Result {
+func (s *Service) importOne(ctx context.Context, dests *destinations, id string, source transcript, readErr error, versions map[domain.AgentHarness]error) Result {
 	result := Result{ID: id, Status: "failed"}
 	// Out of time: report every row, so the dialog shows what was created.
 	if ctx.Err() != nil {
@@ -736,6 +774,25 @@ func (s *Service) importOne(ctx context.Context, dests *destinations, id string,
 		delete(s.cache, item.cacheKey)
 		result.Error = "The source or project changed. Scan again before importing."
 		return result
+	}
+	// A pinned native CLI must be the verified version now; otherwise the
+	// import would be created and then fail on first open.
+	if s.importVersion != nil {
+		err, checked := versions[source.harness]
+		if !checked {
+			err = s.importVersion(ctx, source.harness)
+			versions[source.harness] = err
+		}
+		if err != nil {
+			result.Error = err.Error()
+			return result
+		}
+	}
+	if source.harness == domain.HarnessKimi {
+		if err := kimiadapter.CheckImportedOAuth(ctx, source.root, source.model); err != nil {
+			result.Error = err.Error()
+			return result
+		}
 	}
 	adopt := harnessImporters[source.harness].adopt
 	if adopt != nil {
@@ -786,6 +843,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 		return nil, err
 	}
 	results := make([]Result, 0, len(ids))
+	versions := map[domain.AgentHarness]error{}
 	// Histories are read in parallel, as Scan reads them, a batch at a time so
 	// only one batch of full histories is held; each batch then registers in
 	// order.
@@ -812,7 +870,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 		}
 		_ = group.Wait()
 		for i, id := range chunk {
-			results = append(results, s.importOne(ctx, dests, id, reads[i].source, reads[i].err))
+			results = append(results, s.importOne(ctx, dests, id, reads[i].source, reads[i].err, versions))
 		}
 	}
 	return results, nil

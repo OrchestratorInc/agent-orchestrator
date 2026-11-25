@@ -1,11 +1,13 @@
 package sessionmanager
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/domain"
 	"github.com/OrchestratorInc/agent-orchestrator/backend/internal/ports"
 )
 
@@ -38,5 +40,22 @@ func TestImportFailureNoticeShowsOnlyNotices(t *testing.T) {
 	setup := fmt.Errorf("prepare import: %w", &SetupStepError{Step: 2, Err: errors.New("exit status 1"), Output: "npm ERR! [redacted]"})
 	if got, ok := ImportFailureNotice(setup); !ok || !strings.Contains(got, "step 2") || !strings.Contains(got, "npm ERR! [redacted]") {
 		t.Fatalf("a failed Setup step was not shown: %q", got)
+	}
+}
+
+type versionRefusingPreparer struct{}
+
+func (versionRefusingPreparer) PrepareImportedSession(context.Context, ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+	return ports.NativeSessionRef{}, fmt.Errorf("probe: %w", &ports.ImportRefusedError{Message: "droid: session import supports only verified version 0.251.0"})
+}
+
+// A CLI updated between import and first open fails preparation with the
+// adapter's version message as the user-facing notice.
+func TestPrepareImportedNativeSessionShowsVersionNotice(t *testing.T) {
+	m := &Manager{dataDir: t.TempDir()}
+	rec := domain.SessionRecord{ID: "mer-1", Metadata: domain.SessionMetadata{ImportSource: &domain.SessionImportSource{NativeID: "native-1"}}}
+	_, err := m.prepareImportedNativeSession(context.Background(), rec, t.TempDir(), versionRefusingPreparer{}, nil)
+	if got, ok := ImportFailureNotice(err); !ok || got != "droid: session import supports only verified version 0.251.0" {
+		t.Fatalf("notice = %q, %v; err = %v", got, ok, err)
 	}
 }

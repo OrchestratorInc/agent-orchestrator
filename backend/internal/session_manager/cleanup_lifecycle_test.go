@@ -397,6 +397,23 @@ func TestDeleteSession(t *testing.T) {
 	}
 }
 
+func TestDeleteImportedKimiSessionCleansPrivateCredentialLinks(t *testing.T) {
+	m, st, _, _ := newManager()
+	agent := &cleaningAgent{}
+	m.agents = singleAgent{agent: agent}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Harness: domain.HarnessKimi, IsTerminated: true,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", ImportSource: &domain.SessionImportSource{
+			NativeID: "source", ConfigDir: "/user/profile", ResumeNativeID: "copied", ResumeConfigDir: "/private/import",
+		}}}
+	st.cleanupFacts = map[domain.SessionID]domain.SessionCleanupRecord{"mer-1": {SessionID: "mer-1", WorkspaceDisposition: domain.DispositionRemoved}}
+	if err := m.DeleteSession(ctx, "mer-1", false); err != nil {
+		t.Fatal(err)
+	}
+	if agent.cleanupCalls != 1 || agent.cleanupConfigs[0].ImportConfigDir != "/private/import" || agent.cleanupConfigs[0].NativeSessionID != "copied" {
+		t.Fatal("session deletion did not clean the exact imported native home")
+	}
+}
+
 // With cleanup, a worktree still on disk is released first, the way cleanup
 // does it; a refusal keeps both the worktree and the session.
 func TestDeleteSession_CleansUpFirst(t *testing.T) {

@@ -36,6 +36,9 @@ const (
 // capture Kimi's native session id for true resume without mutating the user's
 // global Kimi profile.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
+	if cfg.ImportConfigDir != "" && cfg.NativeSessionID != "" {
+		return errors.New("kimi: imported conversations require Chat mode")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -43,6 +46,13 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return errors.New("kimi.GetAgentHooks: WorkspacePath is required")
 	}
 
+	if IsImportedHome(cfg.Env[kimiCodeHomeEnv], cfg.DataDir) {
+		prompt, err := kimiSystemPromptText(cfg.SystemPrompt, cfg.SystemPromptFile)
+		if err != nil {
+			return err
+		}
+		return PrepareACPInstructions(ctx, cfg.WorkspacePath, prompt)
+	}
 	if err := installKimiConfigHooks(cfg); err != nil {
 		return fmt.Errorf("kimi.GetAgentHooks: %w", err)
 	}
@@ -187,13 +197,19 @@ func seedKimiCredentials(targetHome string) error {
 // sign each other out. It reports false where the user has no Kimi login or a
 // link cannot be made (Windows without the privilege), leaving the copy below.
 func shareKimiCredentialStore(sourceHome, targetHome string) (bool, error) {
-	source := filepath.Join(sourceHome, "credentials")
-	target := filepath.Join(targetHome, "credentials")
+	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(sourceHome, "credentials", "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
+		return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
+	}
+	return shareKimiNativeDirectory(sourceHome, targetHome, "credentials")
+}
+
+// Both ordinary credential sharing and imported OAuth use this same link
+// operation. Imports refuse its copy fallback so rotating tokens stay shared.
+func shareKimiNativeDirectory(sourceHome, targetHome, name string) (bool, error) {
+	source := filepath.Join(sourceHome, name)
+	target := filepath.Join(targetHome, name)
 	if sameKimiConfigPath(source, target) {
 		return true, nil
-	}
-	if status, ok, err := kimiCredentialsAuthStatus(filepath.Join(source, "kimi-code.json")); err != nil || !ok || status != ports.AgentAuthStatusAuthorized {
-		return false, nil //nolint:nilerr // No usable login to share; the seeded copy stays.
 	}
 	if link, err := os.Readlink(target); err == nil && sameKimiConfigPath(link, source) {
 		return true, nil

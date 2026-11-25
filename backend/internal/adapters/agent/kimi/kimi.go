@@ -18,6 +18,7 @@ package kimi
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -149,6 +150,9 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 // to fresh launch behavior. Model and approval flags reapply the saved AO
 // configuration using the verified Kimi Code 2.2 CLI contract.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
+	if IsImportedHome(cfg.Env[kimiCodeHomeEnv], cfg.DataDir) {
+		return nil, false, errors.New("kimi: imported conversations require Chat mode")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
