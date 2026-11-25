@@ -1016,7 +1016,7 @@
 	"cues.typeLabel": "Тип",
 	"cues.typeName.agent": "Агент",
 	"cues.typeName.command": "Команда",
-	"daemon.hint.binaryMissing": "Выполните npm run build:daemon, чтобы пересобрать демон.",
+	"daemon.hint.binaryMissing": "Переустановите Orchestrator, чтобы восстановить фоновую службу.",
 	"daemon.hint.conflict": "Остановите конфликтующий демон, затем перезапустите настольное приложение.",
 	"daemon.hint.default": "Подробности смотрите в терминале, где был запущен npm run dev.",
 	"daemon.hint.notConfigured": "Задайте AO_DAEMON_COMMAND или запустите настольное приложение из исходного checkout.",
