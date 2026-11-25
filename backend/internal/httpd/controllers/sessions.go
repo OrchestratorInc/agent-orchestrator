@@ -101,7 +101,7 @@ type SessionService interface {
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
 	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	DeleteArtifacts(ctx context.Context, id domain.SessionID) error
-	RegisterArtifacts(ctx context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error)
+	RegisterArtifacts(ctx context.Context, id domain.SessionID, workingDir string, references []string) (sessionsvc.ArtifactRegistration, error)
 	UnregisterArtifact(ctx context.Context, id domain.SessionID, path string) error
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
 	Cleanup(ctx context.Context, project domain.ProjectID) (sessionsvc.CleanupOutcome, error)

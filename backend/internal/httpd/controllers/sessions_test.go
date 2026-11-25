@@ -49,6 +49,7 @@ import (
 
 type fakeSessionService struct {
 	artifactsRegistered   []string
+	artifactsWorkingDir   string
 	artifactsUnregistered []string
 	registerArtifactsErr  error
 	deleted               []domain.SessionID
@@ -456,11 +457,12 @@ func (f *fakeSessionService) Kill(_ context.Context, id domain.SessionID) (bool,
 	return true, nil
 }
 
-func (f *fakeSessionService) RegisterArtifacts(_ context.Context, id domain.SessionID, references []string) (sessionsvc.ArtifactRegistration, error) {
+func (f *fakeSessionService) RegisterArtifacts(_ context.Context, id domain.SessionID, workingDir string, references []string) (sessionsvc.ArtifactRegistration, error) {
 	if f.registerArtifactsErr != nil {
 		return sessionsvc.ArtifactRegistration{}, f.registerArtifactsErr
 	}
 	f.artifactsRegistered = append(f.artifactsRegistered, references...)
+	f.artifactsWorkingDir = workingDir
 	return sessionsvc.ArtifactRegistration{Registered: references, OtherFiles: 2, OtherRootFiles: []string{"draft.md"}}, nil
 }
 
